@@ -33,6 +33,7 @@ class FakeFileHandle {
         this.bytes = next;
       },
       write: (source, options = {}) => {
+        if (this.writeError) throw this.writeError;
         const at = options.at ?? 0;
         const end = at + source.byteLength;
         if (this.bytes.byteLength < end) {
@@ -46,6 +47,22 @@ class FakeFileHandle {
       },
       flush: () => {},
       close: () => {},
+    };
+  }
+
+  async createWritable() {
+    let staged = new Uint8Array();
+    return {
+      write: async (source) => {
+        if (this.writeError) throw this.writeError;
+        staged = source.slice();
+      },
+      close: async () => {
+        if (this.closeError) throw this.closeError;
+        this.bytes = staged;
+        this.lastModified += 1;
+      },
+      abort: async () => {},
     };
   }
 }
@@ -92,6 +109,29 @@ class FakeDirectoryHandle {
 function domError(name) {
   return Object.assign(new Error(name), { name });
 }
+
+test("failed replacement save preserves the previous file", async () => {
+  const root = new FakeDirectoryHandle();
+  const filesystem = await OriginPrivateFileSystem.open({ getDirectory: async () => root });
+  const encode = (text) => new TextEncoder().encode(text);
+  const request = { mode: WRITE_MODE.TRUNCATE, offset: 0, sync: true };
+  await filesystem.write("/notes", encode("previous notes"), request);
+  root.children.get("notes").writeError = domError("QuotaExceededError");
+  await assert.rejects(filesystem.write("/notes", encode("new notes"), request));
+  assert.equal(new TextDecoder().decode(await filesystem.read("/notes")), "previous notes");
+});
+
+test("failed publication preserves the previous file and reports the close error", async () => {
+  const root = new FakeDirectoryHandle();
+  const filesystem = await OriginPrivateFileSystem.open({ getDirectory: async () => root });
+  const request = { mode: WRITE_MODE.TRUNCATE, offset: 0, sync: true };
+  const encode = (text) => new TextEncoder().encode(text);
+  await filesystem.write("/notes", encode("previous notes"), request);
+  const failure = domError("QuotaExceededError");
+  root.children.get("notes").closeError = failure;
+  await assert.rejects(filesystem.write("/notes", encode("new notes"), request), (e) => e === failure);
+  assert.equal(new TextDecoder().decode(await filesystem.read("/notes")), "previous notes");
+});
 
 async function renameFixture() {
   const filesystem = await OriginPrivateFileSystem.open({
