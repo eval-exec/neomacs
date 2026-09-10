@@ -1,10 +1,6 @@
 //! Owned, bounded Unicode observations of an editor insertion context.
 
-use super::{ImeSelection, ImeUtf16Offset};
-
-/// VM-issued identity of one surrounding-text observation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ImeSnapshotId(pub u64);
+use super::{ImeSelection, ImeSnapshotId, ImeUtf16Offset};
 
 /// Bounded, owned Unicode text; no Lisp values or editor pointers cross threads.
 #[derive(Clone, Debug, PartialEq, Eq)]
