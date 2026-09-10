@@ -34,7 +34,7 @@ impl crate::Context {
         if session.0 != self.composition.latest {
             return Ok(Value::NIL);
         }
-        let Some(active) = self.composition.active.take() else {
+        let Some(mut active) = self.composition.active.take() else {
             return Ok(Value::NIL);
         };
         let ImeOperation::Replace {
@@ -45,7 +45,25 @@ impl crate::Context {
         else {
             return Ok(Value::NIL);
         };
-        if self.ime_anchor() != Some(active.anchor) || after_bytes != 0 {
+        if self.ime_anchor() != Some(active.anchor) {
+            // Ordinary command hooks can edit text and move point without
+            // closing the platform input connection. That retires authority
+            // over old byte offsets, not subsequent insertion-only input.
+            let Some(anchor) = self.ime_anchor().filter(|anchor| {
+                anchor.buffer == active.anchor.buffer
+                    && anchor.window == active.anchor.window
+                    && anchor.multibyte == active.anchor.multibyte
+                    && anchor.selection_anchor == active.anchor.selection_anchor
+            }) else {
+                return Ok(Value::NIL);
+            };
+            active = ActiveComposition { start: anchor.point, anchor };
+            if before_bytes != 0 || after_bytes != 0 {
+                self.composition.active = Some(active);
+                return Ok(Value::NIL);
+            }
+        }
+        if after_bytes != 0 {
             return Ok(Value::NIL);
         }
         let buffer = self
@@ -103,6 +121,9 @@ impl crate::Context {
         if self.ime_anchor() != Some(active.anchor)
             || self.composition.operation_revision != operation_revision
         {
+            if self.composition.operation_revision == operation_revision {
+                self.composition.active = Some(active);
+            }
             return Ok(Value::NIL);
         }
         self.buffers.replace_buffer_measured_region_lisp_string(
@@ -134,7 +155,6 @@ impl crate::Context {
             .publish_conversion_edits(active.anchor.buffer, deletion.into_iter().chain(insertion));
         editfns::signal_after_text_change(self, change)?;
         if let Some(anchor) = updated
-            && self.ime_anchor() == Some(anchor)
             && self.composition.operation_revision == operation_revision
         {
             self.composition.active = Some(ActiveComposition {
