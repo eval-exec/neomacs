@@ -199,6 +199,14 @@ jobs:
           -l test/src/sqlite-tests.el
           -f ert-run-tests-batch-and-exit
 
+      - name: Test browser HTTP Lisp adapter
+        shell: bash
+        run: >-
+          "${{ matrix.binary }}" --batch -Q
+          -L lisp/url
+          -l test/lisp/url/url-neomacs-http-tests.el
+          -f ert-run-tests-batch-and-exit
+
       - name: Run unchanged upstream GNU file-notify ERT suite
         env:
           REMOTE_TEMPORARY_FILE_DIRECTORY: /dev/null
