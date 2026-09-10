@@ -84,11 +84,6 @@ fn gc_threshold_cap_from_env() -> Option<usize> {
     })
 }
 
-const EVAL_STACK_RED_ZONE: usize = 128 * 1024;
-const EVAL_STACK_SEGMENT: usize = 2 * 1024 * 1024;
-const STACK_GROWTH_PROBE_START_DEPTH: usize = 16;
-const STACK_GROWTH_PROBE_INTERVAL: usize = 16;
-
 /// Install GNU's target-width fixnum limit constants (`src/data.c`).
 ///
 /// These values cannot come from `i64`'s width: a portable image produced on
@@ -4424,16 +4419,14 @@ impl Context {
     #[inline]
     fn maybe_grow_eval_stack<R>(&mut self, callback: impl FnOnce(&mut Self) -> R) -> R {
         let depth = self.depth;
-        if depth < STACK_GROWTH_PROBE_START_DEPTH
-            || !depth.is_multiple_of(STACK_GROWTH_PROBE_INTERVAL)
-        {
+        if !super::stack_growth::should_probe(depth) {
             return callback(self);
         }
         native_stack::maybe_grow_tracking_jit_limit(
             self,
             Self::jit_stack_limit_mut,
-            EVAL_STACK_RED_ZONE,
-            EVAL_STACK_SEGMENT,
+            super::stack_growth::RED_ZONE,
+            super::stack_growth::SEGMENT,
             callback,
         )
     }
@@ -4445,8 +4438,8 @@ impl Context {
         native_stack::maybe_grow_tracking_jit_limit(
             self,
             Self::jit_stack_limit_mut,
-            EVAL_STACK_RED_ZONE,
-            EVAL_STACK_SEGMENT,
+            super::stack_growth::RED_ZONE,
+            super::stack_growth::SEGMENT,
             callback,
         )
     }
