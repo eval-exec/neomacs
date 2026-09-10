@@ -5,7 +5,7 @@
 
 use super::*;
 
-/// Owns the bindings and transient roots installed for one `let` body.
+/// Owns the bindings and transient roots installed for one `let`/`let*` body.
 /// Consumed exactly once, whether the body returns normally or unwinds.
 pub(super) struct ActiveLetScope {
     specpdl: usize,
@@ -19,17 +19,20 @@ impl Context {
         target_id: SymId,
         tail: Value,
     ) -> Option<Result<continuation::PreparedForm, Flow>> {
-        if matches!(
-            evaluator_handler(target_id),
-            Some(EvaluatorHandler::SpecialForm(SpecialFormHandler::Let))
-        ) {
-            return Some(
+        let entered = match evaluator_handler(target_id) {
+            Some(EvaluatorHandler::SpecialForm(SpecialFormHandler::Let)) => {
                 self.begin_let_value_named(surface_id, tail)
-                    .map(|(body, scope)| continuation::PreparedForm::LetBody { body, scope }),
-            );
-        }
-        self.try_special_form_with_surface(surface_id, target_id, tail)
-            .map(|result| result.map(continuation::PreparedForm::Value))
+            }
+            Some(EvaluatorHandler::SpecialForm(SpecialFormHandler::LetStar)) => {
+                self.begin_let_star_value_named(surface_id, tail)
+            }
+            _ => {
+                return self
+                    .try_special_form_with_surface(surface_id, target_id, tail)
+                    .map(|result| result.map(continuation::PreparedForm::Value));
+            }
+        };
+        Some(entered.map(|(body, scope)| continuation::PreparedForm::LetBody { body, scope }))
     }
 
     pub(super) fn try_special_form_value_id(
@@ -391,6 +394,16 @@ impl Context {
     }
 
     pub(super) fn sf_let_star_value_named(&mut self, call_name: SymId, tail: Value) -> EvalResult {
+        let (body, scope) = self.begin_let_star_value_named(call_name, tail)?;
+        let result = self.sf_progn_value(body);
+        self.finish_let_scope(scope, result)
+    }
+
+    fn begin_let_star_value_named(
+        &mut self,
+        call_name: SymId,
+        tail: Value,
+    ) -> Result<(Value, ActiveLetScope), Flow> {
         if tail.is_nil() {
             return Err(signal(
                 LispCondition::WrongNumberOfArguments,
@@ -488,13 +501,16 @@ impl Context {
         if let Err(error) = init_result {
             let result = self.unbind_to_with_result(specpdl_count, Err(error));
             self.restore_eval_temp_roots_to_sequence(temp_scope);
-            return result;
+            return result.map(|_| unreachable!("unwinding a binding error cannot return a value"));
         }
 
-        let result = self.sf_progn_value(body);
-        let result = self.unbind_to_with_result(specpdl_count, result);
-        self.restore_eval_temp_roots_to_sequence(temp_scope);
-        result
+        Ok((
+            body,
+            ActiveLetScope {
+                specpdl: specpdl_count,
+                temp_roots: temp_scope,
+            },
+        ))
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
