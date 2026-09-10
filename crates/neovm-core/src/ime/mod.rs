@@ -3,6 +3,7 @@
 mod composition;
 mod context;
 mod export;
+mod replacement;
 mod request;
 mod selection;
 mod surrounding;

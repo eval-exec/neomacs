@@ -5146,8 +5146,7 @@ impl crate::emacs_core::eval::Context {
                 self.handle_read_char_input_event(*event, tty_input_decoding)
             }
             InputEvent::ImeRequest(request) => {
-                request.dispatch(self)?;
-                Ok(None)
+                request.dispatch(self)
             }
             InputEvent::Ime { session, operation, emacs_frame_id } => {
                 self.route_keyboard_input_to_frame(emacs_frame_id);
