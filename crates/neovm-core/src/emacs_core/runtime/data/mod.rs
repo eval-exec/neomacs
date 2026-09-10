@@ -225,7 +225,7 @@ fn store_default_internal(
     // and discarded on every `let` of a per-buffer default.
     if ctx.runtime_binding_has_projection(resolved) {
         let visible = ctx.visible_variable_value_or_nil_by_id(resolved);
-        ctx.publish_runtime_binding_write_by_id(resolved, visible);
+        ctx.publish_runtime_binding_write_by_resolved_id(resolved, visible);
     }
     Ok(value)
 }

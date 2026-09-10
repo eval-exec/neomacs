@@ -4153,6 +4153,27 @@ impl Context {
         self.mark_redisplay_dirty_if_display_var(sym_id);
     }
 
+    /// The same publication for a caller that has already walked the alias
+    /// chain, which the bytecode `varset` path has: `assign_var_id` resolves
+    /// the symbol before it decides which cell to write, and then handed the
+    /// resolved id to a publisher that resolved it again.  On the call
+    /// microbenchmark that second walk ran 404,373 times -- once per variable
+    /// write -- to compute its own argument.
+    ///
+    /// The unresolved entry point above stays for callers that genuinely hold
+    /// a possibly-aliased symbol; `try_set_runtime_binding_by_id` is
+    /// `pub(crate)` and cannot promise otherwise.
+    pub(crate) fn publish_runtime_binding_write_by_resolved_id(
+        &mut self,
+        resolved: SymId,
+        value: Value,
+    ) {
+        self.sync_cached_runtime_binding_by_id(resolved, value);
+        self.sync_keyboard_runtime_binding_by_id(resolved, value);
+        self.refresh_gc_runtime_settings_after_change_by_id(resolved);
+        self.mark_redisplay_dirty_if_display_var_resolved(resolved);
+    }
+
     /// Whether `publish_runtime_binding_write_by_id` would do anything for
     /// `resolved` (an alias-resolved symbol): the union of the four
     /// projections' own tests.  Lets a writer skip computing the value Lisp
@@ -6232,7 +6253,7 @@ impl Context {
                 .buffers
                 .set_buffer_local_property_by_sym_id(buffer_id, resolved, value);
             // Finding 6: `setq-local`/`set` on a display-affecting slot.
-            self.mark_redisplay_dirty_if_display_var(resolved);
+            self.mark_redisplay_dirty_if_display_var_resolved(resolved);
             return Ok(());
         }
 
@@ -6265,7 +6286,7 @@ impl Context {
             None,
         );
         // Finding 6: a LOCALIZED display var set buffer-locally.
-        self.mark_redisplay_dirty_if_display_var(resolved);
+        self.mark_redisplay_dirty_if_display_var_resolved(resolved);
         Ok(())
     }
 

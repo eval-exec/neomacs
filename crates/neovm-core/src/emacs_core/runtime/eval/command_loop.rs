@@ -1457,6 +1457,19 @@ impl Context {
     pub(crate) fn mark_redisplay_dirty_if_display_var(&mut self, sym_id: SymId) {
         let resolved =
             builtins::resolve_variable_alias_id_in_obarray(&self.obarray, sym_id).unwrap_or(sym_id);
+        self.mark_redisplay_dirty_if_display_var_resolved(resolved);
+    }
+
+    /// The same check for a caller that has already walked the alias chain.
+    ///
+    /// Resolving an alias is not free: it is a chunked symbol-slot load plus a
+    /// redirect test, ~28 instructions, and it runs on every variable write.
+    /// The store paths resolve the symbol before they decide where to put the
+    /// value, then handed the *resolved* id to a function that resolved it a
+    /// second time -- a walk whose answer is, by construction, its own
+    /// argument.  Measured on the call microbenchmark, this happened twice per
+    /// variable write: 805,733 resolutions for 400,312 writes.
+    pub(crate) fn mark_redisplay_dirty_if_display_var_resolved(&mut self, resolved: SymId) {
         if crate::buffer::buffer::variable_affects_display_by_sym_id(resolved) {
             self.invalidate_redisplay();
             // GNU covers the three chrome formats with an

@@ -5873,7 +5873,7 @@ impl<'a> Vm<'a> {
                             }
                         }
                         self.ctx
-                            .publish_runtime_binding_write_by_id(resolved, value);
+                            .publish_runtime_binding_write_by_resolved_id(resolved, value);
                         return Ok(());
                     }
                 }
@@ -5914,7 +5914,7 @@ impl<'a> Vm<'a> {
                 buf.replace_local_var_alist(new_alist);
             }
             self.ctx
-                .publish_runtime_binding_write_by_id(resolved, value);
+                .publish_runtime_binding_write_by_resolved_id(resolved, value);
             return Ok(());
         }
 
@@ -5932,7 +5932,7 @@ impl<'a> Vm<'a> {
         )?;
         crate::emacs_core::eval::set_runtime_binding_in_state(&mut *self.ctx, resolved, value)?;
         self.ctx
-            .publish_runtime_binding_write_by_id(resolved, value);
+            .publish_runtime_binding_write_by_resolved_id(resolved, value);
         Ok(())
     }
 
