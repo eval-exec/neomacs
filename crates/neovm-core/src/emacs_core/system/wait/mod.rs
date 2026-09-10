@@ -10,8 +10,8 @@
 mod host_input;
 pub use host_input::{HostInputWaitBackend, HostInputWaitError};
 
-use std::time::Duration;
 use neomacs_host_runtime::time::Instant;
+use std::time::Duration;
 
 use crate::keyboard::SpecialInputServiceOutcome;
 
@@ -700,6 +700,10 @@ impl WaitRequest {
             return Some(WaitCompletion::CommandInputPending);
         }
 
+        if self.keyboard == KeyboardWaitPolicy::ReadCommandInput && outcome.read_control_pending {
+            return Some(WaitCompletion::SpecialInputActivity);
+        }
+
         // Timer and process callbacks can replace the displayed buffer. Return
         // to read_char so its bounded display maintenance can discover that
         // change even when its previous coverage request had no more work.
@@ -860,6 +864,8 @@ struct WaitServiceOutcome {
     special_input_activity: WaitSpecialInputActivity,
     timers_fired: bool,
     command_input_pending: bool,
+    // Ordered read-side requests are serviceable but are not command input.
+    read_control_pending: bool,
 }
 
 impl WaitServiceOutcome {
@@ -1153,6 +1159,11 @@ impl super::eval::Context {
         if request.needs_redisplay_after_service(special_input, outcome) {
             self.redisplay()?;
         }
+        outcome.read_control_pending = self
+            .command_loop
+            .keyboard
+            .pending_input_events
+            .has_read_control_front();
         Ok(outcome)
     }
 
