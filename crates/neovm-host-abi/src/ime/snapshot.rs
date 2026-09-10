@@ -1,5 +1,7 @@
 //! Owned, bounded Unicode observations of an editor insertion context.
 
+use super::{ImeSelection, ImeUtf16Offset};
+
 /// VM-issued identity of one surrounding-text observation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ImeSnapshotId(pub u64);
@@ -14,6 +16,21 @@ pub struct ImeTextSnapshot {
 }
 
 impl ImeTextSnapshot {
+    /// Convert platform code-unit offsets using exactly this observation.
+    /// Preserve selection direction and snapshot identity. Reject offsets past
+    /// the excerpt or inside a surrogate pair; never clamp or retarget them.
+    pub fn selection_from_utf16(
+        &self,
+        cursor: ImeUtf16Offset,
+        anchor: ImeUtf16Offset,
+    ) -> Option<ImeSelection> {
+        Some(ImeSelection {
+            snapshot: self.id,
+            cursor: cursor.byte_offset(&self.text)?,
+            anchor: anchor.byte_offset(&self.text)?,
+        })
+    }
+
     /// Stay below winit's 4000-byte surrounding-text transport limit.
     pub const MAX_BYTES: usize = 3999;
 
