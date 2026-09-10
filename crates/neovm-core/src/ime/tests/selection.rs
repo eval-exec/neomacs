@@ -1,6 +1,51 @@
 use crate::Value;
 
 #[test]
+fn ime_selection_rejects_field_changes_without_text_edits() {
+    use neovm_host_abi::ime::{ImeSelection, ImeSelectionOutcome};
+    for change in [
+        "(put-text-property 1 3 'field 'protected)",
+        "(overlay-put (make-overlay 1 3) 'field 'protected)",
+    ] {
+        let mut eval = crate::Context::new();
+        eval.eval_str(r##"(insert "abc")"##).unwrap();
+        let snapshot = eval.ime_surrounding_text().unwrap();
+        eval.eval_str(change).unwrap();
+        assert_eq!(
+            eval.ime_set_selection(ImeSelection {
+                snapshot: snapshot.id(),
+                cursor: 0,
+                anchor: 0,
+            })
+            .unwrap(),
+            ImeSelectionOutcome::StaleSnapshot,
+            "{change}"
+        );
+        assert_eq!(eval.eval_str("(point)").unwrap(), Value::fixnum(4));
+    }
+}
+
+#[test]
+fn ime_selection_rejects_a_context_that_became_private_after_capture() {
+    use neovm_host_abi::ime::{ImeSelection, ImeSelectionOutcome};
+    let mut eval = crate::Context::new();
+    eval.eval_str(r##"(insert "secret")"##).unwrap();
+    let snapshot = eval.ime_surrounding_text().unwrap();
+    eval.eval_str("(setq overriding-text-conversion-style 'password)")
+        .unwrap();
+    assert_eq!(
+        eval.ime_set_selection(ImeSelection {
+            snapshot: snapshot.id(),
+            cursor: 0,
+            anchor: 0,
+        })
+        .unwrap(),
+        ImeSelectionOutcome::StaleSnapshot
+    );
+    assert_eq!(eval.eval_str("(point)").unwrap(), Value::fixnum(7));
+}
+
+#[test]
 fn ime_surrounding_selection_rejects_partial_characters_and_changed_contexts() {
     use neovm_host_abi::ime::{ImeSelection, ImeSelectionOutcome};
     for offset in [2, 3, 4, 99] {
