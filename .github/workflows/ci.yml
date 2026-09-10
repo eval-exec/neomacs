@@ -718,6 +718,11 @@ jobs:
           "$TMPDIR/browser-smoke-venv/bin/python"
           crates/neomacs-wasm/tests/browser_http_smoke.py --headless
 
+      - name: Exercise OPFS failed-save preservation in default Chrome
+        run: >-
+          "$TMPDIR/browser-smoke-venv/bin/python"
+          crates/neomacs-wasm/tests/browser_opfs_write_smoke.py
+
       - name: Exercise an ordinary warm-cache browser upgrade
         run: |
           "$TMPDIR/browser-smoke-venv/bin/python" \
