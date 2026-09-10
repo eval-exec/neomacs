@@ -163,6 +163,8 @@ enum PendingInputPolicy {
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum FrontendEventSemantics {
     Command,
+    /// Ordered work answered by read_char, without becoming a Lisp command.
+    ReadControl,
     Internal(InternalFrontendEvent),
     MouseMotion,
     ServiceDuringWait,
@@ -205,6 +207,8 @@ fn semantics(event: &InputEvent) -> FrontendEventSemantics {
         | InputEvent::ToolBarClick { .. }
         | InputEvent::PresentedPointer { .. }
         | InputEvent::MenuBarClick { .. } => Command,
+        // Answer ordered control requests at the next input read, after edits.
+        InputEvent::ImeRequest(_) => FrontendEventSemantics::ReadControl,
         InputEvent::MouseMove { .. } => MouseMotion,
         InputEvent::PixelScroll { .. } => special_input(PendingInputPolicy::Always, true, false),
         InputEvent::PresentedRegion {
@@ -278,7 +282,8 @@ pub(crate) fn interrupts(event: &InputEvent) -> bool {
     match semantics(event) {
         FrontendEventSemantics::Command => true,
         FrontendEventSemantics::SpecialInput { interrupts, .. } => interrupts,
-        FrontendEventSemantics::Internal(_)
+        FrontendEventSemantics::ReadControl
+        | FrontendEventSemantics::Internal(_)
         | FrontendEventSemantics::MouseMotion
         | FrontendEventSemantics::ServiceDuringWait => false,
     }
@@ -286,7 +291,9 @@ pub(crate) fn interrupts(event: &InputEvent) -> bool {
 
 pub(crate) fn is_wait_special(event: &InputEvent, track_mouse: bool) -> bool {
     match semantics(event) {
-        FrontendEventSemantics::Command | FrontendEventSemantics::Internal(_) => false,
+        FrontendEventSemantics::Command
+        | FrontendEventSemantics::ReadControl
+        | FrontendEventSemantics::Internal(_) => false,
         FrontendEventSemantics::MouseMotion => !track_mouse,
         FrontendEventSemantics::ServiceDuringWait => true,
         FrontendEventSemantics::SpecialInput {
@@ -304,7 +311,9 @@ fn counts_as_input(
 ) -> bool {
     match semantics(event) {
         FrontendEventSemantics::Command => true,
-        FrontendEventSemantics::Internal(_) | FrontendEventSemantics::ServiceDuringWait => false,
+        FrontendEventSemantics::ReadControl
+        | FrontendEventSemantics::Internal(_)
+        | FrontendEventSemantics::ServiceDuringWait => false,
         FrontendEventSemantics::MouseMotion => track_mouse,
         FrontendEventSemantics::SpecialInput { pending, .. } => match pending {
             PendingInputPolicy::Always => true,
@@ -327,6 +336,7 @@ mod tests {
     #[derive(Debug, PartialEq, Eq)]
     enum FrontendEventClass {
         Command,
+        ReadControl,
         LispSpecial,
         Internal,
     }
@@ -396,6 +406,7 @@ mod tests {
     ) {
         let actual_class = match semantics(&event) {
             FrontendEventSemantics::Command => FrontendEventClass::Command,
+            FrontendEventSemantics::ReadControl => FrontendEventClass::ReadControl,
             FrontendEventSemantics::Internal(_) => FrontendEventClass::Internal,
             FrontendEventSemantics::MouseMotion
             | FrontendEventSemantics::ServiceDuringWait
