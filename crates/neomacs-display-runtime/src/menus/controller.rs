@@ -1,6 +1,6 @@
 //! One menu session and its native popup chain.
 
-use super::session::MenuSession;
+use super::MenuSession;
 use crate::presentation::{PopupCommit, PopupHost};
 use neomacs_display_protocol::{
     Point, PopupConstraintPolicy, PopupPlacement, PopupPreferredSide, Rect, menu::MenuPanelPaint,
@@ -29,7 +29,7 @@ pub(crate) struct MenuPresentation {
     request: Option<MenuRequest>,
     host: PopupHost,
     panels: Vec<PanelState>,
-    lifetime: super::session::MenuLifetime,
+    lifetime: super::MenuLifetime,
     menu_bar: super::menu_bar::MenuBarTracking,
     modifiers: winit::keyboard::ModifiersState,
     // A dismissing press still owns its matching release after the menu closes.

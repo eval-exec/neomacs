@@ -52,6 +52,7 @@ libc.workspace = true
 
 # NeoVM Elisp evaluator
 neovm-host-abi.workspace = true
+neomacs-app.workspace = true
 neovm-core.workspace = true
 neomacs-display-protocol.workspace = true
 neomacs-video-model.workspace = true
