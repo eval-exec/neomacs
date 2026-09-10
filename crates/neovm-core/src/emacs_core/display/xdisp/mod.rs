@@ -1309,7 +1309,11 @@ pub(crate) fn format_mode_line_from_state(
     args: Vec<Value>,
 ) -> Result<Option<Value>, Flow> {
     expect_args_range("format-mode-line", &args, 1, 4)?;
-    validate_optional_window_designator_in_state(frames, args.get(2), "windowp")?;
+    validate_optional_window_designator_in_state(
+        frames,
+        args.get(2),
+        crate::emacs_core::window_cmds::WindowDomain::Any,
+    )?;
     validate_optional_buffer_designator_in_state(buffers, args.get(3))?;
 
     let target_buffer = resolve_mode_line_buffer_in_state(frames, args.get(2), args.get(3));
@@ -1403,7 +1407,13 @@ pub fn format_mode_line_for_display_with_sources(
     target_cols: usize,
 ) -> ModeLineDisplayOutput {
     let args = [format_val, Value::NIL, window, buffer];
-    if validate_optional_window_designator(eval, args.get(2), "windowp").is_err() {
+    if validate_optional_window_designator(
+        eval,
+        args.get(2),
+        crate::emacs_core::window_cmds::WindowDomain::Any,
+    )
+    .is_err()
+    {
         return ModeLineDisplayOutput::from_root_string(Value::string(""));
     }
     if validate_optional_buffer_designator(eval, args.get(3)).is_err() {
@@ -1504,7 +1514,11 @@ pub(crate) fn finish_format_mode_line_in_eval(
     args: &[Value],
 ) -> EvalResult {
     expect_args_range("format-mode-line", args, 1, 4)?;
-    validate_optional_window_designator(eval, args.get(2), "windowp")?;
+    validate_optional_window_designator(
+        eval,
+        args.get(2),
+        crate::emacs_core::window_cmds::WindowDomain::Any,
+    )?;
     validate_optional_buffer_designator(eval, args.get(3))?;
 
     let target_buffer = resolve_mode_line_buffer(eval, args.get(2), args.get(3));
@@ -1559,7 +1573,11 @@ pub(crate) fn finish_format_mode_line_in_state_with_eval(
     mut eval_form: impl FnMut(&Value, &crate::buffer::BufferManager) -> Result<Value, Flow>,
 ) -> EvalResult {
     expect_args_range("format-mode-line", args, 1, 4)?;
-    validate_optional_window_designator_in_state(frames, args.get(2), "windowp")?;
+    validate_optional_window_designator_in_state(
+        frames,
+        args.get(2),
+        crate::emacs_core::window_cmds::WindowDomain::Any,
+    )?;
     validate_optional_buffer_designator_in_state(buffers, args.get(3))?;
 
     let target_buffer = resolve_mode_line_buffer_in_state(frames, args.get(2), args.get(3));
@@ -4505,7 +4523,11 @@ pub(crate) fn builtin_pos_visible_in_window_p_ctx(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("pos-visible-in-window-p", &args, 0, 3)?;
-    validate_optional_window_designator_in_state(&eval.frames, args.get(1), "window-live-p")?;
+    validate_optional_window_designator_in_state(
+        &eval.frames,
+        args.get(1),
+        crate::emacs_core::window_cmds::WindowDomain::Live,
+    )?;
     // GNU `pos_visible_p` (xdisp.c): `if (FRAME_INITIAL_P (frame)) return
     // false;` — nothing is ever visible on the bootstrap/--batch frame, no
     // matter where window-start sits.  It is a frame-kind rule, not a
@@ -4550,7 +4572,11 @@ fn pos_visible_in_window_p_impl(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("pos-visible-in-window-p", &args, 0, 3)?;
-    validate_optional_window_designator_in_state(&*frames, args.get(1), "window-live-p")?;
+    validate_optional_window_designator_in_state(
+        &*frames,
+        args.get(1),
+        crate::emacs_core::window_cmds::WindowDomain::Live,
+    )?;
     let partially = args.get(2).is_some_and(|v| v.is_truthy());
     if let Some((_, metrics)) =
         resolve_exact_visible_metrics(frames, buffers, args.get(1), args.first())?
@@ -4607,7 +4633,11 @@ pub(crate) fn builtin_fringe_bitmaps_at_pos(
 ) -> EvalResult {
     expect_args_range("fringe-bitmaps-at-pos", &args, 0, 2)?;
     let window_arg = args.get(1).copied().unwrap_or(Value::NIL);
-    validate_optional_window_designator_in_state(&eval.frames, args.get(1), "window-live-p")?;
+    validate_optional_window_designator_in_state(
+        &eval.frames,
+        args.get(1),
+        crate::emacs_core::window_cmds::WindowDomain::Live,
+    )?;
     let Some((frame_id, window_id)) = resolve_live_window_identity(&eval.frames, args.get(1))?
     else {
         return Ok(Value::NIL);
@@ -4715,7 +4745,11 @@ fn window_line_height_impl(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("window-line-height", &args, 0, 2)?;
-    validate_optional_window_designator_in_state(&*frames, args.get(1), "window-live-p")?;
+    validate_optional_window_designator_in_state(
+        &*frames,
+        args.get(1),
+        crate::emacs_core::window_cmds::WindowDomain::Live,
+    )?;
     if let Some((fid, wid)) = resolve_live_window_identity(frames, args.get(1))?
         && let Some(frame) = frames.get(fid)
         && let Some(snapshot) = frame.redisplay_snapshot(wid)
@@ -5219,7 +5253,7 @@ pub(crate) fn builtin_tool_bar_height_ctx(
             &mut eval.frames,
             &mut eval.buffers,
             Some(frame),
-            "framep",
+            crate::emacs_core::window_cmds::FrameDomain::Any,
         )?,
         None => super::window_cmds::ensure_selected_frame_id_in_state(
             &mut eval.frames,
@@ -5264,7 +5298,7 @@ pub(crate) fn builtin_tab_bar_height_ctx(
             &mut eval.frames,
             &mut eval.buffers,
             Some(frame),
-            "framep",
+            crate::emacs_core::window_cmds::FrameDomain::Any,
         )?,
         None => super::window_cmds::ensure_selected_frame_id_in_state(
             &mut eval.frames,
@@ -5346,15 +5380,22 @@ pub(crate) fn builtin_long_line_optimizations_p(args: Vec<Value>) -> EvalResult 
 fn validate_optional_window_designator(
     eval: &super::eval::Context,
     value: Option<&Value>,
-    predicate: &str,
+    predicate: crate::emacs_core::window_cmds::WindowDomain,
 ) -> Result<(), Flow> {
     validate_optional_window_designator_in_state(&eval.frames, value, predicate)
 }
 
+/// Validate an optional WINDOW argument against the GNU decoder the caller
+/// names.
+///
+/// The domain used to arrive as a `&str` that chose only the error TEXT, while
+/// the check was always `find_window` -- so asking for `window-live-p` still
+/// admitted an internal window and merely misreported the reason on failure.
+/// Taking `WindowDomain` makes the predicate and the lookup the same decision.
 fn validate_optional_window_designator_in_state(
     frames: &crate::window::FrameManager,
     value: Option<&Value>,
-    predicate: &str,
+    predicate: crate::emacs_core::window_cmds::WindowDomain,
 ) -> Result<(), Flow> {
     let Some(windowish) = value else {
         return Ok(());
@@ -5370,18 +5411,14 @@ fn validate_optional_window_designator_in_state(
             .filter(|&id| id >= 0)
             .map(|id| WindowId(id as u64))
     };
-    if let Some(wid) = wid {
-        for fid in frames.frame_list() {
-            if let Some(frame) = frames.get(fid)
-                && frame.find_window(wid).is_some()
-            {
-                return Ok(());
-            }
-        }
+    if let Some(wid) = wid
+        && predicate.frame_of(frames, wid).is_some()
+    {
+        return Ok(());
     }
     Err(signal(
         LispCondition::WrongTypeArgument,
-        vec![Value::symbol(predicate), *windowish],
+        vec![Value::symbol(predicate.predicate()), *windowish],
     ))
 }
 
@@ -6504,7 +6541,11 @@ pub(crate) fn builtin_posn_at_point(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("posn-at-point", &args, 0, 2)?;
-    validate_optional_window_designator_in_state(&eval.frames, args.get(1), "window-live-p")?;
+    validate_optional_window_designator_in_state(
+        &eval.frames,
+        args.get(1),
+        crate::emacs_core::window_cmds::WindowDomain::Live,
+    )?;
     let Some((window_id, metrics)) =
         resolve_exact_visible_metrics_with_layout(eval, args.get(1), args.first())?
     else {

@@ -154,7 +154,12 @@ fn frame_window_system_symbol_in_state(
     buffers: &mut crate::buffer::BufferManager,
     frame: Option<&Value>,
 ) -> Result<Option<Value>, Flow> {
-    let frame_id = super::window_cmds::resolve_frame_id_in_state(frames, buffers, frame, "framep")?;
+    let frame_id = super::window_cmds::resolve_frame_id_in_state(
+        frames,
+        buffers,
+        frame,
+        crate::emacs_core::window_cmds::FrameDomain::Any,
+    )?;
     Ok(frames
         .get(frame_id)
         .and_then(|frame| frame.effective_window_system()))
@@ -2512,7 +2517,7 @@ pub(crate) fn builtin_x_focus_frame(eval: &mut Context, args: Vec<Value>) -> Eva
         &mut eval.frames,
         &mut eval.buffers,
         args.first(),
-        "frame-live-p",
+        crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
     if eval
         .frames

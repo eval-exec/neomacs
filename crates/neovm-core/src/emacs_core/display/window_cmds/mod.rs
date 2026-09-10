@@ -87,14 +87,14 @@ pub(crate) fn decode_live_window_id(
     eval: &mut super::eval::Context,
     arg: Option<&Value>,
 ) -> Result<WindowId, Flow> {
-    resolve_window_id_with_pred(eval, arg, "window-live-p").map(|(_frame, window)| window)
+    resolve_window_id_with_pred(eval, arg, WindowDomain::Live).map(|(_frame, window)| window)
 }
 
 fn decode_valid_window_id(
     eval: &mut super::eval::Context,
     arg: Option<&Value>,
 ) -> Result<WindowId, Flow> {
-    resolve_window_id_with_pred(eval, arg, "window-valid-p").map(|(_frame, window)| window)
+    resolve_window_id_with_pred(eval, arg, WindowDomain::Valid).map(|(_frame, window)| window)
 }
 
 /// `(window-new-pixel &optional WINDOW)` -> WINDOW's pending pixel size.
@@ -494,15 +494,75 @@ fn window_value(wid: WindowId) -> Value {
     Value::make_window(wid.0)
 }
 
+/// GNU's two frame-argument domains, as a closed set.
+///
+/// The frame decoders differ only in whether a dead frame is admitted, and --
+/// like the window ones -- each fixes the predicate its rejection reports.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, IntoStaticStr)]
+pub(crate) enum FrameDomain {
+    /// `decode_live_frame` / `CHECK_LIVE_FRAME`.
+    #[strum(serialize = "frame-live-p")]
+    Live,
+    /// `decode_any_frame` / `CHECK_FRAME`: any frame object.
+    #[strum(serialize = "framep")]
+    Any,
+}
+
+impl FrameDomain {
+    /// The symbol a rejection reports, derived from the variant.
+    pub(crate) fn predicate(self) -> &'static str {
+        self.into()
+    }
+}
+
+/// GNU's three window-argument domains, as a closed set.
+///
+/// Every subr that takes a WINDOW names one of GNU's decoders, and the decoder
+/// fixes BOTH which windows are admitted and which predicate a rejection
+/// reports.  Keeping them together is the point: the predicate used to be a
+/// `&str` passed alongside a hard-coded lookup, so
+/// `validate_optional_window_designator_in_state(.., WindowDomain::Live)` reported
+/// `window-live-p` while still admitting internal windows -- a decoder that
+/// lied about its own contract.  Here the predicate is derived from the variant
+/// and the lookup is a method on it, so the two cannot drift, and adding a
+/// domain is a compile error at every site rather than a silent default.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, IntoStaticStr)]
+pub(crate) enum WindowDomain {
+    /// `decode_live_window` / `CHECK_LIVE_WINDOW`: a live leaf window only.
+    #[strum(serialize = "window-live-p")]
+    Live,
+    /// `decode_valid_window` / `CHECK_VALID_WINDOW`: live OR internal.
+    #[strum(serialize = "window-valid-p")]
+    Valid,
+    /// `decode_any_window` / `CHECK_WINDOW`: any window object, deleted included.
+    #[strum(serialize = "windowp")]
+    Any,
+}
+
+impl WindowDomain {
+    /// The frame owning WINDOW in this domain, or `None` when WINDOW is outside
+    /// it.  Exhaustive by construction.
+    pub(crate) fn frame_of(self, frames: &FrameManager, window: WindowId) -> Option<FrameId> {
+        match self {
+            Self::Live => frames.find_window_frame_id(window),
+            Self::Valid => frames.find_valid_window_frame_id(window),
+            Self::Any => frames.any_window_frame_id(window),
+        }
+    }
+
+    /// The symbol a rejection reports, derived from the variant rather than
+    /// carried beside it.
+    pub(crate) fn predicate(self) -> &'static str {
+        self.into()
+    }
+}
+
 fn resolve_window_frame_id_for_pred(
     frames: &FrameManager,
     wid: WindowId,
-    pred: &str,
+    pred: WindowDomain,
 ) -> Option<FrameId> {
-    match pred {
-        "window-valid-p" => frames.find_valid_window_frame_id(wid),
-        _ => frames.find_window_frame_id(wid),
-    }
+    pred.frame_of(frames, wid)
 }
 
 fn window_id_from_designator(value: &Value) -> Option<WindowId> {
@@ -520,7 +580,7 @@ fn window_id_from_designator(value: &Value) -> Option<WindowId> {
 fn resolve_window_id_with_pred(
     eval: &mut super::eval::Context,
     arg: Option<&Value>,
-    pred: &str,
+    pred: WindowDomain,
 ) -> Result<(FrameId, WindowId), Flow> {
     resolve_window_id_with_pred_in_state(&mut eval.frames, &mut eval.buffers, arg, pred)
 }
@@ -529,7 +589,7 @@ fn resolve_window_id_with_pred_in_state(
     frames: &mut FrameManager,
     buffers: &mut BufferManager,
     arg: Option<&Value>,
-    pred: &str,
+    pred: WindowDomain,
 ) -> Result<(FrameId, WindowId), Flow> {
     if arg.is_none_or(|v| v.is_nil()) {
         let frame_id = ensure_selected_frame_id_in_state(frames, buffers);
@@ -542,7 +602,7 @@ fn resolve_window_id_with_pred_in_state(
     let Some(wid) = window_id_from_designator(val) else {
         return Err(signal(
             LispCondition::WrongTypeArgument,
-            vec![Value::symbol(pred), *val],
+            vec![Value::symbol(pred.predicate()), *val],
         ));
     };
     if let Some(frame_id) = resolve_window_frame_id_for_pred(frames, wid, pred) {
@@ -550,7 +610,7 @@ fn resolve_window_id_with_pred_in_state(
     } else {
         Err(signal(
             LispCondition::WrongTypeArgument,
-            vec![Value::symbol(pred), *val],
+            vec![Value::symbol(pred.predicate()), *val],
         ))
     }
 }
@@ -560,7 +620,7 @@ fn resolve_window_id_in_state(
     buffers: &mut BufferManager,
     arg: Option<&Value>,
 ) -> Result<(FrameId, WindowId), Flow> {
-    resolve_window_id_with_pred_in_state(frames, buffers, arg, "window-live-p")
+    resolve_window_id_with_pred_in_state(frames, buffers, arg, WindowDomain::Live)
 }
 
 fn window_is_rightmost(frame: &crate::window::Frame, window_id: WindowId) -> bool {
@@ -579,7 +639,7 @@ fn resolve_window_object_id_with_pred_in_state(
     frames: &mut FrameManager,
     buffers: &mut BufferManager,
     arg: Option<&Value>,
-    pred: &str,
+    pred: WindowDomain,
 ) -> Result<WindowId, Flow> {
     if arg.is_none_or(|v| v.is_nil()) {
         let (_fid, wid) = resolve_window_id_with_pred_in_state(frames, buffers, None, pred)?;
@@ -589,7 +649,7 @@ fn resolve_window_object_id_with_pred_in_state(
     let Some(wid) = window_id_from_designator(val) else {
         return Err(signal(
             LispCondition::WrongTypeArgument,
-            vec![Value::symbol(pred), *val],
+            vec![Value::symbol(pred.predicate()), *val],
         ));
     };
     if frames.is_window_object_id(wid) {
@@ -597,7 +657,7 @@ fn resolve_window_object_id_with_pred_in_state(
     } else {
         Err(signal(
             LispCondition::WrongTypeArgument,
-            vec![Value::symbol(pred), *val],
+            vec![Value::symbol(pred.predicate()), *val],
         ))
     }
 }
@@ -636,7 +696,7 @@ fn resolve_window_id_or_error_in_state(
 pub(crate) fn resolve_frame_id(
     eval: &mut super::eval::Context,
     arg: Option<&Value>,
-    predicate: &str,
+    predicate: FrameDomain,
 ) -> Result<FrameId, Flow> {
     resolve_frame_id_in_state(&mut eval.frames, &mut eval.buffers, arg, predicate)
 }
@@ -645,7 +705,7 @@ pub(crate) fn resolve_frame_id_in_state(
     frames: &mut FrameManager,
     buffers: &mut BufferManager,
     arg: Option<&Value>,
-    predicate: &str,
+    predicate: FrameDomain,
 ) -> Result<FrameId, Flow> {
     if arg.is_none_or(|v| v.is_nil()) {
         return Ok(ensure_selected_frame_id_in_state(frames, buffers));
@@ -659,7 +719,7 @@ pub(crate) fn resolve_frame_id_in_state(
             } else {
                 Err(signal(
                     LispCondition::WrongTypeArgument,
-                    vec![Value::symbol(predicate), Value::fixnum(n)],
+                    vec![Value::symbol(predicate.predicate()), Value::fixnum(n)],
                 ))
             }
         }
@@ -671,13 +731,16 @@ pub(crate) fn resolve_frame_id_in_state(
             } else {
                 Err(signal(
                     LispCondition::WrongTypeArgument,
-                    vec![Value::symbol(predicate), Value::make_frame(raw_id)],
+                    vec![
+                        Value::symbol(predicate.predicate()),
+                        Value::make_frame(raw_id),
+                    ],
                 ))
             }
         }
         _ => Err(signal(
             LispCondition::WrongTypeArgument,
-            vec![Value::symbol(predicate), *val],
+            vec![Value::symbol(predicate.predicate()), *val],
         )),
     }
 }
@@ -686,7 +749,7 @@ fn resolve_frame_or_window_frame_id_in_state(
     frames: &mut FrameManager,
     buffers: &mut BufferManager,
     arg: Option<&Value>,
-    predicate: &str,
+    predicate: FrameDomain,
 ) -> Result<FrameId, Flow> {
     if arg.is_none_or(|v| v.is_nil()) {
         return Ok(ensure_selected_frame_id_in_state(frames, buffers));
@@ -701,7 +764,10 @@ fn resolve_frame_or_window_frame_id_in_state(
             } else {
                 Err(signal(
                     LispCondition::WrongTypeArgument,
-                    vec![Value::symbol(predicate), Value::make_frame(raw_id)],
+                    vec![
+                        Value::symbol(predicate.predicate()),
+                        Value::make_frame(raw_id),
+                    ],
                 ))
             }
         }
@@ -716,7 +782,7 @@ fn resolve_frame_or_window_frame_id_in_state(
             }
             Err(signal(
                 LispCondition::WrongTypeArgument,
-                vec![Value::symbol(predicate), Value::fixnum(n)],
+                vec![Value::symbol(predicate.predicate()), Value::fixnum(n)],
             ))
         }
         ValueKind::Veclike(VecLikeType::Window) => {
@@ -727,12 +793,15 @@ fn resolve_frame_or_window_frame_id_in_state(
             }
             Err(signal(
                 LispCondition::WrongTypeArgument,
-                vec![Value::symbol(predicate), Value::make_window(raw_id)],
+                vec![
+                    Value::symbol(predicate.predicate()),
+                    Value::make_window(raw_id),
+                ],
             ))
         }
         _ => Err(signal(
             LispCondition::WrongTypeArgument,
-            vec![Value::symbol(predicate), *val],
+            vec![Value::symbol(predicate.predicate()), *val],
         )),
     }
 }
@@ -930,7 +999,7 @@ pub(crate) fn window_line_wrap(
         &mut eval.frames,
         &mut eval.buffers,
         window.as_ref(),
-        "window-live-p",
+        crate::emacs_core::window_cmds::WindowDomain::Live,
     ) else {
         return LineWrap::WindowWrap;
     };
@@ -1277,8 +1346,12 @@ pub(crate) fn builtin_frame_selected_window(
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("frame-selected-window", &args, 1)?;
-    let fid =
-        resolve_frame_or_window_frame_id_in_state(frames, buffers, args.first(), "frame-live-p")?;
+    let fid = resolve_frame_or_window_frame_id_in_state(
+        frames,
+        buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
     let frame = frames
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
@@ -1302,7 +1375,12 @@ pub(crate) fn builtin_frame_old_selected_window(
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("frame-old-selected-window", &args, 1)?;
-    let fid = resolve_frame_id_in_state(frames, buffers, args.first(), "frame-live-p")?;
+    let fid = resolve_frame_id_in_state(
+        frames,
+        buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
     let frame = frames
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
@@ -1346,7 +1424,11 @@ pub(crate) fn builtin_tty_frame_edges(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("tty-frame-edges", &args, 2)?;
-    let fid = resolve_frame_id(eval, args.first(), "frame-live-p")?;
+    let fid = resolve_frame_id(
+        eval,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
     let frame = eval
         .frames
         .get(fid)
@@ -1369,7 +1451,11 @@ pub(crate) fn builtin_neomacs_frame_edges(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("neomacs-frame-edges", &args, 2)?;
-    let fid = resolve_frame_id(eval, args.first(), "frame-live-p")?;
+    let fid = resolve_frame_id(
+        eval,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
     let frame = eval
         .frames
         .get(fid)
@@ -1414,7 +1500,11 @@ pub(crate) fn builtin_tty_frame_geometry(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("tty-frame-geometry", &args, 1)?;
-    let fid = resolve_frame_id(eval, args.first(), "frame-live-p")?;
+    let fid = resolve_frame_id(
+        eval,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
     let frame = eval
         .frames
         .get(fid)
@@ -1445,7 +1535,11 @@ pub(crate) fn builtin_tty_frame_list_z_order(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("tty-frame-list-z-order", &args, 1)?;
-    let fid = resolve_frame_id(eval, args.first(), "frame-live-p")?;
+    let fid = resolve_frame_id(
+        eval,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
     let mut frames = eval
         .frames
         .frames_in_reverse_z_order(fid, crate::window::RenderFrameVisibility::VisibleOnly);
@@ -1522,7 +1616,7 @@ pub(crate) fn builtin_set_frame_selected_window(
         &mut eval.frames,
         &mut eval.buffers,
         args.first(),
-        "frame-live-p",
+        crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
     let wid = match window_id_from_designator(&args[1]) {
         Some(wid) => {
@@ -1582,8 +1676,12 @@ pub(crate) fn builtin_frame_first_window(
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("frame-first-window", &args, 1)?;
-    let fid =
-        resolve_frame_or_window_frame_id_in_state(frames, buffers, args.first(), "frame-live-p")?;
+    let fid = resolve_frame_or_window_frame_id_in_state(
+        frames,
+        buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
     let frame = frames
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
@@ -1601,8 +1699,12 @@ pub(crate) fn builtin_frame_root_window(
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("frame-root-window", &args, 1)?;
-    let fid =
-        resolve_frame_or_window_frame_id_in_state(frames, buffers, args.first(), "frame-live-p")?;
+    let fid = resolve_frame_or_window_frame_id_in_state(
+        frames,
+        buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
     let frame = frames
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
@@ -1615,7 +1717,12 @@ pub(crate) fn builtin_minibuffer_window(
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("minibuffer-window", &args, 1)?;
-    let fid = resolve_frame_id_in_state(frames, buffers, args.first(), "frame-live-p")?;
+    let fid = resolve_frame_id_in_state(
+        frames,
+        buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
     let frame = frames
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
@@ -1632,7 +1739,7 @@ pub(crate) fn builtin_window_minibuffer_p(
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-minibuffer-p", &args, 1)?;
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-valid-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
     let is_minibuffer = frames
         .get(fid)
         .is_some_and(|frame| frame.minibuffer_window == Some(wid));
@@ -1673,7 +1780,7 @@ pub(crate) fn builtin_window_frame(
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-frame", &args, 1)?;
     let (fid, _wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-valid-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
     Ok(Value::make_frame(fid.0))
 }
 /// `(window-buffer &optional WINDOW)` -> buffer object.
@@ -1693,7 +1800,7 @@ pub(crate) fn builtin_window_buffer(
 
     if args.first().is_none_or(|v| v.is_nil()) {
         let (fid, wid) =
-            resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "windowp")?;
+            resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Any)?;
         return resolve_buffer(frames, fid, wid);
     }
     let val = args.first().unwrap();
@@ -1723,7 +1830,7 @@ pub(crate) fn builtin_window_display_table(
     expect_max_args("window-display-table", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (_fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-live-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     Ok(frames.window_display_table(wid))
 }
 /// `(set-window-display-table WINDOW TABLE)` -> TABLE.
@@ -1735,7 +1842,7 @@ pub(crate) fn builtin_set_window_display_table(
     expect_args("set-window-display-table", &args, 2)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (_fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-live-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     let table = args[1];
     frames.set_window_display_table(wid, table);
     Ok(table)
@@ -1749,7 +1856,7 @@ pub(crate) fn builtin_window_cursor_type(
     expect_max_args("window-cursor-type", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (_fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-live-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     Ok(frames.window_cursor_type(wid))
 }
 /// `(set-window-cursor-type WINDOW TYPE)` -> TYPE.
@@ -1774,7 +1881,7 @@ pub(crate) fn builtin_set_window_cursor_type(
     expect_args("set-window-cursor-type", &args, 2)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (_fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-live-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     let cursor_type = args[1];
 
     if !is_valid_cursor_type(cursor_type) {
@@ -1796,7 +1903,7 @@ pub(crate) fn builtin_window_cursor_info(
     expect_max_args("window-cursor-info", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-live-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     let Some(frame) = frames.get(fid) else {
         return Ok(Value::NIL);
     };
@@ -1851,8 +1958,12 @@ pub(crate) fn builtin_window_parameter(
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_args("window-parameter", &args, 2)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let wid =
-        resolve_window_object_id_with_pred_in_state(frames, buffers, args.first(), "windowp")?;
+    let wid = resolve_window_object_id_with_pred_in_state(
+        frames,
+        buffers,
+        args.first(),
+        WindowDomain::Any,
+    )?;
     Ok(frames.window_parameter(wid, &args[1]).unwrap_or(Value::NIL))
 }
 /// `(set-window-parameter WINDOW PARAMETER VALUE)` -> VALUE.
@@ -1863,8 +1974,12 @@ pub(crate) fn builtin_set_window_parameter(
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_args("set-window-parameter", &args, 3)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let wid =
-        resolve_window_object_id_with_pred_in_state(frames, buffers, args.first(), "windowp")?;
+    let wid = resolve_window_object_id_with_pred_in_state(
+        frames,
+        buffers,
+        args.first(),
+        WindowDomain::Any,
+    )?;
     let value = args[2];
     frames.set_window_parameter(wid, args[1], value);
     // A window parameter named after one of the chrome formats OVERRIDES the
@@ -1889,7 +2004,7 @@ pub(crate) fn builtin_window_parameters(
     expect_max_args("window-parameters", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (_fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-valid-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
     Ok(frames.window_parameters_alist(wid))
 }
 /// `(window-parent &optional WINDOW)` -> parent window or nil.
@@ -1901,7 +2016,7 @@ pub(crate) fn builtin_window_parent(
     expect_max_args("window-parent", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-valid-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
     let Some(frame) = frames.get(fid) else {
         return Err(signal("error", vec![Value::string("Frame not found")]));
     };
@@ -1916,7 +2031,7 @@ pub(crate) fn builtin_window_top_child(
     expect_max_args("window-top-child", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-valid-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
     let Some(frame) = frames.get(fid) else {
         return Err(signal("error", vec![Value::string("Frame not found")]));
     };
@@ -1934,7 +2049,7 @@ pub(crate) fn builtin_window_left_child(
     expect_max_args("window-left-child", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-valid-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
     let Some(frame) = frames.get(fid) else {
         return Err(signal("error", vec![Value::string("Frame not found")]));
     };
@@ -1952,7 +2067,7 @@ pub(crate) fn builtin_window_next_sibling(
     expect_max_args("window-next-sibling", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-valid-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
     let Some(frame) = frames.get(fid) else {
         return Err(signal("error", vec![Value::string("Frame not found")]));
     };
@@ -1967,7 +2082,7 @@ pub(crate) fn builtin_window_prev_sibling(
     expect_max_args("window-prev-sibling", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-valid-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
     let Some(frame) = frames.get(fid) else {
         return Err(signal("error", vec![Value::string("Frame not found")]));
     };
@@ -1991,7 +2106,7 @@ pub(crate) fn builtin_window_normal_size(
     expect_max_args("window-normal-size", &args, 2)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-valid-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
     let horizontal = args.get(1).is_some_and(|v| v.is_truthy());
     let Some(frame) = frames.get(fid) else {
         return Err(signal("error", vec![Value::string("Frame not found")]));
@@ -2013,7 +2128,7 @@ pub(crate) fn builtin_window_start(
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-start", &args, 1)?;
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-live-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     let w = get_leaf(frames, fid, wid)?;
     match w {
         Window::Leaf { window_start, .. } => Ok(Value::fixnum(window_start.as_i64())),
@@ -2110,7 +2225,7 @@ pub(crate) fn builtin_window_end(eval: &mut super::eval::Context, args: Vec<Valu
         &mut eval.frames,
         &mut eval.buffers,
         args.first(),
-        "window-live-p",
+        crate::emacs_core::window_cmds::WindowDomain::Live,
     )?;
     let policy = if args.get(1).is_some_and(|arg| !arg.is_nil()) {
         WindowEndQueryPolicy::EnsureCurrent
@@ -2127,7 +2242,7 @@ pub(crate) fn builtin_window_point(
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-point", &args, 1)?;
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-live-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     let w = get_leaf(frames, fid, wid)?;
     match w {
         Window::Leaf {
@@ -2156,8 +2271,12 @@ pub(crate) fn builtin_set_window_start(
     let chrome_dirty_window;
     let result = {
         let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
-        let (fid, wid) =
-            resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-live-p")?;
+        let (fid, wid) = resolve_window_id_with_pred_in_state(
+            frames,
+            buffers,
+            args.first(),
+            WindowDomain::Live,
+        )?;
         let pos = parse_integer_or_marker_arg(&args[1])?;
         // GNU Fset_window_start: w->force_start = !NILP (noforce) ? 0 : 1 —
         // an explicit start is honored by the next redisplay (point moves
@@ -2226,7 +2345,7 @@ pub(crate) fn builtin_set_window_point(
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_args("set-window-point", &args, 2)?;
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-live-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     let pos = parse_integer_or_marker_arg(&args[1])?;
     let is_minibuffer = frames
         .get(fid)
@@ -2314,7 +2433,7 @@ pub(crate) fn builtin_window_use_time(
     expect_max_args("window-use-time", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (_fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-live-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     Ok(Value::fixnum(frames.window_use_time(wid)))
 }
 /// `(window-bump-use-time &optional WINDOW)` -> integer or nil.
@@ -2369,7 +2488,7 @@ pub(crate) fn builtin_window_old_point(
     expect_max_args("window-old-point", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-live-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     let w = get_leaf(frames, fid, wid)?;
     match w {
         Window::Leaf { old_point, .. } => {
@@ -2410,8 +2529,12 @@ pub(crate) fn builtin_window_old_buffer(
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-old-buffer", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let _window =
-        resolve_window_object_id_with_pred_in_state(frames, buffers, args.first(), "windowp")?;
+    let _window = resolve_window_object_id_with_pred_in_state(
+        frames,
+        buffers,
+        args.first(),
+        WindowDomain::Any,
+    )?;
     Ok(Value::NIL)
 }
 /// `(window-prev-buffers &optional WINDOW)` -> previous buffer list or nil.
@@ -2423,7 +2546,7 @@ pub(crate) fn builtin_window_prev_buffers(
     expect_max_args("window-prev-buffers", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (_fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-live-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     Ok(frames.window_prev_buffers(wid))
 }
 /// `(window-next-buffers &optional WINDOW)` -> next buffer list or nil.
@@ -2435,7 +2558,7 @@ pub(crate) fn builtin_window_next_buffers(
     expect_max_args("window-next-buffers", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (_fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-live-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     Ok(frames.window_next_buffers(wid))
 }
 /// `(set-window-prev-buffers WINDOW PREV-BUFFERS)` -> PREV-BUFFERS.
@@ -2447,7 +2570,7 @@ pub(crate) fn builtin_set_window_prev_buffers(
     expect_args("set-window-prev-buffers", &args, 2)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (_fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-live-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     let value = args[1];
     frames.set_window_prev_buffers(wid, value);
     Ok(value)
@@ -2461,7 +2584,7 @@ pub(crate) fn builtin_set_window_next_buffers(
     expect_args("set-window-next-buffers", &args, 2)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (_fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-live-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     let value = args[1];
     frames.set_window_next_buffers(wid, value);
     Ok(value)
@@ -2501,9 +2624,9 @@ pub(crate) fn builtin_combine_windows(
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_args("combine-windows", &args, 2)?;
     let (_first_fid, first_wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-valid-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
     let (_last_fid, last_wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.get(1), "window-valid-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.get(1), WindowDomain::Valid)?;
 
     if first_wid == last_wid {
         return Err(signal(
@@ -2527,7 +2650,7 @@ pub(crate) fn builtin_uncombine_window(
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_args("uncombine-window", &args, 1)?;
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-valid-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
 
     if frames
         .get(fid)
@@ -2551,7 +2674,7 @@ pub(crate) fn builtin_window_left_column(
     expect_max_args("window-left-column", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-valid-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
     let w = get_window(frames, fid, wid)?;
     // GNU `Fwindow_left_column` returns `w->left_col` directly. See
     // `Window::left_col`.
@@ -2566,7 +2689,7 @@ pub(crate) fn builtin_window_top_line(
     expect_max_args("window-top-line", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-valid-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
     let w = get_window(frames, fid, wid)?;
     // GNU `Fwindow_top_line` returns `w->top_line` directly (the stored
     // character-line edge maintained by the resize passes, decoupled from pixel
@@ -2637,7 +2760,7 @@ pub(crate) fn builtin_window_pixel_left(
     expect_max_args("window-pixel-left", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-valid-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
     let w = get_window(frames, fid, wid)?;
     let frame = frames.get(fid);
     let graphical = frame.is_some_and(|frame| frame.effective_window_system().is_some());
@@ -2663,7 +2786,7 @@ pub(crate) fn builtin_window_pixel_top(
     expect_max_args("window-pixel-top", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-valid-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
     let w = get_window(frames, fid, wid)?;
     let frame = frames.get(fid);
     let graphical = frame.is_some_and(|frame| frame.effective_window_system().is_some());
@@ -2685,7 +2808,7 @@ pub(crate) fn builtin_window_hscroll(
     expect_max_args("window-hscroll", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-live-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     let w = get_leaf(frames, fid, wid)?;
     match w {
         Window::Leaf { hscroll, .. } => Ok(Value::fixnum(*hscroll as i64)),
@@ -2700,7 +2823,7 @@ pub(crate) fn builtin_set_window_hscroll(
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_args("set-window-hscroll", &args, 2)?;
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-live-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     let cols = expect_fixnum(&args[1])?.max(0) as usize;
     if let Some(Window::Leaf {
         hscroll,
@@ -2843,7 +2966,7 @@ pub(crate) fn builtin_window_vscroll(
     expect_max_args("window-vscroll", &args, 2)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (_fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-live-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     let pixelwise = args.get(1).is_some_and(|v| v.is_truthy());
     Ok(frames
         .window_vscroll(wid, pixelwise)
@@ -2858,7 +2981,7 @@ pub(crate) fn builtin_set_window_vscroll(
     expect_min_args("set-window-vscroll", &args, 2)?;
     expect_max_args("set-window-vscroll", &args, 4)?;
     let (_fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-live-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     let next_vscroll = expect_number(&args[1])?;
     let pixelwise = args.get(2).is_some_and(|v| v.is_truthy());
     let preserve = args.get(3).is_some_and(|v| v.is_truthy());
@@ -2875,7 +2998,7 @@ pub(crate) fn builtin_set_window_margins(
     expect_min_args("set-window-margins", &args, 2)?;
     expect_max_args("set-window-margins", &args, 3)?;
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-live-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     let left = expect_margin_width(&args[1])?;
     let right = if let Some(arg) = args.get(2) {
         expect_margin_width(arg)?
@@ -2904,7 +3027,7 @@ pub(crate) fn builtin_window_margins(
     expect_max_args("window-margins", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-live-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     if let Some(geometry) = redisplay_window_regions(frames, fid, wid)? {
         let regions = geometry;
         let left = regions.left_margin_columns();
@@ -2950,7 +3073,7 @@ pub(crate) fn builtin_window_fringes(
     expect_max_args("window-fringes", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-live-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     if let Some(geometry) = redisplay_window_regions(frames, fid, wid)? {
         let regions = geometry;
         let left = regions
@@ -2986,7 +3109,7 @@ pub(crate) fn builtin_set_window_fringes(
     expect_min_args("set-window-fringes", &args, 2)?;
     expect_max_args("set-window-fringes", &args, 5)?;
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-live-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     if frames
         .get(fid)
         .is_none_or(|frame| frame.effective_window_system().is_none())
@@ -3044,7 +3167,7 @@ pub(crate) fn builtin_window_scroll_bars(
     expect_max_args("window-scroll-bars", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (_fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-live-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     let (width, columns, vertical_type, height, lines, horizontal_type, persistent) = frames
         .window_scroll_bars(wid)
         .unwrap_or((Value::NIL, 0, Value::T, Value::NIL, 0, Value::T, false));
@@ -3067,7 +3190,7 @@ pub(crate) fn builtin_set_window_scroll_bars(
     expect_min_args("set-window-scroll-bars", &args, 1)?;
     expect_max_args("set-window-scroll-bars", &args, 6)?;
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-live-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     if frames
         .get(fid)
         .is_none_or(|frame| frame.effective_window_system().is_none())
@@ -3141,7 +3264,7 @@ pub(crate) fn builtin_window_scroll_bar_width(
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-live-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     if let Some(geometry) = redisplay_window_regions(frames, fid, wid)? {
         let regions = geometry;
         let width = regions
@@ -3162,7 +3285,7 @@ pub(crate) fn builtin_window_scroll_bar_height(
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-live-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     if let Some(geometry) = redisplay_window_regions(frames, fid, wid)? {
         let height = geometry
             .horizontal_scroll_bar()
@@ -3180,7 +3303,7 @@ pub(crate) fn builtin_window_mode_line_height(
     expect_max_args("window-mode-line-height", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-live-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     let height = window_chrome_height_in_state(
         frames,
         fid,
@@ -3203,7 +3326,7 @@ pub(crate) fn builtin_window_header_line_height(
     expect_max_args("window-header-line-height", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-live-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     Ok(Value::fixnum(window_chrome_height_in_state(
         frames,
         fid,
@@ -3221,7 +3344,7 @@ pub(crate) fn builtin_window_tab_line_height(
     expect_max_args("window-tab-line-height", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-live-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     Ok(Value::fixnum(window_chrome_height_in_state(
         frames,
         fid,
@@ -3279,7 +3402,7 @@ pub(crate) fn builtin_window_pixel_height(
     expect_max_args("window-pixel-height", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-valid-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
     let w = get_window(frames, fid, wid)?;
     // GNU `Fwindow_pixel_height` returns `w->pixel_height` directly.  This is
     // synchronous window-layout state and exists before the first redisplay;
@@ -3298,7 +3421,7 @@ pub(crate) fn builtin_window_pixel_width(
     expect_max_args("window-pixel-width", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-valid-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
     let w = get_window(frames, fid, wid)?;
     // GNU `Fwindow_pixel_width` returns `w->pixel_width` directly.  Keep this
     // public Lisp primitive on the logical-layout side of the geometry seam.
@@ -3322,7 +3445,7 @@ pub(crate) fn builtin_window_body_height(
         &mut eval.frames,
         &mut eval.buffers,
         args.first(),
-        "window-live-p",
+        crate::emacs_core::window_cmds::WindowDomain::Live,
     )?;
     let remapped = remapped_window_body_cell_size(eval, fid, unit);
     window_body_height_for_window(&eval.frames, fid, wid, unit, remapped)
@@ -3336,7 +3459,7 @@ fn window_body_height_impl(
     expect_max_args("window-body-height", &args, 2)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-live-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     let unit = window_body_unit_from_lisp(args.get(1));
     window_body_height_for_window(frames, fid, wid, unit, None)
 }
@@ -3410,7 +3533,7 @@ pub(crate) fn builtin_window_body_width(
         &mut eval.frames,
         &mut eval.buffers,
         args.first(),
-        "window-live-p",
+        crate::emacs_core::window_cmds::WindowDomain::Live,
     )?;
     let remapped = remapped_window_body_cell_size(eval, fid, unit);
     let window = get_leaf(&eval.frames, fid, wid)?;
@@ -3435,7 +3558,7 @@ pub(crate) fn builtin_window_text_height(
     expect_max_args("window-text-height", &args, 2)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-live-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     let w = get_leaf(frames, fid, wid)?;
     let pixelwise = args.get(1).is_some_and(|v| v.is_truthy());
     if pixelwise {
@@ -3477,7 +3600,7 @@ pub(crate) fn builtin_window_text_width(
     expect_max_args("window-text-width", &args, 2)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-live-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     let w = get_leaf(frames, fid, wid)?;
     let pixelwise = args.get(1).is_some_and(|v| v.is_truthy());
     if pixelwise {
@@ -3516,7 +3639,7 @@ pub(crate) fn window_total_height_impl(
     expect_max_args("window-total-height", &args, 2)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-valid-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
     let w = get_window(frames, fid, wid)?;
     let ch = frames.get(fid).map(|f| f.char_height).unwrap_or(16.0);
     Ok(Value::fixnum(window_height_lines(w, ch)))
@@ -3539,7 +3662,7 @@ pub(crate) fn window_total_width_impl(
     expect_max_args("window-total-width", &args, 2)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-valid-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
     let w = get_window(frames, fid, wid)?;
     let cw = frames.get(fid).map(|f| f.char_width).unwrap_or(8.0);
     Ok(Value::fixnum(window_width_cols(w, cw)))
@@ -3645,7 +3768,7 @@ pub(crate) fn builtin_window_list_1(
     expect_max_args("window-list-1", &args, 3)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, start_wid) = if args.first().is_none_or(|v| v.is_nil()) {
-        resolve_window_id_with_pred_in_state(frames, buffers, None, "window-live-p")?
+        resolve_window_id_with_pred_in_state(frames, buffers, None, WindowDomain::Live)?
     } else {
         let val = args.first().unwrap();
         if let Some(raw_id) = val.as_window_id() {
@@ -3796,7 +3919,7 @@ pub(crate) fn builtin_window_dedicated_p(
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-dedicated-p", &args, 1)?;
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-live-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     let w = get_leaf(frames, fid, wid)?;
     match w {
         Window::Leaf { dedicated, .. } => Ok(*dedicated),
@@ -3812,7 +3935,7 @@ pub(crate) fn builtin_set_window_dedicated_p(
     expect_args("set-window-dedicated-p", &args, 2)?;
     let flag = args[1];
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-live-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     if let Some(w) = frames.get_mut(fid).and_then(|f| f.find_window_mut(wid))
         && let Window::Leaf { dedicated, .. } = w
     {
@@ -3882,7 +4005,12 @@ pub(crate) fn builtin_window_at(eval: &mut super::eval::Context, args: Vec<Value
     expect_max_args("window-at", &args, 3)?;
     let x = expect_number(&args[0])?;
     let y = expect_number(&args[1])?;
-    let fid = resolve_frame_id_in_state(frames, buffers, args.get(2), "frame-live-p")?;
+    let fid = resolve_frame_id_in_state(
+        frames,
+        buffers,
+        args.get(2),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
     let frame = frames
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
@@ -4041,8 +4169,12 @@ pub(crate) fn builtin_delete_window_internal(
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_args("delete-window-internal", &args, 1)?;
 
-    let wid =
-        resolve_window_object_id_with_pred_in_state(frames, buffers, args.first(), "windowp")?;
+    let wid = resolve_window_object_id_with_pred_in_state(
+        frames,
+        buffers,
+        args.first(),
+        WindowDomain::Any,
+    )?;
     if !frames.is_valid_window_id(wid) {
         // GNU Emacs treats deleting an already deleted window object as a no-op.
         return Ok(Value::NIL);
@@ -4096,7 +4228,7 @@ pub(crate) fn builtin_delete_other_windows_internal(
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("delete-other-windows-internal", &args, 2)?;
     let (fid, keep_wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-valid-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
     let frame = frames
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
@@ -4107,7 +4239,7 @@ pub(crate) fn builtin_delete_other_windows_internal(
             frames,
             buffers,
             args.get(1),
-            "window-valid-p",
+            crate::emacs_core::window_cmds::WindowDomain::Valid,
         )?;
         if frames.find_valid_window_frame_id(root_wid) != Some(fid) {
             return Err(signal(
@@ -4751,7 +4883,7 @@ pub(crate) fn builtin_neomacs_record_window_navigation_intent(
     expect_min_args("neomacs--record-window-navigation-intent", &args, 1)?;
     expect_max_args("neomacs--record-window-navigation-intent", &args, 2)?;
     let direction = navigation_transition_direction(args[0])?;
-    let (_, window_id) = resolve_window_id_with_pred(eval, args.get(1), "window-live-p")?;
+    let (_, window_id) = resolve_window_id_with_pred(eval, args.get(1), WindowDomain::Live)?;
     eval.frames
         .record_window_navigation_intent(window_id, direction);
     Ok(Value::NIL)
@@ -4765,7 +4897,11 @@ pub(crate) fn builtin_neomacs_record_frame_navigation_intent(
     expect_min_args("neomacs--record-frame-navigation-intent", &args, 1)?;
     expect_max_args("neomacs--record-frame-navigation-intent", &args, 2)?;
     let direction = navigation_transition_direction(args[0])?;
-    let frame_id = resolve_frame_id(eval, args.get(1), "frame-live-p")?;
+    let frame_id = resolve_frame_id(
+        eval,
+        args.get(1),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
     eval.frames
         .record_frame_navigation_intent(frame_id, direction);
     Ok(Value::NIL)
@@ -6850,7 +6986,7 @@ pub(crate) fn builtin_window_bottom_divider_width(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("window-bottom-divider-width", &args, 1)?;
-    let (fid, wid) = resolve_window_id_with_pred(eval, args.first(), "window-live-p")?;
+    let (fid, wid) = resolve_window_id_with_pred(eval, args.first(), WindowDomain::Live)?;
     let frame = eval
         .frames
         .get(fid)
@@ -6868,7 +7004,7 @@ pub(crate) fn builtin_window_right_divider_width(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("window-right-divider-width", &args, 1)?;
-    let (fid, wid) = resolve_window_id_with_pred(eval, args.first(), "window-live-p")?;
+    let (fid, wid) = resolve_window_id_with_pred(eval, args.first(), WindowDomain::Live)?;
     let frame = eval
         .frames
         .get(fid)
@@ -6988,7 +7124,7 @@ pub(crate) fn builtin_window_combination_limit(
     expect_args("window-combination-limit", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-valid-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
     let w = get_window(frames, fid, wid)?;
     match w.combination_limit() {
         Some(true) => Ok(Value::T),
@@ -7013,7 +7149,7 @@ pub(crate) fn builtin_set_window_combination_limit(
     expect_args("set-window-combination-limit", &args, 2)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), "window-valid-p")?;
+        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
     let limit = args[1].is_truthy();
     let frame = frames
         .get_mut(fid)
@@ -7042,7 +7178,12 @@ pub(crate) fn builtin_window_resize_apply(
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-resize-apply", &args, 2)?;
-    let fid = resolve_frame_id_in_state(frames, buffers, args.first(), "frame-live-p")?;
+    let fid = resolve_frame_id_in_state(
+        frames,
+        buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
     let horflag = args.get(1).is_some_and(|v| v.is_truthy());
 
     let frame = frames
@@ -7094,7 +7235,12 @@ pub(crate) fn builtin_window_resize_apply_total(
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-resize-apply-total", &args, 2)?;
-    let fid = resolve_frame_id_in_state(frames, buffers, args.first(), "frame-live-p")?;
+    let fid = resolve_frame_id_in_state(
+        frames,
+        buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
     let horflag = args.get(1).is_some_and(|v| v.is_truthy());
 
     let frame = frames

@@ -1971,7 +1971,7 @@ pub(crate) fn builtin_next_frame(eval: &mut super::eval::Context, args: Vec<Valu
             &mut eval.frames,
             &mut eval.buffers,
             Some(frame),
-            "frame-live-p",
+            crate::emacs_core::window_cmds::FrameDomain::Live,
         )?;
     }
     crate::emacs_core::frame::builtin_selected_frame(eval, Vec::new())
@@ -1989,7 +1989,7 @@ pub(crate) fn builtin_previous_frame(
             &mut eval.frames,
             &mut eval.buffers,
             Some(frame),
-            "frame-live-p",
+            crate::emacs_core::window_cmds::FrameDomain::Live,
         )?;
     }
     crate::emacs_core::frame::builtin_selected_frame(eval, Vec::new())
@@ -2828,7 +2828,7 @@ pub(crate) fn builtin_reconsider_frame_fonts(
         &mut eval.frames,
         &mut eval.buffers,
         Some(&args[0]),
-        "frame-live-p",
+        crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
     if eval
         .frames
@@ -3164,7 +3164,7 @@ pub(crate) fn builtin_set_mouse_pixel_position(
         &mut eval.frames,
         &mut eval.buffers,
         Some(&args[0]),
-        "frame-live-p",
+        crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
     let x = expect_int(&args[1])?;
     let y = expect_int(&args[2])?;
@@ -3183,7 +3183,7 @@ pub(crate) fn builtin_set_mouse_position(
         &mut eval.frames,
         &mut eval.buffers,
         Some(&args[0]),
-        "frame-live-p",
+        crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
     let x = expect_int(&args[1])?;
     let y = expect_int(&args[2])?;

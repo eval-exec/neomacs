@@ -6238,6 +6238,18 @@ impl FrameManager {
     }
 
     /// Return true when WINDOW-ID designates a live or stale window object.
+    /// The frame owning WINDOW_ID for GNU's `decode_any_window` -- `CHECK_WINDOW`,
+    /// which admits a live window, an internal window, and one that has been
+    /// deleted.
+    pub fn any_window_frame_id(&self, window_id: WindowId) -> Option<FrameId> {
+        self.find_valid_window_frame_id(window_id).or_else(|| {
+            self.deleted_windows
+                .contains(&window_id)
+                .then(|| self.frames.keys().copied().next())
+                .flatten()
+        })
+    }
+
     pub fn is_window_object_id(&self, window_id: WindowId) -> bool {
         self.is_valid_window_id(window_id) || self.deleted_windows.contains(&window_id)
     }

@@ -669,7 +669,7 @@ pub(crate) fn builtin_display_update_for_mouse_movement(
         &mut eval.frames,
         &mut eval.buffers,
         Some(&args[0]),
-        "frame-live-p",
+        crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
     let x = expect_fixnum(&args[1])?;
     let y = expect_fixnum(&args[2])?;
@@ -1196,7 +1196,7 @@ pub(crate) fn builtin_frame_id(eval: &mut super::eval::Context, args: Vec<Value>
         &mut eval.frames,
         &mut eval.buffers,
         args.first(),
-        "frame-live-p",
+        crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
     let public_id = if fid.0 >= crate::window::FRAME_ID_BASE {
         fid.0 - crate::window::FRAME_ID_BASE + 1
@@ -1216,7 +1216,7 @@ pub(crate) fn builtin_frame_root_frame(
         &mut eval.frames,
         &mut eval.buffers,
         args.first(),
-        "frame-live-p",
+        crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
     let root = eval.frames.root_frame_id(fid).unwrap_or(fid);
     Ok(Value::make_frame(root.0))

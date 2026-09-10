@@ -40,7 +40,12 @@ enum IconifyFrameAction {
 pub(crate) fn builtin_frame_focus(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("frame-focus", &args, 1)?;
-    let fid = resolve_frame_id_in_state(frames, buffers, args.first(), "frame-live-p")?;
+    let fid = resolve_frame_id_in_state(
+        frames,
+        buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
     let frame = frames
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
@@ -53,7 +58,11 @@ pub(crate) fn builtin_frame_parent(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-parent", &args, 1)?;
-    let fid = resolve_frame_id(eval, args.first(), "frame-live-p")?;
+    let fid = resolve_frame_id(
+        eval,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
     let Some(parent) = eval.frames.frame_parent_id(fid) else {
         return Ok(Value::NIL);
     };
@@ -66,8 +75,16 @@ pub(crate) fn builtin_frame_ancestor_p(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("frame-ancestor-p", &args, 2)?;
-    let ancestor = resolve_frame_id(eval, args.first(), "frame-live-p")?;
-    let descendant = resolve_frame_id(eval, args.get(1), "frame-live-p")?;
+    let ancestor = resolve_frame_id(
+        eval,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
+    let descendant = resolve_frame_id(
+        eval,
+        args.get(1),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
     Ok(Value::bool_val(
         eval.frames.frame_ancestor_p(ancestor, descendant),
     ))
@@ -80,8 +97,12 @@ pub(crate) fn builtin_redirect_frame_focus(
 ) -> EvalResult {
     expect_min_args("redirect-frame-focus", &args, 1)?;
     expect_max_args("redirect-frame-focus", &args, 2)?;
-    let fid =
-        resolve_frame_id_in_state(&mut eval.frames, &mut eval.buffers, args.first(), "framep")?;
+    let fid = resolve_frame_id_in_state(
+        &mut eval.frames,
+        &mut eval.buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Any,
+    )?;
     let focus_frame = if let Some(value) = args.get(1) {
         if value.is_nil() {
             Value::NIL
@@ -90,7 +111,7 @@ pub(crate) fn builtin_redirect_frame_focus(
                 &mut eval.frames,
                 &mut eval.buffers,
                 Some(value),
-                "frame-live-p",
+                crate::emacs_core::window_cmds::FrameDomain::Live,
             )?;
             Value::make_frame(focus_fid.0)
         }
@@ -112,7 +133,12 @@ pub(crate) fn builtin_iconify_frame(
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("iconify-frame", &args, 1)?;
-    let fid = resolve_frame_id_in_state(frames, buffers, args.first(), "frame-live-p")?;
+    let fid = resolve_frame_id_in_state(
+        frames,
+        buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
     let _frame = frames
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
@@ -180,7 +206,12 @@ pub(crate) fn builtin_make_frame_invisible(
     expect_max_args("make-frame-invisible", &args, 2)?;
     let fid = {
         let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
-        resolve_frame_id_in_state(frames, buffers, args.first(), "frame-live-p")?
+        resolve_frame_id_in_state(
+            frames,
+            buffers,
+            args.first(),
+            crate::emacs_core::window_cmds::FrameDomain::Live,
+        )?
     };
     let force = args.get(1).copied().unwrap_or(Value::NIL).is_truthy();
     if !force && !other_frames_in_state(eval, fid, false) {
@@ -253,7 +284,12 @@ pub(crate) fn builtin_make_frame_visible(
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("make-frame-visible", &args, 1)?;
-    let fid = resolve_frame_id_in_state(frames, buffers, args.first(), "frame-live-p")?;
+    let fid = resolve_frame_id_in_state(
+        frames,
+        buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
     // Ensure the frame exists.
     if eval.frames.get(fid).is_none() {
         return Err(signal("error", vec![Value::string("Frame not found")]));
@@ -374,7 +410,12 @@ pub(crate) fn builtin_frame_char_height(
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("frame-char-height", &args, 1)?;
-    let fid = resolve_frame_id_in_state(frames, buffers, args.first(), "framep")?;
+    let fid = resolve_frame_id_in_state(
+        frames,
+        buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Any,
+    )?;
     let ch = frames.get(fid).map(|f| f.char_height as i64).unwrap_or(16);
     Ok(Value::fixnum(ch))
 }
@@ -388,7 +429,12 @@ pub(crate) fn builtin_frame_char_width(
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("frame-char-width", &args, 1)?;
-    let fid = resolve_frame_id_in_state(frames, buffers, args.first(), "framep")?;
+    let fid = resolve_frame_id_in_state(
+        frames,
+        buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Any,
+    )?;
     let cw = frames.get(fid).map(|f| f.char_width as i64).unwrap_or(8);
     Ok(Value::fixnum(cw))
 }
@@ -399,8 +445,12 @@ pub(crate) fn builtin_frame_native_height(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-native-height", &args, 1)?;
-    let fid =
-        resolve_frame_id_in_state(&mut eval.frames, &mut eval.buffers, args.first(), "framep")?;
+    let fid = resolve_frame_id_in_state(
+        &mut eval.frames,
+        &mut eval.buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Any,
+    )?;
     sync_live_gui_resize_for_geometry_queries(eval, fid)?;
     let frame = eval
         .frames
@@ -419,8 +469,12 @@ pub(crate) fn builtin_frame_native_width(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-native-width", &args, 1)?;
-    let fid =
-        resolve_frame_id_in_state(&mut eval.frames, &mut eval.buffers, args.first(), "framep")?;
+    let fid = resolve_frame_id_in_state(
+        &mut eval.frames,
+        &mut eval.buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Any,
+    )?;
     sync_live_gui_resize_for_geometry_queries(eval, fid)?;
     let frame = eval
         .frames
@@ -455,8 +509,12 @@ pub(crate) fn builtin_frame_text_cols(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-text-cols", &args, 1)?;
-    let fid =
-        resolve_frame_id_in_state(&mut eval.frames, &mut eval.buffers, args.first(), "framep")?;
+    let fid = resolve_frame_id_in_state(
+        &mut eval.frames,
+        &mut eval.buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Any,
+    )?;
     sync_live_gui_resize_for_geometry_queries(eval, fid)?;
     let frame = eval
         .frames
@@ -471,8 +529,12 @@ pub(crate) fn builtin_frame_text_lines(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-text-lines", &args, 1)?;
-    let fid =
-        resolve_frame_id_in_state(&mut eval.frames, &mut eval.buffers, args.first(), "framep")?;
+    let fid = resolve_frame_id_in_state(
+        &mut eval.frames,
+        &mut eval.buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Any,
+    )?;
     sync_live_gui_resize_for_geometry_queries(eval, fid)?;
     let frame = eval
         .frames
@@ -496,8 +558,12 @@ pub(crate) fn builtin_frame_text_width(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-text-width", &args, 1)?;
-    let fid =
-        resolve_frame_id_in_state(&mut eval.frames, &mut eval.buffers, args.first(), "framep")?;
+    let fid = resolve_frame_id_in_state(
+        &mut eval.frames,
+        &mut eval.buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Any,
+    )?;
     sync_live_gui_resize_for_geometry_queries(eval, fid)?;
     let frame = eval
         .frames
@@ -518,8 +584,12 @@ pub(crate) fn builtin_frame_text_height(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-text-height", &args, 1)?;
-    let fid =
-        resolve_frame_id_in_state(&mut eval.frames, &mut eval.buffers, args.first(), "framep")?;
+    let fid = resolve_frame_id_in_state(
+        &mut eval.frames,
+        &mut eval.buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Any,
+    )?;
     sync_live_gui_resize_for_geometry_queries(eval, fid)?;
     let frame = eval
         .frames
@@ -538,8 +608,12 @@ pub(crate) fn builtin_frame_total_cols(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-total-cols", &args, 1)?;
-    let fid =
-        resolve_frame_id_in_state(&mut eval.frames, &mut eval.buffers, args.first(), "framep")?;
+    let fid = resolve_frame_id_in_state(
+        &mut eval.frames,
+        &mut eval.buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Any,
+    )?;
     sync_live_gui_resize_for_geometry_queries(eval, fid)?;
     let frame = eval
         .frames
@@ -554,8 +628,12 @@ pub(crate) fn builtin_frame_total_lines(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-total-lines", &args, 1)?;
-    let fid =
-        resolve_frame_id_in_state(&mut eval.frames, &mut eval.buffers, args.first(), "framep")?;
+    let fid = resolve_frame_id_in_state(
+        &mut eval.frames,
+        &mut eval.buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Any,
+    )?;
     sync_live_gui_resize_for_geometry_queries(eval, fid)?;
     let frame = eval
         .frames
@@ -571,7 +649,12 @@ pub(crate) fn builtin_frame_position(
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("frame-position", &args, 1)?;
-    let fid = resolve_frame_id_in_state(frames, buffers, args.first(), "frame-live-p")?;
+    let fid = resolve_frame_id_in_state(
+        frames,
+        buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
     let frame = frames
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
@@ -592,7 +675,7 @@ pub(crate) fn builtin_set_frame_height(
         &mut ctx.frames,
         &mut ctx.buffers,
         Some(&args[0]),
-        "frame-live-p",
+        crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
     let pretend = args.get(2).is_some_and(|v| v.is_truthy());
     let pixelwise = args.get(3).is_some_and(|v| v.is_truthy());
@@ -683,7 +766,7 @@ pub(crate) fn builtin_set_frame_width(
         &mut ctx.frames,
         &mut ctx.buffers,
         Some(&args[0]),
-        "frame-live-p",
+        crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
     let pretend = args.get(2).is_some_and(|v| v.is_truthy());
     let pixelwise = args.get(3).is_some_and(|v| v.is_truthy());
@@ -774,7 +857,7 @@ pub(crate) fn builtin_set_frame_size(
         &mut ctx.frames,
         &mut ctx.buffers,
         Some(&args[0]),
-        "frame-live-p",
+        crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
     let pixelwise = args.get(3).is_some_and(|v| v.is_truthy());
     let (char_width, char_height, uses_window_system_pixels) = {
@@ -869,7 +952,12 @@ pub(crate) fn builtin_set_frame_position(
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_args("set-frame-position", &args, 3)?;
-    let fid = resolve_frame_id_in_state(frames, buffers, Some(&args[0]), "frame-live-p")?;
+    let fid = resolve_frame_id_in_state(
+        frames,
+        buffers,
+        Some(&args[0]),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
     let x = expect_int(&args[1])?;
     let y = expect_int(&args[2])?;
     let frame = frames
@@ -895,7 +983,7 @@ pub(crate) fn builtin_set_frame_size_and_position_pixelwise(
         &mut eval.frames,
         &mut eval.buffers,
         Some(&args[0]),
-        "frame-live-p",
+        crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
     let left = expect_int(&args[3])?;
     let top = expect_int(&args[4])?;
@@ -1159,7 +1247,12 @@ pub(crate) fn builtin_delete_frame(
     }
     let fid = {
         let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
-        resolve_frame_id_in_state(frames, buffers, args.first(), "framep")?
+        resolve_frame_id_in_state(
+            frames,
+            buffers,
+            args.first(),
+            crate::emacs_core::window_cmds::FrameDomain::Any,
+        )?
     };
     let force_non_nil = args.get(1).copied().unwrap_or(Value::NIL).is_truthy();
     delete_frame_owned(eval, fid, DeleteFrameMode::Public { force_non_nil })
@@ -1170,7 +1263,11 @@ pub(crate) fn builtin_frame_window_state_change(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-window-state-change", &args, 1)?;
-    let fid = resolve_frame_id(eval, args.first(), "frame-live-p")?;
+    let fid = resolve_frame_id(
+        eval,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
     Ok(Value::bool_val(
         eval.frames
             .get(fid)
@@ -1183,7 +1280,11 @@ pub(crate) fn builtin_set_frame_window_state_change(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("set-frame-window-state-change", &args, 2)?;
-    let fid = resolve_frame_id(eval, args.first(), "frame-live-p")?;
+    let fid = resolve_frame_id(
+        eval,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Live,
+    )?;
     let state = args.get(1).copied().unwrap_or(Value::NIL).is_truthy();
     let frame = eval.frames.get_mut(fid).ok_or_else(|| {
         signal(
@@ -1204,7 +1305,11 @@ pub(crate) fn builtin_frame_parameter(
 ) -> EvalResult {
     expect_min_args("frame-parameter", &args, 2)?;
     expect_max_args("frame-parameter", &args, 2)?;
-    let fid = resolve_frame_id(eval, Some(&args[0]), "framep")?;
+    let fid = resolve_frame_id(
+        eval,
+        Some(&args[0]),
+        crate::emacs_core::window_cmds::FrameDomain::Any,
+    )?;
     let Some(param_key) = FrameParamKey::from_symbol_value(args[1]) else {
         return Ok(Value::NIL);
     };
@@ -1223,7 +1328,12 @@ pub(crate) fn builtin_frame_parameters(
 ) -> EvalResult {
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("frame-parameters", &args, 1)?;
-    let fid = resolve_frame_id_in_state(frames, buffers, args.first(), "framep")?;
+    let fid = resolve_frame_id_in_state(
+        frames,
+        buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Any,
+    )?;
     let frame = frames
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
@@ -1335,8 +1445,12 @@ pub(crate) fn builtin_frame_bottom_divider_width(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-bottom-divider-width", &args, 1)?;
-    let fid =
-        resolve_frame_id_in_state(&mut eval.frames, &mut eval.buffers, args.first(), "framep")?;
+    let fid = resolve_frame_id_in_state(
+        &mut eval.frames,
+        &mut eval.buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Any,
+    )?;
     let frame = eval
         .frames
         .get(fid)
@@ -1351,8 +1465,12 @@ pub(crate) fn builtin_frame_child_frame_border_width(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-child-frame-border-width", &args, 1)?;
-    let fid =
-        resolve_frame_id_in_state(&mut eval.frames, &mut eval.buffers, args.first(), "framep")?;
+    let fid = resolve_frame_id_in_state(
+        &mut eval.frames,
+        &mut eval.buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Any,
+    )?;
     let frame = eval
         .frames
         .get(fid)
@@ -1365,8 +1483,12 @@ pub(crate) fn builtin_frame_internal_border_width(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-internal-border-width", &args, 1)?;
-    let fid =
-        resolve_frame_id_in_state(&mut eval.frames, &mut eval.buffers, args.first(), "framep")?;
+    let fid = resolve_frame_id_in_state(
+        &mut eval.frames,
+        &mut eval.buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Any,
+    )?;
     let frame = eval
         .frames
         .get(fid)
@@ -1379,8 +1501,12 @@ pub(crate) fn builtin_frame_right_divider_width(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-right-divider-width", &args, 1)?;
-    let fid =
-        resolve_frame_id_in_state(&mut eval.frames, &mut eval.buffers, args.first(), "framep")?;
+    let fid = resolve_frame_id_in_state(
+        &mut eval.frames,
+        &mut eval.buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Any,
+    )?;
     let frame = eval
         .frames
         .get(fid)
@@ -1395,8 +1521,12 @@ pub(crate) fn builtin_frame_scale_factor(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-scale-factor", &args, 1)?;
-    let fid =
-        resolve_frame_id_in_state(&mut eval.frames, &mut eval.buffers, args.first(), "framep")?;
+    let fid = resolve_frame_id_in_state(
+        &mut eval.frames,
+        &mut eval.buffers,
+        args.first(),
+        crate::emacs_core::window_cmds::FrameDomain::Any,
+    )?;
     let frame = eval
         .frames
         .get(fid)
@@ -1420,7 +1550,7 @@ pub(crate) fn builtin_modify_frame_parameters(
         &mut eval.frames,
         &mut eval.buffers,
         Some(&args[0]),
-        "frame-live-p",
+        crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
     let items = super::value::list_to_vec(&args[1]).unwrap_or_default();
 

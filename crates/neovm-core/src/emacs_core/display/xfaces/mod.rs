@@ -81,7 +81,7 @@ pub(crate) fn builtin_frame_face_hash_table(
         &mut eval.frames,
         &mut eval.buffers,
         args.first(),
-        "frame-live-p",
+        crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
 
     Ok(eval

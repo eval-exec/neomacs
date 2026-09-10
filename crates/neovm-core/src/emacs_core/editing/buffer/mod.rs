@@ -4700,7 +4700,7 @@ pub(crate) fn other_buffer_impl_in_state(
         frames,
         buffers,
         args.get(2),
-        "frame-live-p",
+        crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
     let frame_buffer_list = frames
         .get(frame_id)

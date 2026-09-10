@@ -121,7 +121,7 @@ pub(crate) fn builtin_x_show_tip_eval(ctx: &mut Context, args: Vec<Value>) -> Ev
         &mut ctx.frames,
         &mut ctx.buffers,
         args.get(1),
-        "frame-live-p",
+        crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
     if !ctx
         .frames
