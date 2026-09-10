@@ -1,5 +1,10 @@
 //! Evaluator-thread text conversion; platform byte counts never index Lisp text directly.
 
+mod surrounding;
+
+#[cfg(test)]
+mod tests;
+
 use crate::buffer::{BufferId, EmacsBytePos, EmacsByteRange};
 use neovm_host_abi::ime::{ImeOperation, ImeSessionId};
 
@@ -12,6 +17,8 @@ struct InsertionAnchor {
     point: EmacsBytePos,
     accessible: crate::buffer::AccessibleEmacsByteRange,
     revision: i64,
+    selection_anchor: Option<EmacsBytePos>,
+    multibyte: bool,
 }
 
 #[derive(Debug)]
@@ -26,6 +33,7 @@ pub(crate) struct CompositionState {
     latest: u64,
     operation_revision: u64,
     active: Option<ActiveComposition>,
+    surrounding: surrounding::SurroundingTextState,
 }
 
 impl crate::Context {
@@ -40,6 +48,11 @@ impl crate::Context {
             point: buffer.point_emacs_byte_pos(),
             accessible: buffer.accessible_emacs_byte_region(),
             revision: buffer.chars_modified_tick(),
+            selection_anchor: buffer
+                .get_buffer_local("mark-active")
+                .filter(|active| active.is_truthy())
+                .and_then(|_| buffer.mark_emacs_byte_pos()),
+            multibyte: buffer.get_multibyte(),
         })
     }
 
@@ -50,6 +63,7 @@ impl crate::Context {
     ) -> crate::emacs_core::error::EvalResult {
         use crate::Value;
         use crate::emacs_core::{editfns, error::signal, textprop};
+        self.composition.surrounding.invalidate();
         self.composition.operation_revision = self.composition.operation_revision.wrapping_add(1);
         let operation_revision = self.composition.operation_revision;
         if matches!(operation, ImeOperation::Begin) {
