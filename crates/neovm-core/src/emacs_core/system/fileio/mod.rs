@@ -1245,19 +1245,6 @@ pub fn file_symlink_target(filename: &str) -> Option<String> {
         .map(|p| p.to_string_lossy().into_owned())
 }
 
-pub fn file_symlink_target_lisp(
-    filename: &crate::heap_types::LispString,
-) -> Option<crate::heap_types::LispString> {
-    let path = lisp_file_name_to_path_buf(filename);
-    let meta = fs::symlink_metadata(&path).ok()?;
-    if !meta.file_type().is_symlink() {
-        return None;
-    }
-    fs::read_link(&path)
-        .ok()
-        .map(|target| path_to_lisp_file_name(&target))
-}
-
 /// Return true if FILENAME is on a case-insensitive filesystem.
 pub fn file_name_case_insensitive_p(filename: &str) -> bool {
     let mut probe = PathBuf::from(filename);
@@ -3621,9 +3608,11 @@ pub(crate) fn builtin_file_symlink_p(eval: &mut Context, args: Vec<Value>) -> Ev
     if let Some(result) = dispatch_expanded_file_handler(eval, "file-symlink-p", &filename)? {
         return Ok(result);
     }
-    Ok(match file_symlink_target_lisp(&filename) {
-        Some(target) => Value::heap_string(target),
-        None => Value::NIL,
+    // GNU asks readlink directly; dangling links are still links. Keep this
+    // predicate in the same editor namespace as truename and attributes.
+    Ok(match eval.editor_file_system().read_link(&lisp_file_name_to_path_buf(&filename)) {
+        Ok(target) => Value::heap_string(path_to_lisp_file_name(&target)),
+        Err(_) => Value::NIL,
     })
 }
 
