@@ -193,6 +193,7 @@ impl Context {
             symbol_bytecode_call_cache:
                 crate::emacs_core::bytecode::vm::SymbolByteCodeCallCache::new(),
             interpreter_stacks: crate::emacs_core::bytecode::vm::InterpreterStackPool::new(),
+            evaluation_stacks: super::continuation::EvaluationStackPool::new(),
             jit_bind_stack: Vec::new(),
             aset_fast_path_epoch: std::cell::Cell::new(u64::MAX),
             apply_fast_path_epoch: std::cell::Cell::new(u64::MAX),
