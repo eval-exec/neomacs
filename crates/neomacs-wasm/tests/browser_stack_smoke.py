@@ -17,6 +17,7 @@ def main():
     parser.add_argument("--limits", type=int, nargs="+", default=[200, 400, 800, 1600])
     parser.add_argument("--timeout", type=float, default=60)
     parser.add_argument("--bytecompiled", action="store_true")
+    parser.add_argument("--call-style", choices=["direct", "argument", "conditional", "funcall", "binding", "protected"], default="direct")
     args = parser.parse_args()
     driver = webdriver.Chrome(options=chrome_options(args.chrome, args.headless))
     editor = BrowserEditorHarness(driver, args.timeout)
@@ -29,6 +30,14 @@ def main():
             "(fset 'neomacs-stack-probe (byte-compile (symbol-function 'neomacs-stack-probe)))"
             if args.bytecompiled else ""
         )
+        body = {
+            "direct": "(neomacs-stack-probe)",
+            "argument": "(+ 1 (neomacs-stack-probe))",
+            "conditional": "(if t (neomacs-stack-probe))",
+            "funcall": "(funcall #'neomacs-stack-probe)",
+            "binding": "(let ((neomacs-stack-local 42)) (neomacs-stack-probe))",
+            "protected": "(unwind-protect (neomacs-stack-probe) (setq neomacs-stack-cleanups (1+ neomacs-stack-cleanups)))",
+        }[args.call_style]
         for limit in args.limits:
             # GNU bytecode.c raises a plain error for Bcall overflow; eval.c
             # raises excessive-lisp-nesting. Do not erase that distinction.
@@ -41,8 +50,9 @@ def main():
             )
             editor.eval_expression(
                 f"""(progn
+                      (setq neomacs-stack-cleanups 0)
                       (defalias 'neomacs-stack-probe
-                        (lambda () (neomacs-stack-probe)))
+                        (lambda () {body}))
                       {compile_probe}
                       (unwind-protect
                           (condition-case err
@@ -57,6 +67,11 @@ def main():
                 failure_marker="STACK-FAIL:",
             )
             print(f"PASS: Lisp recursion limit {limit} signals without trapping", flush=True)
+            if args.call_style == "protected":
+                editor.eval_expression(
+                    '(if (> neomacs-stack-cleanups 0) (message (concat "STACK-" "CLEANUP-PASS")) (message (concat "STACK-" "FAIL: missing cleanup")))',
+                    "STACK-CLEANUP-PASS", failure_marker="STACK-FAIL:",
+                )
         editor.eval_expression(
             '(message (concat "STACK-" "ALIVE-%d") (+ 20 22))',
             "STACK-ALIVE-42",
