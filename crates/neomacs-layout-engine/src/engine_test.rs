@@ -21,6 +21,9 @@ fn settled_point(
 
 use super::*;
 
+#[path = "engine_face_identity_test.rs"]
+mod face_identity;
+
 fn test_image_load(id: u32) -> neomacs_display_protocol::ImageLoadToken {
     neomacs_display_protocol::ImageLoadToken::new(
         neomacs_display_protocol::ImageId::new(id),

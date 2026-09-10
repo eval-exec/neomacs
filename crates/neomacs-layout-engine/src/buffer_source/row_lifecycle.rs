@@ -2240,8 +2240,7 @@ pub(crate) fn append_hscroll_truncation_marker_to_text_row<'ctx>(
     row_progress: &mut DisplaySourceRowProgressState<'_>,
     content_x: f32,
 ) {
-    let request =
-        render_context.hscroll_truncation_request(source_render.default_face(), content_x);
+    let request = render_context.hscroll_truncation_request(source_render, content_x);
     append_synthetic_request_to_text_row(
         render_context,
         row_geometry,

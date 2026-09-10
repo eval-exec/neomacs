@@ -14,7 +14,12 @@ use neomacs_display_protocol::types::FaceId;
 /// canonical and remapped identities as variants prevents later decoration
 /// code from silently substituting frame face 0 for a window-local remap.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum EffectiveWindowDefaultFace {
+pub(crate) struct EffectiveWindowDefaultFace {
+    kind: EffectiveWindowDefaultFaceKind,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum EffectiveWindowDefaultFaceKind {
     FrameDefault { face: ResolvedFace },
     BufferRemapped { face_id: FaceId, face: ResolvedFace },
 }
@@ -25,28 +30,32 @@ impl EffectiveWindowDefaultFace {
         resolved: &ResolvedFace,
         face_ids: &mut FrameFaceAttempt,
     ) -> Self {
-        if same_resolved_face(resolved, face_resolver.default_face()) {
-            Self::FrameDefault {
+        let kind = if same_resolved_face(resolved, face_resolver.default_face()) {
+            EffectiveWindowDefaultFaceKind::FrameDefault {
                 face: resolved.clone(),
             }
         } else {
-            Self::BufferRemapped {
+            EffectiveWindowDefaultFaceKind::BufferRemapped {
                 face_id: stable_face_id_for_resolved(face_ids, resolved),
                 face: resolved.clone(),
             }
-        }
+        };
+        Self { kind }
     }
 
     pub(crate) const fn face_id(&self) -> FaceId {
-        match self {
-            Self::FrameDefault { .. } => FaceId::new(BasicFaceId::Default as u32),
-            Self::BufferRemapped { face_id, .. } => *face_id,
+        match &self.kind {
+            EffectiveWindowDefaultFaceKind::FrameDefault { .. } => {
+                FaceId::new(BasicFaceId::Default as u32)
+            }
+            EffectiveWindowDefaultFaceKind::BufferRemapped { face_id, .. } => *face_id,
         }
     }
 
     pub(crate) fn face(&self) -> &ResolvedFace {
-        match self {
-            Self::FrameDefault { face } | Self::BufferRemapped { face, .. } => face,
+        match &self.kind {
+            EffectiveWindowDefaultFaceKind::FrameDefault { face }
+            | EffectiveWindowDefaultFaceKind::BufferRemapped { face, .. } => face,
         }
     }
 }

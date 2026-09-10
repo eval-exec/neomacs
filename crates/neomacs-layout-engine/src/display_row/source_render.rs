@@ -7,7 +7,7 @@
 //! need to own the render-state facade.
 
 use crate::display_current_row_output::{DisplayCurrentRowMutation, DisplayRowCurrentRowOutput};
-use crate::display_face_policy::BaseFacePolicy;
+use crate::display_face_policy::{BaseFacePolicy, EffectiveWindowDefaultFace};
 use crate::display_item::{
     DisplayItem, DisplayPropertyReplacementDescriptor, RenderFaceRef, SourceSpan,
 };
@@ -1113,6 +1113,17 @@ impl<'a> TextRowSourceRenderState<'a> {
 
     pub(crate) fn default_face(&self) -> ResolvedFace {
         self.faces.default_face()
+    }
+
+    pub(crate) fn effective_default_face(
+        &self,
+        face_ids: &mut FrameFaceAttempt,
+    ) -> EffectiveWindowDefaultFace {
+        EffectiveWindowDefaultFace::resolve(
+            self.faces.pipeline_resolver(),
+            &self.faces.default_face(),
+            face_ids,
+        )
     }
 
     pub(crate) fn display_string_base_face<B: LayoutBufferView>(

@@ -55,6 +55,31 @@ why that service is not used. They no longer share an ambiguous optional input.
 This preserves the current approximation on deferred paths; it does not certify
 that every stored metric came from a concrete font.
 
+## Synthetic glyphs retain window-default identity
+
+A frame face ID identifies one immutable rendering within a published frame.
+The canonical frame default and a buffer-remapped default are not interchangeable:
+two windows can display different text scales in the same frame.
+
+GNU `xdisp.c:produce_special_glyphs` calls `lookup_basic_face` for truncation
+glyphs. `xfaces.c:lookup_basic_face` resolves buffer remapping before selecting
+the realized face ID. Neomacs' horizontal-scroll `$` marker previously paired
+the canonical default ID with remapped attributes, causing `FrameFaceConflict`
+when a scaled buffer scrolled horizontally.
+
+`display_face_policy::EffectiveWindowDefaultFace` binds the resolved attributes
+to their canonical or arena-assigned identity. Its private enum variants can
+only be constructed through resolution. The synthetic-marker factory accepts
+this value rather than an independently supplied ID and face. The existing
+frame publication conflict check remains intact; it detects invalid producers
+rather than silently replacing another window's rendering.
+
+`engine_face_identity_test.rs` exercises real buffer remapping and frame output:
+a minimal scaled, horizontally scrolled window reproduces the original panic,
+and mixed scaled/unscaled windows verify marker/body sizes across consecutive
+redisplays with concrete font metrics. These are layout regressions, not a
+claim of native GUI input or Treemacs mouse-session coverage.
+
 ## Verification and next stages
 
 Tests live out-of-line and cover lossy face-merge sequences, terminal defaults,

@@ -1,3 +1,4 @@
+use crate::display_face_policy::EffectiveWindowDefaultFace;
 use crate::display_face_ref::render_face_ref_id;
 use crate::display_item::{DisplayItem, DisplayItemKind, RenderFaceRef};
 use crate::display_row::append_context::{
@@ -21,7 +22,6 @@ use crate::display_source_append_plan::{
 };
 use crate::frame_face_arena::{FrameFaceArena, FrameFaceAttempt};
 use crate::neovm_bridge::ResolvedFace;
-use neomacs_display_protocol::face::BasicFaceId;
 use neomacs_display_protocol::types::FaceId;
 
 const SYNTHETIC_SOURCE_INVISIBLE_ELLIPSIS: u64 = 3;
@@ -206,19 +206,18 @@ impl SyntheticTextAppendRequest {
         }
     }
 
-    pub(crate) fn text_row_metrics_marker(
+    fn text_row_metrics_marker(
         position: DisplayRowPosition,
         marker: SyntheticTextMarker,
-        face_id: FaceId,
-        base_face: &ResolvedFace,
+        default_face: EffectiveWindowDefaultFace,
         metrics: DisplayRowFallbackMetrics,
     ) -> Self {
         Self {
             position,
             source: SyntheticTextSource::marker(marker),
             face: SyntheticTextAppendFace::TextRowMetrics {
-                face_id,
-                base_face: base_face.clone(),
+                face_id: default_face.face_id(),
+                base_face: default_face.face().clone(),
                 metrics,
             },
         }
@@ -480,14 +479,16 @@ impl<'a> BufferSyntheticTextRenderContext<'a> {
 
     pub(crate) fn hscroll_truncation_request(
         &self,
-        base_face: ResolvedFace,
+        source: &TextRowSourceRenderState<'_>,
         content_x: f32,
     ) -> SyntheticTextAppendRequest {
+        // GNU produce_special_glyphs resolves the buffer-remapped default,
+        // not the canonical frame ID paired with window-local attributes.
+        let face = source.effective_default_face(&mut self.face_attempt.clone());
         SyntheticTextAppendRequest::text_row_metrics_marker(
             DisplayRowPosition::new(content_x, 0),
             SyntheticTextMarker::HscrollTruncation,
-            BasicFaceId::Default.into(),
-            &base_face,
+            face,
             self.metrics,
         )
     }
@@ -499,7 +500,7 @@ impl<'a> BufferSyntheticTextRenderContext<'a> {
         geometry: &'a DisplayRowGeometryState,
         content_x: f32,
     ) -> Option<DisplayRowPosition> {
-        let request = self.hscroll_truncation_request(state.default_face(), content_x);
+        let request = self.hscroll_truncation_request(state, content_x);
         self.render_request_to_text_row(state, geometry, request)
             .map(|progress| progress.end())
     }
