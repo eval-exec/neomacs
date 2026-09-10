@@ -716,14 +716,7 @@ impl<'a> LoadDecoder<'a> {
         // Pre-size the heap-side registries: one counting pass over the span
         // table is far cheaper than growing a 12K-entry FxHashMap by
         // rehashing during registration.
-        let (mut veclikes, mut strings) = (0usize, 0usize);
-        for (_index, record) in self.state.spans.iter() {
-            match record {
-                LoadedObjectSpan::Vectorlike { .. } => veclikes += 1,
-                LoadedObjectSpan::String { .. } => strings += 1,
-                _ => {}
-            }
-        }
+        let (veclikes, strings) = self.state.spans.count_vectorlikes_and_strings();
         with_tagged_heap(|heap| heap.reserve_mapped_object_capacity(veclikes, strings));
 
         for (_index, record) in self.state.spans.iter() {

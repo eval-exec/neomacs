@@ -320,6 +320,39 @@ impl<'data> LoadedSpans<'data> {
         }
     }
 
+    /// Count the spans that will need a heap-side registry slot.
+    ///
+    /// The registration pass pre-sizes two `FxHashMap`s, and obtaining those
+    /// two numbers used to mean decoding every span row into a
+    /// `LoadedObjectSpan` -- a `pod_read_unaligned` of the whole row plus the
+    /// tag dispatch that builds the variant -- only to read its tag and throw
+    /// the rest away.  The tag is the row's first byte (`SpanRow` is
+    /// `repr(C)` with `tag: u8` leading), so counting reads one byte per row.
+    pub(crate) fn count_vectorlikes_and_strings(&self) -> (usize, usize) {
+        let (mut vectorlikes, mut strings) = (0usize, 0usize);
+        match &self.repr {
+            SpansRepr::Mapped { payload, count } => {
+                for index in 0..*count {
+                    match payload[index * ROW_SIZE] {
+                        SPAN_VECTORLIKE => vectorlikes += 1,
+                        SPAN_STRING => strings += 1,
+                        _ => {}
+                    }
+                }
+            }
+            SpansRepr::Owned(records) => {
+                for record in records {
+                    match record {
+                        LoadedObjectSpan::Vectorlike { .. } => vectorlikes += 1,
+                        LoadedObjectSpan::String { .. } => strings += 1,
+                        _ => {}
+                    }
+                }
+            }
+        }
+        (vectorlikes, strings)
+    }
+
     pub(crate) fn iter(&self) -> LoadedSpansIter<'_, 'data> {
         LoadedSpansIter {
             spans: self,
@@ -471,9 +504,8 @@ pub(crate) fn load_object_starts(section: &[u8]) -> Result<LoadedSpans<'_>, Dump
 mod tests {
     use super::*;
 
-    #[test]
-    fn object_starts_round_trips() {
-        let heap = DumpTaggedHeap {
+    fn sample_heap() -> DumpTaggedHeap {
+        DumpTaggedHeap {
             objects: vec![
                 DumpHeapObject::Cons {
                     car: DumpValue::Int(1),
@@ -521,7 +553,45 @@ mod tests {
                 }),
                 None,
             ],
-        };
+        }
+    }
+
+    /// The tag-only count must agree with decoding every span.
+    ///
+    /// `count_vectorlikes_and_strings` reads one byte per row instead of
+    /// decoding the row, which is only correct while `SpanRow` keeps `tag` as
+    /// its leading byte.  Re-derive the answer the slow way and compare, so a
+    /// field reordering fails here rather than silently mis-sizing the
+    /// registries at load.
+    #[test]
+    fn the_tag_only_span_count_agrees_with_decoding_every_span() {
+        let heap = sample_heap();
+        let bytes = build_object_starts(&heap).unwrap();
+        let spans = load_object_starts(&bytes).unwrap();
+
+        let (mut vectorlikes, mut strings) = (0usize, 0usize);
+        for (_index, record) in spans.iter() {
+            match record {
+                LoadedObjectSpan::Vectorlike { .. } => vectorlikes += 1,
+                LoadedObjectSpan::String { .. } => strings += 1,
+                _ => {}
+            }
+        }
+
+        assert_eq!(
+            spans.count_vectorlikes_and_strings(),
+            (vectorlikes, strings),
+            "tag-only count disagrees with the decoded spans"
+        );
+        assert!(
+            vectorlikes > 0 && strings > 0,
+            "the sample must contain both kinds for this to prove anything"
+        );
+    }
+
+    #[test]
+    fn object_starts_round_trips() {
+        let heap = sample_heap();
         let bytes = build_object_starts(&heap).unwrap();
         let spans = load_object_starts(&bytes).unwrap();
         assert_eq!(spans.len(), 5);
