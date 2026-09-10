@@ -57,6 +57,19 @@ impl FromStr for SuiteId {
 pub struct SuiteScenario {
     pub scenario: ScenarioId,
     pub maximum_regression_percent: f64,
+    /// How far this row may move against the PREVIOUS suite run before the
+    /// suite fails, or `None` to record the drift without gating on it.
+    ///
+    /// The budget above compares the candidate against the baseline within one
+    /// run, so a row that regresses a little every time never trips it: five
+    /// 2% regressions against a 10% budget all pass individually. This is the
+    /// ratchet that catches the accumulation.
+    ///
+    /// It is armed per row rather than globally because a gate that fires on
+    /// noise gets switched off. `rust-lsp-typing` spans 6.6% between runs of
+    /// the same binary and `sustained-editing` about 0.8%, so arming those
+    /// would produce false failures; the batch rows reproduce to ~0.03%.
+    pub maximum_drift_percent: Option<f64>,
 }
 
 const STANDARD_SCENARIOS: &[SuiteScenario] = &[
@@ -67,21 +80,35 @@ const STANDARD_SCENARIOS: &[SuiteScenario] = &[
     suite_scenario(ScenarioId::Startup, 12.0),
     suite_scenario(ScenarioId::SustainedEditing, 8.0),
     suite_scenario(ScenarioId::GuiInputLatency, 15.0),
-    suite_scenario(ScenarioId::OrgEditing, 8.0),
-    suite_scenario(ScenarioId::MagitStatus, 10.0),
-    suite_scenario(ScenarioId::OrgJournalOpen, 10.0),
-    suite_scenario(ScenarioId::LargeFileEditing, 8.0),
-    suite_scenario(ScenarioId::Indentation, 8.0),
-    suite_scenario(ScenarioId::RegexSearch, 8.0),
+    ratcheted(ScenarioId::OrgEditing, 8.0, 2.0),
+    ratcheted(ScenarioId::MagitStatus, 10.0, 2.0),
+    ratcheted(ScenarioId::OrgJournalOpen, 10.0, 2.0),
+    ratcheted(ScenarioId::LargeFileEditing, 8.0, 2.0),
+    ratcheted(ScenarioId::Indentation, 8.0, 2.0),
+    ratcheted(ScenarioId::RegexSearch, 8.0, 2.0),
     // Byte-code rows carry the same budgets as the source rows they mirror.
-    suite_scenario(ScenarioId::MagitStatusCompiled, 10.0),
-    suite_scenario(ScenarioId::OrgJournalOpenCompiled, 10.0),
+    ratcheted(ScenarioId::MagitStatusCompiled, 10.0, 2.0),
+    ratcheted(ScenarioId::OrgJournalOpenCompiled, 10.0, 2.0),
 ];
 
 const fn suite_scenario(scenario: ScenarioId, maximum_regression_percent: f64) -> SuiteScenario {
     SuiteScenario {
         scenario,
         maximum_regression_percent,
+        maximum_drift_percent: None,
+    }
+}
+
+/// A row whose run-to-run variance is small enough to ratchet against history.
+const fn ratcheted(
+    scenario: ScenarioId,
+    maximum_regression_percent: f64,
+    maximum_drift_percent: f64,
+) -> SuiteScenario {
+    SuiteScenario {
+        scenario,
+        maximum_regression_percent,
+        maximum_drift_percent: Some(maximum_drift_percent),
     }
 }
 
@@ -150,6 +177,10 @@ impl SuiteRequest {
 pub struct SuiteScenarioResult {
     pub scenario: ScenarioId,
     pub maximum_regression_percent: f64,
+    /// Carried from the suite definition so the verdict can ratchet without
+    /// re-deriving it, and so the artifact records what gate was in force.
+    #[serde(default)]
+    pub maximum_drift_percent: Option<f64>,
     pub percent_change: Option<f64>,
     pub comparison_artifact: PathBuf,
 }
@@ -165,6 +196,16 @@ pub struct SuiteHistoryLink {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
+pub struct SuiteDrift {
+    pub scenario: ScenarioId,
+    pub previous_percent_change: f64,
+    pub current_percent_change: f64,
+    pub drift_percent: f64,
+    pub maximum_drift_percent: f64,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SuiteRegression {
     pub scenario: ScenarioId,
     pub maximum_regression_percent: f64,
@@ -175,8 +216,18 @@ pub struct SuiteRegression {
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum SuiteVerdict {
     Passed,
-    Regressed { regressions: Vec<SuiteRegression> },
-    Rejected { scenarios: Vec<ScenarioId> },
+    Regressed {
+        regressions: Vec<SuiteRegression>,
+    },
+    /// The suite is inside every per-run budget but has moved against the
+    /// previous run by more than an armed row allows. This is the failure the
+    /// budgets cannot see: repeated small regressions that each pass.
+    Drifted {
+        drifts: Vec<SuiteDrift>,
+    },
+    Rejected {
+        scenarios: Vec<ScenarioId>,
+    },
 }
 
 impl SuiteVerdict {
@@ -225,17 +276,26 @@ impl PerfHarness {
             source,
         })?;
 
-        let previous_suite = match request.previous_suite.as_deref() {
+        // The previous artifact was retained and linked but never read back,
+        // so the suite had history and no ratchet. Keep both: the link for
+        // provenance, the parsed artifact for the drift comparison.
+        let (previous_suite, previous_artifact) = match request.previous_suite.as_deref() {
             Some(path) => {
                 let (link, bytes) = read_history(path)?;
                 let retained = directory.join(&link.retained_path);
-                fs::write(&retained, bytes).map_err(|source| PerfError::WriteArtifact {
+                fs::write(&retained, &bytes).map_err(|source| PerfError::WriteArtifact {
                     path: retained,
                     source,
                 })?;
-                Some(link)
+                let parsed = serde_json::from_slice::<SuiteArtifact>(&bytes).map_err(|error| {
+                    PerfError::InvalidSuiteHistory {
+                        path: path.to_path_buf(),
+                        message: error.to_string(),
+                    }
+                })?;
+                (Some(link), Some(parsed))
             }
-            None => None,
+            None => (None, None),
         };
         let mut scenario_results = Vec::with_capacity(request.suite.scenarios().len());
         for suite_scenario in request.suite.scenarios() {
@@ -259,11 +319,12 @@ impl PerfHarness {
             scenario_results.push(SuiteScenarioResult {
                 scenario: suite_scenario.scenario,
                 maximum_regression_percent: suite_scenario.maximum_regression_percent,
+                maximum_drift_percent: suite_scenario.maximum_drift_percent,
                 percent_change,
                 comparison_artifact: report.artifact_path,
             });
         }
-        let verdict = evaluate_suite(&scenario_results);
+        let verdict = evaluate_suite(&scenario_results, previous_artifact.as_ref());
         let artifact = SuiteArtifact {
             schema_version: SUITE_ARTIFACT_SCHEMA_VERSION,
             suite_id,
@@ -288,7 +349,10 @@ impl PerfHarness {
     }
 }
 
-pub(crate) fn evaluate_suite(scenarios: &[SuiteScenarioResult]) -> SuiteVerdict {
+pub(crate) fn evaluate_suite(
+    scenarios: &[SuiteScenarioResult],
+    previous: Option<&SuiteArtifact>,
+) -> SuiteVerdict {
     let rejected = scenarios
         .iter()
         .filter(|scenario| scenario.percent_change.is_none())
@@ -310,10 +374,39 @@ pub(crate) fn evaluate_suite(scenarios: &[SuiteScenarioResult]) -> SuiteVerdict 
             })
         })
         .collect::<Vec<_>>();
-    if regressions.is_empty() {
+    if !regressions.is_empty() {
+        return SuiteVerdict::Regressed { regressions };
+    }
+    // Only now consider drift: a row already over its own budget is reported as
+    // a regression rather than as history.
+    let drifts = previous
+        .map(|previous| {
+            scenarios
+                .iter()
+                .filter_map(|scenario| {
+                    let maximum_drift_percent = scenario.maximum_drift_percent?;
+                    let current = scenario.percent_change?;
+                    let before = previous
+                        .scenarios
+                        .iter()
+                        .find(|earlier| earlier.scenario == scenario.scenario)?
+                        .percent_change?;
+                    let drift_percent = current - before;
+                    (drift_percent > maximum_drift_percent).then_some(SuiteDrift {
+                        scenario: scenario.scenario,
+                        previous_percent_change: before,
+                        current_percent_change: current,
+                        drift_percent,
+                        maximum_drift_percent,
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if drifts.is_empty() {
         SuiteVerdict::Passed
     } else {
-        SuiteVerdict::Regressed { regressions }
+        SuiteVerdict::Drifted { drifts }
     }
 }
 

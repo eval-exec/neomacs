@@ -595,6 +595,13 @@ pub fn run_cli(
                     artifact: report.artifact_path,
                     reason: format!("regressions: {regressions:?}"),
                 }),
+                SuiteVerdict::Drifted { drifts } => Err(PerfCliError::SuiteRejected {
+                    artifact: report.artifact_path,
+                    reason: format!(
+                        "drifted against the previous suite (each row is inside \
+                         its own budget; the movement is the accumulation): {drifts:?}"
+                    ),
+                }),
                 SuiteVerdict::Rejected { scenarios } => Err(PerfCliError::SuiteRejected {
                     artifact: report.artifact_path,
                     reason: format!("rejected scenarios: {scenarios:?}"),
