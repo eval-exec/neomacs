@@ -14,19 +14,36 @@ def main():
     parser.add_argument("--chrome")
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--artifacts-dir")
+    parser.add_argument("--limits", type=int, nargs="+", default=[200, 400, 800, 1600])
+    parser.add_argument("--timeout", type=float, default=60)
+    parser.add_argument("--bytecompiled", action="store_true")
     args = parser.parse_args()
     driver = webdriver.Chrome(options=chrome_options(args.chrome, args.headless))
-    editor = BrowserEditorHarness(driver, 60)
+    editor = BrowserEditorHarness(driver, args.timeout)
     try:
         editor.install_frame_observer()
         driver.get(args.url)
         editor.wait_ready()
         editor.wait_for_presentation()
-        for limit in (200, 400, 800, 1600):
+        compile_probe = (
+            "(fset 'neomacs-stack-probe (byte-compile (symbol-function 'neomacs-stack-probe)))"
+            if args.bytecompiled else ""
+        )
+        for limit in args.limits:
+            # GNU bytecode.c raises a plain error for Bcall overflow; eval.c
+            # raises excessive-lisp-nesting. Do not erase that distinction.
+            error_handler = (
+                f'''(if (and (stringp (cadr err))
+                             (string-match-p "Lisp nesting exceeds.*max-lisp-eval-depth" (cadr err)))
+                        (message (concat "STACK-" "{limit}-PASS"))
+                      (message (concat "STACK-" "FAIL: %S") err))'''
+                if args.bytecompiled else '(message (concat "STACK-" "FAIL: %S") err)'
+            )
             editor.eval_expression(
                 f"""(progn
                       (defalias 'neomacs-stack-probe
                         (lambda () (neomacs-stack-probe)))
+                      {compile_probe}
                       (unwind-protect
                           (condition-case err
                               (let ((max-lisp-eval-depth {limit}))
@@ -34,7 +51,7 @@ def main():
                                 (message (concat "STACK-" "FAIL: returned")))
                             (excessive-lisp-nesting
                               (message (concat "STACK-" "{limit}-PASS")))
-                            (error (message (concat "STACK-" "FAIL: %S") err)))
+                            (error {error_handler}))
                         (fmakunbound 'neomacs-stack-probe)))""",
                 f"STACK-{limit}-PASS",
                 failure_marker="STACK-FAIL:",
