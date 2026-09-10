@@ -18,6 +18,7 @@ impl SurroundingTextState {
 #[derive(Debug)]
 pub(super) struct CapturedText {
     pub(super) source: super::InsertionAnchor,
+    pub(super) export_revision: super::export::ExportRevision,
     pub(super) id: ImeSnapshotId,
     pub(super) positions: Vec<(usize, EmacsBytePos)>,
 }
@@ -31,13 +32,15 @@ impl crate::Context {
     /// lossily. Each observation retires the previous identity, even on failure.
     pub fn ime_surrounding_text(&mut self) -> Option<ImeTextSnapshot> {
         self.composition.surrounding.captured = None;
+        let export_revision = self.ime_export_revision()?;
         let source = self.ime_anchor()?;
+        let field = self.ime_field_bounds()?;
         let buffer = self.buffers.current_buffer()?;
         let point = source.point;
         let mark = source.selection_anchor.unwrap_or(point);
         let mut start = point.min(mark);
         let mut end = point.max(mark);
-        if start < buffer.point_min_emacs_byte_pos() || end > buffer.point_max_emacs_byte_pos() {
+        if start < field.start() || end > field.end() {
             return None;
         }
 
@@ -57,7 +60,7 @@ impl crate::Context {
         let before_budget = (ImeTextSnapshot::MAX_BYTES - bytes) / 2;
         let mut before_bytes = 0;
         let mut characters = Vec::new();
-        while start > buffer.point_min_emacs_byte_pos() {
+        while start > field.start() {
             let Some(ch) = buffer.char_before_emacs_byte_pos(start) else {
                 break;
             };
@@ -71,7 +74,7 @@ impl crate::Context {
         characters.reverse();
         characters.extend(selected);
         bytes += before_bytes;
-        while end < buffer.point_max_emacs_byte_pos() {
+        while end < field.end() {
             let Some(ch) = buffer.char_after_emacs_byte_pos(end) else {
                 break;
             };
@@ -101,6 +104,7 @@ impl crate::Context {
         )?;
         self.composition.surrounding.captured = Some(CapturedText {
             source,
+            export_revision,
             id: snapshot.id(),
             positions,
         });
