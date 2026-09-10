@@ -40,6 +40,8 @@ unsafe extern "C" {
     safe fn copy_input(destination: *mut u8, capacity: u32) -> u32;
     #[link_name = "acknowledge_input"]
     safe fn imported_acknowledge_input(source: *const u8, length: u32) -> u32;
+    #[link_name = "reject_input"]
+    fn imported_reject_input(source: *const u8, length: u32);
     safe fn publish_frame(source: *const u8, length: u32) -> u32;
     safe fn post_status(source: *const u8, length: u32);
     safe fn post_failure(source: *const u8, length: u32);
@@ -153,6 +155,12 @@ pub(crate) fn acknowledge_input(sequence: InputBatchSequence) -> Result<(), Stri
             sequence.get()
         ))
     }
+}
+
+pub(crate) fn reject_input(message: &str) {
+    // SAFETY: the host synchronously copies this valid UTF-8 slice before the
+    // import returns. It cannot retain a pointer into the evaluator's memory.
+    unsafe { imported_reject_input(message.as_ptr(), message.len() as u32) }
 }
 
 fn copy_host_bytes(
