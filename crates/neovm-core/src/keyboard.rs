@@ -1212,6 +1212,8 @@ impl TtyInputTarget {
 /// Input events from the display layer.
 #[derive(Clone, Debug)]
 pub enum InputEvent {
+    /// Ordered request answered with owned data at the next input read.
+    ImeRequest(crate::ime::ImeRequest),
     /// Ordered, context-qualified text conversion on the VM thread.
     Ime {
         session: neovm_host_abi::ime::ImeSessionId,
@@ -4994,6 +4996,10 @@ impl crate::emacs_core::eval::Context {
         }
 
         match event {
+            InputEvent::ImeRequest(request) => {
+                request.dispatch(self)?;
+                Ok(None)
+            }
             InputEvent::Ime { session, operation, emacs_frame_id } => {
                 self.route_keyboard_input_to_frame(emacs_frame_id);
                 let event = self.handle_ime_operation(session, operation)?;

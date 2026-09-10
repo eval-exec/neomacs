@@ -7,7 +7,9 @@
 //! adapter which preserves the recursive Lisp stack.
 
 mod blocking;
+mod ime;
 mod transport;
+pub use ime::{ImeClient, ImeEditorError, ImeReply, PendingImeReply};
 pub use blocking::{EditorSessionExit, StoppedEditorSession};
 std::cfg_select! {
     target_family = "wasm" => {}

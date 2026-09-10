@@ -201,6 +201,9 @@ fn semantics(event: &InputEvent) -> FrontendEventSemantics {
         | InputEvent::TtyByte { .. }
         | InputEvent::TtyCharacter { .. } => command(),
         InputEvent::KeyPress { .. } | InputEvent::Ime { .. } => command(),
+        // Do not overtake preceding keyboard edits through wait servicing or
+        // the eager internal-event drain. Answer at the next input read.
+        InputEvent::ImeRequest(_) => special(PendingPolicy::Never, false, false),
         InputEvent::MousePress { .. } => command(),
         InputEvent::MouseRelease { .. } => command(),
         InputEvent::MouseMove { .. } => special(PendingPolicy::TrackMouse, false, true),
