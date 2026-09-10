@@ -324,12 +324,12 @@ impl Context {
         // settings and the defaults keep their meaning as minimum budgets);
         // overridden thresholds (`set_gc_threshold`) are unaffected because
         // this value only flows through `set_gc_threshold_from_runtime`; the
-        // GC_HI clamp below still bounds the result. `live_bytes` only grows
-        // between sweeps (it is recomputed exactly at each sweep), which is
-        // safe for a max term.
+        // GC_HI clamp below still bounds the result. `live_bytes` is what the
+        // last sweep counted and does not move between sweeps, so this term
+        // is stable across a burst of allocation rather than growing with it.
         let live_growth = ((self.tagged_heap.live_bytes() as u128)
-            .saturating_mul(GC_LIVE_GROWTH_NUM)
-            / GC_LIVE_GROWTH_DEN)
+            .saturating_mul(super::gc_live_growth_percent())
+            / 100)
             .min(GC_HI_THRESHOLD_BYTES as u128) as usize;
         threshold = threshold.max(live_growth);
         let mut threshold = threshold.clamp(1, GC_HI_THRESHOLD_BYTES);

@@ -29,8 +29,17 @@ fn list_cars(mut value: TaggedValue) -> Vec<TaggedValue> {
     out
 }
 
+/// Allocation advances the consing counters, and deliberately does NOT
+/// advance `live_bytes`.
+///
+/// `live_bytes` is what the last sweep counted. Both adaptive pacing terms
+/// multiply it, so charging allocations to it made the collection threshold
+/// grow with every allocation and outrun the counter it is compared against:
+/// nothing ever collected in `--batch`, and the sweep that would have
+/// corrected `live_bytes` was the thing being prevented. The pacer accounts
+/// for recent allocation separately, via `bytes_since_gc / 2`.
 #[test]
-fn cons_allocation_advances_every_counter_by_one_cell() {
+fn cons_allocation_advances_the_consing_counters_but_not_live_bytes() {
     let mut heap = TaggedHeap::new();
     let before_counts = heap.memory_use_counts_snapshot()[MemoryUseCountSlot::ConsCells.index()];
     let before_bytes = heap.bytes_since_gc();
@@ -46,7 +55,11 @@ fn cons_allocation_advances_every_counter_by_one_cell() {
         before_counts + 1
     );
     assert_eq!(heap.bytes_since_gc(), before_bytes + size_of::<ConsCell>());
-    assert_eq!(heap.live_bytes(), before_live + size_of::<ConsCell>());
+    assert_eq!(
+        heap.live_bytes(),
+        before_live,
+        "allocation must not move the sweep's live count"
+    );
     assert_eq!(heap.allocated_count, before_allocated + 1);
     assert_eq!(heap.cons_live_count, before_cons_live + 1);
 }

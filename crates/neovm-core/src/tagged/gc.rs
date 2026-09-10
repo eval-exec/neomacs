@@ -1435,6 +1435,20 @@ impl TaggedHeap {
         self.partition_dump
     }
 
+    /// Charge an allocation to the consing counter.
+    ///
+    /// This deliberately does NOT advance `live_bytes`.  `live_bytes` is what
+    /// the last sweep actually counted, and both adaptive pacing terms
+    /// multiply it, so charging every allocation to it made the collection
+    /// threshold chase the consing counter: the threshold grew with each
+    /// allocation, `should_collect` could never become true, and the sweep
+    /// that would have corrected `live_bytes` was exactly the thing being
+    /// prevented.  In `--batch`, where nothing else forces a collection, that
+    /// meant none ever ran -- GNU performed 78 collections on a loop that
+    /// neomacs completed with 0.  The pacer compensates for recent allocation
+    /// on its own, adding `bytes_since_gc / 2` to the live estimate, which is
+    /// GNU's `total_bytes_of_live_objects () + since_gc` shape
+    /// (`consing_threshold`, `src/alloc.c`).
     fn note_allocation_bytes(&mut self, bytes: usize) {
         // GNU charges an allocation to ONE counter here (`consing_until_gc`,
         // `src/alloc.c`) and totals the rest at collection time.  This charged
@@ -1443,7 +1457,6 @@ impl TaggedHeap {
         // has accumulated since.  Every cons in the engine paid for that
         // extra saturating add.
         self.bytes_since_gc = self.bytes_since_gc.saturating_add(bytes);
-        self.live_bytes = self.live_bytes.saturating_add(bytes);
     }
 
     /// Every byte this heap has ever allocated.
@@ -1949,7 +1962,9 @@ impl TaggedHeap {
 
         HeapLayoutStats {
             allocated_objects: self.allocated_count,
-            managed_live_bytes: self.live_bytes,
+            // `live_bytes` is what the last sweep counted, so add what has been
+            // allocated since to keep reporting the current managed size.
+            managed_live_bytes: self.live_bytes.saturating_add(self.bytes_since_gc),
             page_backing_bytes,
             known_payload_capacity_bytes,
             cons,

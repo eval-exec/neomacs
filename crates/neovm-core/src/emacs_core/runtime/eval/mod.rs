@@ -115,6 +115,26 @@ const GC_PERCENT_SCALE: u64 = 1_000_000;
 /// raise, never lower, and `GC_HI_THRESHOLD_BYTES` still caps the result.
 const GC_LIVE_GROWTH_NUM: u128 = 1;
 const GC_LIVE_GROWTH_DEN: u128 = 2;
+
+/// The live-growth term as a percentage of the live heap, overridable for
+/// measurement with `NEOVM_GC_LIVE_GROWTH_PERCENT`.
+///
+/// The default is 50, i.e. the `NUM/DEN` above.  GNU's nearest equivalent is
+/// `gc-cons-percentage`, whose default is 10, so this term is five times GNU's
+/// and dominates whatever the user asked for: because it combines as a strict
+/// max, a `gc-cons-threshold` below it has no effect at all.  That is worth
+/// being able to measure rather than argue about, and `0` disables the term
+/// entirely, leaving GNU's contract exactly.
+fn gc_live_growth_percent() -> u128 {
+    static PERCENT: OnceLock<u128> = OnceLock::new();
+    *PERCENT.get_or_init(|| {
+        std::env::var("NEOVM_GC_LIVE_GROWTH_PERCENT")
+            .ok()
+            .and_then(|value| value.parse::<u128>().ok())
+            .filter(|percent| *percent <= 10_000)
+            .unwrap_or(GC_LIVE_GROWTH_NUM * 100 / GC_LIVE_GROWTH_DEN)
+    })
+}
 pub(crate) const INTERNAL_COMPILER_FUNCTION_OVERRIDES: &str =
     "internal--compiler-function-overrides";
 
