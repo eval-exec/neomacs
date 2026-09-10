@@ -94,7 +94,6 @@ impl crate::Context {
             end.get(),
         )?;
         let range = EmacsByteRange::new(start, end);
-        let removed = buffer.buffer_substring_bytes_range(range);
         let start_char = buffer.emacs_byte_pos_to_lisp_char_pos(start).as_i64();
         let change = editfns::text_change_for_lisp_string_replacement_in_manager(
             &self.buffers,
@@ -144,34 +143,18 @@ impl crate::Context {
             .get_mut(captured.source.buffer)
             .expect("validated replacement buffer")
             .goto_emacs_byte_pos(cursor);
+        use super::conversion::ConversionEdit;
+        let at = crate::buffer::LispCharPos1::new(start_char);
+        let deletion = (start != end).then_some(ConversionEdit::EphemeralDeletion { at });
+        let insertion = (!replacement.is_empty()).then_some(ConversionEdit::Insertion {
+            at,
+            text: replacement,
+        });
+        let event = self.publish_conversion_edits(
+            captured.source.buffer,
+            deletion.into_iter().chain(insertion),
+        );
         editfns::signal_after_text_change(self, change)?;
-
-        let mut edits = Vec::new();
-        let buffer_value = Value::make_buffer(captured.source.buffer);
-        if !request.text.is_empty() {
-            edits.push(Value::list(vec![
-                buffer_value,
-                Value::fixnum(start_char),
-                Value::fixnum(start_char + replacement.schars() as i64),
-                Value::heap_string(replacement),
-            ]));
-        }
-        if !removed.is_empty() {
-            edits.push(Value::list(vec![
-                buffer_value,
-                Value::fixnum(start_char),
-                Value::fixnum(start_char),
-                Value::heap_string(if multibyte {
-                    LispString::from_emacs_bytes(removed)
-                } else {
-                    LispString::from_unibyte(removed)
-                }),
-            ]));
-        }
-        if edits.is_empty() {
-            return Ok((Applied, None));
-        }
-        self.assign("text-conversion-edits", Value::list(edits));
-        Ok((Applied, Some(Value::symbol("text-conversion"))))
+        Ok((Applied, (!event.is_nil()).then_some(event)))
     }
 }

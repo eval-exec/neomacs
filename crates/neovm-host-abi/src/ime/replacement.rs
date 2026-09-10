@@ -2,7 +2,8 @@
 
 use super::{ImeSnapshotId, ImeTextSnapshot};
 
-/// Replace an observed range, never an inferred range in the current buffer.
+/// Commit replacement text in an observed range, never an inferred range in
+/// the current buffer. This is not a preedit or a backspace operation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ImeReplacement {
     /// Observation from which all coordinates were computed.
