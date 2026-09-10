@@ -1,6 +1,7 @@
 import { fetchEditorWorkerAssets } from "./worker-assets.mjs";
 import { createHttpHostImports } from "./network/host.mjs";
 import { WorkerWait, HostWake } from "./worker-wait.mjs";
+import { WorkerInput } from "./worker-input.mjs";
 import {
   OriginPrivateFileSystem,
   createOpfsHostImports,
@@ -21,8 +22,7 @@ let runtimeResourceBundle = null;
 let runtimeResourceId = null;
 let startup = null;
 let mailbox = null;
-let queuedInput = null;
-let queuedInputSequence = null;
+const queuedInput = new WorkerInput(receipt => self.postMessage(receipt));
 const workerWait = new WorkerWait(() => Boolean(currentInput()));
 let probing = true;
 
@@ -50,7 +50,7 @@ function mailboxInput() {
 }
 
 function currentInput() {
-  return queuedInput ?? mailboxInput();
+  return queuedInput.bytes() ?? mailboxInput();
 }
 
 function createJspiWait() {
@@ -85,7 +85,6 @@ function decodeMemoryString(source, length) {
 }
 
 function currentInputSequence() {
-  if (queuedInput !== null) return queuedInputSequence;
   const input = mailboxInput();
   if (input === null) return null;
   try {
@@ -98,9 +97,8 @@ function currentInputSequence() {
 
 function acknowledgeInput(source, length) {
   const acknowledged = decodeMemoryString(source, length);
+  if (queuedInput.bytes() !== null) return Number(queuedInput.accept(acknowledged));
   if (currentInputSequence() !== acknowledged) return 0;
-  queuedInput = null;
-  queuedInputSequence = null;
   const state = mailboxState();
   if (state) {
     Atomics.store(state, 1, 0);
@@ -108,6 +106,17 @@ function acknowledgeInput(source, length) {
   }
   post("input-accepted", { sequence: acknowledged });
   return 1;
+}
+
+function rejectInput(source, length) {
+  const message = decodeMemoryString(source, length);
+  if (queuedInput.reject(message)) return;
+  if (mailboxInput() === null) return;
+  const sequence = currentInputSequence();
+  const state = mailboxState();
+  Atomics.store(state, 1, 0);
+  Atomics.store(state, 0, 0);
+  post("input-rejected", { sequence, message });
 }
 
 function hostImports(waitForInput, filesystemImports) {
@@ -132,6 +141,7 @@ function hostImports(waitForInput, filesystemImports) {
       input_len: () => currentInput()?.byteLength ?? 0,
       copy_input: (destination, capacity) => copyToMemory(currentInput(), destination, capacity),
       acknowledge_input: acknowledgeInput,
+      reject_input: rejectInput,
       publish_frame: (source, length) => {
         try {
           const payload = new Uint8Array(memory.buffer, source, length).slice().buffer;
@@ -240,10 +250,12 @@ self.onmessage = (event) => {
     return;
   }
   if (message?.type === "input") {
-    queuedInput = encoder.encode(JSON.stringify(message.batch));
-    queuedInputSequence = typeof message.batch?.sequence === "string"
-      ? message.batch.sequence
-      : null;
+    try {
+      queuedInput.enqueue(message.batch);
+    } catch (error) {
+      post("failed", { message: String(error) });
+      return;
+    }
     workerWait.notify();
     return;
   }
