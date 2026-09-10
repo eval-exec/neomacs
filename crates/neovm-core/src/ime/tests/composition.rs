@@ -198,3 +198,26 @@ fn ime_session_cannot_delete_before_its_anchor_or_reopen_a_retired_identity() {
         Some("safe")
     );
 }
+#[test]
+fn ime_commit_inherits_adjacent_text_properties_like_gnu() {
+    use neovm_host_abi::ime::{ImeOperation, ImeSessionId};
+    let mut eval = crate::Context::new();
+    eval.eval_str(r##"(progn (insert "x") (put-text-property 1 2 'face 'bold))"##)
+        .unwrap();
+    eval.handle_ime_operation(ImeSessionId(1), ImeOperation::Begin)
+        .unwrap();
+    eval.handle_ime_operation(
+        ImeSessionId(1),
+        ImeOperation::Replace {
+            before_bytes: 0,
+            after_bytes: 0,
+            text: "y".into(),
+        },
+    )
+    .unwrap();
+    assert!(
+        eval.eval_str("(get-text-property 2 'face)")
+            .unwrap()
+            .is_symbol_named("bold")
+    );
+}
