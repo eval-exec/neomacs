@@ -61,7 +61,12 @@ impl Drop for EvalTempRootsToSequenceGuard<'_> {
     }
 }
 
-||||||| parent of 3911772ff8 (fix(eval): unwind let bodies through explicit continuations)
+pub(super) struct ConditionalForms {
+    pub(super) condition: Value,
+    pub(super) then_form: Value,
+    pub(super) else_forms: Value,
+}
+
 impl Context {
     pub(super) fn prepare_special_form_with_surface(
         &mut self,
@@ -70,6 +75,12 @@ impl Context {
         tail: Value,
     ) -> Option<Result<continuation::PreparedForm, Flow>> {
         let entered = match evaluator_handler(target_id) {
+            Some(EvaluatorHandler::SpecialForm(SpecialFormHandler::If)) => {
+                return Some(
+                    self.prepare_conditional_forms(surface_id, tail)
+                        .map(continuation::PreparedForm::Conditional),
+                );
+            }
             Some(EvaluatorHandler::SpecialForm(SpecialFormHandler::Let)) => {
                 self.begin_let_value_named(surface_id, tail)
             }
@@ -582,28 +593,11 @@ impl Context {
             Ok(())
         })();
         if let Err(error) = init_result {
-<<<<<<< HEAD
-            return context.unbind_to_with_result(specpdl_count, Err(error));
-||||||| parent of 3ea55392db (fix(eval): reuse body continuations for sequential let bindings)
-            let result = self.unbind_to_with_result(specpdl_count, Err(error));
-            self.restore_eval_temp_roots_to_sequence(temp_scope);
-            return result;
-=======
             let result = self.unbind_to_with_result(specpdl_count, Err(error));
             self.restore_eval_temp_roots_to_sequence(temp_scope);
             return result.map(|_| unreachable!("unwinding a binding error cannot return a value"));
->>>>>>> 3ea55392db (fix(eval): reuse body continuations for sequential let bindings)
         }
 
-<<<<<<< HEAD
-        let result = context.sf_progn_value(body);
-        context.unbind_to_with_result(specpdl_count, result)
-||||||| parent of 3ea55392db (fix(eval): reuse body continuations for sequential let bindings)
-        let result = self.sf_progn_value(body);
-        let result = self.unbind_to_with_result(specpdl_count, result);
-        self.restore_eval_temp_roots_to_sequence(temp_scope);
-        result
-=======
         Ok((
             body,
             ActiveLetScope {
@@ -611,7 +605,6 @@ impl Context {
                 temp_roots: temp_scope,
             },
         ))
->>>>>>> 3ea55392db (fix(eval): reuse body continuations for sequential let bindings)
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
@@ -681,6 +674,19 @@ impl Context {
     }
 
     pub(super) fn sf_if_value_named(&mut self, call_name: SymId, tail: Value) -> EvalResult {
+        let forms = self.prepare_conditional_forms(call_name, tail)?;
+        if self.eval_sub(forms.condition)?.is_truthy() {
+            self.eval_sub(forms.then_form)
+        } else {
+            self.sf_progn_value(forms.else_forms)
+        }
+    }
+
+    fn prepare_conditional_forms(
+        &self,
+        call_name: SymId,
+        tail: Value,
+    ) -> Result<ConditionalForms, Flow> {
         if tail.is_nil() {
             return Err(signal(
                 LispCondition::WrongNumberOfArguments,
@@ -703,11 +709,11 @@ impl Context {
         }
         let then_form = rest.cons_car();
         rest = rest.cons_cdr();
-        if self.eval_sub(cond_form)?.is_truthy() {
-            self.eval_sub(then_form)
-        } else {
-            self.sf_progn_value(rest)
-        }
+        Ok(ConditionalForms {
+            condition: cond_form,
+            then_form,
+            else_forms: rest,
+        })
     }
 
     pub(super) fn sf_and_value(&mut self, tail: Value) -> EvalResult {

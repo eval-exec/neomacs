@@ -5,13 +5,14 @@
 //! and linear binding-cleanup ownership. The Context remains on its VM thread.
 
 use super::apply::ActiveInterpretedLambdaCall;
-use super::special_forms::ActiveLetScope;
+use super::special_forms::{ActiveLetScope, ConditionalForms};
 use super::*;
 
 pub(super) enum PreparedForm {
     Value(Value),
     Call(PreparedCall),
     LetBody { body: Value, scope: ActiveLetScope },
+    Conditional(ConditionalForms),
 }
 
 pub(super) struct PreparedCall {
@@ -29,6 +30,7 @@ pub(super) enum CallTarget {
 
 enum Step {
     Eval(Value),
+    Sequence(Value),
     Return(EvalResult),
     Invoke {
         function: usize,
@@ -58,6 +60,11 @@ enum Continuation {
     },
     Let {
         scope: ActiveLetScope,
+    },
+    Conditional {
+        branches: usize,
+    },
+    SequenceScope {
         sequence: SequenceTempRootScopeState,
         operands: usize,
     },
@@ -108,6 +115,23 @@ impl Context {
         let mut step = Step::Eval(form);
         loop {
             step = match step {
+                Step::Sequence(body) => {
+                    let cursor = self.bc_buf.len();
+                    self.bc_buf.push(body);
+                    let sequence = self.save_sequence_temp_roots();
+                    continuations.push(Continuation::SequenceScope {
+                        sequence,
+                        operands: cursor,
+                    });
+                    if body.is_cons() {
+                        continuations.push(Continuation::Sequence { cursor });
+                        Step::Eval(body.cons_car())
+                    } else if body.is_nil() {
+                        Step::Return(Ok(Value::NIL))
+                    } else {
+                        Step::Return(Err(self.listp_error(body)))
+                    }
+                }
                 Step::Eval(form) => {
                     let unwrapped = self.unwrap_symbol(form);
                     if let Some(sym_id) = unwrapped.as_symbol_id() {
@@ -144,23 +168,16 @@ impl Context {
                         match prepared {
                             Err(flow) => Step::Return(Err(flow)),
                             Ok(PreparedForm::Value(value)) => Step::Return(Ok(value)),
+                            Ok(PreparedForm::Conditional(forms)) => {
+                                let branches = self.bc_buf.len();
+                                self.bc_buf.push(forms.then_form);
+                                self.bc_buf.push(forms.else_forms);
+                                continuations.push(Continuation::Conditional { branches });
+                                Step::Eval(forms.condition)
+                            }
                             Ok(PreparedForm::LetBody { body, scope }) => {
-                                let cursor = self.bc_buf.len();
-                                self.bc_buf.push(body);
-                                let sequence = self.save_sequence_temp_roots();
-                                continuations.push(Continuation::Let {
-                                    scope,
-                                    sequence,
-                                    operands: cursor,
-                                });
-                                if body.is_cons() {
-                                    continuations.push(Continuation::Sequence { cursor });
-                                    Step::Eval(body.cons_car())
-                                } else if body.is_nil() {
-                                    Step::Return(Ok(Value::NIL))
-                                } else {
-                                    Step::Return(Err(self.listp_error(body)))
-                                }
+                                continuations.push(Continuation::Let { scope });
+                                Step::Sequence(body)
                             }
                             Ok(PreparedForm::Call(call)) => {
                                 let cursor = self.bc_buf.len();
@@ -324,13 +341,16 @@ impl Context {
                             }
                             Err(flow) => Step::Return(Err(flow)),
                         },
-                        Continuation::Let {
-                            scope,
-                            sequence,
-                            operands,
-                        } => {
+                        Continuation::Conditional { branches } => match result {
+                            Ok(value) if value.is_truthy() => Step::Eval(self.bc_buf[branches]),
+                            Ok(_) => Step::Sequence(self.bc_buf[branches + 1]),
+                            Err(flow) => Step::Return(Err(flow)),
+                        },
+                        Continuation::Let { scope } => {
+                            Step::Return(self.finish_let_scope(scope, result))
+                        }
+                        Continuation::SequenceScope { sequence, operands } => {
                             self.restore_sequence_temp_roots(sequence);
-                            let result = self.finish_let_scope(scope, result);
                             self.bc_buf.truncate(operands);
                             Step::Return(result)
                         }
