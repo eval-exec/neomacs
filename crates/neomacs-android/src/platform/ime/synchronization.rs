@@ -4,7 +4,7 @@ use neomacs_app::frontend_event::{FrontendEvent, FrontendFrameId, ImeOperation, 
 use winit::event::Ime;
 
 #[derive(Default)]
-pub(super) struct InputMethod {
+pub(in crate::platform) struct InputMethod {
     next: u64,
     active: Option<Session>,
 }
@@ -15,7 +15,11 @@ struct Session {
 }
 
 impl InputMethod {
-    pub(super) fn event(&mut self, event: Ime, target: FrontendFrameId) -> Option<FrontendEvent> {
+    pub(in crate::platform) fn event(
+        &mut self,
+        event: Ime,
+        target: FrontendFrameId,
+    ) -> Option<FrontendEvent> {
         let (session, operation) = match event {
             Ime::Enabled => {
                 self.next = self
