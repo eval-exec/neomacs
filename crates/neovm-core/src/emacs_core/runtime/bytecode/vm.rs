@@ -1961,14 +1961,6 @@ fn copy_frame_arguments(buffer: &mut Vec<Value>, args_start: usize, copied: usiz
     }
 }
 
-// Match the evaluator's coarse stack-growth policy so deeply recursive
-// bytecode/macroexpansion paths don't exhaust the native thread stack before
-// `max-lisp-eval-depth` handling can fire.
-const VM_STACK_RED_ZONE: usize = 128 * 1024;
-const VM_STACK_SEGMENT: usize = 2 * 1024 * 1024;
-const VM_STACK_GROWTH_PROBE_START_DEPTH: usize = 16;
-const VM_STACK_GROWTH_PROBE_INTERVAL: usize = 16;
-
 impl<'a> crate::emacs_core::hook_runtime::HookRuntime for Vm<'a> {
     fn hook_context(&self) -> &crate::emacs_core::eval::Context {
         self.ctx
@@ -2370,13 +2362,12 @@ impl<'a> Vm<'a> {
         // integer compares straight through to the body — no FnOnce
         // combinator whose two consumption sites (fast path + the stacker
         // closure) forced a memory-materialized closure environment on
-        // every call. Only every 16th depth level from 16 up takes the cold
+        // every call. In release, every 16th depth level takes the cold
         // stacker path (INTERVAL is a power of two — the is_multiple_of
-        // folds to a mask).
+        // folds to a mask). Debug builds probe each recursive boundary because
+        // their dispatch frames can exceed the release red zone.
         let depth = self.ctx.depth;
-        if depth >= VM_STACK_GROWTH_PROBE_START_DEPTH
-            && depth.is_multiple_of(VM_STACK_GROWTH_PROBE_INTERVAL)
-        {
+        if crate::emacs_core::stack_growth::should_probe(depth) {
             return self.execute_from_stack_args_grown(func, args_start, nargs, func_value);
         }
         self.execute_from_stack_args_body(func, args_start, nargs, func_value)
@@ -2393,9 +2384,11 @@ impl<'a> Vm<'a> {
         nargs: usize,
         func_value: Value,
     ) -> EvalResult {
-        crate::emacs_core::stack_growth::maybe_grow(VM_STACK_RED_ZONE, VM_STACK_SEGMENT, || {
-            self.execute_from_stack_args_body(func, args_start, nargs, func_value)
-        })
+        crate::emacs_core::stack_growth::maybe_grow(
+            crate::emacs_core::stack_growth::RED_ZONE,
+            crate::emacs_core::stack_growth::SEGMENT,
+            || self.execute_from_stack_args_body(func, args_start, nargs, func_value),
+        )
     }
 
     #[inline]
