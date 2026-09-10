@@ -9,6 +9,39 @@ use neomacs_app::session::{EditorSession, ImeReply};
 use neovm_core::emacs_core::eval::Context;
 
 #[test]
+fn snapshot_request_honors_dynamic_password_bindings_during_input() {
+    let mut evaluator = Context::new();
+    evaluator
+        .eval_str(
+            r##"(progn
+        (insert "secret")
+        (setq noninteractive t top-level
+          '(progn
+            (let ((read-hide-char ?*)
+                  (overriding-text-conversion-style 'password))
+              (read-event))
+            (kill-emacs 0))))"##,
+        )
+        .unwrap();
+    let (session, frontend) =
+        EditorSession::attach(evaluator, PresentationMetrics::CellGrid, || {});
+    let reply = frontend
+        .input()
+        .ime_client(|| {})
+        .surrounding_text()
+        .unwrap();
+    frontend
+        .input()
+        .submit(&FrontendEvent::TextCommitted {
+            text: "z".into(),
+            target: FrontendFrameId::PRIMARY,
+        })
+        .unwrap();
+    assert!(session.run().is_success());
+    assert!(matches!(reply.try_receive(), ImeReply::Ready(None)));
+}
+
+#[test]
 fn snapshot_request_observes_the_preceding_keyboard_edit_and_wakes_frontend() {
     let mut evaluator = Context::new();
     evaluator
