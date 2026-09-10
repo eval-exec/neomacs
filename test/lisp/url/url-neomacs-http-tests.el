@@ -4,6 +4,18 @@
 (require 'url)
 (require 'url-neomacs-http)
 
+(ert-deftest url-neomacs-http-enable-preserves-scheme-handlers ()
+  (let ((url-scheme-registry (copy-hash-table url-scheme-registry)))
+    (dolist (scheme '("http" "https"))
+      (let ((exists (url-scheme-get-property scheme 'file-exists-p))
+            (attributes (url-scheme-get-property scheme 'file-attributes)))
+        (should exists)
+        (should attributes)
+        (url-neomacs-http-enable)
+        (url-neomacs-http-enable)
+        (should (eq exists (url-scheme-get-property scheme 'file-exists-p)))
+        (should (eq attributes (url-scheme-get-property scheme 'file-attributes)))))))
+
 (ert-deftest url-neomacs-http-asynchronous-response ()
   (let ((url-scheme-registry (copy-hash-table url-scheme-registry))
         (url-proxy-services nil)

@@ -73,12 +73,13 @@ Browser CORS restrictions apply; browser login cookies are not sent."
 (defun url-neomacs-http-enable ()
   "Install browser HTTP loaders in the current VM's URL scheme registry."
   (dolist (scheme '("http" "https"))
-    (puthash scheme
-             (list 'name scheme 'loader #'url-neomacs-http 'asynchronous-p t
-                   'default-port (if (equal scheme "https") 443 80)
-                   'expand-file-name #'url-default-expander
-                   'parse-url #'url-generic-parse-url)
-             url-scheme-registry)))
+    ;; Materialize GNU's lazy scheme registration first.  Keep its file-name
+    ;; handlers and any user properties; this adapter owns only retrieval.
+    (url-scheme-get-property scheme 'loader)
+    (let ((properties (copy-sequence (gethash scheme url-scheme-registry))))
+      (setq properties (plist-put properties 'loader #'url-neomacs-http))
+      (setq properties (plist-put properties 'asynchronous-p t))
+      (puthash scheme properties url-scheme-registry))))
 
 (provide 'url-neomacs-http)
 ;;; url-neomacs-http.el ends here
