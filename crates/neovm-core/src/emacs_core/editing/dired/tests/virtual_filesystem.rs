@@ -189,6 +189,35 @@ fn virtual_directory_unknown_modtime_does_not_stat_a_non_file_buffer() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn mounted_symlink_predicate_and_attributes_share_namespace_targets() {
+    use crate::emacs_core::fileio::{MountTableFileSystem, NativeFileSystem};
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tmp");
+    std::fs::create_dir_all(&root).unwrap();
+    let fixture = tempfile::Builder::new().prefix("mounted-links-").tempdir_in(root).unwrap();
+    let directory = fixture.path().canonicalize().unwrap();
+    let mut mounts = MountTableFileSystem::new();
+    mounts.mount(Path::new("/host"), Box::new(NativeFileSystem)).unwrap();
+    let mut eval = Context::new();
+    eval.install_editor_file_system(Box::new(mounts));
+    // Missing targets are intentional: both operations describe the link,
+    // not the existence or metadata of the target.
+    for (name, target, expected) in [
+        ("absolute", directory.join("missing"), format!("/host{}/missing", directory.display())),
+        ("relative", "../missing".into(), "../missing".to_owned()),
+    ] {
+        std::os::unix::fs::symlink(target, directory.join(name)).unwrap();
+        let filename = format!("/host{}/{name}", directory.display());
+        for expression in [
+            format!("(file-symlink-p {filename:?})"),
+            format!("(car (file-attributes {filename:?}))"),
+        ] {
+            assert_eq!(eval.eval_str(&expression).unwrap().as_utf8_str(), Some(expected.as_str()), "{expression}");
+        }
+    }
+}
+
 #[test]
 fn filename_completion_uses_the_same_virtual_directory_as_directory_files() {
     let mut eval = virtual_editor();
