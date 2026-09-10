@@ -110,7 +110,7 @@ impl FrontendInputPort {
         self.submit_batch(EvaluatorInputBatch::from_positioned_pointer(event))
     }
 
-    fn submit_batch(
+    pub(super) fn submit_batch(
         &self,
         batch: EvaluatorInputBatch<'_>,
     ) -> Result<FrontendInputSubmission, FrontendInputDisconnected> {
