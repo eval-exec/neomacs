@@ -188,6 +188,17 @@ LOAD 0x004000 0x4000 0x4000 0x100 0x100 R E 0x4000
 3: 0 1 FUNC GLOBAL DEFAULT 1 Java_com_google_androidgamesdk_GameActivity_initializeNativeCode
 ";
     android_package::validate_elf_report(elf).expect("valid Android native library");
+    for symbol in [
+        "android_main",
+        "GameActivity_onCreate",
+        "Java_com_google_androidgamesdk_GameActivity_initializeNativeCode",
+    ] {
+        let imported = elf.replace(&format!("DEFAULT 1 {symbol}"), &format!("DEFAULT UND {symbol}"));
+        assert!(
+            android_package::validate_elf_report(&imported).is_err(),
+            "an undefined import is not an exported implementation: {symbol}",
+        );
+    }
 }
 
 #[test]
@@ -878,7 +889,7 @@ fn portable_frontend_ci_reuses_one_runtime_bundle_and_smokes_packaged_wasm() {
     let wasm = github_workflow_job(workflow, "wasm-browser-smoke");
     assert!(wasm.contains("needs: [portable-runtime-assets, neomacs-workspace-test-archive]"));
     assert!(wasm.contains("package(neomacs-wasm-protocol)"));
-    assert!(wasm.contains("node --test crates/neomacs-wasm/web/*.test.mjs"));
+    assert!(wasm.contains("node --test 'crates/neomacs-wasm/web/**/*.test.mjs'"));
     assert!(wasm.contains("cargo xtask build-wasm"));
     assert!(wasm.contains("browser_release_upgrade.py"));
     assert!(wasm.contains("browser_opfs_smoke_test.py"));
