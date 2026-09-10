@@ -47,10 +47,10 @@ impl ImeClient {
 
     /// Request the current insertion snapshot at the next ordered input read.
     ///
-    /// Capturing a new snapshot retires the previous observation. Keep system
-    /// keyboard export disabled until VM-side password/field checks and
-    /// backend callback identity are implemented; this transport alone does
-    /// not establish either policy.
+    /// Capturing a new snapshot retires the previous observation. The VM
+    /// enforces privacy, field bounds, and GUI presentation freshness. Keep
+    /// system keyboard export disabled until the backend also preserves the
+    /// source identity of asynchronous callbacks.
     pub fn surrounding_text(
         &self,
     ) -> Result<PendingImeReply<Option<ImeTextSnapshot>>, FrontendInputDisconnected> {

@@ -29,6 +29,96 @@ fn ime_surrounding_snapshot_is_confined_to_the_input_field() {
 }
 
 #[test]
+fn ime_gui_export_waits_for_an_acknowledged_live_presentation() {
+    use crate::window::{WindowDisplaySnapshot, geometry::PresentationId};
+    let mut eval = crate::Context::new();
+    let buffer = eval.buffers.current_buffer_id().unwrap();
+    eval.eval_str(r##"(insert "visible")"##).unwrap();
+    let frame_id = eval.frames.create_frame("ime", 800, 600, buffer);
+    let window_id = eval.frames.get(frame_id).unwrap().selected_window;
+    eval.frames
+        .get_mut(frame_id)
+        .unwrap()
+        .set_window_system(Some(crate::Value::symbol("neo")));
+    assert!(eval.ime_surrounding_text().is_none());
+    let freshness = eval
+        .window_display_snapshot_freshness(frame_id, window_id, buffer)
+        .unwrap();
+    eval.frames
+        .get_mut(frame_id)
+        .unwrap()
+        .prepare_live_window_presentation(
+            PresentationId::new(1),
+            vec![WindowDisplaySnapshot {
+                window_id,
+                layout_freshness: Some(freshness),
+                ..WindowDisplaySnapshot::default()
+            }],
+        )
+        .unwrap();
+    assert!(
+        eval.ime_surrounding_text().is_none(),
+        "prepared is not displayed"
+    );
+    eval.frames
+        .get_mut(frame_id)
+        .unwrap()
+        .activate_display_presentation(PresentationId::new(1))
+        .unwrap();
+    assert_eq!(eval.ime_surrounding_text().unwrap().text(), "visible");
+    eval.eval_str(r##"(set-buffer (get-buffer-create "not displayed"))"##)
+        .unwrap();
+    assert!(eval.ime_surrounding_text().is_none());
+}
+
+#[test]
+fn ime_gui_export_rejects_a_selection_not_yet_acknowledged_by_the_renderer() {
+    use crate::window::{
+        SplitDirection, SplitPlacement, WindowDisplaySnapshot, geometry::PresentationId,
+    };
+    let mut eval = crate::Context::new();
+    let buffer = eval.buffers.current_buffer_id().unwrap();
+    let frame_id = eval.frames.create_frame("ime", 800, 600, buffer);
+    let first = eval.frames.get(frame_id).unwrap().selected_window;
+    let second = eval
+        .frames
+        .split_window(
+            frame_id,
+            first,
+            SplitDirection::Horizontal,
+            buffer,
+            None,
+            SplitPlacement::AfterTarget,
+        )
+        .unwrap();
+    eval.frames
+        .get_mut(frame_id)
+        .unwrap()
+        .set_window_system(Some(crate::Value::symbol("neo")));
+    let snapshots = [first, second]
+        .into_iter()
+        .map(|window_id| WindowDisplaySnapshot {
+            window_id,
+            layout_freshness: eval.window_display_snapshot_freshness(frame_id, window_id, buffer),
+            ..WindowDisplaySnapshot::default()
+        })
+        .collect();
+    let frame = eval.frames.get_mut(frame_id).unwrap();
+    frame
+        .prepare_live_window_presentation(PresentationId::new(1), snapshots)
+        .unwrap();
+    frame
+        .activate_display_presentation(PresentationId::new(1))
+        .unwrap();
+    assert!(eval.ime_surrounding_text().is_some());
+    eval.frames.get_mut(frame_id).unwrap().select_window(second);
+    assert!(
+        eval.ime_surrounding_text().is_none(),
+        "both windows were drawn, but only the first was selected"
+    );
+}
+
+#[test]
 fn ime_surrounding_snapshot_is_bounded_and_does_not_truncate_selection() {
     use neovm_host_abi::ime::ImeTextSnapshot;
     let mut eval = crate::Context::new();
