@@ -18,6 +18,13 @@ pub(super) struct ConditionalForms {
     pub(super) else_forms: Value,
 }
 
+/// A registered Lisp cleanup remains on the specpdl while its protected body
+/// runs. The continuation owns this token; ordinary and nonlocal returns must
+/// both pass through the existing unwinder, including debugger/watchers.
+pub(super) struct ActiveCleanupScope {
+    specpdl: usize,
+}
+
 impl Context {
     pub(super) fn prepare_special_form_with_surface(
         &mut self,
@@ -25,25 +32,31 @@ impl Context {
         target_id: SymId,
         tail: Value,
     ) -> Option<Result<continuation::PreparedForm, Flow>> {
-        let entered = match evaluator_handler(target_id) {
-            Some(EvaluatorHandler::SpecialForm(SpecialFormHandler::If)) => {
-                return Some(
-                    self.prepare_conditional_forms(surface_id, tail)
-                        .map(continuation::PreparedForm::Conditional),
-                );
-            }
-            Some(EvaluatorHandler::SpecialForm(SpecialFormHandler::Let)) => {
-                self.begin_let_value_named(surface_id, tail)
-            }
-            Some(EvaluatorHandler::SpecialForm(SpecialFormHandler::LetStar)) => {
-                self.begin_let_star_value_named(surface_id, tail)
-            }
-            _ => {
-                return self
-                    .try_special_form_with_surface(surface_id, target_id, tail)
-                    .map(|result| result.map(continuation::PreparedForm::Value));
-            }
-        };
+        let entered =
+            match evaluator_handler(target_id) {
+                Some(EvaluatorHandler::SpecialForm(SpecialFormHandler::UnwindProtect)) => {
+                    return Some(self.begin_unwind_protect(surface_id, tail).map(
+                        |(body, scope)| continuation::PreparedForm::ProtectedBody { body, scope },
+                    ));
+                }
+                Some(EvaluatorHandler::SpecialForm(SpecialFormHandler::If)) => {
+                    return Some(
+                        self.prepare_conditional_forms(surface_id, tail)
+                            .map(continuation::PreparedForm::Conditional),
+                    );
+                }
+                Some(EvaluatorHandler::SpecialForm(SpecialFormHandler::Let)) => {
+                    self.begin_let_value_named(surface_id, tail)
+                }
+                Some(EvaluatorHandler::SpecialForm(SpecialFormHandler::LetStar)) => {
+                    self.begin_let_star_value_named(surface_id, tail)
+                }
+                _ => {
+                    return self
+                        .try_special_form_with_surface(surface_id, target_id, tail)
+                        .map(|result| result.map(continuation::PreparedForm::Value));
+                }
+            };
         Some(entered.map(|(body, scope)| continuation::PreparedForm::LetBody { body, scope }))
     }
 
@@ -974,6 +987,16 @@ impl Context {
         call_name: SymId,
         tail: Value,
     ) -> EvalResult {
+        let (body, scope) = self.begin_unwind_protect(call_name, tail)?;
+        let result = self.eval_sub(body);
+        self.finish_cleanup_scope(scope, result)
+    }
+
+    fn begin_unwind_protect(
+        &mut self,
+        call_name: SymId,
+        tail: Value,
+    ) -> Result<(Value, ActiveCleanupScope), Flow> {
         // GNU eval.c:1461 declares `unwind-protect` with min_args=1.
         // The generic arity check in GNU `eval_sub` (eval.c:2612) runs
         // for every SUBRP including UNEVALLED. Neomacs skips that check
@@ -994,8 +1017,20 @@ impl Context {
             forms: cleanup_forms,
             lexenv: self.lexenv,
         });
-        let result = self.eval_sub(body);
-        self.unbind_to_with_result(specpdl_count, result)
+        Ok((
+            body,
+            ActiveCleanupScope {
+                specpdl: specpdl_count,
+            },
+        ))
+    }
+
+    pub(super) fn finish_cleanup_scope(
+        &mut self,
+        scope: ActiveCleanupScope,
+        result: EvalResult,
+    ) -> EvalResult {
+        self.unbind_to_with_result(scope.specpdl, result)
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
