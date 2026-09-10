@@ -187,6 +187,11 @@ fn prepare_magit_repository(run_directory: &Path) -> Result<PathBuf, String> {
 #[serde(try_from = "EditorWorkloadResultWire")]
 pub(crate) struct EditorWorkloadResult {
     schema_version: u32,
+    /// How much collection each engine actually did for this row, so a
+    /// comparison can say whether the two did comparable work.
+    pub(crate) gcs_done: u64,
+    pub(crate) gc_elapsed_us: u64,
+    pub(crate) max_rss_kb: u64,
     scenario: ScenarioId,
     outcome: ScenarioOutcome,
     iterations: u32,
@@ -219,6 +224,14 @@ pub(crate) struct EditorWorkloadResult {
 #[serde(deny_unknown_fields)]
 struct EditorWorkloadResultWire {
     schema_version: u32,
+    /// Collection parity, added after the shared schema version 1 and so
+    /// optional: the other four fixtures do not report it yet.
+    #[serde(default)]
+    gcs_done: u64,
+    #[serde(default)]
+    gc_elapsed_us: u64,
+    #[serde(default)]
+    max_rss_kb: u64,
     scenario: ScenarioId,
     status: ScenarioStatus,
     iterations: u32,
@@ -254,6 +267,9 @@ impl TryFrom<EditorWorkloadResultWire> for EditorWorkloadResult {
     fn try_from(wire: EditorWorkloadResultWire) -> Result<Self, Self::Error> {
         Ok(Self {
             schema_version: wire.schema_version,
+            gcs_done: wire.gcs_done,
+            gc_elapsed_us: wire.gc_elapsed_us,
+            max_rss_kb: wire.max_rss_kb,
             scenario: wire.scenario,
             outcome: scenario_outcome(wire.status, wire.error)?,
             iterations: wire.iterations,

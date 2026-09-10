@@ -293,6 +293,18 @@
       (how-many . ,how-many-us)
       (motion . ,motion-us))))
 
+(defun neomacs-perf-workload--max-rss-kb ()
+  "Peak resident set size in kB, or 0 where the kernel does not report it.
+Both engines run the same code here, so the number is comparable."
+  (if (file-readable-p "/proc/self/status")
+      (with-temp-buffer
+        (insert-file-contents "/proc/self/status")
+        (goto-char (point-min))
+        (if (re-search-forward "^VmHWM:[ \t]*\\([0-9]+\\)" nil t)
+            (string-to-number (match-string 1))
+          0))
+    0))
+
 (defun neomacs-perf-workload--write-result
     (path scenario status iterations elapsed-us elapsed-wall-us operation-count
           initial-checksum final-checksum point-restored expected-mode actual-mode
@@ -321,6 +333,14 @@
         (buffer_switch_phase_us . ,(alist-get 'buffer-switch phases))
         (how_many_phase_us . ,(alist-get 'how-many phases))
         (motion_phase_us . ,(alist-get 'motion phases))
+        ;; Collection parity. Comparing two engines without these is comparing
+        ;; different amounts of work: neomacs performs no automatic collections
+        ;; in --batch (its adaptive pacer's live-growth term is a strict max
+        ;; over gc-cons-threshold), so a batch row silently charges GNU for
+        ;; collection the other engine skipped.
+        (gcs_done . ,gcs-done)
+        (gc_elapsed_us . ,(round (* 1000000 gc-elapsed)))
+        (max_rss_kb . ,(neomacs-perf-workload--max-rss-kb))
         (error . ,error-message))
       :false-object :json-false :null-object nil))))
 
