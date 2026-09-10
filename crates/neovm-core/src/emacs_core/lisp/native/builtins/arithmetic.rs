@@ -1642,7 +1642,7 @@ pub(crate) fn builtin_random(args: Vec<Value>) -> EvalResult {
         }
     }
 
-    Ok(Value::fixnum(emacs_get_random()))
+    Ok(Value::ufixnum(emacs_get_random() as u64))
 }
 
 fn emacs_random_lock() -> &'static Mutex<()> {
@@ -1655,7 +1655,7 @@ fn emacs_intmask() -> u64 {
 }
 
 fn emacs_random_fixnum_bits() -> u32 {
-    62
+    usize::BITS - crate::tagged::value::FIXNUM_SHIFT
 }
 
 fn emacs_get_random_unlocked() -> i64 {

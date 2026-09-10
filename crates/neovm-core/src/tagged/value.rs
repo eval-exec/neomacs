@@ -263,6 +263,16 @@ impl TaggedValue {
         Self(((n as usize) << FIXNUM_SHIFT) | FIXNUM_CHECK_VALUE)
     }
 
+    /// Encode an unsigned fixnum payload, as GNU `make_ufixnum` does.
+    ///
+    /// The payload includes the signed fixnum's sign bit. Its upper half
+    /// decodes as negative fixnums; this is required by unbounded `random`.
+    #[inline]
+    pub fn ufixnum(n: u64) -> Self {
+        debug_assert!(n <= (usize::MAX >> FIXNUM_SHIFT) as u64);
+        Self(((n as usize) << FIXNUM_SHIFT) | FIXNUM_CHECK_VALUE)
+    }
+
     /// Maximum fixnum value for this target's pointer width.
     pub const MOST_POSITIVE_FIXNUM: i64 = fixnum_bounds_for_word_bits(usize::BITS).1;
     /// Minimum fixnum value for this target's pointer width.
