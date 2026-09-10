@@ -1399,7 +1399,7 @@ pub(super) fn expect_window_valid_or_nil(value: &Value) -> Result<(), Flow> {
     }
 }
 
-fn expect_frame_live_or_nil(value: &Value) -> Result<(), Flow> {
+pub(super) fn expect_frame_live_or_nil(value: &Value) -> Result<(), Flow> {
     if value.is_nil() || value.is_frame() {
         Ok(())
     } else {

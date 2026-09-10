@@ -5652,8 +5652,19 @@ pub(crate) fn builtin_kill_emacs(eval: &mut super::eval::Context, args: Vec<Valu
     Err(Flow::Shutdown(request))
 }
 
+/// `(lower-frame &optional FRAME)`
+///
+/// GNU `Flower_frame` opens with `decode_live_frame (frame)` (`src/frame.c`),
+/// so a window, a symbol, or anything else that is not a live frame is
+/// rejected against `frame-live-p` before any lowering is attempted.  The
+/// lowering itself has no effect without a window system, but the type check
+/// is not conditional on one -- accepting every argument silently is how a
+/// caller passing the wrong object learns nothing.
 pub(crate) fn builtin_lower_frame(args: Vec<Value>) -> EvalResult {
     expect_args_range("lower-frame", &args, 0, 1)?;
+    if let Some(frame) = args.first() {
+        super::stubs::expect_frame_live_or_nil(frame)?;
+    }
     Ok(Value::NIL)
 }
 
