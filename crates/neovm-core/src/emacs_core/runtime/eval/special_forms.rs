@@ -5,6 +5,13 @@
 
 use super::*;
 
+/// Owns the bindings and transient roots installed for one `let` body.
+/// Consumed exactly once, whether the body returns normally or unwinds.
+pub(super) struct ActiveLetScope {
+    specpdl: usize,
+    temp_roots: EvalTempRootScopeState,
+}
+
 /// Temporary root visibility owned by one mutator during a special form.
 ///
 /// The mutable Context borrow is confined to this scope. Drop preserves the same
@@ -54,22 +61,33 @@ impl Drop for EvalTempRootsToSequenceGuard<'_> {
     }
 }
 
+||||||| parent of 3911772ff8 (fix(eval): unwind let bodies through explicit continuations)
 impl Context {
+    pub(super) fn prepare_special_form_with_surface(
+        &mut self,
+        surface_id: SymId,
+        target_id: SymId,
+        tail: Value,
+    ) -> Option<Result<continuation::PreparedForm, Flow>> {
+        if matches!(
+            evaluator_handler(target_id),
+            Some(EvaluatorHandler::SpecialForm(SpecialFormHandler::Let))
+        ) {
+            return Some(
+                self.begin_let_value_named(surface_id, tail)
+                    .map(|(body, scope)| continuation::PreparedForm::LetBody { body, scope }),
+            );
+        }
+        self.try_special_form_with_surface(surface_id, target_id, tail)
+            .map(|result| result.map(continuation::PreparedForm::Value))
+    }
+
     pub(super) fn try_special_form_value_id(
         &mut self,
         sym_id: SymId,
         tail: Value,
     ) -> Option<EvalResult> {
         self.try_special_form_with_surface(sym_id, sym_id, tail)
-    }
-
-    pub(super) fn try_aliased_special_form_value_id(
-        &mut self,
-        surface_id: SymId,
-        target_id: SymId,
-        tail: Value,
-    ) -> Option<EvalResult> {
-        self.try_special_form_with_surface(surface_id, target_id, tail)
     }
 
     /// The single special-form dispatch table. `target_id` selects the form
@@ -231,6 +249,16 @@ impl Context {
     }
 
     pub(super) fn sf_let_value_named(&mut self, call_name: SymId, tail: Value) -> EvalResult {
+        let (body, scope) = self.begin_let_value_named(call_name, tail)?;
+        let result = self.sf_progn_value(body);
+        self.finish_let_scope(scope, result)
+    }
+
+    fn begin_let_value_named(
+        &mut self,
+        call_name: SymId,
+        tail: Value,
+    ) -> Result<(Value, ActiveLetScope), Flow> {
         if tail.is_nil() {
             return Err(signal(
                 LispCondition::WrongNumberOfArguments,
@@ -252,10 +280,9 @@ impl Context {
         // The evaluated init values, rooted on the operand stack like GNU's
         // `temps[]` until every init form has run; every exit truncates it
         // back.
-        let mut roots = EvalTempRootsToSequenceGuard::enter(self);
-        let context = roots.context();
-        let bindings_slot = context.push_eval_temp_root_slot(varlist);
-        let temps_base = context.bc_buf.len();
+        let temp_scope = self.save_eval_temp_roots();
+        let bindings_slot = self.push_eval_temp_root_slot(varlist);
+        let temps_base = self.bc_buf.len();
         let mut bindings = varlist;
 
         // Initializers may mutate the validated spine. GNU Flet (eval.c:1158)
@@ -264,22 +291,22 @@ impl Context {
             if !bindings.is_cons() {
                 break;
             }
-            let binding = context.unwrap_symbol(bindings.cons_car());
+            let binding = self.unwrap_symbol(bindings.cons_car());
             bindings = bindings.cons_cdr();
             // GNU advances before the initializer, which may detach this
             // next cons before forcing GC. Keep the live cursor rooted.
-            context.set_eval_temp_root_slot(bindings_slot, bindings);
+            self.set_eval_temp_root_slot(bindings_slot, bindings);
             if let Some(id) = binding.as_symbol_id() {
                 // A bare binder binds nil, which is never a keyword's own value.
-                if let Some(name) = let_constant_error_name(&context.obarray, id, Value::NIL) {
+                if let Some(name) = let_constant_error_name(&self.obarray, id, Value::NIL) {
                     if constant_binding_error.is_none() {
                         constant_binding_error = Some(name);
                     }
                     continue;
                 }
                 if use_lexical
-                    && !context.obarray.is_special_id(id)
-                    && !context.lexenv_declares_special_cached_in(context.lexenv, id)
+                    && !self.obarray.is_special_id(id)
+                    && !self.lexenv_declares_special_cached_in(self.lexenv, id)
                 {
                     lexical_bindings.push((id, Value::NIL));
                 } else {
@@ -288,7 +315,8 @@ impl Context {
                 continue;
             }
             if !binding.is_cons() {
-                context.bc_buf.truncate(temps_base);
+                self.bc_buf.truncate(temps_base);
+                self.restore_eval_temp_roots_to_sequence(temp_scope);
                 // GNU takes `(car elt)` of a non-symbol binding, so a non-list
                 // element signals `(wrong-type-argument listp ELT)`.
                 return Err(signal(
@@ -296,9 +324,10 @@ impl Context {
                     vec![Value::symbol("listp"), binding],
                 ));
             }
-            let head = context.unwrap_symbol(binding.cons_car());
+            let head = self.unwrap_symbol(binding.cons_car());
             let Some(id) = head.as_symbol_id() else {
-                context.bc_buf.truncate(temps_base);
+                self.bc_buf.truncate(temps_base);
+                self.restore_eval_temp_roots_to_sequence(temp_scope);
                 return Err(signal(
                     LispCondition::WrongTypeArgument,
                     vec![Value::symbol("symbolp"), head],
@@ -311,7 +340,8 @@ impl Context {
                 let init_form = value_tail.cons_car();
                 value_tail = value_tail.cons_cdr();
                 if !value_tail.is_nil() {
-                    context.bc_buf.truncate(temps_base);
+                    self.bc_buf.truncate(temps_base);
+                    self.restore_eval_temp_roots_to_sequence(temp_scope);
                     return Err(signal(
                         LispCondition::Error,
                         vec![
@@ -320,27 +350,29 @@ impl Context {
                         ],
                     ));
                 }
-                match context.eval_sub(init_form) {
+                match self.eval_sub(init_form) {
                     Ok(value) => value,
                     Err(err) => {
-                        context.bc_buf.truncate(temps_base);
+                        self.bc_buf.truncate(temps_base);
+                        self.restore_eval_temp_roots_to_sequence(temp_scope);
                         return Err(err);
                     }
                 }
             } else {
-                context.bc_buf.truncate(temps_base);
-                return Err(context.listp_error(binding));
+                self.bc_buf.truncate(temps_base);
+                self.restore_eval_temp_roots_to_sequence(temp_scope);
+                return Err(self.listp_error(binding));
             };
-            context.bc_buf.push(value);
-            if let Some(name) = let_constant_error_name(&context.obarray, id, value) {
+            self.bc_buf.push(value);
+            if let Some(name) = let_constant_error_name(&self.obarray, id, value) {
                 if constant_binding_error.is_none() {
                     constant_binding_error = Some(name);
                 }
                 continue;
             }
             if use_lexical
-                && !context.obarray.is_special_id(id)
-                && !context.lexenv_declares_special_cached_in(context.lexenv, id)
+                && !self.obarray.is_special_id(id)
+                && !self.lexenv_declares_special_cached_in(self.lexenv, id)
             {
                 lexical_bindings.push((id, value));
             } else {
@@ -348,7 +380,8 @@ impl Context {
             }
         }
         if let Some(name) = constant_binding_error {
-            context.bc_buf.truncate(temps_base);
+            self.bc_buf.truncate(temps_base);
+            self.restore_eval_temp_roots_to_sequence(temp_scope);
             return Err(signal(
                 LispCondition::SettingConstant,
                 vec![Value::symbol(name)],
@@ -359,29 +392,29 @@ impl Context {
         // pushed on the specpdl.  From here to the install and the temp-root
         // pushes below nothing can collect: only conses are allocated, and
         // `alloc_cons` never collects (`tagged/gc/allocation.rs`).
-        context.bc_buf.truncate(temps_base);
+        self.bc_buf.truncate(temps_base);
 
         // Save lexenv AFTER init forms run (matches GNU eval.c:1167:
         //   `lexenv = Vinternal_interpreter_environment;`).
         // Capture specpdl_count AFTER restoring so LexicalEnv sits exactly at
         // specpdl[specpdl_count] and unbind_to will pop it.
-        let lexenv_at_entry = context.lexenv;
-        let specpdl_count = context.specpdl.len();
+        let lexenv_at_entry = self.lexenv;
+        let specpdl_count = self.specpdl.len();
 
         // Always save the entry-point lexenv on the specpdl when in lexical
         // mode, so unbind_to restores it regardless of what the body does.
         // Matches GNU's specbind(Qinternal_interpreter_environment).
         if use_lexical {
-            context.push_specpdl_with(|| SpecBinding::LexicalEnv {
+            self.push_specpdl_with(|| SpecBinding::LexicalEnv {
                 old_lexenv: lexenv_at_entry,
             });
         }
 
         // Build new lexenv locally by consing bindings onto the ENTRY-POINT
-        // lexenv (not context.lexenv which may have been modified by init forms).
+        // lexenv (not self.lexenv which may have been modified by init forms).
         // Matches GNU eval.c:1167-1186.
         // In a local, like GNU's `lexenv`: nothing here can collect (see
-        // above), and `context.lexenv` roots it from the install on.
+        // above), and `self.lexenv` roots it from the install on.
         let mut new_lexenv = lexenv_at_entry;
         for (sym_id, val) in &lexical_bindings {
             let binding_pair = Value::make_cons(
@@ -391,21 +424,37 @@ impl Context {
             new_lexenv = Value::make_cons(binding_pair, new_lexenv);
         }
         // Install the new lexenv atomically.
-        context.lexenv = new_lexenv;
+        self.lexenv = new_lexenv;
 
         for (_, value) in lexical_bindings.iter().chain(dynamic_sym_ids.iter()) {
-            context.push_eval_temp_root(*value);
+            self.push_eval_temp_root(*value);
         }
         for (sym_id, value) in &dynamic_sym_ids {
-            if let Err(flow) = context.try_specbind(*sym_id, *value) {
-                return context.unbind_to_with_result(specpdl_count, Err(flow));
+            if let Err(flow) = self.try_specbind(*sym_id, *value) {
+                let result = self.unbind_to_with_result(specpdl_count, Err(flow));
+                self.restore_eval_temp_roots_to_sequence(temp_scope);
+                return result
+                    .map(|_| unreachable!("unwinding a binding error cannot return a value"));
             }
         }
 
-        let result = context.sf_progn_value(body);
-        // A let with only lexical bindings leaves exactly its `LexicalEnv`
-        // entry, retired inline; dynamic bindings take the general unwinder.
-        context.unbind_lexenv_frame(specpdl_count, result)
+        Ok((
+            body,
+            ActiveLetScope {
+                specpdl: specpdl_count,
+                temp_roots: temp_scope,
+            },
+        ))
+    }
+
+    pub(super) fn finish_let_scope(
+        &mut self,
+        scope: ActiveLetScope,
+        result: EvalResult,
+    ) -> EvalResult {
+        let result = self.unbind_lexenv_frame(scope.specpdl, result);
+        self.restore_eval_temp_roots_to_sequence(scope.temp_roots);
+        result
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
