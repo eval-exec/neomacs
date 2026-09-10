@@ -84,6 +84,14 @@ impl FrontendEventQueue {
         self.events.is_empty()
     }
 
+    /// Control work must return to read_char without masquerading as Lisp
+    /// command input. Inspect only the head so it cannot overtake an event.
+    pub(crate) fn has_read_control_front(&self) -> bool {
+        self.events
+            .front()
+            .is_some_and(|event| matches!(semantics(event), FrontendEventSemantics::ReadControl))
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.events.len()
     }
@@ -157,8 +165,9 @@ enum PendingInputPolicy {
 }
 
 /// Scheduling is a choice, not independent flags. In particular, an event
-/// that is never command input must carry an internal service action or be
-/// serviced during waits. Mouse motion is readable exactly when track-mouse
+/// that is never command input must carry an internal service action, be
+/// serviced during waits, or explicitly wake its ordered read-side handler.
+/// Mouse motion is readable exactly when track-mouse
 /// is enabled, and serviced during waits otherwise (GNU some_mouse_moved).
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum FrontendEventSemantics {
