@@ -3596,6 +3596,7 @@ pub struct Context {
     /// Pooled backing stores for the interpreter's per-entry stacks (see
     /// `vm::InterpreterStackPool`).
     pub(crate) interpreter_stacks: crate::emacs_core::bytecode::vm::InterpreterStackPool,
+    evaluation_stacks: continuation::EvaluationStackPool,
     /// specpdl depths of the dynamic bindings generated code has made in
     /// the current native frames (`neovm_jit_varbind` pushes, `Op::Unbind`
     /// pops N, a frame exit truncates to its base).  A Context field, not a
@@ -5838,6 +5839,383 @@ impl Context {
         }
     }
 
+    /// Evaluate a runtime Value form, matching GNU Emacs's `eval_sub` in eval.c.
+    ///
+    /// Dispatch order (matching GNU eval.c:2552-2766):
+    /// 1. Symbol → lexenv lookup or symbol-value
+    /// 2. Non-cons → self-evaluating (return as-is)
+    /// 3. Cons → special form / macro / function call
+    pub(super) fn eval_sub_continuation(&mut self, form: Value) -> EvalResult {
+        // 1. Symbol → variable lookup (GNU eval.c:2554-2562)
+        // Also unwrap symbol-with-pos when symbols-with-pos-enabled is true.
+        let form_unwrapped = self.unwrap_symbol(form);
+        if let Some(sym_id) = form_unwrapped.as_symbol_id() {
+            // Route the variable-lookup result through the signal dispatcher so a
+            // void-variable enters the debugger (debug-on-error) at signal time,
+            // while dynamic bindings are still active — symmetric with the cons
+            // continuation and GNU's Fsignal. `search_complete` keeps this
+            // idempotent, so an already-dispatched signal is not re-dispatched.
+            let result = self.eval_symbol_by_id(sym_id);
+            return self.dispatch_signal_result_if_needed(result);
+        }
+
+        // 2. Non-cons → self-evaluating (GNU eval.c:2564-2565)
+        if !form_unwrapped.is_cons() {
+            return Ok(form_unwrapped);
+        }
+
+        self.maybe_grow_eval_stack(|ctx| ctx.eval_with_continuations(form))
+    }
+
+    fn prepare_eval_sub_cons_dispatch(
+        &mut self,
+        original_fun: Value,
+        original_args: Value,
+    ) -> Result<continuation::PreparedForm, Flow> {
+        use continuation::{CallTarget, PreparedCall, PreparedForm};
+        // Resolve function (GNU eval.c:2600-2605)
+        let sym_id = original_fun.as_symbol_id();
+
+        // Everything this head decides -- whether it is an evaluator-internal
+        // literal form, what its function cell holds, and whether that cell is
+        // a subr -- depends only on the symbol and the function epoch.  A form
+        // is evaluated 32.5 times on average here (measured on magit-status;
+        // 61.4 on org-journal-open), so re-deriving it per evaluation is
+        // almost entirely repeat work.  One probe answers all three.
+        //
+        // The cache is bypassed entirely while compiler function overrides are
+        // active, exactly as the direct resolution below was.
+        let overrides_active = self.compiler_function_overrides_active();
+        let head = match sym_id {
+            Some(sym_id) if !overrides_active => {
+                let epoch = self.obarray.function_epoch();
+                Some(match self.form_head_cache.find(sym_id, epoch) {
+                    Some(entry) => entry,
+                    None => {
+                        let func = self.obarray.symbol_function_id(sym_id);
+                        let entry = FormHead::classify(sym_id, func);
+                        self.form_head_cache.push(sym_id, epoch, entry);
+                        entry
+                    }
+                })
+            }
+            _ => None,
+        };
+
+        // Keep only evaluator-internal literal forms on the pre-resolution
+        // fast path. GNU decides public special-form dispatch from the
+        // function cell's UNEVALLED subr, so user-visible special forms
+        // should flow through the resolved subr surface below.
+        //
+        // With overrides active there is no cached head, so the three literal
+        // heads are still tested directly.
+        if let Some(sym_id) = sym_id
+            && head.map_or_else(
+                || {
+                    sym_id == lambda_symbol()
+                        || sym_id == byte_code_literal_symbol()
+                        || sym_id == byte_code_symbol()
+                },
+                |head| head.literal_head,
+            )
+            && let Some(result) = self.try_special_form_value_id(sym_id, original_args)
+        {
+            return result.map(PreparedForm::Value);
+        }
+
+        // GNU `eval_sub` (`src/eval.c:2600-2680`): the symbol's function cell
+        // is read once; a SUBRP that is not UNEVALLED evaluates its arguments
+        // into `argvals` and calls by `maxargs`, a COMPILEDP goes to
+        // `apply_lambda`.  Neither path re-examines aliases, autoloads,
+        // macros, overrides or callability -- the cell already IS a fixed-
+        // arity builtin or a byte-code object -- so those probes stay on the
+        // full resolution below, which every other cell shape still takes.
+        let prefetched_cell = head.and_then(|head| head.func);
+        if let Some(sym_id) = sym_id
+            && let Some(func) = prefetched_cell
+        {
+            let subr = head.and_then(|head| head.func).and_then(subr_call_entry_from_value);
+            if let Some((target_sym_id, entry)) = subr
+                && entry.dispatch_kind == SubrDispatchKind::SpecialForm
+                && target_sym_id == sym_id
+            {
+                // GNU eval.c:2624: `list_length (args_left)` runs for every
+                // SUBRP, UNEVALLED ones included, before the dispatch.  The
+                // frame stays UNEVALLED (eval.c:2618-2619).
+                if list_length(&original_args).is_none() {
+                    return Err(self.listp_error(original_args));
+                }
+                if let Some(result) = self.try_special_form_value_id(sym_id, original_args) {
+                    return result.map(PreparedForm::Value);
+                }
+            }
+            if let Some((target_sym_id, entry)) = subr
+                && entry.dispatch_kind == SubrDispatchKind::Builtin
+                && Self::subr_entry_uses_fixed_value_call(entry)
+            {
+                let numargs = match list_length(&original_args) {
+                    Some(n) => n,
+                    None => return Err(self.listp_error(original_args)),
+                };
+                let min = entry.min_args as usize;
+                let max_ok = match entry.max_args {
+                    Some(m) => numargs <= m as usize,
+                    None => true,
+                };
+                if numargs < min || !max_ok {
+                    return Err(signal(
+                        LispCondition::WrongNumberOfArguments,
+                        vec![original_fun, Value::fixnum(numargs as i64)],
+                    ));
+                }
+                return Ok(PreparedForm::Call(PreparedCall {
+                    function: func,
+                    arguments: original_args,
+                    target: CallTarget::Subr { sym_id: target_sym_id, entry },
+                }));
+            }
+            if func.get_bytecode_data().is_some() {
+                if list_length(&original_args).is_none() {
+                    return Err(self.listp_error(original_args));
+                }
+                return Ok(PreparedForm::Call(PreparedCall {
+                    function: func,
+                    arguments: original_args,
+                    target: CallTarget::Function,
+                }));
+            }
+        }
+
+        // Resolve function value
+        let func = if let Some(sym_id) = sym_id {
+            if let Some(override_func) = self
+                .compiler_function_overrides_active()
+                .then(|| compiler_function_override_in_obarray(&self.obarray, sym_id))
+                .flatten()
+            {
+                override_func
+            } else {
+                match prefetched_cell.or_else(|| self.obarray.symbol_function_id(sym_id)) {
+                    Some(f) => {
+                        let mut f = f;
+                        // Follow symbol indirection (GNU eval.c:2604)
+                        if let Some(alias_id) = f.as_symbol_id()
+                            && let Some(resolved) = self.obarray.indirect_function_id(alias_id)
+                        {
+                            f = resolved;
+                        }
+                        loop {
+                            if !super::autoload::is_autoload_value(&f) {
+                                break f;
+                            }
+
+                            match self.load_named_autoload_call_step(sym_id, f)? {
+                                NamedAutoloadCallStep::RetrySymbol { autoload_form } => {
+                                    // GNU `eval_sub` jumps back to named
+                                    // function resolution after each autoload
+                                    // hop.  The returned form is the current
+                                    // indirect function cell for that symbol.
+                                    f = autoload_form;
+                                }
+                                NamedAutoloadCallStep::DispatchFunction { function } => {
+                                    break function;
+                                }
+                                NamedAutoloadCallStep::Void => {
+                                    return Err(signal(
+                                        LispCondition::VoidFunction,
+                                        vec![original_fun],
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(signal(
+                            LispCondition::VoidFunction,
+                            vec![Value::from_sym_id(sym_id)],
+                        ));
+                    }
+                }
+            }
+        } else {
+            // GNU eval_sub runs every non-symbol function position through
+            // Ffunction(list1(fun)).  `function` only transforms literal
+            // `(lambda ...)` forms; byte-code objects, subrs, and malformed
+            // values are quoted through to the normal callable validation
+            // below.
+            if original_fun.is_cons() && cons_head_symbol_id(&original_fun) == Some(lambda_symbol())
+            {
+                self.instantiate_callable_cons_form(original_fun)?
+            } else {
+                original_fun
+            }
+        };
+
+        if let Some(surface_sym_id) = sym_id
+            && let Some(target_sym_id) = func.as_subr_id()
+            && self.subr_is_special_form_id(target_sym_id)
+        {
+            // GNU eval.c:2624 runs `list_length (args_left)` for *every*
+            // SUBRP `fun` — including UNEVALLED special forms — BEFORE
+            // dispatching to the special-form C function. `list_length`
+            // ends in `CHECK_LIST_END`, so an improper top-level argument
+            // list (e.g. `(progn a . b)`, `(if t a . b)`, `(when t . b)`)
+            // signals `(wrong-type-argument listp BAD-CDR)` up front,
+            // *before* any body form is evaluated. Neo otherwise validated
+            // lazily and evaluated the first element first (wrong error /
+            // no error). Match GNU: validate the arg-list structure here.
+            if list_length(&original_args).is_none() {
+                return Err(self.listp_error(original_args));
+            }
+            // The outer UNEVALLED frame (pushed by the continuation driver)
+            // already records the surface function and raw
+            // argument forms. Special forms leave the frame UNEVALLED
+            // throughout (no `set_backtrace_args_evalled` call),
+            // matching GNU eval.c:2618-2619.
+            let result = if surface_sym_id == target_sym_id {
+                self.try_special_form_value_id(surface_sym_id, original_args)
+            } else {
+                self.try_aliased_special_form_value_id(surface_sym_id, target_sym_id, original_args)
+            };
+            if let Some(result) = result {
+                return result.map(PreparedForm::Value);
+            }
+        }
+
+        // Check for macro (GNU eval.c:2730-2755)
+        if func.is_macro() {
+            // GNU expands a macro via `apply1 (Fcdr (fun), original_args)`
+            // (eval.c:2766), and `apply1` -> `Fapply` -> `list_length`
+            // (eval.c:3065/fns.c:115) validates the argument-list structure
+            // up front. An improper macro-call tail (e.g. `(when t . b)`)
+            // therefore signals `(wrong-type-argument listp BAD-CDR)` rather
+            // than silently dropping the bad cdr. `value_list_to_values`
+            // walks lazily and would otherwise swallow the improper tail.
+            if list_length(&original_args).is_none() {
+                return Err(self.listp_error(original_args));
+            }
+            let arg_values = value_list_to_values(&original_args);
+            let bt_count = self.specpdl.len();
+            self.push_backtrace_frame(original_fun, &arg_values);
+            let expanded =
+                self.with_macro_expansion_scope(|eval| eval.apply_lambda(func, arg_values));
+            let expanded = self.unbind_to_with_result(bt_count, expanded);
+            let expanded = expanded?;
+            let expanded_root_count = self.specpdl.len();
+            self.push_specpdl_root(expanded);
+            let result = self.eval_sub(expanded);
+            return self.unbind_to_with_result(expanded_root_count, result).map(PreparedForm::Value);
+        }
+        if cons_head_symbol_id(&func) == Some(macro_symbol()) {
+            // Cons-cell macro: (macro . fn) — GNU eval.c:2730
+            // Same up-front `apply1`/`list_length` validation as the
+            // `func.is_macro()` branch above (GNU eval.c:2766).
+            if list_length(&original_args).is_none() {
+                return Err(self.listp_error(original_args));
+            }
+            let macro_fn = func.cons_cdr();
+            let arg_values = value_list_to_values(&original_args);
+            let bt_count = self.specpdl.len();
+            self.push_backtrace_frame(original_fun, &arg_values);
+            let expanded = self.with_macro_expansion_scope(|eval| eval.apply(macro_fn, arg_values));
+            let expanded = self.unbind_to_with_result(bt_count, expanded);
+            let expanded = expanded?;
+            let expanded_root_count = self.specpdl.len();
+            self.push_specpdl_root(expanded);
+            let result = self.eval_sub(expanded);
+            return self.unbind_to_with_result(expanded_root_count, result).map(PreparedForm::Value);
+        }
+
+        // GNU eval.c:2606-2614: for SUBRP `fun`, check arity
+        // against the raw `original_args` count BEFORE any arg
+        // evaluation, and on mismatch signal
+        // `(wrong-number-of-arguments original_fun numargs)` where
+        // `original_fun` is the XCAR of the form (the surface
+        // symbol, not the resolved subr value). This is how GNU
+        // gets `(wrong-number-of-arguments car 0)` for a direct
+        // `(car)` call -- the arity check runs inline in eval_sub
+        // and never reaches `funcall_subr` which would have emitted
+        // `#<subr car>` via `XSETSUBR`.
+        //
+        // For non-subrs (closures, bytecode, lambdas, cons forms)
+        // the dispatch falls through to the normal apply path,
+        // which signals with `fun` itself -- also matching GNU
+        // funcall_lambda and funcall_subr.
+        // GNU keeps the resolved XSUBR in `fun` across argument
+        // evaluation and calls it directly. Preserve the SubrEntry we
+        // resolved for the direct eval_sub arity check instead of
+        // looking it up again after evaluating args.
+        let direct_subr_entry = if let Some((sym_id, entry)) = subr_entry_from_value(func) {
+            if entry.dispatch_kind != SubrDispatchKind::SpecialForm {
+                let numargs = match list_length(&original_args) {
+                    Some(n) => n,
+                    None => return Err(self.listp_error(original_args)),
+                };
+                let min = entry.min_args as usize;
+                let max_ok = match entry.max_args {
+                    Some(m) => numargs <= m as usize,
+                    None => true, // &rest / MANY
+                };
+                if numargs < min || !max_ok {
+                    return Err(signal(
+                        LispCondition::WrongNumberOfArguments,
+                        vec![original_fun, Value::fixnum(numargs as i64)],
+                    ));
+                }
+                Some((sym_id, entry))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // GNU eval.c:2716-2726: when `fun` is not a subr, closure,
+        // bytecode, or cons-shaped lambda/autoload/macro, signal
+        // `(invalid-function original_fun)` with the SURFACE
+        // symbol. Verified against emacs 31.0.50:
+        //   (fset 'vm-fsetint 1)
+        //   (condition-case e (vm-fsetint) (error e))
+        //     → (invalid-function vm-fsetint)
+        //
+        // The check runs inline in eval_sub so the dispatcher
+        // `funcall_general` never sees the invalid value and
+        // never emits the resolved fncell contents as signal data.
+        if !self.function_value_is_callable(&func) {
+            if func.is_nil() {
+                return Err(signal(LispCondition::VoidFunction, vec![original_fun]));
+            }
+            return Err(signal(LispCondition::InvalidFunction, vec![original_fun]));
+        }
+
+        // The continuation driver roots this resolved function and its
+        // argument cursor on bc_buf, evaluates arguments in order, then
+        // promotes the UNEVALLED backtrace frame to its EVALD stack span.
+        // GNU validates the argument-list structure UP FRONT, before
+        // evaluating any argument: the subr path runs a single
+        // `list_length (args_left)` (eval.c:2624) and `apply_lambda` runs
+        // `list_length (args)` (eval.c:3302). Both end in `CHECK_LIST_END`,
+        // so an improper arg list (e.g. `((lambda (a &rest b) b) x . y)`)
+        // signals `(wrong-type-argument listp BAD-CDR)` *before* `x` is ever
+        // evaluated. Neo previously evaluated args lazily and only checked
+        // the tail afterwards, leaking a void-variable error for `x` first.
+        // Subrs already walked the spine once for the arity check above
+        // (`direct_subr_entry` is only Some when that walk returned a
+        // length), so re-walking here would make the spine cost 3x per
+        // interpreted subr call where GNU pays 1x + the eval walk. Only
+        // the closure/bytecode/lambda paths still need the up-front walk.
+        if direct_subr_entry.is_none() && list_length(&original_args).is_none() {
+            return Err(self.listp_error(original_args));
+        }
+        Ok(PreparedForm::Call(PreparedCall {
+            function: func,
+            arguments: original_args,
+            target: direct_subr_entry.map_or(CallTarget::Function, |(sym_id, entry)| {
+                CallTarget::Subr { sym_id, entry }
+            }),
+        }))
+    }
+
     /// Legacy eval_value: delegates to eval_sub.
     pub fn eval_value(&mut self, value: &Value) -> EvalResult {
         if !crate::tagged::gc::tagged_heap_is_current(&self.tagged_heap) {
@@ -7720,6 +8098,7 @@ mod special_forms;
 mod apply;
 pub(crate) mod assoc_predicate;
 mod sort_predicate;
+mod continuation;
 
 mod command_loop;
 

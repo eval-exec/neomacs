@@ -19,6 +19,14 @@ fn restore_failed_callback_roots(saved_len: usize) {
     restore_scratch_gc_roots(saved_len);
 }
 
+/// Ownership of one interpreted call's bindings. Consumed exactly once by
+/// finish_interpreted_lambda, whether its body returns or raises a Lisp flow.
+pub(super) struct ActiveInterpretedLambdaCall {
+    pub(super) body: Value,
+    call_state: ActiveLambdaCallState,
+    root_count: usize,
+}
+
 impl Context {
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
     pub(super) fn make_interpreted_closure_with_expr_runtime_hook(
@@ -3848,6 +3856,7 @@ impl Context {
         walk_lambda_formals(fun, arglist, args, |sym, arg| self.try_specbind(sym, arg))
     }
 
+    #[cfg(not(target_family = "wasm"))]
     pub(super) fn apply_lambda(&mut self, func_value: Value, args: LispArgVec) -> EvalResult {
         let raw_cons_lambda = func_value.is_cons();
         let (arglist, body, env) = if raw_cons_lambda {
@@ -3991,6 +4000,85 @@ impl Context {
         let result = self.eval_lambda_body_value(body);
         let result = self.rewrap_thread_blocked_in_lexenv(result);
         self.unbind_lexenv_frame(count, result)
+    }
+
+    #[cfg(target_family = "wasm")]
+    pub(super) fn apply_lambda(&mut self, func_value: Value, args: LispArgVec) -> EvalResult {
+        let call = self.begin_interpreted_lambda(func_value, &args)?;
+        let result = self.eval_lambda_body_value(call.body);
+        self.finish_interpreted_lambda(call, result)
+    }
+
+    pub(super) fn begin_interpreted_lambda(
+        &mut self,
+        func_value: Value,
+        args: &[Value],
+    ) -> Result<ActiveInterpretedLambdaCall, Flow> {
+        let raw_cons_lambda = func_value.is_cons();
+        let (arglist, body, env) = if raw_cons_lambda {
+            let tail = func_value.cons_cdr();
+            if !tail.is_cons() {
+                return Err(signal(LispCondition::InvalidFunction, vec![func_value]));
+            }
+            (tail.cons_car(), tail.cons_cdr(), None)
+        } else {
+            let Some(arglist) = func_value.closure_slot(CLOSURE_ARGLIST) else {
+                return Err(signal(LispCondition::InvalidFunction, vec![func_value]));
+            };
+            let Some(body) = func_value.closure_body_value() else {
+                return Err(signal(LispCondition::InvalidFunction, vec![func_value]));
+            };
+            (arglist, body, func_value.closure_env().unwrap_or(None))
+        };
+
+        // Root the function value on the specpdl so GC can trace it
+        // (keeping body, env, and params alive through the call).
+        let root_count = self.specpdl.len();
+        self.specpdl.push(SpecBinding::GcRoot { value: func_value });
+        if raw_cons_lambda {
+            let old_lexenv = std::mem::replace(&mut self.lexenv, Value::NIL);
+            self.specpdl.push(SpecBinding::LexicalEnv { old_lexenv });
+        }
+
+        let call_state = match self.begin_lambda_call(func_value, arglist, env, args) {
+            Ok(state) => state,
+            Err(err) => {
+                return self.unbind_to_with_result(root_count, Err(err)).map(|_| unreachable!());
+            }
+        };
+        Ok(ActiveInterpretedLambdaCall { body, call_state, root_count })
+    }
+
+    pub(super) fn finish_interpreted_lambda(
+        &mut self,
+        call: ActiveInterpretedLambdaCall,
+        result: EvalResult,
+    ) -> EvalResult {
+        let result = match result {
+            Err(Flow::ThreadBlocked(blocked))
+                if !blocked.remaining_forms.is_nil()
+                    && crate::emacs_core::threads::thread_condition_case_continuation_parts(
+                        blocked.remaining_forms,
+                    )
+                    .is_none() =>
+            {
+                match builtins::symbols::make_interpreted_closure_from_parts(
+                    &Value::NIL,
+                    &blocked.remaining_forms,
+                    &self.lexenv,
+                    None,
+                    None,
+                ) {
+                    Ok(resume_function) => {
+                        Err(Flow::thread_blocked(blocked.blocker, resume_function))
+                    }
+                    Err(flow) => Err(flow),
+                }
+            }
+            other => other,
+        };
+        let result = self.finish_lambda_call(call.call_state, result);
+        self.unbind_to_with_result(call.root_count, result)
     }
 
     #[inline]
