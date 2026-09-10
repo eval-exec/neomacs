@@ -3208,6 +3208,7 @@ pub struct GuiFrameGeometryHints {
 struct PreparedDisplayPresentation {
     geometry: geometry::PresentationGeometry,
     publications: Vec<WindowPresentationSnapshot>,
+    selected_window: WindowId,
 }
 
 #[derive(Default)]
@@ -4402,6 +4403,7 @@ impl Frame {
         let prepared = PreparedDisplayPresentation {
             geometry: candidate,
             publications,
+            selected_window: self.selected_window,
         };
         if self
             .presentation_state
@@ -4505,6 +4507,15 @@ impl Frame {
             Some(active) => Some(active.geometry.presentation()),
             _ => None,
         }
+    }
+
+    /// Selection belonging to the renderer-acknowledged presentation, not a
+    /// newer prepared redisplay or the mutable live selection.
+    pub fn active_selected_window(&self) -> Option<WindowId> {
+        self.presentation_state
+            .active
+            .as_ref()
+            .map(|active| active.selected_window)
     }
 
     /// Geometry for the presentation currently used by renderer drawing and

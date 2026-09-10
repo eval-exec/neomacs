@@ -2,12 +2,14 @@
 
 use crate::buffer::{EmacsByteRange, LispCharPos1};
 use crate::emacs_core::intern::intern;
+use crate::window::{WindowPresentationSnapshot, geometry::PresentationId};
 
 /// Property-only changes can move input fields without changing text identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ExportRevision {
     properties: i64,
     overlays: i64,
+    presentation: Option<PresentationId>,
 }
 
 impl crate::Context {
@@ -16,9 +18,38 @@ impl crate::Context {
             return None;
         }
         let buffer = self.buffers.current_buffer()?;
+        let presentation = if let Some(frame) = self.frames.selected_frame() {
+            let window = frame.selected_window;
+            if frame.find_window(window)?.buffer_id() != Some(buffer.id()) {
+                return None;
+            }
+            if frame.effective_window_system().is_some() {
+                if frame.active_selected_window() != Some(window) {
+                    return None;
+                }
+                let presentation = frame.active_presentation()?;
+                let WindowPresentationSnapshot::LiveWindow(snapshot) =
+                    frame.active_window_presentation(window)?
+                else {
+                    return None;
+                };
+                let recorded = snapshot.layout_freshness?;
+                let current =
+                    self.window_display_snapshot_freshness(frame.id, window, buffer.id())?;
+                if recorded != current {
+                    return None;
+                }
+                Some(presentation)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         Some(ExportRevision {
             properties: buffer.props_modified_tick(),
             overlays: buffer.overlay_modified_tick(),
+            presentation,
         })
     }
 
