@@ -21,7 +21,7 @@ def main():
     parser.add_argument(
         "--call-style",
         choices=[
-            "direct", "argument", "conditional", "funcall", "binding",
+            "direct", "argument", "conditional", "conditional-test", "conditional-else", "funcall", "binding",
             "initializer", "sequential-binding", "sequential-initializer", "protected",
         ],
         default="direct",
@@ -42,6 +42,8 @@ def main():
             "direct": "(neomacs-stack-probe)",
             "argument": "(+ 1 (neomacs-stack-probe))",
             "conditional": "(if t (neomacs-stack-probe))",
+            "conditional-test": "(if (neomacs-stack-probe) 1 2)",
+            "conditional-else": "(if nil 1 2 (neomacs-stack-probe))",
             "funcall": "(funcall #'neomacs-stack-probe)",
             "binding": "(let ((neomacs-stack-local 42)) (neomacs-stack-probe))",
             "initializer": "(let ((neomacs-stack-local (neomacs-stack-probe))) neomacs-stack-local)",
@@ -90,6 +92,23 @@ def main():
                 editor.eval_expression(
                     '(if (> neomacs-stack-cleanups 0) (message (concat "STACK-" "CLEANUP-PASS")) (message (concat "STACK-" "FAIL: missing cleanup")))',
                     "STACK-CLEANUP-PASS", failure_marker="STACK-FAIL:",
+                )
+                editor.eval_expression(
+                    """(let ((trace nil))
+                         (let ((caught
+                                (condition-case err
+                                    (unwind-protect
+                                        (unwind-protect
+                                            (error "body")
+                                          (setq trace (cons 'inner trace))
+                                          (error "cleanup"))
+                                      (setq trace (cons 'outer trace)))
+                                  (error (cadr err)))))
+                           (if (and (equal caught "cleanup")
+                                    (equal trace '(outer inner)))
+                               (message (concat "STACK-" "UNWIND-PASS"))
+                             (message (concat "STACK-" "FAIL: unwind %S %S") caught trace))))""",
+                    "STACK-UNWIND-PASS", failure_marker="STACK-FAIL:",
                 )
         editor.eval_expression(
             '(message (concat "STACK-" "ALIVE-%d") (+ 20 22))',
