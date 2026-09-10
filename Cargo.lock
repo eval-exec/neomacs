@@ -3863,6 +3863,7 @@ dependencies = [
  "gio",
  "image",
  "libc",
+ "neomacs-app",
  "neomacs-display-protocol",
  "neomacs-infra",
  "neomacs-layout-engine",

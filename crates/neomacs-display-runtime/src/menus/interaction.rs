@@ -1,6 +1,6 @@
 //! Translate desktop keys into menu navigation, never editor input.
 
-use super::session::MenuSession;
+use super::MenuSession;
 use winit::keyboard::{Key, NamedKey};
 
 pub(super) fn cancels(key: &Key, modifiers: winit::keyboard::ModifiersState) -> bool {
