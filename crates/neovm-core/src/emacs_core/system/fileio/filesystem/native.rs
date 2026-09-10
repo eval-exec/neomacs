@@ -11,6 +11,7 @@ use super::{
 };
 
 mod attributes;
+mod timestamps;
 
 /// Direct access to the current process's native filesystem namespace.
 #[derive(Clone, Copy, Debug, Default)]
@@ -320,71 +321,7 @@ impl EditorFileSystem for NativeFileSystem {
         timestamp: Option<FileTimestamp>,
         follow_links: bool,
     ) -> io::Result<()> {
-        if !follow_links {
-            #[cfg(unix)]
-            {
-                use std::os::unix::ffi::OsStrExt;
-
-                let path = std::ffi::CString::new(path.as_os_str().as_bytes()).map_err(|_| {
-                    io::Error::new(io::ErrorKind::InvalidInput, "embedded NUL in file name")
-                })?;
-                let mut times = [
-                    libc::timespec {
-                        tv_sec: 0,
-                        tv_nsec: 0,
-                    },
-                    libc::timespec {
-                        tv_sec: 0,
-                        tv_nsec: 0,
-                    },
-                ];
-                if let Some(timestamp) = timestamp {
-                    for time in &mut times {
-                        time.tv_sec = timestamp.seconds as libc::time_t;
-                        time.tv_nsec = timestamp.nanoseconds as libc::c_long;
-                    }
-                } else {
-                    for time in &mut times {
-                        time.tv_nsec = libc::UTIME_NOW as libc::c_long;
-                    }
-                }
-                let result = unsafe {
-                    libc::utimensat(
-                        libc::AT_FDCWD,
-                        path.as_ptr(),
-                        times.as_ptr(),
-                        libc::AT_SYMLINK_NOFOLLOW,
-                    )
-                };
-                return if result == 0 {
-                    Ok(())
-                } else {
-                    Err(io::Error::last_os_error())
-                };
-            }
-            #[cfg(not(unix))]
-            {
-                return Err(io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    "nofollow set-file-times is unsupported on this platform",
-                ));
-            }
-        }
-
-        let time = match timestamp {
-            Some(timestamp) => timestamp.to_system_time().ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "file timestamp is out of range",
-                )
-            })?,
-            None => std::time::SystemTime::now(),
-        };
-        let times = fs::FileTimes::new().set_accessed(time).set_modified(time);
-        fs::OpenOptions::new()
-            .write(true)
-            .open(path)?
-            .set_times(times)
+        timestamps::set(path, timestamp, follow_links)
     }
 
     fn file_system_space(&self, path: &Path) -> io::Result<FileSystemSpace> {
