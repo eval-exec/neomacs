@@ -1,4 +1,4 @@
-//! Menu panel measurement, independent of native window placement.
+//! Menu panel measurement, independent of platform presentation.
 
 use neomacs_display_protocol::{PopupMenuItem, menu::MenuPanel};
 

@@ -1,10 +1,10 @@
-//! Menu hierarchy and navigation, owned by the display runtime.
+//! Menu hierarchy and navigation, independent of the presentation adapter.
 
 use neomacs_display_protocol::{PopupMenuItem, menu::MenuPanel};
 
 /// Revision ordering and immutable results, independent of native surfaces.
 #[derive(Default)]
-pub(super) struct MenuLifetime {
+pub struct MenuLifetime {
     active: Option<neomacs_display_protocol::menu::MenuToken>,
     latest: Option<neomacs_display_protocol::menu::MenuToken>,
     results: std::collections::VecDeque<neomacs_display_protocol::menu::MenuResult>,
@@ -133,7 +133,7 @@ impl MenuSession {
             .unwrap_or(&mut self.root_panel)
     }
 
-    pub(super) fn panel(&self, depth: usize) -> Option<&MenuPanel> {
+    pub fn panel(&self, depth: usize) -> Option<&MenuPanel> {
         if depth == 0 {
             Some(&self.root_panel)
         } else {
@@ -308,13 +308,13 @@ impl MenuSession {
         panels
     }
 
-    pub(super) fn metrics(&self) -> (f32, f32) {
+    pub fn metrics(&self) -> (f32, f32) {
         (self.font_size, self.line_height)
     }
 
-    /// Pointer coordinates are local to the actual native surface, not a
-    /// guessed global origin (the compositor may flip or slide any panel).
-    pub(super) fn hover_panel(&mut self, depth: usize, x: f32, y: f32) {
+    /// Pointer coordinates are local to the presented panel, not a guessed
+    /// global origin (the presentation adapter may flip or slide any panel).
+    pub fn hover_panel(&mut self, depth: usize, x: f32, y: f32) {
         let Some(panel) = self.panel(depth) else {
             return;
         };
@@ -328,7 +328,7 @@ impl MenuSession {
         }
     }
 
-    pub(super) fn activate_panel(&mut self, depth: usize) -> Option<i32> {
+    pub fn activate_panel(&mut self, depth: usize) -> Option<i32> {
         let panel = self.panel(depth)?;
         let global = *panel
             .item_indices

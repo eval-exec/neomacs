@@ -86,7 +86,7 @@ fn simple_menu(items: Vec<PopupMenuItem>) -> MenuSession {
 fn layout_panel_bounds_position() {
     let items = vec![item("Open", true, 0), item("Save", true, 0)];
     let indices: Vec<usize> = vec![0, 1];
-    let panel = crate::menus::layout::measure_panel(
+    let panel = crate::frontend::menu::layout::measure_panel(
         100.0,
         200.0,
         &items,
@@ -106,7 +106,7 @@ fn layout_panel_bounds_position() {
 fn layout_panel_hover_starts_at_minus_one() {
     let items = vec![item("Open", true, 0)];
     let indices: Vec<usize> = vec![0];
-    let panel = crate::menus::layout::measure_panel(
+    let panel = crate::frontend::menu::layout::measure_panel(
         0.0,
         0.0,
         &items,
@@ -125,7 +125,7 @@ fn layout_panel_height_with_items() {
     let item_height = LINE_HEIGHT + 3.0; // 21.0
     let items = vec![item("A", true, 0), item("B", true, 0), item("C", true, 0)];
     let indices: Vec<usize> = vec![0, 1, 2];
-    let panel = crate::menus::layout::measure_panel(
+    let panel = crate::frontend::menu::layout::measure_panel(
         0.0,
         0.0,
         &items,
@@ -151,7 +151,7 @@ fn layout_panel_height_with_separator() {
     let separator_height = 8.0_f32;
     let items = vec![item("A", true, 0), separator(0), item("B", true, 0)];
     let indices: Vec<usize> = vec![0, 1, 2];
-    let panel = crate::menus::layout::measure_panel(
+    let panel = crate::frontend::menu::layout::measure_panel(
         0.0,
         0.0,
         &items,
@@ -173,7 +173,7 @@ fn layout_panel_height_with_title() {
     let title_height = item_height + separator_height;
     let items = vec![item("A", true, 0)];
     let indices: Vec<usize> = vec![0];
-    let panel = crate::menus::layout::measure_panel(
+    let panel = crate::frontend::menu::layout::measure_panel(
         0.0,
         0.0,
         &items,
@@ -192,7 +192,7 @@ fn layout_panel_minimum_width() {
     // Very short label should still get at least 150px width.
     let items = vec![item("X", true, 0)];
     let indices: Vec<usize> = vec![0];
-    let panel = crate::menus::layout::measure_panel(
+    let panel = crate::frontend::menu::layout::measure_panel(
         0.0,
         0.0,
         &items,
@@ -210,7 +210,7 @@ fn layout_panel_width_grows_with_label() {
     let long_label = "A".repeat(100);
     let items = vec![item(&long_label, true, 0)];
     let indices: Vec<usize> = vec![0];
-    let panel = crate::menus::layout::measure_panel(
+    let panel = crate::frontend::menu::layout::measure_panel(
         0.0,
         0.0,
         &items,
@@ -235,7 +235,7 @@ fn layout_panel_width_grows_with_label() {
 fn layout_panel_width_accounts_for_shortcut() {
     let items = vec![item_with_shortcut("Save", "C-x C-s", 0)];
     let indices: Vec<usize> = vec![0];
-    let panel = crate::menus::layout::measure_panel(
+    let panel = crate::frontend::menu::layout::measure_panel(
         0.0,
         0.0,
         &items,
@@ -285,7 +285,7 @@ fn menu_columns_reserve_the_widest_label_and_shortcut_independently() {
 fn layout_panel_width_accounts_for_submenu_arrow() {
     let items = vec![submenu_item("Submenu", 0)];
     let indices: Vec<usize> = vec![0];
-    let panel = crate::menus::layout::measure_panel(
+    let panel = crate::frontend::menu::layout::measure_panel(
         0.0,
         0.0,
         &items,
@@ -307,7 +307,7 @@ fn layout_panel_width_uses_title_len_if_longer() {
     let title = "A Very Long Menu Title That Exceeds All Labels";
     let items = vec![item("X", true, 0)];
     let indices: Vec<usize> = vec![0];
-    let panel = crate::menus::layout::measure_panel(
+    let panel = crate::frontend::menu::layout::measure_panel(
         0.0,
         0.0,
         &items,
@@ -333,7 +333,7 @@ fn layout_panel_item_offsets_monotonic() {
         item("C", true, 0),
     ];
     let indices: Vec<usize> = vec![0, 1, 2, 3];
-    let panel = crate::menus::layout::measure_panel(
+    let panel = crate::frontend::menu::layout::measure_panel(
         0.0,
         0.0,
         &items,
@@ -360,7 +360,7 @@ fn layout_panel_item_offsets_monotonic() {
 fn layout_panel_empty_indices() {
     let items = vec![item("A", true, 0)];
     let indices: Vec<usize> = vec![];
-    let panel = crate::menus::layout::measure_panel(
+    let panel = crate::frontend::menu::layout::measure_panel(
         10.0,
         20.0,
         &items,
@@ -381,7 +381,7 @@ fn layout_panel_empty_indices() {
 fn layout_panel_item_height_matches() {
     let items = vec![item("A", true, 0)];
     let indices: Vec<usize> = vec![0];
-    let panel = crate::menus::layout::measure_panel(
+    let panel = crate::frontend::menu::layout::measure_panel(
         0.0,
         0.0,
         &items,
@@ -764,7 +764,7 @@ fn layout_panel_no_non_separator_items_uses_default_label_len() {
     // Panel with only separators: max_label_len falls back to unwrap_or(10)
     let items = vec![separator(0), separator(0)];
     let indices: Vec<usize> = vec![0, 1];
-    let panel = crate::menus::layout::measure_panel(
+    let panel = crate::frontend::menu::layout::measure_panel(
         0.0,
         0.0,
         &items,
