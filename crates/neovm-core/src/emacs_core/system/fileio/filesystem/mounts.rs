@@ -16,6 +16,15 @@ struct Mount {
     filesystem: Box<dyn EditorFileSystem>,
 }
 
+impl Mount {
+    fn namespace_link_target(&self, target: PathBuf) -> PathBuf {
+        match VirtualPath::parse(&target) {
+            Ok(target) => self.path.join(&target).to_path_buf(),
+            Err(_) => target,
+        }
+    }
+}
+
 /// An immutable-after-construction table of rooted filesystem adapters.
 ///
 /// Backends always receive an absolute path rooted at `/`; mount prefixes are
@@ -113,7 +122,15 @@ fn namespace_metadata() -> FileMetadata {
 impl EditorFileSystem for MountTableFileSystem {
     fn attributes(&self, path: &Path) -> io::Result<super::FileAttributeSnapshot> {
         match self.route(path) {
-            Ok((mount, relative)) => mount.filesystem.attributes(&relative),
+            Ok((mount, relative)) => {
+                let mut attributes = mount.filesystem.attributes(&relative)?;
+                if let super::FileAttributeType::SymbolicLink(target) = attributes.kind {
+                    attributes.kind = super::FileAttributeType::SymbolicLink(
+                        mount.namespace_link_target(target),
+                    );
+                }
+                Ok(attributes)
+            }
             Err(error) if error.kind() == ErrorKind::NotFound && self.namespace_directory(path)? => {
                 super::FileAttributeSnapshot::read_single_user_virtual(self, path)
             }
@@ -256,9 +273,6 @@ impl EditorFileSystem for MountTableFileSystem {
     fn read_link(&self, path: &Path) -> io::Result<PathBuf> {
         let (mount, relative) = self.route(path)?;
         let target = mount.filesystem.read_link(&relative)?;
-        match VirtualPath::parse(&target) {
-            Ok(target) => Ok(mount.path.join(&target).to_path_buf()),
-            Err(_) => Ok(target),
-        }
+        Ok(mount.namespace_link_target(target))
     }
 }
