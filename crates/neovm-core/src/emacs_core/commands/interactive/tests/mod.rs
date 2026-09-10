@@ -6931,3 +6931,50 @@ fn self_inserted_space_fills_without_shifting_point() {
     );
     assert_eq!(result, "OK (\"Summary words continue\nbeyond \" 31)");
 }
+
+/// `heap_specs` is derived state: it must always equal the heap-object
+/// entries of `specs`, or root seeding would skip a live spec and the
+/// collector would free it out from under an interactive command.
+///
+/// The four ways the map can change are covered here, including the one that
+/// is easy to miss: re-registering a symbol whose spec stops being a heap
+/// object has to *remove* the stale entry, not leave it behind.
+#[test]
+fn interactive_heap_specs_track_the_heap_valued_specs() {
+    let expected = |registry: &InteractiveRegistry| {
+        registry
+            .specs
+            .iter()
+            .filter(|(_, spec)| spec.spec.is_heap_object())
+            .map(|(symbol, spec)| (*symbol, spec.spec))
+            .collect::<HashMap<_, _>>()
+    };
+
+    let mut registry = InteractiveRegistry::new();
+    let heap = SymId(101);
+    let plain = SymId(102);
+    let flipped = SymId(103);
+
+    registry.register_interactive(heap, InteractiveSpec::new("p"));
+    registry.register_interactive(plain, InteractiveSpec { spec: Value::NIL });
+    registry.register_interactive(flipped, InteractiveSpec::new("r"));
+    assert_eq!(registry.heap_specs, expected(&registry));
+    assert_eq!(registry.heap_specs.len(), 2);
+
+    // Re-registration that drops the heap value must drop the root with it.
+    registry.register_interactive(flipped, InteractiveSpec { spec: Value::NIL });
+    assert_eq!(registry.heap_specs, expected(&registry));
+    assert_eq!(registry.heap_specs.len(), 1);
+
+    registry.unregister_interactive(heap);
+    assert_eq!(registry.heap_specs, expected(&registry));
+    assert!(registry.heap_specs.is_empty());
+
+    // The dump restores `specs` in bulk, bypassing `register_interactive`.
+    let mut dumped = HashMap::new();
+    dumped.insert(heap, InteractiveSpec::new("p"));
+    dumped.insert(plain, InteractiveSpec { spec: Value::NIL });
+    let restored = InteractiveRegistry::from_dump(dumped);
+    assert_eq!(restored.heap_specs, expected(&restored));
+    assert_eq!(restored.heap_specs.len(), 1);
+}

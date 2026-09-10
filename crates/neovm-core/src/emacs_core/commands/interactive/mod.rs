@@ -223,6 +223,17 @@ struct WhereIsReverseIndex {
     state: WhereIsKeymapState,
     sequences_by_definition: HashMap<WhereIsDefinitionKey, Vec<Vec<Value>>>,
     remapping_by_command: HashMap<SymId, Value>,
+    /// The heap objects this index keeps alive, collected once at build time.
+    ///
+    /// The index is a complete reverse map of every accessible binding, so
+    /// enumerating its roots means walking every key sequence of every
+    /// definition -- tens of thousands of events, nearly all of which are
+    /// integers and so not roots at all.  Root seeding runs twice per
+    /// collection cycle, and this index is replaced wholesale rather than
+    /// mutated, so the answer is the same every time it is asked.  Computing
+    /// it with the index turns that repeated scan into a walk of the few
+    /// values that are actually roots.
+    traced_roots: Vec<Value>,
 }
 
 impl WhereIsReverseIndex {
@@ -237,22 +248,38 @@ impl WhereIsReverseIndex {
         self.remapping_by_command.get(&command).copied()
     }
 
-    fn trace_roots_with(&self, visit: &mut (impl FnMut(Value) + ?Sized)) {
-        for keymap in &self.state.keymaps {
-            visit(*keymap);
-        }
-        for (definition, sequences) in &self.sequences_by_definition {
-            definition.trace_roots_with(visit);
+    /// Every heap object reachable from the index, in one pass over it.
+    ///
+    /// Kept beside `trace_roots_with` so the two cannot drift: this is the
+    /// definition of the index's root set, and the collector reads the vector
+    /// this produces.
+    fn collect_traced_roots(
+        state: &WhereIsKeymapState,
+        sequences_by_definition: &HashMap<WhereIsDefinitionKey, Vec<Vec<Value>>>,
+        remapping_by_command: &HashMap<SymId, Value>,
+    ) -> Vec<Value> {
+        let mut roots = Vec::new();
+        roots.extend(state.keymaps.iter().copied());
+        for (definition, sequences) in sequences_by_definition {
+            definition.trace_roots_with(&mut |root| roots.push(root));
             for event in sequences.iter().flatten() {
                 if event.is_heap_object() {
-                    visit(*event);
+                    roots.push(*event);
                 }
             }
         }
-        for remapping in self.remapping_by_command.values() {
+        for remapping in remapping_by_command.values() {
             if remapping.is_heap_object() {
-                visit(*remapping);
+                roots.push(*remapping);
             }
+        }
+        roots.shrink_to_fit();
+        roots
+    }
+
+    fn trace_roots_with(&self, visit: &mut (impl FnMut(Value) + ?Sized)) {
+        for root in &self.traced_roots {
+            visit(*root);
         }
     }
 }
@@ -264,6 +291,17 @@ impl WhereIsReverseIndex {
 pub struct InteractiveRegistry {
     /// Map from function symbol to its interactive spec.
     specs: HashMap<SymId, InteractiveSpec>,
+    /// The subset of `specs` whose spec is a heap object, i.e. the only
+    /// entries that are GC roots.
+    ///
+    /// `specs` holds an entry for every interactive command, thousands of
+    /// them restored in bulk from the dump, and almost none of their specs
+    /// are heap objects.  Root seeding runs twice per collection cycle, so
+    /// filtering the whole map each time walks tens of thousands of entries
+    /// to find single digits.  Maintaining the answer at the four points that
+    /// can change it costs nothing measurable and makes seeding proportional
+    /// to the root count rather than the command count.
+    heap_specs: HashMap<SymId, Value>,
     /// Stack tracking whether the current function was called interactively.
     interactive_call_stack: Vec<bool>,
     /// GNU-shaped lazy reverse-keymap index used by menu-free
@@ -285,6 +323,7 @@ impl InteractiveRegistry {
     pub fn new() -> Self {
         Self {
             specs: HashMap::new(),
+            heap_specs: HashMap::new(),
             interactive_call_stack: Vec::new(),
             where_is_reverse_index: None,
             #[cfg(test)]
@@ -296,10 +335,17 @@ impl InteractiveRegistry {
 
     /// Register a function symbol as interactive with the given spec.
     pub fn register_interactive(&mut self, symbol: SymId, spec: InteractiveSpec) {
+        if spec.spec.is_heap_object() {
+            self.heap_specs.insert(symbol, spec.spec);
+        } else {
+            // A re-registration can replace a heap spec with a non-heap one.
+            self.heap_specs.remove(&symbol);
+        }
         self.specs.insert(symbol, spec);
     }
 
     pub fn unregister_interactive(&mut self, symbol: SymId) {
+        self.heap_specs.remove(&symbol);
         self.specs.remove(&symbol);
     }
 
@@ -333,8 +379,14 @@ impl InteractiveRegistry {
         &self.specs
     }
     pub(crate) fn from_dump(specs: HashMap<SymId, InteractiveSpec>) -> Self {
+        let heap_specs = specs
+            .iter()
+            .filter(|(_, spec)| spec.spec.is_heap_object())
+            .map(|(symbol, spec)| (*symbol, spec.spec))
+            .collect();
         Self {
             specs,
+            heap_specs,
             interactive_call_stack: Vec::new(),
             where_is_reverse_index: None,
             #[cfg(test)]
@@ -390,10 +442,8 @@ impl InteractiveRegistry {
     }
 
     pub(crate) fn trace_roots_with(&self, visit: &mut (impl FnMut(Value) + ?Sized)) {
-        for spec in self.specs.values() {
-            if spec.spec.is_heap_object() {
-                visit(spec.spec);
-            }
+        for spec in self.heap_specs.values() {
+            visit(*spec);
         }
         if let Some(index) = &self.where_is_reverse_index {
             index.trace_roots_with(visit);
@@ -4535,10 +4585,17 @@ fn build_where_is_reverse_index(obarray: &Obarray, keymaps: &[Value]) -> WhereIs
         }
     }
 
+    let state = WhereIsKeymapState::new(keymaps);
+    let traced_roots = WhereIsReverseIndex::collect_traced_roots(
+        &state,
+        &sequences_by_definition,
+        &remapping_by_command,
+    );
     WhereIsReverseIndex {
-        state: WhereIsKeymapState::new(keymaps),
+        state,
         sequences_by_definition,
         remapping_by_command,
+        traced_roots,
     }
 }
 
