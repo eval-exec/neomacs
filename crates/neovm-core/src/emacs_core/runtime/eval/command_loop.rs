@@ -1821,6 +1821,19 @@ impl Context {
             crate::emacs_core::undo::compact_buffers_for_gc(self);
         }
         let start = std::time::Instant::now();
+        // These two are the caches keyed on a raw heap address -- the address
+        // of a lexical environment's head cons -- so a swept and recycled cons
+        // could otherwise be read back as a different environment.  Nothing
+        // else needs clearing here: the named-call and form-head caches key on
+        // a symbol id and a function epoch, and what they hold is reachable
+        // from the symbol's function cell, so it cannot be swept while the
+        // entry is still valid.  Do not add an epoch-keyed cache to this list.
+        //
+        // Gating these on a sweep having actually run was tried and measured
+        // NEUTRAL (2026-09-10): mx-tab -0.06%, org-editing +0.01%,
+        // magit +0.02%, and rust-lsp-typing's median -0.35% inside its own
+        // 6.6% bimodal spread.  The 32 stores are not worth the invalidation
+        // risk of a narrower rule.
         self.lexenv_assq_cache.clear();
         self.lexenv_special_cache.clear();
         // Per-slice sweep budget in cons blocks (each ~4096 cells); the slice
