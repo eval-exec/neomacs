@@ -244,6 +244,7 @@ pub(super) fn validate_elf_report(report: &str) -> Result<()> {
         }
         if fields.contains(&"FUNC")
             && fields.contains(&"GLOBAL")
+            && !fields.contains(&"UND")
             && let Some(name) = fields.last()
         {
             exports.insert((*name).to_owned());
