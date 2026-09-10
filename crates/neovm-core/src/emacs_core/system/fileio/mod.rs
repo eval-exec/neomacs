@@ -3697,14 +3697,16 @@ pub(crate) fn builtin_file_modes(eval: &mut Context, args: Vec<Value>) -> EvalRe
         .mode(&lisp_file_name_to_path_buf(&absname), !nofollow)
     {
         Ok(mode) => Ok(Value::fixnum(i64::from(mode.bits()))),
-        Err(error) if error.kind() == ErrorKind::Unsupported => {
+        Err(error) if matches!(error.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => {
+            Ok(Value::NIL)
+        }
+        Err(error) => {
             Err(signal_file_action_error_value(
                 error,
                 "Reading file modes",
                 Value::heap_string(absname),
             ))
         }
-        Err(_) => Ok(Value::NIL),
     }
 }
 
