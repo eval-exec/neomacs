@@ -2,6 +2,57 @@ use super::*;
 use neovm_host_abi::ime::{ImeSelection, ImeSnapshotId, ImeTextSnapshot};
 
 #[test]
+fn commit_and_composition_preserve_signed_cursor_semantics() {
+    for (raw, cursor) in [
+        (1, CursorPlacement::AfterEnd(0)),
+        (2, CursorPlacement::AfterEnd(1)),
+        (0, CursorPlacement::BeforeStart(0)),
+        (-1, CursorPlacement::BeforeStart(1)),
+        (i32::MIN, CursorPlacement::BeforeStart(2147483648)),
+        (i32::MAX, CursorPlacement::AfterEnd(2147483646)),
+    ] {
+        for kind in [TextEditKind::Commit, TextEditKind::Compose] {
+            assert_eq!(
+                text_edit(kind, "😀".into(), raw),
+                TextEdit {
+                    kind,
+                    text: "😀".into(),
+                    cursor,
+                }
+            );
+        }
+    }
+}
+
+#[test]
+fn deletion_counts_keep_their_units_and_reject_negative_lengths() {
+    assert_eq!(
+        deletion(2, 0, DeletionUnit::Utf16),
+        Ok(Deletion {
+            before: 2,
+            after: 0,
+            unit: DeletionUnit::Utf16
+        })
+    );
+    assert_eq!(
+        deletion(1, 0, DeletionUnit::CodePoint),
+        Ok(Deletion {
+            before: 1,
+            after: 0,
+            unit: DeletionUnit::CodePoint
+        })
+    );
+    assert_eq!(
+        deletion(-1, 0, DeletionUnit::CodePoint),
+        Err(DecodeError::InvalidDeletion)
+    );
+    assert_eq!(
+        deletion(0, -1, DeletionUnit::Utf16),
+        Err(DecodeError::InvalidDeletion)
+    );
+}
+
+#[test]
 fn android_selection_preserves_gnu_point_and_mark_mapping() {
     let snapshot = ImeTextSnapshot::new(ImeSnapshotId(7), "A😀Z".into(), 0, 0).unwrap();
     assert_eq!(
