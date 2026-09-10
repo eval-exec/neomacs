@@ -47,8 +47,10 @@ impl ImeClient {
 
     /// Request the current insertion snapshot at the next ordered input read.
     ///
-    /// This does not authorize exporting text to a system keyboard: the host
-    /// must first enforce its password/field policy and callback identity.
+    /// Capturing a new snapshot retires the previous observation. Keep system
+    /// keyboard export disabled until VM-side password/field checks and
+    /// backend callback identity are implemented; this transport alone does
+    /// not establish either policy.
     pub fn surrounding_text(
         &self,
     ) -> Result<PendingImeReply<Option<ImeTextSnapshot>>, FrontendInputDisconnected> {
@@ -60,6 +62,8 @@ impl ImeClient {
 }
 
 /// One owned reply. Dropping it abandons the response, not the queued request.
+/// Hosts must also observe session exit: an unanswered request dropped during
+/// shutdown does not emit a reply notification.
 #[must_use]
 pub struct PendingImeReply<T> {
     receiver: Receiver<T>,
