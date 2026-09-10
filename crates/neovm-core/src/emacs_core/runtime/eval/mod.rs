@@ -83,11 +83,6 @@ fn gc_threshold_cap_from_env() -> Option<usize> {
     })
 }
 
-const EVAL_STACK_RED_ZONE: usize = 128 * 1024;
-const EVAL_STACK_SEGMENT: usize = 2 * 1024 * 1024;
-const STACK_GROWTH_PROBE_START_DEPTH: usize = 16;
-const STACK_GROWTH_PROBE_INTERVAL: usize = 16;
-
 /// Install GNU's target-width fixnum limit constants (`src/data.c`).
 ///
 /// These values cannot come from `i64`'s width: a portable image produced on
@@ -4145,12 +4140,14 @@ impl Context {
     #[inline]
     fn maybe_grow_eval_stack<R>(&mut self, callback: impl FnOnce(&mut Self) -> R) -> R {
         let depth = self.depth;
-        if depth < STACK_GROWTH_PROBE_START_DEPTH
-            || !depth.is_multiple_of(STACK_GROWTH_PROBE_INTERVAL)
-        {
+        if !super::stack_growth::should_probe(depth) {
             return callback(self);
         }
-        super::stack_growth::maybe_grow(EVAL_STACK_RED_ZONE, EVAL_STACK_SEGMENT, || callback(self))
+        super::stack_growth::maybe_grow(
+            super::stack_growth::RED_ZONE,
+            super::stack_growth::SEGMENT,
+            || callback(self),
+        )
     }
 
     /// Whether lexical-binding is currently enabled.
