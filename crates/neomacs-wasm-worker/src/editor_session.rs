@@ -172,6 +172,17 @@ impl BrowserWorkerTransport {
     }
 
     fn submit_input_batch(&self) -> Result<(), HostInputWaitError> {
+        let result = self.try_submit_input_batch();
+        if let Err(error) = &result {
+            // The command loop may catch this error and wait again. Retire the
+            // batch on every failure, including invalid envelopes and size
+            // limits, so it cannot be replayed indefinitely (or partially twice).
+            browser_host::reject_input(&error.to_string());
+        }
+        result
+    }
+
+    fn try_submit_input_batch(&self) -> Result<(), HostInputWaitError> {
         let bytes = browser_host::take_input_bytes().map_err(HostInputWaitError::new)?;
         let batch: BrowserInputBatch = serde_json::from_slice(&bytes).map_err(|error| {
             HostInputWaitError::new(format!("invalid browser input batch: {error}"))
