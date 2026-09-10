@@ -431,7 +431,7 @@ fn frame_selected_window_accepts_any_valid_window_as_its_own_frame() {
     let mut ev = Context::new();
     let out = ev
         .eval_str_each(
-            "(progn (split-window-internal (selected-window) nil nil nil)
+            "(progn (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)
                 (windowp (selected-window)))
          (eq (frame-selected-window (selected-window)) (frame-selected-window))
          (window-valid-p (window-parent (selected-window)))
@@ -439,7 +439,7 @@ fn frame_selected_window_accepts_any_valid_window_as_its_own_frame() {
          (eq (frame-selected-window (window-parent (selected-window)))
              (frame-selected-window))
          (eq (frame-selected-window (minibuffer-window)) (frame-selected-window))
-         (let ((doomed (split-window-internal (selected-window) nil nil nil)))
+         (let ((doomed (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
            (delete-window-internal doomed)
            (list (window-valid-p doomed)
                  (condition-case err (frame-selected-window doomed) (error (car err)))))",
@@ -487,12 +487,12 @@ fn window_new_size_slots_decode_a_valid_window_and_default_to_the_selected_one()
     let mut ev = Context::new();
     let out = ev
         .eval_str_each(
-            "(progn (split-window-internal (selected-window) nil nil nil) t)
+            "(progn (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil) t)
          (progn (set-window-new-pixel nil 4242) (window-new-pixel (selected-window)))
          (progn (set-window-new-total nil 77) (window-new-total (selected-window)))
          (progn (set-window-new-normal nil 0.5) (window-new-normal (selected-window)))
          (integerp (window-new-pixel (window-parent (selected-window))))
-         (let ((doomed (split-window-internal (selected-window) nil nil nil)))
+         (let ((doomed (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
            (delete-window-internal doomed)
            (condition-case err (window-new-pixel doomed) (error (car (cdr err)))))
          (condition-case err (window-new-pixel 'foo) (error (car (cdr err))))",
@@ -544,13 +544,13 @@ fn window_old_buffer_decodes_any_window_including_internal_and_deleted_ones() {
     let mut ev = Context::new();
     let out = ev
         .eval_str_each(
-            "(progn (split-window-internal (selected-window) nil nil nil) t)
+            "(progn (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil) t)
          (condition-case err (progn (window-old-buffer nil) 'ok) (error (car (cdr err))))
          (condition-case err (progn (window-old-buffer (selected-window)) 'ok)
            (error (car (cdr err))))
          (condition-case err (progn (window-old-buffer (window-parent (selected-window))) 'ok)
            (error (car (cdr err))))
-         (let ((doomed (split-window-internal (selected-window) nil nil nil)))
+         (let ((doomed (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
            (delete-window-internal doomed)
            (condition-case err (progn (window-old-buffer doomed) 'ok) (error (car (cdr err)))))
          (condition-case err (window-old-buffer 'foo) (error (car (cdr err))))
@@ -596,12 +596,12 @@ fn coordinates_in_window_p_decodes_a_live_window_before_its_coordinates() {
     let mut ev = Context::new();
     let out = ev
         .eval_str_each(
-            "(progn (split-window-internal (selected-window) nil nil nil) t)
+            "(progn (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil) t)
          (coordinates-in-window-p '(0 . 0) nil)
          (coordinates-in-window-p '(0 . 0) (selected-window))
          (condition-case err (coordinates-in-window-p '(0 . 0) (window-parent (selected-window)))
            (error (car (cdr err))))
-         (let ((doomed (split-window-internal (selected-window) nil nil nil)))
+         (let ((doomed (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
            (delete-window-internal doomed)
            (condition-case err (coordinates-in-window-p '(0 . 0) doomed) (error (car (cdr err)))))
          (condition-case err (coordinates-in-window-p '(0 . 0) (selected-frame))
@@ -901,7 +901,7 @@ fn windowp_true() {
 fn windowp_true_for_stale_deleted_window() {
     crate::test_utils::init_test_tracing();
     let r = runtime_eval_one_with_usable_terminal(
-        "(let ((w (split-window-internal (selected-window) nil nil nil)))
+        "(let ((w (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
            (delete-window w)
            (windowp w))",
     );
@@ -940,7 +940,7 @@ fn window_buffer_returns_buffer() {
 fn window_buffer_returns_nil_for_stale_deleted_window() {
     crate::test_utils::init_test_tracing();
     let r = runtime_eval_one_with_usable_terminal(
-        "(let ((w (split-window-internal (selected-window) nil nil nil)))
+        "(let ((w (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
            (delete-window w)
            (window-buffer w))",
     );
@@ -1016,7 +1016,7 @@ def
 fn window_point_nonselected_window_reads_marker_adjusted_by_buffer_edits() {
     crate::test_utils::init_test_tracing();
     let result = eval_one_with_frame(
-        r#"(let ((other (split-window-internal (selected-window) nil nil nil)))
+        r#"(let ((other (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
              (erase-buffer)
              (insert "    alpha
 beta
@@ -1792,7 +1792,7 @@ fn get_buffer_window_prefers_selected_window_when_buffer_is_displayed_twice() {
              (unwind-protect
                  (progn
                    (set-window-buffer (selected-window) shared)
-                   (let ((second (split-window-internal (selected-window) nil nil nil)))
+                   (let ((second (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
                      (set-window-buffer second shared)
                      (select-window second)
                      (eq (get-buffer-window shared) (selected-window))))
@@ -2067,7 +2067,7 @@ fn window_list_1_callable_paths_return_live_windows() {
 fn window_list_1_stale_window_signals_wrong_type_argument() {
     crate::test_utils::init_test_tracing();
     let r = runtime_eval_one_with_usable_terminal(
-        "(let ((w (split-window-internal (selected-window) nil nil nil)))
+        "(let ((w (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
            (delete-window w)
            (list (condition-case err (window-list-1 w nil) (error (car err)))
                  (condition-case err (funcall #'window-list-1 w nil) (error (car err)))
@@ -2271,7 +2271,7 @@ fn set_window_dedicated_p_bootstraps_nil_and_validates_designators() {
 fn split_window_internal_creates_new() {
     crate::test_utils::init_test_tracing();
     let results = eval_with_frame(
-        "(split-window-internal (selected-window) nil nil nil)
+        "(split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)
          (length (window-list))",
     );
     assert!(results[0].starts_with("OK "));
@@ -2473,7 +2473,7 @@ fn split_window_internal_enforces_arity() {
             "(condition-case err
              (split-window-internal (selected-window) nil nil nil nil nil)
            (error (car err)))
-         (let ((w (split-window-internal (selected-window) nil nil nil)))
+         (let ((w (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
            (window-live-p w))",
         )
         .iter()
@@ -2521,7 +2521,7 @@ fn split_delete_window_invalid_designators_signal_error() {
 fn delete_window_after_split() {
     crate::test_utils::init_test_tracing();
     let results = bootstrap_eval_with_frame(
-        "(let ((new-win (split-window-internal (selected-window) nil nil nil)))
+        "(let ((new-win (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
            (delete-window new-win)
            (length (window-list)))",
     );
@@ -2536,7 +2536,7 @@ fn delete_window_updates_current_buffer_to_selected_window_buffer() {
            (let* ((b1 (get-buffer-create \"dw-curbuf-a\"))
                   (b2 (get-buffer-create \"dw-curbuf-b\")))
              (set-window-buffer nil b1)
-             (let ((w2 (split-window-internal (selected-window) nil nil nil)))
+             (let ((w2 (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
                (set-window-buffer w2 b2)
                (select-window w2)
                (delete-window w2)
@@ -2559,7 +2559,7 @@ fn delete_window_and_delete_other_windows_enforce_max_arity() {
         "(condition-case err (delete-window nil nil) (error (car err)))
          (condition-case err (delete-other-windows nil nil nil) (error (car err)))
          (condition-case err
-             (let ((w2 (split-window-internal (selected-window) nil nil nil)))
+             (let ((w2 (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
                (delete-other-windows w2 nil))
            (error err))",
     );
@@ -2572,8 +2572,8 @@ fn delete_window_and_delete_other_windows_enforce_max_arity() {
 fn delete_other_windows_keeps_one() {
     crate::test_utils::init_test_tracing();
     let results = bootstrap_eval_with_frame(
-        "(split-window-internal (selected-window) nil nil nil)
-         (split-window-internal (selected-window) nil nil nil)
+        "(split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)
+         (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)
          (delete-other-windows)
          (length (window-list))",
     );
@@ -2621,7 +2621,7 @@ fn delete_other_windows_updates_current_buffer_when_kept_window_differs() {
            (let* ((b1 (get-buffer-create \"dow-curbuf-a\"))
                   (b2 (get-buffer-create \"dow-curbuf-b\")))
              (set-window-buffer nil b1)
-             (let ((w2 (split-window-internal (selected-window) nil nil nil))
+             (let ((w2 (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil))
                    (w1 (selected-window)))
                (set-window-buffer w2 b2)
                (select-window w2)
@@ -2635,7 +2635,7 @@ fn delete_other_windows_updates_current_buffer_when_kept_window_differs() {
 fn select_window_works() {
     crate::test_utils::init_test_tracing();
     let results = eval_with_frame(
-        "(let ((new-win (split-window-internal (selected-window) nil nil nil)))
+        "(let ((new-win (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
            (select-window new-win)
            (eq (selected-window) new-win))",
     );
@@ -2707,7 +2707,7 @@ fn select_window_updates_current_buffer_to_selected_window_buffer() {
            (let* ((b1 (get-buffer-create \"sw-curbuf-a\"))
                   (b2 (get-buffer-create \"sw-curbuf-b\")))
              (set-window-buffer nil b1)
-             (let ((w2 (split-window-internal (selected-window) nil nil nil)))
+             (let ((w2 (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
                (set-window-buffer w2 b2)
                (select-window w2)
                (buffer-name (current-buffer)))))",
@@ -2762,7 +2762,7 @@ fn other_window_cycles() {
     crate::test_utils::init_test_tracing();
     let results = bootstrap_eval_with_frame(
         "(let ((w1 (selected-window)))
-           (split-window-internal (selected-window) nil nil nil)
+           (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)
            (other-window 1)
            (not (eq (selected-window) w1)))",
     );
@@ -2777,7 +2777,7 @@ fn other_window_updates_current_buffer_to_selected_window_buffer() {
            (let* ((b1 (get-buffer-create \"ow-curbuf-a\"))
                   (b2 (get-buffer-create \"ow-curbuf-b\")))
              (set-window-buffer nil b1)
-             (let ((w2 (split-window-internal (selected-window) nil nil nil)))
+             (let ((w2 (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
                (set-window-buffer w2 b2)
                (other-window 1)
                (buffer-name (current-buffer)))))",
@@ -2803,7 +2803,7 @@ fn other_window_accepts_float_counts_with_floor_semantics() {
     crate::test_utils::init_test_tracing();
     let results = bootstrap_eval_with_frame(
         "(let* ((w1 (progn (delete-other-windows) (selected-window)))
-                (w2 (split-window-internal (selected-window) nil nil nil)))
+                (w2 (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
            (list
              (progn (other-window 1.5) (eq (selected-window) w2))
              (progn (select-window w1) (other-window 0.4) (eq (selected-window) w1))
@@ -2820,7 +2820,7 @@ fn other_window_enforces_max_arity() {
         "(condition-case err (other-window 1 nil nil nil) (error (car err)))
          (condition-case err
              (let ((w1 (selected-window)))
-               (split-window-internal (selected-window) nil nil nil)
+               (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)
                (other-window 1 nil nil)
                (not (eq (selected-window) w1)))
            (error err))",
@@ -2951,7 +2951,7 @@ fn window_use_time_and_old_state_queries_match_batch_defaults_and_error_predicat
                  (window-next-buffers w)
                  (window-next-buffers m)))
          (let* ((w1 (selected-window))
-                (w2 (split-window-internal (selected-window) nil nil nil))
+                (w2 (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil))
                 (m (minibuffer-window)))
            (list (window-use-time w1)
                  (window-use-time w2)
@@ -3001,7 +3001,7 @@ fn window_bump_use_time_tracks_second_most_recent_window() {
     crate::test_utils::init_test_tracing();
     let out = runtime_eval_with_usable_terminal(
         "(let* ((w1 (selected-window))
-                (w2 (split-window-internal (selected-window) nil nil nil)))
+                (w2 (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
            (list (window-use-time w1)
                  (window-use-time w2)
                  (window-bump-use-time w2)
@@ -3010,7 +3010,7 @@ fn window_bump_use_time_tracks_second_most_recent_window() {
                  (window-bump-use-time w1)))
          (list (condition-case err (window-bump-use-time 1) (error err))
                (condition-case err (window-bump-use-time nil nil) (error err))
-               (let ((w (split-window-internal (selected-window) nil nil nil)))
+               (let ((w (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
                  (delete-window w)
                  (condition-case err (window-bump-use-time w) (error (car err)))))",
     );
@@ -3028,7 +3028,7 @@ fn window_bump_use_time_shared_state_smoke() {
     let out = ev
         .eval_str_each(
             "(let* ((w1 (selected-window))
-                (w2 (split-window-internal (selected-window) nil nil nil)))
+                (w2 (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
            (list (window-use-time w1)
                  (window-use-time w2)
                  (window-bump-use-time w2)
@@ -3071,7 +3071,7 @@ fn window_vscroll_helpers_match_batch_defaults_and_error_predicates() {
                (condition-case err (set-window-vscroll nil 'foo) (error err))
                (condition-case err (window-vscroll nil nil nil) (error err))
                (condition-case err (set-window-vscroll nil 1 nil nil nil) (error err)))
-         (let ((w (split-window-internal (selected-window) nil nil nil)))
+         (let ((w (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
            (delete-window w)
            (list (condition-case err (window-vscroll w) (error (car err)))
                  (condition-case err (set-window-vscroll w 1) (error (car err)))))",
@@ -3182,7 +3182,7 @@ fn window_hscroll_and_margin_setters_match_batch_defaults_and_error_predicates()
                (condition-case err (set-window-margins 'foo 1 2) (error err))
                (condition-case err (set-window-margins nil) (error err))
                (condition-case err (set-window-margins nil 1 2 3) (error err)))
-         (let ((w (split-window-internal (selected-window) nil nil nil)))
+         (let ((w (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
            (delete-window w)
            (list (condition-case err (set-window-hscroll w 1) (error (car err)))
                  (condition-case err (set-window-margins w 1 2) (error (car err)))))",
@@ -3229,7 +3229,7 @@ fn window_fringes_and_scroll_bar_setters_match_batch_defaults_and_error_predicat
                (condition-case err (set-window-scroll-bars 'foo nil) (error err))
                (condition-case err (set-window-fringes nil) (error err))
                (condition-case err (set-window-scroll-bars) (error err)))
-         (let ((w (split-window-internal (selected-window) nil nil nil)))
+         (let ((w (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
            (delete-window w)
            (list (condition-case err (set-window-fringes w 0 0) (error (car err)))
                  (condition-case err (set-window-scroll-bars w nil) (error (car err)))))",
@@ -3318,7 +3318,7 @@ fn window_display_table_helpers_match_batch_defaults_and_set_get_semantics() {
                (condition-case err (set-window-display-table 999999 nil) (error err))
                (condition-case err (window-display-table 'foo) (error err))
                (condition-case err (set-window-display-table 'foo nil) (error err)))
-         (let ((w (split-window-internal (selected-window) nil nil nil)))
+         (let ((w (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
            (delete-window w)
            (list (condition-case err (window-display-table w) (error (car err)))
                  (condition-case err (set-window-display-table w nil) (error (car err)))))",
@@ -3356,7 +3356,7 @@ fn window_cursor_type_helpers_match_batch_defaults_and_set_get_semantics() {
                (condition-case err (set-window-cursor-type 999999 nil) (error err))
                (condition-case err (window-cursor-type 'foo) (error err))
                (condition-case err (set-window-cursor-type 'foo nil) (error err)))
-         (let ((w (split-window-internal (selected-window) nil nil nil)))
+         (let ((w (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
            (delete-window w)
            (list (condition-case err (window-cursor-type w) (error (car err)))
                  (condition-case err (set-window-cursor-type w nil) (error (car err)))))",
@@ -4334,7 +4334,7 @@ fn next_window_cycles() {
     crate::test_utils::init_test_tracing();
     let results = eval_with_frame(
         "(let ((w1 (selected-window)))
-           (split-window-internal (selected-window) nil nil nil)
+           (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)
            (let ((w2 (next-window)))
              (null (eq w1 w2))))",
     );
@@ -4347,7 +4347,7 @@ fn one_window_p_tracks_current_window_count() {
     let results = bootstrap_eval_with_frame(
         "(list (one-window-p)
                (progn
-                 (split-window-internal (selected-window) nil nil nil)
+                 (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)
                  (one-window-p)))",
     );
     assert_eq!(results[0], "OK (t nil)");
@@ -4371,10 +4371,10 @@ fn next_previous_window_enforce_max_arity() {
             "(condition-case err (next-window nil nil nil nil) (error (car err)))
          (condition-case err (previous-window nil nil nil nil) (error (car err)))
          (let ((w1 (selected-window)))
-           (split-window-internal (selected-window) nil nil nil)
+           (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)
            (windowp (next-window w1 nil nil)))
          (let ((w1 (selected-window)))
-           (split-window-internal (selected-window) nil nil nil)
+           (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)
            (windowp (previous-window w1 nil nil)))",
         )
         .iter()
@@ -4390,7 +4390,7 @@ fn next_previous_window_enforce_max_arity() {
 fn previous_window_wraps() {
     crate::test_utils::init_test_tracing();
     let results = eval_with_frame(
-        "(split-window-internal (selected-window) nil nil nil)
+        "(split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)
          (let ((w (previous-window)))
            (windowp w))",
     );
@@ -4686,14 +4686,14 @@ fn set_frame_selected_window_matches_selection_and_error_semantics() {
          (condition-case err (set-frame-selected-window nil nil) (error err))
          (condition-case err (set-frame-selected-window nil 999999) (error err))
          (let* ((w1 (selected-window))
-                (w2 (split-window-internal (selected-window) nil nil nil)))
+                (w2 (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
            (prog1
                (list (eq (set-frame-selected-window nil w2) w2)
                      (eq (selected-window) w2))
              (select-window w1)
              (delete-window w2)))
          (let* ((w1 (selected-window))
-                (w2 (split-window-internal (selected-window) nil nil nil))
+                (w2 (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil))
                 (t1 (window-use-time w1))
                 (t2 (window-use-time w2)))
            (prog1
@@ -4707,7 +4707,7 @@ fn set_frame_selected_window_matches_selection_and_error_semantics() {
                 (f2 (make-frame))
                 (w2 (progn
                       (select-frame f2)
-                      (split-window-internal (selected-window) nil nil nil))))
+                      (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil))))
            (select-frame f1)
            (prog1
                (list (eq (set-frame-selected-window f2 w2) w2)
@@ -4723,7 +4723,7 @@ fn set_frame_selected_window_matches_selection_and_error_semantics() {
                (condition-case err (set-frame-selected-window f2 w1) (error err))
              (delete-frame f2)))
          (let* ((w1 (selected-window))
-                (w2 (split-window-internal (selected-window) nil nil nil)))
+                (w2 (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
            (prog1
                (list (eq (funcall #'set-frame-selected-window nil w2) w2)
                      (eq (apply #'set-frame-selected-window (list nil w1)) w1))
@@ -4757,7 +4757,7 @@ fn old_selected_window_matches_stable_and_stale_window_semantics() {
         .eval_str_each(
             "(windowp (old-selected-window))
          (let* ((w1 (selected-window))
-                (w2 (split-window-internal (selected-window) nil nil nil)))
+                (w2 (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
            (prog1
                (list (eq (old-selected-window) w1)
                      (progn (select-window w2) (eq (old-selected-window) w1))
@@ -4769,7 +4769,7 @@ fn old_selected_window_matches_stable_and_stale_window_semantics() {
              (select-window w1)
              (delete-window w2)))
          (let* ((w1 (selected-window))
-                (w2 (split-window-internal (selected-window) nil nil nil)))
+                (w2 (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
            (prog1
                (list (progn (select-window w2) (eq (old-selected-window) w1))
                      (progn (delete-window w1) (windowp (old-selected-window)))
@@ -4809,7 +4809,7 @@ fn frame_old_selected_window_matches_batch_and_arity_semantics() {
                  (frame-old-selected-window f)
                  (frame-old-selected-window (window-frame (selected-window)))))
          (let* ((w1 (selected-window))
-                (w2 (split-window-internal (selected-window) nil nil nil)))
+                (w2 (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
            ;; GNU `Fframe_old_selected_window` returns
            ;; `frame->old_selected_window`, which is updated only
            ;; by `window_change_record` (run from
@@ -9191,7 +9191,7 @@ fn deleting_a_window_crosses_the_menu_bar_rebuild_boundary() {
     let buffer = ev.buffers.create_buffer("delete-window-menu-boundary");
     ev.buffers.set_current(buffer);
     let frame_id = ev.frames.create_frame("F1", 800, 600, buffer);
-    ev.eval_str("(split-window-internal (selected-window) nil nil nil)")
+    ev.eval_str("(split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)")
         .expect("split the selected window");
     let deleted_window = ev
         .frames
@@ -9216,7 +9216,7 @@ fn only_nonselected_window_redisplay_crosses_the_menu_bar_rebuild_boundary() {
     let buffer = ev.buffers.create_buffer("window-redisplay-menu-boundary");
     ev.buffers.set_current(buffer);
     let frame_id = ev.frames.create_frame("F1", 800, 600, buffer);
-    ev.eval_str("(split-window-internal (selected-window) nil nil nil)")
+    ev.eval_str("(split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)")
         .expect("split the selected window");
     let windows = ev.frames.get(frame_id).expect("frame").window_list();
     let selected = ev.frames.get(frame_id).expect("frame").selected_window;

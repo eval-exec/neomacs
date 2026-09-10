@@ -15278,7 +15278,7 @@ fn internal_save_selected_window_helpers_restore_selected_window() {
     let result = eval
         .eval_str(
             r#"(let* ((orig (selected-window))
-                  (new (split-window-internal (selected-window) nil nil nil)))
+                  (new (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
              (select-window new)
              (save-selected-window
                (select-window orig)

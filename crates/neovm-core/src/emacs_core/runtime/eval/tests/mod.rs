@@ -11266,7 +11266,7 @@ fn run_window_scroll_functions_uses_scrolled_window_buffer_context() {
                   (buf2 (get-buffer-create \"scroll-b\")))
              (set-buffer buf1)
              (set-window-buffer (selected-window) buf1)
-             (let ((w2 (split-window-internal (selected-window) nil nil nil)))
+             (let ((w2 (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
                (set-window-buffer w2 buf2)
                (set-buffer buf2)
                (setq window-scroll-functions
@@ -11289,7 +11289,7 @@ fn run_window_scroll_functions_reads_displayed_buffer_local_hook() {
                   (buf2 (get-buffer-create \"scroll-local-b\")))
              (set-buffer buf1)
                (set-window-buffer (selected-window) buf1)
-               (let ((w2 (split-window-internal (selected-window) nil nil nil)))
+               (let ((w2 (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
                  (set-window-buffer w2 buf2)
                (let ((orig (current-buffer)))
                  (set-buffer buf2)
@@ -11456,7 +11456,7 @@ fn run_window_configuration_change_hook_uses_window_buffer_context() {
     )
     .expect("selected window buffer");
     let split_window = ev
-        .eval_str("(split-window-internal (selected-window) nil nil nil)")
+        .eval_str("(split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)")
         .expect("split window");
     crate::emacs_core::window_cmds::builtin_set_window_buffer(
         &mut ev,
@@ -11570,7 +11570,7 @@ fn redisplay_runs_window_change_functions_with_selected_frame_context() {
            (let* ((buf1 (get-buffer-create \"wcf-a\"))
                   (buf2 (get-buffer-create \"wcf-b\")))
              (set-window-buffer (selected-window) buf1)
-             (let ((w2 (split-window-internal (selected-window) nil nil nil)))
+             (let ((w2 (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
                (set-window-buffer w2 buf2)
                (setq window-size-change-functions
                      (list (lambda (frame)
@@ -12952,7 +12952,7 @@ fn save_window_excursion_restores_window_layout_after_split() {
             (let ((wconfig (current-window-configuration)))
               (unwind-protect
                   (progn
-                    (split-window-internal (selected-window) nil nil nil)
+                    (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)
                     (length (window-list)))
                 (set-window-configuration wconfig)))
             (length (window-list))
@@ -13012,7 +13012,7 @@ fn set_window_configuration_reconciles_restored_batch_frame_geometry() {
                               (pw61-pixel-edges (frame-root-window)))))
                    (let ((configuration (current-window-configuration)))
                      (unwind-protect
-                         (split-window-internal (selected-window) nil nil nil)
+                         (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)
                        (set-window-configuration configuration)))
                    (list before
                          (window-total-height (frame-root-window))

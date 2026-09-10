@@ -3643,7 +3643,7 @@ fn vm_frame_selected_window_builtins_use_shared_runtime_state() {
     assert_eq!(
         vm_eval_str(
             r#"(let* ((w1 (selected-window))
-                      (w2 (split-window-internal (selected-window) nil nil nil)))
+                      (w2 (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
                  (prog1
                      (list (eq (frame-old-selected-window) nil)
                            (eq (set-frame-selected-window nil w2) w2)
@@ -3737,7 +3737,7 @@ fn vm_window_scroll_and_history_builtins_use_shared_runtime_state() {
     assert_eq!(
         vm_eval_str(
             r#"(let* ((w1 (selected-window))
-                      (w2 (split-window-internal (selected-window) nil nil nil)))
+                      (w2 (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
                  (list (window-use-time w1)
                        (window-use-time w2)
                        (window-bump-use-time w2)
