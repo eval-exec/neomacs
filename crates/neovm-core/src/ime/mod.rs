@@ -2,10 +2,12 @@
 
 mod composition;
 mod context;
+mod request;
 mod selection;
 mod surrounding;
 
 pub(crate) use context::CompositionState;
+pub use request::{ImeEditorError, ImeRequest};
 use context::InsertionAnchor;
 
 #[cfg(test)]

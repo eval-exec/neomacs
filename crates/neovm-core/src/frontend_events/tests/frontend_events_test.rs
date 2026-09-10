@@ -4,6 +4,7 @@ use super::*;
 #[derive(Debug, PartialEq, Eq)]
 enum FrontendEventClass {
     Command,
+    ReadControl,
     LispSpecial,
     Internal,
 }
@@ -73,6 +74,7 @@ fn assert_policy(
 ) {
     let actual_class = match semantics(&event) {
         FrontendEventSemantics::Command => FrontendEventClass::Command,
+        FrontendEventSemantics::ReadControl => FrontendEventClass::ReadControl,
         FrontendEventSemantics::Internal(_) => FrontendEventClass::Internal,
         FrontendEventSemantics::MouseMotion
         | FrontendEventSemantics::ServiceDuringWait

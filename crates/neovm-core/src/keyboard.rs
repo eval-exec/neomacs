@@ -1263,6 +1263,8 @@ pub enum InputEvent {
         token: neomacs_display_protocol::input_latency::InputToken,
         event: Box<InputEvent>,
     },
+    /// Ordered request answered with owned data at the next input read.
+    ImeRequest(crate::ime::ImeRequest),
     /// Ordered, context-qualified text conversion on the VM thread.
     Ime {
         session: neovm_host_abi::ime::ImeSessionId,
@@ -5142,6 +5144,10 @@ impl crate::emacs_core::eval::Context {
             InputEvent::Observed { token, event } => {
                 neomacs_display_protocol::input_latency::consumed(token);
                 self.handle_read_char_input_event(*event, tty_input_decoding)
+            }
+            InputEvent::ImeRequest(request) => {
+                request.dispatch(self)?;
+                Ok(None)
             }
             InputEvent::Ime { session, operation, emacs_frame_id } => {
                 self.route_keyboard_input_to_frame(emacs_frame_id);
