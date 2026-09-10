@@ -5,6 +5,21 @@ use super::{
 };
 use neovm_core::emacs_core::value::Value;
 
+#[test]
+fn terminal_size_query_rejects_empty_extents_before_falling_back() {
+    for queried in [None, Some((0, 0)), Some((80, 0)), Some((0, 25))] {
+        assert_eq!(
+            super::resolve_terminal_size_cells(queried, || Some((160, 50))),
+            Some((160, 50))
+        );
+        assert_eq!(super::resolve_terminal_size_cells(queried, || None), None);
+    }
+    assert_eq!(
+        super::resolve_terminal_size_cells(Some((100, 40)), || panic!("unneeded fallback")),
+        Some((100, 40))
+    );
+}
+
 /// A terminal database standing in for one terminfo entry's colour block --
 /// GNU's `op`, `AF`, `AB` and `Co`, which `init_tty` reads together
 /// (src/term.c:4602-4616).
