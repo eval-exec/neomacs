@@ -678,7 +678,7 @@ jobs:
             --no-fail-fast
 
       - name: Run browser adapter JavaScript contracts
-        run: node --test crates/neomacs-wasm/web/*.test.mjs
+        run: node --test 'crates/neomacs-wasm/web/**/*.test.mjs'
 
       - name: Assemble browser distribution
         run: >-
