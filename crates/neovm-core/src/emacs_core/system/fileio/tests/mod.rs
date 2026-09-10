@@ -2581,6 +2581,37 @@ fn installed_filesystem_reports_unavailable_capacity_as_nil_like_gnu() {
 
 #[cfg(unix)]
 #[test]
+fn file_modes_signals_permission_denied_instead_of_claiming_a_missing_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tmp");
+    fs::create_dir_all(&root).unwrap();
+    let directory = tempfile::Builder::new()
+        .prefix("file-mode-access-")
+        .tempdir_in(root)
+        .unwrap();
+    let path = directory.path().join("note");
+    fs::write(&path, b"contents").unwrap();
+    let mut eval = Context::new();
+    fs::set_permissions(directory.path(), fs::Permissions::from_mode(0)).unwrap();
+    // A privileged test process may bypass directory search permissions.
+    let inaccessible = fs::metadata(&path)
+        .is_err_and(|error| error.kind() == ErrorKind::PermissionDenied);
+    let result = builtin_file_modes(
+        &mut eval,
+        vec![Value::heap_string(path_to_lisp_file_name(&path))],
+    );
+    fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    if inaccessible {
+        match result.expect_err("access failure is not evidence that the file is missing") {
+            // GNU's permission-denied condition is a subtype of file-error.
+            Flow::Signal(signal) => assert_eq!(signal.symbol_name(), "permission-denied"),
+            other => panic!("expected file-error, got {other:?}"),
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn builtin_file_modes_treats_any_non_nil_flag_as_nofollow() {
     crate::test_utils::init_test_tracing();
     use std::os::unix::fs::PermissionsExt;
