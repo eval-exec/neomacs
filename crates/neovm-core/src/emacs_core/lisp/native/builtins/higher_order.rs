@@ -118,11 +118,20 @@ where
         ValueKind::Cons => {
             let mut cursor = sequence;
             let mut mapped = 0usize;
+            // GNU walks the list in a stack local that its conservative
+            // collector scans for free (`mapcar1`, src/fns.c).  Rooting the
+            // cursor with a fresh push per element instead made the VM root
+            // vector grow by one entry for every element of the sequence and
+            // never shrink until the whole map finished -- for a mapcar over
+            // an N-element list, N roots to keep one live cursor reachable.
+            // Only the current cursor needs to be a root, so it gets one slot,
+            // rewritten in place.
+            let cursor_root = eval.push_vm_frame_root_slot(cursor);
             for _ in 0..len {
                 if !cursor.is_cons() {
                     return Ok(mapped);
                 }
-                eval.push_vm_frame_root(cursor);
+                eval.set_vm_frame_root_slot(cursor_root, cursor);
                 let item = cursor.cons_car();
                 let value = call(eval, item)?;
                 if let Some(results) = values.as_deref_mut() {
