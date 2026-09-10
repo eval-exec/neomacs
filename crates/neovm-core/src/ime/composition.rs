@@ -116,6 +116,22 @@ impl crate::Context {
             );
         }
         let updated = self.ime_anchor();
+        use super::conversion::ConversionEdit;
+        let at = crate::buffer::LispCharPos1::new(start_char);
+        let deletion = (!removed.is_empty()).then(|| ConversionEdit::DeletionBeforePoint {
+            at,
+            text: if target_multibyte {
+                crate::heap_types::LispString::from_emacs_bytes(removed)
+            } else {
+                crate::heap_types::LispString::from_unibyte(removed)
+            },
+        });
+        let insertion = (!replacement.is_empty()).then_some(ConversionEdit::Insertion {
+            at,
+            text: replacement,
+        });
+        let event = self
+            .publish_conversion_edits(active.anchor.buffer, deletion.into_iter().chain(insertion));
         editfns::signal_after_text_change(self, change)?;
         if let Some(anchor) = updated
             && self.ime_anchor() == Some(anchor)
@@ -126,35 +142,9 @@ impl crate::Context {
                 start: active.start,
             });
         }
-        let mut edits = Vec::new();
-        let buffer_value = Value::make_buffer(active.anchor.buffer);
-        if !text.is_empty() {
-            edits.push(Value::list(vec![
-                buffer_value,
-                Value::fixnum(start_char),
-                Value::fixnum(start_char + replacement.schars() as i64),
-                Value::heap_string(replacement),
-            ]));
-        }
-        if !removed.is_empty() {
-            edits.push(Value::list(vec![
-                buffer_value,
-                Value::fixnum(start_char),
-                Value::fixnum(start_char),
-                Value::heap_string(if target_multibyte {
-                    crate::heap_types::LispString::from_emacs_bytes(removed)
-                } else {
-                    crate::heap_types::LispString::from_unibyte(removed)
-                }),
-            ]));
-        }
-        if edits.is_empty() {
-            return Ok(Value::NIL);
-        }
         // GNU read_char returns this command event after conversion edits.
         // Lisp's analyze-text-conversion owns post-self-insert hooks, mode
         // integration, and undo amalgamation; do not duplicate those here.
-        self.assign("text-conversion-edits", Value::list(edits));
-        Ok(Value::symbol("text-conversion"))
+        Ok(event)
     }
 }

@@ -2,6 +2,7 @@
 
 mod composition;
 mod context;
+mod conversion;
 mod export;
 mod replacement;
 mod request;

@@ -65,6 +65,34 @@ fn acknowledged_replacement_delivers_a_text_conversion_event() {
             .unwrap()
             .is_symbol_named("text-conversion")
     );
+    assert!(
+        evaluator
+            .eval_str(
+                r##"(let ((inserted (car text-conversion-edits))
+                                      (deleted (cadr text-conversion-edits)))
+      (and (markerp (nth 1 inserted)) (markerp (nth 2 inserted))
+           (marker-insertion-type (nth 2 inserted))
+           (markerp (nth 1 deleted)) (eq (nth 1 deleted) (nth 2 deleted))
+           (eq (nth 3 deleted) t)))"##
+            )
+            .unwrap()
+            .is_truthy()
+    );
+    evaluator
+        .eval_str(r##"(save-excursion (goto-char 1) (insert "!"))"##)
+        .unwrap();
+    assert!(
+        evaluator
+            .eval_str(
+                r##"(equal
+      (mapcar (lambda (edit) (list (marker-position (nth 1 edit))
+                                  (marker-position (nth 2 edit))))
+              text-conversion-edits)
+      '((8 9) (8 8)))"##
+            )
+            .unwrap()
+            .is_truthy()
+    );
 }
 
 #[test]
