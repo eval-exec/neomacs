@@ -17,8 +17,8 @@ impl Context {
 
     pub(crate) fn eval_lambda_body_value(&mut self, body: Value) -> EvalResult {
         let depth = self.depth;
-        if depth < STACK_GROWTH_PROBE_START_DEPTH
-            || !depth.is_multiple_of(STACK_GROWTH_PROBE_INTERVAL)
+        if depth < super::super::stack_growth::PROBE_INTERVAL
+            || !depth.is_multiple_of(super::super::stack_growth::PROBE_INTERVAL)
         {
             return self.eval_lambda_body_forms(body);
         }
@@ -33,8 +33,8 @@ impl Context {
         super::native_stack::maybe_grow_tracking_jit_limit(
             self,
             Context::jit_stack_limit_mut,
-            EVAL_STACK_RED_ZONE,
-            EVAL_STACK_SEGMENT,
+            super::super::stack_growth::RED_ZONE,
+            super::super::stack_growth::SEGMENT,
             |ctx| ctx.eval_lambda_body_forms(body),
         )
     }
@@ -68,6 +68,9 @@ impl Context {
     /// 2. Non-cons → self-evaluating (return as-is)
     /// 3. Cons → special form / macro / function call
     pub fn eval_sub(&mut self, form: Value) -> EvalResult {
+        #[cfg(target_family = "wasm")]
+        { return self.eval_sub_continuation(form); }
+
         crate::emacs_core::subr::leaf::debug_assert_no_leaf_active!("eval");
         // 1. Symbol → variable lookup (GNU eval.c:2554-2562)
         // Also unwrap symbol-with-pos when symbols-with-pos-enabled is true.
