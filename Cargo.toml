@@ -63,7 +63,7 @@ passthrough = ["CARGO_INCREMENTAL"]
 image = "ghcr.io/cross-rs/x86_64-pc-windows-gnu:edge"
 
 [workspace.package]
-version = "0.0.17"
+version = "0.0.18"
 edition = "2024"
 authors = ["Eval Exec <execvy@gmail.com>"]
 license = "GPL-3.0-or-later"
