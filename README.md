@@ -61,8 +61,6 @@ the test oracle, so every rewritten subsystem is verified to behave identically.
 
 ## Showcase
 
-[![NEO Emacs Showcase Video](https://img.youtube.com/vi/WZRWWuuNZX0/maxresdefault.jpg)](https://youtu.be/WZRWWuuNZX0?si=yHUy1lUDTznUbTMx)
-
 **Cursor, buffer-switch, and scroll animations** — GPU-rendered at display refresh rate:
 
 https://github.com/user-attachments/assets/85b7ee7b-3f4a-4cd2-a84f-86a91d052f11
