@@ -3826,9 +3826,20 @@ fn vm_window_chrome_height_builtins_use_last_redisplay_snapshot() {
     crate::test_utils::init_test_tracing();
     assert_eq!(
         vm_eval_with_init_str(
+            // GNU gates each height on whether the window WANTS that line
+            // (`window.h` WINDOW_{MODE,HEADER,TAB}_LINE_HEIGHT, each
+            // `window_wants_*` ? CURRENT_*_HEIGHT : 0), so a recorded height is
+            // only reachable once the format variable makes the line present.
+            // Both halves are checked here: the default buffer has only a mode
+            // line, and enabling the other two exposes the snapshot's heights.
             r#"(list (window-mode-line-height)
                      (window-header-line-height)
-                     (window-tab-line-height))"#,
+                     (window-tab-line-height)
+                     (progn
+                       (setq header-line-format "h" tab-line-format "t")
+                       (list (window-mode-line-height)
+                             (window-header-line-height)
+                             (window-tab-line-height))))"#,
             |eval| {
                 let fid = crate::emacs_core::window_cmds::ensure_selected_frame_id_in_state(
                     &mut eval.frames,
@@ -3847,7 +3858,7 @@ fn vm_window_chrome_height_builtins_use_last_redisplay_snapshot() {
                     }]);
             }
         ),
-        "OK (35 35 34)"
+        "OK (35 0 0 (35 35 34))"
     );
 }
 

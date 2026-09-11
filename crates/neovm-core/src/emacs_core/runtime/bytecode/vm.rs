@@ -1436,6 +1436,21 @@ enum InterpreterFrameCompletion {
     Exit(EvalResult),
 }
 
+/// What the dispatch loop must do after the nonlocal-flow path has run.
+///
+/// `resume_flow!` cannot simply call a function: it has to `continue`, to
+/// `continue 'frame`, or to return. Naming the three outcomes lets the work
+/// live in one out-of-line body while the loop keeps only the three-way jump.
+enum ResumeFlowOutcome {
+    /// A VM handler in this frame caught it; reacquire the cursor and resume
+    /// opcode dispatch.
+    ResumeOp,
+    /// The frame chain unwound to a suspended caller; restart the frame loop.
+    ResumeFrame,
+    /// Nothing in this driver handles it.
+    Exit(EvalResult),
+}
+
 /// Result of GNU's ordinary `Breturn` transition.
 ///
 /// A successful bytecode return is a tagged value, not a general Lisp control
@@ -3368,10 +3383,16 @@ impl<'a> Vm<'a> {
             // body pushes and pops `callers`, so nothing may hold a reference
             // into it across those. This is also where a `continue 'frame`
             // lands, which is exactly where a push has just happened.
-            let (func, frame_base, code) = {
+            // Copy the frame's `InterpreterFunction` handle out rather than the
+            // `&ByteCodeFunction` it yields: the reference would keep `callers`
+            // immutably borrowed for the whole loop body, and the cold
+            // nonlocal-flow path needs `&mut callers`. The handle is a
+            // `NonNull` and is `Copy`, so `func` below borrows this local.
+            let (function, frame_base, code) = {
                 let current = callers.active();
-                (current.function.code(), current.frame_base, current.code)
+                (current.function, current.frame_base, current.code)
             };
+            let func = function.code();
             // GNU reloads `bytestr_data` and `vectorp` from the frame at
             // `Breturn` rather than re-deriving them; the frame carries the
             // same pair, resolved when it was built.
@@ -3423,38 +3444,24 @@ impl<'a> Vm<'a> {
             // can run unwind-protect cleanup forms (arbitrary Lisp / GC).
             macro_rules! resume_flow {
                 ($flow:expr) => {{
-                    let resume = {
-                        let aux = aux_stack.current_mut();
-                        self.resume_nonlocal(
-                            func,
-                            &mut pc_local,
-                            &mut aux.handlers,
-                            &mut aux.bind_stack,
-                            $flow,
-                        )
-                    };
-                    match resume {
-                        Ok(()) => {
+                    match self.resume_flow_out_of_line(
+                        &mut pc_local,
+                        osr_tried,
+                        quitcounter,
+                        driver_quitcounter,
+                        aux_stack,
+                        callers,
+                        $flow,
+                    ) {
+                        ResumeFlowOutcome::ResumeOp => {
                             cursor = StackCursor::acquire(&mut self.ctx);
                             continue;
                         }
-                        Err(flow) => {
-                            callers
-                                .active_mut()
-                                .save_execution_state(pc_local, osr_tried);
-                            *driver_quitcounter = quitcounter;
-                            match self.complete_interpreter_frame_chain(
-                                callers,
-                                aux_stack,
-                                Err(flow),
-                            ) {
-                                InterpreterFrameCompletion::Resume => {
-                                    cursor = StackCursor::acquire(self.ctx);
-                                    continue 'frame;
-                                }
-                                InterpreterFrameCompletion::Exit(result) => return result,
-                            }
+                        ResumeFlowOutcome::ResumeFrame => {
+                            cursor = StackCursor::acquire(self.ctx);
+                            continue 'frame;
                         }
+                        ResumeFlowOutcome::Exit(result) => return result,
                     }
                 }};
             }
@@ -7640,6 +7647,52 @@ impl<'a> Vm<'a> {
             _ => VR_SLOW_OTHER,
         };
         (class, via_alias)
+    }
+
+    /// The whole body of `resume_flow!`, out of line.
+    ///
+    /// Every dispatch site that can signal expanded this inline. Twelve sites
+    /// at ~2,900 bytes each made it 34,875 of `run_loop`'s 148,064 bytes -- for
+    /// a path worth ~0.4K Ir per org-editing operation. GNU's entire
+    /// `exec_byte_code` is 17,530 bytes (and GCC splits a `.cold` part out of
+    /// even that), and this loop is front-end bound: one extra inlined body in
+    /// it measured 7.1% more CYCLES at 1.0009x the instructions. So the bytes
+    /// are the cost here, not the branch.
+    ///
+    /// `resume_nonlocal` ignores its `_func` argument, so the frame's code is
+    /// re-derived from `callers` rather than threaded in -- passing it would
+    /// hold `callers` borrowed across the `&mut` uses below.
+    #[cold]
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)] // one per loop local the cold path touches
+    fn resume_flow_out_of_line(
+        &mut self,
+        pc_local: &mut usize,
+        osr_tried: bool,
+        quitcounter: u8,
+        driver_quitcounter: &mut u8,
+        aux_stack: &mut InterpreterFrameAuxStack,
+        callers: &mut InterpreterCallerStack,
+        flow: Flow,
+    ) -> ResumeFlowOutcome {
+        let resume = {
+            let func = callers.active().function.code();
+            let aux = aux_stack.current_mut();
+            self.resume_nonlocal(func, pc_local, &mut aux.handlers, &mut aux.bind_stack, flow)
+        };
+        match resume {
+            Ok(()) => ResumeFlowOutcome::ResumeOp,
+            Err(flow) => {
+                callers
+                    .active_mut()
+                    .save_execution_state(*pc_local, osr_tried);
+                *driver_quitcounter = quitcounter;
+                match self.complete_interpreter_frame_chain(callers, aux_stack, Err(flow)) {
+                    InterpreterFrameCompletion::Resume => ResumeFlowOutcome::ResumeFrame,
+                    InterpreterFrameCompletion::Exit(result) => ResumeFlowOutcome::Exit(result),
+                }
+            }
+        }
     }
 
     fn resume_nonlocal(
