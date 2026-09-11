@@ -19,11 +19,12 @@
 //! are implemented from scratch with simple recursive descent.
 
 use super::error::{EvalResult, Flow, signal};
-use super::intern::resolve_sym;
+use super::intern::{SymId, resolve_sym};
 use super::value::*;
 use crate::buffer::{EmacsByteLen, EmacsBytePos, EmacsByteRange, TextExtent};
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::expect_min_args;
+use smallvec::SmallVec;
 use strum::{EnumString, IntoStaticStr};
 
 // ---------------------------------------------------------------------------
@@ -422,7 +423,7 @@ fn serialize_cons_object(
     })?;
     let is_alist = matches!(items.first().map(|v| v.kind()), Some(ValueKind::Cons));
 
-    let mut seen: Vec<String> = Vec::new();
+    let mut seen: SmallVec<[SymId; 16]> = SmallVec::new();
     let mut wrote_any = false;
     out.push('{');
 
@@ -437,13 +438,13 @@ fn serialize_cons_object(
             let key = item.cons_car();
             let val = item.cons_cdr();
             // Alist keys are emitted verbatim (no colon stripping).
-            let name = symbol_object_key(&key)?;
-            if push_unique(&mut seen, &name) {
+            let (symbol, name) = symbol_object_key(&key)?;
+            if push_unique(&mut seen, symbol) {
                 if wrote_any {
                     out.push(',');
                 }
                 wrote_any = true;
-                json_encode_string_into(out, &name);
+                json_encode_string_into(out, name);
                 out.push(':');
                 serialize_into(out, &val, opts, depth + 1)?;
             }
@@ -451,7 +452,7 @@ fn serialize_cons_object(
     } else {
         let mut i = 0;
         while i < items.len() {
-            let name = symbol_object_key(&items[i])?;
+            let (symbol, name) = symbol_object_key(&items[i])?;
             // A plist must supply a value for every key.
             let val = *items.get(i + 1).ok_or_else(|| {
                 signal(
@@ -462,12 +463,12 @@ fn serialize_cons_object(
             i += 2;
             // Dedup on the raw symbol name (symbol identity, like GNU's
             // symset) but emit the colon-stripped form.
-            if push_unique(&mut seen, &name) {
+            if push_unique(&mut seen, symbol) {
                 if wrote_any {
                     out.push(',');
                 }
                 wrote_any = true;
-                json_encode_string_into(out, strip_plist_colon(&name));
+                json_encode_string_into(out, strip_plist_colon(name));
                 out.push(':');
                 serialize_into(out, &val, opts, depth + 1)?;
             }
@@ -477,13 +478,19 @@ fn serialize_cons_object(
     Ok(())
 }
 
-/// Record `name` as seen; return true if it was not already present
+/// Record `symbol` as seen; return true if it was not already present
 /// (first-occurrence-wins semantics).
-fn push_unique(seen: &mut Vec<String>, name: &str) -> bool {
-    if seen.iter().any(|s| s == name) {
+///
+/// Keyed on the symbol id, which is what GNU's `symset` compares and what the
+/// call sites always meant: interning makes identity exact, so this replaces a
+/// string compare per probe -- and a `String` allocation per key -- with a
+/// `u32` compare. Objects carry a handful of keys, so a linear scan over a
+/// stack-resident `SmallVec` beats hashing them.
+fn push_unique(seen: &mut SmallVec<[SymId; 16]>, symbol: SymId) -> bool {
+    if seen.contains(&symbol) {
         false
     } else {
-        seen.push(name.to_owned());
+        seen.push(symbol);
         true
     }
 }
@@ -527,9 +534,15 @@ fn hash_key_to_string(key: &HashKey) -> Result<String, Flow> {
 /// serializing alists).
 ///
 /// Emacs `json-serialize` expects symbol keys in alists.
-fn symbol_object_key(value: &Value) -> Result<String, Flow> {
+/// The object key for a symbol, as its interned name and its id.
+///
+/// The name is borrowed: `resolve_sym` already yields `&'static str`, so the
+/// former `to_owned()` allocated a `String` per key for nothing. The id is
+/// returned alongside because duplicate detection compares symbol IDENTITY,
+/// which is a `SymId` compare rather than a string compare.
+fn symbol_object_key(value: &Value) -> Result<(SymId, &'static str), Flow> {
     match value.kind() {
-        ValueKind::Symbol(id) => Ok(resolve_sym(id).to_owned()),
+        ValueKind::Symbol(id) => Ok((id, resolve_sym(id))),
         _ => Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("symbolp"), *value],
