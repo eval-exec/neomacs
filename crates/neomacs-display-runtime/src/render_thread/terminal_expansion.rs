@@ -1,5 +1,6 @@
 //! Renderer-owned NeoTerm glyphs composed over an immutable editor frame.
 
+use neomacs_display_protocol::FrameFaceMap;
 use crate::core::face::Face;
 use crate::core::frame_glyphs::{FrameGlyph, FrameGlyphBuffer};
 use crate::core::types::FaceId;
@@ -18,11 +19,11 @@ pub(super) const TERMINAL_FACE_ID_MASK: u32 = 0x0FFF_FFFF;
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct TerminalExpansion {
     glyphs: Vec<FrameGlyph>,
-    faces: HashMap<FaceId, Face>,
+    faces: FrameFaceMap,
 }
 
 impl TerminalExpansion {
-    pub(super) fn new(glyphs: Vec<FrameGlyph>, faces: HashMap<FaceId, Face>) -> Self {
+    pub(super) fn new(glyphs: Vec<FrameGlyph>, faces: FrameFaceMap) -> Self {
         Self { glyphs, faces }
     }
 
@@ -72,7 +73,7 @@ impl TerminalExpansion {
         self.glyphs.extend(other.glyphs);
     }
 
-    pub(super) fn faces(&self) -> &HashMap<FaceId, Face> {
+    pub(super) fn faces(&self) -> &FrameFaceMap {
         &self.faces
     }
 

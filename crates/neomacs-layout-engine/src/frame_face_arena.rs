@@ -9,11 +9,12 @@
 //! then saw dozens of "modified" faces per keystroke and mode-line composed
 //! clusters missed their caches on every frame.
 
+use neomacs_display_protocol::FrameFaceMap;
 use neomacs_display_protocol::face::{BasicFaceId, Face};
 use neomacs_display_protocol::types::FaceId;
 use rustc_hash::FxHasher;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::hash::Hasher;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
@@ -122,7 +123,7 @@ pub(crate) struct FrameFaceArena {
     owner: Arc<FrameFaceOwner>,
     snapshot: Arc<FrameFaceSnapshot>,
     generation: FrameFaceGeneration,
-    faces: Arc<HashMap<FaceId, Face>>,
+    faces: Arc<FrameFaceMap>,
     /// Persistent realization-identity -> stable id map (GNU face_cache
     /// analogue). Survives seals so the same content keeps the same id
     /// across frames regardless of realization order.
@@ -200,7 +201,7 @@ struct FrameFaceAttemptState {
     base_snapshot: Arc<FrameFaceSnapshot>,
     generation: FrameFaceGeneration,
     next_face_id: u32,
-    faces: HashMap<FaceId, Face>,
+    faces: FrameFaceMap,
     /// Read-only view of the arena's persistent identity map.
     realized: Arc<RealizedIdentityMap>,
     /// Identities first realized in this attempt; folded into the arena at
@@ -324,8 +325,8 @@ impl Default for FrameFaceArena {
             owner: Arc::new(FrameFaceOwner),
             snapshot: Arc::new(FrameFaceSnapshot),
             generation: FrameFaceGeneration(1),
-            faces: Arc::new(HashMap::new()),
-            realized: Arc::new(HashMap::new()),
+            faces: Arc::new(HashMap::default()),
+            realized: Arc::new(HashMap::default()),
             next_face_id: BasicFaceId::SENTINEL,
         }
     }
@@ -343,10 +344,10 @@ impl FrameFaceArena {
                 base_snapshot: Arc::clone(&self.snapshot),
                 generation: self.generation,
                 next_face_id: self.next_face_id.max(BasicFaceId::SENTINEL),
-                faces: HashMap::new(),
+                faces: HashMap::default(),
                 realized: Arc::clone(&self.realized),
-                fresh_realized: HashMap::new(),
-                resolved_memo: HashMap::new(),
+                fresh_realized: HashMap::default(),
+                resolved_memo: HashMap::default(),
             })),
         }
     }
@@ -357,8 +358,8 @@ impl FrameFaceArena {
             owner: Arc::clone(&self.owner),
             snapshot: Arc::new(FrameFaceSnapshot),
             generation: self.generation.next(),
-            faces: Arc::new(HashMap::new()),
-            realized: Arc::new(HashMap::new()),
+            faces: Arc::new(HashMap::default()),
+            realized: Arc::new(HashMap::default()),
             next_face_id: BasicFaceId::SENTINEL,
         }
     }
@@ -437,10 +438,10 @@ impl FrameFaceAttempt {
                 base_snapshot: Arc::new(FrameFaceSnapshot),
                 generation: FrameFaceGeneration(1),
                 next_face_id: next_face_id.max(BasicFaceId::SENTINEL),
-                faces: HashMap::new(),
-                realized: Arc::new(HashMap::new()),
-                fresh_realized: HashMap::new(),
-                resolved_memo: HashMap::new(),
+                faces: HashMap::default(),
+                realized: Arc::new(HashMap::default()),
+                fresh_realized: HashMap::default(),
+                resolved_memo: HashMap::default(),
             })),
         }
     }
@@ -592,7 +593,7 @@ impl FrameFaceAttempt {
         Ok(face_id)
     }
 
-    pub(crate) fn faces(&self) -> HashMap<FaceId, Face> {
+    pub(crate) fn faces(&self) -> FrameFaceMap {
         self.state.borrow().faces.clone()
     }
 
@@ -645,7 +646,7 @@ impl FrameFaceAttempt {
     /// re-key face identities.
     pub(crate) fn seal(
         &self,
-        finalized_faces: HashMap<FaceId, Face>,
+        finalized_faces: FrameFaceMap,
     ) -> Result<FrameFaceArena, FrameFaceSealError> {
         let state = self.state.borrow();
         let mut published: Vec<FaceId> = state.faces.keys().copied().collect();

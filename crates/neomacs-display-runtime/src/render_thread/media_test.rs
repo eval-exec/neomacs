@@ -1,3 +1,4 @@
+use neomacs_display_protocol::FrameFaceMap;
 use super::*;
 
 #[cfg(feature = "neo-term")]
@@ -201,7 +202,7 @@ fn terminal_face_interning_keeps_distinct_opacity_faces_distinct() {
         default_fg: Color::WHITE,
     };
     let mut glyphs = Vec::new();
-    let mut faces = HashMap::new();
+    let mut faces = FrameFaceMap::default();
 
     RenderApp::expand_terminal_cells(
         &content,

@@ -15,7 +15,7 @@
 use super::{FrameId, LispCharPos1, WindowDisplaySnapshot, WindowId};
 use neomacs_display_protocol::frame_glyphs::PresentedWindowRegions;
 use neomacs_display_protocol::types::Rect as TransportRect;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::marker::PhantomData;
 use std::num::NonZeroU64;
 
@@ -136,7 +136,7 @@ impl PresentationGeometry {
         presentation: PresentationId,
         snapshots: impl IntoIterator<Item = WindowDisplaySnapshot>,
     ) -> Result<Self, GeometryError> {
-        let mut windows = HashMap::new();
+        let mut windows = HashMap::default();
         for snapshot in snapshots {
             let window = PresentationWindow::from_snapshot(snapshot)?;
             let id = window.id;
@@ -236,7 +236,7 @@ impl PresentationWindow {
             .regions_materialized
             .then(|| WindowRegions::from_transport(&snapshot.regions))
             .transpose()?;
-        let mut body_rows = HashMap::new();
+        let mut body_rows = HashMap::default();
         for row in &snapshot.body_rows {
             if body_rows.insert(row.output_row, *row).is_some() {
                 return Err(GeometryError::DuplicateBodyRow {

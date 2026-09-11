@@ -4,7 +4,7 @@ use crate::core::frame_glyphs::{CursorStyle, FrameGlyphBuffer, GlyphRowRole, Phy
 use crate::thread_comm::ThreadComms;
 use neomacs_display_protocol::types::FaceId;
 use neomacs_display_protocol::types::{Color, DisplayWindowId};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::sync::{Arc, Mutex};
 
 fn make_test_app() -> RenderApp {
@@ -63,14 +63,14 @@ fn face_change_summary_distinguishes_added_modified_and_removed_faces() {
     let modified_id = FaceId::new(2);
     let removed_id = FaceId::new(3);
     let added_id = FaceId::new(4);
-    let old = HashMap::from([
+    let old = HashMap::from_iter([
         (unchanged_id, named_face(unchanged_id, "unchanged")),
         (modified_id, named_face(modified_id, "modified")),
         (removed_id, named_face(removed_id, "removed")),
     ]);
     let mut modified = named_face(modified_id, "modified");
     modified.font_size = 18.0;
-    let new = HashMap::from([
+    let new = HashMap::from_iter([
         (unchanged_id, named_face(unchanged_id, "unchanged")),
         (modified_id, modified),
         (added_id, named_face(added_id, "added")),
@@ -96,10 +96,10 @@ fn recoloring_faces_is_not_classified_as_raster_relevant() {
     // so a foreground/background-only change must not count as
     // raster-relevant in diagnostics.
     let id = FaceId::new(1);
-    let old = HashMap::from([(id, named_face(id, "recolored"))]);
+    let old = HashMap::from_iter([(id, named_face(id, "recolored"))]);
     let mut recolored = named_face(id, "recolored");
     recolored.foreground = Color::new(0.9, 0.1, 0.1, 1.0);
-    let new = HashMap::from([(id, recolored)]);
+    let new = HashMap::from_iter([(id, recolored)]);
 
     let summary = summarize_face_changes(&old, &new);
 
@@ -114,8 +114,8 @@ fn adding_faces_is_classified_as_added_not_modified() {
     // or allocate fresh entries.
     let retained_id = FaceId::new(1);
     let added_id = FaceId::new(2);
-    let old = HashMap::from([(retained_id, face(retained_id))]);
-    let new = HashMap::from([
+    let old = HashMap::from_iter([(retained_id, face(retained_id))]);
+    let new = HashMap::from_iter([
         (retained_id, face(retained_id)),
         (added_id, named_face(added_id, "fringe")),
     ]);
@@ -129,10 +129,10 @@ fn adding_faces_is_classified_as_added_not_modified() {
 #[test]
 fn changing_a_face_font_is_classified_as_raster_relevant() {
     let id = FaceId::new(1);
-    let old = HashMap::from([(id, named_face(id, "refonted"))]);
+    let old = HashMap::from_iter([(id, named_face(id, "refonted"))]);
     let mut refonted = named_face(id, "refonted");
     refonted.font_family = "Iosevka".to_owned();
-    let new = HashMap::from([(id, refonted)]);
+    let new = HashMap::from_iter([(id, refonted)]);
 
     let summary = summarize_face_changes(&old, &new);
 
@@ -143,11 +143,11 @@ fn changing_a_face_font_is_classified_as_raster_relevant() {
 fn removing_faces_alone_is_classified_as_removed() {
     let retained_id = FaceId::new(1);
     let removed_id = FaceId::new(2);
-    let old = HashMap::from([
+    let old = HashMap::from_iter([
         (retained_id, face(retained_id)),
         (removed_id, face(removed_id)),
     ]);
-    let new = HashMap::from([(retained_id, face(retained_id))]);
+    let new = HashMap::from_iter([(retained_id, face(retained_id))]);
 
     let summary = summarize_face_changes(&old, &new);
 
@@ -157,7 +157,7 @@ fn removing_faces_alone_is_classified_as_removed() {
 
 #[test]
 fn face_diff_details_are_sorted_bounded_and_name_changed_fields() {
-    let old = HashMap::from([
+    let old = HashMap::from_iter([
         (FaceId::new(2), named_face(FaceId::new(2), "second")),
         (FaceId::new(1), named_face(FaceId::new(1), "first")),
     ]);
@@ -165,7 +165,7 @@ fn face_diff_details_are_sorted_bounded_and_name_changed_fields() {
     first.font_size = 12.0;
     let mut second = named_face(FaceId::new(2), "second");
     second.font_weight = 700;
-    let new = HashMap::from([(FaceId::new(2), second), (FaceId::new(1), first)]);
+    let new = HashMap::from_iter([(FaceId::new(2), second), (FaceId::new(1), first)]);
 
     let details = build_face_diff_details(&old, &new, 1);
 

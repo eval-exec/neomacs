@@ -1032,45 +1032,42 @@ fn build_presented_hit_buckets(
             .then(left.1.total_cmp(&right.1))
             .then(left.2.cmp(&right.2))
     });
-    let mut buckets: Vec<PresentedHitBucket> = Vec::new();
-    for (top, bottom, index, _) in &entries {
-        if buckets.last().is_none_or(|bucket| {
-            bucket.top.total_cmp(top).is_ne() || bucket.bottom.total_cmp(bottom).is_ne()
-        }) {
-            buckets.push(PresentedHitBucket {
-                top: *top,
-                bottom: *bottom,
-                prefix_max_bottom: *bottom,
-                candidates: Vec::new(),
-                prefix_max_right: Vec::new(),
-            });
+    // Each (top, bottom) run of the sorted entries becomes one bucket. The run
+    // is re-sorted by `x` in place, so every candidate's bounds travel with the
+    // entry: the previous shape kept a side `HashMap<usize, FrameRect>` and the
+    // comparator hashed both indices on every comparison, which made bucket
+    // construction O(n log n) SipHash lookups on a per-frame path.
+    let mut runs: Vec<(f32, f32, usize, usize)> = Vec::new();
+    for (position, (top, bottom, _, _)) in entries.iter().enumerate() {
+        match runs.last_mut() {
+            Some(run) if run.0.total_cmp(top).is_eq() && run.1.total_cmp(bottom).is_eq() => {
+                run.3 = position + 1;
+            }
+            _ => runs.push((*top, *bottom, position, position + 1)),
         }
-        buckets.last_mut().unwrap().candidates.push(*index);
     }
-    let bounds_by_index = entries
-        .iter()
-        .map(|(_, _, index, bounds)| (*index, *bounds))
-        .collect::<std::collections::HashMap<_, _>>();
+
+    let mut buckets: Vec<PresentedHitBucket> = Vec::with_capacity(runs.len());
     let mut prefix_max_bottom = 0.0_f32;
-    for bucket in &mut buckets {
-        prefix_max_bottom = prefix_max_bottom.max(bucket.bottom);
-        bucket.prefix_max_bottom = prefix_max_bottom;
-        bucket.candidates.sort_by(|left, right| {
-            bounds_by_index[left]
-                .x()
-                .total_cmp(&bounds_by_index[right].x())
-                .then(left.cmp(right))
-        });
-        let mut prefix_max_right = 0.0_f32;
-        bucket.prefix_max_right = bucket
-            .candidates
+    for (top, bottom, start, end) in runs {
+        let run = &mut entries[start..end];
+        run.sort_by(|left, right| left.3.x().total_cmp(&right.3.x()).then(left.2.cmp(&right.2)));
+        prefix_max_bottom = prefix_max_bottom.max(bottom);
+        let mut running_right = 0.0_f32;
+        let prefix_max_right = run
             .iter()
-            .map(|index| {
-                let bounds = bounds_by_index[index];
-                prefix_max_right = prefix_max_right.max(bounds.x() + bounds.width());
-                prefix_max_right
+            .map(|(_, _, _, bounds)| {
+                running_right = running_right.max(bounds.x() + bounds.width());
+                running_right
             })
             .collect();
+        buckets.push(PresentedHitBucket {
+            top,
+            bottom,
+            prefix_max_bottom,
+            candidates: run.iter().map(|(_, _, index, _)| *index).collect(),
+            prefix_max_right,
+        });
     }
     buckets
 }

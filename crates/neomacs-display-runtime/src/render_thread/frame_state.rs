@@ -1,3 +1,4 @@
+use neomacs_display_protocol::FrameFaceMap;
 use super::{FpsCounter, RenderApp};
 use crate::core::face::Face;
 use crate::core::frame_glyphs::{DisplaySlotId, FrameGlyph, WindowCursor};
@@ -90,8 +91,8 @@ struct FaceConflictDetails {
 }
 
 pub(super) fn summarize_face_changes(
-    old: &HashMap<FaceId, Face>,
-    new: &HashMap<FaceId, Face>,
+    old: &FrameFaceMap,
+    new: &FrameFaceMap,
 ) -> FaceChangeSummary {
     use neomacs_renderer_wgpu::glyph_atlas::glyph_font_identity;
     let mut summary = FaceChangeSummary::default();
@@ -156,8 +157,8 @@ fn changed_face_fields(old: &Face, new: &Face) -> Vec<String> {
 }
 
 pub(super) fn build_face_diff_details(
-    old: &HashMap<FaceId, Face>,
-    new: &HashMap<FaceId, Face>,
+    old: &FrameFaceMap,
+    new: &FrameFaceMap,
     limit: usize,
 ) -> FaceDiffDetails {
     let mut added: Vec<_> = new
@@ -344,7 +345,7 @@ impl RenderApp {
 
     fn for_each_face_source(
         &self,
-        mut visit: impl FnMut(u64, u64, &HashMap<FaceId, Face>, Option<&HashMap<FaceId, Face>>),
+        mut visit: impl FnMut(u64, u64, &FrameFaceMap, Option<&FrameFaceMap>),
     ) {
         self.frame_windows
             .for_each_top_level_window(|window_state| {
@@ -405,7 +406,7 @@ impl RenderApp {
         // (for_each_top_level_window iterates the full window map), so the
         // former second primary-window pass was pure duplication - and
         // panicked when no primary window existed.
-        let mut faces = std::collections::HashMap::new();
+        let mut faces = rustc_hash::FxHashMap::default();
         self.for_each_face_source(|_frame_id, _generation, frame_faces, terminal_faces| {
             for (face_id, face) in frame_faces
                 .iter()

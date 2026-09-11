@@ -7,6 +7,7 @@
 //!
 //! Runs on the evaluator thread (single-threaded, no channel needed).
 
+use neomacs_display_protocol::FrameFaceMap;
 use neomacs_display_protocol::TerminalColor;
 use neomacs_display_protocol::face::UnderlineStyle;
 use neomacs_display_protocol::face::{Face, FaceAttributes};
@@ -482,7 +483,7 @@ pub struct TtyRif {
     /// Visible terminal cursor shape when the hardware cursor is shown.
     cursor_shape: TerminalCursorShape,
     /// Face lookup table (face_id -> Face).
-    faces: HashMap<FaceId, Face>,
+    faces: FrameFaceMap,
     /// The default face's realized terminal background.
     default_bg: Option<TerminalColor>,
     /// The default face's realized terminal foreground.
@@ -844,7 +845,7 @@ impl TtyRif {
             cursor_col: 0,
             cursor_visible: false,
             cursor_shape: TerminalCursorShape::Block,
-            faces: HashMap::new(),
+            faces: rustc_hash::FxHashMap::default(),
             default_bg: None,
             default_fg: None,
             caps: TermCaps::default(),
@@ -888,7 +889,7 @@ impl TtyRif {
     }
 
     /// Set the face table for resolving face_ids.
-    pub fn set_faces(&mut self, faces: HashMap<FaceId, Face>) {
+    pub fn set_faces(&mut self, faces: FrameFaceMap) {
         self.faces = faces;
     }
 

@@ -13,6 +13,7 @@
 // restructuring for this test binary's lint gate.
 #![allow(clippy::too_many_arguments)]
 
+use neomacs_display_protocol::FrameFaceMap;
 use neomacs_display_protocol::face::{Face, FaceAttributes};
 use neomacs_display_protocol::glyph_matrix::*;
 use neomacs_display_protocol::types::FaceId;
@@ -383,7 +384,7 @@ fn build_single(
     char_h: f32,
     pixel_w: f32,
     pixel_h: f32,
-    faces: &HashMap<FaceId, Face>,
+    faces: &FrameFaceMap,
 ) -> MockFrameContent {
     let r = rows as usize;
     let text_rows = r - 2;
@@ -421,7 +422,7 @@ fn build_hsplit(
     char_h: f32,
     pixel_w: f32,
     _pixel_h: f32,
-    faces: &HashMap<FaceId, Face>,
+    faces: &FrameFaceMap,
 ) -> MockFrameContent {
     let r = rows as usize;
     let half = (r - 1) / 2;
@@ -481,7 +482,7 @@ fn build_vsplit(
     char_h: f32,
     pixel_w: f32,
     _pixel_h: f32,
-    faces: &HashMap<FaceId, Face>,
+    faces: &FrameFaceMap,
 ) -> MockFrameContent {
     let c = cols as usize;
     let r = rows as usize;
@@ -556,7 +557,7 @@ fn build_triple(
     char_h: f32,
     pixel_w: f32,
     _pixel_h: f32,
-    faces: &HashMap<FaceId, Face>,
+    faces: &FrameFaceMap,
 ) -> MockFrameContent {
     let c = cols as usize;
     let r = rows as usize;
@@ -640,7 +641,7 @@ fn build_default(
     char_h: f32,
     pixel_w: f32,
     _pixel_h: f32,
-    faces: &HashMap<FaceId, Face>,
+    faces: &FrameFaceMap,
 ) -> MockFrameContent {
     let c = cols as usize;
     let r = rows as usize;
@@ -789,10 +790,10 @@ fn build_default(
 // Faces
 // ===================================================================
 
-fn build_faces() -> HashMap<FaceId, Face> {
+fn build_faces() -> FrameFaceMap {
     use neomacs_display_protocol::gradient::{ColorStop, Gradient};
 
-    let mut f = HashMap::new();
+    let mut f = FrameFaceMap::default();
     f.insert(
         FaceId::new(0),
         mk(

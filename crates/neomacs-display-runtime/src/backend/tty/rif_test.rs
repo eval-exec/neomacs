@@ -91,7 +91,7 @@ fn resolve_attrs_uses_face_table() {
     face.underline_style = UnderlineStyle::Wave;
     face.attributes |= FaceAttributes::STRIKE_THROUGH;
 
-    let mut faces = HashMap::new();
+    let mut faces = rustc_hash::FxHashMap::default();
     faces.insert(FaceId::new(1), face);
     rif.set_faces(faces);
 
@@ -124,7 +124,7 @@ fn resolve_attrs_preserves_terminal_default_face_colors() {
     face.use_default_foreground = true;
     face.use_default_background = true;
 
-    let mut faces = HashMap::new();
+    let mut faces = rustc_hash::FxHashMap::default();
     faces.insert(FaceId::new(0), face);
     rif.set_faces(faces);
 
@@ -4757,7 +4757,7 @@ fn resolve_attrs_carries_the_realized_underline_color() {
     let mut face = Face::new(FaceId::new(7));
     face.underline_style = UnderlineStyle::Wave;
     face.terminal_underline_color = Some(TerminalColor::Indexed(1));
-    let mut faces = HashMap::new();
+    let mut faces = rustc_hash::FxHashMap::default();
     faces.insert(FaceId::new(7), face);
     rif.set_faces(faces);
 

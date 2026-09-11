@@ -2905,7 +2905,7 @@ struct GlyphTrace {
 impl GlyphTrace {
     fn from_glyph(
         glyph: &Glyph,
-        faces: &std::collections::HashMap<FaceId, neomacs_display_protocol::face::Face>,
+        faces: &rustc_hash::FxHashMap<FaceId, neomacs_display_protocol::face::Face>,
     ) -> Self {
         let kind = match &glyph.glyph_type {
             GlyphType::Char { ch } => GlyphKindTrace::Char(*ch),
@@ -2964,7 +2964,7 @@ struct RowTrace {
 impl RowTrace {
     fn from_row(
         row: &GlyphRow,
-        faces: &std::collections::HashMap<FaceId, neomacs_display_protocol::face::Face>,
+        faces: &rustc_hash::FxHashMap<FaceId, neomacs_display_protocol::face::Face>,
     ) -> Self {
         Self {
             role: row.role,

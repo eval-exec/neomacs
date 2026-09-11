@@ -12,6 +12,7 @@
 //! stages; [`FramePassCtx`] bundles the active render pass with those
 //! params for the draw phases.
 
+use neomacs_display_protocol::FrameFaceMap;
 use neomacs_display_protocol::types::FaceId;
 use std::collections::HashMap;
 
@@ -31,7 +32,7 @@ use super::pointer_override::PointerOverrideResolver;
 pub(super) struct FrameParams<'a> {
     pub(super) frame_glyphs: &'a FrameGlyphBuffer,
     pub(super) pointer_override: PointerOverrideResolver,
-    pub(super) faces: &'a HashMap<FaceId, Face>,
+    pub(super) faces: &'a FrameFaceMap,
     pub(super) cursor_visible: bool,
     pub(super) animated_cursor: &'a Option<AnimatedCursor>,
     /// Present-time inverse-video contract for the active filled-box cursor.
@@ -239,7 +240,7 @@ impl BoxSpanAccumulator {
 /// ownership must not drift.
 pub(super) fn collect_frame_box_spans(
     frame_glyphs: &FrameGlyphBuffer,
-    faces: &HashMap<FaceId, Face>,
+    faces: &FrameFaceMap,
     pointer_override: &PointerOverrideResolver,
 ) -> Vec<BoxSpan> {
     let mut box_spans = BoxSpanAccumulator::default();

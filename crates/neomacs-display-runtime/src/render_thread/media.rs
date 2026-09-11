@@ -1,3 +1,4 @@
+use neomacs_display_protocol::FrameFaceMap;
 use super::RenderApp;
 #[cfg(feature = "video")]
 use super::frame_sched::{NativeWindowId, PacingAction};
@@ -116,14 +117,14 @@ impl RenderApp {
     fn expanded_terminal_glyphs_for_frame(
         frame: &FrameGlyphBuffer,
         terminal_contents: &HashMap<crate::terminal::TerminalId, crate::terminal::TerminalContent>,
-    ) -> (Vec<FrameGlyph>, HashMap<FaceId, Face>) {
+    ) -> (Vec<FrameGlyph>, FrameFaceMap) {
         let cell_w = frame.char_width;
         let cell_h = frame.char_height;
         let font_size = frame.font_pixel_size;
         let ascent = cell_h * 0.8;
         let default_font = frame.default_resolved_font();
         let mut extra_glyphs = Vec::new();
-        let mut extra_faces = HashMap::new();
+        let mut extra_faces = rustc_hash::FxHashMap::default();
 
         for glyph in &frame.glyphs {
             let FrameGlyph::Terminal {
@@ -234,9 +235,9 @@ impl RenderApp {
             crate::terminal::TerminalId,
             crate::terminal::TerminalDisplayTarget,
         >,
-    ) -> (Vec<FrameGlyph>, HashMap<FaceId, Face>) {
+    ) -> (Vec<FrameGlyph>, FrameFaceMap) {
         let mut glyphs = Vec::new();
-        let mut faces = HashMap::new();
+        let mut faces = rustc_hash::FxHashMap::default();
         let cell_w = frame.char_width;
         let cell_h = frame.char_height;
         let ascent = cell_h * 0.8;
@@ -724,7 +725,7 @@ impl RenderApp {
 
         // Render floating terminals
         let mut float_glyphs = Vec::new();
-        let mut float_faces = HashMap::new();
+        let mut float_faces = rustc_hash::FxHashMap::default();
         for &id in &terminal_ids {
             if let Some(view) = self.terminal_manager.get(id) {
                 if view.target != TerminalDisplayTarget::Floating {
@@ -828,7 +829,7 @@ impl RenderApp {
         paint: TerminalPaintTarget,
         opacity: f32,
         out: &mut Vec<FrameGlyph>,
-        faces: &mut HashMap<FaceId, Face>,
+        faces: &mut FrameFaceMap,
     ) {
         for cell in &content.cells {
             let cx = origin_x + cell.col as f32 * cell_w;
@@ -1018,7 +1019,7 @@ fn terminal_cell_face_candidate_id(fg: Color, style: TerminalCellStyle) -> FaceI
 
 #[cfg(feature = "neo-term")]
 fn intern_terminal_cell_face(
-    faces: &mut HashMap<FaceId, Face>,
+    faces: &mut FrameFaceMap,
     fg: Color,
     style: TerminalCellStyle,
     font_size: f32,

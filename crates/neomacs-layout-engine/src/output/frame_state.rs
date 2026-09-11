@@ -10,7 +10,7 @@ use neomacs_display_protocol::glyph_matrix::{
     BackgroundItem, BorderItem, CursorItem, FaceFillItem, FrameDisplayState, ScrollBarItem,
 };
 use neomacs_display_protocol::types::{Color, DisplayFrameId, DisplayWindowId};
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 pub(crate) struct OutputFrameBuildState {
     backgrounds: Vec<BackgroundItem>,
@@ -48,9 +48,9 @@ impl OutputFrameBuildState {
             cursors: Vec::new(),
             scroll_bars: Vec::new(),
             phys_cursor: None,
-            cursor_effects_by_window: HashMap::new(),
+            cursor_effects_by_window: HashMap::default(),
             window_infos: Vec::new(),
-            pending_window_geometry: HashSet::new(),
+            pending_window_geometry: HashSet::default(),
             transition_hints: Vec::new(),
             background_color: Color {
                 r: 0.0,

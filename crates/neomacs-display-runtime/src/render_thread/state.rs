@@ -1,3 +1,4 @@
+use neomacs_display_protocol::FrameFaceMap;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -826,7 +827,7 @@ pub(super) struct RenderApp {
 
     /// Shared media memory accounting. Fed from the asset-command choke
     /// point (`asset_commands.rs`); shader surfaces only so far — see the
-    pub(super) faces: HashMap<neomacs_display_protocol::types::FaceId, Face>,
+    pub(super) faces: neomacs_display_protocol::FrameFaceMap,
     /// Sorted (frame_id, ingest_seq) fingerprint of the frames the current
     /// `faces` map was aggregated from; unchanged fingerprint skips the
     /// per-render rebuild entirely.
@@ -1012,7 +1013,7 @@ impl RenderApp {
             backend_profile,
             render_policy,
             device_lost: super::device_loss::DeviceLossDetector::new(),
-            faces: HashMap::new(),
+            faces: rustc_hash::FxHashMap::default(),
             faces_signature: Vec::new(),
             modifiers: 0,
             pending_file_drops: Default::default(),

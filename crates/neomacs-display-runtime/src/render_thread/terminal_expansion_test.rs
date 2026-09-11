@@ -1,3 +1,4 @@
+use neomacs_display_protocol::FrameFaceMap;
 use super::*;
 use crate::core::frame_glyphs::{DisplaySlotId, GlyphRowRole};
 use crate::core::types::{Color, DisplayWindowId, Px};
@@ -32,12 +33,12 @@ fn merge_remaps_a_conflicting_generated_face_and_its_glyphs_together() {
     translucent.foreground = Color::new(1.0, 1.0, 1.0, 0.5);
     let mut expansion = TerminalExpansion::new(
         vec![generated_char(original_id, 0.0)],
-        HashMap::from([(original_id, opaque)]),
+        FrameFaceMap::from_iter([(original_id, opaque)]),
     );
 
     expansion.merge(TerminalExpansion::new(
         vec![generated_char(original_id, 8.0)],
-        HashMap::from([(original_id, translucent)]),
+        FrameFaceMap::from_iter([(original_id, translucent)]),
     ));
 
     let face_ids: Vec<_> = expansion

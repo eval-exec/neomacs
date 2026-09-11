@@ -387,7 +387,7 @@ fn has_adjacent_window(
 fn window_chrome_string_positions(
     state: &FrameDisplayState,
 ) -> Result<Vec<PresentedStringPosition>, PresentedHitError> {
-    let mut sources = std::collections::HashMap::new();
+    let mut sources = rustc_hash::FxHashMap::default();
     for entry in &state.window_matrices {
         for (row_index, row) in entry.matrix.rows.iter().enumerate() {
             let Some(region) = window_chrome_region(row.role) else {
@@ -474,10 +474,10 @@ fn push_row_fallback_positions(
     // Group the window's points by output row ONCE. The previous per-row
     // `points.iter().filter(...)` re-scanned every point for every row —
     // O(rows x points) per window per frame.
-    let mut points_by_row: std::collections::HashMap<
+    let mut points_by_row: rustc_hash::FxHashMap<
         i64,
         Vec<&neovm_core::window::DisplayPointSnapshot>,
-    > = std::collections::HashMap::new();
+    > = rustc_hash::FxHashMap::default();
     for point in &snapshot.points {
         points_by_row.entry(point.row).or_default().push(point);
     }

@@ -333,7 +333,7 @@ fn fixed_cell_advance_rejects_invalid_protocol_geometry() {
 
 #[test]
 fn resolved_font_table_serde_round_trip() {
-    let mut table = ResolvedFontTable::new();
+    let mut table = ResolvedFontTable::default();
     table.insert(ResolvedFontId(1), sample_font(1));
     table.insert(ResolvedFontId(2), sample_font(2));
     let json = serde_json::to_string(&table).unwrap();

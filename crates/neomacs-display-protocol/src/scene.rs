@@ -1,8 +1,8 @@
 //! Scene graph for display rendering.
 
+use crate::face::FrameFaceMap;
 use crate::face::Face;
 use crate::types::{Color, DisplayWindowId, FaceId, ImageId, Rect, Transform, VideoId, WebViewId};
-use std::collections::HashMap;
 
 /// Scene graph node types
 #[derive(Debug, Clone)]
@@ -236,7 +236,7 @@ pub struct Scene {
     pub dirty: Option<Rect>,
 
     /// Faces used in this scene (face_id -> Face)
-    pub faces: HashMap<FaceId, Face>,
+    pub faces: FrameFaceMap,
 
     /// Floating videos at screen positions
     pub floating_videos: Vec<FloatingVideo>,
@@ -288,7 +288,7 @@ impl Scene {
             windows: Vec::new(),
             root: None,
             dirty: None,
-            faces: HashMap::new(),
+            faces: rustc_hash::FxHashMap::default(),
             floating_videos: Vec::new(),
             floating_images: Vec::new(),
             borders: Vec::new(),

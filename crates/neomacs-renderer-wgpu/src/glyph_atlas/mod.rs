@@ -11,6 +11,7 @@ pub use types::{
     AnyAtlasEntry, GlyphAtlasError, GlyphAtlasHandle, GlyphMaterialKind, SubpixelRequest,
 };
 
+use neomacs_display_protocol::FrameFaceMap;
 use neomacs_display_protocol::types::FaceId;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::{HashMap, HashSet, hash_map::DefaultHasher};
@@ -196,7 +197,7 @@ pub fn resolved_glyph_stream_identity(glyphs: &[ResolvedGlyph]) -> ResolvedGlyph
 pub(crate) struct FrameFontBindingsIdentity(pub(crate) u64);
 
 fn frame_font_bindings_identity(
-    faces: &HashMap<FaceId, Face>,
+    faces: &FrameFaceMap,
     fonts: &ResolvedFontTable,
     char_fonts: &CharFontTable,
     shaped_clusters: &ShapedClusterTable,
@@ -609,9 +610,9 @@ impl WgpuGlyphAtlas {
             font_file_cache: FontFileCache::new(),
             bitmap_font_cache: BitmapFontReplayCache::new().ok(),
             subpixel_order: default_subpixel_order(),
-            frame_fonts: ResolvedFontTable::new(),
-            frame_char_fonts: CharFontTable::new(),
-            frame_shaped_clusters: ShapedClusterTable::new(),
+            frame_fonts: ResolvedFontTable::default(),
+            frame_char_fonts: CharFontTable::default(),
+            frame_shaped_clusters: ShapedClusterTable::default(),
             frame_font_bindings_identity: FrameFontBindingsIdentity::default(),
             font_catalog_generation: None,
             resolved_fontdb_ids: HashMap::new(),
@@ -1343,7 +1344,7 @@ impl WgpuGlyphAtlas {
     /// face-id-keyed tables are only valid for the current frame.
     pub(crate) fn install_frame_fonts(
         &mut self,
-        faces: &HashMap<FaceId, Face>,
+        faces: &FrameFaceMap,
         fonts: &ResolvedFontTable,
         char_fonts: &CharFontTable,
         shaped_clusters: &ShapedClusterTable,

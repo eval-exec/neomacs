@@ -1,3 +1,4 @@
+use neomacs_display_protocol::FrameFaceMap;
 use super::*;
 use crate::core::frame_glyphs::{
     BufferTransitionTarget, ContentTransitionHint, CursorStyle, DisplaySlotId, FrameGlyph,
@@ -90,7 +91,7 @@ fn terminal_expansion_replacement_is_atomic_and_invalidates_the_scene() {
         color: Color::WHITE,
     };
     let generated_faces =
-        HashMap::from([(face_id, neomacs_display_protocol::face::Face::new(face_id))]);
+        FrameFaceMap::from_iter([(face_id, neomacs_display_protocol::face::Face::new(face_id))]);
     let expansion = TerminalExpansion::new(vec![generated_glyph], generated_faces);
     let initial_generation = render.compositor.current_scene_generation;
 
@@ -171,7 +172,7 @@ fn terminal_expansion_rejects_editor_face_collisions_without_partial_installatio
     );
     let retained = TerminalExpansion::new(
         Vec::new(),
-        HashMap::from([(
+        FrameFaceMap::from_iter([(
             retained_face_id,
             neomacs_display_protocol::face::Face::new(retained_face_id),
         )]),
@@ -185,7 +186,7 @@ fn terminal_expansion_rejects_editor_face_collisions_without_partial_installatio
 
     let collision = TerminalExpansion::new(
         Vec::new(),
-        HashMap::from([(
+        FrameFaceMap::from_iter([(
             editor_face_id,
             neomacs_display_protocol::face::Face::new(editor_face_id),
         )]),

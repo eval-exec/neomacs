@@ -8,8 +8,9 @@
 //! `pixel_width`; GUI backends must use that rather than reconstructing every
 //! glyph as one frame column.
 
+use crate::face::FrameFaceMap;
 use super::effect_config::EffectsConfig;
-use super::face::{BoxVerticalEdges, Face, FaceAttributes, UnderlineStyle};
+use super::face::{BoxVerticalEdges, FaceAttributes, UnderlineStyle};
 use super::frame_chrome::{FrameChrome, FrameChromeContent, PresentationId};
 use super::frame_glyphs::{
     ContentTransitionHint, CursorStyle, DisplaySlotId, FrameGlyph, FrameGlyphBuffer,
@@ -27,7 +28,7 @@ use super::xwidget_extent::{
 };
 use super::{FrameSpace, GeometryPoint, GeometryRect, LogicalPixels};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 mod text_geometry;
 pub use text_geometry::{TextRowGeometry, TextSlotColumn, VisualTextGlyphIndex};
@@ -1885,7 +1886,7 @@ pub struct FrameDisplayState {
     pub char_height: f32,
     pub font_pixel_size: f32,
     pub background: Color,
-    pub faces: HashMap<FaceId, Face>,
+    pub faces: FrameFaceMap,
     /// Native catalog generation used for all font resolution and geometry in
     /// this immutable presentation.
     #[serde(default)]
@@ -2411,11 +2412,11 @@ impl FrameDisplayState {
                 b: 0.0,
                 a: 1.0,
             },
-            faces: HashMap::new(),
+            faces: HashMap::default(),
             font_catalog_generation: crate::font::FontCatalogGeneration::default(),
-            fonts: crate::font::ResolvedFontTable::new(),
-            char_fonts: crate::font::CharFontTable::new(),
-            shaped_clusters: crate::font::ShapedClusterTable::new(),
+            fonts: crate::font::ResolvedFontTable::default(),
+            char_fonts: crate::font::CharFontTable::default(),
+            shaped_clusters: crate::font::ShapedClusterTable::default(),
             undecorated: false,
             border_width: 0.0,
             border_color: Color {
@@ -2439,10 +2440,10 @@ impl FrameDisplayState {
             face_fills: Vec::new(),
             borders: Vec::new(),
             cursors: Vec::new(),
-            cursor_effects_by_window: HashMap::new(),
+            cursor_effects_by_window: HashMap::default(),
             scroll_bars: Vec::new(),
             phys_cursor: None,
-            fringe_bitmaps: HashMap::new(),
+            fringe_bitmaps: HashMap::default(),
         }
     }
 

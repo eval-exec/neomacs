@@ -1,5 +1,6 @@
 //! Glyphs methods for WgpuRenderer.
 
+use neomacs_display_protocol::FrameFaceMap;
 use super::super::glyph_atlas::{ComposedGlyphKey, GlyphKey, WgpuGlyphAtlas};
 use super::super::vertex::{RectVertex, SubpixelGlyphVertex, Uniforms};
 use super::GlyphRenderStats;
@@ -933,7 +934,7 @@ fn log_frame_glyph_debug_scan(frame_glyphs: &FrameGlyphBuffer) {
 fn log_face_debug_summary(
     call_id: u64,
     frame_glyphs: &FrameGlyphBuffer,
-    faces: &HashMap<FaceId, Face>,
+    faces: &FrameFaceMap,
 ) {
     if !trace_face_debug_enabled() {
         return;
@@ -2046,7 +2047,7 @@ impl WgpuRenderer {
         (logical_w, logical_h, draw)
     }
 
-    fn face_has_rounded_box(faces: &HashMap<FaceId, Face>, face_id: FaceId) -> bool {
+    fn face_has_rounded_box(faces: &FrameFaceMap, face_id: FaceId) -> bool {
         faces
             .get(&face_id)
             .map(|f| f.box_corner_radius > 0)
@@ -2065,7 +2066,7 @@ impl WgpuRenderer {
         clip: Option<&Rect>,
         row_role: GlyphRowRole,
         box_spans: &[BoxSpan],
-        faces: &HashMap<FaceId, Face>,
+        faces: &FrameFaceMap,
     ) -> bool {
         let right = gx + width;
         box_spans.iter().any(|s| {

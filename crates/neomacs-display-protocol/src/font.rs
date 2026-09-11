@@ -6,8 +6,9 @@
 //! resolved font identity and only rasterizes. See
 //! `docs/plans/2026-07-05-font-realization-render-boundary-design.md`.
 
-use crate::{face::Face, types::FaceId};
-use std::collections::HashMap;
+use crate::face::FrameFaceMap;
+use crate::types::FaceId;
+use rustc_hash::FxHashMap as HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroU64;
@@ -905,7 +906,7 @@ pub type CharFontTable = HashMap<FaceId, HashMap<char, ResolvedCharGlyph>>;
 #[derive(Clone, Copy, Debug)]
 pub struct FrameFontBindings<'a> {
     pub catalog_generation: FontCatalogGeneration,
-    pub faces: &'a HashMap<FaceId, Face>,
+    pub faces: &'a FrameFaceMap,
     pub fonts: &'a ResolvedFontTable,
     pub char_fonts: &'a CharFontTable,
     pub shaped_clusters: &'a ShapedClusterTable,

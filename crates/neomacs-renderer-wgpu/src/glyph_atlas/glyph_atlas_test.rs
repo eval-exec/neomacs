@@ -871,7 +871,7 @@ fn reused_resolved_font_id_invalidates_renderer_identity_caches() {
             glyph_advance: Default::default(),
         }
     };
-    let mut first = ResolvedFontTable::new();
+    let mut first = ResolvedFontTable::default();
     first.insert(id, font("/fonts/first.ttf"));
     atlas.install_frame_fonts(
         &Default::default(),
@@ -881,7 +881,7 @@ fn reused_resolved_font_id_invalidates_renderer_identity_caches() {
     );
     atlas.resolved_fontdb_ids.insert(id, None);
 
-    let mut replacement = ResolvedFontTable::new();
+    let mut replacement = ResolvedFontTable::default();
     replacement.insert(id, font("/fonts/replacement.ttf"));
     atlas.install_frame_fonts(
         &Default::default(),

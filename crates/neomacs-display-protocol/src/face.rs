@@ -9,6 +9,14 @@ use std::os::raw::c_char;
 use std::os::raw::c_int;
 use strum::{EnumString, IntoStaticStr};
 
+/// The realized face table a frame presentation carries, keyed by face id.
+///
+/// Every consumer joins glyphs to styling through this one map, so it is named
+/// once here rather than respelled at each boundary.  The hasher is `Fx`, not
+/// the default SipHash: the keys are engine-minted dense ids, never
+/// attacker-supplied, and redisplay probes this table once per glyph.
+pub type FrameFaceMap = rustc_hash::FxHashMap<FaceId, Face>;
+
 bitflags! {
     /// Face attributes flags
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]

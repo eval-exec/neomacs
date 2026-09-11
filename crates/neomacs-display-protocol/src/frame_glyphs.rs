@@ -4,6 +4,7 @@
 //! Emacs's current_matrix and rebuilds this buffer from scratch. No
 //! incremental overlap tracking is needed.
 
+use crate::face::FrameFaceMap;
 use crate::effect_config::EffectsConfig;
 use crate::face::{
     BasicFaceId, BoxBorderStyle, BoxType, BoxVerticalEdges, Face, FaceAttributes, UnderlineStyle,
@@ -14,7 +15,7 @@ use crate::types::{
 };
 use crate::xwidget_extent::XwidgetPresentationGeometry;
 use crate::{ContentTransitionIntent, FrameSpace, GeometryRect, LogicalPixels};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 pub use crate::cursor::{CursorBarWidth, CursorKind, CursorSpec, CursorStyle};
 
@@ -1238,7 +1239,7 @@ pub struct FrameGlyphBuffer {
 
     /// Full face data: face_id -> Face (includes box, underline, etc.)
     /// Rebuilt from scratch each frame by apply_face() in the layout engine.
-    pub faces: HashMap<FaceId, Face>,
+    pub faces: FrameFaceMap,
 
     /// Native catalog generation paired with `faces` and `fonts`.
     pub font_catalog_generation: crate::font::FontCatalogGeneration,
@@ -1549,7 +1550,7 @@ impl FrameGlyphBuffer {
             window_infos: Vec::with_capacity(16),
             transition_hints: Vec::with_capacity(16),
             window_cursors: Vec::with_capacity(8),
-            cursor_effects_by_window: HashMap::new(),
+            cursor_effects_by_window: HashMap::default(),
             current_face_id: FaceId::new(0),
             current_fg: Color::WHITE,
             current_bg: None,
@@ -1559,12 +1560,12 @@ impl FrameGlyphBuffer {
             current_window_id: DisplayWindowId::new(0),
             current_row_role: GlyphRowRole::Text,
             current_clip_rect: None,
-            faces: HashMap::new(),
+            faces: HashMap::default(),
             font_catalog_generation: crate::font::FontCatalogGeneration::default(),
-            fonts: crate::font::ResolvedFontTable::new(),
-            char_fonts: crate::font::CharFontTable::new(),
-            shaped_clusters: crate::font::ShapedClusterTable::new(),
-            fringe_bitmaps: HashMap::new(),
+            fonts: crate::font::ResolvedFontTable::default(),
+            char_fonts: crate::font::CharFontTable::default(),
+            shaped_clusters: crate::font::ShapedClusterTable::default(),
+            fringe_bitmaps: HashMap::default(),
         }
     }
 
