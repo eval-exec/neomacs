@@ -1319,6 +1319,7 @@ pub(crate) mod replacement;
 pub(crate) mod source_append;
 pub(crate) mod source_render;
 pub(crate) mod source_state;
+pub(crate) mod spacing;
 pub(crate) mod special_glyphs;
 pub(crate) mod text_output;
 pub(crate) mod trailing_whitespace;

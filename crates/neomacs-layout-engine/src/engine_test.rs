@@ -24,6 +24,9 @@ use super::*;
 #[path = "engine_face_identity_test.rs"]
 mod face_identity;
 
+#[path = "engine_line_spacing_test.rs"]
+mod line_spacing;
+
 fn test_image_load(id: u32) -> neomacs_display_protocol::ImageLoadToken {
     neomacs_display_protocol::ImageLoadToken::new(
         neomacs_display_protocol::ImageId::new(id),
@@ -13397,8 +13400,8 @@ fn layout_frame_rust_applies_extra_line_spacing_once_to_newline_rows() {
 
     assert_eq!(
         second_row.y - first_row.y,
-        first_row.height + 5,
-        "newline row advance should include extra line-spacing exactly once"
+        first_row.height,
+        "logical row height owns extra line-spacing exactly once"
     );
 }
 
@@ -21976,24 +21979,6 @@ fn plain_item_prefix_shadow_matches_eob_tail_row() {
     );
 }
 
-/// Engagement proof for the phase-2h empty-line extension (flag-on suite
-/// gate): laying out a buffer with an empty line must route it RowBreak-only.
-/// Trivially passes when the flag is off.
-#[test]
-fn plain_route_layout_engages_empty_row_acquisition() {
-    let before = crate::buffer_source::row_route::ROUTED_EMPTY_ROW_COUNT
-        .load(std::sync::atomic::Ordering::Relaxed);
-    let (_eval, _buf_id, rows, _char_width, _char_height) = layout_main_text_rows("x\n\ny\n");
-    assert!(rows.len() >= 3);
-    let after = crate::buffer_source::row_route::ROUTED_EMPTY_ROW_COUNT
-        .load(std::sync::atomic::Ordering::Relaxed);
-    assert!(
-        after > before,
-        "expected the empty line to route through the item renderer \
-         (before={before}, after={after})"
-    );
-}
-
 /// Engagement proof for the phase-2h EOB-tail extension (flag-on suite gate):
 /// a buffer ending without a trailing newline must route its final line when
 /// point is elsewhere. Trivially passes when the flag is off.
@@ -25909,7 +25894,7 @@ fn display_replacement_string_line_spacing_overrides_buffer_spacing() {
         .expect("row after replacement newline");
     assert_eq!(
         next.pixel_y - row.pixel_y,
-        row.height_px + 3.0,
+        row.height_px,
         "string-local line-spacing must override the surrounding buffer value"
     );
 }

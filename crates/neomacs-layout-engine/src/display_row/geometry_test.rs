@@ -126,7 +126,7 @@ fn current_display_row_metrics_advances_to_next_row_from_finished_extents() {
         DisplayRowAdvance {
             finished: DisplayTextRowMetrics {
                 y: 7.0,
-                height: 24.0,
+                height: 27.0,
                 ascent: 18.0,
             },
             next_y: 10.0 + 3.0 * 16.0 + 13.0,
@@ -220,7 +220,7 @@ fn display_row_geometry_cursor_advances_row_position_and_resets_metrics() {
         finished,
         DisplayTextRowMetrics {
             y: 42.0,
-            height: 24.0,
+            height: 28.0,
             ascent: 18.0,
         }
     );
@@ -828,7 +828,7 @@ fn display_row_geometry_cursor_finishes_and_builds_next_display_text_row_begin()
         DisplayTextRowGeometryTransition {
             finished_row: DisplayTextRowMetrics {
                 y: 42.0,
-                height: 24.0,
+                height: 28.0,
                 ascent: 18.0,
             },
             begin_row: DisplayTextRowBegin {
@@ -1031,7 +1031,7 @@ fn display_row_geometry_state_can_finish_boundary_without_row_y_recording() {
     ));
 
     assert_eq!(transition.finished_row.y, 42.0);
-    assert_eq!(transition.finished_row.height, 24.0);
+    assert_eq!(transition.finished_row.height, 26.0);
     assert_eq!(geometry.row, 3);
     assert_eq!(geometry.y, 10.0 + 3.0 * 16.0 + 13.0);
     assert_eq!(geometry.row_extra_y, 13.0);

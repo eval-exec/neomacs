@@ -272,12 +272,6 @@ pub(crate) static ROUTED_TRUNCATION_PREFIX_ROW_COUNT: std::sync::atomic::AtomicU
 pub(crate) static ROUTED_WRAP_PREFIX_ROW_COUNT: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
-/// Test-only engagement proof for the phase-2h empty-line extension: routed
-/// bare-newline rows rendered RowBreak-only.
-#[cfg(test)]
-pub(crate) static ROUTED_EMPTY_ROW_COUNT: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
-
 /// Test-only engagement proof for the phase-2h EOB-tail extension: routed
 /// newline-less tail rows ending at the source end.
 #[cfg(test)]
@@ -350,9 +344,6 @@ pub(super) fn note_routed_row(plan: &PlainRowPlan, wrap_mode: LineWrapMode, mid_
                     ROUTED_WRAP_PREFIX_ROW_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
             }
-        }
-        if plan.is_empty_line() {
-            ROUTED_EMPTY_ROW_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
         if plan.is_end_of_source() {
             ROUTED_EOB_TAIL_ROW_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

@@ -2,6 +2,7 @@ use crate::display_item::RenderFaceRef;
 use crate::display_pixel_calc::PixelCalcContext;
 use crate::display_row::builder::{DisplayRowLayout, DisplayTabPolicy};
 use crate::display_row::face_state::DisplayRowMeasurementMode;
+use crate::display_row::spacing::ResolvedLineSpacing;
 use crate::types::LayoutCharPos0;
 use crate::window_output::{
     DisplayTextRowBegin, DisplayTextRowGeometryTransition, DisplayTextRowMetrics,
@@ -171,10 +172,10 @@ pub(crate) enum DisplayRowAdvanceKind {
 }
 
 impl DisplayRowAdvanceKind {
-    fn line_spacing(self) -> f32 {
+    fn line_spacing(self) -> ResolvedLineSpacing {
         match self {
-            Self::LineBreak { line_spacing } => line_spacing,
-            Self::Truncation | Self::VisualWrap => 0.0,
+            Self::LineBreak { line_spacing } => ResolvedLineSpacing::from_pixels(line_spacing),
+            Self::Truncation | Self::VisualWrap => ResolvedLineSpacing::NONE,
         }
     }
 }
@@ -957,10 +958,15 @@ impl CurrentDisplayRowMetrics {
         }
         let line_spacing = match measurement_mode {
             DisplayRowMeasurementMode::ConcreteFont => advance.kind.line_spacing(),
-            DisplayRowMeasurementMode::LogicalCells => 0.0,
-        };
+            DisplayRowMeasurementMode::LogicalCells => ResolvedLineSpacing::NONE,
+        }
+        .pixels();
         let row_extra_y = advance.row_extra_y
             + self.next_row_vertical_delta(advance.default_height, line_spacing);
+        // Spacing belongs to the row's logical descent, not to an unowned gap
+        // after the row. Glyph ascent stays unchanged. Painting, hit testing
+        // and retained-row replay all consume this same finished height.
+        self.height += line_spacing;
         let finished =
             self.finish_and_reset(advance.y, advance.default_height, advance.default_ascent);
         DisplayRowAdvance {

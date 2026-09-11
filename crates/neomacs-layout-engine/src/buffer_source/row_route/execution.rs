@@ -154,21 +154,11 @@ impl<'rows, 'emit, 'surface>
             }
         };
 
-        // Phase 2h rung 1: a bare-newline empty line renders RowBreak-only —
-        // no text probe/commit; the row break drives the shared line-end
-        // plan and row transition directly.
+        // Batching owns text, never newline semantics. Even a bare newline
+        // carries properties (including defaults and overlay values). Leave
+        // it to BufferElementProducer just like a newline under point/region.
         if plan.is_empty_line() {
-            return self.render_routed_empty_row_break(
-                loop_context,
-                source_walk,
-                text,
-                active_face_state,
-                buffer,
-                row,
-                &plan,
-                policy.wrap_mode,
-                mid_line_start,
-            );
+            return PlainRowRouteOutcome::NotRouted;
         }
 
         let start = CharPos0::new(row.charpos.max(0) as usize);
@@ -892,90 +882,6 @@ impl<'rows, 'emit, 'surface>
         self.progress
             .set_byte_idx(row.byte_idx + plan.line_byte_len());
         note_routed_row(&plan, policy.wrap_mode, mid_line_start);
-        PlainRowRouteOutcome::Rendered
-    }
-
-    /// Phase 2h rung 1 production: render a classified EMPTY line (a bare
-    /// newline) through the item vocabulary's RowBreak-only shape. The
-    /// [`BufferPlainItemSource`] yields exactly one explicit-newline
-    /// `RowBreak` at the newline's charpos (shadow-proven glyph-identical to
-    /// the pipeline's empty row in engine_test), and that break drives the
-    /// SAME shared line-end plan + row-transition lifecycle the pipeline's
-    /// newline dispatch uses (`BufferSourceLineBreakRenderRequest` ->
-    /// `LineEndContext` -> `line_end::plan` -> `emit_line_break_then_row_start`),
-    /// so the finished row carries the pinned empty-row semantics unchanged:
-    /// start == end == the newline's charpos, `displays_text` false, the
-    /// appended newline space in the line's own face (GNU display_line's
-    /// at_end_of_line branch, xdisp.c:26517, with `default_face_p = false`).
-    ///
-    /// The per-char consumption bookkeeping the pipeline would run before
-    /// its dispatch is provably idle for a classified empty row: the
-    /// selective-display tail probe (policy refused selective display),
-    /// cursor capture (point-on-newline refused by the pre-gate), overlay
-    /// strings at eol (the overlay allow-list refused string-bearing
-    /// overlays touching the newline; face-only overlays merge through the
-    /// shared eol collector inside the line-break render), and pending
-    /// source-face installation (the loop's face checkpoint already resolved
-    /// and installed the face AT the newline's charpos this iteration).
-    #[allow(clippy::too_many_arguments)]
-    fn render_routed_empty_row_break<B: LayoutBufferView>(
-        &mut self,
-        loop_context: crate::buffer_source::loop_context::BufferSourceLoopRequestContext,
-        source_walk: &mut crate::buffer_source::walk::BufferSourceWalk<'_, B>,
-        text: &[u8],
-        active_face_state: &crate::display_row::face_state::DisplayRowActiveFaceState,
-        buffer: &B,
-        row: RowRouteRowStart<'_>,
-        plan: &PlainRowPlan,
-        wrap_mode: LineWrapMode,
-        mid_line_start: bool,
-    ) -> PlainRowRouteOutcome {
-        use crate::display_source::DisplayItemSource as _;
-
-        debug_assert_eq!(plan.line_char_len(), 0);
-        debug_assert_eq!(text.get(row.byte_idx), Some(&b'\n'));
-
-        let line_end = CharPos0::new(row.charpos.max(0) as usize);
-        let mut source = BufferPlainItemSource::with_row_break_segments(
-            loop_context.buffer_id(),
-            buffer,
-            &[],
-            line_end,
-            RenderFaceRef::FaceId(active_face_state.face_id()),
-        );
-        let mut item_context = crate::display_source::DisplaySourceContext::empty();
-        let row_break_item = source
-            .next_item(&mut item_context)
-            .expect("RowBreak-only source yields exactly the row break");
-        debug_assert!(
-            matches!(
-                row_break_item.kind,
-                DisplayItemKind::RowBreak(row_break)
-                    if row_break == DisplayRowBreak::explicit_newline()
-                        .with_line_height(DisplayLineHeightPolicy::from_property(None))
-            ),
-            "empty-row production must be the explicit-newline row break"
-        );
-        debug_assert!(source.next_item(&mut item_context).is_none());
-
-        // Mirror the pipeline's explicit-line-break dispatch
-        // (item_render.rs): byte_idx advances past the newline BEFORE the
-        // line-break render; charpos is advanced/re-synced inside it.
-        let source_char =
-            crate::display_source::DisplaySourceStepChar::new('\n', row.byte_idx, row.charpos);
-        self.progress.set_byte_idx(row.byte_idx + 1);
-        let continuation = loop_context
-            .line_break_request(
-                source_char,
-                text,
-                self.surface.append_surface,
-                active_face_state,
-            )
-            .render_and_apply(source_walk, buffer, self.reborrow());
-        if continuation.should_break() {
-            return note_route_stopped(PlainRowRouteOutcome::Stopped);
-        }
-        note_routed_row(plan, wrap_mode, mid_line_start);
         PlainRowRouteOutcome::Rendered
     }
 }

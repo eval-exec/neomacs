@@ -26,9 +26,8 @@ pub(crate) struct BufferPlainItemSource {
 impl BufferPlainItemSource {
     /// Source over `[start, line_end)` text plus the newline row break at
     /// `line_end` — the full row, as the shadow renderer consumes it. The
-    /// single-segment shape only the shadow-equivalence tests need; execution
-    /// always builds a source through
-    /// [`with_row_break_segments`](Self::with_row_break_segments).
+    /// single-segment shape only the shadow-equivalence tests need.
+    /// Production batches text only; the canonical producer owns newlines.
     #[cfg(test)]
     pub(crate) fn with_row_break<B: LayoutBufferView + ?Sized>(
         buffer_id: BufferId,
@@ -55,6 +54,7 @@ impl BufferPlainItemSource {
     /// resolved AT the newline (a face span covering the newline rides onto
     /// the appended newline space through the line-end plan, mirroring the
     /// buffer pipeline's row-break face).
+    #[cfg(test)]
     pub(crate) fn with_row_break_segments<B: LayoutBufferView + ?Sized>(
         buffer_id: BufferId,
         buffer: &B,
