@@ -511,6 +511,23 @@ jobs:
     env:
       prefix: ${{ github.workspace }}/tmp/prefix
     steps:
+      # The Linux product declares `video`, so the tarball links GStreamer and
+      # needs it present to start; only the AppImage carries its own copy. The
+      # runtime libraries (not `-dev`) are exactly what a user installing the
+      # tarball needs, so installing them here is what makes this job test the
+      # documented path rather than whichever machine it landed on.
+      #
+      # This label resolves to both self-hosted and GitHub-hosted runners. The
+      # self-hosted ones have GStreamer, the GitHub-hosted image does not, and
+      # v0.0.17 passed only because it drew a self-hosted one; v0.0.18 drew a
+      # hosted one and died with `libgstpbutils-1.0.so.0: cannot open shared
+      # object file`.
+      - name: Install the GStreamer runtime the tarball links
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libgstreamer1.0-0 libgstreamer-plugins-base1.0-0
+
       - name: Run the published installer
         run: |
           curl -fsSL \
