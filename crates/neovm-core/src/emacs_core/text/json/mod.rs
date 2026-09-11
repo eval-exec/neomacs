@@ -644,6 +644,15 @@ struct JsonParser<'a> {
     /// Current object/array nesting depth, bounded by [`MAX_PARSE_DEPTH`].
     depth: usize,
     opts: ParseOpts,
+    /// Keyword symbol for each distinct plist key seen in this document.
+    ///
+    /// A JSON document repeats its keys: an LSP `publishDiagnostics` carries
+    /// the same dozen or so (`line`, `character`, `range`, `message`, ...)
+    /// once per diagnostic, thousands of times over. Building the keyword
+    /// fresh each time allocated a `":" + key` string and re-interned it per
+    /// occurrence. Interned symbols are permanently rooted, so caching the
+    /// resulting value is safe for the life of the parse.
+    keyword_cache: std::collections::HashMap<String, Value>,
 }
 
 /// Maximum object/array nesting accepted while parsing, mirroring GNU
@@ -660,6 +669,7 @@ impl<'a> JsonParser<'a> {
             pos: 0,
             depth: 0,
             opts,
+            keyword_cache: std::collections::HashMap::new(),
         }
     }
 
@@ -1208,6 +1218,20 @@ impl<'a> JsonParser<'a> {
         Ok(Value::list(pairs))
     }
 
+    /// The keyword symbol for plist key `key`, interning it at most once per
+    /// document. See [`JsonParser::keyword_cache`].
+    fn plist_keyword(&mut self, key: &str) -> Value {
+        if let Some(value) = self.keyword_cache.get(key) {
+            return *value;
+        }
+        let mut name = String::with_capacity(key.len() + 1);
+        name.push(':');
+        name.push_str(key);
+        let value = Value::keyword(&name);
+        self.keyword_cache.insert(key.to_string(), value);
+        value
+    }
+
     fn parse_object_plist(&mut self, mut c: u8) -> Result<Value, Flow> {
         let mut items: Vec<Value> = Vec::new();
         if c == b'}' {
@@ -1218,7 +1242,7 @@ impl<'a> JsonParser<'a> {
         loop {
             let (key, val) = self.parse_object_member(c)?;
             // Plist keys are keywords (symbols with leading colon).
-            items.push(Value::keyword(format!(":{}", key)));
+            items.push(self.plist_keyword(&key));
             items.push(val);
 
             c = self.skip_ws_consume()?;
