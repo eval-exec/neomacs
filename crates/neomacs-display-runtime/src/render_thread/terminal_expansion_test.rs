@@ -1,7 +1,7 @@
-use neomacs_display_protocol::FrameFaceMap;
 use super::*;
 use crate::core::frame_glyphs::{DisplaySlotId, GlyphRowRole};
 use crate::core::types::{Color, DisplayWindowId, Px};
+use neomacs_display_protocol::FrameFaceMap;
 
 fn generated_char(face_id: FaceId, x: f32) -> FrameGlyph {
     let window_id = DisplayWindowId::new(1);

@@ -57,13 +57,13 @@
 //!
 //! Offending sites are tagged `FIXME(chrome-insets)` below.
 
-use neomacs_display_protocol::FrameFaceMap;
 use super::super::vertex::RectVertex;
 use super::effect_common::{EffectCtx, ambient_cycle_phase, effect_entity_seed, push_rect};
 use super::{
     ClickHaloEntry, CursorGhostEntry, EdgeGlowEntry, EdgeSnapEntry, HeatMapEntry, RainDrop,
     ScrollMomentumEntry, ScrollVelocityFadeEntry, WindowFadeEntry,
 };
+use neomacs_display_protocol::FrameFaceMap;
 use neomacs_display_protocol::face::Face;
 use neomacs_display_protocol::frame_glyphs::{FrameGlyph, MaterializedFaceData};
 use neomacs_display_protocol::frame_time::EventTime;
@@ -1511,10 +1511,7 @@ pub(super) fn emit_search_highlight(
 }
 
 /// Selection region glow highlight.
-pub(super) fn emit_selection_glow(
-    ctx: &EffectCtx,
-    faces: &FrameFaceMap,
-) -> Vec<RectVertex> {
+pub(super) fn emit_selection_glow(ctx: &EffectCtx, faces: &FrameFaceMap) -> Vec<RectVertex> {
     if !ctx.effects.region_glow.enabled || ctx.effects.region_glow.face_id == FaceId::new(0) {
         return Vec::new();
     }

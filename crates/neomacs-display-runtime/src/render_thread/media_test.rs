@@ -1,5 +1,5 @@
-use neomacs_display_protocol::FrameFaceMap;
 use super::*;
+use neomacs_display_protocol::FrameFaceMap;
 
 #[cfg(feature = "neo-term")]
 use crate::terminal::content::{RenderCell, RenderCursor, TerminalContent};

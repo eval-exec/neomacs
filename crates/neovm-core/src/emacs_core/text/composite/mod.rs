@@ -962,11 +962,8 @@ fn select_automatic_composition_spans(
             let Some(trigger_char) = text[offset..].chars().next() else {
                 break;
             };
-            super::chartable::ct_lookup(
-                &composition_function_table,
-                i64::from(trigger_char as u32),
-            )
-            .unwrap_or(Value::NIL)
+            super::chartable::ct_lookup(&composition_function_table, i64::from(trigger_char as u32))
+                .unwrap_or(Value::NIL)
         };
         // Nearly every character in an ordinary buffer has NO composition
         // rule. `list_to_vec` opens with `Vec::with_capacity(16)` and so

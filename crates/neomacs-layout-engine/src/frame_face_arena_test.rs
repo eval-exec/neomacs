@@ -435,7 +435,9 @@ fn sealing_advances_the_generation() {
     let arena = FrameFaceArena::default();
     let attempt = arena.begin_attempt();
 
-    let sealed = attempt.seal(HashMap::default()).expect("seal empty attempt");
+    let sealed = attempt
+        .seal(HashMap::default())
+        .expect("seal empty attempt");
 
     assert_ne!(
         sealed.generation(),

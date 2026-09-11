@@ -1,4 +1,3 @@
-use neomacs_display_protocol::FrameFaceMap;
 use super::RenderApp;
 #[cfg(feature = "video")]
 use super::frame_sched::{NativeWindowId, PacingAction};
@@ -16,6 +15,7 @@ use crate::core::types::DisplayWindowId;
 use crate::core::types::{Color, FaceId, Px, Rect};
 #[cfg(any(feature = "neo-term", feature = "webview"))]
 use crate::thread_comm::InputEvent;
+use neomacs_display_protocol::FrameFaceMap;
 #[cfg(feature = "neo-term")]
 use neomacs_display_protocol::font::{FontSlantKind, ResolvedFont, ResolvedFontId};
 #[cfg(feature = "neo-term")]

@@ -12,9 +12,9 @@
 use neomacs_display_protocol::FrameFaceMap;
 use neomacs_display_protocol::face::{BasicFaceId, Face};
 use neomacs_display_protocol::types::FaceId;
+use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHasher;
 use std::cell::RefCell;
-use rustc_hash::FxHashMap as HashMap;
 use std::hash::Hasher;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;

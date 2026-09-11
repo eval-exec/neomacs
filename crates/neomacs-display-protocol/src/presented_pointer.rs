@@ -1051,7 +1051,12 @@ fn build_presented_hit_buckets(
     let mut prefix_max_bottom = 0.0_f32;
     for (top, bottom, start, end) in runs {
         let run = &mut entries[start..end];
-        run.sort_by(|left, right| left.3.x().total_cmp(&right.3.x()).then(left.2.cmp(&right.2)));
+        run.sort_by(|left, right| {
+            left.3
+                .x()
+                .total_cmp(&right.3.x())
+                .then(left.2.cmp(&right.2))
+        });
         prefix_max_bottom = prefix_max_bottom.max(bottom);
         let mut running_right = 0.0_f32;
         let prefix_max_right = run

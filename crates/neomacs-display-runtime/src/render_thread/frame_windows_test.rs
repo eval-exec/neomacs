@@ -1,4 +1,3 @@
-use neomacs_display_protocol::FrameFaceMap;
 use super::*;
 use crate::core::frame_glyphs::{
     BufferTransitionTarget, ContentTransitionHint, CursorStyle, DisplaySlotId, FrameGlyph,
@@ -7,6 +6,7 @@ use crate::core::frame_glyphs::{
 use crate::render_thread::cursor::CursorTarget;
 #[cfg(feature = "neo-term")]
 use crate::render_thread::terminal_expansion::TerminalExpansionUpdate;
+use neomacs_display_protocol::FrameFaceMap;
 use neomacs_display_protocol::types::Color;
 use neovm_core::window::GuiFrameGeometryHints;
 

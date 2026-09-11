@@ -4,8 +4,8 @@
 //! Emacs's current_matrix and rebuilds this buffer from scratch. No
 //! incremental overlap tracking is needed.
 
-use crate::face::FrameFaceMap;
 use crate::effect_config::EffectsConfig;
+use crate::face::FrameFaceMap;
 use crate::face::{
     BasicFaceId, BoxBorderStyle, BoxType, BoxVerticalEdges, Face, FaceAttributes, UnderlineStyle,
 };

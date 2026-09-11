@@ -1,8 +1,8 @@
-use neomacs_display_protocol::FrameFaceMap;
 use super::{FpsCounter, RenderApp};
 use crate::core::face::Face;
 use crate::core::frame_glyphs::{DisplaySlotId, FrameGlyph, WindowCursor};
 use crate::core::types::FaceId;
+use neomacs_display_protocol::FrameFaceMap;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 const FACE_DIFF_SAMPLE_LIMIT: usize = 10;
@@ -90,10 +90,7 @@ struct FaceConflictDetails {
     omitted: usize,
 }
 
-pub(super) fn summarize_face_changes(
-    old: &FrameFaceMap,
-    new: &FrameFaceMap,
-) -> FaceChangeSummary {
+pub(super) fn summarize_face_changes(old: &FrameFaceMap, new: &FrameFaceMap) -> FaceChangeSummary {
     use neomacs_renderer_wgpu::glyph_atlas::glyph_font_identity;
     let mut summary = FaceChangeSummary::default();
     for (face_id, face) in new {

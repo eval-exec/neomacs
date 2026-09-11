@@ -1,6 +1,5 @@
 //! Glyphs methods for WgpuRenderer.
 
-use neomacs_display_protocol::FrameFaceMap;
 use super::super::glyph_atlas::{ComposedGlyphKey, GlyphKey, WgpuGlyphAtlas};
 use super::super::vertex::{RectVertex, SubpixelGlyphVertex, Uniforms};
 use super::GlyphRenderStats;
@@ -12,6 +11,7 @@ use super::cursor_presentation::{
 };
 use super::frame_pass::{BoxSpan, FrameParams, FramePassCtx};
 use super::scissor::SurfaceScissor;
+use neomacs_display_protocol::FrameFaceMap;
 use neomacs_display_protocol::PointerAppearanceSelection;
 use neomacs_display_protocol::effect_config::EffectsConfig;
 use neomacs_display_protocol::face::Face;
@@ -931,11 +931,7 @@ fn log_frame_glyph_debug_scan(frame_glyphs: &FrameGlyphBuffer) {
     }
 }
 
-fn log_face_debug_summary(
-    call_id: u64,
-    frame_glyphs: &FrameGlyphBuffer,
-    faces: &FrameFaceMap,
-) {
+fn log_face_debug_summary(call_id: u64, frame_glyphs: &FrameGlyphBuffer, faces: &FrameFaceMap) {
     if !trace_face_debug_enabled() {
         return;
     }

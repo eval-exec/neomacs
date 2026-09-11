@@ -4532,7 +4532,6 @@ impl Context {
         self.unbind_to_with_result(state.specpdl_count, result)
     }
 
-
     /// Keep the Lisp-visible `features` variable in sync with the evaluator's
     /// internal feature set.
     pub(crate) fn sync_features_variable(&mut self) {

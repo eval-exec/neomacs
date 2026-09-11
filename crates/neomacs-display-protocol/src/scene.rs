@@ -1,7 +1,7 @@
 //! Scene graph for display rendering.
 
-use crate::face::FrameFaceMap;
 use crate::face::Face;
+use crate::face::FrameFaceMap;
 use crate::types::{Color, DisplayWindowId, FaceId, ImageId, Rect, Transform, VideoId, WebViewId};
 
 /// Scene graph node types

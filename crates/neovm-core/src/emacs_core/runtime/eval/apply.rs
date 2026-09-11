@@ -5,7 +5,6 @@
 
 use super::*;
 
-
 cached_symbol_id!(optional_arg_symbol, "&optional");
 cached_symbol_id!(rest_arg_symbol, "&rest");
 

@@ -8,7 +8,6 @@
 //! `pixel_width`; GUI backends must use that rather than reconstructing every
 //! glyph as one frame column.
 
-use crate::face::FrameFaceMap;
 use super::effect_config::EffectsConfig;
 use super::face::{BoxVerticalEdges, FaceAttributes, UnderlineStyle};
 use super::frame_chrome::{FrameChrome, FrameChromeContent, PresentationId};
@@ -27,6 +26,7 @@ use super::xwidget_extent::{
     XwidgetContentExtent, XwidgetLayoutAdvance, XwidgetPresentationGeometry,
 };
 use super::{FrameSpace, GeometryPoint, GeometryRect, LogicalPixels};
+use crate::face::FrameFaceMap;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use rustc_hash::FxHashMap as HashMap;
 
