@@ -6,7 +6,7 @@
 //! live in crate::window; window.c builtins stay in super::window_cmds.
 
 pub(crate) mod position;
-use position::{FramePositionSpec, apply_position_parameters};
+use position::{FrameCoordinateOrigin, FramePositionSpec, apply_frame_position};
 
 use super::error::Flow;
 use super::error::{EvalResult, LispCondition, signal};
@@ -961,16 +961,19 @@ pub(crate) fn builtin_set_frame_position(
         Some(&args[0]),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
-    let x = expect_int(&args[1])?;
-    let y = expect_int(&args[2])?;
     let frame = frames
-        .get_mut(fid)
+        .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+    // GNU frame.c: GUI offsets use signed edges; TTY child offsets are literal.
+    let origin = if frame_uses_window_system_pixels(frame) {
+        FrameCoordinateOrigin::SignedEdges
+    } else {
+        FrameCoordinateOrigin::Absolute
+    };
+    let x = FramePositionSpec::from_coordinate(args[1], origin)?;
+    let y = FramePositionSpec::from_coordinate(args[2], origin)?;
     if frame.effective_window_system().is_some() || frame.parent_frame.as_frame_id().is_some() {
-        frame.left_pos = x;
-        frame.top_pos = y;
-        frame.set_parameter(Value::symbol("left"), Value::fixnum(x));
-        frame.set_parameter(Value::symbol("top"), Value::fixnum(y));
+        apply_frame_position(frames, fid, Some(x), Some(y));
     }
     Ok(Value::T)
 }
@@ -988,8 +991,8 @@ pub(crate) fn builtin_set_frame_size_and_position_pixelwise(
         Some(&args[0]),
         crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
-    let left = expect_int(&args[3])?;
-    let top = expect_int(&args[4])?;
+    let left = FramePositionSpec::from_coordinate(args[3], FrameCoordinateOrigin::Absolute)?;
+    let top = FramePositionSpec::from_coordinate(args[4], FrameCoordinateOrigin::Absolute)?;
     if let Some(gravity) = args.get(5)
         && gravity.is_truthy()
     {
@@ -1015,25 +1018,18 @@ pub(crate) fn builtin_set_frame_size_and_position_pixelwise(
         .get(fid)
         .is_some_and(|frame| frame.parent_frame.as_frame_id().is_some());
 
+    builtin_set_frame_size(eval, vec![args[0], args[1], args[2], Value::T])?;
     if uses_window_system_pixels || is_child_frame {
-        let frame = eval
-            .frames
-            .get_mut(fid)
-            .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
-        frame.left_pos = left;
-        frame.top_pos = top;
-        frame.set_parameter(Value::symbol("left"), Value::fixnum(left));
-        frame.set_parameter(Value::symbol("top"), Value::fixnum(top));
+        apply_frame_position(&mut eval.frames, fid, Some(left), Some(top));
     } else {
         let frame = eval
             .frames
             .get_mut(fid)
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
-        frame.set_parameter(Value::symbol("left"), Value::fixnum(left));
-        frame.set_parameter(Value::symbol("top"), Value::fixnum(top));
+        frame.set_parameter(Value::symbol("left"), args[3]);
+        frame.set_parameter(Value::symbol("top"), args[4]);
     }
 
-    builtin_set_frame_size(eval, vec![args[0], args[1], args[2], Value::T])?;
     if eval
         .frames
         .get(fid)
@@ -1894,7 +1890,7 @@ pub(crate) fn builtin_modify_frame_parameters(
         }
     }
 
-    apply_position_parameters(&mut eval.frames, fid, requested_left, requested_top);
+    apply_frame_position(&mut eval.frames, fid, requested_left, requested_top);
 
     Ok(Value::NIL)
 }

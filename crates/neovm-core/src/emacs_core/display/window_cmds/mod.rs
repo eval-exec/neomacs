@@ -18,6 +18,7 @@ pub(crate) use crate::emacs_core::error::{
 };
 use crate::emacs_core::indent::MotionEngine;
 use crate::emacs_core::xdisp::LineWrap;
+use crate::window::WindowChromeLine;
 use crate::window::body::{WindowBodyAxis, WindowBodyCellSize, WindowBodyUnit};
 use crate::window::{
     CombinationLimit, CursorTypeSymbol, DeleteResize, FrameDeletion, FrameDeletionSelectionPolicy,
@@ -31,6 +32,8 @@ use crate::window::{
 use neomacs_display_protocol::TransitionDirection;
 use std::collections::HashSet;
 use strum::{EnumString, IntoStaticStr};
+
+mod body_geometry;
 
 fn navigation_transition_direction(value: Value) -> Result<TransitionDirection, Flow> {
     value
@@ -1276,16 +1279,6 @@ pub(crate) fn record_window_buffer_change_history_in_state(
     }
 
     Ok(record_outgoing && !is_minibuffer_window(frames, frame_id, window_id))
-}
-
-fn window_body_height_lines(frames: &FrameManager, fid: FrameId, wid: WindowId, w: &Window) -> i64 {
-    let ch = frames.get(fid).map(|f| f.char_height).unwrap_or(16.0);
-    let lines = window_height_lines(w, ch);
-    if is_minibuffer_window(frames, fid, wid) {
-        lines
-    } else {
-        lines.saturating_sub(1)
-    }
 }
 
 // ===========================================================================
@@ -3310,17 +3303,8 @@ pub(crate) fn builtin_window_mode_line_height(
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
         resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
-    let height = window_chrome_height_in_state(
-        frames,
-        fid,
-        wid,
-        WindowChromeMetric::ModeLine,
-        if is_minibuffer_window(frames, fid, wid) {
-            0
-        } else {
-            1
-        },
-    )?;
+    let height =
+        body_geometry::chrome_height_pixels(frames, buffers, fid, wid, WindowChromeLine::ModeLine)?;
     Ok(Value::fixnum(height))
 }
 /// `(window-header-line-height &optional WINDOW)` -> integer.
@@ -3333,12 +3317,12 @@ pub(crate) fn builtin_window_header_line_height(
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
         resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
-    Ok(Value::fixnum(window_chrome_height_in_state(
+    Ok(Value::fixnum(body_geometry::chrome_height_pixels(
         frames,
+        buffers,
         fid,
         wid,
-        WindowChromeMetric::HeaderLine,
-        0,
+        WindowChromeLine::HeaderLine,
     )?))
 }
 /// `(window-tab-line-height &optional WINDOW)` -> integer.
@@ -3351,51 +3335,15 @@ pub(crate) fn builtin_window_tab_line_height(
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
         resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
-    Ok(Value::fixnum(window_chrome_height_in_state(
+    Ok(Value::fixnum(body_geometry::chrome_height_pixels(
         frames,
+        buffers,
         fid,
         wid,
-        WindowChromeMetric::TabLine,
-        0,
+        WindowChromeLine::TabLine,
     )?))
 }
 
-#[derive(Clone, Copy)]
-// Variant names are the GNU-visible chrome concepts used at call sites.
-#[allow(clippy::enum_variant_names)]
-enum WindowChromeMetric {
-    ModeLine,
-    HeaderLine,
-    TabLine,
-}
-
-fn window_chrome_height_in_state(
-    frames: &FrameManager,
-    fid: FrameId,
-    wid: WindowId,
-    metric: WindowChromeMetric,
-    fallback: i64,
-) -> Result<i64, Flow> {
-    if let Some(geometry) = redisplay_window_regions(frames, fid, wid)? {
-        let regions = geometry;
-        return Ok(match metric {
-            WindowChromeMetric::ModeLine => regions.mode_line(),
-            WindowChromeMetric::HeaderLine => regions.header_line(),
-            WindowChromeMetric::TabLine => regions.tab_line(),
-        }
-        .map_or(0, |rect| rect.height().get() as i64));
-    }
-    Ok(frames
-        .get(fid)
-        .and_then(|frame| frame.redisplay_snapshot(wid))
-        .map(|snapshot| match metric {
-            WindowChromeMetric::ModeLine => snapshot.mode_line_height,
-            WindowChromeMetric::HeaderLine => snapshot.header_line_height,
-            WindowChromeMetric::TabLine => snapshot.tab_line_height,
-        })
-        .unwrap_or(fallback)
-        .max(0))
-}
 /// `(window-pixel-height &optional WINDOW)` -> integer.
 ///
 /// In batch-mode GNU Emacs, these "pixel" helpers report character-cell units.
@@ -3438,7 +3386,7 @@ pub(crate) fn builtin_window_pixel_width(
 /// Returns the body height of WINDOW.  PIXELWISE follows GNU's three-state
 /// contract: nil uses canonical lines, `remap` uses the buffer-remapped
 /// default face, and every other non-nil value uses pixels.
-/// Body excludes mode-line (one row) for non-minibuffer windows.
+/// Body excludes the window's actual chrome, scroll bar and divider areas.
 pub(crate) fn builtin_window_body_height(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
@@ -3454,7 +3402,7 @@ pub(crate) fn builtin_window_body_height(
         crate::emacs_core::window_cmds::WindowDomain::Live,
     )?;
     let remapped = remapped_window_body_cell_size(eval, fid, unit);
-    window_body_height_for_window(&eval.frames, fid, wid, unit, remapped)
+    window_body_height_for_window(&eval.frames, &eval.buffers, fid, wid, unit, remapped)
 }
 
 fn window_body_height_impl(
@@ -3467,7 +3415,7 @@ fn window_body_height_impl(
     let (fid, wid) =
         resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
     let unit = window_body_unit_from_lisp(args.get(1));
-    window_body_height_for_window(frames, fid, wid, unit, None)
+    window_body_height_for_window(frames, buffers, fid, wid, unit, None)
 }
 
 fn canonical_window_body_cell_size(frames: &FrameManager, fid: FrameId) -> WindowBodyCellSize {
@@ -3494,27 +3442,13 @@ fn remapped_window_body_cell_size(
 
 fn window_body_height_for_window(
     frames: &FrameManager,
+    buffers: &BufferManager,
     fid: FrameId,
     wid: WindowId,
     unit: WindowBodyUnit,
     remapped: Option<WindowBodyCellSize>,
 ) -> EvalResult {
-    let window = get_leaf(frames, fid, wid)?;
-    let pixels = match redisplay_window_regions(frames, fid, wid)? {
-        Some(geometry) => geometry.text_body().height().get() as i64,
-        None => {
-            let total = window_height_pixels(window);
-            if is_minibuffer_window(frames, fid, wid) {
-                total
-            } else {
-                let mode_line_height = frames
-                    .get(fid)
-                    .map(|frame| frame.char_height.max(0.0) as i64)
-                    .unwrap_or(0);
-                total.saturating_sub(mode_line_height)
-            }
-        }
-    };
+    let pixels = body_geometry::body_height_pixels(frames, buffers, fid, wid)?;
     Ok(Value::fixnum(unit.measure(
         WindowBodyAxis::Height,
         pixels,
@@ -3565,34 +3499,16 @@ pub(crate) fn builtin_window_text_height(
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     let (fid, wid) =
         resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Live)?;
-    let w = get_leaf(frames, fid, wid)?;
     let pixelwise = args.get(1).is_some_and(|v| v.is_truthy());
+    let body = body_geometry::body_height_pixels(frames, buffers, fid, wid)?;
     if pixelwise {
-        let body = match redisplay_window_regions(frames, fid, wid)? {
-            Some(geometry) => geometry.text_body().height().get() as i64,
-            None => {
-                let total = window_height_pixels(w);
-                if is_minibuffer_window(frames, fid, wid) {
-                    total
-                } else {
-                    let mode_line_height = frames
-                        .get(fid)
-                        .map(|frame| frame.char_height.max(0.0) as i64)
-                        .unwrap_or(0);
-                    total.saturating_sub(mode_line_height)
-                }
-            }
-        };
         Ok(Value::fixnum(body))
     } else {
         let char_height = frames
             .get(fid)
             .map(|frame| frame.char_height.max(1.0))
             .unwrap_or(16.0);
-        let height = match redisplay_window_regions(frames, fid, wid)? {
-            Some(geometry) => (geometry.text_body().height().get() / char_height).floor() as i64,
-            None => window_body_height_lines(frames, fid, wid, w),
-        };
+        let height = (body as f32 / char_height).floor() as i64;
         Ok(Value::fixnum(height))
     }
 }
@@ -6739,7 +6655,7 @@ pub(crate) fn x_create_frame_impl(
             frame.sync_window_area_bounds();
         }
     }
-    super::frame::position::apply_position_parameters(frames, fid, parsed.left, parsed.top);
+    super::frame::position::apply_frame_position(frames, fid, parsed.left, parsed.top);
     if !is_child_frame && let Some(host) = display_host.as_mut() {
         let geometry_hints = frames
             .get(fid)

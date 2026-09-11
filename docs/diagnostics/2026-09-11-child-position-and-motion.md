@@ -97,3 +97,71 @@ and dispatched ordinary LSP motion. With the original Rust file and user
 configuration, the hover requested `(248, 533)` and the release frame snapshot
 reported `(248, 533)`. No autoload generation or byte compilation was run;
 `ldefs-boot.el` remained unchanged.
+
+## Follow-up: posframe's bottom-right handler (issue 120)
+
+The report at
+<https://github.com/eval-exec/neomacs/issues/120#issuecomment-5571041480>
+uses `posframe-poshandler-frame-bottom-right-corner`. Running the same example
+from `/tmp/a.el`, with local posframe 20260527.857 and `-Q`, reproduced the
+missing popup on Linux/headless Wayland even after the first placement fix.
+The buffer and redisplay glyphs contained `TestABC`, but the child was placed
+at `(-1, -36)` instead of `(584, 589)` for a 658x667 parent and 73x42 child.
+
+This is a different public entry point into the same placement semantics.
+Posframe intentionally calls `set-frame-position` with negative edge offsets.
+The previous fix covered creation and `modify-frame-parameters` but left that
+builtin writing the offsets directly into resolved coordinate fields.
+Calling the parameter API and then the positioning API on the same child
+confirmed that only the latter bypassed resolution.
+
+GNU reference:
+
+- `src/frame.c:4662`, `Fset_frame_position`: GUI negative coordinates mean
+  right/bottom-relative placement; TTY children retain literal coordinates.
+- `src/w32term.c`, `w32_set_offset` and `w32_calc_absolute_position`: mark
+  negative axes and resolve them using the parent and child extents.
+- `src/frame.c:4704`, `Fset_frame_size_and_position_pixelwise`: negative values
+  are signed absolute coordinates, including the fallback through `(+ N)`
+  parameters. Sharing a resolver must not erase this distinction.
+
+The position module now admits strict integer requests through the closed
+`FrameCoordinateOrigin::{SignedEdges, Absolute}` enum. `FramePositionSpec`
+keeps its private representation and validates native coordinate bounds.
+All four GUI callers (creation, parameters, positioning, compound pixelwise
+size/position) use `apply_frame_position`; neither integer builtin writes
+resolved coordinates directly. Rendering still consumes numeric placement,
+not Lisp expressions or package-specific conventions. This is a shared
+placement implementation, not a posframe special case. Existing top-level
+desktop/workarea limitations remain out of scope.
+
+Verification:
+
+- The GUI regression was run before changing production code: actual
+  `(-1, -36)`, expected `(535, 575)` for its fixture geometry.
+- The fixed debug binary passes the expanded nine-case GUI fixture, including
+  posframe-style negative offsets, mixed signs/zero, and signed absolute
+  compound pixelwise placement.
+- 312 selected frame/window tests pass via `cargo nextest`, including the
+  out-of-line `frame_position_test.rs` coordinate-range check. Its expected
+  errors were obtained directly from GNU Emacs.
+- Re-running the real `/tmp/a.el` on the fixed debug binary produces a visible
+  child at `(584, 589)` and a redisplay snapshot containing `TestABC` there.
+  Artifacts are under `target/diagnostics/issue-120-comment/fixed/`.
+
+The issue reporter used Windows. These results reproduce and fix the shared
+coordinate bug on Linux Wayland; they do not claim Windows-native validation.
+
+Final release verification: `cargo build -p neomacs --release` succeeded in
+7m 05s. Its freshly generated matching pdump starts normally. The release
+passes the nine-case GUI regression and the original `/tmp/a.el` example:
+the snapshot contains `TestABC` at `(584, 589)`. Three focused core tests were
+also rerun successfully after the final resolver rename. No byte compilation
+or autoload regeneration was performed, and `ldefs-boot.el` is unchanged.
+Release logs are `/tmp/neomacs-posframe-release-{build,pdump,gui}.log`; the
+original-example snapshot is
+`target/diagnostics/issue-120-comment/release-a-el-frame.json`.
+The standalone headless run logged one Vulkan surface-capability
+`ERROR_SURFACE_LOST_KHR` during startup, then continued through the example,
+snapshot assertion, and normal shutdown without a panic. The verification
+here asserts redisplay geometry/glyphs, not a compositor screenshot.

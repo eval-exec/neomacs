@@ -20,6 +20,8 @@ use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::hash::Hash;
 
 pub(crate) mod body;
+mod chrome;
+pub use chrome::WindowChromePresence;
 mod display;
 mod frame_params;
 pub mod geometry;

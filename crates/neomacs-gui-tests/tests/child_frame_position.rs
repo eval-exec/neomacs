@@ -6,7 +6,7 @@ use std::{path::PathBuf, time::Duration};
 
 #[test]
 #[ignore = "requires a built binary/pdump and a native GUI backend"]
-fn child_frame_signed_absolute_parameters_reach_rendered_placement() {
+fn child_frame_position_apis_preserve_coordinate_intent_in_rendered_placement() {
     let backend = match std::env::var("NEOMACS_GUI_TEST_BACKEND").as_deref() {
         Ok("wayland") => GuiBackend::LinuxWayland,
         Ok("x11") => GuiBackend::LinuxX11,
@@ -81,6 +81,9 @@ fn child_frame_signed_absolute_parameters_reach_rendered_placement() {
         "created-fraction",
         "resized",
         "negative",
+        "posframe",
+        "mixed",
+        "pixelwise",
     ] {
         let buffer = format!("*child-position-{name}*");
         let child = frames
@@ -105,6 +108,10 @@ fn child_frame_signed_absolute_parameters_reach_rendered_placement() {
             ),
             "resized" => (remaining_x - 10.0, remaining_y),
             "negative" => (-12.0, -17.0),
+            // GNU set-frame-position: distance from right/bottom outer edges.
+            "posframe" => (remaining_x - 1.0, remaining_y - 36.0),
+            "mixed" => (0.0, remaining_y - 36.0),
+            "pixelwise" => (-12.0, -17.0),
             _ => unreachable!(),
         };
         assert_eq!(

@@ -932,87 +932,12 @@ fn effective_buffer_bool(buffer: &Buffer, obarray: &Obarray, var: LayoutVar) -> 
     }
 }
 
-fn value_non_nil(value: Option<Value>) -> bool {
-    value.is_some_and(|value| !value.is_nil())
-}
-
-fn value_is_symbol(value: Option<Value>, name: &str) -> bool {
-    value.is_some_and(|value| value.as_symbol_name() == Some(name))
-}
-
 pub(crate) fn window_parameter_by_name(window: &Window, name: &str) -> Option<Value> {
     window
         .parameters()
         .iter()
         .find(|(key, _)| key.as_symbol_name() == Some(name))
         .map(|(_, value)| *value)
-}
-
-fn window_wants_mode_line(
-    window: &Window,
-    buffer: &Buffer,
-    frame: &Frame,
-    obarray: &Obarray,
-    is_minibuffer: bool,
-) -> bool {
-    let window_mode_line_format = window_parameter_by_name(window, "mode-line-format");
-    window.is_leaf()
-        && !is_minibuffer
-        && !value_is_symbol(window_mode_line_format, "none")
-        && (value_non_nil(window_mode_line_format)
-            || value_non_nil(effective_buffer_value(
-                buffer,
-                obarray,
-                LayoutVar::ModeLineFormat,
-            )))
-        && window.bounds().height > frame.char_height
-}
-
-fn window_wants_header_line(
-    window: &Window,
-    buffer: &Buffer,
-    frame: &Frame,
-    obarray: &Obarray,
-    is_minibuffer: bool,
-    wants_mode_line: bool,
-) -> bool {
-    let window_header_line_format = window_parameter_by_name(window, "header-line-format");
-    let required_rows = if wants_mode_line { 2.0 } else { 1.0 };
-    window.is_leaf()
-        && !is_minibuffer
-        && !value_is_symbol(window_header_line_format, "none")
-        && (value_non_nil(window_header_line_format)
-            || value_non_nil(effective_buffer_value(
-                buffer,
-                obarray,
-                LayoutVar::HeaderLineFormat,
-            )))
-        && window.bounds().height > required_rows * frame.char_height
-}
-
-fn window_wants_tab_line(
-    window: &Window,
-    buffer: &Buffer,
-    frame: &Frame,
-    obarray: &Obarray,
-    is_minibuffer: bool,
-    wants_mode_line: bool,
-    wants_header_line: bool,
-) -> bool {
-    let window_tab_line_format = window_parameter_by_name(window, "tab-line-format");
-    let required_rows = (if wants_mode_line { 1.0 } else { 0.0 })
-        + (if wants_header_line { 1.0 } else { 0.0 })
-        + 1.0;
-    window.is_leaf()
-        && !is_minibuffer
-        && !value_is_symbol(window_tab_line_format, "none")
-        && (value_non_nil(window_tab_line_format)
-            || value_non_nil(effective_buffer_value(
-                buffer,
-                obarray,
-                LayoutVar::TabLineFormat,
-            )))
-        && window.bounds().height > required_rows * frame.char_height
 }
 
 fn global_bool(obarray: &Obarray, name: &str) -> bool {
@@ -2027,24 +1952,12 @@ pub fn window_params_from_neovm_with_font_sizing(
     // windows whose window parameter is not `none`, whose window
     // parameter or buffer-local format is non-nil, and whose window is
     // high enough to hold the requested chrome.
-    let wants_mode_line = window_wants_mode_line(window, buffer, frame, obarray, is_minibuffer);
-    let wants_header_line = window_wants_header_line(
-        window,
-        buffer,
-        frame,
-        obarray,
-        is_minibuffer,
-        wants_mode_line,
-    );
-    let wants_tab_line = window_wants_tab_line(
-        window,
-        buffer,
-        frame,
-        obarray,
-        is_minibuffer,
-        wants_mode_line,
-        wants_header_line,
-    );
+    let chrome =
+        neovm_core::window::WindowChromePresence::resolve(window, buffer, frame, is_minibuffer);
+    use neovm_core::window::WindowChromeLine;
+    let wants_mode_line = chrome.contains(WindowChromeLine::ModeLine);
+    let wants_header_line = chrome.contains(WindowChromeLine::HeaderLine);
+    let wants_tab_line = chrome.contains(WindowChromeLine::TabLine);
 
     // Window chrome is buffer-owned in GNU: `face-remapping-alist` can remap
     // mode-line, header-line, and tab-line independently for this buffer.  Keep

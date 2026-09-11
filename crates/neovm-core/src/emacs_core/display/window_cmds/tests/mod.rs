@@ -13,6 +13,9 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+mod body_geometry_test;
+mod frame_position_test;
+
 #[test]
 fn frame_scale_factor_reads_the_selected_frames_presented_device_scale() {
     let mut eval = Context::new();
@@ -8590,6 +8593,12 @@ fn window_chrome_height_queries_prefer_last_redisplay_snapshot_when_available() 
     ev.buffers.set_current(buf);
     let fid = ev.frames.create_frame("F1", 800, 600, buf);
     let wid = ev.frames.get(fid).expect("frame").selected_window;
+
+    // Recorded heights measure requested chrome; they do not create chrome
+    // whose buffer format is nil (GNU WINDOW_*_LINE_HEIGHT predicates).
+    let buffer = ev.buffers.get_mut(buf).expect("buffer");
+    buffer.set_buffer_local("header-line-format", Value::string("HEADER"));
+    buffer.set_buffer_local("tab-line-format", Value::string("TAB"));
 
     {
         let frame = ev.frames.get_mut(fid).expect("frame");

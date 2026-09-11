@@ -38,6 +38,17 @@
                              (width . (text-pixels . 160)) (height . (text-pixels . 80))))
   (defvar child-position-negative (child-position-make "*child-position-negative*" 0 0))
   (modify-frame-parameters child-position-negative '((left . (+ -12)) (top . (+ -17))))
+  ;; posframe's bottom-right handler uses this public API, not parameters.
+  (defvar child-position-posframe
+    (child-position-make "*child-position-posframe*" 10 20))
+  (set-frame-position child-position-posframe -1 -36)
+  (defvar child-position-mixed
+    (child-position-make "*child-position-mixed*" 10 20))
+  (set-frame-position child-position-mixed 0 -36)
+  ;; GNU's compound pixelwise API instead promises signed ABSOLUTE positions.
+  (defvar child-position-pixelwise
+    (child-position-make "*child-position-pixelwise*" 10 20))
+  (set-frame-size-and-position-pixelwise child-position-pixelwise 160 80 -12 -17)
   (run-at-time 1 nil
                (lambda ()
                  (neomacs--write-frame-snapshot

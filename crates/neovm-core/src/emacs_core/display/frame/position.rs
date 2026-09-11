@@ -3,7 +3,9 @@
 //! GNU frame.c uses the same forms in gui_figure_window_size and
 //! gui_set_frame_parameters. In particular, (+ -10) is NOT the same as -10.
 
+use crate::emacs_core::error::{Flow, LispCondition, signal};
 use crate::emacs_core::value::Value;
+use crate::emacs_core::window_cmds::expect_int;
 use crate::window::{FrameId, FrameManager};
 
 /// A validated position request, not a resolved parent-local coordinate.
@@ -18,15 +20,48 @@ enum PositionKind {
     Proportional(f64),
 }
 
+/// Integer coordinate contracts differ between GNU's public frame APIs.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum FrameCoordinateOrigin {
+    /// Negative values are offsets from the right/bottom edge.
+    SignedEdges,
+    /// Negative values remain outside the left/top edge.
+    Absolute,
+}
+
 impl FramePositionSpec {
+    fn signed_edges(offset: i32) -> Self {
+        Self(if offset < 0 {
+            PositionKind::FarEdge(i64::from(offset))
+        } else {
+            PositionKind::Absolute(offset)
+        })
+    }
+
+    /// Strict integer API admission, unlike permissive frame-parameter parsing.
+    pub(crate) fn from_coordinate(
+        value: Value,
+        origin: FrameCoordinateOrigin,
+    ) -> Result<Self, Flow> {
+        let offset = i32::try_from(expect_int(&value)?).map_err(|_| {
+            signal(
+                LispCondition::ArgsOutOfRange,
+                vec![
+                    value,
+                    Value::fixnum(i64::from(i32::MIN)),
+                    Value::fixnum(i64::from(i32::MAX)),
+                ],
+            )
+        })?;
+        Ok(match origin {
+            FrameCoordinateOrigin::SignedEdges => Self::signed_edges(offset),
+            FrameCoordinateOrigin::Absolute => Self(PositionKind::Absolute(offset)),
+        })
+    }
+
     pub(crate) fn from_lisp(value: Value) -> Option<Self> {
         let kind = if let Some(integer) = value.as_int() {
-            let integer = i32::try_from(integer).ok()?;
-            if integer < 0 {
-                PositionKind::FarEdge(i64::from(integer))
-            } else {
-                PositionKind::Absolute(integer)
-            }
+            return Some(Self::signed_edges(i32::try_from(integer).ok()?));
         } else if value.as_symbol_name() == Some("-") {
             PositionKind::FarEdge(0)
         } else if value.is_cons() && value.cons_cdr().is_cons() {
@@ -64,7 +99,7 @@ impl FramePositionSpec {
 
 /// Resolve only after size/font changes, then publish numeric parent-local
 /// coordinates. Renderers never have to interpret Lisp position expressions.
-pub(crate) fn apply_position_parameters(
+pub(crate) fn apply_frame_position(
     frames: &mut FrameManager,
     fid: FrameId,
     left: Option<FramePositionSpec>,
