@@ -2430,15 +2430,43 @@ impl Context {
         }
     }
 
+    /// The concurrent mark is running, has not drained, and has not blown its
+    /// allocation cap -- so this safe point has no collector work to do.
+    ///
+    /// Strictly narrower than the branch it front-runs: under exactly these
+    /// conditions `gc_collect_from_current_roots_body` reaches its
+    /// "GC thread still marking; mutator continues" return and does nothing on
+    /// the way. `compact_buffers_for_gc` is already gated on no mark being in
+    /// progress (`concurrent_mark_running` implies `mark_in_progress`), and the
+    /// two address-keyed lexenv caches only go stale when a sweep recycles a
+    /// cons -- every sweep runs inside that body, past this point.
+    fn concurrent_mark_is_still_the_gc_thread_s(&self) -> bool {
+        if !self.tagged_heap.concurrent_mark_running() || self.tagged_heap.concurrent_mark_done() {
+            return false;
+        }
+        let cap = self.tagged_heap.gc_threshold().saturating_mul(4);
+        self.tagged_heap.bytes_since_gc() <= cap
+    }
+
     pub(super) fn gc_safe_point_exact_should_collect(&mut self) -> bool {
         if self.gc_inhibit_depth > 0 {
             return false;
         }
-        // An in-flight incremental mark or deferred sweep must keep getting
-        // slices at every safe point until it finishes, regardless of the
-        // allocation threshold.
-        if self.tagged_heap.mark_in_progress() || self.tagged_heap.sweep_in_progress() {
+        // A deferred sweep must keep getting slices at every safe point until
+        // it drains, regardless of the allocation threshold.
+        if self.tagged_heap.sweep_in_progress() {
             return true;
+        }
+        // An in-flight mark must too -- but while the GC THREAD holds the mark,
+        // the mutator's job at a safe point is only to notice that it has
+        // drained. Saying so here, rather than entering the collector to find
+        // out, is what keeps that safe point cheap: the caller wraps this in a
+        // specpdl root save/restore and the collector body opened with a
+        // `clock_gettime`, so a poll that had nothing to do still cost ~90
+        // instructions. On one rust-lsp-typing capture that was 5,800,003
+        // timestamps taken for the 25 durations anything ever read.
+        if self.tagged_heap.mark_in_progress() {
+            return !self.concurrent_mark_is_still_the_gc_thread_s();
         }
         if self.gc_pending {
             return true;
