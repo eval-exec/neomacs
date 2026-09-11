@@ -53,6 +53,17 @@ pub enum ScenarioId {
     /// `org-journal-open` with the package loaded as byte-code, for the same
     /// reason.
     OrgJournalOpenCompiled,
+    /// One `jsonrpc` round trip per operation at the size a language server
+    /// actually sends: serialize a request, then parse a
+    /// `textDocument/publishDiagnostics` reply.
+    ///
+    /// This is eglot's per-keystroke path. It is a separate row from
+    /// `rust-lsp-typing`, which edits a buffer with diagnostics already
+    /// applied and whose JSON fixture is 1.2 KB -- small enough that both
+    /// engines measure identically, which is exactly why a 3.3x-8.3x
+    /// serializer gap (issue #173) survived unseen in the suite. Payload
+    /// size is the variable this row exists to hold at a realistic value.
+    LspJsonRpc,
 }
 
 impl ScenarioId {
@@ -89,6 +100,7 @@ impl ScenarioId {
             Self::SustainedNativeVideo => "sustained-native-video",
             Self::MagitStatusCompiled => "magit-status-compiled",
             Self::OrgJournalOpenCompiled => "org-journal-open-compiled",
+            Self::LspJsonRpc => "lsp-json-rpc",
         }
     }
 }
@@ -131,6 +143,7 @@ impl FromStr for ScenarioId {
             "sustained-native-video" => Ok(Self::SustainedNativeVideo),
             "magit-status-compiled" => Ok(Self::MagitStatusCompiled),
             "org-journal-open-compiled" => Ok(Self::OrgJournalOpenCompiled),
+            "lsp-json-rpc" => Ok(Self::LspJsonRpc),
             unknown => Err(UnknownScenarioId(unknown.to_string())),
         }
     }
@@ -320,6 +333,14 @@ const SCENARIOS: &[ScenarioSpec] = &[
         primary_metric: MetricName::PerOperationWallTime,
         cross_editor_parity_metrics: &[],
     },
+    ScenarioSpec {
+        id: ScenarioId::LspJsonRpc,
+        description: "jsonrpc round trip at language-server message size: serialize a request, parse a diagnostics reply",
+        default_frontend: Frontend::Batch,
+        default_iterations: NonZeroU32::new(200).expect("non-zero scenario default"),
+        primary_metric: MetricName::PerOperationWallTime,
+        cross_editor_parity_metrics: &[],
+    },
 ];
 
 pub fn scenarios() -> &'static [ScenarioSpec] {
@@ -349,5 +370,6 @@ pub const fn scenario(id: ScenarioId) -> &'static ScenarioSpec {
         ScenarioId::SustainedNativeVideo => &SCENARIOS[13],
         ScenarioId::MagitStatusCompiled => &SCENARIOS[14],
         ScenarioId::OrgJournalOpenCompiled => &SCENARIOS[15],
+        ScenarioId::LspJsonRpc => &SCENARIOS[16],
     }
 }

@@ -426,6 +426,9 @@ pub(crate) fn validate_editor_workload_result(
             require_positive_phase(&mut mismatches, "indent-phase-time", result.indent_phase_us);
         }
         ScenarioId::Startup | ScenarioId::GuiInputLatency => {}
+        ScenarioId::LspJsonRpc => {
+            require_positive_phase(&mut mismatches, "regex-phase-time", result.regex_phase_us);
+        }
         ScenarioId::OrgJournalOpen | ScenarioId::OrgJournalOpenCompiled => {
             unreachable!("org-journal-open has a dedicated result validator")
         }

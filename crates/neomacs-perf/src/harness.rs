@@ -508,6 +508,7 @@ impl PerfHarness {
             | ScenarioId::MagitStatusCompiled
             | ScenarioId::LargeFileEditing
             | ScenarioId::Indentation
+            | ScenarioId::LspJsonRpc
             | ScenarioId::RegexSearch => {
                 scenarios::editor_workload::prepare(&self.workspace_root, request, run_directory)
             }
@@ -1562,6 +1563,7 @@ fn parse_scenario_result(
         | ScenarioId::MagitStatusCompiled
         | ScenarioId::LargeFileEditing
         | ScenarioId::Indentation
+        | ScenarioId::LspJsonRpc
         | ScenarioId::RegexSearch => serde_json::from_str(raw).map(ScenarioResult::EditorWorkload),
         ScenarioId::OrgJournalOpen | ScenarioId::OrgJournalOpenCompiled => {
             serde_json::from_str(raw).map(ScenarioResult::OrgJournalOpen)

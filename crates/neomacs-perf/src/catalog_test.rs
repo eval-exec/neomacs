@@ -7,7 +7,7 @@ use super::{CrossEditorParityMetric, Frontend, MetricName, ScenarioId, scenario,
 #[test]
 fn catalog_exposes_the_rust_lsp_typing_workload_as_a_typed_scenario() {
     let scenarios = scenarios();
-    assert_eq!(scenarios.len(), 16);
+    assert_eq!(scenarios.len(), 17);
 
     let rust_lsp = scenario(ScenarioId::RustLspTyping);
     assert_eq!(rust_lsp.id, ScenarioId::RustLspTyping);
@@ -75,6 +75,7 @@ fn catalog_commits_the_editor_workflow_scenario_family() {
             "org-journal-open-compiled",
             ScenarioId::OrgJournalOpenCompiled,
         ),
+        ("lsp-json-rpc", ScenarioId::LspJsonRpc),
     ];
 
     for (name, id) in expected {

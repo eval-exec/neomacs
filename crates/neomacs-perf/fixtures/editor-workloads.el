@@ -49,6 +49,9 @@
     (funcall function)
     (max 1 (- (neomacs-perf-workload--cpu-us) started))))
 
+(defvar neomacs-perf-workload--lsp-payload nil
+  "The `textDocument/publishDiagnostics' plist the lsp-json-rpc row round-trips.")
+
 (defvar neomacs-perf-workload--latency-trace nil
   "Reverse-ordered per-keystroke records, when latency tracing is on.")
 
@@ -204,6 +207,12 @@ first suspect and deserves to be confirmed or cleared by number."
   (cond
    ((equal scenario "startup")
     (fundamental-mode))
+   ((equal scenario "lsp-json-rpc")
+    ;; Build the payload once: the workload measures the round trip, not the
+    ;; construction of the object graph.
+    (setq neomacs-perf-workload--lsp-payload
+          (neomacs-perf-workload--lsp-message 120))
+    (fundamental-mode))
    ((equal scenario "org-editing")
     (require 'org)
     (dotimes (section 150)
@@ -263,6 +272,20 @@ first suspect and deserves to be confirmed or cleared by number."
           ("sustained-editing"
            (setq type-us (+ type-us (neomacs-perf-workload--time
                                      #'neomacs-perf-workload--single-edit-cycle))))
+          ("lsp-json-rpc"
+           ;; One jsonrpc round trip, the eglot per-keystroke path: serialize a
+           ;; request and parse a server reply. Timed together because that is
+           ;; how a session pays for them.
+           (setq regex-us
+                 (+ regex-us
+                    (neomacs-perf-workload--time
+                     (lambda ()
+                       (let ((payload (json-serialize
+                                       neomacs-perf-workload--lsp-payload
+                                       :null-object nil :false-object :json-false)))
+                         (json-parse-string payload :object-type 'plist
+                                            :null-object nil
+                                            :false-object :json-false)))))))
           ("gui-input-latency"
            (push (neomacs-perf-workload--latency-time
                   (lambda ()
@@ -316,6 +339,36 @@ first suspect and deserves to be confirmed or cleared by number."
       (buffer-switch . ,buffer-switch-us)
       (how-many . ,how-many-us)
       (motion . ,motion-us))))
+
+(defun neomacs-perf-workload--lsp-message (count)
+  "Build one `textDocument/publishDiagnostics' plist with COUNT diagnostics.
+
+Shaped like what a language server actually sends -- nested ranges, a
+message string per item, related information -- because payload SIZE and
+SHAPE are what this workload exists to hold fixed.  A 1 KB sample measures
+neither engine's JSON path: both complete it in tens of microseconds."
+  (list :jsonrpc "2.0"
+        :method "textDocument/publishDiagnostics"
+        :params
+        (list :uri "file:///tmp/neomacs-perf/main.cpp"
+              :diagnostics
+              (vconcat
+               (let (items)
+                 (dotimes (i count)
+                   (push (list :range (list :start (list :line i :character 4)
+                                            :end (list :line i :character 32))
+                               :severity 1
+                               :code "no_member"
+                               :source "clang"
+                               :message (format "no member named 'field_%d' in 'Widget'" i)
+                               :relatedInformation
+                               (vector (list :location
+                                             (list :uri "file:///tmp/neomacs-perf/widget.h"
+                                                   :range (list :start (list :line i :character 0)
+                                                                :end (list :line i :character 9)))
+                                             :message "declared here")))
+                         items))
+                 (nreverse items))))))
 
 (defun neomacs-perf-workload--max-rss-kb ()
   "Peak resident set size in kB, or 0 where the kernel does not report it.
