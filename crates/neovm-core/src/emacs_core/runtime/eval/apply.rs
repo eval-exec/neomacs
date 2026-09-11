@@ -19,6 +19,13 @@ fn restore_failed_callback_roots(saved_len: usize) {
     restore_scratch_gc_roots(saved_len);
 }
 
+||||||| parent of a94cdce597 (fix(eval): drive funcall and apply with shared continuations)
+/// One Ffuncall entry, including its logical depth and optional backtrace.
+/// Kept separate from lambda bindings: subrs and bytecode have this scope too.
+pub(super) struct ActiveApplication {
+    specpdl: usize,
+}
+
 /// Ownership of one interpreted call's bindings. Consumed exactly once by
 /// finish_interpreted_lambda, whether its body returns or raises a Lisp flow.
 pub(super) struct ActiveInterpretedLambdaCall {
@@ -1983,11 +1990,22 @@ impl Context {
         record_backtrace: bool,
     ) -> EvalResult {
         crate::emacs_core::subr::leaf::debug_assert_no_leaf_active!("apply");
+        let call = self.begin_application(function, &args, record_backtrace)?;
+        let result = self.maybe_grow_eval_stack(|ctx| ctx.funcall_general_untraced(function, args));
+        self.finish_application(call, result)
+    }
+
+    pub(super) fn begin_application(
+        &mut self,
+        function: Value,
+        args: &[Value],
+        record_backtrace: bool,
+    ) -> Result<ActiveApplication, Flow> {
         self.maybe_quit_before_gc()?;
         self.enter_interpreted_eval_depth()?;
         let bt_count = self.specpdl.len();
         if record_backtrace {
-            self.push_backtrace_frame(function, &args);
+            self.push_backtrace_frame(function, args);
         }
         let result = {
             if self.gc_safe_point_exact_should_collect() {
@@ -2003,23 +2021,27 @@ impl Context {
             } else {
                 None
             };
-            let entered = match armed {
+            match armed {
                 Some(arm) => self.do_debug_on_call(arm),
                 None => Ok(()),
-            };
-            // GNU does not probe stack space for every funcall. Keep growth
-            // checks at the function-application boundary, but only on coarse
-            // depth intervals so normal startup is not dominated by TLS lookups
-            // in stacker::maybe_grow.
-            match entered {
-                Err(flow) => Err(flow),
-                Ok(()) => {
-                    self.maybe_grow_eval_stack(|ctx| ctx.funcall_general_untraced(function, args))
-                }
             }
         };
+        let call = ActiveApplication { specpdl: bt_count };
+        match result {
+            Ok(()) => Ok(call),
+            Err(flow) => self
+                .finish_application(call, Err(flow))
+                .map(|_| unreachable!("failed application entry cannot return a value")),
+        }
+    }
+
+    pub(super) fn finish_application(
+        &mut self,
+        call: ActiveApplication,
+        result: EvalResult,
+    ) -> EvalResult {
         self.depth -= 1;
-        self.finish_traced_call(bt_count, result)
+        self.finish_traced_call(call.specpdl, result)
     }
 
     /// Apply a function value to evaluated arguments.
@@ -3501,6 +3523,19 @@ impl Context {
     }
 
     #[inline]
+    pub(super) fn resolve_application_symbol(&mut self, sym_id: SymId) -> NamedCallTarget {
+        if super::builtins::is_canonical_symbol_id(sym_id) {
+            self.resolve_named_call_target_by_id(sym_id)
+        } else if self.obarray.is_function_unbound_id(sym_id) {
+            NamedCallTarget::Void
+        } else {
+            self.obarray
+                .symbol_function_id(sym_id)
+                .map_or(NamedCallTarget::Void, NamedCallTarget::Obarray)
+        }
+    }
+
+    #[inline]
     pub(super) fn resolve_named_call_target_by_id(&mut self, sym_id: SymId) -> NamedCallTarget {
         let compiler_overrides_active = self.compiler_function_overrides_active();
         let function_epoch = self.obarray.function_epoch();
@@ -3816,7 +3851,14 @@ impl Context {
         sym_id: SymId,
         args: &[Value],
     ) -> EvalResult {
+        if let Some(flow) = self.check_funcall_subr_arity(sym_id, args.len()) {
+            return Err(flow);
+        }
         match evaluator_handler(sym_id) {
+            Some(EvaluatorHandler::Callable(CallableHandler::Application(handler))) => {
+                let (function, args) = handler.prepare(&args)?;
+                self.apply_from_lisp_funcall(function, args)
+            }
             Some(EvaluatorHandler::Callable(CallableHandler::Throw)) => {
                 if args.len() != 2 {
                     return Err(signal(
