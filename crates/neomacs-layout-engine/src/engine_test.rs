@@ -7846,6 +7846,72 @@ fn extend_fill_does_not_bleed_onto_the_following_blank_line() {
     );
 }
 
+#[test]
+fn extend_fill_covers_a_blank_line_whose_own_newline_is_covered() {
+    // The other half of #185's rule, and the shape `org-block` takes: a BLANK
+    // line INSIDE an `:extend` region. GNU fills to the window edge exactly
+    // when the face covers that line's own newline, so a blank line in the
+    // middle of the region fills, while the blank line merely following the
+    // region does not (see the sibling test above).
+    //
+    // Buffer "x\n\n" with the face on [0,3) covers 'x', line 1's newline AND
+    // line 2's own newline -- so BOTH rows must fill.
+    let mut eval = Context::new();
+    convert_current_buffer_text_backend(&mut eval, BufferTextBackendKind::GapBuffer);
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    {
+        insert_fragmented_current_buffer_text(&mut eval, "x\n\n");
+        let buffer = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        assert!(buffer.put_text_property(0, 3, Value::symbol("face"), extend_face_value()));
+    }
+
+    let frame_id =
+        eval.frame_manager_mut()
+            .create_frame("extend-fill-inner-blank", 360, 180, buf_id);
+    let selected_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
+
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("display state");
+    let entry = state
+        .window_matrices
+        .iter()
+        .find(|entry| entry.window_id.get() == selected_window.0 as i64)
+        .expect("selected window matrix");
+    let text_rows: Vec<_> = entry
+        .matrix
+        .rows
+        .iter()
+        .filter(|row| row.enabled && row.role == GlyphRowRole::Text)
+        .collect();
+    let row2 = text_rows.get(1).expect("blank line 2 text row");
+
+    let fill = row2.glyphs[GlyphArea::Text.index()]
+        .iter()
+        .rev()
+        .find(|glyph| matches!(glyph.glyph_type, GlyphType::Stretch { .. }))
+        .expect("blank line inside an :extend region must carry a fill stretch");
+    match &fill.glyph_type {
+        GlyphType::Stretch { width_cols } => assert!(
+            *width_cols >= u16::try_from(entry.matrix.ncols - 2).expect("fits u16"),
+            "a blank line whose own newline is covered must fill to the window edge, \
+             got {width_cols} cols"
+        ),
+        other => panic!("expected a stretch fill, got {other:?}"),
+    }
+}
+
 fn boxed_extend_face_value() -> Value {
     // An `:extend` face that ALSO carries a `:box` -- the shape a dock/mode
     // face (e.g. agentty-mode's multi-dock layout) resolves to. GNU extends
