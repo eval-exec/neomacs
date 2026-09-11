@@ -24,6 +24,7 @@ use super::value::*;
 use crate::buffer::{EmacsByteLen, EmacsBytePos, EmacsByteRange, TextExtent};
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::expect_min_args;
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use strum::{EnumString, IntoStaticStr};
 
@@ -680,7 +681,7 @@ struct JsonParser<'a> {
     /// fresh each time allocated a `":" + key` string and re-interned it per
     /// occurrence. Interned symbols are permanently rooted, so caching the
     /// resulting value is safe for the life of the parse.
-    keyword_cache: std::collections::HashMap<String, Value>,
+    keyword_cache: FxHashMap<String, Value>,
 }
 
 /// Maximum object/array nesting accepted while parsing, mirroring GNU
@@ -697,7 +698,7 @@ impl<'a> JsonParser<'a> {
             pos: 0,
             depth: 0,
             opts,
-            keyword_cache: std::collections::HashMap::new(),
+            keyword_cache: FxHashMap::default(),
         }
     }
 
@@ -874,6 +875,27 @@ impl<'a> JsonParser<'a> {
     fn parse_string_body(&mut self) -> Result<String, Flow> {
         let mut result = String::new();
         loop {
+            // Copy the run of plain ASCII up to the next byte that needs
+            // deciding on -- quote, backslash, control, or a multi-byte lead.
+            // JSON strings are overwhelmingly such runs, and appending them one
+            // `char` at a time was the single largest cost in parsing.
+            let run_start = self.pos;
+            let mut end = run_start;
+            while let Some(&byte) = self.input.get(end) {
+                if byte < 0x20 || byte >= 0x80 || byte == b'"' || byte == b'\\' {
+                    break;
+                }
+                end += 1;
+            }
+            if end > run_start {
+                // Every byte in the run is ASCII, so this slice is valid UTF-8
+                // by construction.
+                result.push_str(
+                    std::str::from_utf8(&self.input[run_start..end])
+                        .expect("ASCII run is valid UTF-8"),
+                );
+                self.pos = end;
+            }
             match self.peek() {
                 None => {
                     return Err(self.signal_at_pos(JsonError::EndOfFile));
