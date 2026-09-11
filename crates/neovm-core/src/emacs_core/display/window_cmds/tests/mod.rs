@@ -702,6 +702,51 @@ fn window_old_buffer_reports_a_deleted_window_as_a_stale_epoch() {
 }
 
 #[test]
+fn window_old_buffer_reports_the_recorded_buffer_after_a_change_epoch() {
+    // The third arm of GNU's `window-old-buffer`.  Once the window change
+    // functions have run, `window_change_record_windows` has stamped each live
+    // leaf and set its `old_buffer` to the buffer it is showing
+    // (`src/window.c`), so the window's epoch matches its frame's and the
+    // recorded buffer is the answer -- neither nil nor t.
+    //
+    // Unobservable from `--batch` Lisp, because neomacs runs the change
+    // functions from redisplay and batch has none; drive the recorder directly,
+    // which is what the command loop does at
+    // `runtime/eval/command_loop.rs`.
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new();
+    let buffer = ev.buffers.current_buffer().expect("current buffer").id;
+
+    // Before any epoch: the window was created since the last record, so it has
+    // no old buffer at all.
+    let before = ev
+        .eval_str_each("(window-old-buffer (selected-window))")
+        .iter()
+        .map(format_eval_result)
+        .collect::<Vec<_>>();
+    assert_eq!(before[0], "OK nil", "no epoch has been recorded yet");
+
+    crate::emacs_core::builtins::run_redisplay_window_change_hooks(&mut ev)
+        .expect("window change hooks");
+
+    let after = ev
+        .eval_str_each("(bufferp (window-old-buffer (selected-window)))")
+        .iter()
+        .map(format_eval_result)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        after[0], "OK t",
+        "after an epoch the window reports the buffer it was showing, not t"
+    );
+    assert_eq!(
+        ev.frames
+            .window_old_buffer(ev.frames.selected_frame().expect("frame").selected_window),
+        crate::window::WindowOldBuffer::Recorded(buffer),
+        "and it is the buffer the window actually shows"
+    );
+}
+
+#[test]
 fn minibuffer_window_frame_first_window_and_window_minibuffer_p_semantics() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();

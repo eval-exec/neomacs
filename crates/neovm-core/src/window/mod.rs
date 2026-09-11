@@ -3647,6 +3647,22 @@ impl Frame {
     /// This must not call `sync_window_area_bounds`: GNU's `window-resize-apply`
     /// has already computed child sizes, and resyncing the whole frame would
     /// redistribute the tree and lose those sizes.
+    /// Stamp every live leaf with STAMP and record the buffer it shows.
+    ///
+    /// GNU's `window_change_record_windows` (`src/window.c`) walks the tree,
+    /// recursing past internal windows and recording only live leaves -- which
+    /// is why an internal window never reports an old buffer.
+    pub fn record_window_change_epoch(&mut self, stamp: ChangeStamp) {
+        for window_id in self.window_list() {
+            if let Some(window) = self.find_window_mut(window_id) {
+                window.record_change_epoch(stamp);
+            }
+        }
+        if let Some(minibuffer) = self.minibuffer_leaf.as_mut() {
+            minibuffer.record_change_epoch(stamp);
+        }
+    }
+
     pub fn recalculate_minibuffer_bounds(&mut self) {
         self.reposition_minibuffer_below_root();
     }

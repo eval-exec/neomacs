@@ -501,6 +501,21 @@ fn run_redisplay_window_change_hooks_inner(eval: &mut super::eval::Context) -> E
             frame.old_selected_window = Some(frame.selected_window);
             frame.window_hook_record =
                 frame_window_hook_record_from_live_state(frame, was_selected_frame);
+            // GNU closes the same block by opening a new epoch
+            // (`window_change_record`, `src/window.c`):
+            //
+            //     f->change_stamp += 1;
+            //     if (f->change_stamp == 0) f->change_stamp = 1;
+            //     f->number_of_windows
+            //       = window_change_record_windows (f->root_window, f->change_stamp, 0);
+            //
+            // The bump and the per-window record belong together: a window
+            // stamped with the epoch its frame is leaving would report a stale
+            // record forever.  `ChangeStamp::next` carries GNU's wrap guard, so
+            // the reserved zero cannot reappear here.
+            frame.change_stamp = frame.change_stamp.next();
+            let stamp = frame.change_stamp;
+            frame.record_window_change_epoch(stamp);
             frame.window_state_change = false;
         }
     }
