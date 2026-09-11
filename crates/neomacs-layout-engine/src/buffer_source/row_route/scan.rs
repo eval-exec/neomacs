@@ -485,7 +485,7 @@ pub(super) fn routed_row_overlay_scan<B: LayoutBufferView + ?Sized>(
     if overlays.is_empty() {
         return Some(scan);
     }
-    for overlay in overlays.overlays_in_gnu_lists_order() {
+    for overlay in overlays_possibly_intersecting(overlays, start_byte, coverage_end_byte) {
         let (Some(ov_start), Some(ov_end)) = (
             overlays.overlay_start_emacs_byte_pos(overlay),
             overlays.overlay_end_emacs_byte_pos(overlay),
@@ -589,6 +589,36 @@ pub(super) fn routed_lisp_string_advance_cols(value: Value) -> Option<usize> {
 ///
 /// Anchors before `start_byte` are simply not this row's: they were emitted
 /// on an earlier row.
+/// The overlays that can intersect `[start_byte, end_byte]`, without walking
+/// the whole buffer.
+///
+/// Both row scans used to iterate EVERY overlay in the buffer and look each
+/// one's start and end up through the interval tree before discarding the ones
+/// that miss the row. That is O(overlays x rows) with two tree lookups per
+/// pair, and it dominated overlay cost: on a 200-diagnostic buffer it drove
+/// 94,199 position lookups where GNU's redisplay -- which iterates its interval
+/// tree over the row's range -- issued 1,155.
+///
+/// The window is widened by a byte on each side and the caller keeps its own
+/// intersection test, so this returns a superset of what the scans previously
+/// considered and the filtering decision is unchanged. An overlay ending
+/// exactly at `start_byte` still reaches the caller, which the half-open query
+/// alone would drop.
+fn overlays_possibly_intersecting(
+    overlays: &neovm_core::buffer::OverlayList,
+    start_byte: usize,
+    end_byte: usize,
+) -> Vec<Value> {
+    let scan_range = EmacsByteRange::new(
+        EmacsBytePos::new(start_byte.saturating_sub(1)),
+        EmacsBytePos::new(end_byte.saturating_add(1)),
+    );
+    let mut ids = overlays.overlays_in_emacs_byte_range(scan_range);
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
 pub(super) fn routed_row_overlay_string_scan<B: LayoutBufferView>(
     buffer: &B,
     window_id: Option<u64>,
@@ -612,7 +642,7 @@ pub(super) fn routed_row_overlay_string_scan<B: LayoutBufferView>(
     // collection (which walks a byte range and sorts) off every row that has
     // face-only overlays.
     let mut anchor_bytes: Vec<usize> = Vec::new();
-    for overlay in overlays.overlays_in_gnu_lists_order() {
+    for overlay in overlays_possibly_intersecting(overlays, start_byte, line_end_byte) {
         let (Some(ov_start), Some(ov_end)) = (
             overlays.overlay_start_emacs_byte_pos(overlay),
             overlays.overlay_end_emacs_byte_pos(overlay),
