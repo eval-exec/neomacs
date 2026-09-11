@@ -58,7 +58,9 @@ mod subrs;
 #[cfg(test)]
 pub(crate) use subrs::SUBRS;
 use subrs::{CallableHandler, EvaluatorHandler, SpecialFormHandler, evaluator_handler};
-pub(crate) use subrs::{evaluator_dispatch_kind, register_public_subrs, register_subrs};
+pub(crate) use subrs::{
+    evaluator_dispatch_kind, register_application_subrs, register_public_subrs, register_subrs,
+};
 
 /// Stress-GC at every allocation-bearing safe point when `NEOVM_GC_STRESS=1`.
 /// Mirrors the per-evaluator `gc_stress` test flag, exposed as an env hook so a
@@ -6527,53 +6529,7 @@ impl Context {
         args: LispArgVec,
         rewrite_builtin_wrong_arity: bool,
     ) -> EvalResult {
-        if super::builtins::is_canonical_symbol_id(sym_id) {
-            return self.apply_symbol_callable_untraced_resolved_id(
-                sym_id,
-                args,
-                rewrite_builtin_wrong_arity,
-            );
-        }
-
-        if self.obarray.is_function_unbound_id(sym_id) {
-            return Err(signal(
-                LispCondition::VoidFunction,
-                vec![Value::from_sym_id(sym_id)],
-            ));
-        }
-
-        let Some(function) = self.obarray.symbol_function_id(sym_id) else {
-            return Err(signal(
-                LispCondition::VoidFunction,
-                vec![Value::from_sym_id(sym_id)],
-            ));
-        };
-
-        if super::autoload::is_autoload_value(&function) {
-            let name = resolve_sym(sym_id);
-            return self.apply_named_autoload_callable(
-                name,
-                function,
-                args,
-                rewrite_builtin_wrong_arity,
-            );
-        }
-
-        let callable_before = self.callable_before_call_snapshot(&function);
-        let result = self.funcall_general_untraced(function, args);
-        match &result {
-            Err(Flow::Signal(sig))
-                if sig.symbol == invalid_function_symbol()
-                    && !callable_before
-                        .unwrap_or_else(|| self.function_value_is_callable(&function)) =>
-            {
-                Err(signal(
-                    LispCondition::InvalidFunction,
-                    vec![Value::from_sym_id(sym_id)],
-                ))
-            }
-            _ => result,
-        }
+        self.apply_symbol_callable_untraced_resolved_id(sym_id, args, rewrite_builtin_wrong_arity)
     }
 
     fn apply_symbol_callable_untraced_resolved_id(
@@ -6582,7 +6538,7 @@ impl Context {
         args: LispArgVec,
         rewrite_builtin_wrong_arity: bool,
     ) -> EvalResult {
-        match self.resolve_named_call_target_by_id(sym_id) {
+        match self.resolve_application_symbol(sym_id) {
             NamedCallTarget::Obarray(func) => {
                 if super::autoload::is_autoload_value(&func) {
                     return self.apply_named_autoload_callable_by_id(

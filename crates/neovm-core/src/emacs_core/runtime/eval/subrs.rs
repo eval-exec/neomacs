@@ -28,9 +28,10 @@ pub(crate) fn subr_entry_from_value(function: Value) -> Option<(SymId, SubrEntry
             dispatch_kind: subr.dispatch_kind,
             name_id: subr.name,
             interactive_spec: registered.and_then(|entry| entry.interactive_spec),
-            portability: registered.map_or(crate::emacs_core::subr::SubrPortability::AllTargets, |entry| {
-                entry.portability
-            }),
+            portability: registered.map_or(
+                crate::emacs_core::subr::SubrPortability::AllTargets,
+                |entry| entry.portability,
+            ),
         },
     ))
 }
@@ -110,7 +111,23 @@ pub(super) enum SpecialFormHandler {
 
 #[derive(Clone, Copy)]
 pub(super) enum CallableHandler {
+    Application(ApplicationHandler),
     Throw,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum ApplicationHandler {
+    Apply,
+    Funcall,
+}
+
+impl ApplicationHandler {
+    pub(super) fn prepare(self, args: &[Value]) -> Result<(Value, LispArgVec), Flow> {
+        match self {
+            Self::Apply => super::builtins::prepare_apply_args(args),
+            Self::Funcall => super::builtins::prepare_funcall_args(args),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -134,6 +151,21 @@ impl EvaluatorSubr {
         }
     }
 }
+
+// These two declarations retain their early startup registration position.
+// Handler lookup includes both groups, but materialization must not reorder them.
+const APPLICATION_SUBRS: &[EvaluatorSubr] = &[
+    EvaluatorSubr::callable(
+        "apply",
+        SubrArity::new(1, None),
+        CallableHandler::Application(ApplicationHandler::Apply),
+    ),
+    EvaluatorSubr::callable(
+        "funcall",
+        SubrArity::new(1, None),
+        CallableHandler::Application(ApplicationHandler::Funcall),
+    ),
+];
 
 /// Evaluator-owned callable objects installed in Lisp function cells.
 const EVALUATOR_SUBRS: &[EvaluatorSubr] = &[
@@ -213,6 +245,7 @@ crate::emacs_core::subr::define_subrs! {
 fn evaluator_subr(name: &str) -> Option<EvaluatorSubr> {
     EVALUATOR_SUBRS
         .iter()
+        .chain(APPLICATION_SUBRS)
         .copied()
         .find(|declaration| declaration.spec.name() == name)
 }
@@ -224,11 +257,12 @@ pub(super) fn evaluator_handler(sym_id: SymId) -> Option<EvaluatorHandler> {
         .get_or_init(|| {
             let max_id = EVALUATOR_SUBRS
                 .iter()
+                .chain(APPLICATION_SUBRS)
                 .map(|declaration| intern(declaration.spec.name()).0 as usize)
                 .max()
                 .unwrap_or(0);
             let mut handlers = vec![None; max_id + 1];
-            for declaration in EVALUATOR_SUBRS {
+            for declaration in EVALUATOR_SUBRS.iter().chain(APPLICATION_SUBRS) {
                 handlers[intern(declaration.spec.name()).0 as usize] = Some(declaration.handler);
             }
             handlers
@@ -246,6 +280,12 @@ pub(crate) fn evaluator_dispatch_kind(name: &str) -> Option<SubrDispatchKind> {
 /// late startup position.
 pub(crate) fn register_public_subrs(ctx: &mut Context) {
     for declaration in EVALUATOR_SUBRS {
+        ctx.register_subr(declaration.spec);
+    }
+}
+
+pub(crate) fn register_application_subrs(ctx: &mut Context) {
+    for declaration in APPLICATION_SUBRS {
         ctx.register_subr(declaration.spec);
     }
 }
