@@ -4689,6 +4689,13 @@ fn re_match_candidate(
 /// One match attempt on a caller-held scratch: the search loop borrows the
 /// per-thread scratch ONCE and tries every candidate on it (17.6K attempts
 /// per org font-lock op paid a thread-local RefCell borrow each).
+/// MEASURED (2026-09-11): this returns a 176-byte
+/// `Option<(usize, MatchRegisters)>`, and Rust moves it out of the return slot
+/// with a `memcpy` whether or not it is `Some` -- one per candidate position,
+/// 21,938 of them per org-editing operation, ~30 Ir each. An `#[inline]` hint
+/// here and on `re_match_internal` did NOT remove it (the rows came back
+/// byte-identical). Taking the registers as an out-parameter is the fix; the
+/// hint is not.
 fn re_match_candidate_in(
     scratch: &mut MatchScratch,
     pattern: &CompiledPattern,
