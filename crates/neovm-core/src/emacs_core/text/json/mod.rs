@@ -545,30 +545,45 @@ fn json_encode_string(s: &str) -> String {
 }
 
 /// Append the JSON encoding of `s` to `out`, quotes included.
+///
+/// Copies in runs rather than character by character. JSON strings are
+/// overwhelmingly escape-free -- an LSP diagnostic message, a URI, a symbol
+/// name -- so the common path is one `push_str` of the whole string, not one
+/// `push` per character with its UTF-8 re-encode. Scanning bytes is safe
+/// because every byte that needs escaping is ASCII: UTF-8 continuation bytes
+/// are all >= 0x80, so a multi-byte character can never contain one, and its
+/// bytes are copied through untouched exactly as the per-char loop emitted
+/// them.
 fn json_encode_string_into(out: &mut String, s: &str) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
     out.push('"');
-    for ch in s.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\x08' => out.push_str("\\b"),
-            '\x0C' => out.push_str("\\f"),
-            c if (c as u32) < 0x20 => {
-                // Control characters: emit \u00XX. Written digit by digit
-                // rather than through `format!`, which would allocate a
-                // temporary String for each one.
-                const HEX: &[u8; 16] = b"0123456789abcdef";
-                let code = c as u32;
+    let bytes = s.as_bytes();
+    let mut run_start = 0usize;
+    for (index, &byte) in bytes.iter().enumerate() {
+        let escape: &str = match byte {
+            b'"' => "\\\"",
+            b'\\' => "\\\\",
+            b'\n' => "\\n",
+            b'\r' => "\\r",
+            b'\t' => "\\t",
+            0x08 => "\\b",
+            0x0C => "\\f",
+            // Other C0 controls have no short form and take \u00XX.
+            b if b < 0x20 => {
+                out.push_str(&s[run_start..index]);
                 out.push_str("\\u00");
-                out.push(HEX[((code >> 4) & 0xf) as usize] as char);
-                out.push(HEX[(code & 0xf) as usize] as char);
+                out.push(HEX[usize::from(b >> 4)] as char);
+                out.push(HEX[usize::from(b & 0xf)] as char);
+                run_start = index + 1;
+                continue;
             }
-            c => out.push(c),
-        }
+            _ => continue,
+        };
+        out.push_str(&s[run_start..index]);
+        out.push_str(escape);
+        run_start = index + 1;
     }
+    out.push_str(&s[run_start..]);
     out.push('"');
 }
 
