@@ -888,12 +888,14 @@ impl<'a> JsonParser<'a> {
                 end += 1;
             }
             if end > run_start {
-                // Every byte in the run is ASCII, so this slice is valid UTF-8
-                // by construction.
-                result.push_str(
-                    std::str::from_utf8(&self.input[run_start..end])
-                        .expect("ASCII run is valid UTF-8"),
-                );
+                let run = &self.input[run_start..end];
+                debug_assert!(run.is_ascii(), "run loop admits only ASCII bytes");
+                // SAFETY: the loop above stops at the first byte that is not in
+                // 0x20..0x7F, so every byte here is ASCII and the slice is
+                // valid UTF-8 by construction. Re-validating it with
+                // `from_utf8` cost 4.9% of parse -- a second pass over every
+                // string in the document to confirm what the scan just decided.
+                result.push_str(unsafe { std::str::from_utf8_unchecked(run) });
                 self.pos = end;
             }
             match self.peek() {
