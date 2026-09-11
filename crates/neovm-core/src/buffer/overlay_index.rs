@@ -416,6 +416,18 @@ impl EndpointBPlusTree {
             let Some(mut record) = self.records.record(identity) else {
                 continue;
             };
+            // The mask says WHICH indexed properties the overlay carries, not
+            // their values, so almost every `overlay-put` leaves it alone:
+            // setting `face` on an overlay that already has one, or writing a
+            // property the index does not filter on, changes nothing here.
+            // Republishing regardless cost two ordered-tree rewrites per put --
+            // `replace_same_key` refreshes the leaf and every ancestor -- which
+            // is the dominant cost of diagnostic churn, where flymake puts four
+            // properties on each of hundreds of overlays. Comparing first turns
+            // the unchanged case into two lookups.
+            if record.property_mask == property_mask {
+                continue;
+            }
             record.property_mask = property_mask;
             let previous = self
                 .records
