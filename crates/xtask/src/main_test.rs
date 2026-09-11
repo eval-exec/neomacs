@@ -1495,7 +1495,7 @@ fn windows_releases_ship_the_gnu_compatible_shell_proxy() {
         "the GNU-shaped release tree must install cmdproxy in its private archlib"
     );
     assert!(
-        release_workflow.contains("cp target/release-pgo/cmdproxy.exe \"$STAGING/\""),
+        release_workflow.contains("cp target/release/cmdproxy.exe \"$STAGING/\""),
         "the portable Windows zip must include cmdproxy beside neomacs.exe"
     );
     assert!(
@@ -4250,115 +4250,17 @@ fn release_jobs_share_the_features_their_platform_declares() {
             "`{job_name}` must compile the features {platform} declares"
         );
 
-        // One PGO step owns both passes; a separate compile step or a
-        // `--skip-build` bootstrap would reintroduce the two-build split.
-        let step_name = "Build, train, and dump (PGO)";
-        let step = job
-            .steps
-            .iter()
-            .find(|step| step.name == step_name)
-            .unwrap_or_else(|| panic!("`{job_name}` must keep a `{step_name}` step"));
-        assert!(
-            step.run.contains("--features \"$RELEASE_FEATURES\""),
-            "`{job_name}` / `{step_name}` must build the shared feature list, found: {}",
-            step.run
-        );
-        assert!(
-            step.run.contains("--profile release-pgo"),
-            "`{job_name}` / `{step_name}` must build the PGO release profile, found: {}",
-            step.run
-        );
-        // (The packaging scripts take `--skip-build` to REUSE the product; only
-        // a `fresh-build --skip-build` would mean a second, separate build.)
-        assert!(
-            job.steps
+        for step_name in ["Compile release binaries", "Bootstrap and dump"] {
+            let step = job
+                .steps
                 .iter()
-                .all(|step| step.name != "Compile release binaries"
-                    && !(step.run.contains("fresh-build") && step.run.contains("--skip-build"))),
-            "`{job_name}` must not split the PGO build into a compile step plus a --skip-build bootstrap"
-        );
-    }
-}
-
-/// PGO output lands in `target/release-pgo`, so every consumer of the built
-/// product -- the packaging scripts (through NEOMACS_RELEASE_DIR) and the
-/// inline Windows staging -- must read that directory, and the toolchain must
-/// carry `llvm-tools` for the counter merge.
-#[test]
-fn release_jobs_package_the_pgo_profile_directory() {
-    let workflow: serde_yaml_ng::Value = serde_yaml_ng::from_str(include_str!(concat!(
-        env!("CARGO_WORKSPACE_DIR"),
-        "/.github/workflows/release.yml"
-    )))
-    .expect("release.yml parses");
-    let jobs = workflow["jobs"].as_mapping().expect("jobs mapping");
-    let mut checked = 0;
-    for (name, job) in jobs {
-        let name = name.as_str().unwrap_or_default();
-        let steps = job["steps"].as_sequence().cloned().unwrap_or_default();
-        let builds_pgo = steps
-            .iter()
-            .any(|step| step["name"].as_str() == Some("Build, train, and dump (PGO)"));
-        if !builds_pgo {
-            continue;
-        }
-        checked += 1;
-        let stages_inline = steps
-            .iter()
-            .any(|step| step["name"].as_str() == Some("Package zip"));
-        if stages_inline {
-            let run = steps
-                .iter()
-                .find(|step| step["name"].as_str() == Some("Package zip"))
-                .and_then(|step| step["run"].as_str())
-                .unwrap_or_default();
+                .find(|step| step.name == step_name)
+                .unwrap_or_else(|| panic!("`{job_name}` must keep a `{step_name}` step"));
             assert!(
-                run.contains("target/release-pgo/neomacs.exe") && !run.contains("target/release/"),
-                "`{name}` must stage the PGO profile directory, found: {run}"
-            );
-        } else {
-            let dir = job["env"]["NEOMACS_RELEASE_DIR"]
-                .as_str()
-                .unwrap_or_default();
-            assert!(
-                dir.ends_with("target/release-pgo"),
-                "`{name}` must point NEOMACS_RELEASE_DIR at target/release-pgo, found: {dir:?}"
+                step.run.contains("--features \"$RELEASE_FEATURES\""),
+                "`{job_name}` / `{step_name}` must build the shared feature list, found: {}",
+                step.run
             );
         }
     }
-    assert_eq!(
-        checked, 3,
-        "expected the three release build jobs to build with PGO"
-    );
-    let toolchain = include_str!(concat!(env!("CARGO_WORKSPACE_DIR"), "/rust-toolchain.toml"));
-    assert!(
-        toolchain.contains("\"llvm-tools\""),
-        "rust-toolchain.toml must install llvm-tools for the PGO counter merge"
-    );
-}
-
-/// `llvm-profdata` must come from the active toolchain under the HOST
-/// triple's rustlib dir (the release jobs train on native runners).
-#[test]
-fn llvm_profdata_is_resolved_under_the_host_triple() {
-    let host = std::process::Command::new("rustc")
-        .args(["--print", "host-tuple"])
-        .output()
-        .expect("rustc runs");
-    let host = String::from_utf8(host.stdout)
-        .expect("utf8")
-        .trim()
-        .to_string();
-    let path = llvm_profdata_path().expect("llvm-tools is installed by rust-toolchain.toml");
-    let text = path.to_string_lossy();
-    assert!(
-        text.contains(&host),
-        "{text} must live under the host triple {host}"
-    );
-    assert!(
-        path.file_name()
-            .and_then(|f| f.to_str())
-            .is_some_and(|f| f.starts_with("llvm-profdata")),
-        "{text}"
-    );
 }

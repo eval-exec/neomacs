@@ -414,6 +414,13 @@ strip = "none"
 # occupies the directory the optimized one lands in.
 [profile.release-pgo-gen]
 inherits = "release"
+# NOT for release builds. The v0.0.18 attempt to ship this profile failed on two
+# of five targets: fat LTO together with `-Cprofile-generate` crashed rustc with
+# STATUS_ACCESS_VIOLATION compiling `yoke` for aarch64-pc-windows-msvc, and the
+# Linux x86_64 runner was SIGTERMed during the instrumented links. Releases
+# build `release` (see .github/workflows/release.yml). Anyone reviving this for
+# release should try `lto = false` here first -- the instrumented binary is
+# discarded after training, so LTO buys it nothing.
 
 [profile.profiling]
 inherits = "release"
