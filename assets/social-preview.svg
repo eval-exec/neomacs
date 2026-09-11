@@ -1,130 +1,58 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640" role="img" aria-labelledby="title desc">
-  <title id="title">NEO Emacs social preview</title>
-  <desc id="desc">A blue and orange taijitu mark with two lambda symbols beside the NEO Emacs wordmark and the tagline The future of Emacs.</desc>
-
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640" role="img" aria-labelledby="markTitle markDesc">
+  <title id="markTitle">NEOMACS</title>
+  <desc id="markDesc">The NEOMACS taijitu mark above the NEOMACS wordmark, above the line "The Emacs from the future."</desc>
+  <!-- Generated. Glyphs are outlines, not font-family text: this file is served
+       as a bare <img>, where a named font falls back to whatever the viewer has.
+       Wordmark JetBrains Mono ExtraBold, tagline JetBrains Mono Regular. -->
   <defs>
-    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#08111c"/>
-      <stop offset="52%" stop-color="#101823"/>
-      <stop offset="100%" stop-color="#15120e"/>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#09070f"/>
+      <stop offset="55%" stop-color="#0e0b17"/>
+      <stop offset="100%" stop-color="#120d14"/>
     </linearGradient>
-
-    <radialGradient id="blueGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(330 280) rotate(18) scale(340 260)">
-      <stop offset="0%" stop-color="#17b7ff" stop-opacity="0.34"/>
-      <stop offset="100%" stop-color="#17b7ff" stop-opacity="0"/>
+    <radialGradient id="bloomPurple" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse"
+      gradientTransform="translate(640.0 190.0) scale(560 430)">
+      <stop offset="0%" stop-color="#7e55b3" stop-opacity="0.24"/>
+      <stop offset="100%" stop-color="#7e55b3" stop-opacity="0"/>
     </radialGradient>
-
-    <radialGradient id="orangeGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(730 380) rotate(-12) scale(430 260)">
-      <stop offset="0%" stop-color="#ff9f2e" stop-opacity="0.24"/>
-      <stop offset="100%" stop-color="#ff9f2e" stop-opacity="0"/>
+    <radialGradient id="bloomOrange" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse"
+      gradientTransform="translate(1080 560) scale(520 340)">
+      <stop offset="0%" stop-color="#ff9900" stop-opacity="0.11"/>
+      <stop offset="100%" stop-color="#ff9900" stop-opacity="0"/>
     </radialGradient>
-
-    <linearGradient id="wordmarkGradient" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0%" stop-color="#77f7ff"/>
-      <stop offset="34%" stop-color="#b8fff0"/>
-      <stop offset="68%" stop-color="#ffe08a"/>
-      <stop offset="100%" stop-color="#ff8f45"/>
+    <linearGradient id="neoFill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffc95c"/><stop offset="100%" stop-color="#ff8c1a"/>
     </linearGradient>
-
-    <linearGradient id="emacsGradient" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0%" stop-color="#ffffff"/>
-      <stop offset="42%" stop-color="#d9fbff"/>
-      <stop offset="72%" stop-color="#ffe7bd"/>
-      <stop offset="100%" stop-color="#ffb15f"/>
+    <linearGradient id="macsFill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/><stop offset="100%" stop-color="#cdc4e6"/>
     </linearGradient>
-
-    <linearGradient id="lineGradient" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0%" stop-color="#19b8ff" stop-opacity="0"/>
-      <stop offset="28%" stop-color="#19b8ff" stop-opacity="0.95"/>
-      <stop offset="70%" stop-color="#ff9f2e" stop-opacity="0.95"/>
-      <stop offset="100%" stop-color="#ff9f2e" stop-opacity="0"/>
+    <!-- mark colours, identical to crates/neomacs-display-runtime/assets/window-icon.svg -->
+    <linearGradient id="emacsPurple" x1="20" y1="40" x2="20" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#411f5d"/><stop offset="0.35" stop-color="#5b2a85"/>
+      <stop offset="0.7" stop-color="#7e55b3"/><stop offset="1" stop-color="#8381c5"/>
     </linearGradient>
-
-    <filter id="softShadow" x="-40%" y="-40%" width="180%" height="180%">
-      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#000000" flood-opacity="0.42"/>
+    <linearGradient id="emacsOrange" x1="20" y1="0" x2="20" y2="40" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#9a3f00"/><stop offset="0.35" stop-color="#d05f00"/>
+      <stop offset="0.7" stop-color="#ff9900"/><stop offset="1" stop-color="#ffd166"/>
+    </linearGradient>
+    <filter id="markGlow" x="-60%" y="-60%" width="220%" height="220%">
+      <feDropShadow dx="0" dy="6" stdDeviation="30" flood-color="#3b1a63" flood-opacity="0.55"/>
     </filter>
-
-    <filter id="wordGlow" x="-30%" y="-80%" width="160%" height="260%">
-      <feGaussianBlur stdDeviation="5" result="blur"/>
-      <feMerge>
-        <feMergeNode in="blur"/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
-    </filter>
-
-    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
-      <path d="M40 0H0V40" fill="none" stroke="#8fb7cc" stroke-opacity="0.075" stroke-width="1"/>
-    </pattern>
-
-    <clipPath id="taijituClip">
-      <circle cx="0" cy="0" r="184"/>
-    </clipPath>
+    <clipPath id="frameClip"><rect width="1280" height="640" rx="0"/></clipPath>
   </defs>
 
-  <rect width="1280" height="640" fill="url(#background)"/>
-  <rect width="1280" height="640" fill="url(#grid)" opacity="0.85"/>
-  <rect width="1280" height="640" fill="url(#blueGlow)"/>
-  <rect width="1280" height="640" fill="url(#orangeGlow)"/>
-
-  <g opacity="0.42">
-    <path d="M0 500L250 280L510 640H0Z" fill="#102a3a"/>
-    <path d="M830 0H1280V640H1010L720 250Z" fill="#281d14"/>
-    <path d="M210 88H1110" stroke="url(#lineGradient)" stroke-width="2"/>
-    <path d="M210 552H1110" stroke="url(#lineGradient)" stroke-width="2"/>
-  </g>
-
-  <g transform="translate(142 106) scale(10)" filter="url(#softShadow)">
-    <circle cx="20" cy="20" r="20" fill="#07101a" opacity="0.62"/>
-    <circle cx="20" cy="20" r="18.5" fill="#16aee8" stroke="#07101a" stroke-width="1.1"/>
-    <path
-      d="M20 1.5 a18.5 18.5 0 0 1 0 37 a9.25 9.25 0 0 1 0 -18.5 a9.25 9.25 0 0 0 0 -18.5 Z"
-      fill="#ff9900"/>
-    <circle cx="20" cy="20" r="18.5" fill="none" stroke="#d7f6ff" stroke-opacity="0.34" stroke-width="0.42"/>
-    <text
-      x="16"
-      y="18"
-      text-anchor="middle"
-      font-size="16.5"
-      font-weight="700"
-      fill="#0d0d12"
-      font-family="JetBrains Mono, Cascadia Code, Menlo, Consolas, monospace"
-      transform="rotate(225 16 12)">λ</text>
-    <text
-      x="16"
-      y="18"
-      text-anchor="middle"
-      font-size="16.5"
-      font-weight="700"
-      fill="#0d0d12"
-      font-family="JetBrains Mono, Cascadia Code, Menlo, Consolas, monospace"
-      transform="rotate(180 20 20) rotate(225 16 12)">λ</text>
-  </g>
-
-  <g transform="translate(570 0)">
-    <text x="0" y="282"
-          font-family="IBM Plex Sans Condensed, IBM Plex Sans, Inter, Segoe UI, sans-serif"
-          font-size="172"
-          font-weight="800"
-          letter-spacing="0"
-          fill="url(#wordmarkGradient)"
-          filter="url(#wordGlow)">NEO</text>
-    <text x="0" y="428"
-          font-family="IBM Plex Sans Condensed, IBM Plex Sans, Inter, Segoe UI, sans-serif"
-          font-size="150"
-          font-weight="780"
-          letter-spacing="0"
-          fill="url(#emacsGradient)"
-          filter="url(#wordGlow)">Emacs</text>
-    <rect x="5" y="456" width="610" height="4" rx="2" fill="url(#lineGradient)"/>
-  </g>
-
-  <g transform="translate(570 520)">
-    <rect x="0" y="-48" width="492" height="78" rx="18" fill="#0b141f" fill-opacity="0.74" stroke="#86dfff" stroke-opacity="0.18"/>
-    <text x="246" y="3"
-          font-family="JetBrains Mono, Cascadia Code, Menlo, Consolas, monospace"
-          font-size="34"
-          font-weight="650"
-          text-anchor="middle"
-          fill="#ffd2a1">The future of Emacs</text>
-  </g>
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <rect width="1280" height="640" fill="url(#bloomPurple)"/>
+  <rect width="1280" height="640" fill="url(#bloomOrange)"/>
+  <g transform="translate(536.0 86.0) scale(5.2000)" filter="url(#markGlow)">
+      <g transform="rotate(45 20 20)">
+        <circle cx="20" cy="20" r="20" fill="url(#emacsPurple)"/>
+        <path d="M20 0 a20 20 0 0 1 0 40 a10 10 0 0 1 0 -20 a10 10 0 0 0 0 -20 Z" fill="url(#emacsOrange)"/>
+        <g fill="#0d0d12" transform="translate(4.1 -2) rotate(270 13.4 12) translate(13.4 12) scale(1.35) translate(-13.4 -12)"><path d="M10.9 7.6 C13.3 10.3 12.2 13.1 10.2 15.9 Q9.8 16.5 10.4 16.8 Q11 17.1 11.5 16.5 C12.4 15.1 13.1 13.7 13.8 12.1 C14.4 13.6 15 15 15.6 16.3 Q15.9 16.9 16.5 16.7 Q17.1 16.5 16.8 15.9 C15.7 12.5 14.3 9.4 12.8 7.6 Q11.8 6.7 10.9 7.6 Z"/></g>
+        <g fill="#0d0d12" transform="rotate(180 20 20) translate(4.1 -2) rotate(270 13.4 12) translate(13.4 12) scale(1.35) translate(-13.4 -12)"><path d="M10.9 7.6 C13.3 10.3 12.2 13.1 10.2 15.9 Q9.8 16.5 10.4 16.8 Q11 17.1 11.5 16.5 C12.4 15.1 13.1 13.7 13.8 12.1 C14.4 13.6 15 15 15.6 16.3 Q15.9 16.9 16.5 16.7 Q17.1 16.5 16.8 15.9 C15.7 12.5 14.3 9.4 12.8 7.6 Q11.8 6.7 10.9 7.6 Z"/></g>
+      </g>
+    </g>
+  <path d="M285.40 482.70H310.48V421.90C310.48 408.79 308.96 387.51 307.82 375.35L343.35 482.70H376.60V344.00H351.52V401.00C351.52 414.11 353.23 437.48 354.56 451.35L318.65 344.00H285.40Z M392.20 482.70H477.70V458.00H420.13V423.42H471.05V399.86H420.13V368.70H477.70V344.00H392.20Z M537.00 484.60C564.93 484.60 582.60 467.88 582.60 440.90V385.80C582.60 358.82 564.93 342.10 537.00 342.10C509.07 342.10 491.40 358.82 491.40 385.80V440.90C491.40 467.88 509.07 484.60 537.00 484.60ZM537.00 459.90C525.60 459.90 519.90 453.82 519.90 442.80V383.90C519.90 372.88 525.41 366.80 537.00 366.80C548.59 366.80 554.10 372.88 554.10 383.90V442.80C554.10 453.82 548.40 459.90 537.00 459.90Z" fill="url(#neoFill)"/>
+    <path d="M590.98 482.70H617.01V429.50C617.01 400.43 613.59 373.64 611.12 357.11L628.22 423.80H651.02L668.50 355.40C666.03 374.97 662.99 401.76 662.99 429.50V482.70H689.02V344.00H653.87L639.81 403.28L625.75 344.00H590.98Z M690.75 482.70H719.82L726.47 451.35H759.53L766.18 482.70H795.25L760.86 344.00H724.76ZM731.22 428.55 738.25 394.92C740.15 385.42 742.05 374.97 743.00 369.65C743.95 374.97 746.04 385.42 747.94 395.11L754.59 428.55Z M847.52 484.60C875.45 484.60 893.88 468.07 893.88 442.80H865.38C865.38 453.82 858.92 459.90 847.52 459.90C836.12 459.90 829.66 453.82 829.66 442.80V383.90C829.66 372.88 836.12 366.80 847.52 366.80C858.92 366.80 865.38 372.88 865.38 383.90H893.88C893.88 358.63 875.45 342.10 847.52 342.10C819.59 342.10 801.16 358.63 801.16 383.90V442.80C801.16 467.88 819.59 484.60 847.52 484.60Z M949.38 484.60C978.64 484.60 997.07 468.45 997.07 443.56C997.07 421.14 983.39 403.85 961.54 398.91L944.06 394.92C935.70 393.02 930.95 388.46 930.95 381.05C930.95 372.12 937.41 366.42 948.24 366.42C959.45 366.42 966.10 372.31 966.10 381.81H993.84C993.84 357.49 976.17 342.10 948.24 342.10C920.31 342.10 903.21 357.30 903.21 382.00C903.21 402.33 916.89 417.72 938.74 422.85L955.65 426.84C964.58 428.93 969.14 435.77 969.14 443.56C969.14 453.44 961.73 459.90 949.38 459.90C936.65 459.90 928.67 453.25 928.67 442.80H900.93C900.93 468.45 920.12 484.60 949.38 484.60Z" fill="url(#macsFill)"/>
+  <path d="M284.20 548.70H287.80V522.78H295.80V519.50H276.20V522.78H284.20Z M306.00 548.70H309.60V534.70C309.60 531.30 311.44 529.34 314.44 529.34C317.32 529.34 319.12 531.18 319.12 534.50V548.70H322.72V533.90C322.72 529.22 319.88 526.30 315.48 526.30C312.12 526.30 310.00 527.98 309.64 530.90H309.60V519.50H306.00Z M342.64 549.10C347.28 549.10 350.64 546.78 351.12 543.10H347.52C347.16 544.86 345.32 545.98 342.64 545.98C339.52 545.98 337.52 543.94 337.52 540.70V538.62H351.28V534.70C351.28 529.62 347.84 526.30 342.64 526.30C337.44 526.30 334.00 529.62 334.00 535.10V540.30C334.00 545.78 337.44 549.10 342.64 549.10ZM337.52 535.82V534.70C337.52 531.22 339.40 529.26 342.64 529.26C345.88 529.26 347.76 531.22 347.76 534.70V535.82Z M391.28 548.70H408.08V545.42H394.84V535.02H406.68V531.82H394.84V522.78H408.08V519.50H391.28Z M418.00 548.70H421.36V531.90C421.36 530.14 422.28 529.06 423.76 529.06C425.20 529.06 426.12 530.18 426.12 531.94V548.70H429.08V531.90C429.08 530.14 430.00 529.06 431.44 529.06C432.92 529.06 433.84 530.18 433.84 531.94V548.70H437.20V531.98C437.20 528.62 435.36 526.30 432.56 526.30C430.52 526.30 429.16 527.50 428.80 529.42H428.76C428.20 527.50 426.80 526.30 424.88 526.30C422.88 526.30 421.48 527.62 421.20 529.62H421.12V526.70H418.00Z M454.00 549.10C457.76 549.10 460.20 547.42 460.60 544.70H460.68V548.70H464.24V533.58C464.24 528.98 461.28 526.30 455.96 526.30C451.04 526.30 447.92 528.86 447.64 532.30H451.24C451.36 530.50 453.16 529.42 455.96 529.42C459.12 529.42 460.64 530.82 460.64 533.70V535.42H453.84C449.56 535.42 446.60 538.18 446.60 542.22C446.60 546.34 449.44 549.10 454.00 549.10ZM454.88 546.06C452.00 546.06 450.28 544.54 450.28 542.10C450.28 539.78 451.88 538.22 454.24 538.22H460.64V541.30C460.64 544.22 458.40 546.06 454.88 546.06Z M484.56 549.10C489.64 549.10 493.00 546.18 493.16 541.50H489.56C489.40 544.30 487.52 545.90 484.56 545.90C481.40 545.90 479.36 544.02 479.36 540.70V534.66C479.36 531.38 481.40 529.50 484.56 529.50C487.52 529.50 489.40 531.10 489.56 533.90H493.16C493.00 529.22 489.64 526.30 484.56 526.30C479.24 526.30 475.76 529.46 475.76 534.70V540.70C475.76 545.94 479.24 549.10 484.56 549.10Z M511.68 549.02H513.44C518.36 549.02 521.16 546.66 521.16 542.54C521.16 538.70 519.28 536.50 515.56 535.98L509.88 535.18C508.48 534.98 507.76 534.06 507.76 532.54C507.76 530.62 509.20 529.42 511.68 529.42H513.44C515.64 529.42 517.08 530.58 517.20 532.10H520.84C520.64 528.70 517.72 526.38 513.44 526.38H511.68C507.04 526.38 504.24 528.70 504.24 532.54C504.24 535.90 505.96 538.02 508.96 538.46L515.04 539.34C516.80 539.58 517.64 540.62 517.64 542.54C517.64 544.66 516.12 545.90 513.44 545.90H511.68C509.08 545.90 507.56 544.70 507.56 542.66H503.96C503.96 546.74 506.76 549.02 511.68 549.02Z M565.80 548.70H569.40V532.98H578.40V529.70H569.40V525.10C569.40 523.58 570.32 522.78 571.96 522.78H578.40V519.50H571.96C568.12 519.50 565.80 521.62 565.80 525.10V529.70H559.40V532.98H565.80Z M590.00 548.70H593.60V534.70C593.60 531.30 595.28 529.42 598.44 529.42C601.48 529.42 603.12 530.98 603.12 534.22V536.10H606.72V534.22C606.72 529.18 604.12 526.30 599.56 526.30C596.16 526.30 594.04 528.06 593.68 530.90H593.60V526.70H590.00Z M625.84 549.02C631.12 549.02 634.48 545.78 634.48 540.22V535.18C634.48 529.58 631.16 526.38 625.84 526.38C620.52 526.38 617.20 529.58 617.20 535.18V540.22C617.20 545.78 620.56 549.02 625.84 549.02ZM625.84 545.82C622.72 545.82 620.80 544.02 620.80 540.62V534.78C620.80 531.38 622.72 529.58 625.84 529.58C628.96 529.58 630.88 531.38 630.88 534.78V540.62C630.88 544.02 628.96 545.82 625.84 545.82Z M644.56 548.70H647.92V531.90C647.92 530.14 648.84 529.06 650.32 529.06C651.76 529.06 652.68 530.18 652.68 531.94V548.70H655.64V531.90C655.64 530.14 656.56 529.06 658.00 529.06C659.48 529.06 660.40 530.18 660.40 531.94V548.70H663.76V531.98C663.76 528.62 661.92 526.30 659.12 526.30C657.08 526.30 655.72 527.50 655.36 529.42H655.32C654.76 527.50 653.36 526.30 651.44 526.30C649.44 526.30 648.04 527.62 647.76 529.62H647.68V526.70H644.56Z M713.00 548.70H719.40V545.42H713.00C711.56 545.42 710.60 544.42 710.60 542.90V529.98H719.60V526.70H710.60V520.50H707.00V526.70H700.68V529.98H707.00V542.90C707.00 546.42 709.36 548.70 713.00 548.70Z M730.80 548.70H734.40V534.70C734.40 531.30 736.24 529.34 739.24 529.34C742.12 529.34 743.92 531.18 743.92 534.50V548.70H747.52V533.90C747.52 529.22 744.68 526.30 740.28 526.30C736.92 526.30 734.80 527.98 734.44 530.90H734.40V519.50H730.80Z M767.44 549.10C772.08 549.10 775.44 546.78 775.92 543.10H772.32C771.96 544.86 770.12 545.98 767.44 545.98C764.32 545.98 762.32 543.94 762.32 540.70V538.62H776.08V534.70C776.08 529.62 772.64 526.30 767.44 526.30C762.24 526.30 758.80 529.62 758.80 535.10V540.30C758.80 545.78 762.24 549.10 767.44 549.10ZM762.32 535.82V534.70C762.32 531.22 764.20 529.26 767.44 529.26C770.68 529.26 772.56 531.22 772.56 534.70V535.82Z M820.68 548.70H824.28V532.98H833.28V529.70H824.28V525.10C824.28 523.58 825.20 522.78 826.84 522.78H833.28V519.50H826.84C823.00 519.50 820.68 521.62 820.68 525.10V529.70H814.28V532.98H820.68Z M852.36 549.10C857.44 549.10 860.80 545.86 860.80 540.70V526.70H857.20V540.70C857.20 543.90 855.32 545.94 852.36 545.94C849.44 545.94 847.60 543.90 847.60 540.70V526.70H844.00V540.70C844.00 545.86 847.28 549.10 852.36 549.10Z M882.92 548.70H889.32V545.42H882.92C881.48 545.42 880.52 544.42 880.52 542.90V529.98H889.52V526.70H880.52V520.50H876.92V526.70H870.60V529.98H876.92V542.90C876.92 546.42 879.28 548.70 882.92 548.70Z M909.00 549.10C914.08 549.10 917.44 545.86 917.44 540.70V526.70H913.84V540.70C913.84 543.90 911.96 545.94 909.00 545.94C906.08 545.94 904.24 543.90 904.24 540.70V526.70H900.64V540.70C900.64 545.86 903.92 549.10 909.00 549.10Z M929.84 548.70H933.44V534.70C933.44 531.30 935.12 529.42 938.28 529.42C941.32 529.42 942.96 530.98 942.96 534.22V536.10H946.56V534.22C946.56 529.18 943.96 526.30 939.40 526.30C936.00 526.30 933.88 528.06 933.52 530.90H933.44V526.70H929.84Z M965.68 549.10C970.32 549.10 973.68 546.78 974.16 543.10H970.56C970.20 544.86 968.36 545.98 965.68 545.98C962.56 545.98 960.56 543.94 960.56 540.70V538.62H974.32V534.70C974.32 529.62 970.88 526.30 965.68 526.30C960.48 526.30 957.04 529.62 957.04 535.10V540.30C957.04 545.78 960.48 549.10 965.68 549.10ZM960.56 535.82V534.70C960.56 531.22 962.44 529.26 965.68 529.26C968.92 529.26 970.80 531.22 970.80 534.70V535.82Z M994.00 549.10C995.96 549.10 997.28 547.82 997.28 545.94C997.28 543.98 995.96 542.62 994.00 542.62C992.04 542.62 990.72 543.98 990.72 545.94C990.72 547.82 992.04 549.10 994.00 549.10Z" fill="#a79ecb"/>
 </svg>
