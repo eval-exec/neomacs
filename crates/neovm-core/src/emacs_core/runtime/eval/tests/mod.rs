@@ -9723,6 +9723,20 @@ fn application_subr_wrong_arity_uses_subr_object_payload() {
 }
 
 #[test]
+fn application_subr_identity_survives_function_cell_redefinition() {
+    assert_eq!(
+        eval_one(r##"(let ((saved (symbol-function 'funcall)))
+            (list (funcall (progn
+                             (fset 'funcall (lambda (&rest args) 'redefined))
+                             '+)
+                           20 22)
+                  (funcall nil)
+                  (apply saved '(+ 3 4))))"##),
+        "OK (42 redefined 7)",
+    );
+}
+
+#[test]
 fn bytecode_bcall_symbol_function_cell_subr_matches_gnu() {
     crate::test_utils::init_test_tracing();
     let mut ctx = runtime_startup_context();

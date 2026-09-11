@@ -144,16 +144,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(neovm_internal_panic),
         SubrArity::new(0, Some(1)),
     ));
-    ctx.register_subr(SubrSpec::new(
-        "apply",
-        NativeFn::ContextSlice(builtin_apply_slice),
-        SubrArity::new(1, None),
-    ));
-    ctx.register_subr(SubrSpec::new(
-        "funcall",
-        NativeFn::ContextSlice(builtin_funcall_slice),
-        SubrArity::new(1, None),
-    ));
+    crate::emacs_core::eval::register_application_subrs(ctx);
     ctx.register_subr(SubrSpec::new(
         "funcall-interactively",
         NativeFn::ContextSlice(builtin_funcall_interactively_slice),
