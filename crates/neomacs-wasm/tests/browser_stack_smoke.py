@@ -23,7 +23,7 @@ def main():
         choices=[
             "direct", "argument", "conditional", "conditional-test", "conditional-else",
             "funcall", "apply", "funcall-subr", "apply-subr", "binding",
-            "initializer", "sequential-binding", "sequential-initializer", "protected",
+            "initializer", "sequential-binding", "sequential-initializer", "protected", "cleanup",
         ],
         default="direct",
     )
@@ -54,6 +54,7 @@ def main():
             "sequential-binding": "(let* ((neomacs-stack-local 42)) (neomacs-stack-probe))",
             "sequential-initializer": "(let* ((neomacs-stack-local (neomacs-stack-probe))) neomacs-stack-local)",
             "protected": "(unwind-protect (neomacs-stack-probe) (setq neomacs-stack-cleanups (1+ neomacs-stack-cleanups)))",
+            "cleanup": "(unwind-protect nil (neomacs-stack-probe))",
         }[args.call_style]
         for limit in args.limits:
             # GNU bytecode.c raises a plain error for Bcall overflow; eval.c
