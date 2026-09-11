@@ -735,10 +735,16 @@ impl TaggedHeap {
         if addr >= self.dump_addr_lo && addr < self.dump_addr_hi {
             return self.mark_mapped_cons(ptr);
         }
-        if ptr.is_null() || !ConsBlock::ptr_is_cell_aligned(ptr) {
+        // One address decomposition for the whole operation: the block base
+        // and the in-block offset are what the alignment test, the block
+        // lookup and the mark bit all need, and each used to derive them
+        // again from the pointer.
+        let block_base = addr & !(CONS_BLOCK_ALIGN - 1);
+        let offset = addr - block_base;
+        if addr == 0 || offset >= CONS_CELLS_BYTES || !offset.is_multiple_of(size_of::<ConsCell>())
+        {
             return self.mark_mapped_cons(ptr);
         }
-        let block_base = ConsBlock::block_base_for_ptr(ptr);
         let block_index = match self.mark_cons_block_cache {
             Some(cache) if cache.block_base == block_base => cache.block_index,
             _ => {
@@ -750,12 +756,7 @@ impl TaggedHeap {
                 block_index
             }
         };
-        let block = &mut self.cons_blocks[block_index];
-        if block.is_marked_ptr(ptr) {
-            return false;
-        }
-        block.mark_ptr(ptr);
-        true
+        self.cons_blocks[block_index].mark_cell_offset(offset)
     }
 
     pub(super) fn mark_mapped_cons(&mut self, ptr: *const ConsCell) -> bool {

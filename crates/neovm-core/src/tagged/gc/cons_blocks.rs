@@ -145,6 +145,28 @@ impl ConsBlock {
         (self.mark_word(mark.word_index).load(Ordering::Relaxed) & mark.mask) != 0
     }
 
+    /// Mark the cell at `offset` bytes into this block's cells, reporting
+    /// whether the bit was newly set.
+    ///
+    /// The caller has already decomposed the address, and the test and the set
+    /// share one index and one mark word. Going through `is_marked_ptr` and
+    /// then `mark_ptr` recomputed the block base, the offset, the cell index
+    /// and the bit mask a second time -- on 26.4M marked conses per
+    /// rust-lsp-typing capture.
+    #[inline]
+    pub(super) fn mark_cell_offset(&mut self, offset: usize) -> bool {
+        let index = offset / size_of::<ConsCell>();
+        let word_index = index / CONS_MARK_BITS_PER_WORD;
+        let mask = 1usize << (index % CONS_MARK_BITS_PER_WORD);
+        debug_assert!(word_index < CONS_MARK_WORDS);
+        let word = self.mark_word(word_index);
+        if word.load(Ordering::Relaxed) & mask != 0 {
+            return false;
+        }
+        word.fetch_or(mask, Ordering::Relaxed);
+        true
+    }
+
     #[inline]
     pub(super) fn mark_ptr(&mut self, ptr: *const ConsCell) {
         let index = Self::index_of_ptr(ptr);

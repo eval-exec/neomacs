@@ -5,6 +5,10 @@
 
 use super::*;
 
+
+cached_symbol_id!(optional_arg_symbol, "&optional");
+cached_symbol_id!(rest_arg_symbol, "&rest");
+
 impl Context {
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
     pub(super) fn make_interpreted_closure_with_expr_runtime_hook(
@@ -2825,6 +2829,93 @@ impl Context {
                 vec![Value::from_sym_id(sym_id)],
             )),
         }
+    }
+
+    /// Bind one interpreted lambda's formals, GNU `funcall_lambda`'s arglist
+    /// walk. Lives beside lambda application rather than in the evaluator
+    /// facade, whose line ceiling exists to keep domain work in its own module.
+    pub(super) fn bind_lambda_args_from_arglist(
+        &mut self,
+        binding: LambdaArgumentBinding,
+        fun: Value,
+        arglist: Value,
+        args: &[Value],
+    ) -> Result<(), Flow> {
+        // Two string interns per interpreted lambda application: 423,456 of
+        // them on one rust-lsp-typing capture, for two symbols whose ids are
+        // fixed for the process. `cached_symbol_id!` is what the other hundred
+        // well-known names on this path already use.
+        let optional_sym = optional_arg_symbol();
+        let rest_sym = rest_arg_symbol();
+        let mut syms_left = arglist;
+        let mut arg_index = 0;
+        let mut optional = false;
+        let mut rest = false;
+        let mut previous_rest = false;
+
+        while syms_left.is_cons() {
+            let next = syms_left.cons_car();
+            syms_left = syms_left.cons_cdr();
+            let Some(next_id) = bare_lambda_arg_symbol_id(next) else {
+                return Err(signal(LispCondition::InvalidFunction, vec![fun]));
+            };
+
+            if next_id == rest_sym {
+                if rest || previous_rest {
+                    return Err(signal(LispCondition::InvalidFunction, vec![fun]));
+                }
+                rest = true;
+                previous_rest = true;
+            } else if next_id == optional_sym {
+                if optional || rest || previous_rest {
+                    return Err(signal(LispCondition::InvalidFunction, vec![fun]));
+                }
+                optional = true;
+            } else {
+                let arg = if rest {
+                    let rest_value = Value::list_from_slice(&args[arg_index..]);
+                    arg_index = args.len();
+                    rest_value
+                } else if arg_index < args.len() {
+                    let arg = args[arg_index];
+                    arg_index += 1;
+                    arg
+                } else if !optional {
+                    return Err(signal(
+                        LispCondition::WrongNumberOfArguments,
+                        vec![fun, Value::fixnum(args.len() as i64)],
+                    ));
+                } else {
+                    Value::NIL
+                };
+
+                match binding {
+                    LambdaArgumentBinding::Dynamic => self.try_specbind(next_id, arg)?,
+                    LambdaArgumentBinding::Lexical { env_root_index } => {
+                        prepend_lexical_binding_in_specpdl_rooted_env(
+                            &mut self.lexenv,
+                            &mut self.specpdl,
+                            env_root_index,
+                            next_id,
+                            arg,
+                        );
+                    }
+                }
+                previous_rest = false;
+            }
+        }
+
+        if !syms_left.is_nil() || previous_rest {
+            return Err(signal(LispCondition::InvalidFunction, vec![fun]));
+        }
+        if arg_index < args.len() {
+            return Err(signal(
+                LispCondition::WrongNumberOfArguments,
+                vec![fun, Value::fixnum(args.len() as i64)],
+            ));
+        }
+
+        Ok(())
     }
 
     pub(super) fn apply_lambda(&mut self, func_value: Value, args: LispArgVec) -> EvalResult {
