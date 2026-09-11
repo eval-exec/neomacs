@@ -929,25 +929,45 @@ fn select_automatic_composition_spans(
     // needs random access, but a parallel `Vec<char>` of the whole buffer is
     // half a megabyte of pure duplication -- the character is one `chars()`
     // step from the offset we already keep.
-    let mut byte_offsets = text
-        .char_indices()
-        .map(|(offset, _)| offset)
-        .collect::<Vec<_>>();
+    // `collect` trusts `CharIndices::size_hint`, whose lower bound is one
+    // quarter of the byte length, so an ASCII scan grew and recopied this
+    // table twice on the way up -- once per window per frame.
+    let mut byte_offsets = Vec::with_capacity(text.len() + 1);
+    byte_offsets.extend(text.char_indices().map(|(offset, _)| offset));
     byte_offsets.push(text.len());
     let char_count = byte_offsets.len() - 1;
 
+    // GNU reads this table through `CHAR_TABLE_REF`, whose ASCII arm
+    // (`CHAR_TABLE_REF_ASCII`) is a direct array index off `tbl->ascii`.
+    // Asking the generic entry point once per character instead costs a call
+    // frame, a `Result` channel and three repeated type checks -- 63 Ir a
+    // character, for every character of every window on every frame. Nothing
+    // in this scan runs Lisp, so the table cannot change under it: resolve its
+    // ASCII row once and index it. Every entry stays reachable from the table
+    // itself, which is a root, so holding them here roots nothing new.
+    let ascii_rules: [Value; 128] = std::array::from_fn(|ch| {
+        super::chartable::ct_lookup(&composition_function_table, ch as i64).unwrap_or(Value::NIL)
+    });
+
+    let bytes = text.as_bytes();
     let mut spans = Vec::new();
     let mut committed_end = 0usize;
     let mut trigger = 0usize;
     while trigger < char_count {
-        let Some(trigger_char) = text[byte_offsets[trigger]..].chars().next() else {
-            break;
+        let offset = byte_offsets[trigger];
+        let lead = bytes[offset];
+        let rules = if lead < 0x80 {
+            ascii_rules[lead as usize]
+        } else {
+            let Some(trigger_char) = text[offset..].chars().next() else {
+                break;
+            };
+            super::chartable::ct_lookup(
+                &composition_function_table,
+                i64::from(trigger_char as u32),
+            )
+            .unwrap_or(Value::NIL)
         };
-        let rules = super::chartable::ct_lookup(
-            &composition_function_table,
-            i64::from(trigger_char as u32),
-        )
-        .unwrap_or(Value::NIL);
         // Nearly every character in an ordinary buffer has NO composition
         // rule. `list_to_vec` opens with `Vec::with_capacity(16)` and so
         // allocates even for nil, which made this one malloc/free pair per

@@ -1458,7 +1458,18 @@ pub fn try_as_utf8(bytes: &[u8]) -> Option<&str> {
 /// Convert an Emacs-encoded byte sequence to a UTF-8 `String`, replacing any
 /// raw-byte characters with U+FFFD (REPLACEMENT CHARACTER).
 pub fn to_utf8_lossy(bytes: &[u8]) -> String {
-    let mut out = String::new();
+    // Emacs's internal encoding IS UTF-8 for every character that has a
+    // Unicode scalar value. The forms that differ -- the `C0`/`C1` overlong
+    // pair that carries a raw eight-bit byte, the `F8` five-byte extension,
+    // and unpaired surrogates -- are all sequences UTF-8 itself rejects, so a
+    // slice that validates decodes identically either way and can be copied
+    // whole. Deciding that per character instead cost ~42 Ir a character on
+    // the redisplay path, most of it re-growing a `String` that started with
+    // no capacity at all.
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return text.to_owned();
+    }
+    let mut out = String::with_capacity(bytes.len());
     let mut pos = 0;
     while pos < bytes.len() {
         let (c, len) = string_char(&bytes[pos..]);
