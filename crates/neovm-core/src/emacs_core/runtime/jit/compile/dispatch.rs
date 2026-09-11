@@ -646,7 +646,13 @@ fn call_fixed_builtin_from_native(
     }
     // Only the fixed entries whose slot count covers `nargs` (missing
     // optionals are nil, as the stack dispatcher fills them).
-    let slots = match subr.function {
+    //
+    // Read the entry point ONCE into a local. The arity screen and the call
+    // below both discriminate on it, and re-reading it through `subr` made the
+    // compiler load and branch on the same field twice on every builtin call
+    // out of JIT-compiled code.
+    let function = subr.function;
+    let slots = match function {
         Some(SubrFn::A0(_)) => 0,
         Some(SubrFn::A1(_)) => 1,
         Some(SubrFn::A2(_)) => 2,
@@ -680,7 +686,7 @@ fn call_fixed_builtin_from_native(
         ctx.depth -= 1;
         return Some(ctx.pop_bytecode_backtrace_frame_with_result(bt_count, Err(flow)));
     }
-    let result = match subr.function {
+    let result = match function {
         Some(SubrFn::A0(f)) => f(ctx),
         Some(SubrFn::A1(f)) => f(ctx, arg(0)),
         Some(SubrFn::A2(f)) => f(ctx, arg(0), arg(1)),

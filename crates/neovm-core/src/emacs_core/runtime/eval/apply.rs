@@ -1107,6 +1107,13 @@ impl Context {
                 return result;
             }
         }
+        // MEASURED DEAD END (2026-09-11): admitting a whole trivial SUFFIX
+        // here, not just one entry, does nothing. The suffixes that reach the
+        // general path hold a `SpecBinding::Let`, which is not a trivial pop --
+        // so the wider screen found nothing, ran on all 8.2M unwinds of a
+        // rust-lsp-typing capture, and grew this function past the inliner's
+        // threshold: +248M Ir (+0.96%). The cost is in `Let` restores, not in
+        // reaching them.
         self.unbind_to_with_result_slow(count, result)
     }
 
