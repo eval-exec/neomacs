@@ -2529,13 +2529,19 @@ pub(crate) fn builtin_window_old_buffer(
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-old-buffer", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let _window = resolve_window_object_id_with_pred_in_state(
+    let window = resolve_window_object_id_with_pred_in_state(
         frames,
         buffers,
         args.first(),
         WindowDomain::Any,
     )?;
-    Ok(Value::NIL)
+    Ok(match frames.window_old_buffer(window) {
+        crate::window::WindowOldBuffer::NeverRecorded => Value::NIL,
+        crate::window::WindowOldBuffer::StaleEpoch => Value::T,
+        crate::window::WindowOldBuffer::Recorded(buffer) => buffers
+            .get(buffer)
+            .map_or(Value::NIL, |_| Value::make_buffer(buffer)),
+    })
 }
 /// `(window-prev-buffers &optional WINDOW)` -> previous buffer list or nil.
 pub(crate) fn builtin_window_prev_buffers(

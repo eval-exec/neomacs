@@ -1148,7 +1148,7 @@ fn deleting_child_frame_that_shares_minibuffer_does_not_delete_owner_minibuffer(
         Some(root_id)
     );
     assert!(mgr.delete_frame(child_id).was_deleted());
-    assert!(!mgr.deleted_windows.contains(&root_minibuffer));
+    assert!(!mgr.deleted_windows.contains_key(&root_minibuffer));
     assert_eq!(mgr.find_window_frame_id(root_minibuffer), Some(root_id));
     assert!(mgr.lookup_window(root_minibuffer).is_some());
 }

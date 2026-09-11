@@ -662,6 +662,46 @@ fn lower_frame_decodes_a_live_frame() {
 }
 
 #[test]
+fn window_old_buffer_reports_a_deleted_window_as_a_stale_epoch() {
+    // GNU answers `window-old-buffer` from two slots (src/window.c):
+    //
+    //     return (NILP (w->old_buffer)                                   ? Qnil
+    //             : (w->change_stamp != WINDOW_XFRAME (w)->change_stamp) ? Qt
+    //             : w->old_buffer);
+    //
+    // `w->old_buffer` is written in exactly two places: when window change
+    // functions run (`window_change_record_windows`, which also stamps the
+    // window), and when a live window is DELETED -- `Fdelete_window_internal`
+    // does `wset_old_buffer (w, w->contents)` before clearing contents.
+    //
+    // Measured on GNU Emacs 31.1, batch:
+    //     live window, created since the last record => nil
+    //     the same window after delete-window        => t
+    //
+    // The `t` is not arbitrary: the window was created after the last record
+    // so its own stamp is 0, while the frame's stamp is already non-zero, and
+    // deletion gives it an old_buffer.  Recording the buffer WITHOUT the
+    // stamps would answer with the buffer here and diverge.
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new();
+    let out = ev
+        .eval_str_each(
+            "(let ((w (split-window-internal (selected-window)
+                        (/ (window-pixel-height (selected-window)) 2) nil nil)))
+           (list (window-old-buffer w)
+                 (progn (delete-window-internal w) (window-old-buffer w))))",
+        )
+        .iter()
+        .map(format_eval_result)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        out[0], "OK (nil t)",
+        "a window created since the last record has no old buffer; once deleted \
+         it has one, but from an older epoch, so GNU answers t"
+    );
+}
+
+#[test]
 fn minibuffer_window_frame_first_window_and_window_minibuffer_p_semantics() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();

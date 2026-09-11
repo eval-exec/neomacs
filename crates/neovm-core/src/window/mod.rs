@@ -1199,6 +1199,56 @@ impl WindowOldPointMarker {
     }
 }
 
+/// GNU's window-change epoch counter (`f->change_stamp`, `w->change_stamp`).
+///
+/// GNU reserves 0 for "never recorded" and keeps that invariant with a runtime
+/// wrap guard:
+///
+/// ```c
+///   f->change_stamp += 1;
+///   if (f->change_stamp == 0) f->change_stamp = 1;
+/// ```
+///
+/// `NonZeroU32` makes the reserved value unrepresentable instead, so
+/// `Option<ChangeStamp>` IS GNU's "0 or a stamp" in one word and the guard
+/// cannot be dropped by accident.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ChangeStamp(std::num::NonZeroU32);
+
+impl ChangeStamp {
+    /// The first epoch.
+    pub const FIRST: Self = Self(std::num::NonZeroU32::new(1).unwrap());
+
+    /// The next epoch, wrapping past zero exactly as GNU's guard does.
+    #[must_use]
+    pub fn next(self) -> Self {
+        Self(std::num::NonZeroU32::new(self.0.get().wrapping_add(1)).unwrap_or(Self::FIRST.0))
+    }
+}
+
+/// GNU's three possible answers for `window-old-buffer`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WindowOldBuffer {
+    /// `NILP (w->old_buffer)` -- the window was created since the last record.
+    NeverRecorded,
+    /// The record is from an older epoch: a window restored from a
+    /// configuration, or one that has been deleted.
+    StaleEpoch,
+    /// The buffer the window showed when the epoch was recorded.
+    Recorded(BufferId),
+}
+
+/// What a deleted window remembers, mirroring the `old_buffer` GNU stores on
+/// the window object it keeps alive.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DeletedWindowRecord {
+    /// The buffer the window was showing when it was deleted.
+    pub old_buffer: Option<BufferId>,
+    /// The window's epoch at deletion, or `None` if it was never recorded --
+    /// i.e. it was created after the last time window change functions ran.
+    pub change_stamp: Option<ChangeStamp>,
+}
+
 /// A window in the window tree.
 #[derive(Clone, Debug)]
 // Window nodes own their complete leaf/split state and are cloned as snapshots;
@@ -1238,6 +1288,13 @@ pub enum Window {
         point: LispCharPos1,
         /// Cached previous point value mirrored from GNU `w->old_pointm`.
         old_point: LispCharPos1,
+        /// GNU `w->old_buffer`: the buffer this window showed when its epoch was
+        /// recorded.  `None` is GNU's nil.
+        old_buffer: Option<BufferId>,
+        /// GNU `w->change_stamp`: the window-change epoch this window was last
+        /// recorded in.  `None` is GNU's 0 -- "created since the last record",
+        /// which is why a brand-new window reports no old buffer.
+        change_stamp: Option<ChangeStamp>,
         /// Mirror GNU `w->dedicated`: the dedication flag value.
         /// nil = not dedicated, t = strongly dedicated,
         /// side = side-window dedication (blocks display-buffer reuse but
@@ -1369,6 +1426,10 @@ impl Window {
         Window::Leaf {
             id,
             buffer_id,
+            // GNU gives a new window change_stamp 0 and a nil old_buffer, so the
+            // next record can tell it did not exist before.
+            old_buffer: None,
+            change_stamp: None,
             bounds,
             window_start: LispCharPos1::ONE,
             position_markers: WindowPositionMarkerState::Detached,
@@ -1796,6 +1857,48 @@ impl Window {
     }
 
     /// Buffer displayed in this window (leaf only).
+    /// This window's window-change epoch, or `None` when it has never been
+    /// recorded -- GNU's `w->change_stamp == 0`, which marks a window created
+    /// since the last run of the window change functions.
+    ///
+    /// Internal windows are never stamped: GNU's
+    /// `window_change_record_windows` recurses past them and records only
+    /// live leaves (`src/window.c`).
+    pub fn old_buffer(&self) -> Option<BufferId> {
+        match self {
+            Window::Leaf { old_buffer, .. } => *old_buffer,
+            Window::Internal { .. } => None,
+        }
+    }
+
+    /// Record the buffer and epoch, as `window_change_record_windows` does.
+    pub fn record_change_epoch(&mut self, stamp: ChangeStamp) {
+        if let Window::Leaf {
+            buffer_id,
+            old_buffer,
+            change_stamp,
+            ..
+        } = self
+        {
+            *old_buffer = Some(*buffer_id);
+            *change_stamp = Some(stamp);
+        }
+    }
+
+    pub fn change_stamp(&self) -> Option<ChangeStamp> {
+        match self {
+            Window::Leaf { change_stamp, .. } => *change_stamp,
+            Window::Internal { .. } => None,
+        }
+    }
+
+    /// Stamp this window with the epoch that has just been recorded.
+    pub fn set_change_stamp(&mut self, stamp: ChangeStamp) {
+        if let Window::Leaf { change_stamp, .. } = self {
+            *change_stamp = Some(stamp);
+        }
+    }
+
     pub fn buffer_id(&self) -> Option<BufferId> {
         match self {
             Window::Leaf { buffer_id, .. } => Some(*buffer_id),
@@ -3178,6 +3281,11 @@ impl FrameDivider {
 
 /// A frame (top-level window/screen).
 pub struct Frame {
+    /// GNU `f->change_stamp`: the epoch bumped each time the window change
+    /// functions run.  Starts at `FIRST` rather than "unset" because GNU's is
+    /// already non-zero by the time any Lisp can observe it, which is what
+    /// makes a window created afterwards (stamp 0) compare unequal.
+    pub change_stamp: ChangeStamp,
     pub id: FrameId,
     /// GNU `struct frame.name`: a Lisp string used for resources and default
     /// title fallback.
@@ -3384,6 +3492,7 @@ impl Frame {
             .unwrap_or(WindowId(0));
         Self {
             id,
+            change_stamp: ChangeStamp::FIRST,
             name,
             explicit_name: false,
             icon_name: Value::NIL,
@@ -4984,7 +5093,15 @@ pub struct FrameManager {
     last_tty_frame_name: Option<TtyFrameNameOrdinal>,
     next_window_id: u64,
     old_selected_window: Option<WindowId>,
-    deleted_windows: HashSet<WindowId>,
+    /// Windows that were live and have been deleted, with the buffer each was
+    /// showing when it went.
+    ///
+    /// GNU keeps the deleted window object itself and sets `w->old_buffer` from
+    /// `w->contents` in `Fdelete_window_internal` (`src/window.c`), which is
+    /// what lets `window-old-buffer` still answer for it.  neomacs drops the
+    /// window from the tree, so the buffer has to be recorded here instead --
+    /// a set of ids alone cannot answer the question.
+    deleted_windows: HashMap<WindowId, DeletedWindowRecord>,
     deleted_window_parameters: HashMap<WindowId, WindowParameters>,
     window_select_count: i64,
     next_navigation_intent_generation: std::num::NonZeroU64,
@@ -5041,7 +5158,7 @@ impl FrameManager {
             last_tty_frame_name: None,
             next_window_id: 1,
             old_selected_window: None,
-            deleted_windows: HashSet::default(),
+            deleted_windows: HashMap::default(),
             deleted_window_parameters: HashMap::default(),
             window_select_count: 0,
             next_navigation_intent_generation: std::num::NonZeroU64::MIN,
@@ -5595,7 +5712,12 @@ impl FrameManager {
             self.pending_content_transition_intents.frames.remove(id);
             for wid in frame.window_list() {
                 self.pending_content_transition_intents.windows.remove(wid);
-                self.deleted_windows.insert(wid);
+                // GNU `Fdelete_window_internal` stores the window's buffer in
+                // `old_buffer` before clearing its contents (`src/window.c`),
+                // which is what lets `window-old-buffer` still answer for a
+                // window that no longer exists.
+                self.deleted_windows
+                    .insert(wid, Self::deletion_record(frame.find_window(wid)));
                 if let Some(window) = frame.find_window(wid) {
                     self.deleted_window_parameters
                         .insert(wid, window.parameters().clone());
@@ -5603,7 +5725,8 @@ impl FrameManager {
             }
             if let Some(minibuffer_leaf) = frame.minibuffer_leaf.as_ref() {
                 let minibuffer_wid = minibuffer_leaf.id();
-                self.deleted_windows.insert(minibuffer_wid);
+                self.deleted_windows
+                    .insert(minibuffer_wid, Self::deletion_record(Some(minibuffer_leaf)));
                 self.deleted_window_parameters
                     .insert(minibuffer_wid, minibuffer_leaf.parameters().clone());
             }
@@ -6067,11 +6190,14 @@ impl FrameManager {
         let deleted_parameters = frame
             .find_window(window_id)
             .map(|window| window.parameters().clone());
+        // Taken before the tree drops the window: after `delete_window_in_tree`
+        // there is nothing left to read the buffer from.
+        let deletion_record = Self::deletion_record(frame.find_window(window_id));
         // A promotion at the very top has no grandparent to merge into, so the
         // outcome collapses to "was it removed" here.
         let removed = delete_window_in_tree(&mut frame.root_window, window_id, resize).removed();
         if removed {
-            self.deleted_windows.insert(window_id);
+            self.deleted_windows.insert(window_id, deletion_record);
             self.deleted_window_parameters
                 .insert(window_id, deleted_parameters.unwrap_or_default());
             frame.recalculate_minibuffer_bounds();
@@ -6177,7 +6303,13 @@ impl FrameManager {
         frame.recalculate_minibuffer_bounds();
 
         for (id, parameters) in removed_windows {
-            self.deleted_windows.insert(id);
+            self.deleted_windows.insert(
+                id,
+                DeletedWindowRecord {
+                    old_buffer: None,
+                    change_stamp: None,
+                },
+            );
             self.deleted_window_parameters.insert(id, parameters);
         }
 
@@ -6241,17 +6373,72 @@ impl FrameManager {
     /// The frame owning WINDOW_ID for GNU's `decode_any_window` -- `CHECK_WINDOW`,
     /// which admits a live window, an internal window, and one that has been
     /// deleted.
+    /// GNU's `window-old-buffer` answer for WINDOW, as a closed set.
+    ///
+    /// ```c
+    ///   return (NILP (w->old_buffer)                                   ? Qnil
+    ///           : (w->change_stamp != WINDOW_XFRAME (w)->change_stamp) ? Qt
+    ///           : w->old_buffer);
+    /// ```
+    ///
+    /// The three arms are a sum type, not two nullable slots compared at every
+    /// call: an old buffer without an epoch, or an epoch without a buffer, are
+    /// states GNU can represent and this cannot.
+    pub fn window_old_buffer(&self, window_id: WindowId) -> WindowOldBuffer {
+        // A deleted window answers from what it recorded on the way out; a live
+        // one from what the last window-change record left on it.
+        let (old_buffer, stamp, frame_stamp) =
+            if let Some(record) = self.deleted_windows.get(&window_id) {
+                let frame_stamp = self
+                    .any_window_frame_id(window_id)
+                    .and_then(|fid| self.frames.get(&fid))
+                    .map(|frame| frame.change_stamp);
+                (record.old_buffer, record.change_stamp, frame_stamp)
+            } else {
+                let Some(frame_id) = self.find_valid_window_frame_id(window_id) else {
+                    return WindowOldBuffer::NeverRecorded;
+                };
+                let Some(frame) = self.frames.get(&frame_id) else {
+                    return WindowOldBuffer::NeverRecorded;
+                };
+                let window = frame.find_window(window_id);
+                (
+                    window.and_then(Window::old_buffer),
+                    window.and_then(Window::change_stamp),
+                    Some(frame.change_stamp),
+                )
+            };
+
+        match old_buffer {
+            None => WindowOldBuffer::NeverRecorded,
+            Some(buffer) if stamp == frame_stamp => WindowOldBuffer::Recorded(buffer),
+            Some(_) => WindowOldBuffer::StaleEpoch,
+        }
+    }
+
+    /// What a window should remember once it is deleted.
+    ///
+    /// Mirrors GNU's `wset_old_buffer (w, w->contents)` in
+    /// `Fdelete_window_internal`: a live leaf remembers the buffer it was
+    /// showing, an internal window has none to remember.
+    fn deletion_record(window: Option<&Window>) -> DeletedWindowRecord {
+        DeletedWindowRecord {
+            old_buffer: window.and_then(Window::buffer_id),
+            change_stamp: window.and_then(Window::change_stamp),
+        }
+    }
+
     pub fn any_window_frame_id(&self, window_id: WindowId) -> Option<FrameId> {
         self.find_valid_window_frame_id(window_id).or_else(|| {
             self.deleted_windows
-                .contains(&window_id)
+                .contains_key(&window_id)
                 .then(|| self.frames.keys().copied().next())
                 .flatten()
         })
     }
 
     pub fn is_window_object_id(&self, window_id: WindowId) -> bool {
-        self.is_valid_window_id(window_id) || self.deleted_windows.contains(&window_id)
+        self.is_valid_window_id(window_id) || self.deleted_windows.contains_key(&window_id)
     }
 
     /// Look up a window by id across every live frame, returning a
