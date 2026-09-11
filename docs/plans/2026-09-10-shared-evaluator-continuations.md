@@ -72,19 +72,32 @@ order. Sequence execution is reusable by conditionals and binding bodies.
 ## Migration boundaries
 
 Already implemented: ordinary interpreted calls/arguments, lambda bodies,
-`let`/`let*` bodies, conditional condition/branch selection, and protected bodies.
-Pending values
+`let`/`let*` bodies, conditional condition/branch selection, protected bodies,
+and interpreted `funcall`/`apply` applications. Pending values
 are rooted in the existing VM arenas, and bindings unwind through owned tokens.
+
+Application handlers are typed evaluator declarations. Their subr objects are
+still materialized at their original early registration positions, separately
+from the late special-form declarations. Dispatch uses the captured callable
+object/entry, not the current spelling of a function cell. A saved `funcall`
+subr remains callable after Lisp redefines the symbol.
+
+An owned application scope preserves Ffuncall's extra logical depth, backtrace,
+GC/debugger entry order, and return unwinding. Native entry points and the driver
+share that scope's entry/exit implementation. Symbol indirection and interpreted
+lambda application are driver steps, including calls through first-class
+application subrs. GNU's subr-object wrong-arity payload is checked before
+argument preparation; the Lisp form's own arity error remains distinct.
 
 The next work is deliberately not a collection of string-name fast paths:
 
 - Protected bodies now keep cleanup on the existing specpdl while the driver
   runs the body. This removes body recursion but does not itself make arbitrary Lisp
   recursion *inside cleanup callbacks* stack-independent.
-- `funcall`/`apply`: classify evaluator control callables using the existing
-  typed declaration/handler metadata. Preserve their original registration
-  positions and arities. Introduce application-entry and application-return
-  states so GC, depth, backtrace, debugger and resolution order stay centralized.
+- Application reentrancy: autoload execution and native callbacks still enter
+  existing synchronous paths. Preserve their retry/error semantics while moving
+  their Lisp execution onto explicit states; do not mistake ordinary application
+  recursion passing for complete callback or autoload stack independence.
 - General cleanup: eventually make Lisp cleanup execution resumable in the
   shared unwinder. Retain the pending return value or nonlocal flow as a traced
   object while cleanup runs. Cleanup can replace the pending exit, and remaining

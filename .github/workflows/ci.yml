@@ -774,9 +774,9 @@ jobs:
             --url http://127.0.0.1:4174/ \
             --artifacts-dir "$TMPDIR/browser-smoke-artifacts"
 
-          # A Lisp nesting error must leave the Worker usable and restore
-          # bindings. Additional failing shapes remain available in the probe.
-          for call_style in direct argument conditional conditional-test conditional-else binding initializer sequential-binding sequential-initializer protected; do
+          # A Lisp nesting error must leave the Worker usable across call,
+          # binding, branch, and protected-body paths.
+          for call_style in direct argument conditional conditional-test conditional-else funcall apply funcall-subr apply-subr binding initializer sequential-binding sequential-initializer protected; do
             "$TMPDIR/browser-smoke-venv/bin/python" \
               crates/neomacs-wasm/tests/browser_stack_smoke.py \
               --headless --limits 1600 --call-style "$call_style" \
@@ -784,7 +784,7 @@ jobs:
               --artifacts-dir "$TMPDIR/browser-smoke-artifacts/stack-$call_style"
           done
 
-          for call_style in conditional conditional-test conditional-else binding initializer sequential-binding sequential-initializer protected; do
+          for call_style in conditional conditional-test conditional-else funcall apply funcall-subr apply-subr binding initializer sequential-binding sequential-initializer protected; do
             "$TMPDIR/browser-smoke-venv/bin/python" \
               crates/neomacs-wasm/tests/browser_stack_smoke.py \
               --headless --lexical --limits 1600 --call-style "$call_style" \
