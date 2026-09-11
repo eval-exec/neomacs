@@ -7459,6 +7459,18 @@ impl<'a> Vm<'a> {
         }
     }
 
+    /// MEASURED DEAD END (2026-09-11): splitting this into an
+    /// `#[inline(always)]` cache probe plus an out-of-line miss half does
+    /// remove the frame -- the probe drops from 39 to 22 Ir over 55,851 calls
+    /// per org-editing operation, worth -0.95M/op there. It is still a net
+    /// loss, because `run_loop` is front-end bound: rust-lsp-typing came back
+    /// at 1.0009x the INSTRUCTIONS and 1.0712x the CYCLES, and 1.0702x the
+    /// per-edit CPU time. Same work, 7% slower, from one more inlined body in
+    /// the dispatch loop.
+    ///
+    /// The corollary is the useful part: the way to close the 2.43x gap against
+    /// GNU's `exec_byte_code` is not to inline more into this loop. Measure
+    /// cycles, not just instructions, for anything that changes its size.
     fn resolve_stack_call_target(&mut self, func_val: Value) -> ResolvedStackCallTarget {
         match func_val.kind() {
             ValueKind::Veclike(VecLikeType::ByteCode) => ResolvedStackCallTarget::ByteCode {
