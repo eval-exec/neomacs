@@ -53,7 +53,7 @@ the test oracle, so every rewritten subsystem is verified to behave identically.
 > features — [bug reports](https://github.com/eval-exec/neomacs/issues) are very welcome.
 
 > [!NOTE]
-> NEO Emacs is a hard fork of GNU Emacs (Lisp tree synced to `emacs-31.0.90`). The C core
+> NEO Emacs is a hard fork of GNU Emacs (Lisp tree synced to `emacs-31.1`). The C core
 > has been fully replaced by Rust. Fork provenance and rationale: [FAQ](docs/faq.md).
 
 

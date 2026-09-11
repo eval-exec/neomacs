@@ -43,8 +43,8 @@ GNU Emacs.
 NEO Emacs is a hard fork of GNU Emacs, forked from commit
 [`705c0e3729`](https://git.savannah.gnu.org/cgit/emacs.git/commit/?id=705c0e3729bf53db9e84ae7c8b932ebc3b2da934).
 The NEO Emacs source tree (the Lisp side) was synced up to GNU Emacs commit
-[`0ee48ac4df2`](https://git.savannah.gnu.org/cgit/emacs.git/commit/?id=0ee48ac4df2),
-tagged `emacs-31.0.90`. The changes are too invasive to ever be accepted upstream, so
+[`a360712c9d2`](https://git.savannah.gnu.org/cgit/emacs.git/commit/?id=a360712c9d272d950d8d8255ef74570f7e90b7d9),
+tagged `emacs-31.1`. The changes are too invasive to ever be accepted upstream, so
 we did not preserve the original git history to keep the repository lightweight. If
 you need the full Emacs git history for reference, open an issue, and we can re-add it.
 
