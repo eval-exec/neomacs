@@ -3438,6 +3438,22 @@ impl<'a> Vm<'a> {
                 };
             }
 
+            // MEASURED DEAD END (2026-09-11): this expands the call and its
+            // three-way outcome at every signalling site, and because the uses
+            // sit inside `vm_try!`/`invalid_bytecode!`/`branch_to!` the compiler
+            // emits 253 copies at ~86 bytes -- 21,734 bytes of `run_loop`.
+            // Collapsing them into one dispatch point (`break 'ops flow` out of
+            // a value-returning labelled loop, handled once) does shrink the
+            // function a further 20.3%, to 97,756 bytes. It is SLOWER:
+            // rust-lsp-typing +1.37% cycles, magit-status-compiled +1.49%,
+            // org-editing +0.12%, with instructions up 1.0009-1.0012x from
+            // spilling the carried flow.
+            //
+            // The rule is not "make this function smaller". Moving a body that
+            // NEVER RUNS out of the loop won (-17.2% size, -2.4% cycles on
+            // rust-lsp-typing). Re-plumbing the exits the HOT path takes loses,
+            // even though it removes more bytes.
+            //
             // Resume nonlocal flow at the innermost VM handler, or propagate out
             // of run_loop. The cursor must be PUBLISHED before this runs:
             // resume_nonlocal truncates bc_buf to the handler's stack height and
