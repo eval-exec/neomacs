@@ -5728,3 +5728,56 @@ fn read_from_minibuffer_clears_the_echo_message_on_entry_like_gnu() {
          inside the hook"
     );
 }
+
+/// A FAILED read from a buffer still leaves point where reading stopped.
+///
+/// GNU reads a buffer stream through `readchar`, which moves point as it
+/// consumes, so a reader error lands point on the offending character (or at
+/// `point-max` for an unterminated form) rather than restoring it. Callers
+/// depend on that to make progress: `elisp-fontify-symbols` drives
+///
+///   (while (< (point) end) (ignore-errors (elisp-scope-analyze-form ...)))
+///
+/// over a buffer that is routinely incomplete mid-edit, and advances only
+/// because the failed read moved point. Restoring point spun that loop forever
+/// at 100% CPU (issue #375). Positions here are the ones GNU 31.1 produces for
+/// the same inputs.
+#[test]
+fn failed_read_from_buffer_leaves_point_where_reading_stopped() {
+    crate::test_utils::init_test_tracing();
+    for (source, expected_signal, expected_char_pos) in [
+        // Unterminated form: everything is consumed, so point ends at point-max.
+        ("(defun test (x)\n", "end-of-file", 16),
+        // Bad token: point stops on the character the reader rejected.
+        ("(a . . b)", "invalid-read-syntax", 6),
+        ("#<junk>", "invalid-read-syntax", 2),
+    ] {
+        let mut ev = Context::new();
+        let buf_id = ev.buffers.create_buffer(" *reader-error-point*");
+        {
+            let buf = ev.buffers.get_mut(buf_id).expect("buffer");
+            buf.insert(source);
+            buf.goto_emacs_byte_pos(crate::buffer::EmacsBytePos::new(0));
+        }
+
+        let result = builtin_read(&mut ev, vec![Value::make_buffer(buf_id)]);
+        match result {
+            Err(Flow::Signal(sig)) => assert_eq!(
+                sig.symbol_name(),
+                expected_signal,
+                "unexpected signal for {source:?}"
+            ),
+            other => panic!("{source:?} should signal {expected_signal}, got {other:?}"),
+        }
+
+        assert_eq!(
+            ev.buffers
+                .get(buf_id)
+                .expect("buffer")
+                .point_char_pos()
+                .get(),
+            expected_char_pos,
+            "{source:?}: point must stay where the reader stopped, not rewind"
+        );
+    }
+}

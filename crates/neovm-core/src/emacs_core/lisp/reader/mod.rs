@@ -1534,7 +1534,17 @@ pub fn builtin_read_impl(
             Ok(value)
         }
         ResolvedReadStream::Buffer(buf_id) => {
-            let (maybe_value, new_pt) =
+            // GNU reads a buffer stream through `readchar`, which advances
+            // point as it consumes.  A reader error therefore leaves point
+            // where reading STOPPED, not where it started -- `end-of-file` on
+            // an unterminated form lands at point-max, and a bad token lands on
+            // the offending character.  Callers depend on that: the semantic
+            // elisp fontifier runs
+            //   (while (< (point) end) (ignore-errors (read ...)))
+            // over a buffer that is routinely incomplete mid-edit, and makes
+            // progress only because the failed read still moved point.
+            // Restoring point on error spun that loop forever (issue #375).
+            let outcome =
                 {
                     let buf = ctx.buffers.get(buf_id).ok_or_else(|| {
                         signal("error", vec![Value::string("Buffer does not exist")])
@@ -1555,10 +1565,26 @@ pub fn builtin_read_impl(
                         &ctx.obarray,
                         shorthands.as_ref(),
                     ) {
-                        Ok(result) => result,
-                        Err(e) => return Err(signal_reader_error_from_buffer(buf, e)),
+                        Ok(result) => Ok(result),
+                        Err(e) => {
+                            // Every `ReadError` records `position: self.pos`, the
+                            // reader's own stop offset, in the same absolute Emacs
+                            // byte space the success path hands to `goto`.  Clamped
+                            // to the accessible end like the marker arm above, so a
+                            // stop offset at the boundary cannot land past it.
+                            let stopped_at = EmacsBytePos::new(e.position).min(end);
+                            Err((signal_reader_error_from_buffer(buf, e), stopped_at))
+                        }
                     }
                 };
+
+            let (maybe_value, new_pt) = match outcome {
+                Ok(result) => result,
+                Err((flow, stopped_at)) => {
+                    let _ = &mut ctx.buffers.goto_buffer_emacs_byte_pos(buf_id, stopped_at);
+                    return Err(flow);
+                }
+            };
 
             let _ = &mut ctx.buffers.goto_buffer_emacs_byte_pos(buf_id, new_pt);
             let value = maybe_value.ok_or_else(|| {
