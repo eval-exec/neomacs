@@ -174,6 +174,14 @@ pub(crate) fn record_dispatch(said_compiled: bool) {
             stats.dispatch_said_compiled += 1;
         }
         cell.set(stats);
+        // Also report on a dispatch cadence, not only every 64 compiles. A
+        // workload that consults the JIT tens of thousands of times and
+        // compiles once would otherwise print nothing at all -- which is
+        // precisely the case worth seeing, since it means the surface is a
+        // coverage question rather than a codegen one.
+        if stats.dispatch_consulted.is_multiple_of(50_000) {
+            eprintln!("[neovm-jit-dispatch] {}", format_summary(&stats));
+        }
     });
 }
 
