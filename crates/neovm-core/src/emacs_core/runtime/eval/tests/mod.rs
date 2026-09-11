@@ -8733,6 +8733,37 @@ fn unwind_protect_cleanup_signal_overrides_throw() {
 }
 
 #[test]
+fn cleanup_recursion_preserves_nesting_signal_and_recovery() {
+    for lexical in ["nil", "t"] {
+        assert_eq!(
+            eval_one(&format!(r##"(progn
+                (defalias 'cleanup-probe
+                  (eval '(function (lambda ()
+                           (unwind-protect nil (cleanup-probe)))) {lexical}))
+                (list (condition-case err (cleanup-probe)
+                        (excessive-lisp-nesting err))
+                      (+ 40 2)))"##)),
+            "OK ((excessive-lisp-nesting 1601) 42)",
+        );
+    }
+}
+
+#[test]
+fn cleanup_throw_replaces_pending_throw_and_runs_outer_cleanup() {
+    assert_eq!(
+        eval_one(r##"(let ((trace nil))
+            (list (catch 'escape
+                    (unwind-protect
+                        (unwind-protect (throw 'escape 'body)
+                          (setq trace (cons 'inner trace))
+                          (throw 'escape 'cleanup))
+                      (setq trace (cons 'outer trace))))
+                  trace))"##),
+        "OK (cleanup (outer inner))",
+    );
+}
+
+#[test]
 fn native_unwind_scope_runs_lower_cleanups_after_a_cleanup_error() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();
