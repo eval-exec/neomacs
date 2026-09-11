@@ -55,14 +55,34 @@ jobs:
       RELEASE_TAG: ${{ inputs.release_tag }}
       RELEASE_COMMIT: ${{ inputs.release_commit }}
     steps:
+      # Nix first, so the verification below has a guaranteed `gh`. Installing
+      # Nix executes nothing from the repository -- the checkout is still
+      # downstream of the verification, so the ordering property this step
+      # exists for is unchanged.
+      #
+      # The selected tag owns its flake cache configuration. Keeping this
+      # setup independent of repository-local actions also permits backfills
+      # for releases made before the shared setup-nix action existed.
+      - name: Install Nix
+        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
+        with:
+          extra_nix_config: |
+            accept-flake-config = true
+
       # Reject arbitrary refs before executing their Nix expressions. This
       # workflow publishes immutable release products, never branch state.
+      #
+      # `gh` comes from nixpkgs rather than the image: three of the four
+      # matrix entries land on self-hosted runners that do not have it, and
+      # v0.0.17 lost all three to `gh: command not found` after the release
+      # had already published.
       - name: Verify the published release tag
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          gh() { nix --extra-experimental-features 'nix-command flakes' run nixpkgs#gh -- "$@"; }
           if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
             echo "release tag is not a supported version: $RELEASE_TAG" >&2
             exit 1
@@ -94,15 +114,6 @@ jobs:
         with:
           ref: ${{ inputs.release_commit }}
           persist-credentials: false
-
-      # The selected tag owns its flake cache configuration. Keeping this
-      # setup independent of repository-local actions also permits backfills
-      # for releases made before the shared setup-nix action existed.
-      - name: Install Nix
-        uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
-        with:
-          extra_nix_config: |
-            accept-flake-config = true
 
       # This action installs the Cachix CLI. Every implicit upload mechanism is
       # disabled; publishing is performed from explicit release roots below.
