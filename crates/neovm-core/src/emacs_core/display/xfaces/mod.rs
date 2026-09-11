@@ -4741,3 +4741,7 @@ mod builtins_test;
 #[cfg(test)]
 #[path = "tests/font_size_test.rs"]
 mod font_size_test;
+
+#[cfg(test)]
+#[path = "tests/font_remapping_test.rs"]
+mod font_remapping_test;
