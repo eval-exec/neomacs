@@ -9708,6 +9708,21 @@ fn funcall_builtin_wrong_arity_uses_subr_object_payload() {
 }
 
 #[test]
+fn application_subr_wrong_arity_uses_subr_object_payload() {
+    for form in [
+        "(funcall (symbol-function 'funcall))",
+        "(apply (symbol-function 'apply) nil)",
+    ] {
+        assert_eq!(
+            eval_one(&format!(r##"(condition-case err {form}
+                (error (list (car err) (subrp (nth 1 err)) (nth 2 err))))"##)),
+            "OK (wrong-number-of-arguments t 0)",
+            "{form}",
+        );
+    }
+}
+
+#[test]
 fn bytecode_bcall_symbol_function_cell_subr_matches_gnu() {
     crate::test_utils::init_test_tracing();
     let mut ctx = runtime_startup_context();
@@ -9962,6 +9977,28 @@ fn max_lisp_eval_depth_binding_updates_overflow_limit() {
         eval_one("(let ((max-lisp-eval-depth 100)) (defalias 'inf #'(lambda () (inf))) (inf))"),
         "ERR (excessive-lisp-nesting (101))"
     );
+}
+
+#[test]
+fn application_recursion_preserves_nesting_signal_and_recovery() {
+    for lexical in ["nil", "t"] {
+        for body in [
+            "(funcall 'application-probe)",
+            "(apply 'application-probe nil)",
+            "(funcall (symbol-function 'funcall) 'application-probe)",
+            "(apply (symbol-function 'apply) '(application-probe nil))",
+        ] {
+            let source = format!(
+                r##"(progn
+                     (defalias 'application-probe
+                       (eval '(function (lambda () {body})) {lexical}))
+                     (list (condition-case err (application-probe)
+                             (excessive-lisp-nesting err))
+                           (+ 40 2)))"##
+            );
+            assert_eq!(eval_one(&source), "OK ((excessive-lisp-nesting 1601) 42)", "{source}");
+        }
+    }
 }
 
 #[test]
