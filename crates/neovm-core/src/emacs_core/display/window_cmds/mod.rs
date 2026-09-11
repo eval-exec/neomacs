@@ -6335,8 +6335,8 @@ struct ParsedGuiFrameParams {
     height: Option<FrameSizeParam>,
     visibility: Option<FrameVisibility>,
     parent_frame: Option<FrameId>,
-    left: Option<i64>,
-    top: Option<i64>,
+    left: Option<super::frame::position::FramePositionSpec>,
+    top: Option<super::frame::position::FramePositionSpec>,
     fullscreen: Option<FrameFullscreen>,
     minibuffer: Option<Value>,
     internal_border_width: Option<i64>,
@@ -6407,8 +6407,8 @@ fn parse_gui_frame_params(value: Option<&Value>) -> ParsedGuiFrameParams {
                     parsed.parent_frame = Some(FrameId(id));
                 }
             }
-            "left" => parsed.left = pair_cdr.as_int(),
-            "top" => parsed.top = pair_cdr.as_int(),
+            "left" => parsed.left = super::frame::position::FramePositionSpec::from_lisp(pair_cdr),
+            "top" => parsed.top = super::frame::position::FramePositionSpec::from_lisp(pair_cdr),
             "fullscreen" => parsed.fullscreen = FrameFullscreen::from_symbol_value(&pair_cdr),
             "minibuffer" => parsed.minibuffer = Some(pair_cdr),
             "internal-border-width" => parsed.internal_border_width = pair_cdr.as_int(),
@@ -6654,8 +6654,8 @@ pub(crate) fn x_create_frame_impl(
         if let Some(z_order) = z_order {
             frame.z_order = z_order;
         }
-        frame.left_pos = parsed.left.unwrap_or(0);
-        frame.top_pos = parsed.top.unwrap_or(0);
+        frame.left_pos = 0;
+        frame.top_pos = 0;
         frame.undecorated = parsed.undecorated;
         frame.no_accept_focus = parsed.no_accept_focus;
         frame.no_split = parsed.unsplittable;
@@ -6739,6 +6739,7 @@ pub(crate) fn x_create_frame_impl(
             frame.sync_window_area_bounds();
         }
     }
+    super::frame::position::apply_position_parameters(frames, fid, parsed.left, parsed.top);
     if !is_child_frame && let Some(host) = display_host.as_mut() {
         let geometry_hints = frames
             .get(fid)
@@ -6763,8 +6764,8 @@ pub(crate) fn x_create_frame_impl(
                 .is_some_and(|frame| frame.visibility.is_visible()),
             width_px,
             height_px,
-            left = parsed.left.unwrap_or(0),
-            top = parsed.top.unwrap_or(0),
+            left = frames.get(fid).map(|frame| frame.left_pos),
+            top = frames.get(fid).map(|frame| frame.top_pos),
             "child_frame_lifecycle: core_created"
         );
     }

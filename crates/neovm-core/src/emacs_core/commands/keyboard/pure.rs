@@ -270,15 +270,30 @@ pub(crate) fn describe_single_key_value(value: &Value, no_angles: bool) -> Resul
                 out.extend_from_slice(&describe_single_key_value(&value.cons_cdr(), no_angles)?);
                 return Ok(out);
             }
-            let items = list_to_vec(value).ok_or_else(invalid_single_key_error)?;
-            if items.len() == 1 {
-                return describe_single_key_value(&items[0], no_angles);
+            if let Some(items) = list_to_vec(value) {
+                // GNU lucid_event_type_list_p excludes position-bearing
+                // events. A proper list of symbols/integers is instead a
+                // Lucid event and must still be validated as such.
+                let lucid = !matches!(
+                    value.cons_car().as_symbol_name(),
+                    Some("help-echo" | "vertical-line" | "mode-line" | "tab-line" | "header-line")
+                ) && items
+                    .iter()
+                    .all(|item| item.is_symbol() || item.as_fixnum().is_some());
+                if lucid {
+                    let converted =
+                        convert_lucid_event_list(&items).ok_or_else(invalid_single_key_error)?;
+                    return describe_single_key_value(&converted, no_angles);
+                }
             }
-            // Lucid-style event list, e.g. (meta shift up) — convert first
-            if let Some(converted) = convert_lucid_event_list(&items) {
-                return describe_single_key_value(&converted, no_angles);
+            // GNU EVENT_HEAD strips exactly one event wrapper, ignoring its
+            // position payload (which need not even be a proper list).
+            let head = value.cons_car();
+            if head.is_cons() {
+                Err(invalid_single_key_error())
+            } else {
+                describe_single_key_value(&head, no_angles)
             }
-            Err(invalid_single_key_error())
         }
         _ => Err(invalid_single_key_error()),
     }

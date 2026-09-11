@@ -581,6 +581,53 @@ fn region_observed_at(
     }
 }
 
+#[test]
+fn tracked_mouse_motion_ignores_keyboard_modifiers_but_keeps_position() {
+    let (mut eval, frame_id, _) = frame_with_a_divider();
+    eval.eval_str("(setq track-mouse t)").unwrap();
+    let mut plain_position = None;
+    for modifiers in [
+        Modifiers::none(),
+        Modifiers::ctrl(),
+        Modifiers {
+            ctrl: true,
+            meta: true,
+            shift: true,
+            super_: true,
+            hyper: true,
+        },
+    ] {
+        let event = eval
+            .handle_read_char_input_event(
+                InputEvent::MouseMove {
+                    x: 45.0,
+                    y: 30.0,
+                    modifiers,
+                    target_frame_id: frame_id.0,
+                },
+                TtyInputDecoding::KeyboardCodingSystem,
+            )
+            .unwrap()
+            .expect("tracked motion is a Lisp event");
+        assert_eq!(event.cons_car(), Value::symbol("mouse-movement"));
+        let position = event.cons_cdr().cons_car();
+        let xy = position.cons_cdr().cons_cdr().cons_car();
+        let position = (
+            position.cons_car(),
+            xy.cons_car().as_fixnum(),
+            xy.cons_cdr().as_fixnum(),
+        );
+        if let Some(expected) = plain_position {
+            assert_eq!(
+                position, expected,
+                "modifiers cannot change the position payload"
+            );
+        } else {
+            plain_position = Some(position);
+        }
+    }
+}
+
 fn feed(
     eval: &mut crate::emacs_core::Context,
     event: InputEvent,

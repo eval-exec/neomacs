@@ -5413,7 +5413,7 @@ impl crate::emacs_core::eval::Context {
             InputEvent::MouseMove {
                 x,
                 y,
-                modifiers,
+                modifiers: _,
                 target_frame_id,
             } => {
                 self.note_mouse_move_input_event(x, y, target_frame_id);
@@ -5422,11 +5422,7 @@ impl crate::emacs_core::eval::Context {
                     return Ok(None);
                 }
                 self.clear_current_message_for_keyboard_input();
-                let mut sym = String::new();
-                Self::append_modifier_prefix(&modifiers, &mut sym);
-                sym.push_str("mouse-movement");
-                let position = Self::make_mouse_position(x, y, target_frame_id, self);
-                let event = Value::list(vec![Value::symbol(&sym), position]);
+                let event = self.make_lispy_movement(x, y, target_frame_id);
                 self.command_loop.store_kbd_macro_event(event);
                 Ok(Some(event))
             }
@@ -6482,6 +6478,13 @@ impl crate::emacs_core::eval::Context {
         }
         let car = def.cons_car();
         KeymapMarker::MenuItem.is_value(car) || car.is_string()
+    }
+
+    /// GNU make_lispy_movement emits an unmodified event head. The constructor
+    /// deliberately has no modifier argument: motion is not a button gesture.
+    fn make_lispy_movement(&self, x: f32, y: f32, target_frame_id: u64) -> Value {
+        let position = Self::make_mouse_position(x, y, target_frame_id, self);
+        Value::list(vec![Value::symbol("mouse-movement"), position])
     }
 
     fn make_mouse_position(x: f32, y: f32, target_frame_id: u64, eval: &Self) -> Value {

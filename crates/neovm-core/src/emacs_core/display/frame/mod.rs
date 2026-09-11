@@ -5,6 +5,9 @@
 //! GNU implements in frame.c. The Frame/FrameManager data structures
 //! live in crate::window; window.c builtins stay in super::window_cmds.
 
+pub(crate) mod position;
+use position::{FramePositionSpec, apply_position_parameters};
+
 use super::error::Flow;
 use super::error::{EvalResult, LispCondition, signal};
 use super::intern::resolve_sym;
@@ -1607,14 +1610,10 @@ pub(crate) fn builtin_modify_frame_parameters(
                         }
                     }
                     "left" => {
-                        if pair_cdr.as_int().is_some() || pair_cdr.as_float().is_some() {
-                            requested_left = Some(pair_cdr);
-                        }
+                        requested_left = FramePositionSpec::from_lisp(pair_cdr);
                     }
                     "top" => {
-                        if pair_cdr.as_int().is_some() || pair_cdr.as_float().is_some() {
-                            requested_top = Some(pair_cdr);
-                        }
+                        requested_top = FramePositionSpec::from_lisp(pair_cdr);
                     }
                     "buffer-list" => {
                         let ids = live_frame_buffer_parameter_ids(&eval.buffers, pair_cdr);
@@ -1895,18 +1894,7 @@ pub(crate) fn builtin_modify_frame_parameters(
         }
     }
 
-    let (left, top) =
-        resolve_frame_position_parameters(&eval.frames, fid, requested_left, requested_top);
-    if let Some(frame) = eval.frames.get_mut(fid) {
-        if let Some(left) = left {
-            frame.left_pos = left;
-            frame.set_parameter(Value::symbol("left"), Value::fixnum(left));
-        }
-        if let Some(top) = top {
-            frame.top_pos = top;
-            frame.set_parameter(Value::symbol("top"), Value::fixnum(top));
-        }
-    }
+    apply_position_parameters(&mut eval.frames, fid, requested_left, requested_top);
 
     Ok(Value::NIL)
 }
@@ -1940,44 +1928,6 @@ fn resolve_frame_size_parameter(
     Some(FrameSizeParam::TextPixels(
         outer_pixels.saturating_sub(non_text_pixels).max(1),
     ))
-}
-
-fn resolve_frame_position_parameters(
-    frames: &FrameManager,
-    fid: FrameId,
-    left: Option<Value>,
-    top: Option<Value>,
-) -> (Option<i64>, Option<i64>) {
-    let Some(frame) = frames.get(fid) else {
-        return (None, None);
-    };
-    let parent = frame
-        .parent_frame
-        .as_frame_id()
-        .map(FrameId)
-        .and_then(|parent_id| frames.get(parent_id));
-    let resolve = |value: Option<Value>, parent_size: u32, frame_size: u32| {
-        value.and_then(|value| {
-            value.as_int().or_else(|| {
-                let fraction = value
-                    .as_float()
-                    .filter(|value| (0.0..=1.0).contains(value))?;
-                Some((fraction * f64::from(parent_size.saturating_sub(frame_size))) as i64)
-            })
-        })
-    };
-    (
-        resolve(
-            left,
-            parent.map_or(frame.width, |parent| parent.width),
-            frame.width,
-        ),
-        resolve(
-            top,
-            parent.map_or(frame.height, |parent| parent.height),
-            frame.height,
-        ),
-    )
 }
 
 /// `(frame-visible-p FRAME)` -> t, `icon`, or nil.
