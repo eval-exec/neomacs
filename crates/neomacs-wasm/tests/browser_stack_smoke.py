@@ -21,7 +21,7 @@ def main():
     parser.add_argument(
         "--call-style",
         choices=[
-            "direct", "argument", "conditional", "conditional-test", "conditional-else", "funcall", "binding",
+            "direct", "argument", "conditional", "conditional-test", "conditional-else", "funcall", "apply", "binding",
             "initializer", "sequential-binding", "sequential-initializer", "protected",
         ],
         default="direct",
@@ -45,6 +45,7 @@ def main():
             "conditional-test": "(if (neomacs-stack-probe) 1 2)",
             "conditional-else": "(if nil 1 2 (neomacs-stack-probe))",
             "funcall": "(funcall #'neomacs-stack-probe)",
+            "apply": "(apply #'neomacs-stack-probe nil)",
             "binding": "(let ((neomacs-stack-local 42)) (neomacs-stack-probe))",
             "initializer": "(let ((neomacs-stack-local (neomacs-stack-probe))) neomacs-stack-local)",
             "sequential-binding": "(let* ((neomacs-stack-local 42)) (neomacs-stack-probe))",
