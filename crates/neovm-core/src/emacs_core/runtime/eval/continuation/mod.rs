@@ -4,7 +4,7 @@
 //! or specpdl, never solely in this Rust Vec. Continuations store stack indices
 //! and linear binding-cleanup ownership. The Context remains on its VM thread.
 
-use super::apply::ActiveInterpretedLambdaCall;
+use super::apply::{ActiveApplication, ActiveInterpretedLambdaCall};
 use super::special_forms::{ActiveCleanupScope, ActiveLetScope, ConditionalForms};
 use super::*;
 
@@ -47,6 +47,13 @@ enum Step {
 }
 
 enum Continuation {
+    Application {
+        call: ActiveApplication,
+        operands: usize,
+    },
+    NamedFunction {
+        symbol: SymId,
+    },
     Form {
         specpdl: usize,
         operands: usize,
@@ -227,10 +234,121 @@ impl Context {
                     first_arg,
                     target,
                 } => {
-                    let function = self.bc_buf[function];
+                    let function_slot = function;
+                    let function = self.bc_buf[function_slot];
                     let nargs = self.bc_buf.len() - first_arg;
-                    match target {
-                        CallTarget::Function if is_interpreted_lambda(function) => {
+                    let application = match &target {
+                        CallTarget::Subr { sym_id, entry }
+                            if entry.dispatch_kind == SubrDispatchKind::ContextCallable =>
+                        {
+                            match evaluator_handler(*sym_id) {
+                                Some(EvaluatorHandler::Callable(CallableHandler::Application(
+                                    handler,
+                                ))) => Some(handler),
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    };
+                    match (target, application) {
+                        (_, Some(handler)) => {
+                            let args = &self.bc_buf[first_arg..];
+                            let prepared = handler.prepare(args);
+                            match prepared {
+                                Err(flow) => Step::Return(Err(flow)),
+                                Ok((callee, args)) => {
+                                    let operands = self.bc_buf.len();
+                                    self.bc_buf.push(callee);
+                                    self.bc_buf.extend_from_slice(&args);
+                                    match self.begin_application(callee, &args, true) {
+                                        Err(flow) => {
+                                            self.bc_buf.truncate(operands);
+                                            Step::Return(Err(flow))
+                                        }
+                                        Ok(call) => {
+                                            continuations
+                                                .push(Continuation::Application { call, operands });
+                                            Step::Invoke {
+                                                function: operands,
+                                                first_arg: operands + 1,
+                                                target: CallTarget::Function,
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        (CallTarget::Function, _) if function.is_symbol_with_pos() => {
+                            self.bc_buf[function_slot] = function.as_symbol_with_pos_sym().unwrap();
+                            Step::Invoke {
+                                function: function_slot,
+                                first_arg,
+                                target: CallTarget::Function,
+                            }
+                        }
+                        (CallTarget::Function, _)
+                            if matches!(function.kind(), ValueKind::Symbol(_) | ValueKind::T) =>
+                        {
+                            let symbol = function.as_symbol_id().unwrap_or_else(|| intern("t"));
+                            match self.resolve_application_symbol(symbol) {
+                                NamedCallTarget::Subr(callee) => {
+                                    self.bc_buf[function_slot] = callee;
+                                    Step::Invoke {
+                                        function: function_slot,
+                                        first_arg,
+                                        target: CallTarget::Function,
+                                    }
+                                }
+                                NamedCallTarget::Obarray(callee)
+                                    if !crate::emacs_core::autoload::is_autoload_value(&callee) =>
+                                {
+                                    if !self.function_value_is_callable(&callee) {
+                                        continuations.push(Continuation::NamedFunction { symbol });
+                                    }
+                                    self.bc_buf[function_slot] = callee;
+                                    Step::Invoke {
+                                        function: function_slot,
+                                        first_arg,
+                                        target: CallTarget::Function,
+                                    }
+                                }
+                                // Loading still uses the shared autoload retry path. Once
+                                // loaded, subsequent calls resolve on this driver directly.
+                                _ => Step::Return(self.maybe_grow_eval_stack(|ctx| {
+                                    let args = LispArgVec::from_slice(&ctx.bc_buf[first_arg..]);
+                                    ctx.apply_symbol_callable_untraced(symbol, args, true)
+                                })),
+                            }
+                        }
+                        (CallTarget::Function, _) if function.as_subr_id().is_some() => {
+                            match subr_entry_from_value(function) {
+                                Some((sym_id, entry))
+                                    if entry.dispatch_kind == SubrDispatchKind::ContextCallable =>
+                                {
+                                    match self.check_funcall_subr_arity_value(function, nargs) {
+                                        Some(flow) => Step::Return(Err(flow)),
+                                        None => Step::Invoke {
+                                            function: function_slot,
+                                            first_arg,
+                                            target: CallTarget::Subr { sym_id, entry },
+                                        },
+                                    }
+                                }
+                                Some((sym_id, entry)) => {
+                                    Step::Return(self.maybe_grow_eval_stack(|ctx| {
+                                        let args = LispArgVec::from_slice(&ctx.bc_buf[first_arg..]);
+                                        ctx.apply_subr_object_with_entry(
+                                            sym_id, function, args, entry,
+                                        )
+                                    }))
+                                }
+                                None => Step::Return(Err(signal(
+                                    LispCondition::InvalidFunction,
+                                    vec![function],
+                                ))),
+                            }
+                        }
+                        (CallTarget::Function, _) if is_interpreted_lambda(function) => {
                             let args = LispArgVec::from_slice(&self.bc_buf[first_arg..]);
                             match self.begin_interpreted_lambda(function, &args) {
                                 Err(flow) => Step::Return(Err(flow)),
@@ -251,7 +369,7 @@ impl Context {
                                 }
                             }
                         }
-                        target => Step::Return(self.maybe_grow_eval_stack(|ctx| {
+                        (target, _) => Step::Return(self.maybe_grow_eval_stack(|ctx| {
                             ctx.invoke_prepared_call(target, function, first_arg, nargs)
                         })),
                     }
@@ -261,6 +379,20 @@ impl Context {
                         return result;
                     };
                     match continuation {
+                        Continuation::Application { call, operands } => {
+                            let result = self.finish_application(call, result);
+                            self.bc_buf.truncate(operands);
+                            Step::Return(result)
+                        }
+                        Continuation::NamedFunction { symbol } => Step::Return(match result {
+                            Err(Flow::Signal(sig)) if sig.symbol == invalid_function_symbol() => {
+                                Err(signal(
+                                    LispCondition::InvalidFunction,
+                                    vec![Value::from_sym_id(symbol)],
+                                ))
+                            }
+                            other => other,
+                        }),
                         Continuation::Form { specpdl, operands } => {
                             let result = self.dispatch_signal_result_if_needed(result);
                             self.record_sequence_call_roots(specpdl);

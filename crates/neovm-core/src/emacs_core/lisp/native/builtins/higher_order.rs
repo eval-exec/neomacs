@@ -178,7 +178,7 @@ fn apply1(eval: &mut super::eval::Context, func: Value, arg: Value) -> EvalResul
     args.push(arg);
     eval.apply(func, args)
 }
-pub(crate) fn builtin_apply_slice(eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
+pub(crate) fn prepare_apply_args(args: &[Value]) -> Result<(Value, LispArgVec), Flow> {
     // GNU eval.c Fapply: with one argument, the argument itself is the spread
     // list.  Its first element is the function and the remaining elements are
     // the arguments.
@@ -218,7 +218,7 @@ pub(crate) fn builtin_apply_slice(eval: &mut super::eval::Context, args: &[Value
                 vec![Value::symbol("listp"), cursor],
             ));
         }
-        eval.apply_from_lisp_funcall(func, call_args)
+        Ok((func, call_args))
     } else {
         call_args.extend_from_slice(&args[1..args.len() - 1]);
         let mut cursor = last;
@@ -237,16 +237,16 @@ pub(crate) fn builtin_apply_slice(eval: &mut super::eval::Context, args: &[Value
                 }
             }
         }
-        eval.apply_from_lisp_funcall(args[0], call_args)
+        Ok((args[0], call_args))
     }
 }
 
-pub(crate) fn builtin_funcall_slice(eval: &mut super::eval::Context, args: &[Value]) -> EvalResult {
+pub(crate) fn prepare_funcall_args(args: &[Value]) -> Result<(Value, LispArgVec), Flow> {
     expect_min_args("funcall", args, 1)?;
     let func = args[0];
     let mut call_args = LispArgVec::new();
     call_args.extend_from_slice(&args[1..]);
-    eval.apply_from_lisp_funcall(func, call_args)
+    Ok((func, call_args))
 }
 
 pub(crate) fn builtin_funcall_interactively_slice(
