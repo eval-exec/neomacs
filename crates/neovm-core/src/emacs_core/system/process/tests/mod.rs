@@ -9987,9 +9987,8 @@ fn process_reaching_terminal_status_dirties_chrome() {
     // Reach a steady state first: whatever the startup did, acknowledge it, so
     // the assertion below is about the process and nothing else.
     ctx.note_chrome_generated(crate::window::WindowId(1));
-    while ctx.chrome_dirty().is_any_dirty() {
+    if ctx.chrome_dirty().is_any_dirty() {
         ctx.note_chrome_generated(crate::window::WindowId(1));
-        break;
     }
 
     let before = ctx.chrome_dirty().is_dirty(crate::window::WindowId(1));
