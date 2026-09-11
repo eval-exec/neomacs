@@ -6,7 +6,7 @@
 
 
 <p align="center">
-  <img src="assets/banner.svg" alt="NEOMACS banner"/>
+  <img src="assets/banner.svg" alt="NEOMACS — The Emacs from the future."/>
 </p>
 
 <p align="center">
