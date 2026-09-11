@@ -3693,7 +3693,13 @@ fn vm_window_state_accessors_use_shared_runtime_state() {
                      (condition-case err (window-prev-buffers 999999) (error err))
                      (condition-case err (window-next-buffers 999999) (error err)))"#
         ),
-        "OK ((wrong-type-argument window-live-p 999999) (wrong-type-argument window-live-p 999999) (wrong-type-argument window-live-p 999999) (wrong-type-argument window-live-p 999999) (wrong-type-argument window-live-p 999999) (wrong-type-argument window-live-p 999999) (wrong-type-argument window-live-p 999999) (wrong-type-argument window-live-p 999999))"
+        // `window-old-buffer` is the odd one out, and deliberately so: GNU
+        // decodes it with `decode_any_window` rather than
+        // `decode_live_window` ("WINDOW can be any window", window.c), so a
+        // non-window argument fails the weaker `windowp` predicate. Every
+        // other accessor here demands a live window. Verified against GNU
+        // 31.1, which returns exactly this list.
+        "OK ((wrong-type-argument window-live-p 999999) (wrong-type-argument window-live-p 999999) (wrong-type-argument window-live-p 999999) (wrong-type-argument window-live-p 999999) (wrong-type-argument window-live-p 999999) (wrong-type-argument windowp 999999) (wrong-type-argument window-live-p 999999) (wrong-type-argument window-live-p 999999))"
     );
 }
 
