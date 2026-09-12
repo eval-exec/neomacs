@@ -163,6 +163,12 @@ jobs:
             label: linux-aarch64
           - runner: macos-latest
             label: macos-aarch64
+          # `macos-15-intel` is GitHub's last x86_64 runner image, promised
+          # only until August 2027 (actions/runner-images#13045).  Keep the
+          # workspace compiling for x86_64-apple-darwin here so the release
+          # job never discovers a breakage at tag time.
+          - runner: macos-15-intel
+            label: macos-x86_64
           - runner: windows-latest
             label: windows-msvc-x86_64
           - runner: windows-11-arm

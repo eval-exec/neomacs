@@ -26,9 +26,9 @@ Environment:
            App Store Connect API key used to notarize/staple the app and DMG.
 
 Output:
-  dist/neomacs-{version}-aarch64-apple-darwin.dmg
-  dist/neomacs-{version}-aarch64-apple-darwin.zip
-  dist/neomacs-{version}-aarch64-apple-darwin.tar.gz
+  dist/neomacs-{version}-{aarch64|x86_64}-apple-darwin.dmg
+  dist/neomacs-{version}-{aarch64|x86_64}-apple-darwin.zip
+  dist/neomacs-{version}-{aarch64|x86_64}-apple-darwin.tar.gz
   dist/neomacs.app
 USAGE
 }
@@ -76,7 +76,20 @@ version="$(get_version)"
 product_name="NEO Emacs"
 app_bundle_name="neomacs"
 app_bundle="$dist_dir/$app_bundle_name.app"
-artifact_stem="neomacs-${version}-aarch64-apple-darwin"
+# The artifact triple names the architecture this machine's binaries were
+# built for -- each release job compiles natively, so the host reports it.
+# vendor-macos-runtime.sh thins bundle images against the same value (its
+# MACOS_BUNDLE_ARCH default is uname -m too), so the asset name and the
+# bundle contents always describe one architecture.
+case "$(uname -m)" in
+  arm64) artifact_triple=aarch64-apple-darwin ;;
+  x86_64) artifact_triple=x86_64-apple-darwin ;;
+  *)
+    echo "unsupported macOS build architecture: $(uname -m)" >&2
+    exit 1
+    ;;
+esac
+artifact_stem="neomacs-${version}-${artifact_triple}"
 dmg="$dist_dir/$artifact_stem.dmg"
 zip="$dist_dir/$artifact_stem.zip"
 tarball="$dist_dir/$artifact_stem.tar.gz"

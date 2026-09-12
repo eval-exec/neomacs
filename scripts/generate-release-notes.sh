@@ -88,9 +88,12 @@ linux_x86_rpm="neomacs-$version-1.x86_64.rpm"
 linux_arm_rpm="neomacs-$version-1.aarch64.rpm"
 linux_x86_tarball="neomacs-$version-x86_64-unknown-linux-gnu.tar.gz"
 linux_arm_tarball="neomacs-$version-aarch64-unknown-linux-gnu.tar.gz"
-macos_dmg="neomacs-$version-aarch64-apple-darwin.dmg"
-macos_zip="neomacs-$version-aarch64-apple-darwin.zip"
-macos_tarball="neomacs-$version-aarch64-apple-darwin.tar.gz"
+macos_arm_dmg="neomacs-$version-aarch64-apple-darwin.dmg"
+macos_arm_zip="neomacs-$version-aarch64-apple-darwin.zip"
+macos_arm_tarball="neomacs-$version-aarch64-apple-darwin.tar.gz"
+macos_x86_dmg="neomacs-$version-x86_64-apple-darwin.dmg"
+macos_x86_zip="neomacs-$version-x86_64-apple-darwin.zip"
+macos_x86_tarball="neomacs-$version-x86_64-apple-darwin.tar.gz"
 windows_x86_installer="neomacs-$version-x86_64-pc-windows-msvc-user-setup.exe"
 windows_x86_zip="neomacs-$version-x86_64-pc-windows-msvc.zip"
 windows_arm_installer="neomacs-$version-aarch64-pc-windows-msvc-user-setup.exe"
@@ -107,9 +110,12 @@ required_assets=(
   "$linux_arm_rpm"
   "$linux_x86_tarball"
   "$linux_arm_tarball"
-  "$macos_dmg"
-  "$macos_zip"
-  "$macos_tarball"
+  "$macos_arm_dmg"
+  "$macos_arm_zip"
+  "$macos_arm_tarball"
+  "$macos_x86_dmg"
+  "$macos_x86_zip"
+  "$macos_x86_tarball"
   "$windows_x86_installer"
   "$windows_x86_zip"
   "$windows_arm_installer"
@@ -194,15 +200,25 @@ write_installation_methods() {
       <td><a href="$release_base/$linux_arm_rpm"><code>$linux_arm_rpm</code></a></td>
     </tr>
     <tr>
-      <td rowspan="3"><img src="https://cdn.simpleicons.org/apple/808080" width="32" height="32" alt="Apple logo"><br><strong>macOS</strong></td>
+      <td rowspan="6"><img src="https://cdn.simpleicons.org/apple/808080" width="32" height="32" alt="Apple logo"><br><strong>macOS</strong></td>
       <td rowspan="3" colspan="2">Apple Silicon<br><code>aarch64</code></td>
-      <td><a href="$release_base/$macos_dmg"><code>$macos_dmg</code></a></td>
+      <td><a href="$release_base/$macos_arm_dmg"><code>$macos_arm_dmg</code></a></td>
     </tr>
     <tr>
-      <td><a href="$release_base/$macos_zip"><code>$macos_zip</code></a></td>
+      <td><a href="$release_base/$macos_arm_zip"><code>$macos_arm_zip</code></a></td>
     </tr>
     <tr>
-      <td><a href="$release_base/$macos_tarball"><code>$macos_tarball</code></a></td>
+      <td><a href="$release_base/$macos_arm_tarball"><code>$macos_arm_tarball</code></a></td>
+    </tr>
+    <tr>
+      <td rowspan="3" colspan="2">Intel<br><code>x86_64</code></td>
+      <td><a href="$release_base/$macos_x86_dmg"><code>$macos_x86_dmg</code></a></td>
+    </tr>
+    <tr>
+      <td><a href="$release_base/$macos_x86_zip"><code>$macos_x86_zip</code></a></td>
+    </tr>
+    <tr>
+      <td><a href="$release_base/$macos_x86_tarball"><code>$macos_x86_tarball</code></a></td>
     </tr>
     <tr>
       <td rowspan="4"><img src="https://cdn.jsdelivr.net/gh/devicons/devicon@v2.17.0/icons/windows11/windows11-original.svg" width="32" height="32" alt="Windows logo"><br><strong>Windows</strong></td>

@@ -33,6 +33,9 @@ assets=(
   neomacs-9.8.7-aarch64-apple-darwin.dmg
   neomacs-9.8.7-aarch64-apple-darwin.zip
   neomacs-9.8.7-aarch64-apple-darwin.tar.gz
+  neomacs-9.8.7-x86_64-apple-darwin.dmg
+  neomacs-9.8.7-x86_64-apple-darwin.zip
+  neomacs-9.8.7-x86_64-apple-darwin.tar.gz
   neomacs-9.8.7-x86_64-pc-windows-msvc-user-setup.exe
   neomacs-9.8.7-x86_64-pc-windows-msvc.zip
   neomacs-9.8.7-aarch64-pc-windows-msvc-user-setup.exe
@@ -65,6 +68,7 @@ assert_contains '<th>Architecture</th>'
 assert_contains '<th>Install / download</th>'
 assert_contains '<td rowspan="11"><img'
 assert_contains '<td rowspan="3" colspan="2">Apple Silicon<br><code>aarch64</code></td>'
+assert_contains '<td rowspan="3" colspan="2">Intel<br><code>x86_64</code></td>'
 assert_contains '<td rowspan="2" colspan="2"><code>x86_64</code></td>'
 assert_contains 'alt="Archive file icon"> <strong>Portable archive</strong></td>'
 assert_contains 'alt="AppImage logo"> <strong>AppImage</strong></td>'
@@ -93,8 +97,8 @@ for asset in "${assets[@]}"; do
 done
 
 download_count="$(grep -o 'href="https://github.com/eval-exec/neomacs/releases/download/v9.8.7/[^\"]*"><code>[^<]*</code></a>' "$output" | wc -l | tr -d ' ')"
-if [[ "$download_count" != "15" ]]; then
-  echo "expected 15 package download links, found $download_count" >&2
+if [[ "$download_count" != "18" ]]; then
+  echo "expected 18 package download links, found $download_count" >&2
   exit 1
 fi
 
