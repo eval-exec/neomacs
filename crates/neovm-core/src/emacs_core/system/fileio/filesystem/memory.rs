@@ -114,7 +114,8 @@ fn remove_tree(nodes: &mut BTreeMap<VirtualPath, MemoryNode>, root: &VirtualPath
 
 impl EditorFileSystem for MemoryFileSystem {
     fn mode(&self, path: &Path, follow_links: bool) -> io::Result<super::FileMode> {
-        self.metadata(path, follow_links).map(super::FileMode::single_user_virtual)
+        self.metadata(path, follow_links)
+            .map(super::FileMode::single_user_virtual)
     }
 
     fn attributes(&self, path: &Path) -> io::Result<super::FileAttributeSnapshot> {

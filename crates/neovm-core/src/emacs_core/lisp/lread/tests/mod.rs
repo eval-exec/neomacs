@@ -27,9 +27,11 @@ fn locate_theme_file_in_the_editor_filesystem() {
         )
         .unwrap();
     eval.install_editor_file_system(Box::new(filesystem));
-    let found = eval.eval_str(
-        r#"(locate-file-internal "modus-vivendi-theme.el" '("/virtual-themes") '("" "c"))"#,
-    ).unwrap();
+    let found = eval
+        .eval_str(
+            r#"(locate-file-internal "modus-vivendi-theme.el" '("/virtual-themes") '("" "c"))"#,
+        )
+        .unwrap();
     assert_eq!(
         found.as_utf8_str(),
         Some("/virtual-themes/modus-vivendi-theme.el")
@@ -38,7 +40,10 @@ fn locate_theme_file_in_the_editor_filesystem() {
         ("nil", "/virtual-themes/modus-vivendi-theme.el"),
         ("t", "/virtual-themes/modus-vivendi-theme.el"),
         // A user predicate may deliberately accept a nonexistent candidate.
-        ("(lambda (_) t)", "/virtual-themes/modus-vivendi-theme.missing"),
+        (
+            "(lambda (_) t)",
+            "/virtual-themes/modus-vivendi-theme.missing",
+        ),
     ] {
         let found = eval.eval_str(&format!(
             r#"(locate-file-internal "modus-vivendi-theme" '("/virtual-themes") '(".missing" ".el") {predicate})"#

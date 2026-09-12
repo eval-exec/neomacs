@@ -1018,9 +1018,9 @@ impl Context {
         }
         let new_args = match BytecodeBacktraceSpan::try_new(args_start, nargs) {
             Some(span) => BacktraceArgs::evaluated_bc_stack(span),
-            None => self.backtrace_args_from_oversized_bc_stack(
-                BytecodeBacktraceRange::new(args_start, nargs),
-            ),
+            None => self.backtrace_args_from_oversized_bc_stack(BytecodeBacktraceRange::new(
+                args_start, nargs,
+            )),
         };
         // The oversized copy touches only `backtrace_args_stack` and `bc_buf`.
         let Some(SpecBinding::Backtrace { args, .. }) = self.specpdl.get_mut(count) else {
@@ -4085,10 +4085,16 @@ impl Context {
         let call_state = match self.begin_lambda_call(func_value, arglist, env, args) {
             Ok(state) => state,
             Err(err) => {
-                return self.unbind_to_with_result(root_count, Err(err)).map(|_| unreachable!());
+                return self
+                    .unbind_to_with_result(root_count, Err(err))
+                    .map(|_| unreachable!());
             }
         };
-        Ok(ActiveInterpretedLambdaCall { body, call_state, root_count })
+        Ok(ActiveInterpretedLambdaCall {
+            body,
+            call_state,
+            root_count,
+        })
     }
 
     pub(super) fn finish_interpreted_lambda(

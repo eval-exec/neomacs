@@ -4,10 +4,10 @@ use super::state::effective_window_scale_factor;
 use crate::thread_comm::InputEvent;
 use neomacs_display_protocol::{ModifierEventKind, TransportModifierBits};
 use neovm_core::keyboard::FrontendKey;
+use neovm_host_abi::frontend_event::FrontendLogicalExtent;
 use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::PhysicalKey;
-use neovm_host_abi::frontend_event::FrontendLogicalExtent;
 use winit::window::WindowId;
 
 impl RenderApp {
