@@ -29,8 +29,8 @@ use std::fmt::{Display, Formatter};
 use std::time::Duration;
 
 pub mod frontend_event;
-pub mod ime;
 mod host;
+pub mod ime;
 
 pub use host::{
     ExecutionEngine, HostKind, HostOperation, HostOperationError, HostProfile, NativeModuleModel,

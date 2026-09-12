@@ -20,12 +20,18 @@ fn nil_is_zero() {
 fn unsigned_fixnum_payload_spans_both_signed_halves() {
     let positive = TaggedValue::MOST_POSITIVE_FIXNUM;
     assert_eq!(TaggedValue::ufixnum(0).as_fixnum(), Some(0));
-    assert_eq!(TaggedValue::ufixnum(positive as u64).as_fixnum(), Some(positive));
+    assert_eq!(
+        TaggedValue::ufixnum(positive as u64).as_fixnum(),
+        Some(positive)
+    );
     assert_eq!(
         TaggedValue::ufixnum(positive as u64 + 1).as_fixnum(),
         Some(TaggedValue::MOST_NEGATIVE_FIXNUM),
     );
-    assert_eq!(TaggedValue::ufixnum((positive as u64) * 2 + 1).as_fixnum(), Some(-1));
+    assert_eq!(
+        TaggedValue::ufixnum((positive as u64) * 2 + 1).as_fixnum(),
+        Some(-1)
+    );
 }
 
 #[test]
