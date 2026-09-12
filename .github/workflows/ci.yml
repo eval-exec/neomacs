@@ -439,14 +439,6 @@ jobs:
           -l test/lisp/net/tramp-bootstrap-tests.el
           -f ert-run-tests-batch-and-exit
 
-      - name: Test browser HTTP Lisp adapter
-        shell: bash
-        run: >-
-          "${{ matrix.binary }}" --batch -Q
-          -L lisp/url
-          -l test/lisp/url/url-neomacs-http-tests.el
-          -f ert-run-tests-batch-and-exit
-
       - name: Run unchanged upstream GNU file-notify ERT suite
         shell: bash
         run: |
@@ -629,6 +621,21 @@ jobs:
             -PneomacsNativeLibrary="$GITHUB_WORKSPACE/target/aarch64-linux-android/release/libneomacs_android.so" \
             -PneomacsPortableAssets="$TMPDIR/neomacs-portable-assets" \
             assembleRelease
+
+      # `assembleRelease` does not compile `androidTest`, so ViewportProbe --
+      # the only runtime check of the packaged app -- was never even built.
+      # Compiling it catches wiring and API breakage for free.
+      #
+      # Executing it still needs an emulator on the runner (KVM plus a
+      # third-party action), which is a separate decision; until then this at
+      # least keeps the probe from silently rotting.
+      - name: Compile the Android instrumentation probe
+        run: |
+          android_project="$GITHUB_WORKSPACE/crates/neomacs-android/android"
+          "$android_project/gradlew" --no-daemon -p "$android_project" \
+            -PneomacsNativeLibrary="$GITHUB_WORKSPACE/target/aarch64-linux-android/release/libneomacs_android.so" \
+            -PneomacsPortableAssets="$TMPDIR/neomacs-portable-assets" \
+            assembleDebugAndroidTest
 
       - name: Verify assembled Android package
         run: >-
@@ -933,6 +940,17 @@ jobs:
           # forever. A green lane on purpose — the standing-red display jobs
           # would hide a fallback regression.
           NEOVM_PDUMP_NO_FIXED_MAP=1 target/release/neomacs --batch -Q --eval '(kill-emacs 0)'
+
+      # The browser HTTP loader is Linux-developed and browser-tested, so its
+      # ERT belongs on a Linux runner. It previously sat in
+      # `file-notify-public-ert`, whose matrix is macOS + Windows only, so a
+      # Linux-only run never executed it at all.
+      - name: Test browser HTTP Lisp adapter
+        run: >-
+          target/release/neomacs --batch -Q
+          -L lisp/url
+          -l test/lisp/url/url-neomacs-http-tests.el
+          -f ert-run-tests-batch-and-exit
 
       - name: Run upstream GNU SQLite ERT suite
         run: >-

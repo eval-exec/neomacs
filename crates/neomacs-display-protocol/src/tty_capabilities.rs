@@ -729,28 +729,28 @@ impl TtyAttributeCapabilities {
     /// GNU `TS_standout_mode` under `MAY_USE_WITH_COLORS_P (tty, NC_REVERSE)`.
     pub fn standout(&self) -> Option<&[u8]> {
         self.supports(TtyCapability::Inverse)
-            .then(|| self.standout_sequence.as_deref())
+            .then_some(self.standout_sequence.as_deref())
             .flatten()
     }
 
     /// GNU `TS_enter_underline_mode` under `NC_UNDERLINE`.
     pub fn underline(&self) -> Option<&[u8]> {
         self.supports(TtyCapability::Underline)
-            .then(|| self.underline_sequence.as_deref())
+            .then_some(self.underline_sequence.as_deref())
             .flatten()
     }
 
     /// GNU `TS_enter_bold_mode` under `NC_BOLD`.
     pub fn bold(&self) -> Option<&[u8]> {
         self.supports(TtyCapability::Bold)
-            .then(|| self.bold_sequence.as_deref())
+            .then_some(self.bold_sequence.as_deref())
             .flatten()
     }
 
     /// GNU `TS_enter_strike_through_mode` under `NC_STRIKE_THROUGH`.
     pub fn strike_through(&self) -> Option<&[u8]> {
         self.supports(TtyCapability::StrikeThrough)
-            .then(|| self.strike_through_sequence.as_deref())
+            .then_some(self.strike_through_sequence.as_deref())
             .flatten()
     }
 

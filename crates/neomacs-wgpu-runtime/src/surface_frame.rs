@@ -255,7 +255,7 @@ impl SurfaceFrameRenderer {
                 let cycle = &frame
                     .effective_window_cursor_effects(cursor.window_id, &self.renderer.effects)
                     .cursor_color_cycle;
-                cycle.enabled.then_some(u32::from(cycle.fps.get()).min(60))
+                cycle.enabled.then_some(cycle.fps.get().min(60))
             })
             .max();
         motion_rate
