@@ -2,6 +2,7 @@
 
 use std::rc::Rc;
 use std::thread::{JoinHandle, Result as ThreadResult};
+use std::time::{Duration, Instant};
 
 use neovm_core::emacs_core::eval::Context;
 
@@ -19,6 +20,35 @@ pub enum NativeEditorWorkerEvent {
     StartupFailed(String),
     /// The outer GNU command loop unwound.
     Exited(EditorSessionExit),
+}
+
+/// Longest wait for an evaluator worker once its host has been destroyed.
+///
+/// Android forwards `onDestroy` from the Java main thread and blocks it until
+/// the native loop acknowledges, so this budget is charged against the same
+/// watchdog that raises an ANR. The evaluator is normally parked in its input
+/// wait and observes the lost frontend immediately; this bound only covers an
+/// evaluator that is busy inside Lisp, where surrendering the thread beats
+/// hanging the system's teardown.
+pub const HOST_DESTROY_JOIN_TIMEOUT: Duration = Duration::from_millis(2000);
+
+/// How the worker thread came to rest during a bounded shutdown.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WorkerShutdown {
+    /// The command loop unwound and the thread was joined.
+    Joined,
+    /// The worker panicked. It was joined and the panic was absorbed.
+    ///
+    /// The panic message has already reached the process panic hook, and the
+    /// hosts that wait for a worker do so while being torn down -- resuming
+    /// the unwind there would abort instead of reporting.
+    Panicked,
+    /// The worker was still running when the deadline passed.
+    ///
+    /// Its thread is left detached: the caller has surrendered every frontend
+    /// handle by this point, so it has no way to interrupt Lisp, and a host
+    /// being destroyed cannot afford to block without end.
+    TimedOut,
 }
 
 /// Join handle for an evaluator constructed and run entirely off the UI thread.
@@ -65,5 +95,35 @@ impl NativeEditorWorker {
     /// Wait for the evaluator worker and surface a thread panic to the owner.
     pub fn join(self) -> ThreadResult<()> {
         self.thread.join()
+    }
+
+    /// Wait up to `timeout` for the worker, abandoning it if it overruns.
+    ///
+    /// The caller is responsible for having already told the evaluator to
+    /// stop. The supported way to do that without running Lisp is to drop
+    /// every [`crate::session::FrontendInputPort`] clone: the evaluator reads
+    /// the disconnected input channel as a lost display terminal and requests
+    /// a non-interactive shutdown. Asking through a frontend event instead
+    /// would let `delete-frame` prompt, and a destroyed host has nobody left
+    /// to answer.
+    #[must_use]
+    pub fn shut_down_before(self, timeout: Duration) -> WorkerShutdown {
+        /// Small enough that a prompt exit is not perceptibly delayed, large
+        /// enough that the wait is not a spin.
+        const POLL_INTERVAL: Duration = Duration::from_millis(5);
+
+        let deadline = Instant::now() + timeout;
+        while !self.thread.is_finished() {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return WorkerShutdown::TimedOut;
+            }
+            std::thread::sleep(POLL_INTERVAL.min(remaining));
+        }
+        // The thread has finished, so this join returns without blocking.
+        if self.thread.join().is_err() {
+            return WorkerShutdown::Panicked;
+        }
+        WorkerShutdown::Joined
     }
 }
