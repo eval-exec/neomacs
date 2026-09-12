@@ -85,6 +85,63 @@ canvas {
   color: #ff8080;
 }
 
+/* Download progress. Sits just under the status line, which owns the phase
+   name; this owns the byte count. Both are decoration over the editor
+   surface, so neither takes pointer events. */
+#browser-progress {
+  position: absolute;
+  z-index: 1;
+  inset-block-start: 2.4rem;
+  inset-inline-start: 0.8rem;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  pointer-events: none;
+}
+
+#browser-progress-track {
+  inline-size: 16rem;
+  max-inline-size: 60vw;
+  block-size: 0.35rem;
+  overflow: hidden;
+  border-radius: 0.2rem;
+  background: #2a3140;
+}
+
+#browser-progress-bar {
+  inline-size: 0;
+  block-size: 100%;
+  border-radius: inherit;
+  background: #6ea8fe;
+  transition: inline-size 120ms linear;
+}
+
+/* No Content-Length: sweep instead of claiming a position. */
+#browser-progress[data-state="indeterminate"] #browser-progress-bar {
+  transition: none;
+  animation: browser-progress-sweep 1.1s ease-in-out infinite;
+  transform-origin: left center;
+}
+
+@keyframes browser-progress-sweep {
+  0% { transform: scaleX(0.05) translateX(0); }
+  50% { transform: scaleX(0.4) translateX(150%); }
+  100% { transform: scaleX(0.05) translateX(1900%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #browser-progress-bar {
+    transition: none;
+    animation: none;
+  }
+}
+
+#browser-progress-label {
+  color: #8892a4;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
 #browser-text-input {
   position: fixed;
   left: 0;
