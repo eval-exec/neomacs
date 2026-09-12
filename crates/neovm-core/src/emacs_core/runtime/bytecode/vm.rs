@@ -4556,7 +4556,7 @@ impl<'a> Vm<'a> {
                             let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                 func,
                                 Self::arith_builtin_id("+", &PLUS_ID),
-                                vec![a, b]
+                                &[a, b]
                             ));
                             stk_push!(result);
                         }
@@ -4579,7 +4579,7 @@ impl<'a> Vm<'a> {
                                 let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                     func,
                                     Self::arith_builtin_id("-", &MINUS_ID),
-                                    vec![a, b]
+                                    &[a, b]
                                 ));
                                 stk_push!(result);
                             }
@@ -4588,7 +4588,7 @@ impl<'a> Vm<'a> {
                             let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                 func,
                                 Self::arith_builtin_id("-", &MINUS_ID),
-                                vec![a, b]
+                                &[a, b]
                             ));
                             stk_push!(result);
                         }
@@ -4611,7 +4611,7 @@ impl<'a> Vm<'a> {
                                     let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                         func,
                                         Self::arith_builtin_id("*", &TIMES_ID),
-                                        vec![a, b]
+                                        &[a, b]
                                     ));
                                     stk_push!(result);
                                 }
@@ -4620,7 +4620,7 @@ impl<'a> Vm<'a> {
                                 let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                     func,
                                     Self::arith_builtin_id("*", &TIMES_ID),
-                                    vec![a, b]
+                                    &[a, b]
                                 ));
                                 stk_push!(result);
                             }
@@ -4629,7 +4629,7 @@ impl<'a> Vm<'a> {
                             let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                 func,
                                 Self::arith_builtin_id("*", &TIMES_ID),
-                                vec![a, b]
+                                &[a, b]
                             ));
                             stk_push!(result);
                         }
@@ -4654,7 +4654,7 @@ impl<'a> Vm<'a> {
                                 let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                     func,
                                     Self::arith_builtin_id("/", &DIVIDE_ID),
-                                    vec![a, b]
+                                    &[a, b]
                                 ));
                                 stk_push!(result);
                             }
@@ -4663,7 +4663,7 @@ impl<'a> Vm<'a> {
                             let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                 func,
                                 Self::arith_builtin_id("/", &DIVIDE_ID),
-                                vec![a, b]
+                                &[a, b]
                             ));
                             stk_push!(result);
                         }
@@ -4683,7 +4683,7 @@ impl<'a> Vm<'a> {
                                 let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                     func,
                                     Self::arith_builtin_id("%", &MODULO_ID),
-                                    vec![a, b]
+                                    &[a, b]
                                 ));
                                 stk_push!(result);
                             }
@@ -4692,7 +4692,7 @@ impl<'a> Vm<'a> {
                             let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                 func,
                                 Self::arith_builtin_id("%", &MODULO_ID),
-                                vec![a, b]
+                                &[a, b]
                             ));
                             stk_push!(result);
                         }
@@ -4724,7 +4724,7 @@ impl<'a> Vm<'a> {
                             let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                 func,
                                 Self::arith_builtin_id("1+", &ADD1_ID),
-                                vec![top]
+                                &[top]
                             ));
                             stk_push!(result);
                         }
@@ -4740,7 +4740,7 @@ impl<'a> Vm<'a> {
                                 let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                     func,
                                     Self::arith_builtin_id("1-", &SUB1_ID),
-                                    vec![top]
+                                    &[top]
                                 ));
                                 stk_push!(result);
                             }
@@ -4749,7 +4749,7 @@ impl<'a> Vm<'a> {
                             let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                 func,
                                 Self::arith_builtin_id("1-", &SUB1_ID),
-                                vec![top]
+                                &[top]
                             ));
                             stk_push!(result);
                         }
@@ -4765,7 +4765,7 @@ impl<'a> Vm<'a> {
                                 let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                     func,
                                     Self::arith_builtin_id("-", &MINUS_ID),
-                                    vec![top]
+                                    &[top]
                                 ));
                                 stk_push!(result);
                             }
@@ -4774,7 +4774,7 @@ impl<'a> Vm<'a> {
                             let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                 func,
                                 Self::arith_builtin_id("-", &MINUS_ID),
-                                vec![top]
+                                &[top]
                             ));
                             stk_push!(result);
                         }
@@ -4794,7 +4794,7 @@ impl<'a> Vm<'a> {
                             let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                 func,
                                 Self::arith_builtin_id("=", &NUMEQ_ID),
-                                vec![a, b]
+                                &[a, b]
                             ));
                             stk_push!(result);
                         }
@@ -4815,7 +4815,7 @@ impl<'a> Vm<'a> {
                             let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                 func,
                                 Self::arith_builtin_id(">", &GT_ID),
-                                vec![a, b]
+                                &[a, b]
                             ));
                             stk_push!(result);
                         }
@@ -4847,7 +4847,7 @@ impl<'a> Vm<'a> {
                             let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                 func,
                                 Self::arith_builtin_id("<", &LT_ID),
-                                vec![a, b]
+                                &[a, b]
                             ));
                             stk_push!(result);
                         }
@@ -4868,7 +4868,7 @@ impl<'a> Vm<'a> {
                             let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                 func,
                                 Self::arith_builtin_id("<=", &LE_ID),
-                                vec![a, b]
+                                &[a, b]
                             ));
                             stk_push!(result);
                         }
@@ -4889,7 +4889,7 @@ impl<'a> Vm<'a> {
                             let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                 func,
                                 Self::arith_builtin_id(">=", &GE_ID),
-                                vec![a, b]
+                                &[a, b]
                             ));
                             stk_push!(result);
                         }
@@ -4906,7 +4906,7 @@ impl<'a> Vm<'a> {
                             let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                 func,
                                 Self::arith_builtin_id("max", &MAX_ID),
-                                vec![a, b]
+                                &[a, b]
                             ));
                             stk_push!(result);
                         }
@@ -4923,7 +4923,7 @@ impl<'a> Vm<'a> {
                             let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                 func,
                                 Self::arith_builtin_id("min", &MIN_ID),
-                                vec![a, b]
+                                &[a, b]
                             ));
                             stk_push!(result);
                         }
@@ -7893,13 +7893,22 @@ impl<'a> Vm<'a> {
     /// them; going straight to `funcall_general` is the same dispatch without
     /// the lookup. `vm_special_builtin_ids` already did this for
     /// `CallBuiltin`; the arithmetic opcodes were left behind.
+    ///
+    /// Takes a SLICE, not `impl Into<LispArgVec>`. `LispArgVec` is a
+    /// `SmallVec<[Value; 8]>`, so one or two arguments fit inline — but
+    /// `vec![a, b].into()` reaches it through `SmallVec::from_vec`, which
+    /// ADOPTS the heap buffer rather than inlining it. Every arithmetic
+    /// operation therefore allocated and freed a two-element `Vec` it never
+    /// needed: 480,992 `Vec::from_iter` calls and 2.2 mallocs per builtin call
+    /// in `nbody`. `from_slice` copies into the inline buffer instead
+    /// (`Value` is `Copy`).
     fn dispatch_vm_arith_with_frame(
         &mut self,
         func: &ByteCodeFunction,
         id: SymId,
-        args: impl Into<LispArgVec>,
+        args: &[Value],
     ) -> EvalResult {
-        let args = args.into();
+        let args = LispArgVec::from_slice(args);
         self.with_frame_arg_roots(func, args, |vm, args| {
             vm.ctx.funcall_general(Value::subr_from_sym_id(id), args)
         })
