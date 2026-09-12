@@ -185,3 +185,23 @@ fn write_valid_portable_assets(directory: &std::path::Path) {
         std::fs::write(directory.join(digest_name), digest).unwrap();
     }
 }
+
+#[test]
+fn editor_worker_links_with_a_raised_shadow_stack() {
+    // rustc's wasm target spec hard-codes `-z stack-size=1048576`, which this
+    // must override: at 1 MiB, evaluating one source form nested a few hundred
+    // levels deep overruns the shadow stack, and the overrun is a trap rather
+    // than a Rust panic -- the Worker dies and unsaved buffers go with it.
+    // Measured in Chrome 149: dead at 400 levels of nesting on 1 MiB, alive
+    // past 6400 on 4 MiB.
+    //
+    // Pinned because the failure mode of losing this flag is invisible:
+    // `cargo check` passes, every unit test passes, and only a packaged
+    // browser run shows the crash.
+    let flags = super::wasm_package::worker_shadow_stack_rustflags();
+    assert_eq!(flags, "-C link-arg=-zstack-size=4194304");
+    assert!(
+        flags.contains("-zstack-size="),
+        "the wasm link must carry an explicit stack size, not rustc's 1 MiB default"
+    );
+}
