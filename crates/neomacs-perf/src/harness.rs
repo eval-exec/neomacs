@@ -490,7 +490,7 @@ impl PerfHarness {
         run_directory: &Path,
     ) -> Result<PreparedScenario, String> {
         match request.scenario {
-            ScenarioId::RustLspTyping => {
+            ScenarioId::RustLspTyping | ScenarioId::RustLspTypingHeavy => {
                 scenarios::rust_lsp::prepare(&self.workspace_root, request, run_directory)
             }
             ScenarioId::MxTabCompletion => {
@@ -1547,7 +1547,9 @@ fn parse_scenario_result(
     raw: &str,
 ) -> Result<ScenarioResult, serde_json::Error> {
     match scenario {
-        ScenarioId::RustLspTyping => serde_json::from_str(raw).map(ScenarioResult::RustLspTyping),
+        ScenarioId::RustLspTyping | ScenarioId::RustLspTypingHeavy => {
+            serde_json::from_str(raw).map(ScenarioResult::RustLspTyping)
+        }
         ScenarioId::MxTabCompletion => {
             serde_json::from_str(raw).map(ScenarioResult::MxTabCompletion)
         }

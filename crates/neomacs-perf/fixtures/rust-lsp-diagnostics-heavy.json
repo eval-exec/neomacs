@@ -1,0 +1,2409 @@
+{
+  "jsonrpc": "2.0",
+  "method": "textDocument/publishDiagnostics",
+  "params": {
+    "uri": "file:///neomacs-perf/rust-lsp-typing.rs",
+    "diagnostics": [
+      {
+        "range": {
+          "start": {
+            "line": 5,
+            "character": 4
+          },
+          "end": {
+            "line": 5,
+            "character": 11
+          }
+        },
+        "severity": 1,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 33,
+            "character": 5
+          },
+          "end": {
+            "line": 33,
+            "character": 13
+          }
+        },
+        "severity": 2,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 61,
+            "character": 6
+          },
+          "end": {
+            "line": 61,
+            "character": 15
+          }
+        },
+        "severity": 3,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 89,
+            "character": 7
+          },
+          "end": {
+            "line": 89,
+            "character": 17
+          }
+        },
+        "severity": 1,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 117,
+            "character": 8
+          },
+          "end": {
+            "line": 117,
+            "character": 19
+          }
+        },
+        "severity": 2,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 145,
+            "character": 9
+          },
+          "end": {
+            "line": 145,
+            "character": 16
+          }
+        },
+        "severity": 3,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 173,
+            "character": 10
+          },
+          "end": {
+            "line": 173,
+            "character": 18
+          }
+        },
+        "severity": 1,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 201,
+            "character": 11
+          },
+          "end": {
+            "line": 201,
+            "character": 20
+          }
+        },
+        "severity": 2,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 230,
+            "character": 12
+          },
+          "end": {
+            "line": 230,
+            "character": 22
+          }
+        },
+        "severity": 3,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 258,
+            "character": 4
+          },
+          "end": {
+            "line": 258,
+            "character": 15
+          }
+        },
+        "severity": 1,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 286,
+            "character": 5
+          },
+          "end": {
+            "line": 286,
+            "character": 12
+          }
+        },
+        "severity": 2,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 314,
+            "character": 6
+          },
+          "end": {
+            "line": 314,
+            "character": 14
+          }
+        },
+        "severity": 3,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 342,
+            "character": 7
+          },
+          "end": {
+            "line": 342,
+            "character": 16
+          }
+        },
+        "severity": 1,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 370,
+            "character": 8
+          },
+          "end": {
+            "line": 370,
+            "character": 18
+          }
+        },
+        "severity": 2,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 398,
+            "character": 9
+          },
+          "end": {
+            "line": 398,
+            "character": 20
+          }
+        },
+        "severity": 3,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 427,
+            "character": 10
+          },
+          "end": {
+            "line": 427,
+            "character": 17
+          }
+        },
+        "severity": 1,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 455,
+            "character": 11
+          },
+          "end": {
+            "line": 455,
+            "character": 19
+          }
+        },
+        "severity": 2,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 483,
+            "character": 12
+          },
+          "end": {
+            "line": 483,
+            "character": 21
+          }
+        },
+        "severity": 3,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 511,
+            "character": 4
+          },
+          "end": {
+            "line": 511,
+            "character": 14
+          }
+        },
+        "severity": 1,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 539,
+            "character": 5
+          },
+          "end": {
+            "line": 539,
+            "character": 16
+          }
+        },
+        "severity": 2,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 567,
+            "character": 6
+          },
+          "end": {
+            "line": 567,
+            "character": 13
+          }
+        },
+        "severity": 3,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 595,
+            "character": 7
+          },
+          "end": {
+            "line": 595,
+            "character": 15
+          }
+        },
+        "severity": 1,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 624,
+            "character": 8
+          },
+          "end": {
+            "line": 624,
+            "character": 17
+          }
+        },
+        "severity": 2,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 652,
+            "character": 9
+          },
+          "end": {
+            "line": 652,
+            "character": 19
+          }
+        },
+        "severity": 3,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 680,
+            "character": 10
+          },
+          "end": {
+            "line": 680,
+            "character": 21
+          }
+        },
+        "severity": 1,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 708,
+            "character": 11
+          },
+          "end": {
+            "line": 708,
+            "character": 18
+          }
+        },
+        "severity": 2,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 736,
+            "character": 12
+          },
+          "end": {
+            "line": 736,
+            "character": 20
+          }
+        },
+        "severity": 3,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 764,
+            "character": 4
+          },
+          "end": {
+            "line": 764,
+            "character": 13
+          }
+        },
+        "severity": 1,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 792,
+            "character": 5
+          },
+          "end": {
+            "line": 792,
+            "character": 15
+          }
+        },
+        "severity": 2,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 821,
+            "character": 6
+          },
+          "end": {
+            "line": 821,
+            "character": 17
+          }
+        },
+        "severity": 3,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 849,
+            "character": 7
+          },
+          "end": {
+            "line": 849,
+            "character": 14
+          }
+        },
+        "severity": 1,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 877,
+            "character": 8
+          },
+          "end": {
+            "line": 877,
+            "character": 16
+          }
+        },
+        "severity": 2,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 905,
+            "character": 9
+          },
+          "end": {
+            "line": 905,
+            "character": 18
+          }
+        },
+        "severity": 3,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 933,
+            "character": 10
+          },
+          "end": {
+            "line": 933,
+            "character": 20
+          }
+        },
+        "severity": 1,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 961,
+            "character": 11
+          },
+          "end": {
+            "line": 961,
+            "character": 22
+          }
+        },
+        "severity": 2,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 989,
+            "character": 12
+          },
+          "end": {
+            "line": 989,
+            "character": 19
+          }
+        },
+        "severity": 3,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 1018,
+            "character": 4
+          },
+          "end": {
+            "line": 1018,
+            "character": 12
+          }
+        },
+        "severity": 1,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 1046,
+            "character": 5
+          },
+          "end": {
+            "line": 1046,
+            "character": 14
+          }
+        },
+        "severity": 2,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 1074,
+            "character": 6
+          },
+          "end": {
+            "line": 1074,
+            "character": 16
+          }
+        },
+        "severity": 3,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 1102,
+            "character": 7
+          },
+          "end": {
+            "line": 1102,
+            "character": 18
+          }
+        },
+        "severity": 1,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 1130,
+            "character": 8
+          },
+          "end": {
+            "line": 1130,
+            "character": 15
+          }
+        },
+        "severity": 2,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 1158,
+            "character": 9
+          },
+          "end": {
+            "line": 1158,
+            "character": 17
+          }
+        },
+        "severity": 3,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 1186,
+            "character": 10
+          },
+          "end": {
+            "line": 1186,
+            "character": 19
+          }
+        },
+        "severity": 1,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 1215,
+            "character": 11
+          },
+          "end": {
+            "line": 1215,
+            "character": 21
+          }
+        },
+        "severity": 2,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 1243,
+            "character": 12
+          },
+          "end": {
+            "line": 1243,
+            "character": 23
+          }
+        },
+        "severity": 3,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 1271,
+            "character": 4
+          },
+          "end": {
+            "line": 1271,
+            "character": 11
+          }
+        },
+        "severity": 1,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 1299,
+            "character": 5
+          },
+          "end": {
+            "line": 1299,
+            "character": 13
+          }
+        },
+        "severity": 2,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 1327,
+            "character": 6
+          },
+          "end": {
+            "line": 1327,
+            "character": 15
+          }
+        },
+        "severity": 3,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 1355,
+            "character": 7
+          },
+          "end": {
+            "line": 1355,
+            "character": 17
+          }
+        },
+        "severity": 1,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 1383,
+            "character": 8
+          },
+          "end": {
+            "line": 1383,
+            "character": 19
+          }
+        },
+        "severity": 2,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 1412,
+            "character": 9
+          },
+          "end": {
+            "line": 1412,
+            "character": 16
+          }
+        },
+        "severity": 3,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 1440,
+            "character": 10
+          },
+          "end": {
+            "line": 1440,
+            "character": 18
+          }
+        },
+        "severity": 1,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 1468,
+            "character": 11
+          },
+          "end": {
+            "line": 1468,
+            "character": 20
+          }
+        },
+        "severity": 2,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 1496,
+            "character": 12
+          },
+          "end": {
+            "line": 1496,
+            "character": 22
+          }
+        },
+        "severity": 3,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 1524,
+            "character": 4
+          },
+          "end": {
+            "line": 1524,
+            "character": 15
+          }
+        },
+        "severity": 1,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 1552,
+            "character": 5
+          },
+          "end": {
+            "line": 1552,
+            "character": 12
+          }
+        },
+        "severity": 2,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 1580,
+            "character": 6
+          },
+          "end": {
+            "line": 1580,
+            "character": 14
+          }
+        },
+        "severity": 3,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 1608,
+            "character": 7
+          },
+          "end": {
+            "line": 1608,
+            "character": 16
+          }
+        },
+        "severity": 1,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 1637,
+            "character": 8
+          },
+          "end": {
+            "line": 1637,
+            "character": 18
+          }
+        },
+        "severity": 2,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 1665,
+            "character": 9
+          },
+          "end": {
+            "line": 1665,
+            "character": 20
+          }
+        },
+        "severity": 3,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 1693,
+            "character": 10
+          },
+          "end": {
+            "line": 1693,
+            "character": 17
+          }
+        },
+        "severity": 1,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 1721,
+            "character": 11
+          },
+          "end": {
+            "line": 1721,
+            "character": 19
+          }
+        },
+        "severity": 2,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 1749,
+            "character": 12
+          },
+          "end": {
+            "line": 1749,
+            "character": 21
+          }
+        },
+        "severity": 3,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 1777,
+            "character": 4
+          },
+          "end": {
+            "line": 1777,
+            "character": 14
+          }
+        },
+        "severity": 1,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 1805,
+            "character": 5
+          },
+          "end": {
+            "line": 1805,
+            "character": 16
+          }
+        },
+        "severity": 2,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 1834,
+            "character": 6
+          },
+          "end": {
+            "line": 1834,
+            "character": 13
+          }
+        },
+        "severity": 3,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 1862,
+            "character": 7
+          },
+          "end": {
+            "line": 1862,
+            "character": 15
+          }
+        },
+        "severity": 1,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 1890,
+            "character": 8
+          },
+          "end": {
+            "line": 1890,
+            "character": 17
+          }
+        },
+        "severity": 2,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 1918,
+            "character": 9
+          },
+          "end": {
+            "line": 1918,
+            "character": 19
+          }
+        },
+        "severity": 3,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 1946,
+            "character": 10
+          },
+          "end": {
+            "line": 1946,
+            "character": 21
+          }
+        },
+        "severity": 1,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 1974,
+            "character": 11
+          },
+          "end": {
+            "line": 1974,
+            "character": 18
+          }
+        },
+        "severity": 2,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 2002,
+            "character": 12
+          },
+          "end": {
+            "line": 2002,
+            "character": 20
+          }
+        },
+        "severity": 3,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 2031,
+            "character": 4
+          },
+          "end": {
+            "line": 2031,
+            "character": 13
+          }
+        },
+        "severity": 1,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 2059,
+            "character": 5
+          },
+          "end": {
+            "line": 2059,
+            "character": 15
+          }
+        },
+        "severity": 2,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 2087,
+            "character": 6
+          },
+          "end": {
+            "line": 2087,
+            "character": 17
+          }
+        },
+        "severity": 3,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 2115,
+            "character": 7
+          },
+          "end": {
+            "line": 2115,
+            "character": 14
+          }
+        },
+        "severity": 1,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 2143,
+            "character": 8
+          },
+          "end": {
+            "line": 2143,
+            "character": 16
+          }
+        },
+        "severity": 2,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 2171,
+            "character": 9
+          },
+          "end": {
+            "line": 2171,
+            "character": 18
+          }
+        },
+        "severity": 3,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 2199,
+            "character": 10
+          },
+          "end": {
+            "line": 2199,
+            "character": 20
+          }
+        },
+        "severity": 1,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 2228,
+            "character": 11
+          },
+          "end": {
+            "line": 2228,
+            "character": 22
+          }
+        },
+        "severity": 2,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 2256,
+            "character": 12
+          },
+          "end": {
+            "line": 2256,
+            "character": 19
+          }
+        },
+        "severity": 3,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 2284,
+            "character": 4
+          },
+          "end": {
+            "line": 2284,
+            "character": 12
+          }
+        },
+        "severity": 1,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 2312,
+            "character": 5
+          },
+          "end": {
+            "line": 2312,
+            "character": 14
+          }
+        },
+        "severity": 2,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 2340,
+            "character": 6
+          },
+          "end": {
+            "line": 2340,
+            "character": 16
+          }
+        },
+        "severity": 3,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 2368,
+            "character": 7
+          },
+          "end": {
+            "line": 2368,
+            "character": 18
+          }
+        },
+        "severity": 1,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 2396,
+            "character": 8
+          },
+          "end": {
+            "line": 2396,
+            "character": 15
+          }
+        },
+        "severity": 2,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 2425,
+            "character": 9
+          },
+          "end": {
+            "line": 2425,
+            "character": 17
+          }
+        },
+        "severity": 3,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 2453,
+            "character": 10
+          },
+          "end": {
+            "line": 2453,
+            "character": 19
+          }
+        },
+        "severity": 1,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 2481,
+            "character": 11
+          },
+          "end": {
+            "line": 2481,
+            "character": 21
+          }
+        },
+        "severity": 2,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 2509,
+            "character": 12
+          },
+          "end": {
+            "line": 2509,
+            "character": 23
+          }
+        },
+        "severity": 3,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 2537,
+            "character": 4
+          },
+          "end": {
+            "line": 2537,
+            "character": 11
+          }
+        },
+        "severity": 1,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 2565,
+            "character": 5
+          },
+          "end": {
+            "line": 2565,
+            "character": 13
+          }
+        },
+        "severity": 2,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 2593,
+            "character": 6
+          },
+          "end": {
+            "line": 2593,
+            "character": 15
+          }
+        },
+        "severity": 3,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 2622,
+            "character": 7
+          },
+          "end": {
+            "line": 2622,
+            "character": 17
+          }
+        },
+        "severity": 1,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 2650,
+            "character": 8
+          },
+          "end": {
+            "line": 2650,
+            "character": 19
+          }
+        },
+        "severity": 2,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 2678,
+            "character": 9
+          },
+          "end": {
+            "line": 2678,
+            "character": 16
+          }
+        },
+        "severity": 3,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 2706,
+            "character": 10
+          },
+          "end": {
+            "line": 2706,
+            "character": 18
+          }
+        },
+        "severity": 1,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 2734,
+            "character": 11
+          },
+          "end": {
+            "line": 2734,
+            "character": 20
+          }
+        },
+        "severity": 2,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 2762,
+            "character": 12
+          },
+          "end": {
+            "line": 2762,
+            "character": 22
+          }
+        },
+        "severity": 3,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 2790,
+            "character": 4
+          },
+          "end": {
+            "line": 2790,
+            "character": 15
+          }
+        },
+        "severity": 1,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 2819,
+            "character": 5
+          },
+          "end": {
+            "line": 2819,
+            "character": 12
+          }
+        },
+        "severity": 2,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 2847,
+            "character": 6
+          },
+          "end": {
+            "line": 2847,
+            "character": 14
+          }
+        },
+        "severity": 3,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 2875,
+            "character": 7
+          },
+          "end": {
+            "line": 2875,
+            "character": 16
+          }
+        },
+        "severity": 1,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 2903,
+            "character": 8
+          },
+          "end": {
+            "line": 2903,
+            "character": 18
+          }
+        },
+        "severity": 2,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 2931,
+            "character": 9
+          },
+          "end": {
+            "line": 2931,
+            "character": 20
+          }
+        },
+        "severity": 3,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 2959,
+            "character": 10
+          },
+          "end": {
+            "line": 2959,
+            "character": 17
+          }
+        },
+        "severity": 1,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 2987,
+            "character": 11
+          },
+          "end": {
+            "line": 2987,
+            "character": 19
+          }
+        },
+        "severity": 2,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 3015,
+            "character": 12
+          },
+          "end": {
+            "line": 3015,
+            "character": 21
+          }
+        },
+        "severity": 3,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 3044,
+            "character": 4
+          },
+          "end": {
+            "line": 3044,
+            "character": 14
+          }
+        },
+        "severity": 1,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 3072,
+            "character": 5
+          },
+          "end": {
+            "line": 3072,
+            "character": 16
+          }
+        },
+        "severity": 2,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 3100,
+            "character": 6
+          },
+          "end": {
+            "line": 3100,
+            "character": 13
+          }
+        },
+        "severity": 3,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 3128,
+            "character": 7
+          },
+          "end": {
+            "line": 3128,
+            "character": 15
+          }
+        },
+        "severity": 1,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 3156,
+            "character": 8
+          },
+          "end": {
+            "line": 3156,
+            "character": 17
+          }
+        },
+        "severity": 2,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 3184,
+            "character": 9
+          },
+          "end": {
+            "line": 3184,
+            "character": 19
+          }
+        },
+        "severity": 3,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 3212,
+            "character": 10
+          },
+          "end": {
+            "line": 3212,
+            "character": 21
+          }
+        },
+        "severity": 1,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 3241,
+            "character": 11
+          },
+          "end": {
+            "line": 3241,
+            "character": 18
+          }
+        },
+        "severity": 2,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 3269,
+            "character": 12
+          },
+          "end": {
+            "line": 3269,
+            "character": 20
+          }
+        },
+        "severity": 3,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 3297,
+            "character": 4
+          },
+          "end": {
+            "line": 3297,
+            "character": 13
+          }
+        },
+        "severity": 1,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 3325,
+            "character": 5
+          },
+          "end": {
+            "line": 3325,
+            "character": 15
+          }
+        },
+        "severity": 2,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 3353,
+            "character": 6
+          },
+          "end": {
+            "line": 3353,
+            "character": 17
+          }
+        },
+        "severity": 3,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 3381,
+            "character": 7
+          },
+          "end": {
+            "line": 3381,
+            "character": 14
+          }
+        },
+        "severity": 1,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 3409,
+            "character": 8
+          },
+          "end": {
+            "line": 3409,
+            "character": 16
+          }
+        },
+        "severity": 2,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 3438,
+            "character": 9
+          },
+          "end": {
+            "line": 3438,
+            "character": 18
+          }
+        },
+        "severity": 3,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 3466,
+            "character": 10
+          },
+          "end": {
+            "line": 3466,
+            "character": 20
+          }
+        },
+        "severity": 1,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 3494,
+            "character": 11
+          },
+          "end": {
+            "line": 3494,
+            "character": 22
+          }
+        },
+        "severity": 2,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 3522,
+            "character": 12
+          },
+          "end": {
+            "line": 3522,
+            "character": 19
+          }
+        },
+        "severity": 3,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 3550,
+            "character": 4
+          },
+          "end": {
+            "line": 3550,
+            "character": 12
+          }
+        },
+        "severity": 1,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 3578,
+            "character": 5
+          },
+          "end": {
+            "line": 3578,
+            "character": 14
+          }
+        },
+        "severity": 2,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 3606,
+            "character": 6
+          },
+          "end": {
+            "line": 3606,
+            "character": 16
+          }
+        },
+        "severity": 3,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 3635,
+            "character": 7
+          },
+          "end": {
+            "line": 3635,
+            "character": 18
+          }
+        },
+        "severity": 1,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 3663,
+            "character": 8
+          },
+          "end": {
+            "line": 3663,
+            "character": 15
+          }
+        },
+        "severity": 2,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 3691,
+            "character": 9
+          },
+          "end": {
+            "line": 3691,
+            "character": 17
+          }
+        },
+        "severity": 3,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 3719,
+            "character": 10
+          },
+          "end": {
+            "line": 3719,
+            "character": 19
+          }
+        },
+        "severity": 1,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 3747,
+            "character": 11
+          },
+          "end": {
+            "line": 3747,
+            "character": 21
+          }
+        },
+        "severity": 2,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 3775,
+            "character": 12
+          },
+          "end": {
+            "line": 3775,
+            "character": 23
+          }
+        },
+        "severity": 3,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 3803,
+            "character": 4
+          },
+          "end": {
+            "line": 3803,
+            "character": 11
+          }
+        },
+        "severity": 1,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 3832,
+            "character": 5
+          },
+          "end": {
+            "line": 3832,
+            "character": 13
+          }
+        },
+        "severity": 2,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 3860,
+            "character": 6
+          },
+          "end": {
+            "line": 3860,
+            "character": 15
+          }
+        },
+        "severity": 3,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 3888,
+            "character": 7
+          },
+          "end": {
+            "line": 3888,
+            "character": 17
+          }
+        },
+        "severity": 1,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 3916,
+            "character": 8
+          },
+          "end": {
+            "line": 3916,
+            "character": 19
+          }
+        },
+        "severity": 2,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 3944,
+            "character": 9
+          },
+          "end": {
+            "line": 3944,
+            "character": 16
+          }
+        },
+        "severity": 3,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 3972,
+            "character": 10
+          },
+          "end": {
+            "line": 3972,
+            "character": 18
+          }
+        },
+        "severity": 1,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 4000,
+            "character": 11
+          },
+          "end": {
+            "line": 4000,
+            "character": 20
+          }
+        },
+        "severity": 2,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 4029,
+            "character": 12
+          },
+          "end": {
+            "line": 4029,
+            "character": 22
+          }
+        },
+        "severity": 3,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 4057,
+            "character": 4
+          },
+          "end": {
+            "line": 4057,
+            "character": 15
+          }
+        },
+        "severity": 1,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 4085,
+            "character": 5
+          },
+          "end": {
+            "line": 4085,
+            "character": 12
+          }
+        },
+        "severity": 2,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 4113,
+            "character": 6
+          },
+          "end": {
+            "line": 4113,
+            "character": 14
+          }
+        },
+        "severity": 3,
+        "code": "E0599",
+        "source": "rustc",
+        "message": "no method named `get` found"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 4141,
+            "character": 7
+          },
+          "end": {
+            "line": 4141,
+            "character": 16
+          }
+        },
+        "severity": 1,
+        "code": "E0277",
+        "source": "rustc",
+        "message": "trait bound not satisfied"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 4169,
+            "character": 8
+          },
+          "end": {
+            "line": 4169,
+            "character": 18
+          }
+        },
+        "severity": 2,
+        "code": "E0308",
+        "source": "rustc",
+        "message": "mismatched types"
+      },
+      {
+        "range": {
+          "start": {
+            "line": 4197,
+            "character": 9
+          },
+          "end": {
+            "line": 4197,
+            "character": 20
+          }
+        },
+        "severity": 3,
+        "code": "E0425",
+        "source": "rustc",
+        "message": "cannot find value in this scope"
+      }
+    ]
+  }
+}

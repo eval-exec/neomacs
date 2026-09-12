@@ -435,7 +435,10 @@ pub(crate) fn validate_editor_workload_result(
         ScenarioId::SustainedNativeVideo => {
             unreachable!("native video has a dedicated result validator")
         }
-        ScenarioId::RustLspTyping | ScenarioId::MxTabCompletion | ScenarioId::BytecodeCallLoop => {
+        ScenarioId::RustLspTyping
+        | ScenarioId::RustLspTypingHeavy
+        | ScenarioId::MxTabCompletion
+        | ScenarioId::BytecodeCallLoop => {
             unreachable!("dedicated scenario results do not use the editor workload validator")
         }
     }

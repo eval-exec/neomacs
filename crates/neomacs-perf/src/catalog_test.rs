@@ -7,7 +7,28 @@ use super::{CrossEditorParityMetric, Frontend, MetricName, ScenarioId, scenario,
 #[test]
 fn catalog_exposes_the_rust_lsp_typing_workload_as_a_typed_scenario() {
     let scenarios = scenarios();
-    assert_eq!(scenarios.len(), 17);
+    assert_eq!(scenarios.len(), 18);
+
+    // The heavy row exists so the light one keeps its baseline: same workload,
+    // a whole-file diagnostic set instead of four on adjacent lines.
+    let heavy = scenario(ScenarioId::RustLspTypingHeavy);
+    assert_eq!(heavy.id, ScenarioId::RustLspTypingHeavy);
+    assert_eq!(heavy.id.to_string(), "rust-lsp-typing-heavy");
+    assert_eq!(
+        ScenarioId::from_str("rust-lsp-typing-heavy"),
+        Ok(ScenarioId::RustLspTypingHeavy)
+    );
+    assert_eq!(
+        heavy.default_frontend,
+        Frontend::Tui {
+            rows: 40,
+            columns: 120,
+        }
+    );
+    assert_eq!(
+        heavy.primary_metric,
+        scenario(ScenarioId::RustLspTyping).primary_metric
+    );
 
     let rust_lsp = scenario(ScenarioId::RustLspTyping);
     assert_eq!(rust_lsp.id, ScenarioId::RustLspTyping);

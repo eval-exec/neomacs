@@ -32,6 +32,7 @@ impl CrossEditorParityMetric {
 #[serde(rename_all = "kebab-case")]
 pub enum ScenarioId {
     RustLspTyping,
+    RustLspTypingHeavy,
     MxTabCompletion,
     BytecodeCallLoop,
     EditingSimulation,
@@ -85,6 +86,7 @@ impl ScenarioId {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::RustLspTyping => "rust-lsp-typing",
+            Self::RustLspTypingHeavy => "rust-lsp-typing-heavy",
             Self::MxTabCompletion => "mx-tab-completion",
             Self::BytecodeCallLoop => "bytecode-call-loop",
             Self::EditingSimulation => "editing-simulation",
@@ -128,6 +130,7 @@ impl FromStr for ScenarioId {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "rust-lsp-typing" => Ok(Self::RustLspTyping),
+            "rust-lsp-typing-heavy" => Ok(Self::RustLspTypingHeavy),
             "mx-tab-completion" => Ok(Self::MxTabCompletion),
             "bytecode-call-loop" => Ok(Self::BytecodeCallLoop),
             "editing-simulation" => Ok(Self::EditingSimulation),
@@ -334,6 +337,17 @@ const SCENARIOS: &[ScenarioSpec] = &[
         cross_editor_parity_metrics: &[],
     },
     ScenarioSpec {
+        id: ScenarioId::RustLspTypingHeavy,
+        description: "Rust Tree-sitter typing with a whole-file diagnostic set, the overlay load a real language-server session carries",
+        default_frontend: Frontend::Tui {
+            rows: 40,
+            columns: 120,
+        },
+        default_iterations: NonZeroU32::new(100).expect("non-zero scenario default"),
+        primary_metric: MetricName::PerEditCpuTime,
+        cross_editor_parity_metrics: &[],
+    },
+    ScenarioSpec {
         id: ScenarioId::LspJsonRpc,
         description: "jsonrpc round trip at language-server message size: serialize a request, parse a diagnostics reply",
         default_frontend: Frontend::Batch,
@@ -370,6 +384,7 @@ pub const fn scenario(id: ScenarioId) -> &'static ScenarioSpec {
         ScenarioId::SustainedNativeVideo => &SCENARIOS[13],
         ScenarioId::MagitStatusCompiled => &SCENARIOS[14],
         ScenarioId::OrgJournalOpenCompiled => &SCENARIOS[15],
-        ScenarioId::LspJsonRpc => &SCENARIOS[16],
+        ScenarioId::RustLspTypingHeavy => &SCENARIOS[16],
+        ScenarioId::LspJsonRpc => &SCENARIOS[17],
     }
 }

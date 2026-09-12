@@ -19,8 +19,33 @@ use crate::harness::{
 use crate::harness::{GrammarProvenance, PackageProvenance, prepare_cached_tree_sitter_grammar};
 use neomacs_melpa_test_support::{EmacsRuntime, PreparedPackageSet, locked_melpa_sources};
 
-const RUST_LSP_TYPING_OVERLAY_COUNT: u64 = 4;
-const RUST_LSP_TYPING_DIAGNOSTIC_COUNT: u64 = 4;
+/// The workload identity behind a row.
+///
+/// `rust-lsp-typing-heavy` runs the same committed `rust-lsp-typing.el`, which
+/// reports its own name. The `scenario-id` invariant exists to prove the
+/// harness ran the fixture it believes it ran, so it is checked against this
+/// rather than against the row.
+const fn workload_scenario(scenario: ScenarioId) -> ScenarioId {
+    match scenario {
+        ScenarioId::RustLspTypingHeavy => ScenarioId::RustLspTyping,
+        other => other,
+    }
+}
+
+/// The committed replay payload and the diagnostic count it must produce, per
+/// scenario.
+///
+/// `rust-lsp-typing` replays four diagnostics on lines 20-24. That is not what a
+/// language-server session looks like, and it hides work: raising the payload to
+/// a whole-file set turned `next_newline_emacs_byte` from 13,985 calls into
+/// 25,860,294 and made it 16.8% of the workload. `rust-lsp-typing-heavy` is that
+/// load as its own row, so the original keeps its baseline.
+const fn replay_fixture(scenario: ScenarioId) -> (&'static str, u64) {
+    match scenario {
+        ScenarioId::RustLspTypingHeavy => ("rust-lsp-diagnostics-heavy.json", 150),
+        _ => ("rust-lsp-diagnostics.json", 4),
+    }
+}
 const RUST_GRAMMAR_REPOSITORY: &str = "https://github.com/tree-sitter/tree-sitter-rust";
 const RUST_GRAMMAR_REVISION: &str = "18b0515fca567f5a10aee9978c6d2640e878671a";
 
@@ -51,7 +76,8 @@ pub(crate) fn prepare(
     let fixture_root = workspace_root.join("crates/neomacs-perf/fixtures");
     let fixture_source = fixture_root.join("rust-lsp-typing.el");
     let source_source = fixture_root.join("rust-lsp-typing.rs");
-    let replay_source = fixture_root.join("rust-lsp-diagnostics.json");
+    let (replay_name, _) = replay_fixture(request.scenario);
+    let replay_source = fixture_root.join(replay_name);
     for required in [&fixture_source, &source_source, &replay_source] {
         if !required.is_file() {
             return Err(format!(
@@ -216,7 +242,7 @@ pub(crate) fn validate_rust_lsp_typing_result(
     mismatch(
         &mut mismatches,
         "scenario-id",
-        request.scenario,
+        workload_scenario(request.scenario),
         result.scenario,
     );
     mismatch(
@@ -259,13 +285,13 @@ pub(crate) fn validate_rust_lsp_typing_result(
     mismatch(
         &mut mismatches,
         "overlay-count",
-        RUST_LSP_TYPING_OVERLAY_COUNT,
+        replay_fixture(request.scenario).1,
         result.overlay_count,
     );
     mismatch(
         &mut mismatches,
         "lsp-diagnostic-count",
-        RUST_LSP_TYPING_DIAGNOSTIC_COUNT,
+        replay_fixture(request.scenario).1,
         result.lsp_diagnostic_count,
     );
     mismatches

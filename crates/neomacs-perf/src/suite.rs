@@ -74,6 +74,7 @@ pub struct SuiteScenario {
 
 const STANDARD_SCENARIOS: &[SuiteScenario] = &[
     suite_scenario(ScenarioId::RustLspTyping, 8.0),
+    suite_scenario(ScenarioId::RustLspTypingHeavy, 8.0),
     suite_scenario(ScenarioId::MxTabCompletion, 8.0),
     suite_scenario(ScenarioId::BytecodeCallLoop, 5.0),
     suite_scenario(ScenarioId::EditingSimulation, 8.0),
