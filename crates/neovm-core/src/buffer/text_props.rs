@@ -2788,6 +2788,16 @@ impl TextPropertyTable {
         self.mutation_tick += 1;
         if Self::name_is_syntax_relevant(name) {
             self.syntax_prop_tick += 1;
+            // Keep the cached bit-set ranges truthful, exactly as
+            // `put_property_raw` does. Its absence here was not a
+            // string-only concession: `text_props_put_property_in_emacs_byte_range`
+            // -- the BUFFER put -- routes through this function, so every
+            // `put-text-property` of `syntax-table`/`category` on a buffer
+            // bumped the tick and left the list stale, and the next
+            // `syntax_prop_free_run_end` query rebuilt it by walking the whole
+            // interval tree. `org-editing-heavy` did that ~192 times per
+            // operation.
+            self.syntax_ranges_note_put(range);
         }
         if range.is_empty() {
             return false;
