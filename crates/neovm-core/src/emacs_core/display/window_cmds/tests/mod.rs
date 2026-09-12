@@ -2472,6 +2472,58 @@ fn split_window_side_domain_matches_gnu() {
 }
 
 #[test]
+fn coordinates_in_window_p_takes_frame_relative_coordinates_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // GNU's COORDINATES are FRAME-relative -- the docstring says "distances
+    // measured in characters from the upper-left corner of the frame" -- and
+    // the answer is window-relative (`src/window.c`):
+    //
+    //     case ON_TEXT:
+    //       x -= window_box_left (w, TEXT_AREA);
+    //       y -= WINDOW_TOP_EDGE_Y (w);
+    //       return Fcons (...);
+    //
+    // with the non-text regions answering a SYMBOL instead: `mode-line',
+    // `tab-line', `header-line', `vertical-line'.
+    //
+    // neomacs tested the input against the window's SIZE -- i.e. read it as
+    // window-relative -- and returned the input cons unchanged, so every
+    // window whose origin is not (0,0) answered for the wrong region:
+    //
+    //   (coordinates-in-window-p '(5 . 24) MINI)  GNU (5 . 0)  neomacs nil
+    //   (coordinates-in-window-p '(0 . 0)  MINI)  GNU nil      neomacs (0 . 0)
+    //   (coordinates-in-window-p '(5 . 23) ROOT)  GNU mode-line neomacs (5 . 23)
+    //
+    // It only agreed for a window at the frame origin, where the two readings
+    // coincide -- which is why a probe that only tried (0 . 0) saw one row.
+    //
+    // Oracle measured on GNU Emacs 31.1 with a side-by-side split, whose
+    // geometry neomacs reproduces exactly: L=(0 0 40 24) R=(40 0 80 24)
+    // mini=(0 24 80 25).
+    let results = bootstrap_eval_with_frame(
+        "(let* ((l (selected-window)) (r (split-window-right)) (mini (minibuffer-window)))
+           (list (window-edges l) (window-edges r) (window-edges mini)
+                 (coordinates-in-window-p '(0 . 0) l)
+                 (coordinates-in-window-p '(5 . 3) l)
+                 (coordinates-in-window-p '(39 . 3) l)
+                 (coordinates-in-window-p '(40 . 3) l)
+                 (coordinates-in-window-p '(5 . 23) l)
+                 (coordinates-in-window-p '(5 . 24) l)
+                 (coordinates-in-window-p '(5 . 3) r)
+                 (coordinates-in-window-p '(40 . 3) r)
+                 (coordinates-in-window-p '(45 . 3) r)
+                 (coordinates-in-window-p '(0 . 0) mini)
+                 (coordinates-in-window-p '(5 . 24) mini)
+                 ;; float coordinates answer in char units, as GNU does
+                 (coordinates-in-window-p '(5.5 . 3.0) l)))",
+    );
+    assert_eq!(
+        results[0],
+        "OK ((0 0 40 24) (40 0 80 24) (0 24 80 25) (0 . 0) (5 . 3) vertical-line nil mode-line nil nil (0 . 3) (5 . 3) nil (5 . 0) (5 . 3))"
+    );
+}
+
+#[test]
 fn internal_show_cursor_p_accepts_any_window_like_gnu() {
     crate::test_utils::init_test_tracing();
     // GNU's whole body is one line (`src/dispnew.c`):

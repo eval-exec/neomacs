@@ -53,10 +53,10 @@ fn lisp_char_pos_from_one_based_usize(pos: usize) -> LispCharPos1 {
 
 pub(crate) use super::builtins::symbols::builtin_resize_mini_window_internal;
 pub(crate) use super::builtins::{
-    builtin_coordinates_in_window_p, builtin_current_window_configuration,
-    builtin_run_window_scroll_functions, builtin_set_window_configuration,
-    builtin_split_window_internal, builtin_window_configuration_equal_p,
-    builtin_window_configuration_frame, builtin_window_configuration_p,
+    builtin_current_window_configuration, builtin_run_window_scroll_functions,
+    builtin_set_window_configuration, builtin_split_window_internal,
+    builtin_window_configuration_equal_p, builtin_window_configuration_frame,
+    builtin_window_configuration_p,
 };
 
 // ---------------------------------------------------------------------------
@@ -131,6 +131,109 @@ fn decode_valid_window_id(
 // The values are still placeholders (`0` / nil) -- see the note on
 // `window-lines-pixel-dimensions` below.  What is fixed here is the DECODE.
 // ---------------------------------------------------------------------------
+
+/// `(coordinates-in-window-p COORDINATES WINDOW)` -- GNU `src/window.c`
+/// (`Fcoordinates_in_window_p` over `coordinates_in_window`).
+///
+/// COORDINATES are FRAME-relative: the docstring says "distances measured in
+/// characters from the upper-left corner of the frame".  The answer is
+/// window-relative for the text area, and a SYMBOL naming the part otherwise:
+///
+///     case ON_TEXT:
+///       x -= window_box_left (w, TEXT_AREA);
+///       y -= WINDOW_TOP_EDGE_Y (w);
+///       return Fcons (...);
+///     case ON_MODE_LINE:       return Qmode_line;
+///     case ON_VERTICAL_BORDER: return Qvertical_line;
+///     case ON_HEADER_LINE:     return Qheader_line;
+///     case ON_TAB_LINE:        return Qtab_line;
+///
+/// This used to test the input against the window's SIZE -- reading it as
+/// window-relative -- and return the input cons unchanged, so it answered for
+/// the wrong region in every window not at the frame origin, and never named a
+/// part at all.
+///
+/// The parts GNU distinguishes that are NOT modelled here are the ones with no
+/// char-cell existence: fringes, margins, scroll bars and dividers.  On a
+/// char-cell frame those have zero extent, so the classification below is
+/// complete for one; on a GUI frame it is not, and that is the remaining gap.
+pub(crate) fn builtin_coordinates_in_window_p(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_args("coordinates-in-window-p", &args, 2)?;
+    // GNU decodes WINDOW before it `CHECK_CONS`es COORDINATES.
+    let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
+    let _ = ensure_selected_frame_id_in_state(frames, buffers);
+    let (fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, args.get(1), WindowDomain::Live)?;
+
+    if !args[0].is_cons() {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("consp"), args[0]],
+        ));
+    }
+    let number = |value: Value| -> Result<f64, Flow> {
+        match value.kind() {
+            ValueKind::Fixnum(n) => Ok(n as f64),
+            ValueKind::Float => Ok(value.xfloat()),
+            _ => Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("numberp"), value],
+            )),
+        }
+    };
+    let x = number(args[0].cons_car())?;
+    let y = number(args[0].cons_cdr())?;
+
+    let w = get_window(frames, fid, wid)?;
+    let (left, top) = (w.left_col() as f64, w.top_line() as f64);
+    let width = match window_total_width_impl(frames, buffers, vec![args[1]])?.kind() {
+        ValueKind::Fixnum(n) => n as f64,
+        _ => 0.0,
+    };
+    let height = match window_total_height_impl(frames, buffers, vec![args[1]])?.kind() {
+        ValueKind::Fixnum(n) => n as f64,
+        _ => 0.0,
+    };
+
+    // ON_NOTHING: outside the window's frame-relative box.
+    if x < left || x >= left + width || y < top || y >= top + height {
+        return Ok(Value::NIL);
+    }
+
+    let chrome = |line| body_geometry::chrome_height_pixels(frames, buffers, fid, wid, line);
+    let mode_line = chrome(WindowChromeLine::ModeLine)? as f64;
+    let tab_line = chrome(WindowChromeLine::TabLine)? as f64;
+    let header_line = chrome(WindowChromeLine::HeaderLine)? as f64;
+
+    // GNU orders these mode-line, then tab-line, then header-line.
+    if mode_line > 0.0 && y >= top + height - mode_line {
+        return Ok(Value::symbol("mode-line"));
+    }
+    if tab_line > 0.0 && y < top + tab_line {
+        return Ok(Value::symbol("tab-line"));
+    }
+    if header_line > 0.0 && y < top + tab_line + header_line {
+        return Ok(Value::symbol("header-line"));
+    }
+    // ON_VERTICAL_BORDER: the last column of a window that is not rightmost.
+    if let Some(frame) = frames.get(fid)
+        && !window_is_rightmost(frame, wid)
+        && x >= left + width - 1.0
+    {
+        return Ok(Value::symbol("vertical-line"));
+    }
+
+    // ON_TEXT.  GNU returns canonical char units, which on a char-cell frame
+    // are whole characters whatever the input was -- `(5.5 . 3.0)` answers
+    // `(5 . 3)`.
+    Ok(Value::cons(
+        Value::fixnum((x - left) as i64),
+        Value::fixnum((y - top) as i64),
+    ))
+}
 
 /// `(window-old-body-pixel-width &optional WINDOW)`; GNU `decode_live_window`.
 pub(crate) fn builtin_window_old_body_pixel_width(
