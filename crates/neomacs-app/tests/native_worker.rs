@@ -8,7 +8,9 @@ use std::time::Duration;
 use neomacs_app::host::HostProfile;
 use neomacs_app::presentation::PresentationMetrics;
 use neomacs_app::runtime_image::AuthenticatedPortableRuntimeImage;
-use neomacs_app::session::{EditorSession, NativeEditorWorker, NativeEditorWorkerEvent};
+use neomacs_app::session::{
+    EditorSession, NativeEditorWorker, NativeEditorWorkerEvent, WorkerShutdown,
+};
 use neovm_core::emacs_core::Value;
 use neovm_core::emacs_core::eval::Context;
 use neovm_core::emacs_core::pdump::encode_portable_snapshot;
@@ -112,4 +114,78 @@ fn native_worker_reports_factory_failure_without_starting_a_session() {
     ));
     worker.join().expect("worker should not panic");
     assert!(event_rx.try_recv().is_err());
+}
+
+/// The contract Android relies on when its Activity is destroyed: surrender
+/// every frontend handle and the evaluator stops on its own, with no Lisp run
+/// and therefore no chance of an unanswerable prompt.
+#[test]
+fn dropping_every_frontend_handle_stops_the_evaluator_worker() {
+    let (event_tx, event_rx) = mpsc::channel();
+    let worker = NativeEditorWorker::spawn(
+        "destroyed-host-editor",
+        || {
+            let mut evaluator = Context::new();
+            evaluator.set_variable("noninteractive", Value::T);
+            Ok(evaluator)
+        },
+        PresentationMetrics::CellGrid,
+        move |event| {
+            let _ = event_tx.send(event);
+        },
+    )
+    .expect("spawn evaluator worker");
+
+    let Ok(NativeEditorWorkerEvent::Started(frontend)) =
+        event_rx.recv_timeout(Duration::from_secs(5))
+    else {
+        panic!("worker should report an attached session");
+    };
+
+    // The evaluator is now in its outer command loop, waiting for input.
+    drop(frontend);
+
+    assert_eq!(
+        worker.shut_down_before(Duration::from_secs(10)),
+        WorkerShutdown::Joined,
+    );
+}
+
+#[test]
+fn a_worker_that_will_not_stop_is_abandoned_at_the_deadline() {
+    let worker = NativeEditorWorker::spawn(
+        "unresponsive-editor",
+        || {
+            std::thread::sleep(Duration::from_secs(10));
+            Err("unreachable".to_owned())
+        },
+        PresentationMetrics::CellGrid,
+        |_| {},
+    )
+    .expect("spawn evaluator worker");
+
+    let started = std::time::Instant::now();
+    let shutdown = worker.shut_down_before(Duration::from_millis(150));
+
+    assert_eq!(shutdown, WorkerShutdown::TimedOut);
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "the bounded wait must return near its deadline, not near the worker's",
+    );
+}
+
+#[test]
+fn a_panicking_worker_is_absorbed_rather_than_re_raised() {
+    let worker = NativeEditorWorker::spawn(
+        "panicking-editor",
+        || panic!("deliberate evaluator construction panic"),
+        PresentationMetrics::CellGrid,
+        |_| {},
+    )
+    .expect("spawn evaluator worker");
+
+    assert_eq!(
+        worker.shut_down_before(Duration::from_secs(10)),
+        WorkerShutdown::Panicked,
+    );
 }

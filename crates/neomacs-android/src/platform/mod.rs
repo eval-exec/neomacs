@@ -9,8 +9,8 @@ use neomacs_app::frontend_event::{
 };
 use neomacs_app::lifecycle::{FrontendLifecycle, LifecycleAction, LifecycleEvent};
 use neomacs_app::session::{
-    FrontendFrameInbox, FrontendFrameReceive, FrontendInputPort, HostStopFlush, NativeEditorWorker,
-    NativeEditorWorkerEvent,
+    FrontendFrameInbox, FrontendFrameReceive, FrontendInputPort, HOST_DESTROY_JOIN_TIMEOUT,
+    HostStopFlush, NativeEditorWorker, NativeEditorWorkerEvent, WorkerShutdown,
 };
 use neomacs_wgpu_runtime::{SurfaceFrameRenderer, SurfaceWindow, WinitFrontendInput};
 use presentation::{PresentedFrontend, RetainedPresentation};
@@ -173,11 +173,38 @@ impl AndroidFrontend {
         }
     }
 
+    /// Release every evaluator handle and wait briefly for the worker thread.
+    ///
+    /// `android_main` can be called again after Activity recreation while the
+    /// process lives on, so a worker left running here becomes a second
+    /// evaluator sharing this process's extracted runtime image and autosave
+    /// files. Dropping the frame and presentation state as well as the input
+    /// port matters: `PresentedFrontend` and `RetainedPresentation` each hold
+    /// an activated-presentation guard, and every one of those carries its own
+    /// input-port clone, so the evaluator's input channel only disconnects
+    /// once all of them are gone.
+    ///
+    /// This runs while the host is being torn down, so it never panics and
+    /// never blocks without a bound -- see [`HOST_DESTROY_JOIN_TIMEOUT`].
     fn finish_worker(&mut self) {
-        if let Some(worker) = self.worker.take() {
-            worker
-                .join()
-                .unwrap_or_else(|_| panic!("Android evaluator worker panicked"));
+        let Some(worker) = self.worker.take() else {
+            return;
+        };
+        self.presented = None;
+        self.retained = None;
+        self.frames = None;
+        self.input = None;
+        self.animation_deadline = None;
+        match worker.shut_down_before(HOST_DESTROY_JOIN_TIMEOUT) {
+            WorkerShutdown::Joined => {}
+            WorkerShutdown::Panicked => {
+                eprintln!("neomacs: the Android evaluator worker panicked");
+            }
+            WorkerShutdown::TimedOut => {
+                eprintln!(
+                    "neomacs: the Android evaluator worker did not stop within {HOST_DESTROY_JOIN_TIMEOUT:?}"
+                );
+            }
         }
     }
 
@@ -469,6 +496,20 @@ impl ApplicationHandler for AndroidFrontend {
             self.animation_deadline
                 .map_or(ControlFlow::Wait, ControlFlow::WaitUntil),
         );
+    }
+}
+
+/// Stop the evaluator when the Activity's event loop is torn down.
+///
+/// `run_app` drops the handler before it returns, which is the only hook this
+/// winit version offers for the end of the loop -- there is no `exiting`
+/// callback. Every route out of the loop therefore converges here: the
+/// graceful `Exited` path (already joined, so this is a no-op), a startup
+/// failure, and `MainEvent::Destroy`, which the fork forwards as an exit
+/// request precisely so that this runs.
+impl Drop for AndroidFrontend {
+    fn drop(&mut self) {
+        self.finish_worker();
     }
 }
 
