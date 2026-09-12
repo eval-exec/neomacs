@@ -24,12 +24,22 @@ pub enum NativeEditorWorkerEvent {
 
 /// Longest wait for an evaluator worker once its host has been destroyed.
 ///
-/// Android forwards `onDestroy` from the Java main thread and blocks it until
-/// the native loop acknowledges, so this budget is charged against the same
-/// watchdog that raises an ANR. The evaluator is normally parked in its input
-/// wait and observes the lost frontend immediately; this bound only covers an
-/// evaluator that is busy inside Lisp, where surrendering the thread beats
-/// hanging the system's teardown.
+/// This has to be bounded rather than a plain `join`. Android's Java main
+/// thread is blocked for the whole span between the destroy notification and
+/// the native entry point returning, so the wait is charged against the
+/// watchdog that raises an ANR. `MainEvent::Destroy` is documented as
+/// "Command from main thread: the app's activity is being destroyed, and
+/// waiting for the app thread to clean up and exit before proceeding"
+/// (android-activity 0.6.1 `src/lib.rs`), and game-activity's glue implements
+/// exactly that: `android_app_free`, reached from `onDestroy`, writes
+/// `APP_CMD_DESTROY` and then `pthread_cond_wait`s until `destroyed`, which is
+/// only set by `android_app_destroy` "due to `android_main` returning"
+/// (`android_native_app_glue.c:376-396`).
+///
+/// The evaluator is normally parked in its input wait and observes the lost
+/// frontend in microseconds, so this budget only ever covers one that is busy
+/// inside Lisp -- where surrendering the thread beats hanging the system's
+/// teardown.
 pub const HOST_DESTROY_JOIN_TIMEOUT: Duration = Duration::from_millis(2000);
 
 /// How the worker thread came to rest during a bounded shutdown.
