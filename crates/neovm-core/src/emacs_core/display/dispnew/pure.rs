@@ -9,8 +9,8 @@ use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{EvalResult, Flow, signal};
 use crate::emacs_core::error::{expect_args, expect_args_range};
 use crate::emacs_core::terminal::pure::expect_terminal_designator_eval;
+use crate::emacs_core::value::ValueKind;
 use crate::emacs_core::value::*;
-use crate::emacs_core::value::{ValueKind, VecLikeType};
 use crate::window::WindowId;
 
 /// Reset cursor visibility state (called from `reset_display_thread_locals`).
