@@ -1935,7 +1935,7 @@ pub(crate) fn builtin_frame_visible_p(
     expect_args("frame-visible-p", &args, 1)?;
     let val = args.first().unwrap(); // expect_args enforced
     let fid = match val.kind() {
-        ValueKind::Fixnum(n) => FrameId(n as u64),
+        // No `Fixnum` arm -- see `window_cmds::window_id_from_designator`.
         ValueKind::Veclike(VecLikeType::Frame) => FrameId(val.as_frame_id().unwrap()),
         _ => {
             return Err(signal(

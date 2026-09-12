@@ -1381,7 +1381,7 @@ fn x_gui_display_queries_accept_nil_and_live_frames_when_x_is_active() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::Context::new();
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
-    let frame = Value::fixnum(frame_id.0 as i64);
+    let frame = Value::make_frame(frame_id.0);
     eval.set_variable("initial-window-system", Value::NIL);
     eval.set_variable("window-system", Value::symbol(gui_window_system_symbol()));
     eval.frames
@@ -1428,7 +1428,7 @@ fn display_queries_default_to_selected_frame_window_system_surface() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::Context::new();
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
-    let frame = Value::fixnum(frame_id.0 as i64);
+    let frame = Value::make_frame(frame_id.0);
 
     eval.frames
         .get_mut(frame_id)
@@ -3557,7 +3557,7 @@ fn window_system_prefers_selected_frame_then_global_fallback() {
         Value::symbol("x")
     );
     assert_eq!(
-        builtin_window_system(&mut eval, vec![Value::fixnum(frame_id.0 as i64)]).unwrap(),
+        builtin_window_system(&mut eval, vec![Value::make_frame(frame_id.0)]).unwrap(),
         Value::symbol("x")
     );
     eval.frames
@@ -3565,7 +3565,7 @@ fn window_system_prefers_selected_frame_then_global_fallback() {
         .expect("selected frame")
         .set_window_system(None);
     assert_eq!(
-        builtin_window_system(&mut eval, vec![Value::fixnum(frame_id.0 as i64)]).unwrap(),
+        builtin_window_system(&mut eval, vec![Value::make_frame(frame_id.0)]).unwrap(),
         Value::NIL,
         "an explicit non-window-system frame must not fall back to global window-system"
     );

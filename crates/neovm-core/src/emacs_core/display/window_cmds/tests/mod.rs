@@ -2472,6 +2472,45 @@ fn split_window_side_domain_matches_gnu() {
 }
 
 #[test]
+fn an_integer_is_not_a_window_or_frame_designator_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // GNU has no notion of an integer window or frame.  A window is a
+    // `Lisp_Window' pseudovector and nothing else -- `WINDOW_VALID_P' is
+    // `WINDOWP (w) && ...' (`src/window.h:1188'), and `WINDOWP' is a
+    // pseudovector tag test.  There is no path by which the fixnum 1 names
+    // window 1.
+    //
+    // neomacs had one: `window_id_from_designator' mapped any non-negative
+    // fixnum to `WindowId(n)', so every predicate and every decoder built on
+    // it accepted a raw integer -- and, because the ids really do start at 1,
+    // small integers silently named REAL windows.  Measured on GNU Emacs 31.1
+    // versus neomacs before this fix:
+    //
+    //   (windowp 1)           nil                              => t
+    //   (window-live-p 1)     nil                              => t
+    //   (window-valid-p 1)    nil                              => t
+    //   (window-buffer 1)     (wrong-type-argument windowp 1)  => #<buffer *scratch*>
+    //   (window-point 1)      (wrong-type-argument window-live-p 1) => 1
+    //   (frame-root-window 1) (wrong-type-argument frame-live-p 1)  => #<window 1 ...>
+    //
+    // `(window-buffer 1)` handing back a live buffer is the sharp end of it:
+    // a type confusion that reads as success.
+    let results = bootstrap_eval_with_frame(
+        "(list (windowp 1) (window-live-p 1) (window-valid-p 1)
+               (condition-case e (progn (window-buffer 1) 'no-error)
+                 (wrong-type-argument (car (cdr e))))
+               (condition-case e (progn (window-point 1) 'no-error)
+                 (wrong-type-argument (car (cdr e))))
+               (condition-case e (progn (frame-root-window 1) 'no-error)
+                 (wrong-type-argument (car (cdr e)))))",
+    );
+    assert_eq!(
+        results[0],
+        "OK (nil nil nil windowp window-live-p frame-live-p)"
+    );
+}
+
+#[test]
 fn split_window_internal_bad_old_names_window_valid_p_like_gnu() {
     crate::test_utils::init_test_tracing();
     // GNU decodes OLD with `decode_valid_window' (`src/window.c'), and does so

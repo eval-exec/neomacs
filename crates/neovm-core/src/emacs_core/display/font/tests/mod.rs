@@ -959,8 +959,8 @@ fn font_family_list_returns_the_selected_frames_platform_families() {
         ],
     }));
 
-    let result = font_family_list(&mut eval, vec![Value::fixnum(frame_id.0 as i64)])
-        .expect("font-family-list");
+    let result =
+        font_family_list(&mut eval, vec![Value::make_frame(frame_id.0)]).expect("font-family-list");
     let families = crate::emacs_core::value::list_to_vec(&result).expect("proper family list");
 
     assert_eq!(*requested_frame.borrow(), Some(frame_id));

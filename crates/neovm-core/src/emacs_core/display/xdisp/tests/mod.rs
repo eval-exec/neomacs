@@ -5506,11 +5506,11 @@ fn test_tool_bar_height_eval_frame_validation() {
     }
 
     let result =
-        builtin_tool_bar_height_ctx(&mut eval, vec![Value::fixnum(frame_id.0 as i64)]).unwrap();
+        builtin_tool_bar_height_ctx(&mut eval, vec![Value::make_frame(frame_id.0)]).unwrap();
     assert_eq!(result, Value::fixnum(2));
 
     let pixelwise =
-        builtin_tool_bar_height_ctx(&mut eval, vec![Value::fixnum(frame_id.0 as i64), Value::T])
+        builtin_tool_bar_height_ctx(&mut eval, vec![Value::make_frame(frame_id.0), Value::T])
             .unwrap();
     assert_eq!(pixelwise, Value::fixnum(34));
 
@@ -5539,7 +5539,7 @@ fn test_tab_bar_height_eval_frame_validation() {
     let frame_id = eval.frames.create_frame("xdisp-test", 80, 24, buf_id);
 
     let result =
-        builtin_tab_bar_height_ctx(&mut eval, vec![Value::fixnum(frame_id.0 as i64)]).unwrap();
+        builtin_tab_bar_height_ctx(&mut eval, vec![Value::make_frame(frame_id.0)]).unwrap();
     assert_eq!(result, Value::fixnum(0));
 
     let err = builtin_tab_bar_height_ctx(&mut eval, vec![Value::string("x")]).unwrap_err();
@@ -5561,7 +5561,7 @@ fn test_tab_bar_height_eval_reflects_tab_bar_lines_and_pixels() {
     super::super::frame::builtin_modify_frame_parameters(
         &mut eval,
         vec![
-            Value::fixnum(frame_id.0 as i64),
+            Value::make_frame(frame_id.0),
             Value::list(vec![Value::cons(
                 Value::symbol("tab-bar-lines"),
                 Value::fixnum(1),
@@ -5570,12 +5570,11 @@ fn test_tab_bar_height_eval_reflects_tab_bar_lines_and_pixels() {
     )
     .unwrap();
 
-    let lines =
-        builtin_tab_bar_height_ctx(&mut eval, vec![Value::fixnum(frame_id.0 as i64)]).unwrap();
+    let lines = builtin_tab_bar_height_ctx(&mut eval, vec![Value::make_frame(frame_id.0)]).unwrap();
     assert_eq!(lines, Value::fixnum(1));
 
     let pixels =
-        builtin_tab_bar_height_ctx(&mut eval, vec![Value::fixnum(frame_id.0 as i64), Value::T])
+        builtin_tab_bar_height_ctx(&mut eval, vec![Value::make_frame(frame_id.0), Value::T])
             .unwrap();
     assert_eq!(pixels, Value::fixnum(20));
 

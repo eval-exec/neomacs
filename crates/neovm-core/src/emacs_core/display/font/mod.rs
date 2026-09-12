@@ -2423,12 +2423,12 @@ enum FaceLayer {
     Inline(RuntimeFace),
 }
 
+/// A verbatim copy of this decoder used to live here, and carried the same
+/// `Fixnum(n) => WindowId(n)` arm GNU has no counterpart for.  Two copies of a
+/// decoder is two places for the window/frame type contract to drift, so this
+/// defers to the one in `window_cmds` -- the mirror of GNU `src/window.c`.
 fn window_id_from_designator(value: &Value) -> Option<WindowId> {
-    match value.kind() {
-        ValueKind::Veclike(VecLikeType::Window) => Some(WindowId(value.as_window_id().unwrap())),
-        ValueKind::Fixnum(n) if n >= 0 => Some(WindowId(n as u64)),
-        _ => None,
-    }
+    super::window_cmds::window_id_from_designator(value)
 }
 
 fn resolve_live_window_for_font_at(

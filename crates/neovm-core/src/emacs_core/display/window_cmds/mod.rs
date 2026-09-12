@@ -605,10 +605,15 @@ fn resolve_window_frame_id_for_pred(
     pred.frame_of(frames, wid)
 }
 
-fn window_id_from_designator(value: &Value) -> Option<WindowId> {
+/// GNU has no integer windows.  A window is a `Lisp_Window` pseudovector and
+/// `WINDOWP` is a tag test (`src/window.h`), so no fixnum can ever name one.
+/// Accepting `Fixnum(n) => WindowId(n)` here made every predicate and decoder
+/// built on this function accept a raw integer -- and since ids start at 1,
+/// small integers named REAL windows: `(windowp 1)` was `t` and
+/// `(window-buffer 1)` handed back a live buffer.
+pub(crate) fn window_id_from_designator(value: &Value) -> Option<WindowId> {
     match value.kind() {
         ValueKind::Veclike(VecLikeType::Window) => Some(WindowId(value.as_window_id().unwrap())),
-        ValueKind::Fixnum(n) if n >= 0 => Some(WindowId(n as u64)),
         _ => None,
     }
 }
@@ -724,18 +729,9 @@ pub(crate) fn resolve_frame_id_in_state(
         return Ok(ensure_selected_frame_id_in_state(frames, buffers));
     }
     let val = arg.unwrap();
+    // No `Fixnum` arm: GNU has no integer frames any more than integer
+    // windows -- `framep` is a tag test on a `Lisp_Frame` pseudovector.
     match val.kind() {
-        ValueKind::Fixnum(n) => {
-            let fid = FrameId(n as u64);
-            if frames.get(fid).is_some() {
-                Ok(fid)
-            } else {
-                Err(signal(
-                    LispCondition::WrongTypeArgument,
-                    vec![Value::symbol(predicate.predicate()), Value::fixnum(n)],
-                ))
-            }
-        }
         ValueKind::Veclike(VecLikeType::Frame) => {
             let raw_id = val.as_frame_id().unwrap();
             let fid = FrameId(raw_id);
@@ -783,20 +779,6 @@ fn resolve_frame_or_window_frame_id_in_state(
                     ],
                 ))
             }
-        }
-        ValueKind::Fixnum(n) => {
-            let fid = FrameId(n as u64);
-            if frames.get(fid).is_some() {
-                return Ok(fid);
-            }
-            let wid = WindowId(n as u64);
-            if let Some(fid) = frames.find_valid_window_frame_id(wid) {
-                return Ok(fid);
-            }
-            Err(signal(
-                LispCondition::WrongTypeArgument,
-                vec![Value::symbol(predicate.predicate()), Value::fixnum(n)],
-            ))
         }
         ValueKind::Veclike(VecLikeType::Window) => {
             let raw_id = val.as_window_id().unwrap();
