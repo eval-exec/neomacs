@@ -2472,6 +2472,41 @@ fn split_window_side_domain_matches_gnu() {
 }
 
 #[test]
+fn frame_geometry_subrs_name_gnus_decoder_predicate() {
+    crate::test_utils::init_test_tracing();
+    // Which predicate a frame subr names is fixed by which decoder GNU's C
+    // opens with: `decode_any_frame' signals `framep', `decode_live_frame'
+    // signals `frame-live-p'.  Verified against `src/frame.c', with the decode
+    // unguarded by any `#ifdef' in each case:
+    //
+    //   frame-fringe-width       decode_any_frame   -> framep
+    //   frame-pointer-visible-p  decode_any_frame   -> framep
+    //   frame-scroll-bar-height  decode_any_frame   -> framep
+    //   frame-scroll-bar-width   decode_any_frame   -> framep
+    //   frame-scale-factor       decode_live_frame  -> frame-live-p
+    //
+    // The first four said `frame-live-p' because they went through a helper
+    // named `expect_frame_live_or_nil' that only tag-checks the value and then
+    // names `frame-live-p' regardless -- the predicate was a constant in the
+    // helper rather than a consequence of the check.  `frame-scale-factor'
+    // diverged the other way, decoding with `FrameDomain::Any'.
+    //
+    // Checking the `#ifdef' guards matters here: `tool-bar-height' and
+    // `tool-bar-pixel-width' look like divergences in exactly this shape and
+    // are NOT -- they are artifacts of the GTK reference binary's
+    // `HAVE_EXT_TOOL_BAR'.  These five have no such guard.
+    let results = bootstrap_eval_with_frame(
+        "(mapcar (lambda (fn)
+                   (condition-case e (progn (funcall fn (selected-window)) 'no-error)
+                     (wrong-type-argument (car (cdr e)))))
+                 '(frame-fringe-width frame-pointer-visible-p
+                   frame-scroll-bar-height frame-scroll-bar-width
+                   frame-scale-factor))",
+    );
+    assert_eq!(results[0], "OK (framep framep framep framep frame-live-p)");
+}
+
+#[test]
 fn an_integer_is_not_a_window_or_frame_designator_like_gnu() {
     crate::test_utils::init_test_tracing();
     // GNU has no notion of an integer window or frame.  A window is a

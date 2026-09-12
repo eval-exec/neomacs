@@ -5663,7 +5663,12 @@ pub(crate) fn builtin_kill_emacs(eval: &mut super::eval::Context, args: Vec<Valu
 pub(crate) fn builtin_lower_frame(args: Vec<Value>) -> EvalResult {
     expect_args_range("lower-frame", &args, 0, 1)?;
     if let Some(frame) = args.first() {
-        super::stubs::expect_frame_live_or_nil(frame)?;
+        // GNU's `Flower_frame' decodes with `decode_live_frame'
+        // (`src/frame.c'), so this really is `frame-live-p'.
+        super::stubs::expect_frame_in_domain(
+            frame,
+            crate::emacs_core::window_cmds::FrameDomain::Live,
+        )?;
     }
     Ok(Value::NIL)
 }

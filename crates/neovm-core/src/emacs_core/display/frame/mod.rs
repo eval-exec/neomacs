@@ -1520,11 +1520,14 @@ pub(crate) fn builtin_frame_scale_factor(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_max_args("frame-scale-factor", &args, 1)?;
+    // GNU opens with `decode_live_frame' (`src/frame.c'), unguarded -- so this
+    // is `frame-live-p', not `framep'.  It is the one subr in this file that
+    // diverged in that direction; its neighbours really are `decode_any_frame'.
     let fid = resolve_frame_id_in_state(
         &mut eval.frames,
         &mut eval.buffers,
         args.first(),
-        crate::emacs_core::window_cmds::FrameDomain::Any,
+        crate::emacs_core::window_cmds::FrameDomain::Live,
     )?;
     let frame = eval
         .frames

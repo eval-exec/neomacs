@@ -4,6 +4,7 @@ use crate::emacs_core::display;
 use crate::emacs_core::error::{expect_args, expect_args_range, expect_fixnum};
 use crate::emacs_core::fontset;
 use crate::emacs_core::value::{ValueKind, VecLikeType};
+use crate::emacs_core::window_cmds::FrameDomain;
 use neomacs_display_protocol::SelectionOwner;
 
 // =========================================================================
@@ -1049,21 +1050,21 @@ fn describe_vector_char_name(code: i64) -> String {
 
 pub(crate) fn builtin_frame_set_was_invisible(args: Vec<Value>) -> EvalResult {
     expect_args("frame--set-was-invisible", &args, 2)?;
-    expect_frame_live_or_nil(&args[0])?;
+    expect_frame_in_domain(&args[0], FrameDomain::Live)?;
     Ok(args[1])
 }
 
 pub(crate) fn builtin_frame_after_make_frame(args: Vec<Value>) -> EvalResult {
     expect_args("frame-after-make-frame", &args, 2)?;
-    expect_frame_live_or_nil(&args[0])?;
+    expect_frame_in_domain(&args[0], FrameDomain::Live)?;
     Ok(Value::NIL)
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn builtin_frame_ancestor_p(args: Vec<Value>) -> EvalResult {
     expect_args("frame-ancestor-p", &args, 2)?;
-    expect_frame_live_or_nil(&args[0])?;
-    expect_frame_live_or_nil(&args[1])?;
+    expect_frame_in_domain(&args[0], FrameDomain::Live)?;
+    expect_frame_in_domain(&args[1], FrameDomain::Live)?;
     Ok(Value::NIL)
 }
 
@@ -1071,7 +1072,7 @@ pub(crate) fn builtin_frame_ancestor_p(args: Vec<Value>) -> EvalResult {
 pub(crate) fn builtin_frame_bottom_divider_width(args: Vec<Value>) -> EvalResult {
     expect_args_range("frame-bottom-divider-width", &args, 0, 1)?;
     if let Some(frame) = args.first() {
-        expect_frame_live_or_nil(frame)?;
+        expect_frame_in_domain(frame, FrameDomain::Any)?;
     }
     Ok(Value::fixnum(0))
 }
@@ -1080,7 +1081,7 @@ pub(crate) fn builtin_frame_bottom_divider_width(args: Vec<Value>) -> EvalResult
 pub(crate) fn builtin_frame_child_frame_border_width(args: Vec<Value>) -> EvalResult {
     expect_args_range("frame-child-frame-border-width", &args, 0, 1)?;
     if let Some(frame) = args.first() {
-        expect_frame_live_or_nil(frame)?;
+        expect_frame_in_domain(frame, FrameDomain::Any)?;
     }
     Ok(Value::fixnum(0))
 }
@@ -1089,7 +1090,7 @@ pub(crate) fn builtin_frame_child_frame_border_width(args: Vec<Value>) -> EvalRe
 pub(crate) fn builtin_frame_focus(args: Vec<Value>) -> EvalResult {
     expect_args_range("frame-focus", &args, 0, 1)?;
     if let Some(frame) = args.first() {
-        expect_frame_live_or_nil(frame)?;
+        expect_frame_in_domain(frame, FrameDomain::Live)?;
     }
     Ok(Value::NIL)
 }
@@ -1097,7 +1098,7 @@ pub(crate) fn builtin_frame_focus(args: Vec<Value>) -> EvalResult {
 pub(crate) fn builtin_frame_font_cache(args: Vec<Value>) -> EvalResult {
     expect_args_range("frame-font-cache", &args, 0, 1)?;
     if let Some(frame) = args.first() {
-        expect_frame_live_or_nil(frame)?;
+        expect_frame_in_domain(frame, FrameDomain::Live)?;
     }
     Ok(Value::NIL)
 }
@@ -1105,7 +1106,7 @@ pub(crate) fn builtin_frame_font_cache(args: Vec<Value>) -> EvalResult {
 pub(crate) fn builtin_frame_fringe_width(args: Vec<Value>) -> EvalResult {
     expect_args_range("frame-fringe-width", &args, 0, 1)?;
     if let Some(frame) = args.first() {
-        expect_frame_live_or_nil(frame)?;
+        expect_frame_in_domain(frame, FrameDomain::Any)?;
     }
     Ok(Value::fixnum(0))
 }
@@ -1114,7 +1115,7 @@ pub(crate) fn builtin_frame_fringe_width(args: Vec<Value>) -> EvalResult {
 pub(crate) fn builtin_frame_internal_border_width(args: Vec<Value>) -> EvalResult {
     expect_args_range("frame-internal-border-width", &args, 0, 1)?;
     if let Some(frame) = args.first() {
-        expect_frame_live_or_nil(frame)?;
+        expect_frame_in_domain(frame, FrameDomain::Any)?;
     }
     Ok(Value::fixnum(0))
 }
@@ -1140,7 +1141,7 @@ pub(crate) fn builtin_frame_or_buffer_changed_p(args: Vec<Value>) -> EvalResult 
 pub(crate) fn builtin_frame_parent(args: Vec<Value>) -> EvalResult {
     expect_args_range("frame-parent", &args, 0, 1)?;
     if let Some(frame) = args.first() {
-        expect_frame_live_or_nil(frame)?;
+        expect_frame_in_domain(frame, FrameDomain::Live)?;
     }
     Ok(Value::NIL)
 }
@@ -1148,7 +1149,7 @@ pub(crate) fn builtin_frame_parent(args: Vec<Value>) -> EvalResult {
 pub(crate) fn builtin_frame_pointer_visible_p(args: Vec<Value>) -> EvalResult {
     expect_args_range("frame-pointer-visible-p", &args, 0, 1)?;
     if let Some(frame) = args.first() {
-        expect_frame_live_or_nil(frame)?;
+        expect_frame_in_domain(frame, FrameDomain::Any)?;
     }
     Ok(Value::T)
 }
@@ -1157,7 +1158,7 @@ pub(crate) fn builtin_frame_pointer_visible_p(args: Vec<Value>) -> EvalResult {
 pub(crate) fn builtin_frame_right_divider_width(args: Vec<Value>) -> EvalResult {
     expect_args_range("frame-right-divider-width", &args, 0, 1)?;
     if let Some(frame) = args.first() {
-        expect_frame_live_or_nil(frame)?;
+        expect_frame_in_domain(frame, FrameDomain::Any)?;
     }
     Ok(Value::fixnum(0))
 }
@@ -1165,7 +1166,7 @@ pub(crate) fn builtin_frame_right_divider_width(args: Vec<Value>) -> EvalResult 
 pub(crate) fn builtin_frame_scroll_bar_height(args: Vec<Value>) -> EvalResult {
     expect_args_range("frame-scroll-bar-height", &args, 0, 1)?;
     if let Some(frame) = args.first() {
-        expect_frame_live_or_nil(frame)?;
+        expect_frame_in_domain(frame, FrameDomain::Any)?;
     }
     Ok(Value::fixnum(0))
 }
@@ -1173,7 +1174,7 @@ pub(crate) fn builtin_frame_scroll_bar_height(args: Vec<Value>) -> EvalResult {
 pub(crate) fn builtin_frame_scroll_bar_width(args: Vec<Value>) -> EvalResult {
     expect_args_range("frame-scroll-bar-width", &args, 0, 1)?;
     if let Some(frame) = args.first() {
-        expect_frame_live_or_nil(frame)?;
+        expect_frame_in_domain(frame, FrameDomain::Any)?;
     }
     Ok(Value::fixnum(0))
 }
@@ -1182,7 +1183,7 @@ pub(crate) fn builtin_frame_scroll_bar_width(args: Vec<Value>) -> EvalResult {
 pub(crate) fn builtin_frame_window_state_change(args: Vec<Value>) -> EvalResult {
     expect_args_range("frame-window-state-change", &args, 0, 1)?;
     if let Some(frame) = args.first() {
-        expect_frame_live_or_nil(frame)?;
+        expect_frame_in_domain(frame, FrameDomain::Live)?;
     }
     Ok(Value::NIL)
 }
@@ -1399,13 +1400,29 @@ pub(super) fn expect_window_valid_or_nil(value: &Value) -> Result<(), Flow> {
     }
 }
 
-pub(super) fn expect_frame_live_or_nil(value: &Value) -> Result<(), Flow> {
+/// GNU's two frame decoders differ only in the predicate they name:
+/// `decode_any_frame` signals `framep`, `decode_live_frame` signals
+/// `frame-live-p` (`src/frame.c`).  Taking the domain as an argument keeps the
+/// predicate a CONSEQUENCE of the contract each caller declares, instead of a
+/// constant sitting in the helper.
+///
+/// Its predecessor, `expect_frame_live_or_nil`, hard-coded `frame-live-p` --
+/// and, despite the name, never checked liveness at all: it tag-tested the
+/// value.  So eight callers mirroring `decode_any_frame` reported the wrong
+/// predicate, which is what `(frame-fringe-width (selected-window))` signalling
+/// `frame-live-p` where GNU signals `framep` came from.
+///
+/// NOTE: `Live` still only tag-checks, exactly as the old helper did, so a DEAD
+/// frame is accepted where GNU rejects it.  These callers hold no
+/// `FrameManager`, so closing that gap means giving them `eval` first; it is a
+/// separate change and is NOT fixed here.
+pub(super) fn expect_frame_in_domain(value: &Value, domain: FrameDomain) -> Result<(), Flow> {
     if value.is_nil() || value.is_frame() {
         Ok(())
     } else {
         Err(signal(
             LispCondition::WrongTypeArgument,
-            vec![Value::symbol("frame-live-p"), *value],
+            vec![Value::symbol(domain.predicate()), *value],
         ))
     }
 }
