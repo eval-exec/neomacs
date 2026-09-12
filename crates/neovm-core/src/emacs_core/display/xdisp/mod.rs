@@ -4736,12 +4736,14 @@ pub(crate) fn builtin_window_line_height(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    window_line_height_impl(&mut eval.frames, &mut eval.buffers, args)
+    let noninteractive = eval.noninteractive();
+    window_line_height_impl(&mut eval.frames, &mut eval.buffers, noninteractive, args)
 }
 
 fn window_line_height_impl(
     frames: &mut crate::window::FrameManager,
     buffers: &mut crate::buffer::BufferManager,
+    noninteractive: bool,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("window-line-height", &args, 0, 2)?;
@@ -4750,6 +4752,24 @@ fn window_line_height_impl(
         args.get(1),
         crate::emacs_core::window_cmds::WindowDomain::Live,
     )?;
+    // GNU bails out here, AFTER decoding WINDOW and BEFORE looking at LINE
+    // (`src/window.c`):
+    //
+    //     w = decode_live_window (window);
+    //     if (noninteractive || w->pseudo_window_p)
+    //       return Qnil;
+    //     ...
+    //     CHECK_FIXNUM (line);
+    //
+    // so in batch every call answers nil whatever LINE is -- there is no
+    // display matrix to measure, which is exactly what the docstring's "Return
+    // nil if window display is not up-to-date" describes.  Falling through to
+    // the LINE type-check signalled `integerp` where GNU returns nil.  The
+    // ORDER matters: a bad WINDOW must still signal, even though the answer
+    // would have been nil anyway.
+    if noninteractive {
+        return Ok(Value::NIL);
+    }
     if let Some((fid, wid)) = resolve_live_window_identity(frames, args.get(1))?
         && let Some(frame) = frames.get(fid)
         && let Some(snapshot) = frame.redisplay_snapshot(wid)

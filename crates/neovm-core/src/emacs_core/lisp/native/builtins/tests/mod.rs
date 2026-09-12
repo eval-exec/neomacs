@@ -6912,7 +6912,13 @@ fn pure_dispatch_reconsider_redirect_placeholders_match_compat_contracts() {
         }
         other => panic!("expected signal, got: {other:?}"),
     }
-    // Valid window handle that is not present in the synthesized batch frame.
+    // A window handle that is not present in any frame.  GNU's
+    // `CHECK_LIVE_WINDOW` (`src/window.c`) asks one question -- is this a LIVE
+    // window -- and a window object that resolves to nothing is not one, so it
+    // signals `window-live-p`.  This used to assert `error "Window not found"`,
+    // which is what neomacs produced by accepting any window object and only
+    // failing later at the live-only frame lookup: a condition GNU never
+    // reaches, pinned here as though it were the contract.
     let resize_mini_no_frame = dispatch_builtin_pure(
         "resize-mini-window-internal",
         vec![Value::make_window(999_999)],
@@ -6921,11 +6927,10 @@ fn pure_dispatch_reconsider_redirect_placeholders_match_compat_contracts() {
     .expect_err("resize-mini-window-internal should signal when window has no frame");
     match resize_mini_no_frame {
         Flow::Signal(sig) => {
-            assert_eq!(sig.symbol_name(), "error");
-            assert_eq!(sig.data.len(), 1);
+            assert_eq!(sig.symbol_name(), "wrong-type-argument");
             assert_eq!(
-                sig.data[0].as_runtime_string_owned().as_deref(),
-                Some("Window not found")
+                sig.data,
+                vec![Value::symbol("window-live-p"), Value::make_window(999_999)]
             );
         }
         other => panic!("expected signal, got: {other:?}"),

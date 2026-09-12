@@ -7107,18 +7107,19 @@ pub fn register_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::Obarray)
 /// setter are both written that way (`src/window.c`).  Resolving nil to the
 /// selected window instead accepted a call GNU rejects, and then failed
 /// further in with a plain `error` about internal windows.
-fn check_valid_window_id_in_state(
+pub(crate) fn check_window_id_in_state(
     frames: &mut FrameManager,
     buffers: &mut BufferManager,
     arg: &Value,
+    domain: WindowDomain,
 ) -> Result<(FrameId, WindowId), Flow> {
     if arg.is_nil() {
         return Err(signal(
             LispCondition::WrongTypeArgument,
-            vec![Value::symbol(WindowDomain::Valid.predicate()), *arg],
+            vec![Value::symbol(domain.predicate()), *arg],
         ));
     }
-    resolve_window_id_with_pred_in_state(frames, buffers, Some(arg), WindowDomain::Valid)
+    resolve_window_id_with_pred_in_state(frames, buffers, Some(arg), domain)
 }
 
 /// `(window-combination-limit WINDOW)` -> nil or t.
@@ -7132,7 +7133,7 @@ pub(crate) fn builtin_window_combination_limit(
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_args("window-combination-limit", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (fid, wid) = check_valid_window_id_in_state(frames, buffers, &args[0])?;
+    let (fid, wid) = check_window_id_in_state(frames, buffers, &args[0], WindowDomain::Valid)?;
     let w = get_window(frames, fid, wid)?;
     match w.combination_limit() {
         Some(true) => Ok(Value::T),
@@ -7158,7 +7159,7 @@ pub(crate) fn builtin_set_window_combination_limit(
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
     // GNU spells this `CHECK_VALID_WINDOW (window)' too, so nil is rejected
     // rather than standing in for the selected window.
-    let (fid, wid) = check_valid_window_id_in_state(frames, buffers, &args[0])?;
+    let (fid, wid) = check_window_id_in_state(frames, buffers, &args[0], WindowDomain::Valid)?;
     let limit = args[1].is_truthy();
     let frame = frames
         .get_mut(fid)

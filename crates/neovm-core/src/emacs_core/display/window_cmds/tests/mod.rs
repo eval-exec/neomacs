@@ -2472,6 +2472,67 @@ fn split_window_side_domain_matches_gnu() {
 }
 
 #[test]
+fn window_line_height_returns_nil_in_batch_after_decoding_window() {
+    crate::test_utils::init_test_tracing();
+    // GNU bails out of `Fwindow_line_height' before it ever looks at LINE
+    // (`src/window.c'):
+    //
+    //     w = decode_live_window (window);
+    //     if (noninteractive || w->pseudo_window_p)
+    //       return Qnil;
+    //     ...
+    //     CHECK_FIXNUM (line);      /* only reached with a display matrix */
+    //
+    // so in batch EVERY call returns nil, whatever LINE is -- and the WINDOW
+    // decode still happens FIRST, so a bad WINDOW signals even though the
+    // result would have been nil.  neomacs decoded WINDOW correctly but then
+    // fell through to a `CHECK_FIXNUM'-equivalent on LINE, signalling
+    // `integerp' where GNU returns nil:
+    //
+    //   (window-line-height SOME-WINDOW)   GNU nil   neomacs (... integerp W)
+    //
+    // This is a runtime contract (`noninteractive'), not an `#ifdef', so it is
+    // a real divergence rather than a build-configuration artifact.
+    let results = bootstrap_eval_with_frame(
+        "(let* ((live (selected-window))
+                (parent (window-parent (progn (split-window-below) (selected-window))))
+                (dead (let ((w (split-window-below))) (delete-window w) w))
+                (probe (lambda (th) (condition-case e (funcall th)
+                                      (wrong-type-argument (car (cdr e)))))))
+           (list (funcall probe (lambda () (window-line-height 0)))
+                 ;; a non-integer LINE is NOT an error in batch -- nil wins
+                 (funcall probe (lambda () (window-line-height live)))
+                 ;; but WINDOW is still decoded before the bail-out
+                 (funcall probe (lambda () (window-line-height 0 parent)))
+                 (funcall probe (lambda () (window-line-height 0 dead)))))",
+    );
+    assert_eq!(results[0], "OK (nil nil window-live-p window-live-p)");
+}
+
+#[test]
+fn resize_mini_window_internal_requires_a_live_window_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // GNU spells it `CHECK_LIVE_WINDOW (window)' (`src/window.c') -- a
+    // REQUIRED argument, so nil is rejected rather than defaulted, and an
+    // internal or deleted window signals `window-live-p'.
+    //
+    // neomacs accepted any window OBJECT (`as_window_id' succeeds for an
+    // internal or dead one) and only failed later, when the live-only frame
+    // lookup missed, with a plain `error "Window not found"' -- reporting a
+    // condition GNU never reaches.
+    let results = bootstrap_eval_with_frame(
+        "(let* ((parent (window-parent (progn (split-window-below) (selected-window))))
+                (dead (let ((w (split-window-below))) (delete-window w) w))
+                (probe (lambda (arg) (condition-case e
+                                         (progn (resize-mini-window-internal arg) 'no-error)
+                                       (wrong-type-argument (car (cdr e)))
+                                       (error 'plain-error)))))
+           (list (funcall probe parent) (funcall probe dead) (funcall probe nil)))",
+    );
+    assert_eq!(results[0], "OK (window-live-p window-live-p window-live-p)");
+}
+
+#[test]
 fn window_old_size_subrs_reject_the_windows_gnu_rejects() {
     crate::test_utils::init_test_tracing();
     // Verified against `src/window.c`, every decode unguarded:

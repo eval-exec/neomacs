@@ -2910,17 +2910,18 @@ pub(crate) fn builtin_resize_mini_window_internal(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("resize-mini-window-internal", &args, 1)?;
-    let wid = args[0].as_window_id().ok_or_else(|| {
-        signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("window-live-p"), args[0]],
-        )
-    })?;
-    let window_id = crate::window::WindowId(wid);
-    let fid = eval
-        .frames
-        .find_window_frame_id(window_id)
-        .ok_or_else(|| signal("error", vec![Value::string("Window not found")]))?;
+    // GNU spells this `CHECK_LIVE_WINDOW (window)' (`src/window.c'): WINDOW is
+    // REQUIRED, so nil is rejected rather than defaulted, and an internal or
+    // deleted window signals `window-live-p'.  Testing `as_window_id' instead
+    // accepted any window OBJECT and only failed later, when the live-only
+    // frame lookup missed, with a plain `error "Window not found"' -- a
+    // condition GNU never reaches.
+    let (fid, window_id) = crate::emacs_core::window_cmds::check_window_id_in_state(
+        &mut eval.frames,
+        &mut eval.buffers,
+        &args[0],
+        crate::emacs_core::window_cmds::WindowDomain::Live,
+    )?;
     let frame = eval
         .frames
         .get_mut(fid)
