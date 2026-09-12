@@ -63,6 +63,16 @@ pub enum ScenarioId {
     /// `org-journal-open` with the package loaded as byte-code, for the same
     /// reason.
     OrgJournalOpenCompiled,
+    /// Opening a file: decode plus buffer insert, then fontification, timed
+    /// apart.
+    ///
+    /// `insert-file-contents` is on the path of every file a session opens and
+    /// NO other row times it -- `large-file-editing` loads its buffer before
+    /// the sampling window opens. A 2.0-2.3x deficit against GNU lived there
+    /// unseen until it was found by profiling outside the board (`0249de3cd`).
+    /// Fontification is the other half of a real open and is large enough to
+    /// bury the first, so the row reports both phases.
+    FileOpen,
     /// `magit-status` over a repository with real history and a populated
     /// working tree.
     ///
@@ -126,6 +136,7 @@ impl ScenarioId {
             Self::MagitStatusCompiled => "magit-status-compiled",
             Self::OrgJournalOpenCompiled => "org-journal-open-compiled",
             Self::MagitStatusHeavy => "magit-status-heavy",
+            Self::FileOpen => "file-open",
             Self::LspJsonRpc => "lsp-json-rpc",
         }
     }
@@ -172,6 +183,7 @@ impl FromStr for ScenarioId {
             "magit-status-compiled" => Ok(Self::MagitStatusCompiled),
             "org-journal-open-compiled" => Ok(Self::OrgJournalOpenCompiled),
             "magit-status-heavy" => Ok(Self::MagitStatusHeavy),
+            "file-open" => Ok(Self::FileOpen),
             "lsp-json-rpc" => Ok(Self::LspJsonRpc),
             unknown => Err(UnknownScenarioId(unknown.to_string())),
         }
@@ -390,6 +402,14 @@ const SCENARIOS: &[ScenarioSpec] = &[
         cross_editor_parity_metrics: &[],
     },
     ScenarioSpec {
+        id: ScenarioId::FileOpen,
+        description: "Open a source file: decode and buffer insert, then fontification, timed as separate phases",
+        default_frontend: Frontend::Batch,
+        default_iterations: NonZeroU32::new(20).expect("non-zero scenario default"),
+        primary_metric: MetricName::PerOperationWallTime,
+        cross_editor_parity_metrics: &[],
+    },
+    ScenarioSpec {
         id: ScenarioId::LspJsonRpc,
         description: "jsonrpc round trip at language-server message size: serialize a request, parse a diagnostics reply",
         default_frontend: Frontend::Batch,
@@ -427,7 +447,8 @@ pub const fn scenario(id: ScenarioId) -> &'static ScenarioSpec {
         ScenarioId::MagitStatusCompiled => &SCENARIOS[14],
         ScenarioId::OrgJournalOpenCompiled => &SCENARIOS[15],
         ScenarioId::RustLspTypingHeavy => &SCENARIOS[16],
-        ScenarioId::LspJsonRpc => &SCENARIOS[19],
+        ScenarioId::LspJsonRpc => &SCENARIOS[20],
+        ScenarioId::FileOpen => &SCENARIOS[19],
         ScenarioId::MagitStatusHeavy => &SCENARIOS[18],
         ScenarioId::OrgEditingHeavy => &SCENARIOS[17],
     }

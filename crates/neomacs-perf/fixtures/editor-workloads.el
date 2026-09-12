@@ -257,6 +257,10 @@ the point of keeping both."
   (cond
    ((equal scenario "startup")
     (fundamental-mode))
+   ((equal scenario "file-open")
+    ;; The workload opens the file itself, once per iteration, into a fresh
+    ;; buffer -- so this one starts empty.
+    (fundamental-mode))
    ((equal scenario "lsp-json-rpc")
     ;; Build the payload once: the workload measures the round trip, not the
     ;; construction of the object graph.
@@ -335,6 +339,40 @@ the point of keeping both."
                  motion-us (+ motion-us (neomacs-perf-workload--time
                                          #'neomacs-perf-workload--motion-phase))))
           ("startup" (redisplay t))
+          ("file-open"
+           ;; Opening a file, split into the two halves that behave
+           ;; differently, because a single number hides both.
+           ;;
+           ;; `insert-file-contents' is decode + buffer insert, and it is on
+           ;; the path of EVERY file a session opens; no other row on the
+           ;; board times it (large-file-editing loads its buffer before the
+           ;; sampling window opens).  Fontification is the other half and is
+           ;; large enough to bury it, so the two are timed apart.
+           (let ((path (neomacs-perf-workload--required-environment
+                        "NEOMACS_PERF_SOURCE")))
+             (with-temp-buffer
+               (setq type-us
+                     (+ type-us
+                        (neomacs-perf-workload--time
+                         (lambda () (insert-file-contents path)))))
+               (setq fontify-us
+                     (+ fontify-us
+                        (neomacs-perf-workload--time
+                         (lambda ()
+                           (emacs-lisp-mode)
+                           ;; ONE SCREENFUL, not the whole buffer.  Opening a
+                           ;; file does not fontify it -- `jit-lock' fontifies
+                           ;; what a window shows and defers the rest, so
+                           ;; `font-lock-ensure' over 252 KB would measure
+                           ;; something no `find-file' performs, and at ~95x
+                           ;; the decode it would bury the half of this row
+                           ;; that nothing else on the board covers.
+                           (font-lock-ensure
+                            (point-min)
+                            (save-excursion
+                              (goto-char (point-min))
+                              (forward-line 60)
+                              (point))))))))))
           ("sustained-editing"
            (setq type-us (+ type-us (neomacs-perf-workload--time
                                      #'neomacs-perf-workload--single-edit-cycle))))

@@ -626,6 +626,16 @@ pub(crate) fn validate_editor_workload_result(
             require_positive_phase(&mut mismatches, "regex-phase-time", result.regex_phase_us);
             require_positive_phase(&mut mismatches, "motion-phase-time", result.motion_phase_us);
         }
+        // Both halves must actually have been measured: a row that reported
+        // only one would silently stop guarding the other.
+        ScenarioId::FileOpen => {
+            require_positive_phase(&mut mismatches, "type-phase-time", result.type_phase_us);
+            require_positive_phase(
+                &mut mismatches,
+                "fontify-phase-time",
+                result.fontify_phase_us,
+            );
+        }
         ScenarioId::Indentation => {
             require_positive_phase(&mut mismatches, "indent-phase-time", result.indent_phase_us);
         }
