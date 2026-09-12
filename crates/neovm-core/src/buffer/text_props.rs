@@ -3786,11 +3786,22 @@ impl TextPropertyTable {
 
     fn adjust_for_replace_raw(&mut self, start: CharPos0, old_len: CharLen, new_len: CharLen) {
         self.mutation_tick += 1;
-        // A replace both clips and shifts; just drop the cached ranges (rare
-        // relative to plain inserts/deletes) — the guard tick 0 never matches.
-        if let Ok(mut guard) = self.syntax_prop_ranges.lock() {
-            *guard = (0, Vec::new());
-        }
+        // A replace is a position adjustment, and this function performs it by
+        // delegating to exactly the insert/delete adjusters below -- the same
+        // calls that transform the interval tree. Those already keep the
+        // cached bit-set ranges positionally truthful, so the ranges follow
+        // the tree for free.
+        //
+        // Dropping them here instead DEFEATED that: the delegates only touch
+        // the list when it is valid for the current tick, so clearing it first
+        // made them no-ops and left every later query to rebuild by walking
+        // the whole tree. The old comment justified the drop as "rare relative
+        // to plain inserts/deletes", which is not true of a buffer being
+        // edited: `org-todo` rewriting TODO to DONE and `org-table-align`
+        // rewriting a row are both replaces, and `org-editing-heavy` did about
+        // 192 whole-tree rebuilds per operation because of it.
+        //
+        // `Equal` moves nothing, so the ranges stay valid untouched.
         match new_len.cmp(&old_len) {
             std::cmp::Ordering::Greater => {
                 self.adjust_for_insert_raw(start, CharLen::new(new_len.get() - old_len.get()));
