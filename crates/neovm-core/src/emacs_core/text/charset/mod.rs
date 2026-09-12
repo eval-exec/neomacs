@@ -58,7 +58,9 @@ impl CharsetMapSource {
     fn is_same_source(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::NativeInstallation, Self::NativeInstallation) => true,
-            (Self::NativeDataDirectory(current), Self::NativeDataDirectory(other)) => current == other,
+            (Self::NativeDataDirectory(current), Self::NativeDataDirectory(other)) => {
+                current == other
+            }
             (Self::MountedRuntimeResources(current), Self::MountedRuntimeResources(other)) => {
                 Rc::ptr_eq(current, other)
             }
@@ -1007,7 +1009,8 @@ pub(crate) fn install_runtime_resource_store(
     data_directory: Option<std::path::PathBuf>,
 ) {
     CHARSET_REGISTRY.with(|slot| {
-        slot.borrow_mut().install_runtime_resources(resources, data_directory)
+        slot.borrow_mut()
+            .install_runtime_resources(resources, data_directory)
     });
 }
 

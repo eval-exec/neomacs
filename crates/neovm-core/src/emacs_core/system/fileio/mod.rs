@@ -12,9 +12,9 @@ mod runtime_resources;
 
 pub(crate) use binary_mode::builtin_set_binary_mode;
 pub use filesystem::{
-    FileAttributeType, FileAttributeSnapshot, FileIdentity, FilePrincipal,
-    AccessMode, AccessPermissions, BrowserFileSystemLayout, EditorFileSystem, FileEntryKind,
-    FileMetadata, FileMode, FileStability, FileSystemSpace, FileTimestamp, MemoryFileSystem,
+    AccessMode, AccessPermissions, BrowserFileSystemLayout, EditorFileSystem,
+    FileAttributeSnapshot, FileAttributeType, FileEntryKind, FileIdentity, FileMetadata, FileMode,
+    FilePrincipal, FileStability, FileSystemSpace, FileTimestamp, MemoryFileSystem,
     MountTableFileSystem, TemporaryEntry, WriteMode, WriteRequest,
 };
 pub(crate) use filesystem::{
@@ -3543,11 +3543,13 @@ pub(crate) fn builtin_file_system_info(eval: &mut Context, args: Vec<Value>) -> 
         // GNU fileio.c returns nil for unavailable fsusage (ENOSYS), and
         // explicitly for Android's virtual /assets and /content directories.
         Err(err) if err.kind() == std::io::ErrorKind::Unsupported => return Ok(Value::NIL),
-        Err(err) => return Err(signal_file_action_error_value(
+        Err(err) => {
+            return Err(signal_file_action_error_value(
                 err,
                 "Getting file system info",
                 Value::heap_string(filename),
-            )),
+            ));
+        }
     };
     Ok(Value::list(vec![
         Value::fixnum(space.total_bytes),
@@ -3610,10 +3612,15 @@ pub(crate) fn builtin_file_symlink_p(eval: &mut Context, args: Vec<Value>) -> Ev
     }
     // GNU asks readlink directly; dangling links are still links. Keep this
     // predicate in the same editor namespace as truename and attributes.
-    Ok(match eval.editor_file_system().read_link(&lisp_file_name_to_path_buf(&filename)) {
-        Ok(target) => Value::heap_string(path_to_lisp_file_name(&target)),
-        Err(_) => Value::NIL,
-    })
+    Ok(
+        match eval
+            .editor_file_system()
+            .read_link(&lisp_file_name_to_path_buf(&filename))
+        {
+            Ok(target) => Value::heap_string(path_to_lisp_file_name(&target)),
+            Err(_) => Value::NIL,
+        },
+    )
 }
 
 /// `(file-name-case-insensitive-p FILENAME)`
@@ -3700,13 +3707,11 @@ pub(crate) fn builtin_file_modes(eval: &mut Context, args: Vec<Value>) -> EvalRe
         Err(error) if matches!(error.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => {
             Ok(Value::NIL)
         }
-        Err(error) => {
-            Err(signal_file_action_error_value(
-                error,
-                "Reading file modes",
-                Value::heap_string(absname),
-            ))
-        }
+        Err(error) => Err(signal_file_action_error_value(
+            error,
+            "Reading file modes",
+            Value::heap_string(absname),
+        )),
     }
 }
 

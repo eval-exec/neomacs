@@ -10,8 +10,8 @@ mod selection;
 mod surrounding;
 
 pub(crate) use context::CompositionState;
-pub use request::{ImeEditorError, ImeRequest};
 use context::InsertionAnchor;
+pub use request::{ImeEditorError, ImeRequest};
 
 #[cfg(test)]
 mod tests;

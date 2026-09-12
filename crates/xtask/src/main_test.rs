@@ -193,7 +193,10 @@ LOAD 0x004000 0x4000 0x4000 0x100 0x100 R E 0x4000
         "GameActivity_onCreate",
         "Java_com_google_androidgamesdk_GameActivity_initializeNativeCode",
     ] {
-        let imported = elf.replace(&format!("DEFAULT 1 {symbol}"), &format!("DEFAULT UND {symbol}"));
+        let imported = elf.replace(
+            &format!("DEFAULT 1 {symbol}"),
+            &format!("DEFAULT UND {symbol}"),
+        );
         assert!(
             android_package::validate_elf_report(&imported).is_err(),
             "an undefined import is not an exported implementation: {symbol}",

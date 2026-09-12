@@ -18,7 +18,7 @@ mod virtual_path;
 pub use access::{AccessMode, AccessPermissions};
 pub use browser_layout::BrowserFileSystemLayout;
 pub use memory::MemoryFileSystem;
-pub use metadata::{FileAttributeType, FileAttributeSnapshot, FileIdentity, FilePrincipal};
+pub use metadata::{FileAttributeSnapshot, FileAttributeType, FileIdentity, FilePrincipal};
 pub use mounts::MountTableFileSystem;
 pub(crate) use namespace::EditorFileSystemNamespace;
 pub use native::NativeFileSystem;
@@ -138,7 +138,6 @@ pub struct FileSystemSpace {
     pub free_bytes: i64,
     pub available_bytes: i64,
 }
-
 
 /// Placement semantics for one complete file write.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

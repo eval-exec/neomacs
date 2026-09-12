@@ -2557,7 +2557,10 @@ fn installed_filesystem_synthesizes_modes_but_rejects_unsupported_metadata_chang
     eval.install_editor_file_system(Box::new(filesystem));
     let path = Value::string("/neomacs-fake/note");
 
-    assert_eq!(builtin_file_modes(&mut eval, vec![path]).unwrap(), Value::fixnum(0o600));
+    assert_eq!(
+        builtin_file_modes(&mut eval, vec![path]).unwrap(),
+        Value::fixnum(0o600)
+    );
 
     for result in [
         builtin_set_file_modes(&mut eval, vec![path, Value::fixnum(0o600)]),
@@ -2576,7 +2579,10 @@ fn installed_filesystem_reports_unavailable_capacity_as_nil_like_gnu() {
     eval.install_editor_file_system(Box::new(MemoryFileSystem::new()));
 
     // GNU Ffile_system_info returns nil for ENOSYS/unavailable fsusage.
-    assert_eq!(builtin_file_system_info(&mut eval, vec![Value::string("/")]).unwrap(), Value::NIL);
+    assert_eq!(
+        builtin_file_system_info(&mut eval, vec![Value::string("/")]).unwrap(),
+        Value::NIL
+    );
 }
 
 #[cfg(unix)]
@@ -2594,8 +2600,8 @@ fn file_modes_signals_permission_denied_instead_of_claiming_a_missing_file() {
     let mut eval = Context::new();
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0)).unwrap();
     // A privileged test process may bypass directory search permissions.
-    let inaccessible = fs::metadata(&path)
-        .is_err_and(|error| error.kind() == ErrorKind::PermissionDenied);
+    let inaccessible =
+        fs::metadata(&path).is_err_and(|error| error.kind() == ErrorKind::PermissionDenied);
     let result = builtin_file_modes(
         &mut eval,
         vec![Value::heap_string(path_to_lisp_file_name(&path))],
@@ -6942,10 +6948,24 @@ fn insert_file_contents_auto_coding_probe_size_is_the_probe_length() {
 fn file_system_info_returns_nil_when_virtual_capacity_is_unsupported() {
     let mut eval = Context::new();
     eval.install_editor_file_system(Box::new(super::MemoryFileSystem::new()));
-    assert_eq!(eval.eval_str(r##"(file-system-info "/")"##).unwrap(), Value::NIL);
+    assert_eq!(
+        eval.eval_str(r##"(file-system-info "/")"##).unwrap(),
+        Value::NIL
+    );
     let mut mounts = super::MountTableFileSystem::new();
-    mounts.mount(std::path::Path::new("/virtual/home"), Box::new(super::MemoryFileSystem::new())).unwrap();
+    mounts
+        .mount(
+            std::path::Path::new("/virtual/home"),
+            Box::new(super::MemoryFileSystem::new()),
+        )
+        .unwrap();
     eval.install_editor_file_system(Box::new(mounts));
-    assert_eq!(eval.eval_str(r##"(file-system-info "/")"##).unwrap(), Value::NIL);
-    assert_eq!(eval.eval_str(r##"(file-system-info "/virtual")"##).unwrap(), Value::NIL);
+    assert_eq!(
+        eval.eval_str(r##"(file-system-info "/")"##).unwrap(),
+        Value::NIL
+    );
+    assert_eq!(
+        eval.eval_str(r##"(file-system-info "/virtual")"##).unwrap(),
+        Value::NIL
+    );
 }

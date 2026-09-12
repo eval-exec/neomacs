@@ -11,8 +11,13 @@ fn native_timestamp_changes_do_not_require_content_write_handles() {
     std::fs::create_dir_all(&parent).unwrap();
     let directory = tempfile::tempdir_in(parent).unwrap();
     let filesystem = NativeFileSystem;
-    let timestamp = Some(FileTimestamp { seconds: 86_400, nanoseconds: 0 });
-    filesystem.set_times(directory.path(), timestamp, true).expect("set directory metadata");
+    let timestamp = Some(FileTimestamp {
+        seconds: 86_400,
+        nanoseconds: 0,
+    });
+    filesystem
+        .set_times(directory.path(), timestamp, true)
+        .expect("set directory metadata");
     let file = directory.path().join("read-only");
     std::fs::write(&file, b"contents").unwrap();
     let original = std::fs::metadata(&file).unwrap().permissions();
@@ -25,7 +30,10 @@ fn native_timestamp_changes_do_not_require_content_write_handles() {
     follow.expect("metadata access does not require content write permission");
     nofollow.expect("nofollow metadata access does not require content write permission");
     assert_eq!(filesystem.read(&file).unwrap(), b"contents");
-    assert_eq!(filesystem.metadata(&file, true).unwrap().modified, timestamp);
+    assert_eq!(
+        filesystem.metadata(&file, true).unwrap().modified,
+        timestamp
+    );
 }
 
 fn write_request(mode: WriteMode) -> WriteRequest {

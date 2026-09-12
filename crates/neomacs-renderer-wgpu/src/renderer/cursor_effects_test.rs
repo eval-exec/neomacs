@@ -420,8 +420,9 @@ fn test_cursor_magnetism_expired_entries_pruned() {
     // Add an old entry at a different position. No sleep is needed any more:
     // the effect ages entries against the injected frame sample, so this entry
     // is exactly ten seconds old however fast the test runs.
-    let old_time =
-        EventTime::from_observed_instant(neomacs_host_runtime::time::Instant::now() - Duration::from_secs(10));
+    let old_time = EventTime::from_observed_instant(
+        neomacs_host_runtime::time::Instant::now() - Duration::from_secs(10),
+    );
     let mut entries = vec![(50.0, 50.0, old_time)];
 
     let (_verts, _) = emit_cursor_magnetism(&ctx, &mut entries);
@@ -701,8 +702,9 @@ fn test_cursor_trail_fade_prunes_old_positions() {
     let ctx = make_ctx(&config, &fgb, &anim_cursor, true);
 
     // Add old position
-    let old_time =
-        EventTime::from_observed_instant(neomacs_host_runtime::time::Instant::now() - Duration::from_secs(10));
+    let old_time = EventTime::from_observed_instant(
+        neomacs_host_runtime::time::Instant::now() - Duration::from_secs(10),
+    );
     let mut positions = vec![(50.0, 50.0, 10.0, 20.0, old_time)];
     let fade_dur = std::time::Duration::from_millis(100);
 

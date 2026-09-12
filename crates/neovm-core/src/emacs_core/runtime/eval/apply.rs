@@ -740,9 +740,9 @@ impl Context {
         debug_assert!(args_start + nargs <= self.bc_buf.len());
         let args = match BytecodeBacktraceSpan::try_new(args_start, nargs) {
             Some(span) => BacktraceArgs::evaluated_bc_stack(span),
-            None => self.backtrace_args_from_oversized_bc_stack(
-                BytecodeBacktraceRange::new(args_start, nargs),
-            ),
+            None => self.backtrace_args_from_oversized_bc_stack(BytecodeBacktraceRange::new(
+                args_start, nargs,
+            )),
         };
         self.specpdl[count] = SpecBinding::Backtrace {
             function,
@@ -3038,10 +3038,16 @@ impl Context {
         let call_state = match self.begin_lambda_call(func_value, arglist, env, args) {
             Ok(state) => state,
             Err(err) => {
-                return self.unbind_to_with_result(root_count, Err(err)).map(|_| unreachable!());
+                return self
+                    .unbind_to_with_result(root_count, Err(err))
+                    .map(|_| unreachable!());
             }
         };
-        Ok(ActiveInterpretedLambdaCall { body, call_state, root_count })
+        Ok(ActiveInterpretedLambdaCall {
+            body,
+            call_state,
+            root_count,
+        })
     }
 
     pub(super) fn finish_interpreted_lambda(

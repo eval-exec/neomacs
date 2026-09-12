@@ -52,7 +52,9 @@ pub struct MonitorInfo {
     pub name: Option<String>,
 }
 
-pub use neomacs_display_protocol::{PointerPosition, PointerTarget, ScrollDelta, PointerAction, PositionedPointerInput};
+pub use neomacs_display_protocol::{
+    PointerAction, PointerPosition, PointerTarget, PositionedPointerInput, ScrollDelta,
+};
 
 /// Input event from render thread to Emacs
 #[derive(Debug, Clone)]

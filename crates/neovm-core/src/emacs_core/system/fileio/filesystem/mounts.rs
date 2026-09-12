@@ -125,13 +125,14 @@ impl EditorFileSystem for MountTableFileSystem {
             Ok((mount, relative)) => {
                 let mut attributes = mount.filesystem.attributes(&relative)?;
                 if let super::FileAttributeType::SymbolicLink(target) = attributes.kind {
-                    attributes.kind = super::FileAttributeType::SymbolicLink(
-                        mount.namespace_link_target(target),
-                    );
+                    attributes.kind =
+                        super::FileAttributeType::SymbolicLink(mount.namespace_link_target(target));
                 }
                 Ok(attributes)
             }
-            Err(error) if error.kind() == ErrorKind::NotFound && self.namespace_directory(path)? => {
+            Err(error)
+                if error.kind() == ErrorKind::NotFound && self.namespace_directory(path)? =>
+            {
                 super::FileAttributeSnapshot::read_single_user_virtual(self, path)
             }
             Err(error) => Err(error),
@@ -228,7 +229,9 @@ impl EditorFileSystem for MountTableFileSystem {
     fn mode(&self, path: &Path, follow_links: bool) -> io::Result<FileMode> {
         match self.route(path) {
             Ok((mount, relative)) => mount.filesystem.mode(&relative, follow_links),
-            Err(error) if error.kind() == ErrorKind::NotFound && self.namespace_directory(path)? => {
+            Err(error)
+                if error.kind() == ErrorKind::NotFound && self.namespace_directory(path)? =>
+            {
                 // Namespace ancestors are readable/searchable, but immutable.
                 Ok(FileMode::from_bits_truncate(0o555))
             }
@@ -256,9 +259,13 @@ impl EditorFileSystem for MountTableFileSystem {
     fn file_system_space(&self, path: &Path) -> io::Result<FileSystemSpace> {
         match self.route(path) {
             Ok((mount, relative)) => mount.filesystem.file_system_space(&relative),
-            Err(error) if error.kind() == ErrorKind::NotFound && self.namespace_directory(path)? => {
-                Err(io::Error::new(ErrorKind::Unsupported,
-                    "synthetic mount directories have no storage capacity"))
+            Err(error)
+                if error.kind() == ErrorKind::NotFound && self.namespace_directory(path)? =>
+            {
+                Err(io::Error::new(
+                    ErrorKind::Unsupported,
+                    "synthetic mount directories have no storage capacity",
+                ))
             }
             Err(error) => Err(error),
         }

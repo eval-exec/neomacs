@@ -9,8 +9,8 @@
 mod blocking;
 mod ime;
 mod transport;
-pub use ime::{ImeClient, ImeEditorError, ImeReply, PendingImeReply};
 pub use blocking::{EditorSessionExit, StoppedEditorSession};
+pub use ime::{ImeClient, ImeEditorError, ImeReply, PendingImeReply};
 std::cfg_select! {
     target_family = "wasm" => {}
     _ => {
