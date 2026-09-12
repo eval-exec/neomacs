@@ -221,3 +221,80 @@ fn ime_commit_inherits_adjacent_text_properties_like_gnu() {
             .is_symbol_named("bold")
     );
 }
+
+#[test]
+fn an_unsupported_after_deletion_does_not_retire_the_session() {
+    // `after_bytes != 0` (deleting to the right of the anchor) is not
+    // supported, but nothing about the session ended. The re-anchored path
+    // already restored for this same condition; leaving the unchanged-anchor
+    // path retiring instead meant one such request silently killed every
+    // later commit.
+    use neovm_host_abi::ime::{ImeOperation, ImeSessionId};
+    let mut eval = crate::Context::new();
+    eval.handle_ime_operation(ImeSessionId(1), ImeOperation::Begin)
+        .unwrap();
+    eval.handle_ime_operation(
+        ImeSessionId(1),
+        ImeOperation::Replace {
+            before_bytes: 0,
+            after_bytes: 3,
+            text: "ignored".into(),
+        },
+    )
+    .unwrap();
+
+    // The session must still be live: a plain insertion has to land.
+    eval.handle_ime_operation(
+        ImeSessionId(1),
+        ImeOperation::Replace {
+            before_bytes: 0,
+            after_bytes: 0,
+            text: "after".into(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        eval.eval_str("(buffer-string)").unwrap().as_utf8_str(),
+        Some("after"),
+        "an unsupported after-deletion must not disable input for the session"
+    );
+}
+
+#[test]
+fn a_read_only_buffer_rejects_the_edit_without_retiring_the_session() {
+    // One IME keystroke into a read-only buffer must not disable input
+    // entirely: the buffer refused the edit, the composition did not end.
+    use neovm_host_abi::ime::{ImeOperation, ImeSessionId};
+    let mut eval = crate::Context::new();
+    eval.handle_ime_operation(ImeSessionId(1), ImeOperation::Begin)
+        .unwrap();
+    eval.eval_str("(setq buffer-read-only t)").unwrap();
+
+    let rejected = eval.handle_ime_operation(
+        ImeSessionId(1),
+        ImeOperation::Replace {
+            before_bytes: 0,
+            after_bytes: 0,
+            text: "blocked".into(),
+        },
+    );
+    assert!(rejected.is_err(), "a read-only buffer must signal");
+
+    eval.eval_str("(setq buffer-read-only nil)").unwrap();
+    eval.handle_ime_operation(
+        ImeSessionId(1),
+        ImeOperation::Replace {
+            before_bytes: 0,
+            after_bytes: 0,
+            text: "allowed".into(),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        eval.eval_str("(buffer-string)").unwrap().as_utf8_str(),
+        Some("allowed"),
+        "input must resume once the buffer is writable again"
+    );
+}
