@@ -3438,21 +3438,29 @@ impl<'a> Vm<'a> {
                 };
             }
 
-            // MEASURED DEAD END (2026-09-11): this expands the call and its
-            // three-way outcome at every signalling site, and because the uses
-            // sit inside `vm_try!`/`invalid_bytecode!`/`branch_to!` the compiler
-            // emits 253 copies at ~86 bytes -- 21,734 bytes of `run_loop`.
-            // Collapsing them into one dispatch point (`break 'ops flow` out of
-            // a value-returning labelled loop, handled once) does shrink the
-            // function a further 20.3%, to 97,756 bytes. It is SLOWER:
-            // rust-lsp-typing +1.37% cycles, magit-status-compiled +1.49%,
-            // org-editing +0.12%, with instructions up 1.0009-1.0012x from
-            // spilling the carried flow.
+            // TWO MEASURED DEAD ENDS (2026-09-11). Read both before shrinking
+            // this further.
             //
-            // The rule is not "make this function smaller". Moving a body that
-            // NEVER RUNS out of the loop won (-17.2% size, -2.4% cycles on
-            // rust-lsp-typing). Re-plumbing the exits the HOT path takes loses,
-            // even though it removes more bytes.
+            // 1. Collapsing the 253 emitted copies of this dispatch into one
+            //    point (`break 'ops flow` out of a value-returning labelled
+            //    loop) shrinks `run_loop` a further 20.3%, to 97,756 bytes --
+            //    and is SLOWER: rust-lsp-typing +1.37% cycles, magit +1.49%,
+            //    with instructions up 1.0009-1.0012x from spilling the flow.
+            // 2. Folding `ResumeOp` into `ResumeFrame` to drop one arm from
+            //    each site, plus moving the invalid-bytecode trace's argument
+            //    setup out of line, removes 525 bytes -- and cost
+            //    rust-lsp-typing +5.5% CYCLES at 1.0011x the instructions,
+            //    while org-editing did not move at all.
+            //
+            // That second one is the cautionary tale: a 0.4% SHRINK bought a
+            // 5.5% slowdown on one scenario and nothing on another. Below some
+            // size, changes here are not optimisations but a lottery on code
+            // layout, and a result that does not reproduce across scenarios is
+            // layout noise. What did work was bulk: moving `resume_flow!`'s
+            // body out removed 25,395 bytes at once and won consistently
+            // (-2.4% / -1.6% / -0.4% cycles on three scenarios). Judge changes
+            // here in CYCLES, on more than one scenario, and do not trust a
+            // small win.
             //
             // Resume nonlocal flow at the innermost VM handler, or propagate out
             // of run_loop. The cursor must be PUBLISHED before this runs:
