@@ -3096,6 +3096,26 @@ impl TextPropertyTable {
         if packed >> 1 == self.syntax_prop_tick + 1 {
             return packed & 1 == 1;
         }
+        // The range list answers this question and `syntax_ranges_note_put`
+        // already keeps it truthful across puts -- which is the whole reason
+        // that function exists. Deriving the answer from it turns a put into
+        // O(1) here instead of a full-tree bit scan on the next query.
+        //
+        // This is what made `org-editing-heavy` walk the interval tree ~193
+        // times per operation: org marks emphasis and source blocks with
+        // syntax-table properties, so syntax-relevant writes are CONSTANT
+        // there, and the memo's "one full-tree scan per such mutation"
+        // assumed they were rare.
+        if let Ok(guard) = self.syntax_prop_ranges.try_lock()
+            && guard.0 == self.syntax_prop_tick + 1
+        {
+            let any = !guard.1.is_empty();
+            self.syntax_prop_any.store(
+                ((self.syntax_prop_tick + 1) << 1) | u64::from(any),
+                Ordering::Relaxed,
+            );
+            return any;
+        }
         let any = self
             .intervals
             .cursor_at(CharPos0::ZERO)
