@@ -288,10 +288,22 @@ the point of keeping both."
   (let ((type-us 0) (comment-us 0) (kill-yank-us 0)
         (indent-us 0) (regex-us 0) (latencies nil)
         (mode-us 0) (fontify-us 0) (replace-us 0) (undo-redo-us 0)
-        (isearch-us 0) (buffer-switch-us 0) (how-many-us 0) (motion-us 0))
+        (isearch-us 0) (buffer-switch-us 0) (how-many-us 0) (motion-us 0)
+        (bookkeeping-us 0))
     (dotimes (_ iterations)
-      (let ((text (buffer-substring-no-properties (point-min) (point-max)))
-            (saved-point (point)))
+      ;; The snapshot and the restore below are the HARNESS's own work, not
+      ;; the workload's, and they sit inside the window `elapsed-us' and
+      ;; `elapsed-wall-us' measure.  Two whole-buffer
+      ;; `buffer-substring-no-properties' calls plus an `equal' per iteration
+      ;; is not free, and it is not charged equally to the two engines, so
+      ;; report what it cost instead of leaving it folded invisibly into
+      ;; every row's primary metric.
+      (let* ((book-started (float-time))
+             (text (buffer-substring-no-properties (point-min) (point-max)))
+             (saved-point (point)))
+        (setq bookkeeping-us
+              (+ bookkeeping-us
+                 (max 0 (round (* 1000000 (- (float-time) book-started))))))
         (pcase scenario
           ("editing-simulation"
            (setq mode-us (+ mode-us (neomacs-perf-workload--time
@@ -378,8 +390,13 @@ the point of keeping both."
            (setq regex-us (+ regex-us (neomacs-perf-workload--time
                                        #'neomacs-perf-workload--regex-phase))))
           (_ (error "unknown editor workload %S" scenario)))
-        (neomacs-perf-workload--restore text saved-point)))
-    `((type . ,type-us)
+        (let ((book-started (float-time)))
+          (neomacs-perf-workload--restore text saved-point)
+          (setq bookkeeping-us
+                (+ bookkeeping-us
+                   (max 0 (round (* 1000000 (- (float-time) book-started)))))))))
+    `((bookkeeping . ,bookkeeping-us)
+      (type . ,type-us)
       (comment . ,comment-us)
       (kill-yank . ,kill-yank-us)
       (indent . ,indent-us)
@@ -464,6 +481,9 @@ Both engines run the same code here, so the number is comparable."
         (buffer_switch_phase_us . ,(alist-get 'buffer-switch phases))
         (how_many_phase_us . ,(alist-get 'how-many phases))
         (motion_phase_us . ,(alist-get 'motion phases))
+        ;; What the harness spent on its own snapshot/restore inside the
+        ;; timed window, so a reader can tell the workload from the scaffold.
+        (harness_bookkeeping_us . ,(alist-get 'bookkeeping phases))
         ;; Collection parity. Comparing two engines without these is comparing
         ;; different amounts of work: neomacs performs no automatic collections
         ;; in --batch (its adaptive pacer's live-growth term is a strict max
@@ -517,7 +537,7 @@ GNU has no such variable and ignores this."
          (initial-checksum "") (final-checksum "")
          (initial-point 1) (point-restored nil) (expected-mode "")
          (actual-mode "")
-         (phases '((type . 0) (comment . 0) (kill-yank . 0)
+         (phases '((bookkeeping . 0) (type . 0) (comment . 0) (kill-yank . 0)
                    (indent . 0) (regex . 0) (latencies . [])
                    (mode . 0) (fontify . 0) (replace . 0)
                    (undo-redo . 0) (isearch . 0) (buffer-switch . 0)

@@ -218,6 +218,7 @@ pub(crate) struct EditorWorkloadResult {
     buffer_switch_phase_us: u64,
     how_many_phase_us: u64,
     motion_phase_us: u64,
+    harness_bookkeeping_us: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -257,6 +258,10 @@ struct EditorWorkloadResultWire {
     buffer_switch_phase_us: u64,
     how_many_phase_us: u64,
     motion_phase_us: u64,
+    /// Added after schema version 1 and so optional: the other fixtures in
+    /// this family do not report it.
+    #[serde(default)]
+    harness_bookkeeping_us: u64,
     #[serde(deserialize_with = "deserialize_optional_error", rename = "error")]
     error: Option<String>,
 }
@@ -295,6 +300,7 @@ impl TryFrom<EditorWorkloadResultWire> for EditorWorkloadResult {
             buffer_switch_phase_us: wire.buffer_switch_phase_us,
             how_many_phase_us: wire.how_many_phase_us,
             motion_phase_us: wire.motion_phase_us,
+            harness_bookkeeping_us: wire.harness_bookkeeping_us,
         })
     }
 }
@@ -552,6 +558,10 @@ pub(crate) fn valid_editor_workload_measurements(
         ),
         (MetricName::HowManyPhaseCpuTime, result.how_many_phase_us),
         (MetricName::MotionPhaseCpuTime, result.motion_phase_us),
+        (
+            MetricName::HarnessBookkeepingWallTime,
+            result.harness_bookkeeping_us,
+        ),
     ] {
         if value > 0 {
             measurements.push(Measurement {

@@ -85,6 +85,16 @@ pub enum MetricName {
     BufferSwitchPhaseCpuTime,
     HowManyPhaseCpuTime,
     MotionPhaseCpuTime,
+    /// Wall time the harness spent on ITSELF inside the timed window: the
+    /// per-iteration whole-buffer snapshot, the comparison against it, and
+    /// the restore when the workload changed the text.
+    ///
+    /// `workload-wall-time` wraps the whole iteration loop, so this is part
+    /// of it and of `per-operation-wall-time`. It is reported rather than
+    /// silently folded in because it is charged UNEQUALLY: whole-buffer
+    /// `buffer-substring-no-properties` is a primitive the two engines do not
+    /// run at the same speed, so a row can move on this alone.
+    HarnessBookkeepingWallTime,
     P50InputToRedisplayLatency,
     P95InputToRedisplayLatency,
     P99InputToRedisplayLatency,
@@ -134,6 +144,7 @@ impl MetricName {
             | Self::BufferSwitchPhaseCpuTime
             | Self::HowManyPhaseCpuTime
             | Self::MotionPhaseCpuTime
+            | Self::HarnessBookkeepingWallTime
             | Self::P50InputToRedisplayLatency
             | Self::P95InputToRedisplayLatency
             | Self::P99InputToRedisplayLatency
