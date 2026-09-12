@@ -15,7 +15,10 @@ std::cfg_select! {
     target_family = "wasm" => {}
     _ => {
         mod native_worker;
-        pub use native_worker::{NativeEditorWorker, NativeEditorWorkerEvent};
+        pub use native_worker::{
+            HOST_DESTROY_JOIN_TIMEOUT, NativeEditorWorker, NativeEditorWorkerEvent,
+            WorkerShutdown,
+        };
     }
 }
 
