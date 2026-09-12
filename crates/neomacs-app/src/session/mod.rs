@@ -174,3 +174,49 @@ impl EditorSession {
         self.evaluator.install_host_input_wait_backend(backend);
     }
 }
+
+/// Bounded wait for a host that is being stopped.
+///
+/// Android runs `onStop` before the OS is free to kill the process, and the
+/// kill arrives with no further notice, so the flush has to complete inline.
+/// It also must not hang: an evaluator stuck in Lisp would turn a graceful
+/// stop into an ANR, which is worse than a missed autosave. Autosave is
+/// best-effort in GNU too.
+pub const HOST_STOP_FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// Outcome of [`FrontendInputPort::flush_for_host_stop`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HostStopFlush {
+    /// `do-auto-save` ran; buffers have recovery files.
+    Flushed,
+    /// It ran and signalled. Recorded, not retried.
+    Failed,
+    /// The evaluator did not answer inside [`HOST_STOP_FLUSH_TIMEOUT`].
+    TimedOut,
+    /// The evaluator was already gone.
+    Disconnected,
+}
+
+impl FrontendInputPort {
+    /// Ask the evaluator to autosave, and wait briefly for it to finish.
+    ///
+    /// Call this from the host's stop notification. It is deliberately
+    /// blocking and deliberately bounded — see [`HOST_STOP_FLUSH_TIMEOUT`].
+    pub fn flush_for_host_stop(&self) -> HostStopFlush {
+        let (request, receiver) = neovm_core::PersistRequest::auto_save(std::sync::Arc::new(|| {}));
+        if self
+            .submit_batch(crate::evaluator_input::EvaluatorInputBatch::single(
+                neovm_core::keyboard::InputEvent::PersistRequest(request),
+            ))
+            .is_err()
+        {
+            return HostStopFlush::Disconnected;
+        }
+        match receiver.recv_timeout(HOST_STOP_FLUSH_TIMEOUT) {
+            Ok(neovm_core::PersistOutcome::Flushed) => HostStopFlush::Flushed,
+            Ok(neovm_core::PersistOutcome::Failed) => HostStopFlush::Failed,
+            Err(crossbeam_channel::RecvTimeoutError::Timeout) => HostStopFlush::TimedOut,
+            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => HostStopFlush::Disconnected,
+        }
+    }
+}

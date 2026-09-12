@@ -26,6 +26,7 @@ pub use emacs_core::error::{EvalError, Flow};
 pub use emacs_core::eval::Context;
 pub use emacs_core::value::{Value, ValueKind};
 pub use ime::{ImeEditorError, ImeRequest};
+pub use keyboard::persist::{PersistOutcome, PersistRequest};
 
 pub const CORE_BACKEND: &str = "rust";
 
