@@ -2047,7 +2047,7 @@ fn window_resize_apply_preserves_lisp_computed_vertical_sizes() {
     crate::test_utils::init_test_tracing();
     let result = bootstrap_eval_one_with_frame(
         r#"(let* ((w1 (selected-window))
-                  (w2 (split-window-internal w1 nil nil nil))
+                  (w2 (split-window-internal w1 (/ (window-pixel-height w1) 2) nil nil))
                   (root (frame-root-window))
                   (root-pixels (window-pixel-height root))
                   (char-height (frame-char-height)))
@@ -2632,7 +2632,7 @@ fn split_delete_window_invalid_designators_signal_error() {
     crate::test_utils::init_test_tracing();
     let results = runtime_eval_with_usable_terminal(
         "(condition-case err
-             (split-window-internal 999999 nil nil nil)
+             (split-window-internal 999999 (/ (window-pixel-height 999999) 2) nil nil)
            (error (car err)))
          (condition-case err
              (split-window-internal 'foo nil nil nil)
@@ -2865,7 +2865,7 @@ fn select_window_runs_buffer_list_update_hook_unless_norecord() {
     let result = eval_one_with_frame(
         "(let* ((w1 (selected-window))
                 (b2 (get-buffer-create \"sw-hook-buf\"))
-                (w2 (split-window-internal w1 nil nil nil))
+                (w2 (split-window-internal w1 (/ (window-pixel-height w1) 2) nil nil))
                 (sw-log nil))
            (set-window-buffer w2 b2)
            (setq buffer-list-update-hook
@@ -2887,7 +2887,7 @@ fn select_window_swaps_buffer_point_between_windows() {
         "(let ((w1 (selected-window)))
            (set-buffer (window-buffer w1))
            (insert \"0123456789abcdefghijklmnopqrstuvwxyz\")
-           (let ((w2 (split-window-internal w1 nil nil nil)))
+           (let ((w2 (split-window-internal w1 (/ (window-pixel-height w1) 2) nil nil)))
              (set-window-point w1 3)
              (set-window-point w2 10)
              (select-window w2)
@@ -3802,8 +3802,8 @@ fn window_preserve_size_fixed_and_resizable_helpers_match_batch_semantics() {
                    (window-preserve-size w t nil)
                    (list (window-size-fixed-p w)
                          (window-size-fixed-p w t)))))
-         (let ((w (split-window-internal (selected-window) nil 'right nil)))
-           (split-window-internal w nil 'below nil)
+         (let ((w (split-window-internal (selected-window) (/ (window-pixel-width (selected-window)) 2) 'right nil)))
+           (split-window-internal w (/ (window-pixel-height w) 2) 'below nil)
            (window-preserve-size w t t)
            (let ((before (list (window-resizable w 100 t)
                                (window-resizable w -100 t)
@@ -7194,7 +7194,7 @@ fn window_right_divider_width_only_applies_to_non_rightmost_windows() {
     let results = eval_with_gui_frame(
         "(modify-frame-parameters (selected-frame) '((right-divider-width . 6)))
          (let ((left (selected-window))
-               (right (split-window-internal (selected-window) nil 'right nil)))
+               (right (split-window-internal (selected-window) (/ (window-pixel-width (selected-window)) 2) 'right nil)))
            (list (window-right-divider-width left)
                  (window-right-divider-width right)))",
     );
@@ -8323,7 +8323,7 @@ fn set_window_configuration_keeps_live_point_for_the_saved_current_buffer() {
              (let ((b (get-buffer-create "wcfg-pt-a"))
                    (other (selected-window))
                    conf w)
-               (setq w (split-window-internal other nil nil nil))
+               (setq w (split-window-internal other (/ (window-pixel-height other) 2) nil nil))
                (set-window-buffer w b)
                (set-buffer b)
                (erase-buffer) (insert "aaa\nbbb\nccc\nddd\n") (goto-char 1)
@@ -8341,7 +8341,7 @@ fn set_window_configuration_keeps_live_point_for_the_saved_current_buffer() {
                    (c (get-buffer-create "wcfg-pt-c"))
                    (other (selected-window))
                    conf w)
-               (setq w (split-window-internal other nil nil nil))
+               (setq w (split-window-internal other (/ (window-pixel-height other) 2) nil nil))
                (set-window-buffer w b)
                (set-buffer b)
                (erase-buffer) (insert "aaa\nbbb\nccc\nddd\n") (goto-char 1)
@@ -8359,7 +8359,7 @@ fn set_window_configuration_keeps_live_point_for_the_saved_current_buffer() {
              (let ((b (get-buffer-create "wcfg-pt-d"))
                    (other (selected-window))
                    conf w)
-               (setq w (split-window-internal other nil nil nil))
+               (setq w (split-window-internal other (/ (window-pixel-height other) 2) nil nil))
                (set-window-buffer w b)
                (set-buffer b)
                (erase-buffer) (insert "aaa\nbbb\nccc\nddd\n") (goto-char 1)

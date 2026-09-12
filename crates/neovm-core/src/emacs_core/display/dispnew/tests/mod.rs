@@ -176,7 +176,8 @@ fn eval_internal_show_cursor_per_window_state() {
     let other = crate::emacs_core::builtins::dispatch_builtin(
         &mut eval,
         "split-window-internal",
-        vec![Value::NIL, Value::NIL, Value::NIL, Value::NIL],
+        // PIXEL-SIZE is required; GNU's `split-window` computes one.
+        vec![Value::NIL, Value::fixnum(12), Value::NIL, Value::NIL],
     )
     .unwrap()
     .unwrap();

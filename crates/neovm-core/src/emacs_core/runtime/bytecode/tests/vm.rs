@@ -4987,7 +4987,7 @@ fn vm_split_window_and_frame_selection_builtins_use_shared_runtime_state() {
         vm_eval_with_init_str(
             r#"(let* ((f1 (selected-frame))
                       (w1 (selected-window))
-                      (w2 (split-window-internal w1 nil 'right nil))
+                      (w2 (split-window-internal w1 (/ (window-pixel-width w1) 2) 'right nil))
                       (f2 (make-terminal-frame '((name . "vm-frame-sel")))))
                  (list (windowp w2)
                        (length (window-list))
@@ -5020,7 +5020,7 @@ fn vm_window_configuration_builtins_use_shared_runtime_state() {
     assert_eq!(
         vm_eval_str(
             r#"(let* ((w1 (selected-window))
-                      (w2 (split-window-internal w1 nil 'right nil))
+                      (w2 (split-window-internal w1 (/ (window-pixel-width w1) 2) 'right nil))
                       (b1 (get-buffer-create "vm-wcfg-1"))
                       (b2 (get-buffer-create "vm-wcfg-2")))
                  (set-window-buffer w1 b1)

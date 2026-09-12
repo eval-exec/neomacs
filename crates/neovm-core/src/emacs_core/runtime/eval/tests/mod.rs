@@ -13302,8 +13302,7 @@ fn set_window_configuration_commits_point_from_a_disconnected_nonselected_window
                          (set-buffer original-buffer)
                          (let ((configuration (current-window-configuration))
                                (extra-window
-                                (split-window-internal
-                                 (selected-window) nil nil nil)))
+                                (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
                            (set-window-buffer extra-window extra-buffer)
                            (set-window-point extra-window 7)
                            (set-buffer extra-buffer)
@@ -13362,8 +13361,7 @@ fn current_window_configuration_owns_independent_window_point_markers() {
                          (insert "abcdefghij")
                          (set-buffer original-buffer)
                          (let ((window
-                                (split-window-internal
-                                 (selected-window) nil nil nil)))
+                                (split-window-internal (selected-window) (/ (window-pixel-height (selected-window)) 2) nil nil)))
                            (set-window-buffer window buffer)
                            (set-window-point window 3)
                            (let ((configuration
@@ -22741,7 +22739,7 @@ fn command_loop_dispatches_select_window_before_following_key() {
         .eval_str(
             r#"(let* ((w1 (selected-window))
                       (buf (get-buffer-create "select-window-command-loop-target"))
-                      (w2 (split-window-internal w1 nil nil nil)))
+                      (w2 (split-window-internal w1 (/ (window-pixel-height w1) 2) nil nil)))
                  (set-window-buffer w2 buf)
                  (setq neo-select-window-target w2)
                  w2)"#,

@@ -2284,9 +2284,25 @@ pub(crate) fn builtin_split_window_internal(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("split-window-internal", &args, 4, 5)?;
-    if !args[1].is_nil() {
-        let _ = expect_fixnum(&args[1])?;
-    }
+    // GNU checks OLD before PIXEL-SIZE (`src/window.c`):
+    //
+    //     struct window *o = decode_valid_window (old);
+    //     ...
+    //     CHECK_FIXNUM (pixel_size);
+    //
+    // so when both are wrong it names the window.  Validate OLD through the
+    // same resolver the split itself uses, then require the size.
+    //
+    // PIXEL-SIZE is `CHECK_FIXNUM`ed unconditionally: it is a required
+    // argument and `lisp/window.el`'s `split-window` computes a real
+    // `new-pixel-size` before calling in.  Exempting nil accepted a call GNU
+    // rejects, and let every in-tree caller omit a size without noticing.
+    super::window_cmds::validate_split_window_target(
+        &mut eval.frames,
+        &mut eval.buffers,
+        &args[0],
+    )?;
+    let _ = expect_fixnum(&args[1])?;
     if !args[2].is_nil() && !args[2].is_symbol() {
         return Err(signal(
             LispCondition::WrongTypeArgument,

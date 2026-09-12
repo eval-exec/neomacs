@@ -2364,7 +2364,7 @@ fn current_active_maps_and_key_binding_use_live_window_position_buffer() {
             r#"(let* ((w1 (selected-window))
                       (b1 (current-buffer))
                       (b2 (get-buffer-create " *phase8-window-pos*"))
-                      (w2 (split-window-internal w1 nil 'right nil))
+                      (w2 (split-window-internal w1 (/ (window-pixel-width w1) 2) 'right nil))
                       (g (make-sparse-keymap))
                       (l1 (make-sparse-keymap))
                       (l2 (make-sparse-keymap)))
@@ -4533,7 +4533,7 @@ fn interactive_at_prefix_selects_mouse_window_from_explicit_command_keys() {
         &mut ev,
         r#"(list
              (let* ((w1 (selected-window))
-                    (w2 (split-window-internal w1 nil 'right nil))
+                    (w2 (split-window-internal w1 (/ (window-pixel-width w1) 2) 'right nil))
                     (b1 (get-buffer-create "iat-prefix-b1"))
                     (b2 (get-buffer-create "iat-prefix-b2"))
                     (evt (list 'mouse-1 (list (list w2 2 '(0 . 0) 0)))))
@@ -4558,7 +4558,7 @@ fn interactive_at_prefix_selects_mouse_window_from_explicit_command_keys() {
                 (eq (selected-window) w2)
                 (eq (current-buffer) b2)))
              (let* ((w1 (selected-window))
-                    (w2 (split-window-internal w1 nil 'right nil))
+                    (w2 (split-window-internal w1 (/ (window-pixel-width w1) 2) 'right nil))
                     (b1 (get-buffer-create "iat-prefix-ce-b1"))
                     (b2 (get-buffer-create "iat-prefix-ce-b2"))
                     (evt (list 'mouse-1 (list (list w2 2 '(0 . 0) 0)))))

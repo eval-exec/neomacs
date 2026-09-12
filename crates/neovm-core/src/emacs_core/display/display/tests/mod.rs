@@ -895,7 +895,8 @@ fn eval_internal_show_cursor_tracks_per_window_state() {
     let other = crate::emacs_core::builtins::dispatch_builtin(
         &mut eval,
         "split-window-internal",
-        vec![Value::NIL, Value::NIL, Value::NIL, Value::NIL],
+        // PIXEL-SIZE is required; GNU's `split-window` computes one.
+        vec![Value::NIL, Value::fixnum(12), Value::NIL, Value::NIL],
     )
     .unwrap()
     .unwrap();
@@ -2601,7 +2602,7 @@ fn x_popup_menu_position_window_slot_accepts_a_frame_like_gnu() {
     // GNU reaches it through `CHECK_LIVE_WINDOW`.
     let internal = probe(
         &mut eval,
-        "(list (list 0 0) (window-parent (split-window-internal nil nil nil nil)))",
+        "(list (list 0 0) (window-parent (split-window-internal nil (/ (window-pixel-height nil) 2) nil nil)))",
     );
     assert!(
         internal.starts_with("(wrong-type-argument (window-live-p "),

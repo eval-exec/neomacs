@@ -86,6 +86,18 @@ pub(crate) use super::builtins::{
 /// only chooses the error TEXT: its check is `find_window`, which matches any
 /// node of the window tree, so asking it for `window-live-p` still accepts an
 /// internal window and merely misreports the reason when it fails.
+/// Validate `split-window-internal`'s OLD argument through the resolver the
+/// split itself uses, so GNU's check ORDER survives: `Fsplit_window_internal`
+/// decodes OLD before it `CHECK_FIXNUM`s PIXEL-SIZE, and reporting the size
+/// first would name the wrong argument when both are wrong.
+pub(crate) fn validate_split_window_target(
+    frames: &mut FrameManager,
+    buffers: &mut BufferManager,
+    window: &Value,
+) -> Result<(), Flow> {
+    resolve_window_id_or_error_in_state(frames, buffers, Some(window)).map(|_| ())
+}
+
 pub(crate) fn decode_live_window_id(
     eval: &mut super::eval::Context,
     arg: Option<&Value>,

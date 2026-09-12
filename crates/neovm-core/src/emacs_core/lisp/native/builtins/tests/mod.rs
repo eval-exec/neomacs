@@ -4155,18 +4155,42 @@ fn replace_region_contents_accepts_vector_buffer_slices() {
 fn split_window_internal_validates_core_argument_types() {
     crate::test_utils::init_test_tracing();
     let mut eval = super::super::eval::Context::new();
+    // PIXEL-SIZE is required.  GNU `CHECK_FIXNUM`s it unconditionally
+    // (`src/window.c`), and `lisp/window.el`'s `split-window` computes a real
+    // `new-pixel-size` before calling in -- confirmed on GNU Emacs 31.1, where
+    // `(split-window-internal (selected-window) nil nil nil)` signals
+    // `fixnump`.  This assertion used to pass Value::NIL and expect a window
+    // back, which pinned the divergence as though it were the contract.
     let split = builtin_split_window_internal(
         &mut eval,
-        vec![Value::NIL, Value::NIL, Value::symbol("below"), Value::NIL],
+        vec![
+            Value::NIL,
+            Value::fixnum(12),
+            Value::symbol("below"),
+            Value::NIL,
+        ],
     )
     .unwrap();
     assert!(split.is_window());
+
+    let nil_size = builtin_split_window_internal(
+        &mut eval,
+        vec![Value::NIL, Value::NIL, Value::symbol("below"), Value::NIL],
+    )
+    .expect_err("split-window-internal must require a fixnum PIXEL-SIZE");
+    match nil_size {
+        Flow::Signal(sig) => {
+            assert_eq!(sig.symbol_name(), "wrong-type-argument");
+            assert_eq!(sig.data, vec![Value::symbol("fixnump"), Value::NIL]);
+        }
+        other => panic!("unexpected flow: {other:?}"),
+    }
 
     let window_type = builtin_split_window_internal(
         &mut eval,
         vec![
             Value::symbol("not-a-window"),
-            Value::NIL,
+            Value::fixnum(12),
             Value::symbol("below"),
             Value::NIL,
         ],
@@ -4204,9 +4228,11 @@ fn split_window_internal_validates_core_argument_types() {
         other => panic!("unexpected flow: {other:?}"),
     }
 
+    // A real PIXEL-SIZE, so the SIDE check is actually reached: GNU checks the
+    // size first, which this used to short-circuit on.
     let side_type = builtin_split_window_internal(
         &mut eval,
-        vec![Value::NIL, Value::NIL, Value::fixnum(9), Value::NIL],
+        vec![Value::NIL, Value::fixnum(12), Value::fixnum(9), Value::NIL],
     )
     .expect_err("split-window-internal should reject non-symbol SIDE");
     match side_type {
