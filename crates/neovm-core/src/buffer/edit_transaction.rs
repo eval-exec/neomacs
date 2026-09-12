@@ -152,6 +152,7 @@ impl Buffer {
     /// `adjust_markers_for_replace` (insdel.c:341).
     pub(in crate::buffer) fn execute_insert_text_plan(
         &mut self,
+        payload: &[u8],
         plan: InsertTextPlan,
     ) -> TextInsertion {
         let edit = plan.edit();
@@ -166,7 +167,7 @@ impl Buffer {
             undo::undo_list_record_insert(&mut ul, edit.char_pos(), edit.char_len());
             self.set_undo_list(ul);
         }
-        self.apply_insert_text_plan(plan)
+        self.apply_insert_text_plan(payload, plan)
     }
 
     /// Mutate storage for a fully measured insertion plan *without* recording
@@ -178,13 +179,13 @@ impl Buffer {
     /// still storage-wise an insertion but records GNU `replace_range`'s
     /// delete-and-insert pair. The caller owns the recording; this owns the
     /// text.
-    fn apply_insert_text_plan(&mut self, plan: InsertTextPlan) -> TextInsertion {
+    fn apply_insert_text_plan(&mut self, payload: &[u8], plan: InsertTextPlan) -> TextInsertion {
         let edit = plan.edit();
         if edit.is_empty() {
             return edit.insertion();
         }
         self.text
-            .insert_measured_emacs_bytes(edit.byte_pos(), plan.bytes(), edit.extent());
+            .insert_measured_emacs_bytes(edit.byte_pos(), payload, edit.extent());
         self.apply_byte_insert_side_effects(edit, InsertSideEffectPolicy::current_buffer());
         if edit.before_markers() {
             self.text
@@ -287,12 +288,12 @@ impl Buffer {
             // storage mutation, markers, overlays and point all behave exactly
             // as for `insert`.  Only the recording above differs, and it has
             // already happened.
-            let insertion_plan = plan.into_insert_plan(
+            let insertion_plan = plan.as_insert_plan(
                 old_range.start_anchor(),
                 InsertMarkerPlacement::AfterMarkers,
                 InsertMarkerAdjustment::ByInsertionType,
             );
-            let insertion = self.apply_insert_text_plan(insertion_plan);
+            let insertion = self.apply_insert_text_plan(plan.bytes(), insertion_plan);
             debug_assert_eq!(old_range.byte_start(), insertion.byte_pos());
             debug_assert_eq!(old_range.char_start(), insertion.char_pos());
             return TextReplacement::new(old_range, insertion.extent());
@@ -1256,90 +1257,97 @@ impl MeasuredInsertEdit {
     }
 }
 
-/// Backend-neutral storage plan for inserting text at a measured buffer point.
+/// Backend-neutral measurement of an insertion at a buffer point.
 ///
-/// This keeps GNU's insert inputs together before the storage mutation: Emacs
-/// bytes, measured character/byte extent, marker placement, and any source
-/// text properties that must be grafted onto the inserted range after the
+/// This keeps GNU's insert inputs together before the storage mutation: the
+/// measured character/byte extent, marker placement, and any source text
+/// properties that must be grafted onto the inserted range after the
 /// structural side effects run.
+///
+/// The bytes themselves are NOT held here. GNU's `insert_from_string_1`
+/// reaches the gap with `copy_text (SDATA (string) + pos_byte, ...)`
+/// (src/insdel.c:1053) -- straight off the source string's own payload, with
+/// nothing owning a second copy in between. Passing the payload to
+/// [`Buffer::execute_insert_text_plan`] as its own argument is that shape:
+/// the caller keeps whatever already owns the bytes alive across the call,
+/// and neither this type nor anything it flows through has to borrow.
 #[derive(Clone, Debug)]
 pub(in crate::buffer) struct InsertTextPlan {
-    bytes: Vec<u8>,
     text_properties: TextPropertyTable,
     edit: MeasuredInsertEdit,
 }
 
 impl InsertTextPlan {
-    pub(in crate::buffer) fn from_storage_text(
-        text: &str,
+    /// Measure an insertion of `bytes`, which the caller hands separately to
+    /// [`Buffer::execute_insert_text_plan`].
+    pub(in crate::buffer) fn for_bytes(
+        bytes: &[u8],
         multibyte: bool,
         anchor: TextPositionAnchor,
         marker_placement: InsertMarkerPlacement,
         marker_adjustment: InsertMarkerAdjustment,
     ) -> Self {
-        let bytes =
-            crate::emacs_core::string_escape::storage_string_to_buffer_bytes(text, multibyte);
-        Self::from_emacs_bytes_at_anchor(
-            bytes,
+        Self::for_extent(
+            TextExtent::from_emacs_bytes(bytes, multibyte),
             TextPropertyTable::new(),
-            multibyte,
             anchor,
             marker_placement,
             marker_adjustment,
         )
     }
 
-    pub(in crate::buffer) fn from_lisp_string(
+    /// Measure an insertion of `text`'s own payload, which the caller hands
+    /// separately to [`Buffer::execute_insert_text_plan`].
+    ///
+    /// GNU takes `nchars`/`nbytes` from `SCHARS`/`SBYTES` (src/insdel.c:986):
+    /// the string header already carries both, so the payload is never walked
+    /// to recount characters. Reading the header instead of rescanning
+    /// removes a full pass over the text on every string insertion.
+    ///
+    /// `text` must already have the target buffer's multibyteness -- convert
+    /// first (`convert_lisp_string_for_buffer_mode`) and measure the
+    /// conversion, since its character count is not the source's.
+    pub(in crate::buffer) fn for_lisp_string(
         text: &LispString,
-        multibyte: bool,
         anchor: TextPositionAnchor,
         marker_placement: InsertMarkerPlacement,
         marker_adjustment: InsertMarkerAdjustment,
     ) -> Self {
-        let text = convert_lisp_string_for_buffer_mode(text, multibyte);
         let text_properties = if text.has_intervals() {
             text.intervals().clone()
         } else {
             TextPropertyTable::new()
         };
-        Self::from_emacs_bytes_at_anchor(
-            text.as_bytes().to_vec(),
+        let extent = TextExtent::new(
+            CharLen::new(text.schars()),
+            EmacsByteLen::new(text.sbytes()),
+        );
+        debug_assert_eq!(
+            extent,
+            TextExtent::from_emacs_bytes(text.as_bytes(), text.is_multibyte()),
+            "a Lisp string's header lengths must describe its own payload"
+        );
+        Self::for_extent(
+            extent,
             text_properties,
-            multibyte,
             anchor,
             marker_placement,
             marker_adjustment,
         )
     }
 
-    fn from_emacs_bytes_at_anchor(
-        bytes: Vec<u8>,
+    fn for_extent(
+        extent: TextExtent,
         text_properties: TextPropertyTable,
-        multibyte: bool,
         anchor: TextPositionAnchor,
         marker_placement: InsertMarkerPlacement,
         marker_adjustment: InsertMarkerAdjustment,
     ) -> Self {
-        let extent = TextExtent::from_emacs_bytes(&bytes, multibyte);
         let insertion = TextInsertion::at_anchor(anchor, extent);
-        let edit = MeasuredInsertEdit::new(insertion, marker_placement, marker_adjustment);
-        Self::from_measured_insert(bytes, text_properties, edit)
-    }
-
-    fn from_measured_insert(
-        bytes: Vec<u8>,
-        text_properties: TextPropertyTable,
-        edit: MeasuredInsertEdit,
-    ) -> Self {
         Self {
-            bytes,
             text_properties,
-            edit,
+            edit: MeasuredInsertEdit::new(insertion, marker_placement, marker_adjustment),
         }
-    }
-
-    pub(in crate::buffer) fn bytes(&self) -> &[u8] {
-        &self.bytes
     }
 
     pub(in crate::buffer) const fn edit(&self) -> MeasuredInsertEdit {
@@ -1373,7 +1381,14 @@ impl ReplaceTextPlan {
         text: &LispString,
         multibyte: bool,
     ) -> Self {
-        let text = convert_lisp_string_for_buffer_mode(text, multibyte);
+        // `convert_lisp_string_for_buffer_mode` clones when it has nothing to
+        // convert, so asking it unconditionally copies the payload twice: once
+        // into the clone and once into `bytes`. Only convert when the
+        // multibyteness actually differs -- GNU's `copy_text` is likewise a
+        // straight copy in the matching case (src/insdel.c:1053).
+        let converted = (text.is_multibyte() != multibyte)
+            .then(|| convert_lisp_string_for_buffer_mode(text, multibyte));
+        let text = converted.as_ref().unwrap_or(text);
         let text_properties = if text.has_intervals() {
             text.intervals().clone()
         } else {
@@ -1425,15 +1440,22 @@ impl ReplaceTextPlan {
         }
     }
 
-    pub(in crate::buffer) fn into_insert_plan(
-        self,
+    /// Re-measure this replacement as the insertion it is when the old range
+    /// is empty. The bytes stay with this plan; the caller passes
+    /// [`Self::bytes`] alongside the result.
+    pub(in crate::buffer) fn as_insert_plan(
+        &self,
         anchor: TextPositionAnchor,
         marker_placement: InsertMarkerPlacement,
         marker_adjustment: InsertMarkerAdjustment,
     ) -> InsertTextPlan {
-        let insertion = TextInsertion::at_anchor(anchor, self.new_extent());
-        let edit = MeasuredInsertEdit::new(insertion, marker_placement, marker_adjustment);
-        InsertTextPlan::from_measured_insert(self.bytes, self.text_properties, edit)
+        InsertTextPlan::for_extent(
+            self.new_extent(),
+            self.text_properties.clone(),
+            anchor,
+            marker_placement,
+            marker_adjustment,
+        )
     }
 }
 

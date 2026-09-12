@@ -9,7 +9,7 @@ use crate::buffer::edit_transaction::{
     DeletionString, InsertMarkerAdjustment, InsertMarkerPlacement, InsertTextPlan,
     MeasuredDeleteEdit, MeasuredInsertEdit, MeasuredReplaceEdit, MeasuredSameLenEdit,
     ReplaceTextPlan, SameLenModifiedStatePolicy, SameLenSubstitutionPlan, SharedTextEditMetadata,
-    SharedTextEditOutcome, TranspositionStoragePlan,
+    SharedTextEditOutcome, TranspositionStoragePlan, convert_lisp_string_for_buffer_mode,
 };
 #[cfg(test)]
 use crate::buffer::position::EmacsByteLen;
@@ -63,14 +63,17 @@ impl Buffer {
         if text.is_empty() {
             return TextInsertion::at_anchor(self.point_anchor(), TextExtent::ZERO);
         }
-        let plan = InsertTextPlan::from_storage_text(
-            text,
-            self.get_multibyte(),
+        let multibyte = self.get_multibyte();
+        let bytes =
+            crate::emacs_core::string_escape::storage_string_to_buffer_bytes(text, multibyte);
+        let plan = InsertTextPlan::for_bytes(
+            &bytes,
+            multibyte,
             self.point_anchor(),
             marker_placement,
             InsertMarkerAdjustment::ByInsertionType,
         );
-        self.execute_insert_text_plan(plan)
+        self.execute_insert_text_plan(&bytes, plan)
     }
 
     pub fn insert(&mut self, text: &str) -> TextInsertion {
@@ -116,14 +119,29 @@ impl Buffer {
         marker_placement: InsertMarkerPlacement,
         marker_adjustment: InsertMarkerAdjustment,
     ) -> TextInsertion {
-        let plan = InsertTextPlan::from_lisp_string(
-            text,
-            self.get_multibyte(),
+        // GNU `insert_from_string_1` (src/insdel.c:1053) copies from the
+        // string's own payload when no conversion is owed, so take that shape:
+        // measure from the header and hand storage the source bytes. Only a
+        // real unibyte/multibyte conversion mints bytes, and the local that
+        // owns them lives across the call.
+        let multibyte = self.get_multibyte();
+        if text.is_multibyte() == multibyte {
+            let plan = InsertTextPlan::for_lisp_string(
+                text,
+                self.point_anchor(),
+                marker_placement,
+                marker_adjustment,
+            );
+            return self.execute_insert_text_plan(text.as_bytes(), plan);
+        }
+        let converted = convert_lisp_string_for_buffer_mode(text, multibyte);
+        let plan = InsertTextPlan::for_lisp_string(
+            &converted,
             self.point_anchor(),
             marker_placement,
             marker_adjustment,
         );
-        self.execute_insert_text_plan(plan)
+        self.execute_insert_text_plan(converted.as_bytes(), plan)
     }
 
     pub fn replace_emacs_byte_range_lisp_string(
