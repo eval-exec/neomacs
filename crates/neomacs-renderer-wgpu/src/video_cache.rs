@@ -180,7 +180,7 @@ impl VideoPresentationTracker {
         // actually paced us. Dating it to the frame's predicted presentation
         // would make it measure the schedule we asked for instead of the one
         // we got, which is exactly the discrepancy it exists to expose.
-        self.finish_presented_surface_at(crate::clock::Instant::now());
+        self.finish_presented_surface_at(Instant::now());
     }
 
     fn finish_presented_surface_at(&mut self, presented_at: Instant) {
