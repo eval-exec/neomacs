@@ -507,6 +507,7 @@ impl PerfHarness {
             | ScenarioId::OrgEditingHeavy
             | ScenarioId::MagitStatus
             | ScenarioId::MagitStatusCompiled
+            | ScenarioId::MagitStatusHeavy
             | ScenarioId::LargeFileEditing
             | ScenarioId::Indentation
             | ScenarioId::LspJsonRpc
@@ -1565,6 +1566,7 @@ fn parse_scenario_result(
         | ScenarioId::OrgEditingHeavy
         | ScenarioId::MagitStatus
         | ScenarioId::MagitStatusCompiled
+        | ScenarioId::MagitStatusHeavy
         | ScenarioId::LargeFileEditing
         | ScenarioId::Indentation
         | ScenarioId::LspJsonRpc

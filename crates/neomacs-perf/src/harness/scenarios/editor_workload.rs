@@ -75,7 +75,7 @@ pub(crate) fn prepare(
     let mut packages = None;
     let repository = if matches!(
         request.scenario,
-        ScenarioId::MagitStatus | ScenarioId::MagitStatusCompiled
+        ScenarioId::MagitStatus | ScenarioId::MagitStatusCompiled | ScenarioId::MagitStatusHeavy
     ) {
         let magit_source = locked_melpa_sources()?
             .into_iter()
@@ -95,7 +95,7 @@ pub(crate) fn prepare(
             upstream_revision: magit_source.upstream_revision(),
         });
         packages = Some(Box::new(prepared));
-        Some(prepare_magit_repository(run_directory)?)
+        Some(prepare_magit_repository(run_directory, request.scenario)?)
     } else {
         None
     };
@@ -142,20 +142,84 @@ pub(crate) fn prepare(
     })
 }
 
-fn prepare_magit_repository(run_directory: &Path) -> Result<PathBuf, String> {
-    let repository = run_directory.join("magit-repository");
-    fs::create_dir_all(&repository).map_err(|error| {
-        format!(
-            "failed to create Magit fixture repository {}: {error}",
-            repository.display()
-        )
-    })?;
-    fs::write(repository.join("README.md"), "# neomacs-perf\n")
-        .map_err(|error| format!("failed to write Magit fixture: {error}"))?;
-    for arguments in [
-        vec!["init", "--quiet"],
-        vec!["add", "README.md"],
-        vec![
+/// How much history and working-tree change the Magit fixture repository
+/// carries.
+///
+/// `magit-status`'s repository has always been one file, one commit and one
+/// modified line, which is the SMALLEST status Magit can render: no staged
+/// changes, no untracked files, no stashes, no second commit in the log. Magit
+/// spends its time parsing `git diff` output into sections and propertizing
+/// them, and that repository gives it one line of diff to parse.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MagitRepositoryShape {
+    /// One file, one commit, one modified line.
+    Minimal,
+    /// A working repository: real history, files of real length, and every
+    /// status section populated.
+    Working,
+}
+
+impl MagitRepositoryShape {
+    const fn of(scenario: ScenarioId) -> Self {
+        match scenario {
+            ScenarioId::MagitStatusHeavy => Self::Working,
+            _ => Self::Minimal,
+        }
+    }
+}
+
+/// How far apart two revised lines must be to land in SEPARATE diff hunks.
+///
+/// `git diff` carries three lines of context either side, so changes closer
+/// than seven lines merge into one hunk. Magit builds a section per hunk, so
+/// a stride below this measures the diff TEXT without measuring the section
+/// machinery -- a 400-line file came out as one 401-line hunk. At this stride
+/// each revised line is its own hunk and a file yields twenty of them.
+const MAGIT_HUNK_STRIDE: u32 = 20;
+
+/// Deterministic file body: `lines` lines seeded by `(name, revision)`, so a
+/// rewrite at a later revision differs from the previous one throughout rather
+/// than only at the end, which is what gives `git diff` scattered hunks
+/// instead of one appended block.
+fn magit_fixture_file(name: &str, revision: u32, lines: u32) -> String {
+    let mut out = String::with_capacity(lines as usize * 48);
+    out.push_str(&format!(
+        "// {name} -- generated fixture, revision {revision}\n"
+    ));
+    for line in 0..lines {
+        // A line's content depends on the revision only once per stride, so a
+        // bumped revision rewrites a scattered slice of the file.
+        if line % MAGIT_HUNK_STRIDE == revision % MAGIT_HUNK_STRIDE {
+            out.push_str(&format!(
+                "    let value_{line} = compute_{name}({line}, {revision}); // revised\n"
+            ));
+        } else {
+            out.push_str(&format!("    let value_{line} = compute({line});\n"));
+        }
+    }
+    out
+}
+
+fn run_git(repository: &Path, arguments: &[&str]) -> Result<(), String> {
+    let output = Command::new("git")
+        .args(arguments)
+        .current_dir(repository)
+        .output()
+        .map_err(|error| format!("failed to launch git for Magit fixture: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "failed to prepare Magit fixture repository ({}): {}",
+            arguments.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
+fn git_commit(repository: &Path, message: &str) -> Result<(), String> {
+    run_git(
+        repository,
+        &[
             "-c",
             "user.name=neomacs-perf",
             "-c",
@@ -163,24 +227,155 @@ fn prepare_magit_repository(run_directory: &Path) -> Result<PathBuf, String> {
             "commit",
             "--quiet",
             "-m",
-            "fixture",
+            message,
         ],
+    )
+}
+
+/// Files, commits, and per-section working-tree changes in the `Working`
+/// repository. Sized so `magit-refresh` parses thousands of diff lines across
+/// every section it renders, not one line in one.
+const MAGIT_HEAVY_FILES: u32 = 40;
+const MAGIT_HEAVY_FILE_LINES: u32 = 400;
+const MAGIT_HEAVY_COMMITS: u32 = 50;
+const MAGIT_HEAVY_UNSTAGED: u32 = 12;
+const MAGIT_HEAVY_STAGED: u32 = 8;
+const MAGIT_HEAVY_UNTRACKED: u32 = 10;
+
+fn prepare_magit_repository(run_directory: &Path, scenario: ScenarioId) -> Result<PathBuf, String> {
+    let repository = run_directory.join("magit-repository");
+    fs::create_dir_all(&repository).map_err(|error| {
+        format!(
+            "failed to create Magit fixture repository {}: {error}",
+            repository.display()
+        )
+    })?;
+    run_git(&repository, &["init", "--quiet"])?;
+    // Pin everything about `git diff` that the HOST could otherwise decide.
+    //
+    // Magit renders a section per hunk, and how many hunks a change becomes is
+    // `diff.context`: a developer machine with `diff.context = 30` merges what
+    // git's default `-U3` reports as forty hunks into one, so the same fixture
+    // would hand Magit forty times fewer sections to build there than on CI.
+    // That is a property of whoever ran the benchmark, not of the workload, so
+    // the repository states it and stops inheriting it.
+    for (key, value) in [
+        ("diff.context", "3"),
+        ("diff.algorithm", "myers"),
+        ("diff.noprefix", "false"),
+        ("diff.renames", "true"),
+        ("core.autocrlf", "false"),
     ] {
-        let output = Command::new("git")
-            .args(arguments)
-            .current_dir(&repository)
-            .output()
-            .map_err(|error| format!("failed to launch git for Magit fixture: {error}"))?;
-        if !output.status.success() {
-            return Err(format!(
-                "failed to prepare Magit fixture repository: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            ));
+        run_git(&repository, &["config", key, value])?;
+    }
+    match MagitRepositoryShape::of(scenario) {
+        MagitRepositoryShape::Minimal => {
+            fs::write(repository.join("README.md"), "# neomacs-perf\n")
+                .map_err(|error| format!("failed to write Magit fixture: {error}"))?;
+            run_git(&repository, &["add", "README.md"])?;
+            git_commit(&repository, "fixture")?;
+            fs::write(repository.join("README.md"), "# neomacs-perf\nmodified\n")
+                .map_err(|error| format!("failed to modify Magit fixture: {error}"))?;
+        }
+        MagitRepositoryShape::Working => {
+            prepare_working_magit_repository(&repository)?;
         }
     }
-    fs::write(repository.join("README.md"), "# neomacs-perf\nmodified\n")
-        .map_err(|error| format!("failed to modify Magit fixture: {error}"))?;
     Ok(repository)
+}
+
+/// Build history and then a working tree that populates every status section.
+///
+/// Magit's default status renders untracked files, unstaged changes, staged
+/// changes, stashes, and the recent-commit log. Each is filled here, so
+/// `magit-refresh` runs the section machinery it runs in a session instead of
+/// short-circuiting on empty output.
+fn prepare_working_magit_repository(repository: &Path) -> Result<(), String> {
+    let name_of = |index: u32| format!("src/module_{index:02}.rs");
+    fs::create_dir_all(repository.join("src"))
+        .map_err(|error| format!("failed to create Magit fixture source directory: {error}"))?;
+
+    // History. The first commit lands every file; the rest each rewrite a
+    // scattered slice of a rotating few, so the log has real diffs behind it.
+    for index in 0..MAGIT_HEAVY_FILES {
+        fs::write(
+            repository.join(name_of(index)),
+            magit_fixture_file(&format!("module_{index:02}"), 0, MAGIT_HEAVY_FILE_LINES),
+        )
+        .map_err(|error| format!("failed to write Magit fixture source: {error}"))?;
+    }
+    run_git(repository, &["add", "."])?;
+    git_commit(repository, "fixture: import the tree")?;
+    for commit in 1..=MAGIT_HEAVY_COMMITS {
+        for slot in 0..3 {
+            let index = (commit * 3 + slot) % MAGIT_HEAVY_FILES;
+            fs::write(
+                repository.join(name_of(index)),
+                magit_fixture_file(
+                    &format!("module_{index:02}"),
+                    commit,
+                    MAGIT_HEAVY_FILE_LINES,
+                ),
+            )
+            .map_err(|error| format!("failed to rewrite Magit fixture source: {error}"))?;
+        }
+        run_git(repository, &["add", "."])?;
+        git_commit(repository, &format!("fixture: revision {commit}"))?;
+    }
+
+    // A stash, so the stash section is non-empty. Made from a change that is
+    // then put away, which is what a stash is.
+    fs::write(
+        repository.join(name_of(0)),
+        magit_fixture_file(
+            "module_00",
+            MAGIT_HEAVY_COMMITS + 100,
+            MAGIT_HEAVY_FILE_LINES,
+        ),
+    )
+    .map_err(|error| format!("failed to write Magit stash fixture: {error}"))?;
+    run_git(
+        repository,
+        &["stash", "push", "--quiet", "-m", "fixture stash"],
+    )?;
+
+    // Staged changes.
+    for index in 0..MAGIT_HEAVY_STAGED {
+        fs::write(
+            repository.join(name_of(index)),
+            magit_fixture_file(
+                &format!("module_{index:02}"),
+                MAGIT_HEAVY_COMMITS + 1,
+                MAGIT_HEAVY_FILE_LINES,
+            ),
+        )
+        .map_err(|error| format!("failed to write staged Magit fixture: {error}"))?;
+    }
+    run_git(repository, &["add", "."])?;
+
+    // Unstaged changes, on a disjoint set so both sections stay populated.
+    for offset in 0..MAGIT_HEAVY_UNSTAGED {
+        let index = MAGIT_HEAVY_STAGED + offset;
+        fs::write(
+            repository.join(name_of(index)),
+            magit_fixture_file(
+                &format!("module_{index:02}"),
+                MAGIT_HEAVY_COMMITS + 2,
+                MAGIT_HEAVY_FILE_LINES,
+            ),
+        )
+        .map_err(|error| format!("failed to write unstaged Magit fixture: {error}"))?;
+    }
+
+    // Untracked files.
+    for index in 0..MAGIT_HEAVY_UNTRACKED {
+        fs::write(
+            repository.join(format!("src/scratch_{index:02}.rs")),
+            magit_fixture_file(&format!("scratch_{index:02}"), 0, 60),
+        )
+        .map_err(|error| format!("failed to write untracked Magit fixture: {error}"))?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -420,7 +615,10 @@ pub(crate) fn validate_editor_workload_result(
         ScenarioId::SustainedEditing | ScenarioId::OrgEditing | ScenarioId::OrgEditingHeavy => {
             require_positive_phase(&mut mismatches, "type-phase-time", result.type_phase_us);
         }
-        ScenarioId::MagitStatus | ScenarioId::MagitStatusCompiled | ScenarioId::RegexSearch => {
+        ScenarioId::MagitStatus
+        | ScenarioId::MagitStatusCompiled
+        | ScenarioId::MagitStatusHeavy
+        | ScenarioId::RegexSearch => {
             require_positive_phase(&mut mismatches, "regex-phase-time", result.regex_phase_us);
         }
         ScenarioId::LargeFileEditing => {
@@ -610,7 +808,9 @@ pub(crate) fn scenario_load_suffixes(scenario: ScenarioId) -> LoadSuffixes {
     // part of their identity rather than an ambient setting.
     if matches!(
         scenario,
-        ScenarioId::MagitStatusCompiled | ScenarioId::OrgJournalOpenCompiled
+        ScenarioId::MagitStatusCompiled
+            | ScenarioId::OrgJournalOpenCompiled
+            | ScenarioId::MagitStatusHeavy
     ) {
         return LoadSuffixes::EmacsDefault;
     }

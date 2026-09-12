@@ -63,6 +63,19 @@ pub enum ScenarioId {
     /// `org-journal-open` with the package loaded as byte-code, for the same
     /// reason.
     OrgJournalOpenCompiled,
+    /// `magit-status` over a repository with real history and a populated
+    /// working tree.
+    ///
+    /// The other Magit rows run a repository of one file, one commit and one
+    /// modified line -- the smallest status Magit can render, with no staged
+    /// changes, no untracked files, no stashes and no second commit in the
+    /// log. Magit's cost is parsing `git diff` output into sections and
+    /// propertizing them, and that repository hands it one line to parse.
+    ///
+    /// This row loads byte-code, like `magit-status-compiled` and unlike
+    /// `magit-status`, so comparing it against `magit-status-compiled`
+    /// isolates the REPOSITORY as the only variable between them.
+    MagitStatusHeavy,
     /// One `jsonrpc` round trip per operation at the size a language server
     /// actually sends: serialize a request, then parse a
     /// `textDocument/publishDiagnostics` reply.
@@ -86,7 +99,7 @@ impl ScenarioId {
     /// id would fail the run rather than measure it.
     pub const fn workload_str(self) -> &'static str {
         match self {
-            Self::MagitStatusCompiled => Self::MagitStatus.as_str(),
+            Self::MagitStatusCompiled | Self::MagitStatusHeavy => Self::MagitStatus.as_str(),
             Self::OrgJournalOpenCompiled => Self::OrgJournalOpen.as_str(),
             other => other.as_str(),
         }
@@ -112,6 +125,7 @@ impl ScenarioId {
             Self::SustainedNativeVideo => "sustained-native-video",
             Self::MagitStatusCompiled => "magit-status-compiled",
             Self::OrgJournalOpenCompiled => "org-journal-open-compiled",
+            Self::MagitStatusHeavy => "magit-status-heavy",
             Self::LspJsonRpc => "lsp-json-rpc",
         }
     }
@@ -157,6 +171,7 @@ impl FromStr for ScenarioId {
             "sustained-native-video" => Ok(Self::SustainedNativeVideo),
             "magit-status-compiled" => Ok(Self::MagitStatusCompiled),
             "org-journal-open-compiled" => Ok(Self::OrgJournalOpenCompiled),
+            "magit-status-heavy" => Ok(Self::MagitStatusHeavy),
             "lsp-json-rpc" => Ok(Self::LspJsonRpc),
             unknown => Err(UnknownScenarioId(unknown.to_string())),
         }
@@ -367,6 +382,14 @@ const SCENARIOS: &[ScenarioSpec] = &[
         cross_editor_parity_metrics: &[],
     },
     ScenarioSpec {
+        id: ScenarioId::MagitStatusHeavy,
+        description: "Magit status over a repository with real history, staged and unstaged diffs, untracked files and a stash",
+        default_frontend: Frontend::Batch,
+        default_iterations: NonZeroU32::new(10).expect("non-zero scenario default"),
+        primary_metric: MetricName::PerOperationWallTime,
+        cross_editor_parity_metrics: &[],
+    },
+    ScenarioSpec {
         id: ScenarioId::LspJsonRpc,
         description: "jsonrpc round trip at language-server message size: serialize a request, parse a diagnostics reply",
         default_frontend: Frontend::Batch,
@@ -404,7 +427,8 @@ pub const fn scenario(id: ScenarioId) -> &'static ScenarioSpec {
         ScenarioId::MagitStatusCompiled => &SCENARIOS[14],
         ScenarioId::OrgJournalOpenCompiled => &SCENARIOS[15],
         ScenarioId::RustLspTypingHeavy => &SCENARIOS[16],
-        ScenarioId::LspJsonRpc => &SCENARIOS[18],
+        ScenarioId::LspJsonRpc => &SCENARIOS[19],
+        ScenarioId::MagitStatusHeavy => &SCENARIOS[18],
         ScenarioId::OrgEditingHeavy => &SCENARIOS[17],
     }
 }
