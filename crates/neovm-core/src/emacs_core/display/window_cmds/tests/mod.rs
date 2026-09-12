@@ -2472,6 +2472,51 @@ fn split_window_side_domain_matches_gnu() {
 }
 
 #[test]
+fn window_old_size_subrs_reject_the_windows_gnu_rejects() {
+    crate::test_utils::init_test_tracing();
+    // Verified against `src/window.c`, every decode unguarded:
+    //
+    //   window-old-body-pixel-width   decode_live_window  -> window-live-p
+    //   window-old-body-pixel-height  decode_live_window  -> window-live-p
+    //   window-lines-pixel-dimensions decode_live_window  -> window-live-p
+    //   window-old-pixel-width        decode_valid_window -> window-valid-p
+    //   window-old-pixel-height       decode_valid_window -> window-valid-p
+    //
+    // These went through `expect_window_live_or_nil` /
+    // `expect_window_valid_or_nil`, which differ from each other ONLY in the
+    // predicate string: both just tag-test `is_window()`.  A helper with no
+    // `FrameManager` in hand cannot tell a live window from an internal or a
+    // deleted one, so all five accepted every window object and returned a
+    // value where GNU signals.
+    //
+    // `window-combination-limit` is a different shape: GNU spells it
+    // `CHECK_VALID_WINDOW (window)` with NO nil defaulting, so nil is simply
+    // not a valid window.  neomacs resolved nil to the selected window and
+    // then failed further in with a plain `error`.
+    let results = bootstrap_eval_with_frame(
+        "(let* ((live (selected-window))
+                (parent (window-parent (progn (split-window-below) (selected-window))))
+                (dead (let ((w (split-window-below))) (delete-window w) w))
+                (probe (lambda (fn arg)
+                         (condition-case e (progn (funcall fn arg) 'no-error)
+                           (wrong-type-argument (car (cdr e)))
+                           (error 'plain-error)))))
+           (list (funcall probe 'window-old-body-pixel-width parent)
+                 (funcall probe 'window-old-body-pixel-height dead)
+                 (funcall probe 'window-lines-pixel-dimensions parent)
+                 (funcall probe 'window-old-pixel-width dead)
+                 (funcall probe 'window-old-pixel-height dead)
+                 (funcall probe 'window-combination-limit nil)
+                 ;; a LIVE window must still work everywhere
+                 (funcall probe 'window-old-body-pixel-width live)))",
+    );
+    assert_eq!(
+        results[0],
+        "OK (window-live-p window-live-p window-live-p window-valid-p window-valid-p window-valid-p no-error)"
+    );
+}
+
+#[test]
 fn frame_geometry_subrs_name_gnus_decoder_predicate() {
     crate::test_utils::init_test_tracing();
     // Which predicate a frame subr names is fixed by which decoder GNU's C

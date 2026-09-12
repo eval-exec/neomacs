@@ -5314,9 +5314,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "window-lines-pixel-dimensions",
-        NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::window_cmds::builtin_window_lines_pixel_dimensions(args)
-        }),
+        NativeFn::ContextVec(crate::emacs_core::window_cmds::builtin_window_lines_pixel_dimensions),
         SubrArity::new(0, Some(6)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -5337,32 +5335,26 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(
         SubrSpec::new(
             "window-old-body-pixel-height",
-            NativeFn::ContextVec(|_ctx, args| {
-                crate::emacs_core::window_cmds::builtin_window_old_body_pixel_height(args)
-            }),
+            NativeFn::ContextVec(
+                crate::emacs_core::window_cmds::builtin_window_old_body_pixel_height,
+            ),
             SubrArity::new(0, Some(1)),
         )
         .placeholder(NoEvalPlaceholder::FixnumZero),
     );
     ctx.register_subr(SubrSpec::new(
         "window-old-body-pixel-width",
-        NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::window_cmds::builtin_window_old_body_pixel_width(args)
-        }),
+        NativeFn::ContextVec(crate::emacs_core::window_cmds::builtin_window_old_body_pixel_width),
         SubrArity::new(0, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
         "window-old-pixel-height",
-        NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::window_cmds::builtin_window_old_pixel_height(args)
-        }),
+        NativeFn::ContextVec(crate::emacs_core::window_cmds::builtin_window_old_pixel_height),
         SubrArity::new(0, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
         "window-old-pixel-width",
-        NativeFn::ContextVec(|_ctx, args| {
-            crate::emacs_core::window_cmds::builtin_window_old_pixel_width(args)
-        }),
+        NativeFn::ContextVec(crate::emacs_core::window_cmds::builtin_window_old_pixel_width),
         SubrArity::new(0, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(

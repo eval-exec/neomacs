@@ -1454,46 +1454,6 @@ pub(crate) fn builtin_window_bottom_divider_width(args: Vec<Value>) -> EvalResul
 /// piping the matrix builder snapshot back into neovm-core,
 /// which is part of the cursor audit Finding 11
 /// (`display_and_set_cursor` collapse) restructuring.
-pub(crate) fn builtin_window_lines_pixel_dimensions(args: Vec<Value>) -> EvalResult {
-    expect_args_range("window-lines-pixel-dimensions", &args, 0, 6)?;
-    if let Some(window) = args.first() {
-        expect_window_live_or_nil(window)?;
-    }
-    Ok(Value::NIL)
-}
-
-pub(crate) fn builtin_window_old_body_pixel_height(args: Vec<Value>) -> EvalResult {
-    expect_args_range("window-old-body-pixel-height", &args, 0, 1)?;
-    if let Some(window) = args.first() {
-        expect_window_live_or_nil(window)?;
-    }
-    Ok(Value::fixnum(0))
-}
-
-pub(crate) fn builtin_window_old_body_pixel_width(args: Vec<Value>) -> EvalResult {
-    expect_args_range("window-old-body-pixel-width", &args, 0, 1)?;
-    if let Some(window) = args.first() {
-        expect_window_live_or_nil(window)?;
-    }
-    Ok(Value::fixnum(0))
-}
-
-pub(crate) fn builtin_window_old_pixel_height(args: Vec<Value>) -> EvalResult {
-    expect_args_range("window-old-pixel-height", &args, 0, 1)?;
-    if let Some(window) = args.first() {
-        expect_window_valid_or_nil(window)?;
-    }
-    Ok(Value::fixnum(0))
-}
-
-pub(crate) fn builtin_window_old_pixel_width(args: Vec<Value>) -> EvalResult {
-    expect_args_range("window-old-pixel-width", &args, 0, 1)?;
-    if let Some(window) = args.first() {
-        expect_window_valid_or_nil(window)?;
-    }
-    Ok(Value::fixnum(0))
-}
-
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(crate) fn builtin_window_right_divider_width(args: Vec<Value>) -> EvalResult {
     expect_args_range("window-right-divider-width", &args, 0, 1)?;

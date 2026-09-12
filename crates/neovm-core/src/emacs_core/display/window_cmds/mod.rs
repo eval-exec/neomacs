@@ -58,11 +58,6 @@ pub(crate) use super::builtins::{
     builtin_split_window_internal, builtin_window_configuration_equal_p,
     builtin_window_configuration_frame, builtin_window_configuration_p,
 };
-pub(crate) use super::builtins::{
-    builtin_window_lines_pixel_dimensions, builtin_window_old_body_pixel_height,
-    builtin_window_old_body_pixel_width, builtin_window_old_pixel_height,
-    builtin_window_old_pixel_width,
-};
 
 // ---------------------------------------------------------------------------
 // The new-size slots (GNU `src/window.c`)
@@ -120,6 +115,80 @@ fn decode_valid_window_id(
     arg: Option<&Value>,
 ) -> Result<WindowId, Flow> {
     resolve_window_id_with_pred(eval, arg, WindowDomain::Valid).map(|(_frame, window)| window)
+}
+
+// ---------------------------------------------------------------------------
+// The old-size slots (GNU `src/window.c`)
+//
+// These used to live in `builtins/stubs.rs` behind `expect_window_live_or_nil`
+// / `expect_window_valid_or_nil`, two helpers that differ from each other only
+// in the predicate they name -- both merely tag-test `is_window()`.  A helper
+// holding no `FrameManager` cannot tell a live window from an internal or a
+// deleted one, so all of them accepted every window object and returned a
+// value where GNU signals.  Taking `eval` is what makes the check possible;
+// the domain then picks both the lookup and the predicate.
+//
+// The values are still placeholders (`0` / nil) -- see the note on
+// `window-lines-pixel-dimensions` below.  What is fixed here is the DECODE.
+// ---------------------------------------------------------------------------
+
+/// `(window-old-body-pixel-width &optional WINDOW)`; GNU `decode_live_window`.
+pub(crate) fn builtin_window_old_body_pixel_width(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("window-old-body-pixel-width", &args, 1)?;
+    let _ = decode_live_window_id(eval, args.first())?;
+    Ok(Value::fixnum(0))
+}
+
+/// `(window-old-body-pixel-height &optional WINDOW)`; GNU `decode_live_window`.
+pub(crate) fn builtin_window_old_body_pixel_height(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("window-old-body-pixel-height", &args, 1)?;
+    let _ = decode_live_window_id(eval, args.first())?;
+    Ok(Value::fixnum(0))
+}
+
+/// `(window-old-pixel-width &optional WINDOW)`; GNU `decode_valid_window`, so
+/// an INTERNAL window is accepted here where the body-pixel pair rejects it.
+pub(crate) fn builtin_window_old_pixel_width(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("window-old-pixel-width", &args, 1)?;
+    let _ = decode_valid_window_id(eval, args.first())?;
+    Ok(Value::fixnum(0))
+}
+
+/// `(window-old-pixel-height &optional WINDOW)`; GNU `decode_valid_window`.
+pub(crate) fn builtin_window_old_pixel_height(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("window-old-pixel-height", &args, 1)?;
+    let _ = decode_valid_window_id(eval, args.first())?;
+    Ok(Value::fixnum(0))
+}
+
+/// `(window-lines-pixel-dimensions &optional WINDOW ...)`; GNU
+/// `decode_live_window`.
+///
+/// GNU walks the window's display matrix and returns `(width . height)` per
+/// glyph row.  neomacs's matrix lives in the layout engine rather than in
+/// `neovm-core`, so nil -- GNU's documented "no information available", the
+/// same answer it gives on a TTY frame before redisplay -- stands in for the
+/// result.  The DECODE is not a placeholder: an internal or deleted WINDOW
+/// must signal `window-live-p`, not quietly return that nil.
+pub(crate) fn builtin_window_lines_pixel_dimensions(
+    eval: &mut super::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
+    expect_max_args("window-lines-pixel-dimensions", &args, 6)?;
+    let _ = decode_live_window_id(eval, args.first())?;
+    Ok(Value::NIL)
 }
 
 /// `(window-new-pixel &optional WINDOW)` -> WINDOW's pending pixel size.
@@ -7029,6 +7098,29 @@ pub fn register_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::Obarray)
     // shadow the .el default, so we deliberately do not seed it: neomacs's
     // window.el provides the value, matching GNU.
 }
+/// GNU's bare `CHECK_VALID_WINDOW (window)`, as distinct from
+/// `decode_valid_window (window)`: there is NO nil defaulting.
+///
+/// A subr whose C spells the check this way takes WINDOW as a REQUIRED
+/// argument, so nil is not "the selected window" -- it is simply not a valid
+/// window, and signals `window-valid-p`.  `window-combination-limit` and its
+/// setter are both written that way (`src/window.c`).  Resolving nil to the
+/// selected window instead accepted a call GNU rejects, and then failed
+/// further in with a plain `error` about internal windows.
+fn check_valid_window_id_in_state(
+    frames: &mut FrameManager,
+    buffers: &mut BufferManager,
+    arg: &Value,
+) -> Result<(FrameId, WindowId), Flow> {
+    if arg.is_nil() {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol(WindowDomain::Valid.predicate()), *arg],
+        ));
+    }
+    resolve_window_id_with_pred_in_state(frames, buffers, Some(arg), WindowDomain::Valid)
+}
+
 /// `(window-combination-limit WINDOW)` -> nil or t.
 ///
 /// Mirrors GNU Emacs: returns the combination limit of an internal window.
@@ -7040,8 +7132,7 @@ pub(crate) fn builtin_window_combination_limit(
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_args("window-combination-limit", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
+    let (fid, wid) = check_valid_window_id_in_state(frames, buffers, &args[0])?;
     let w = get_window(frames, fid, wid)?;
     match w.combination_limit() {
         Some(true) => Ok(Value::T),
@@ -7065,8 +7156,9 @@ pub(crate) fn builtin_set_window_combination_limit(
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_args("set-window-combination-limit", &args, 2)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
+    // GNU spells this `CHECK_VALID_WINDOW (window)' too, so nil is rejected
+    // rather than standing in for the selected window.
+    let (fid, wid) = check_valid_window_id_in_state(frames, buffers, &args[0])?;
     let limit = args[1].is_truthy();
     let frame = frames
         .get_mut(fid)
