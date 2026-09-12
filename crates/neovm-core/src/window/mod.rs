@@ -6403,29 +6403,35 @@ impl FrameManager {
     /// call: an old buffer without an epoch, or an epoch without a buffer, are
     /// states GNU can represent and this cannot.
     pub fn window_old_buffer(&self, window_id: WindowId) -> WindowOldBuffer {
-        // A deleted window answers from what it recorded on the way out; a live
-        // one from what the last window-change record left on it.
-        let (old_buffer, stamp, frame_stamp) =
-            if let Some(record) = self.deleted_windows.get(&window_id) {
-                let frame_stamp = self
-                    .any_window_frame_id(window_id)
-                    .and_then(|fid| self.frames.get(&fid))
-                    .map(|frame| frame.change_stamp);
-                (record.old_buffer, record.change_stamp, frame_stamp)
-            } else {
-                let Some(frame_id) = self.find_valid_window_frame_id(window_id) else {
-                    return WindowOldBuffer::NeverRecorded;
-                };
-                let Some(frame) = self.frames.get(&frame_id) else {
-                    return WindowOldBuffer::NeverRecorded;
-                };
-                let window = frame.find_window(window_id);
-                (
-                    window.and_then(Window::old_buffer),
-                    window.and_then(Window::change_stamp),
-                    Some(frame.change_stamp),
-                )
-            };
+        // A LIVE window answers from what the last window-change record left on
+        // it; only a window that is no longer live falls back to what it
+        // recorded on the way out.
+        //
+        // The order matters and is not GNU's problem: GNU holds a deleted
+        // window as its own object, while neomacs keys the record on an id
+        // that can come back -- `set-window-configuration` deletes and re-adds
+        // windows, so consulting the deletion record first let a stale entry
+        // shadow the live window and answer nil for a window that had just
+        // been recorded.
+        let live = self
+            .find_valid_window_frame_id(window_id)
+            .and_then(|frame_id| self.frames.get(&frame_id));
+        let (old_buffer, stamp, frame_stamp) = if let Some(frame) = live {
+            let window = frame.find_window(window_id);
+            (
+                window.and_then(Window::old_buffer),
+                window.and_then(Window::change_stamp),
+                Some(frame.change_stamp),
+            )
+        } else if let Some(record) = self.deleted_windows.get(&window_id) {
+            let frame_stamp = self
+                .any_window_frame_id(window_id)
+                .and_then(|fid| self.frames.get(&fid))
+                .map(|frame| frame.change_stamp);
+            (record.old_buffer, record.change_stamp, frame_stamp)
+        } else {
+            return WindowOldBuffer::NeverRecorded;
+        };
 
         match old_buffer {
             None => WindowOldBuffer::NeverRecorded,

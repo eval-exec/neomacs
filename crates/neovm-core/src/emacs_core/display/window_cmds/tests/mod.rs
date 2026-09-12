@@ -750,6 +750,62 @@ fn window_old_buffer_reports_the_recorded_buffer_after_a_change_epoch() {
 }
 
 #[test]
+fn window_old_buffer_survives_a_same_epoch_configuration_round_trip() {
+    // A configuration saved and restored WITHIN one epoch keeps the window's
+    // old buffer.  GNU gates that on the frame's stamp (`src/window.c`):
+    //
+    //     if (data->change_stamp == f->change_stamp)
+    //       /* ... only if the configuration was saved and restored in between
+    //          two redisplay cycles ... */
+    //       w->old_buffer = p->old_buffer;
+    //
+    // so the window's own stamp still matches its frame's and the answer is the
+    // BUFFER.  The docstring's "t if WINDOW has been restored from a window
+    // configuration" describes the other side of that gate -- a restore ACROSS
+    // epochs -- which this does not exercise.
+    //
+    // Deliberately not asserted: that cross-epoch case.  It is unobservable
+    // from `--batch` on the GNU side, because the change functions never run
+    // there and a saved old_buffer is nil to begin with.  Asserting an
+    // inference from the docstring instead of a measured answer is exactly how
+    // the wrong expectation got written here the first time.
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new();
+    // Materialise the frame first: the hook runner walks `frame_list`, so
+    // running it against a context whose selected frame has not been demanded
+    // yet records nothing at all.
+    let _ = ev.eval_str_each("(selected-window)");
+
+    // Open an epoch so the window has a real record to restore.
+    crate::emacs_core::builtins::run_redisplay_window_change_hooks(&mut ev)
+        .expect("window change hooks");
+    let recorded = ev
+        .eval_str_each("(bufferp (window-old-buffer (selected-window)))")
+        .iter()
+        .map(format_eval_result)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        recorded[0], "OK t",
+        "precondition: the epoch recorded a buffer"
+    );
+
+    let out = ev
+        .eval_str_each(
+            "(let ((cfg (current-window-configuration)))
+               (set-window-configuration cfg)
+               (window-old-buffer (selected-window)))",
+        )
+        .iter()
+        .map(format_eval_result)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        out[0], "OK #<buffer 1>",
+        "saved and restored inside one epoch, the window still reports the \
+         buffer its record named"
+    );
+}
+
+#[test]
 fn minibuffer_window_frame_first_window_and_window_minibuffer_p_semantics() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
