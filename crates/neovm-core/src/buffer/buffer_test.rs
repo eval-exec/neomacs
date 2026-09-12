@@ -2857,21 +2857,42 @@ fn buffer_local_lookup_index_stays_coherent_across_value_and_structure_changes()
     );
     assert_eq!(local_var_alist_entry_probes(), 2);
 
-    // Prepending and removing bindings are structural changes and must
-    // invalidate the index before the next lookup.
+    // Prepending a NEW binding does not invalidate the index: the fresh entry
+    // is the alist head, and a changed head proves the symbol was absent (an
+    // existing one would have been written in place above), so the head is
+    // inserted directly. No probe runs, because nothing is rebuilt.
+    //
+    // This is the difference between O(n) and O(n^2) while a major mode is
+    // being activated: mode setup creates dozens of buffer-locals interleaved
+    // with reads of them, and a rebuild per creation walks the whole alist
+    // every time.
     buf.set_buffer_local_by_sym_id(third, Value::fixnum(3));
     assert_eq!(
         buf.get_buffer_local_by_sym_id_gated(third, true),
         Some(Value::fixnum(3))
     );
-    assert_eq!(local_var_alist_entry_probes(), 5);
+    assert_eq!(local_var_alist_entry_probes(), 2);
+    // The bindings that were already indexed still resolve, so the maintained
+    // index is complete and not merely correct for the new key.
+    assert_eq!(
+        buf.get_buffer_local_by_sym_id_gated(first, true),
+        Some(Value::fixnum(11))
+    );
+    assert_eq!(
+        buf.get_buffer_local_by_sym_id_gated(second, true),
+        Some(Value::fixnum(2))
+    );
+    assert_eq!(local_var_alist_entry_probes(), 2);
 
+    // Removal still invalidates: with duplicates unrepresentable through the
+    // ordinary APIs a targeted erase would do, but the conservative drop keeps
+    // `assq`'s first-duplicate rule true under any alist shape.
     assert_eq!(
         buf.kill_buffer_local_by_sym_id(second),
         Some(RuntimeBindingValue::Bound(Value::fixnum(2)))
     );
     assert_eq!(buf.get_buffer_local_by_sym_id_gated(second, true), None);
-    assert_eq!(local_var_alist_entry_probes(), 7);
+    assert_eq!(local_var_alist_entry_probes(), 4);
 }
 
 #[test]

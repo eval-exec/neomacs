@@ -1768,8 +1768,23 @@ impl LocalVariableBindings {
     fn set(&mut self, sym_id: SymId, value: Value) {
         let before = self.alist;
         set_local_var_alist_entry(&mut self.alist, Value::from_sym_id(sym_id), value);
-        if self.alist.bits() != before.bits() {
-            *self.index.get_mut() = None;
+        if self.alist.bits() == before.bits() {
+            // An existing entry's cdr was written in place. The index stores
+            // the cons itself, so it already observes the new value.
+            return;
+        }
+        // A NEW entry was prepended, so it is the alist head -- and a changed
+        // head proves `sym_id` was absent, because an entry that existed would
+        // have been mutated in place above. Inserting it keeps the index exact
+        // and costs one hash; dropping it instead made every buffer-local
+        // creation invalidate the map, so the next lookup rebuilt all of it.
+        //
+        // That was quadratic exactly where it hurts: activating a major mode
+        // creates dozens of buffer-locals interleaved with reads of them, and
+        // `emacs-lisp-mode` measured 176 `reserve_rehash` calls per activation
+        // against GNU's 41 `Fmake_local_variable`.
+        if let Some(index) = self.index.get_mut() {
+            index.insert(sym_id, self.alist.cons_car());
         }
     }
 
