@@ -24,6 +24,7 @@ use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
 
 mod input_method;
+pub mod persist;
 mod unread;
 pub(crate) use unread::UnreadCommandEvent;
 
@@ -1214,6 +1215,8 @@ impl TtyInputTarget {
 pub enum InputEvent {
     /// Ordered request answered with owned data at the next input read.
     ImeRequest(crate::ime::ImeRequest),
+    /// Ordered request to flush unsaved work before the host stops the process.
+    PersistRequest(persist::PersistRequest),
     /// Ordered, context-qualified text conversion on the VM thread.
     Ime {
         session: neovm_host_abi::ime::ImeSessionId,
@@ -4997,6 +5000,10 @@ impl crate::emacs_core::eval::Context {
 
         match event {
             InputEvent::ImeRequest(request) => request.dispatch(self),
+            InputEvent::PersistRequest(request) => {
+                self.dispatch_persist_request(request);
+                Ok(None)
+            }
             InputEvent::Ime {
                 session,
                 operation,

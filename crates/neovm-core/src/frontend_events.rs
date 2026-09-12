@@ -227,6 +227,12 @@ fn semantics(event: &InputEvent) -> FrontendEventSemantics {
             | crate::ImeRequest::SetSelection { .. }
             | crate::ImeRequest::SelectAndObserve { .. } => read_control(),
         },
+        // Flushing is in-order but NOT a command: the user typed nothing, so
+        // it must not become `last-command` or land in command history. Like
+        // the IME's observations, it is answered at the next input read so it
+        // cannot overtake preceding edits -- the whole point is to autosave
+        // the state after them.
+        InputEvent::PersistRequest(_) => read_control(),
         InputEvent::MousePress { .. } => command(),
         InputEvent::MouseRelease { .. } => command(),
         InputEvent::MouseMove { .. } => special(PendingPolicy::TrackMouse, false, true),
