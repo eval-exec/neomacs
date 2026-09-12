@@ -3718,7 +3718,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-android"
-version = "0.0.17"
+version = "0.0.18"
 dependencies = [
  "jni 0.22.4",
  "neomacs-app",
@@ -3733,7 +3733,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-app"
-version = "0.0.17"
+version = "0.0.18"
 dependencies = [
  "crossbeam-channel",
  "flate2",
@@ -3858,7 +3858,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-host-runtime"
-version = "0.0.17"
+version = "0.0.18"
 
 [[package]]
 name = "neomacs-layout-engine"
@@ -4060,7 +4060,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-wasm"
-version = "0.0.17"
+version = "0.0.18"
 dependencies = [
  "ciborium",
  "js-sys",
@@ -4078,7 +4078,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-wasm-protocol"
-version = "0.0.17"
+version = "0.0.18"
 dependencies = [
  "ciborium",
  "neomacs-app",
@@ -4089,7 +4089,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-wasm-worker"
-version = "0.0.17"
+version = "0.0.18"
 dependencies = [
  "ciborium",
  "neomacs-app",
@@ -4131,7 +4131,7 @@ dependencies = [
 
 [[package]]
 name = "neomacs-wgpu-runtime"
-version = "0.0.17"
+version = "0.0.18"
 dependencies = [
  "neomacs-app",
  "neomacs-display-protocol",
