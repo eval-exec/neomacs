@@ -243,7 +243,7 @@ itoa = "1.0"
 # GPU / windowing
 # Pin the fork's master integration: Wayland popup lifetime and Android key fixes.
 # Keep builds reproducible by revision; see the fork's NEOMACS_FORK.md.
-winit = { git = "https://github.com/eval-exec/winit", rev = "25e2e5e4652e14097bd64773cc0fdd9920ee293c", default-features = false }
+winit = { git = "https://github.com/eval-exec/winit", rev = "5bf5cc782666a024e728946328cf406a856263ee", default-features = false }
 wgpu = "30"
 # Keep this on the same major version as wgpu: the DMA-BUF importer passes
 # wgpu-hal types through wgpu's public HAL interop API.
