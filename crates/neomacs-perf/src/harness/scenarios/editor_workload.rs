@@ -628,6 +628,9 @@ pub(crate) fn validate_editor_workload_result(
         }
         // Both halves must actually have been measured: a row that reported
         // only one would silently stop guarding the other.
+        ScenarioId::ProcessOutput => {
+            require_positive_phase(&mut mismatches, "type-phase-time", result.type_phase_us);
+        }
         ScenarioId::FileOpen => {
             require_positive_phase(&mut mismatches, "type-phase-time", result.type_phase_us);
             require_positive_phase(

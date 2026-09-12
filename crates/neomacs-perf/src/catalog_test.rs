@@ -7,7 +7,7 @@ use super::{CrossEditorParityMetric, Frontend, MetricName, ScenarioId, scenario,
 #[test]
 fn catalog_exposes_the_rust_lsp_typing_workload_as_a_typed_scenario() {
     let scenarios = scenarios();
-    assert_eq!(scenarios.len(), 21);
+    assert_eq!(scenarios.len(), 22);
 
     // The heavy row exists so the light one keeps its baseline: same workload,
     // a whole-file diagnostic set instead of four on adjacent lines.
@@ -115,6 +115,7 @@ fn catalog_commits_the_editor_workflow_scenario_family() {
         ("magit-status-compiled", ScenarioId::MagitStatusCompiled),
         ("magit-status-heavy", ScenarioId::MagitStatusHeavy),
         ("file-open", ScenarioId::FileOpen),
+        ("process-output", ScenarioId::ProcessOutput),
         (
             "org-journal-open-compiled",
             ScenarioId::OrgJournalOpenCompiled,

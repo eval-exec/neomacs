@@ -257,6 +257,9 @@ the point of keeping both."
   (cond
    ((equal scenario "startup")
     (fundamental-mode))
+   ((equal scenario "process-output")
+    ;; The workload spawns the subprocess itself, once per iteration.
+    (fundamental-mode))
    ((equal scenario "file-open")
     ;; The workload opens the file itself, once per iteration, into a fresh
     ;; buffer -- so this one starts empty.
@@ -339,6 +342,24 @@ the point of keeping both."
                  motion-us (+ motion-us (neomacs-perf-workload--time
                                          #'neomacs-perf-workload--motion-phase))))
           ("startup" (redisplay t))
+          ("process-output"
+           ;; Reading a subprocess's output: spawn, read, DECODE, insert.
+           ;;
+           ;; Every compilation, grep, and language-server session pays this
+           ;; path, and no other row on the board touches it.  `call-process`
+           ;; rather than an async filter because a benchmark has to be
+           ;; deterministic -- it reaches the same decoder
+           ;; (`decode_process_run_in_context`), which is what this row exists
+           ;; to hold honest; it does not cover filter dispatch or partial-run
+           ;; carryover, and a row that claimed to would be lying.
+           (let ((path (neomacs-perf-workload--required-environment
+                        "NEOMACS_PERF_SOURCE")))
+             (setq type-us
+                   (+ type-us
+                      (neomacs-perf-workload--time
+                       (lambda ()
+                         (with-temp-buffer
+                           (call-process "cat" nil t nil path))))))))
           ("file-open"
            ;; Opening a file, split into the two halves that behave
            ;; differently, because a single number hides both.

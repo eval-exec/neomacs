@@ -92,6 +92,7 @@ const STANDARD_SCENARIOS: &[SuiteScenario] = &[
     ratcheted(ScenarioId::MagitStatusCompiled, 10.0, 2.0),
     ratcheted(ScenarioId::MagitStatusHeavy, 10.0, 2.0),
     ratcheted(ScenarioId::FileOpen, 8.0, 2.0),
+    ratcheted(ScenarioId::ProcessOutput, 10.0, 2.0),
     ratcheted(ScenarioId::OrgJournalOpenCompiled, 10.0, 2.0),
     // A pure compute round trip in batch, so it reproduces as tightly as the
     // other batch rows and can carry the same drift ratchet.

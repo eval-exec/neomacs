@@ -63,6 +63,14 @@ pub enum ScenarioId {
     /// `org-journal-open` with the package loaded as byte-code, for the same
     /// reason.
     OrgJournalOpenCompiled,
+    /// Reading a subprocess's output: spawn, read, decode, insert.
+    ///
+    /// Every compilation, grep and language-server session pays this path and
+    /// no other row touches it. It uses `call-process` so the row is
+    /// deterministic; that reaches the same decoder as the async filters
+    /// (`decode_process_run_in_context`) but does NOT cover filter dispatch or
+    /// partial-run carryover.
+    ProcessOutput,
     /// Opening a file: decode plus buffer insert, then fontification, timed
     /// apart.
     ///
@@ -137,6 +145,7 @@ impl ScenarioId {
             Self::OrgJournalOpenCompiled => "org-journal-open-compiled",
             Self::MagitStatusHeavy => "magit-status-heavy",
             Self::FileOpen => "file-open",
+            Self::ProcessOutput => "process-output",
             Self::LspJsonRpc => "lsp-json-rpc",
         }
     }
@@ -184,6 +193,7 @@ impl FromStr for ScenarioId {
             "org-journal-open-compiled" => Ok(Self::OrgJournalOpenCompiled),
             "magit-status-heavy" => Ok(Self::MagitStatusHeavy),
             "file-open" => Ok(Self::FileOpen),
+            "process-output" => Ok(Self::ProcessOutput),
             "lsp-json-rpc" => Ok(Self::LspJsonRpc),
             unknown => Err(UnknownScenarioId(unknown.to_string())),
         }
@@ -410,6 +420,14 @@ const SCENARIOS: &[ScenarioSpec] = &[
         cross_editor_parity_metrics: &[],
     },
     ScenarioSpec {
+        id: ScenarioId::ProcessOutput,
+        description: "Read a subprocess's output into a buffer: spawn, read, decode, insert",
+        default_frontend: Frontend::Batch,
+        default_iterations: NonZeroU32::new(20).expect("non-zero scenario default"),
+        primary_metric: MetricName::PerOperationWallTime,
+        cross_editor_parity_metrics: &[],
+    },
+    ScenarioSpec {
         id: ScenarioId::LspJsonRpc,
         description: "jsonrpc round trip at language-server message size: serialize a request, parse a diagnostics reply",
         default_frontend: Frontend::Batch,
@@ -447,7 +465,8 @@ pub const fn scenario(id: ScenarioId) -> &'static ScenarioSpec {
         ScenarioId::MagitStatusCompiled => &SCENARIOS[14],
         ScenarioId::OrgJournalOpenCompiled => &SCENARIOS[15],
         ScenarioId::RustLspTypingHeavy => &SCENARIOS[16],
-        ScenarioId::LspJsonRpc => &SCENARIOS[20],
+        ScenarioId::LspJsonRpc => &SCENARIOS[21],
+        ScenarioId::ProcessOutput => &SCENARIOS[20],
         ScenarioId::FileOpen => &SCENARIOS[19],
         ScenarioId::MagitStatusHeavy => &SCENARIOS[18],
         ScenarioId::OrgEditingHeavy => &SCENARIOS[17],
