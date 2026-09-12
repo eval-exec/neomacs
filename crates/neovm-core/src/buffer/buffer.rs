@@ -3507,6 +3507,17 @@ impl Buffer {
         self.text.next_newline_emacs_byte(from, limit)
     }
 
+    /// Position past the `n`th `\n` in `[from, limit)`, and how many were
+    /// crossed, in one traversal.  See [`BufferText::nth_newline_emacs_byte`].
+    pub(crate) fn nth_newline_emacs_byte(
+        &self,
+        from: EmacsBytePos,
+        limit: EmacsBytePos,
+        n: usize,
+    ) -> (EmacsBytePos, usize) {
+        self.text.nth_newline_emacs_byte(from, limit, n)
+    }
+
     /// Last `\n` in logical emacs-byte range `[floor, from)`, scanned in
     /// place.  See [`BufferText::prev_newline_emacs_byte`].
     pub(crate) fn prev_newline_emacs_byte(

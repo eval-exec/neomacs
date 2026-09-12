@@ -198,18 +198,14 @@ fn move_by_lines_narrowed(
         if n == 0 {
             return (line_beginning_byte_narrowed(buf, pos, begv), 0);
         }
-        for _ in 0..n {
-            match buf.next_newline_emacs_byte(EmacsBytePos::new(pos), EmacsBytePos::new(zv)) {
-                Some(nl) => {
-                    pos = nl.get() + 1;
-                    moved += 1;
-                }
-                None => {
-                    pos = zv;
-                    break;
-                }
-            }
-        }
+        // One traversal for all N lines. Asking for the next newline N times
+        // re-entered the rope to find its starting chunk on every line; GNU's
+        // `Fforward_line` reaches the Nth newline with a single `scan_buffer`.
+        let (end, crossed) =
+            buf.nth_newline_emacs_byte(EmacsBytePos::new(pos), EmacsBytePos::new(zv), n as usize);
+        moved = crossed as i64;
+        // Short of N means the range ran out: GNU leaves point at ZV.
+        pos = if crossed as i64 == n { end.get() } else { zv };
     } else {
         for _ in 0..(-n) {
             let bol = line_beginning_byte_narrowed(buf, pos, begv);

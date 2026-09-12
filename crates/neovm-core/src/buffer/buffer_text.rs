@@ -916,6 +916,12 @@ impl BufferText {
         let mut found = None;
         let _ =
             self.for_each_emacs_byte_range_chunk::<()>(EmacsByteRange::new(from, limit), |chunk| {
+                // A plain scan, deliberately. `memchr` was tried here and cost
+                // indentation +0.61% instructions: this call stops at the first
+                // newline, so it reads about one line, and the SIMD prologue is
+                // more than the handful of bytes it saves. `memchr` earns its
+                // setup in `nth_newline_emacs_byte`, which scans across many
+                // lines in one go.
                 match chunk.iter().position(|&b| b == b'\n') {
                     Some(off) => {
                         found = Some(base.add_len(EmacsByteLen::new(off)));
@@ -928,6 +934,55 @@ impl BufferText {
                 }
             });
         found
+    }
+
+    /// Position just past the `n`th `\n` at or after `from` and before `limit`,
+    /// with how many were actually crossed -- in ONE traversal.
+    ///
+    /// `forward-line N` used to call [`Self::next_newline_emacs_byte`] N times,
+    /// and each call re-entered the rope to locate its starting chunk. On an
+    /// LSP session with 150 diagnostics that was 25,860,294 newline scans, 228
+    /// instructions each, 16.8% of the whole workload -- because the Lisp side
+    /// moves to a diagnostic's line by asking for a large N, repeatedly. GNU
+    /// answers the same question with a single `scan_buffer` pass, which is
+    /// what this is.
+    ///
+    /// Stops early at `limit`, reporting the count reached; the caller decides
+    /// what a short move means.
+    pub(crate) fn nth_newline_emacs_byte(
+        &self,
+        from: EmacsBytePos,
+        limit: EmacsBytePos,
+        n: usize,
+    ) -> (EmacsBytePos, usize) {
+        let total = self.emacs_byte_end_pos();
+        let from = from.min(total);
+        let limit = limit.min(total);
+        if n == 0 || from >= limit {
+            return (from, 0);
+        }
+        let mut base = from;
+        let mut crossed = 0usize;
+        let mut past_last = from;
+        let _ =
+            self.for_each_emacs_byte_range_chunk::<()>(EmacsByteRange::new(from, limit), |chunk| {
+                let mut off = 0usize;
+                while let Some(hit) = memchr::memchr(b'\n', &chunk[off..]) {
+                    let at = off + hit;
+                    crossed += 1;
+                    past_last = base.add_len(EmacsByteLen::new(at + 1));
+                    if crossed == n {
+                        return Err(());
+                    }
+                    off = at + 1;
+                    if off >= chunk.len() {
+                        break;
+                    }
+                }
+                base = base.add_len(EmacsByteLen::new(chunk.len()));
+                Ok(())
+            });
+        (past_last, crossed)
     }
 
     /// Last `\n` in the logical emacs-byte range `[floor, from)`, or `None`.
