@@ -9,7 +9,7 @@ use neomacs_app::frontend_event::{
 };
 use neomacs_app::lifecycle::{FrontendLifecycle, LifecycleAction, LifecycleEvent};
 use neomacs_app::session::{
-    FrontendFrameInbox, FrontendFrameReceive, FrontendInputPort, NativeEditorWorker,
+    FrontendFrameInbox, FrontendFrameReceive, FrontendInputPort, HostStopFlush, NativeEditorWorker,
     NativeEditorWorkerEvent,
 };
 use neomacs_wgpu_runtime::{SurfaceFrameRenderer, SurfaceWindow, WinitFrontendInput};
@@ -227,6 +227,34 @@ impl ApplicationHandler for AndroidFrontend {
             self.presented = None;
             self.window = None;
             self.animation_deadline = None;
+        }
+    }
+
+    fn suspended(&mut self, _event_loop: &dyn ActiveEventLoop) {
+        // Android's `onStop`. After this returns the OS is free to kill the
+        // process with no further notice, and GNU's autosave is driven by
+        // keystroke and idle counters that stop counting the moment we stop
+        // running -- so without this, everything typed since the last autosave
+        // is lost on a routine app switch.
+        //
+        // `destroy_surfaces` handles the GPU side of suspension; this handles
+        // the durability side. They are separate winit callbacks and Android
+        // does not guarantee both, so neither may assume the other ran.
+        let Some(input) = self.input.as_ref() else {
+            return;
+        };
+        match input.flush_for_host_stop() {
+            HostStopFlush::Flushed => {}
+            HostStopFlush::Failed => {
+                eprintln!("neomacs: autosave signalled while the host was stopping");
+            }
+            HostStopFlush::TimedOut => {
+                eprintln!(
+                    "neomacs: autosave did not finish within {:?} while the host was stopping",
+                    neomacs_app::session::HOST_STOP_FLUSH_TIMEOUT
+                );
+            }
+            HostStopFlush::Disconnected => {}
         }
     }
 

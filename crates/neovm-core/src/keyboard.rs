@@ -26,6 +26,7 @@ use std::time::Duration;
 mod display_service;
 mod input_method;
 mod keysym;
+pub mod persist;
 mod unread;
 
 pub use keysym::{native_key_android, native_key_macos, native_key_ohos, native_key_windows};
@@ -1279,6 +1280,8 @@ pub enum InputEvent {
     },
     /// Ordered request answered with owned data at the next input read.
     ImeRequest(crate::ime::ImeRequest),
+    /// Ordered request to flush unsaved work before the host stops the process.
+    PersistRequest(persist::PersistRequest),
     /// Ordered, context-qualified text conversion on the VM thread.
     Ime {
         session: neovm_host_abi::ime::ImeSessionId,
@@ -5192,6 +5195,10 @@ impl crate::emacs_core::eval::Context {
                 self.handle_read_char_input_event(*event, tty_input_decoding)
             }
             InputEvent::ImeRequest(request) => request.dispatch(self),
+            InputEvent::PersistRequest(request) => {
+                self.dispatch_persist_request(request);
+                Ok(None)
+            }
             InputEvent::Ime {
                 session,
                 operation,
