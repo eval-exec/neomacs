@@ -2303,12 +2303,11 @@ pub(crate) fn builtin_split_window_internal(
         &args[0],
     )?;
     let _ = expect_fixnum(&args[1])?;
-    if !args[2].is_nil() && !args[2].is_symbol() {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("symbolp"), args[2]],
-        ));
-    }
+    // SIDE is deliberately NOT type-checked.  GNU never validates it: it
+    // reduces it to `horflag' and a before/after test, both plain `EQ'
+    // comparisons against a closed set of symbols (`src/window.c'), so a
+    // fixnum or a string SIDE is not an error -- it just means "below".
+    // A `symbolp' check here rejected calls GNU accepts.
 
     // REFER is accepted for arity compatibility and ignored.  NORMAL-SIZE is
     // NOT ignored: GNU stages it as the new window's `new_normal'

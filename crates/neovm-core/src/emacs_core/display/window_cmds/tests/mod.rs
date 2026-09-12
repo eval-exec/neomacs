@@ -2426,38 +2426,110 @@ fn split_window_internal_creates_new() {
 fn split_window_side_domain_matches_gnu() {
     crate::test_utils::init_test_tracing();
     assert_eq!(
-        SplitWindowSide::from_lisp_value(&Value::NIL),
-        Some(SplitWindowSide::Below)
+        SplitWindowSide::from_side_argument(&Value::NIL),
+        SplitWindowSide::Below
     );
     assert_eq!(
-        SplitWindowSide::from_lisp_value(&Value::T),
-        Some(SplitWindowSide::Right)
+        SplitWindowSide::from_side_argument(&Value::T),
+        SplitWindowSide::Right
     );
     assert_eq!(
-        SplitWindowSide::from_lisp_value(&Value::symbol("above")),
-        Some(SplitWindowSide::Above)
+        SplitWindowSide::from_side_argument(&Value::symbol("above")),
+        SplitWindowSide::Above
     );
     assert_eq!(
-        SplitWindowSide::from_lisp_value(&Value::symbol("below")),
-        Some(SplitWindowSide::Below)
+        SplitWindowSide::from_side_argument(&Value::symbol("below")),
+        SplitWindowSide::Below
     );
     assert_eq!(
-        SplitWindowSide::from_lisp_value(&Value::symbol("left")),
-        Some(SplitWindowSide::Left)
+        SplitWindowSide::from_side_argument(&Value::symbol("left")),
+        SplitWindowSide::Left
     );
     assert_eq!(
-        SplitWindowSide::from_lisp_value(&Value::symbol("right")),
-        Some(SplitWindowSide::Right)
+        SplitWindowSide::from_side_argument(&Value::symbol("right")),
+        SplitWindowSide::Right
     );
     assert_eq!(SplitWindowSide::Right.name(), "right");
     assert!(SplitWindowSide::Right.is_horizontal());
     assert!(SplitWindowSide::Left.is_horizontal());
     assert!(!SplitWindowSide::Above.is_horizontal());
     assert!(!SplitWindowSide::Below.is_horizontal());
+    // Unrecognised values are not an error, they are `below' -- GNU's
+    // `horflag'/before tests are `EQ' against a closed set and reject nothing,
+    // so a stray symbol, a fixnum and a string all split vertically.
     assert_eq!(
-        SplitWindowSide::from_lisp_value(&Value::symbol("other")),
-        None
+        SplitWindowSide::from_side_argument(&Value::symbol("other")),
+        SplitWindowSide::Below
     );
+    assert_eq!(
+        SplitWindowSide::from_side_argument(&Value::fixnum(9)),
+        SplitWindowSide::Below
+    );
+    assert_eq!(
+        SplitWindowSide::from_side_argument(&Value::string("x")),
+        SplitWindowSide::Below
+    );
+}
+
+#[test]
+fn split_window_internal_bad_old_names_window_valid_p_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // GNU decodes OLD with `decode_valid_window' (`src/window.c'), and does so
+    // BEFORE `CHECK_FIXNUM (pixel_size)'.  Measured on GNU Emacs 31.1:
+    //
+    //   (split-window-internal 'foo 10   nil 0.5) => (wrong-type-argument window-valid-p foo)
+    //   (split-window-internal 'foo 'zz  9   0.5) => (wrong-type-argument window-valid-p foo)
+    //
+    // The second case is the ordering proof: with BOTH arguments wrong it is
+    // still the window that gets named, never `fixnump'.
+    let results = bootstrap_eval_with_frame(
+        "(list (condition-case err (split-window-internal 'foo 10 nil 0.5)
+                 (error (car (cdr err))))
+               (condition-case err (split-window-internal 'foo 'zz 9 0.5)
+                 (error (car (cdr err)))))",
+    );
+    assert_eq!(results[0], "OK (window-valid-p window-valid-p)");
+}
+
+#[test]
+fn split_window_internal_never_type_checks_side_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // `Fsplit_window_internal' reduces SIDE to two `EQ' tests over a closed
+    // set and validates nothing (`src/window.c'):
+    //
+    //     bool horflag = EQ (side, Qt) || EQ (side, Qleft) || EQ (side, Qright);
+    //     ...
+    //     if (EQ (side, Qabove) || EQ (side, Qleft))   /* insert before */
+    //
+    // so a fixnum SIDE is not an error -- it is simply neither horizontal nor
+    // before, i.e. exactly `below'.  Measured on GNU Emacs 31.1: no SIDE value
+    // produces a `wrong-type-argument'; 9, "x", nil, `below' and `right' all
+    // reach the resize step and fail there identically.
+    //
+    // That last part is why this asserts a RELATIVE result.  GNU rejects a
+    // direct `split-window-internal' call outright -- its docstring requires
+    // the caller to have staged the new pixel/normal sizes first ("See the
+    // code of `split-window' for how this is done"), and an unstaged call
+    // signals (error "Resizing old window failed") for EVERY side, valid ones
+    // included.  So GNU's geometry is not an available oracle here; what is
+    // comparable is the decode that runs before any resizing.  Pinning that a
+    // fixnum SIDE lands on the same side as `below' and NOT on `right' says
+    // exactly what GNU's two `EQ' tests say, without depending on either
+    // implementation's sizing.
+    let results = bootstrap_eval_with_frame(
+        "(let* ((half (/ (window-pixel-height (selected-window)) 2))
+                (a (split-window-internal (selected-window) half 9 nil))
+                (ga (list (window-total-height a) (window-total-width a))))
+           (delete-window a)
+           (let* ((b (split-window-internal (selected-window) half 'below nil))
+                  (gb (list (window-total-height b) (window-total-width b))))
+             (delete-window b)
+             (let* ((c (split-window-internal (selected-window) half 'right nil))
+                    (gc (list (window-total-height c) (window-total-width c))))
+               (delete-window c)
+               (list (equal ga gb) (equal ga gc)))))",
+    );
+    assert_eq!(results[0], "OK (t nil)");
 }
 
 #[test]

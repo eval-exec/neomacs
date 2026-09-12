@@ -77,6 +77,28 @@ pub(crate) use super::builtins::{
 // discarded the write that `window.el`'s resize engine depends on.
 // ---------------------------------------------------------------------------
 
+/// Validate `split-window-internal`'s OLD argument the way GNU does.
+///
+/// `Fsplit_window_internal` opens with `decode_valid_window (old)`, so OLD is
+/// a `window-valid-p` argument -- an INTERNAL window is accepted, a deleted
+/// one is not -- and `CHECK_VALID_WINDOW` names `Qwindow_valid_p`
+/// unconditionally (`src/window.h`), for a non-window designator just as much
+/// as for a dead window.  Going through the shared decoder with
+/// [`WindowDomain::Valid`] *is* that contract; a private helper used to stand
+/// in for it and reported `windowp` for anything that was not a window
+/// designator, a branch GNU's macro does not have.
+///
+/// It also fixes the check ORDER: GNU decodes OLD before it `CHECK_FIXNUM`s
+/// PIXEL-SIZE, so a call with both arguments wrong must name the window.
+pub(crate) fn validate_split_window_target(
+    frames: &mut FrameManager,
+    buffers: &mut BufferManager,
+    window: &Value,
+) -> Result<(), Flow> {
+    resolve_window_id_with_pred_in_state(frames, buffers, Some(window), WindowDomain::Valid)
+        .map(|_| ())
+}
+
 /// GNU's `decode_live_window` (`src/window.c`): nil is the SELECTED window and
 /// everything else must be a LIVE window -- an internal window, a deleted
 /// window, a frame and a symbol are all rejected against `window-live-p`.
@@ -86,18 +108,6 @@ pub(crate) use super::builtins::{
 /// only chooses the error TEXT: its check is `find_window`, which matches any
 /// node of the window tree, so asking it for `window-live-p` still accepts an
 /// internal window and merely misreports the reason when it fails.
-/// Validate `split-window-internal`'s OLD argument through the resolver the
-/// split itself uses, so GNU's check ORDER survives: `Fsplit_window_internal`
-/// decodes OLD before it `CHECK_FIXNUM`s PIXEL-SIZE, and reporting the size
-/// first would name the wrong argument when both are wrong.
-pub(crate) fn validate_split_window_target(
-    frames: &mut FrameManager,
-    buffers: &mut BufferManager,
-    window: &Value,
-) -> Result<(), Flow> {
-    resolve_window_id_or_error_in_state(frames, buffers, Some(window)).map(|_| ())
-}
-
 pub(crate) fn decode_live_window_id(
     eval: &mut super::eval::Context,
     arg: Option<&Value>,
@@ -286,14 +296,29 @@ pub(crate) enum SplitWindowSide {
 }
 
 impl SplitWindowSide {
-    pub(crate) fn from_lisp_value(value: &Value) -> Option<Self> {
-        if value.is_nil() {
-            return Some(Self::Below);
-        }
+    /// GNU's SIDE decode (`Fsplit_window_internal', `src/window.c') is TOTAL:
+    /// it never validates the argument, it just reduces it to two booleans
+    /// over a closed set of symbols --
+    ///
+    ///     bool horflag = EQ (side, Qt) || EQ (side, Qleft) || EQ (side, Qright);
+    ///     ...
+    ///     if (EQ (side, Qabove) || EQ (side, Qleft))   /* insert before OLD */
+    ///
+    /// -- so every Lisp value names a side, and anything the grammar does not
+    /// recognise (a fixnum, a string, `below', an unrelated symbol) is
+    /// horizontal=false, before=false, i.e. `below'.  These four variants are
+    /// exactly the product of GNU's two bools, which is why this can return
+    /// `Self' rather than `Option<Self>': an `Option' here would invent a
+    /// failure mode GNU does not have, and that invented `None' is precisely
+    /// what a spurious `symbolp' type-check on SIDE was once built on.
+    pub(crate) fn from_side_argument(value: &Value) -> Self {
         if value.is_t() {
-            return Some(Self::Right);
+            return Self::Right;
         }
-        value.as_symbol_name()?.parse().ok()
+        value
+            .as_symbol_name()
+            .and_then(|name| name.parse().ok())
+            .unwrap_or(Self::Below)
     }
 
     pub(crate) fn is_horizontal(self) -> bool {
@@ -673,33 +698,6 @@ fn resolve_window_object_id_with_pred_in_state(
         Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol(pred.predicate()), *val],
-        ))
-    }
-}
-
-fn resolve_window_id_or_error_in_state(
-    frames: &mut FrameManager,
-    buffers: &mut BufferManager,
-    arg: Option<&Value>,
-) -> Result<(FrameId, WindowId), Flow> {
-    if arg.is_none_or(|v| v.is_nil()) {
-        return resolve_window_id_in_state(frames, buffers, arg);
-    }
-    let value = arg.unwrap();
-    let Some(wid) = window_id_from_designator(value) else {
-        // GNU window.c: CHECK_VALID_WINDOW signals wrong-type-argument
-        // with window-valid-p (or windowp for non-window types).
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("windowp"), *value],
-        ));
-    };
-    if let Some(fid) = frames.find_valid_window_frame_id(wid) {
-        Ok((fid, wid))
-    } else {
-        Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("window-valid-p"), *value],
         ))
     }
 }
@@ -4011,16 +4009,18 @@ pub(crate) fn split_window_internal_impl_in_state_with_normal(
     normal_size: Value,
     combination_limit: CombinationLimit,
 ) -> EvalResult {
-    let (fid, wid) = resolve_window_id_or_error_in_state(frames, buffers, Some(&window))?;
+    let (fid, wid) =
+        resolve_window_id_with_pred_in_state(frames, buffers, Some(&window), WindowDomain::Valid)?;
 
     // GNU's `window_point` reads the selected window's live buffer point.  Keep
     // the leaf cache in sync before cloning the window tree so a same-buffer
     // split inherits that effective point, not a stale marker value.
     remember_selected_window_point_in_state(frames, buffers, fid);
 
-    // GNU `Fsplit_window_internal` treats SIDE t as `right`, nil as
-    // `below`, and unknown symbols like the vertical/default side.
-    let side_kind = SplitWindowSide::from_lisp_value(&side).unwrap_or(SplitWindowSide::Below);
+    // GNU `Fsplit_window_internal` treats SIDE t as `right`, and every value
+    // it does not recognise -- nil, `below', an unrelated symbol, a fixnum,
+    // a string -- as the vertical/default side.  The decode is total.
+    let side_kind = SplitWindowSide::from_side_argument(&side);
     let direction = if side_kind.is_horizontal() {
         SplitDirection::Horizontal
     } else {

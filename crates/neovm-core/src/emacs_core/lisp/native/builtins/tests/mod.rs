@@ -4199,9 +4199,17 @@ fn split_window_internal_validates_core_argument_types() {
     match window_type {
         Flow::Signal(sig) => {
             assert_eq!(sig.symbol_name(), "wrong-type-argument");
+            // GNU decodes OLD with `decode_valid_window' (`src/window.c'),
+            // whose CHECK_VALID_WINDOW names `window-valid-p' -- NOT `windowp'.
+            // Measured on GNU Emacs 31.1:
+            //   (split-window-internal 'foo 10 nil 0.5)
+            //     => (wrong-type-argument window-valid-p foo)
             assert_eq!(
                 sig.data,
-                vec![Value::symbol("windowp"), Value::symbol("not-a-window")]
+                vec![
+                    Value::symbol("window-valid-p"),
+                    Value::symbol("not-a-window")
+                ]
             );
         }
         other => panic!("unexpected flow: {other:?}"),
@@ -4228,20 +4236,25 @@ fn split_window_internal_validates_core_argument_types() {
         other => panic!("unexpected flow: {other:?}"),
     }
 
-    // A real PIXEL-SIZE, so the SIDE check is actually reached: GNU checks the
-    // size first, which this used to short-circuit on.
-    let side_type = builtin_split_window_internal(
+    // SIDE is NOT type-checked, by GNU or by us.  `Fsplit_window_internal'
+    // reduces it to a single bool and never validates it:
+    //
+    //     bool horflag
+    //       = EQ (side, Qt) || EQ (side, Qleft) || EQ (side, Qright);
+    //
+    // so every value that is not `t'/`left'/`right' -- a fixnum and a string
+    // included -- simply means "split vertically".  Measured on GNU Emacs
+    // 31.1, where no SIDE value produces a `wrong-type-argument' at all:
+    //   (split-window-internal (selected-window) 10 9   0.5) => geometry error
+    //   (split-window-internal (selected-window) 10 "x" 0.5) => geometry error
+    //   (split-window-internal (selected-window) 10 nil 0.5) => geometry error
+    // (all three fail identically, on the resize step, as does SIDE `below').
+    let side_not_checked = builtin_split_window_internal(
         &mut eval,
         vec![Value::NIL, Value::fixnum(12), Value::fixnum(9), Value::NIL],
     )
-    .expect_err("split-window-internal should reject non-symbol SIDE");
-    match side_type {
-        Flow::Signal(sig) => {
-            assert_eq!(sig.symbol_name(), "wrong-type-argument");
-            assert_eq!(sig.data, vec![Value::symbol("symbolp"), Value::fixnum(9)]);
-        }
-        other => panic!("unexpected flow: {other:?}"),
-    }
+    .expect("split-window-internal must not type-check SIDE");
+    assert!(side_not_checked.is_window());
 }
 
 #[test]
