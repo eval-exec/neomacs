@@ -43,6 +43,51 @@ pub enum SurfacePresentError {
     Validation,
     #[error("the recreated surface has no usable configuration")]
     UnsupportedSurface,
+    #[error(
+        "the GPU device reported {0} consecutive lost surfaces; it will not present again \
+         without a full device rebuild"
+    )]
+    DeviceLost(u32),
+}
+
+/// Consecutive `CurrentSurfaceTexture::Lost` results escalated to a device
+/// loss, matching the desktop render thread's
+/// `CONSECUTIVE_SURFACE_LOST_THRESHOLD`.
+///
+/// A one-off Lost is an ordinary swapchain hiccup and is merely recovered from.
+/// A device that keeps answering Lost never presents again without a rebuild,
+/// and recreating the surface each time allocates a fresh `wgpu::Surface` per
+/// frame while asking the frontend for another redraw -- an unbounded livelock
+/// with no diagnostic. Desktop already escalates; this is the shared runtime
+/// reaching the same conclusion rather than spinning.
+const CONSECUTIVE_SURFACE_LOST_THRESHOLD: u32 = 30;
+
+/// Consecutive-`Lost` counter behind [`CONSECUTIVE_SURFACE_LOST_THRESHOLD`].
+///
+/// Split out from the runtime because `wgpu::CurrentSurfaceTexture` owns a real
+/// swapchain image and cannot be constructed in a test, so the policy would
+/// otherwise only be exercised by an actual driver reset.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(super) struct SurfaceLostStreak {
+    consecutive: u32,
+}
+
+impl SurfaceLostStreak {
+    /// An acquisition yielded a texture: the device is presenting again.
+    pub(super) const fn acquired(&mut self) {
+        self.consecutive = 0;
+    }
+
+    /// Record a `Lost`. Returns the streak length once it must be escalated to
+    /// a device loss rather than recovered from again.
+    pub(super) const fn lost(&mut self) -> Option<u32> {
+        self.consecutive += 1;
+        if self.consecutive >= CONSECUTIVE_SURFACE_LOST_THRESHOLD {
+            Some(self.consecutive)
+        } else {
+            None
+        }
+    }
 }
 
 /// A non-fatal reason why no frame was presented.
@@ -126,6 +171,7 @@ pub struct SurfaceRuntime {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
     extent: SurfaceExtent,
+    surface_lost: SurfaceLostStreak,
 }
 
 impl SurfaceRuntime {
@@ -184,6 +230,7 @@ impl SurfaceRuntime {
             surface,
             config,
             extent,
+            surface_lost: SurfaceLostStreak::default(),
         })
     }
 
@@ -331,12 +378,14 @@ impl SurfaceRuntime {
         for _ in 0..2 {
             match self.surface.get_current_texture() {
                 CurrentSurfaceTexture::Success(texture) => {
+                    self.surface_lost.acquired();
                     return Ok(AcquiredFrame::Present {
                         texture,
                         reconfigure_after_present: false,
                     });
                 }
                 CurrentSurfaceTexture::Suboptimal(texture) => {
+                    self.surface_lost.acquired();
                     return Ok(AcquiredFrame::Present {
                         texture,
                         reconfigure_after_present: true,
@@ -349,7 +398,12 @@ impl SurfaceRuntime {
                     return Ok(AcquiredFrame::Skip(PresentationSkipReason::Occluded));
                 }
                 CurrentSurfaceTexture::Outdated => self.configure_drawable(),
-                CurrentSurfaceTexture::Lost => self.recreate_surface()?,
+                CurrentSurfaceTexture::Lost => {
+                    if let Some(streak) = self.surface_lost.lost() {
+                        return Err(SurfacePresentError::DeviceLost(streak));
+                    }
+                    self.recreate_surface()?;
+                }
                 CurrentSurfaceTexture::Validation => {
                     return Err(SurfacePresentError::Validation);
                 }
@@ -401,5 +455,45 @@ mod tests {
             browser_device_limits(wgpu::Backend::BrowserWebGpu, adapter_limits.clone()),
             wgpu::Limits::default().using_resolution(adapter_limits)
         );
+    }
+}
+
+#[cfg(test)]
+mod surface_lost_tests {
+    use super::{CONSECUTIVE_SURFACE_LOST_THRESHOLD, SurfaceLostStreak};
+
+    #[test]
+    fn a_one_off_lost_surface_is_recovered_not_escalated() {
+        // The common case: a swapchain hiccup. Escalating here would rebuild
+        // the GPU device over a transient.
+        let mut streak = SurfaceLostStreak::default();
+        assert_eq!(streak.lost(), None);
+    }
+
+    #[test]
+    fn a_device_that_keeps_answering_lost_escalates_instead_of_looping() {
+        // The bug this policy exists for: without it, every attempt recreated
+        // a `wgpu::Surface` and asked the frontend for another redraw, so a
+        // driver reset became an unbounded livelock with no diagnostic.
+        let mut streak = SurfaceLostStreak::default();
+        for attempt in 1..CONSECUTIVE_SURFACE_LOST_THRESHOLD {
+            assert_eq!(streak.lost(), None, "attempt {attempt} must still recover");
+        }
+        assert_eq!(
+            streak.lost(),
+            Some(CONSECUTIVE_SURFACE_LOST_THRESHOLD),
+            "the threshold itself must escalate, not the one after it"
+        );
+    }
+
+    #[test]
+    fn only_consecutive_losses_count() {
+        // A device that presents between hiccups is healthy; the streak must
+        // not accumulate across successful frames into a spurious rebuild.
+        let mut streak = SurfaceLostStreak::default();
+        for _ in 0..(CONSECUTIVE_SURFACE_LOST_THRESHOLD * 3) {
+            assert_eq!(streak.lost(), None);
+            streak.acquired();
+        }
     }
 }
