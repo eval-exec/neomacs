@@ -7587,6 +7587,15 @@ pub(crate) fn builtin_buffer_text_pixel_size(
 ) -> EvalResult {
     expect_args_range("buffer-text-pixel-size", &args, 0, 4)?;
 
+    // GNU's FIRST statement is `struct window *w = decode_live_window (window);`
+    // (`src/xdisp.c`), so WINDOW is decoded before BUFFER-OR-NAME is resolved
+    // and an internal or deleted window signals `window-live-p`.  The check
+    // here used to be `!window.is_nil() && !window.is_window()` -- a tag test
+    // that named `window-live-p` while enforcing `windowp`, so every window
+    // object was accepted -- and it ran AFTER the buffer was resolved, so a bad
+    // buffer name masked a bad window.
+    crate::emacs_core::window_cmds::decode_live_window_id(eval, args.get(1))?;
+
     // GNU `buffer-text-pixel-size` returns PIXELS: the measured column/row counts
     // scaled by the frame's character cell size. On a TTY the cell is 1x1 (so the
     // result equals the cell counts), on a GUI frame it is the real font
@@ -7608,16 +7617,6 @@ pub(crate) fn builtin_buffer_text_pixel_size(
     } else {
         resolve_buffer_designator_allow_nil_current_in_manager(buffers, &args[0])?
     };
-
-    if args.len() > 1 {
-        let window = &args[1];
-        if !window.is_nil() && !window.is_window() {
-            return Err(signal(
-                LispCondition::WrongTypeArgument,
-                vec![Value::symbol("window-live-p"), *window],
-            ));
-        }
-    }
 
     let limit_from_value = |value: &Value| -> Result<Option<usize>, Flow> {
         match value.kind() {

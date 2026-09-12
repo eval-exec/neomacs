@@ -2472,6 +2472,52 @@ fn split_window_side_domain_matches_gnu() {
 }
 
 #[test]
+fn buffer_text_pixel_size_requires_a_live_window_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // GNU's first statement is `struct window *w = decode_live_window (window);`
+    // (`src/xdisp.c`), so WINDOW is decoded before BUFFER-OR-NAME is resolved,
+    // and an internal or deleted window signals `window-live-p`.
+    //
+    // neomacs tag-tested it -- `!window.is_nil() && !window.is_window()` --
+    // while still reporting `window-live-p`, so it accepted every window object
+    // and measured against it.  That is the fourth instance this session of a
+    // check that names one decoder's contract and enforces another's.
+    //
+    // Measured on GNU Emacs 31.1:
+    //   (buffer-text-pixel-size nil INTERNAL)  => (wrong-type-argument window-live-p W)
+    //   (buffer-text-pixel-size nil DEAD)      => (wrong-type-argument window-live-p W)
+    //   (buffer-text-pixel-size "nope" INTERNAL) => window-live-p, NOT the buffer
+    //     error -- which is the ordering proof.
+    //
+    // This subr was invisible to the differential audit: the harness only ever
+    // put its probe value in argument position 0, and WINDOW is argument 1.
+    //
+    // GNU segfaults on `(buffer-text-pixel-size "no-such-buffer" nil)` -- a
+    // nonexistent buffer name with a live window.  neomacs raises a clean
+    // `error "No buffer named ..."` there and that is deliberately NOT changed
+    // to match.
+    let results = bootstrap_eval_with_frame(
+        "(let* ((live (selected-window))
+                (parent (window-parent (progn (split-window-below) (selected-window))))
+                (dead (let ((w (split-window-below))) (delete-window w) w))
+                (probe (lambda (th) (condition-case e (funcall th)
+                                      (wrong-type-argument (car (cdr e)))
+                                      (error 'plain-error)))))
+           (list (funcall probe (lambda () (buffer-text-pixel-size nil parent)))
+                 (funcall probe (lambda () (buffer-text-pixel-size nil dead)))
+                 ;; WINDOW is decoded before BUFFER-OR-NAME
+                 (funcall probe (lambda () (buffer-text-pixel-size \"no-such-buffer-xyz\" parent)))
+                 ;; a live window still measures
+                 (funcall probe (lambda () (buffer-text-pixel-size nil live)))
+                 (funcall probe (lambda () (buffer-text-pixel-size nil nil)))))",
+    );
+    assert_eq!(
+        results[0],
+        "OK (window-live-p window-live-p window-live-p (0 . 0) (0 . 0))"
+    );
+}
+
+#[test]
 fn window_new_normal_starts_at_zero_like_gnu() {
     crate::test_utils::init_test_tracing();
     // GNU's `make_window` initializes the three pending-size slots to 0, right
