@@ -100,7 +100,7 @@ windows-sys.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2.workspace = true
-objc2-app-kit = { workspace = true, features = ["NSColor"] }
+objc2-app-kit = { workspace = true, features = ["NSColor", "NSFont", "objc2-core-foundation"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # 0.22.9 references GDBusActionGroupClass absent from gio-sys 0.22.8.

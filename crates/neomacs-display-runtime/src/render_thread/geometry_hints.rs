@@ -6,6 +6,17 @@ pub(crate) fn apply_window_geometry_hints(
     window: &dyn Window,
     geometry_hints: GuiFrameGeometryHints,
 ) {
+    // GNU gtkutil.c:xg_wm_set_size_hint supplies the minimum with resize
+    // increments. This is essential on Wayland: winit snaps floating windows
+    // relative to their minimum surface size, not relative to zero. Leaving
+    // its default minimum in place shrinks even an already aligned text grid.
+    window.set_min_surface_size(Some(
+        PhysicalSize::new(
+            geometry_hints.min_width.max(1),
+            geometry_hints.min_height.max(1),
+        )
+        .into(),
+    ));
     window.set_surface_resize_increments(Some(
         PhysicalSize::new(
             geometry_hints.width_inc.max(1),

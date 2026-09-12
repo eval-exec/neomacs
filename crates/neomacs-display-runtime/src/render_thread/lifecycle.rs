@@ -1,9 +1,9 @@
 use super::RenderApp;
 use super::frame_windows::{FrameLifecycle, NativeTextInputPolicy};
+use super::geometry_hints::apply_window_geometry_hints;
 use super::state::{
     RenderGpuContext, effective_window_scale_factor, window_size_from_emacs_pixels,
 };
-use super::x11_hints::apply_window_geometry_hints;
 use crate::thread_comm::InputEvent;
 use neomacs_display_protocol::frame_time::EventTime;
 use std::sync::Arc;

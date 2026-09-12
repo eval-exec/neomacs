@@ -1411,6 +1411,12 @@ impl FontMetricsService {
         italic: bool,
         font_size: f32,
     ) -> (Option<fontdb::ID>, f32) {
+        // Cosmic's Buffer constructor shapes its default line and requires at
+        // least one catalog face. Preserve this selector's fallible contract
+        // when no native fonts are installed instead of panicking in shaping.
+        if self.font_system.db().faces().next().is_none() {
+            return (None, 0.0);
+        }
         let attrs = self.build_attrs(
             family,
             weight,

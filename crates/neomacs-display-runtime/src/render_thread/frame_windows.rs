@@ -15,6 +15,7 @@ use winit::window::{Window, WindowId};
 
 use super::cursor::{CursorState, CursorTarget};
 pub(crate) use super::frame_compositor::{FrameCompositor, RetainedCursorCell, RetainedStatic};
+use super::geometry_hints::apply_window_geometry_hints;
 use super::state::{
     FpsCounter, GuiChromeInteractionState, IdleDimState, ImeCursorArea, PendingPointerDamage,
     PointerAppearanceState, PresentedInteractionKey, PresentedPointerHit, PresentedPressCapture,
@@ -23,7 +24,6 @@ use super::state::{
 #[cfg(feature = "neo-term")]
 use super::terminal_expansion::TerminalExpansion;
 use super::transitions::clear_frame_transition_textures;
-use super::x11_hints::apply_window_geometry_hints;
 use crate::core::frame_glyphs::{FrameGlyph, FrameGlyphBuffer};
 use neomacs_display_protocol::effect_config::IdleDimConfig;
 use neomacs_display_protocol::frame_time::EventTime;

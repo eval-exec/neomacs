@@ -33,6 +33,7 @@ mod tests;
 #[path = "texture_discipline_test.rs"]
 mod texture_discipline_test;
 
+mod geometry_hints;
 mod thread_handle;
 #[cfg(test)]
 #[path = "time_discipline_test.rs"]
@@ -42,7 +43,6 @@ mod transitions;
 mod ui_commands;
 mod window_commands;
 mod window_events;
-mod x11_hints;
 
 #[cfg(feature = "neo-term")]
 pub use bootstrap::run_render_loop_current_thread_with_terminals;

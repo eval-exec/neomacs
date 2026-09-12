@@ -107,6 +107,7 @@ mod image_catalog;
 mod input_bridge;
 mod secondary_tty;
 mod startup_font;
+mod startup_frame;
 mod termcap_input;
 pub(crate) mod terminal_capabilities;
 pub(crate) mod tty_frontend;
@@ -338,7 +339,7 @@ struct BootstrapDisplayConfig {
     color_cells: i64,
     background_mode: &'static str,
     interactivity: Interactivity,
-    system_fonts: neovm_core::emacs_core::display_host::SystemFonts,
+    font_defaults: neomacs_display_runtime::font_defaults::GuiFontDefaults,
 }
 
 /// Display kind and its scale facts available before a native window exists.
@@ -892,7 +893,7 @@ fn bootstrap_tty_display_config(interactivity: Interactivity) -> BootstrapDispla
         color_cells: tty_init::detect_tty_color_cells(),
         background_mode: tty_init::detect_tty_background_mode(),
         interactivity,
-        system_fonts: Default::default(),
+        font_defaults: neomacs_display_runtime::font_defaults::GuiFontDefaults::Portable,
     }
 }
 
@@ -901,6 +902,8 @@ fn bootstrap_gui_display_config(
     frame_font_scale: ResolvedFrameFontScale,
     identity: neomacs_display_protocol::GraphicalDisplayIdentity,
 ) -> BootstrapDisplayConfig {
+    let font_defaults =
+        neomacs_display_runtime::font_defaults::GuiFontDefaults::for_backend(identity.backend());
     BootstrapDisplayConfig {
         kind: BootstrapDisplayKind::Gui {
             frame_font_scale,
@@ -912,7 +915,7 @@ fn bootstrap_gui_display_config(
         // otherwise. Live frame-parameter updates recompute this later.
         background_mode: "light",
         interactivity,
-        system_fonts: Default::default(),
+        font_defaults,
     }
 }
 
@@ -1026,6 +1029,10 @@ struct EvaluatorExit {
 impl EvaluatorExit {
     const OK: Self = Self {
         exit_code: 0,
+        restart: false,
+    };
+    const STARTUP_FAILED: Self = Self {
+        exit_code: 1,
         restart: false,
     };
 }
@@ -3299,16 +3306,13 @@ fn run_gui_main_thread(
     event_loop: RenderEventLoop,
     mode: RuntimeMode,
     startup: StartupOptions,
-    width: u32,
-    height: u32,
     bootstrap_display: BootstrapDisplayConfig,
 ) {
     let render_waker = GuiEventLoopWaker::new(event_loop.create_proxy());
 
     let comms = ThreadComms::new();
     let (emacs_comms, render_comms) = comms.split();
-    let primary_window_size: SharedPrimaryWindowSize =
-        Arc::new(Mutex::new(PrimaryWindowSize { width, height }));
+    let (startup_reply, startup_ready) = startup_frame::StartupFrameReply::channel();
     let gui_image_metadata: SharedImageRenderState =
         Arc::new(neomacs_display_runtime::render_thread::ImageRenderState::default());
     let shared_monitors: SharedMonitorInfo = Arc::new((Mutex::new(Vec::new()), Condvar::new()));
@@ -3318,17 +3322,35 @@ fn run_gui_main_thread(
     let evaluator_handle = spawn_gui_evaluator_worker(
         mode,
         startup,
-        width,
-        height,
+        startup_reply,
         bootstrap_display,
         emacs_comms,
-        Arc::clone(&primary_window_size),
         Arc::clone(&gui_image_metadata),
         Arc::clone(&shared_monitors),
         #[cfg(feature = "neo-term")]
         shared_terminals.clone(),
         render_waker.clone(),
     );
+
+    // No native window or GPU resources exist until the evaluator has opened
+    // the font that owns the initial grid geometry. A disconnected reply means
+    // startup unwound; joining propagates its original panic instead of hanging.
+    let PrimaryWindowSize { width, height } = match startup_ready.recv() {
+        Ok(Ok(size)) => size,
+        result => {
+            if let Ok(Err(error)) = result {
+                eprintln!("neomacs: {error}");
+            }
+            match evaluator_handle.join() {
+                Err(payload) => std::panic::resume_unwind(payload),
+                Ok(exit) => std::process::exit(if exit.exit_code == 0 {
+                    1
+                } else {
+                    exit.exit_code
+                }),
+            }
+        }
+    };
 
     tracing::info!(
         "GUI event loop entering on OS main thread ({}x{})",
@@ -3387,11 +3409,9 @@ fn run_gui_main_thread(
 fn spawn_gui_evaluator_worker(
     mode: RuntimeMode,
     startup: StartupOptions,
-    width: u32,
-    height: u32,
+    startup_reply: startup_frame::StartupFrameReply,
     bootstrap_display: BootstrapDisplayConfig,
     emacs_comms: EmacsComms,
-    primary_window_size: SharedPrimaryWindowSize,
     gui_image_metadata: SharedImageRenderState,
     shared_monitors: SharedMonitorInfo,
     #[cfg(feature = "neo-term")] shared_terminals: SharedTerminals,
@@ -3412,11 +3432,9 @@ fn spawn_gui_evaluator_worker(
                 run_gui_evaluator_worker(
                     mode,
                     startup,
-                    width,
-                    height,
+                    startup_reply,
                     bootstrap_display,
                     emacs_comms,
-                    primary_window_size,
                     gui_image_metadata,
                     shared_monitors,
                     #[cfg(feature = "neo-term")]
@@ -3508,11 +3526,9 @@ fn maybe_drain_aot_pgo(_mode: RuntimeMode, _evaluator: &Context) {}
 fn run_gui_evaluator_worker(
     mode: RuntimeMode,
     startup: StartupOptions,
-    width: u32,
-    height: u32,
+    startup_reply: startup_frame::StartupFrameReply,
     bootstrap_display: BootstrapDisplayConfig,
     emacs_comms: EmacsComms,
-    primary_window_size: SharedPrimaryWindowSize,
     gui_image_metadata: SharedImageRenderState,
     shared_monitors: SharedMonitorInfo,
     #[cfg(feature = "neo-term")] shared_terminals: SharedTerminals,
@@ -3541,7 +3557,19 @@ fn run_gui_evaluator_worker(
     load_neomacs_gui_term_layer(&mut evaluator);
     tracing::info!("GUI evaluator context initialized");
 
-    let _bootstrap = bootstrap_buffers(&mut evaluator, width, height, bootstrap_display.clone());
+    let prepared = match startup_frame::PreparedGuiFrame::prepare(bootstrap_display.clone()) {
+        Ok(frame) => frame,
+        Err(error) => {
+            startup_reply.failed(error);
+            return EvaluatorExit::STARTUP_FAILED;
+        }
+    };
+    let size = prepared.size();
+    let primary_window_size: SharedPrimaryWindowSize = Arc::new(Mutex::new(size));
+    if startup_reply.ready(&prepared).is_err() {
+        return EvaluatorExit::STARTUP_FAILED;
+    }
+    let _bootstrap = prepared.install(&mut evaluator);
     let frame_id = evaluator
         .frame_manager()
         .selected_frame()
@@ -3551,7 +3579,7 @@ fn run_gui_evaluator_worker(
     maybe_install_startup_phase_trace(&mut evaluator);
 
     evaluator.set_display_host(Box::new(PrimaryWindowDisplayHost {
-        system_fonts: bootstrap_display.system_fonts.clone(),
+        system_fonts: bootstrap_display.font_defaults.system_fonts(),
         tooltip_client: neomacs_display_protocol::tooltip::TooltipClient::new(
             emacs_comms.tooltip_context.clone(),
         ),
@@ -4071,26 +4099,19 @@ pub fn run(mode: RuntimeMode) {
                 eprintln!("neomacs: failed to resolve graphical display identity: {error:?}");
                 std::process::exit(1);
             });
+        let font_defaults =
+            neomacs_display_runtime::font_defaults::read_font_defaults(identity.backend());
         let mut config = bootstrap_gui_display_config(
             interactivity,
             gui_frame_font_scale_from_observation(observation),
             identity,
         );
-        config.system_fonts = neomacs_display_runtime::desktop_fonts::read_system_fonts();
+        config.font_defaults = font_defaults;
         config
     } else {
         debug_assert_eq!(startup.frontend, FrontendKind::Tty);
         bootstrap_tty_display_config(interactivity)
     };
-    // For TTY, frame dimensions are in character cells (1x1), so we
-    // don't need to scan the system font database for font metrics.
-    // This avoids ~500ms of FontMetricsService initialization at
-    // startup. GUI mode computes real pixel dimensions from font
-    // metrics via bootstrap_frame_metrics().
-    let frame_metrics = bootstrap_frame_metrics_for_display(&bootstrap_display);
-    let (width, height) =
-        startup_dimensions(startup.frontend, frame_metrics, startup.noninteractive);
-
     // Optional localhost performance diagnostics server (off unless
     // NEOMACS_DIAGNOSTICS_PORT is set). Started before the GUI/TTY fork; the
     // eval-thread task channel's Receiver is published for whichever Context
@@ -4106,13 +4127,17 @@ pub fn run(mode: RuntimeMode) {
             gui_event_loop.expect("GUI frontend constructed an event loop"),
             mode,
             startup,
-            width,
-            height,
             bootstrap_display,
         );
         log_clean_process_exit(process_started_at, &process_args);
         return;
     }
+
+    // TTY geometry is in character cells and performs no native font lookup.
+    // GUI geometry is prepared once on the evaluator thread instead.
+    let frame_metrics = BootstrapFrameMetrics::TTY;
+    let (width, height) =
+        startup_dimensions(startup.frontend, frame_metrics, startup.noninteractive);
 
     // 2. Initialize the evaluator from the canonical bootstrap surface.
     //    GNU loads the dumped bootstrap image here, then lets the outer
@@ -4440,6 +4465,14 @@ struct BootstrapFrameMetrics {
     font_pixel_size: f32,
 }
 
+impl BootstrapFrameMetrics {
+    const TTY: Self = Self {
+        char_width: 1.0,
+        char_height: 1.0,
+        font_pixel_size: 16.0,
+    };
+}
+
 fn font_weight_symbol(weight: FontWeight) -> &'static str {
     weight.symbol_name()
 }
@@ -4536,51 +4569,12 @@ fn core_opened_font_from_selection(
     }
 }
 
-fn bootstrap_default_font_parameter(font_pixel_size: f32) -> Value {
-    let mut metrics_svc = FontMetricsService::new();
-    let selected = metrics_svc.select_font_for_char('M', "Monospace", 400, false, font_pixel_size);
-    let mut face = neovm_core::face::Face::new("default");
-    face.height = Some(FaceHeight::Absolute(100));
-
-    let Some(font) = selected else {
-        // An unresolved selector is not an opened font.  Keep the public
-        // bootstrap name until the display host can publish an exact object.
-        return bootstrap_default_font_name(font_pixel_size);
-    };
-    let matched = ResolvedFontMatch {
-        glyph_code: None,
-        font: core_opened_font_from_selection(font, font_otf_capability_for_file),
-    };
-    neovm_core::emacs_core::font::opened_font_from_resolved_match(&face, &matched)
-}
-
-fn bootstrap_default_font_name(font_pixel_size: f32) -> Value {
-    let mut metrics_svc = FontMetricsService::new();
-    let selected = metrics_svc.select_font_for_char('M', "Monospace", 400, false, font_pixel_size);
-    let rounded_pixel_size = font_pixel_size.max(1.0).round() as i64;
-
-    let family = selected
-        .as_ref()
-        .map(|font| font.resolved.family.as_str())
-        .unwrap_or("Monospace");
-    let weight = selected
-        .as_ref()
-        .map(|font| startup_font_weight_symbol(FontWeight::from_css_weight(font.resolved.weight)))
-        .unwrap_or("regular");
-    let slant = selected
-        .as_ref()
-        .map(|font| font.slant.symbol_name())
-        .unwrap_or("normal");
-
-    Value::string(format!(
-        "-*-{family}-{weight}-{slant}-*-*-{rounded_pixel_size}-*-*-*-*-*-*-*"
-    ))
-}
-
+#[cfg(test)]
 fn bootstrap_frame_metrics() -> BootstrapFrameMetrics {
     bootstrap_frame_metrics_for_font_sizing(FontSizing::native_gui())
 }
 
+#[cfg(test)]
 fn bootstrap_frame_metrics_for_font_sizing(font_sizing: FontSizing) -> BootstrapFrameMetrics {
     let font_pixel_size = font_sizing.face_height_to_layout_pixels(100);
     let mut metrics_svc = FontMetricsService::new();
@@ -4592,6 +4586,7 @@ fn bootstrap_frame_metrics_for_font_sizing(font_sizing: FontSizing) -> Bootstrap
     }
 }
 
+#[cfg(test)]
 fn bootstrap_frame_metrics_for_frontend(frontend: FrontendKind) -> BootstrapFrameMetrics {
     if frontend == FrontendKind::Tty {
         BootstrapFrameMetrics {
@@ -4604,27 +4599,25 @@ fn bootstrap_frame_metrics_for_frontend(frontend: FrontendKind) -> BootstrapFram
     }
 }
 
-fn bootstrap_frame_metrics_for_display(display: &BootstrapDisplayConfig) -> BootstrapFrameMetrics {
-    if display.frontend() == FrontendKind::Tty {
-        bootstrap_frame_metrics_for_frontend(FrontendKind::Tty)
-    } else {
-        bootstrap_frame_metrics_for_font_sizing(display.font_sizing())
-    }
-}
-
 fn bootstrap_buffers(
     eval: &mut Context,
     width: u32,
     height: u32,
     display: BootstrapDisplayConfig,
 ) -> BootstrapResult {
-    let selected_font = (display.frontend() == FrontendKind::Gui)
-        .then(|| startup_font::StartupFont::select(&display))
-        .flatten();
-    let frame_metrics = selected_font.as_ref().map_or_else(
-        || bootstrap_frame_metrics_for_display(&display),
-        |font| font.metrics,
-    );
+    let font = startup_font::BootstrapFont::select(&display)
+        .expect("bootstrap requires a usable font on graphical displays");
+    bootstrap_buffers_with_font(eval, width, height, display, font)
+}
+
+fn bootstrap_buffers_with_font(
+    eval: &mut Context,
+    width: u32,
+    height: u32,
+    display: BootstrapDisplayConfig,
+    font: startup_font::BootstrapFont,
+) -> BootstrapResult {
+    let frame_metrics = font.metrics();
     let find_or_create_buffer = |eval: &mut Context, name: &str| {
         eval.buffer_manager()
             .find_buffer_by_name(name)
@@ -4742,36 +4735,32 @@ fn bootstrap_buffers(
     // finalization.  That Lisp pass may update live frame font state while it
     // computes specifications, but the opening host frame's font and geometry
     // remain the startup policy inputs until normal user configuration runs.
-    let (bootstrap_font, bootstrap_font_name) = if display.frontend() == FrontendKind::Tty {
-        (Value::NIL, Value::string("fixed"))
-    } else if let Some(font) = selected_font {
-        let selected = font.selected;
-        let name = Value::string(format!(
-            "-*-{}-{}-{}-*-*-{}-*-*-*-*-*-*-*",
-            selected.resolved.family,
-            startup_font_weight_symbol(FontWeight::from_css_weight(selected.resolved.weight)),
-            selected.slant.symbol_name(),
-            selected.metrics.pixel_size,
-        ));
-        let mut face = neovm_core::face::Face::new("default");
-        face.height = Some(FaceHeight::Absolute(
-            display
-                .font_sizing()
-                .face_height_tenths_for_layout_pixels(selected.metrics.pixel_size.max(1)),
-        ));
-        let matched = ResolvedFontMatch {
-            glyph_code: None,
-            font: core_opened_font_from_selection(selected, font_otf_capability_for_file),
-        };
-        (
-            neovm_core::emacs_core::font::opened_font_from_resolved_match(&face, &matched),
-            name,
-        )
-    } else {
-        (
-            bootstrap_default_font_parameter(frame_metrics.font_pixel_size),
-            bootstrap_default_font_name(frame_metrics.font_pixel_size),
-        )
+    let (bootstrap_font, bootstrap_font_name) = match font {
+        startup_font::BootstrapFont::Tty => (Value::NIL, Value::string("fixed")),
+        startup_font::BootstrapFont::Gui(font) => {
+            let selected = font.into_selected();
+            let name = Value::string(format!(
+                "-*-{}-{}-{}-*-*-{}-*-*-*-*-*-*-*",
+                selected.resolved.family,
+                startup_font_weight_symbol(FontWeight::from_css_weight(selected.resolved.weight)),
+                selected.slant.symbol_name(),
+                selected.metrics.pixel_size,
+            ));
+            let mut face = neovm_core::face::Face::new("default");
+            face.height = Some(FaceHeight::Absolute(
+                display
+                    .font_sizing()
+                    .face_height_tenths_for_layout_pixels(selected.metrics.pixel_size.max(1)),
+            ));
+            let matched = ResolvedFontMatch {
+                glyph_code: None,
+                font: core_opened_font_from_selection(selected, font_otf_capability_for_file),
+            };
+            (
+                neovm_core::emacs_core::font::opened_font_from_resolved_match(&face, &matched),
+                name,
+            )
+        }
     };
     let bootstrap_font_snapshot = bootstrap_font
         .as_vector_data()

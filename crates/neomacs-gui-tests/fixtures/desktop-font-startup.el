@@ -17,6 +17,11 @@
                   (font-get-system-font)))
          (unless (equal (font-get-system-normal-font) "Ubuntu 10")
            (error "Desktop application font was not kept separate"))
+         ;; GNU chooses the initial font before gui_figure_window_size. A
+         ;; desktop preference must not reduce the default 80-column frame.
+         (unless (= (frame-width) 80)
+           (error "Initial geometry used a different font: expected 80 columns, got %S"
+                  (frame-width)))
          (unless (and (null face-remapping-alist)
                       (equal (face-attribute 'default :family) "Ubuntu Mono")
                       (= (window-font-width) 9) (= (window-font-height) 18))

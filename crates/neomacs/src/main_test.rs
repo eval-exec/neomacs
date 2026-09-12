@@ -10,15 +10,15 @@ use super::tty_init::{
 use super::{
     BOOTSTRAP_CORE_FEATURES, BootstrapDisplayConfig, DumpImageKind, EarlyCliAction, FontSizing,
     FrontendKind, Interactivity, PrimaryWindowDisplayHost, PrimaryWindowSize, RuntimeMode,
-    StartupOptions, adopt_existing_primary_gui_frame, bootstrap_buffers,
-    bootstrap_default_font_name, bootstrap_frame_metrics, bootstrap_frame_metrics_for_font_sizing,
-    bootstrap_frame_metrics_for_frontend, bootstrap_gui_display_config,
-    bootstrap_tty_display_config, classify_early_cli_action, configure_gnu_startup_state,
-    gui_frame_font_scale_from_observation, load_neomacs_gui_term_layer, parse_startup_options,
-    publish_gui_frame, raw_dump_loadup_invocation, raw_loadup_command_line,
-    render_fingerprint_text, render_help_text, render_startup_image_error, render_version_text,
-    run_gnu_startup, runtime_mode_from_program_name, source_bootstrap_loadup_invocation,
-    startup_dimensions, sync_live_gui_frame_titles, sync_selected_gui_chrome_state,
+    StartupOptions, adopt_existing_primary_gui_frame, bootstrap_buffers, bootstrap_frame_metrics,
+    bootstrap_frame_metrics_for_font_sizing, bootstrap_frame_metrics_for_frontend,
+    bootstrap_gui_display_config, bootstrap_tty_display_config, classify_early_cli_action,
+    configure_gnu_startup_state, gui_frame_font_scale_from_observation,
+    load_neomacs_gui_term_layer, parse_startup_options, publish_gui_frame,
+    raw_dump_loadup_invocation, raw_loadup_command_line, render_fingerprint_text, render_help_text,
+    render_startup_image_error, render_version_text, run_gnu_startup,
+    runtime_mode_from_program_name, source_bootstrap_loadup_invocation, startup_dimensions,
+    sync_live_gui_frame_titles, sync_selected_gui_chrome_state,
 };
 use neomacs_display_protocol::{SelectionOwner, VideoId, WebViewId};
 use neomacs_display_runtime::render_thread::{
@@ -2205,6 +2205,35 @@ fn bootstrap_buffers_realize_default_face_from_frame_font_parameter() {
     // GNU at the fallback 100 DPI opens monospace-10 at 14px and reports
     // :height 101: the default face describes the realized, rounded font.
     assert_eq!(default.height, Some(FaceHeight::Absolute(101)));
+}
+
+#[test]
+fn cocoa_startup_uses_backend_default_size_instead_of_linux_ten_points() {
+    let mut eval = create_bootstrap_evaluator_with_features(BOOTSTRAP_CORE_FEATURES)
+        .expect("bootstrap evaluator");
+    // Inject the platform observation, not a Retina/device scale. Native
+    // discovery is unavailable on this test host; the Cocoa size policy must
+    // also hold when it needs a generic fixed-pitch fallback.
+    let display = bootstrap_gui_display_config(
+        Interactivity::Interactive,
+        gui_frame_font_scale_from_observation(neomacs_display_protocol::DisplayObservation::Cocoa),
+        neomacs_display_protocol::GraphicalDisplayIdentity::anonymous_connection(
+            neomacs_display_protocol::GraphicalBackend::Cocoa,
+        ),
+    );
+    let _bootstrap = bootstrap_buffers(&mut eval, 960, 640, display);
+    // GNU nsfns.m supplies fontsize=0; Core Text's documented default opening
+    // size is 12pt. This tests shared policy, not native AppKit discovery.
+    assert_eq!(
+        eval.eval_str("(font-get (frame-parameter nil 'font-parameter) :size)")
+            .expect("opened startup font")
+            .as_int(),
+        Some(12),
+    );
+    assert_eq!(
+        eval.face_table().get("default").unwrap().height,
+        Some(FaceHeight::Absolute(120)),
+    );
 }
 
 fn assert_selected_frame_matches_materialized_default_metrics(eval: &Context) {
@@ -4785,12 +4814,20 @@ fn relative_face_height_uses_policy_default_font_size() {
 
 #[test]
 fn bootstrap_default_font_name_uses_pixel_size_field() {
-    let mut eval = Context::new();
-    let font_pixel_size = face_height_to_gnu_x11_fallback_pixels(100);
-    let font_name = bootstrap_default_font_name(font_pixel_size);
-    let rendered = print_value_with_eval(&mut eval, &font_name);
-    assert!(rendered.contains(&format!("-*-{}-", font_pixel_size.round() as i64)));
-    assert!(rendered.contains("-regular-"));
+    let mut eval = create_bootstrap_evaluator_cached_with_features(BOOTSTRAP_CORE_FEATURES)
+        .expect("bootstrap evaluator");
+    let _bootstrap = bootstrap_buffers(&mut eval, 960, 640, gui_display());
+    let font_name = eval
+        .eval_str("(frame-parameter nil 'font)")
+        .expect("frame font name");
+    let fields = font_name
+        .as_utf8_str()
+        .expect("XLFD string")
+        .split('-')
+        .collect::<Vec<_>>();
+    // GNU's 10pt fallback opens at 14px on this 100-DPI display policy.
+    assert_eq!(fields[7], "14");
+    assert_eq!(fields[3], "regular");
 }
 
 #[test]
