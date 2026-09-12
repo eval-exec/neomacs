@@ -2472,6 +2472,55 @@ fn split_window_side_domain_matches_gnu() {
 }
 
 #[test]
+fn window_new_normal_starts_at_zero_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // GNU's `make_window` initializes the three pending-size slots to 0, right
+    // beside the `normal_lines`/`normal_cols` 1.0 this code already mirrors
+    // (`src/window.c:4607-4611`):
+    //
+    //     wset_normal_lines (w, make_float (1.0));
+    //     wset_normal_cols  (w, make_float (1.0));
+    //     wset_new_total    (w, make_fixnum (0));
+    //     wset_new_normal   (w, make_fixnum (0));
+    //     wset_new_pixel    (w, make_fixnum (0));
+    //
+    // so `window-new-normal` answers a NUMBER for every valid window, never
+    // nil.  `new_pixel`/`new_total` are `Option<i64>` here and already read as
+    // 0 through `unwrap_or(0)`; `new_normal` is a raw `Value` and leaked the
+    // `nil` it was constructed with.
+    //
+    // The minibuffer window is where this shows: it never takes part in a
+    // resize, so nothing ever overwrites the initial value.  Measured on GNU
+    // Emacs 31.1: `(window-new-normal (minibuffer-window))` => 0, neomacs nil.
+    //
+    // Initializing the slot is NOT separable from staging it in the split.
+    // `window_resize_apply` copies `new_normal` into `normal_lines`/
+    // `normal_cols` behind a `NUMBERP` guard (`src/window.c:4829,4838`), so
+    // while the slot was nil the copy was simply skipped.  Making it a number
+    // without also staging the new parent's value -- GNU's
+    // `wset_new_normal (p, horflag ? o->normal_cols : o->normal_lines)` --
+    // makes that copy overwrite the parent's inherited fraction with 0, which
+    // is what `window_tree_navigation_and_normal_size_match_gnu_runtime` and
+    // the `compat_window_semantics` oracle both caught.
+    let results = bootstrap_eval_with_frame(
+        "(let* ((mini (minibuffer-window))
+                (l (selected-window))
+                (r (split-window-right)))
+           (list (window-new-normal mini)
+                 (window-new-total mini)
+                 (window-new-pixel mini)
+                 ;; windows the split touched keep their staged fractions
+                 (window-new-normal l)
+                 (window-new-normal r)
+                 ;; and the new parent is staged from the OLD window's
+                 ;; pre-split fraction, not left at 0
+                 (window-new-normal (window-parent l))
+                 (window-normal-size (window-parent l))))",
+    );
+    assert_eq!(results[0], "OK (0 80 0 0.5 0.5 1.0 1.0)");
+}
+
+#[test]
 fn coordinates_in_window_p_takes_frame_relative_coordinates_like_gnu() {
     crate::test_utils::init_test_tracing();
     // GNU's COORDINATES are FRAME-relative -- the docstring says "distances

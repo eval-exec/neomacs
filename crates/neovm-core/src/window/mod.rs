@@ -1465,11 +1465,17 @@ impl Window {
             force_start: false,
             margins: WindowMargins::ZERO,
             display: WindowDisplayState::default(),
+            // GNU `make_window` initializes all five of these together
+            // (`src/window.c:4607-4611`) -- `normal_lines`/`normal_cols` to
+            // 1.0 and the three pending-size slots to 0, explicitly because
+            // `allocate_window` has already nil'd everything and these are the
+            // slots "which should not be nil".  `new_pixel`/`new_total` are
+            // `Option<i64>` here and read as 0 via `unwrap_or(0)`, but
+            // `new_normal` is a raw `Value` and leaked that nil to
+            // `window-new-normal`.
             new_pixel: None,
             new_total: None,
-            new_normal: Value::NIL,
-            // GNU `make_window` initializes `normal_lines` and
-            // `normal_cols` to 1.0 (`src/window.c:4603-4604`).
+            new_normal: Value::fixnum(0),
             normal_lines: Value::make_float(1.0),
             normal_cols: Value::make_float(1.0),
             // GNU `make_window` leaves top_line/left_col zero; the resize passes
@@ -6860,7 +6866,23 @@ fn split_window_in_tree(
                 combination_limit: new_parent_seal,
                 new_pixel: None,
                 new_total: None,
-                new_normal: Value::NIL,
+                // GNU stages the new parent's `new_normal` from the OLD
+                // window's pre-split fraction, captured before
+                // `make_parent_window` corrupts it (`src/window.c:5543,5570`):
+                //
+                //     Lisp_Object new_normal = horflag ? o->normal_cols : o->normal_lines;
+                //     ...
+                //     wset_new_normal (p, new_normal);
+                //
+                // This is not optional once `new_normal` starts life as a
+                // NUMBER rather than nil: `window_resize_apply` copies it into
+                // `normal_lines`/`normal_cols` guarded by `NUMBERP`
+                // (`src/window.c:4829,4838`), so leaving it 0 here makes the
+                // apply overwrite the inherited fraction with 0.
+                new_normal: match direction {
+                    SplitDirection::Horizontal => inherited_normal_cols,
+                    SplitDirection::Vertical => inherited_normal_lines,
+                },
                 // The new internal node takes the slot that the
                 // old leaf used to fill, so it inherits the
                 // leaf's pre-split proportional fractions.
@@ -6980,7 +7002,15 @@ fn split_window_in_tree(
             combination_limit: new_parent_seal,
             new_pixel: None,
             new_total: None,
-            new_normal: Value::NIL,
+            // Same staging as the sibling construction above -- GNU
+            // `wset_new_normal (p, horflag ? o->normal_cols : o->normal_lines)`
+            // (`src/window.c:5543,5570`).  Leaving it 0 would make
+            // `window_resize_apply`'s `NUMBERP` copy clobber the inherited
+            // fraction.
+            new_normal: match direction {
+                SplitDirection::Horizontal => inherited_normal_cols,
+                SplitDirection::Vertical => inherited_normal_lines,
+            },
             normal_lines: inherited_normal_lines,
             normal_cols: inherited_normal_cols,
             top_line: old_top_line,
