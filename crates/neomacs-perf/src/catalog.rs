@@ -40,6 +40,15 @@ pub enum ScenarioId {
     SustainedEditing,
     GuiInputLatency,
     OrgEditing,
+    /// `org-editing` over a document carrying what a real Org file carries.
+    ///
+    /// The plain row builds headings, property drawers and tables and nothing
+    /// else, so the `font-lock-ensure` it runs over the whole buffer every
+    /// iteration never reaches Org's expensive matchers. Against the Org
+    /// manual it has 0 links, 0 emphasis markers, 0 `#+` lines and 0 list
+    /// items per 100 lines where the manual has 2.3, 19.3, 15.5 and 6.1.
+    /// Same operation, same heading count, realistic surroundings.
+    OrgEditingHeavy,
     MagitStatus,
     OrgJournalOpen,
     LargeFileEditing,
@@ -94,6 +103,7 @@ impl ScenarioId {
             Self::SustainedEditing => "sustained-editing",
             Self::GuiInputLatency => "gui-input-latency",
             Self::OrgEditing => "org-editing",
+            Self::OrgEditingHeavy => "org-editing-heavy",
             Self::MagitStatus => "magit-status",
             Self::OrgJournalOpen => "org-journal-open",
             Self::LargeFileEditing => "large-file-editing",
@@ -138,6 +148,7 @@ impl FromStr for ScenarioId {
             "sustained-editing" => Ok(Self::SustainedEditing),
             "gui-input-latency" => Ok(Self::GuiInputLatency),
             "org-editing" => Ok(Self::OrgEditing),
+            "org-editing-heavy" => Ok(Self::OrgEditingHeavy),
             "magit-status" => Ok(Self::MagitStatus),
             "org-journal-open" => Ok(Self::OrgJournalOpen),
             "large-file-editing" => Ok(Self::LargeFileEditing),
@@ -348,6 +359,14 @@ const SCENARIOS: &[ScenarioSpec] = &[
         cross_editor_parity_metrics: &[],
     },
     ScenarioSpec {
+        id: ScenarioId::OrgEditingHeavy,
+        description: "Org editing over links, emphasis, source blocks and lists -- the markup a real Org file carries",
+        default_frontend: Frontend::Batch,
+        default_iterations: NonZeroU32::new(20).expect("non-zero scenario default"),
+        primary_metric: MetricName::PerOperationWallTime,
+        cross_editor_parity_metrics: &[],
+    },
+    ScenarioSpec {
         id: ScenarioId::LspJsonRpc,
         description: "jsonrpc round trip at language-server message size: serialize a request, parse a diagnostics reply",
         default_frontend: Frontend::Batch,
@@ -385,6 +404,7 @@ pub const fn scenario(id: ScenarioId) -> &'static ScenarioSpec {
         ScenarioId::MagitStatusCompiled => &SCENARIOS[14],
         ScenarioId::OrgJournalOpenCompiled => &SCENARIOS[15],
         ScenarioId::RustLspTypingHeavy => &SCENARIOS[16],
-        ScenarioId::LspJsonRpc => &SCENARIOS[17],
+        ScenarioId::LspJsonRpc => &SCENARIOS[18],
+        ScenarioId::OrgEditingHeavy => &SCENARIOS[17],
     }
 }

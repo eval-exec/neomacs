@@ -504,6 +504,7 @@ impl PerfHarness {
             | ScenarioId::SustainedEditing
             | ScenarioId::GuiInputLatency
             | ScenarioId::OrgEditing
+            | ScenarioId::OrgEditingHeavy
             | ScenarioId::MagitStatus
             | ScenarioId::MagitStatusCompiled
             | ScenarioId::LargeFileEditing
@@ -1561,6 +1562,7 @@ fn parse_scenario_result(
         | ScenarioId::SustainedEditing
         | ScenarioId::GuiInputLatency
         | ScenarioId::OrgEditing
+        | ScenarioId::OrgEditingHeavy
         | ScenarioId::MagitStatus
         | ScenarioId::MagitStatusCompiled
         | ScenarioId::LargeFileEditing

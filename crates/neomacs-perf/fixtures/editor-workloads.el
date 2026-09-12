@@ -203,6 +203,56 @@ first suspect and deserves to be confirmed or cleared by number."
     (end-of-line)
     (beginning-of-line)))
 
+(defconst neomacs-perf-workload--org-subjects
+  ["release prep" "design review" "reading log" "bug hunt" "pairing session"
+   "refactor pass" "research spike" "profiling notes" "triage" "retro"]
+  "Heading subjects, cycled so the document is deterministic.")
+
+(defun neomacs-perf-workload--insert-org-document (sections)
+  "Insert SECTIONS of Org markup of the kind a real Org file carries.
+
+The `org-editing' row builds headings, property drawers and tables and
+nothing else, so its per-iteration `font-lock-ensure\' over the whole
+buffer never reaches Org\'s expensive matchers: `org-activate-links\',
+`org-do-emphasis-faces\' and `org-fontify-meta-lines-and-blocks\' have
+nothing to match.  Measured against the Org manual (doc/misc/org.org,
+23,370 lines), that fixture has 0 links, 0 emphasis markers, 0 `#+\'
+lines, 0 list items and 0 timestamps per 100 lines where the manual has
+2.3, 19.3, 15.5, 6.1 and 0.2 -- while carrying 15x the manual\'s table
+rows and 6.6x its property drawers.
+
+This emits the same 150 TODO headings and keeps a table in every section,
+so the timed operation is unchanged and the two rows stay comparable.
+What differs is everything around them: tags, a scheduled timestamp, a
+paragraph carrying two links and three emphasis forms, a checkbox list
+item, and a source block.  Cycled from constants and indexed by section,
+so every machine builds a byte-identical document.
+
+Every section carries every construct, which makes this an UPPER bound
+rather than an average file.  Measured per 100 lines against the manual,
+`#+\' lines (14.3 vs 15.5) and list items (7.1 vs 6.1) land where the
+manual has them, while links (21.4 vs 2.3), emphasis (35.7 vs 19.3) and
+timestamps (7.1 vs 0.2) run above it.  The plain row is the lower bound --
+zero of all of them -- so a real file sits between the two rows, which is
+the point of keeping both."
+  (dotimes (section sections)
+    (insert
+     (format "* TODO %s %d  :work:proj%d:\n"
+             (aref neomacs-perf-workload--org-subjects
+                   (mod section (length neomacs-perf-workload--org-subjects)))
+             section (mod section 7))
+     (format "SCHEDULED: <2026-09-%02d Sat>\n" (1+ (mod section 28)))
+     (format ":PROPERTIES:\n:ID: item-%d\n:END:\n" section)
+     (format (concat "See [[file:notes.org::*Section %d][the note]] and"
+                     " [[https://example.invalid/%d][upstream]] for *context*;"
+                     " the /interesting/ part is ~code~ plus =verbatim=.\n")
+             section section)
+     (format "- [ ] follow up on *item %d* with the [[https://example.invalid/a][owner]]\n"
+             section)
+     (format "#+BEGIN_SRC emacs-lisp\n(defun sim--section-%d (x) (* x x))\n#+END_SRC\n"
+             section)
+     "| Name | Value |\n|------+-------|\n| alpha | 1 |\n\n")))
+
 (defun neomacs-perf-workload--prepare-buffer (scenario)
   (cond
    ((equal scenario "startup")
@@ -219,6 +269,10 @@ first suspect and deserves to be confirmed or cleared by number."
       (insert (format "* TODO Section %d\n:PROPERTIES:\n:ID: item-%d\n:END:\n"
                       section section)
               "| Name | Value |\n|------+-------|\n| alpha | 1 |\n\n"))
+    (org-mode))
+   ((equal scenario "org-editing-heavy")
+    (require 'org)
+    (neomacs-perf-workload--insert-org-document 150)
     (org-mode))
    ((equal scenario "magit-status")
     (require 'magit)
@@ -297,7 +351,7 @@ first suspect and deserves to be confirmed or cleared by number."
                  latencies)
            (delete-char -1)
            (redisplay t))
-          ("org-editing"
+          ((or "org-editing" "org-editing-heavy")
            (setq type-us (+ type-us (neomacs-perf-workload--time
                                      (lambda ()
                                        (goto-char (point-min))

@@ -7,10 +7,30 @@ use super::{CrossEditorParityMetric, Frontend, MetricName, ScenarioId, scenario,
 #[test]
 fn catalog_exposes_the_rust_lsp_typing_workload_as_a_typed_scenario() {
     let scenarios = scenarios();
-    assert_eq!(scenarios.len(), 18);
+    assert_eq!(scenarios.len(), 19);
 
     // The heavy row exists so the light one keeps its baseline: same workload,
     // a whole-file diagnostic set instead of four on adjacent lines.
+    // Likewise for Org: the plain row's document carries no links, emphasis,
+    // source blocks or lists, so a second row measures the markup a real file
+    // has rather than invalidating the first row's baseline.
+    let org_heavy = scenario(ScenarioId::OrgEditingHeavy);
+    assert_eq!(org_heavy.id, ScenarioId::OrgEditingHeavy);
+    assert_eq!(org_heavy.id.to_string(), "org-editing-heavy");
+    assert_eq!(
+        ScenarioId::from_str("org-editing-heavy"),
+        Ok(ScenarioId::OrgEditingHeavy)
+    );
+    // It runs its own fixture branch, not the plain row's.
+    assert_eq!(
+        ScenarioId::OrgEditingHeavy.workload_str(),
+        "org-editing-heavy"
+    );
+    assert_eq!(
+        org_heavy.primary_metric,
+        scenario(ScenarioId::OrgEditing).primary_metric
+    );
+
     let heavy = scenario(ScenarioId::RustLspTypingHeavy);
     assert_eq!(heavy.id, ScenarioId::RustLspTypingHeavy);
     assert_eq!(heavy.id.to_string(), "rust-lsp-typing-heavy");
@@ -87,6 +107,7 @@ fn catalog_commits_the_editor_workflow_scenario_family() {
         ("sustained-editing", ScenarioId::SustainedEditing),
         ("gui-input-latency", ScenarioId::GuiInputLatency),
         ("org-editing", ScenarioId::OrgEditing),
+        ("org-editing-heavy", ScenarioId::OrgEditingHeavy),
         ("magit-status", ScenarioId::MagitStatus),
         ("large-file-editing", ScenarioId::LargeFileEditing),
         ("indentation", ScenarioId::Indentation),

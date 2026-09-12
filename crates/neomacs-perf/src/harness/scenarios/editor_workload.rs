@@ -411,7 +411,7 @@ pub(crate) fn validate_editor_workload_result(
                 require_positive_phase(&mut mismatches, name, value);
             }
         }
-        ScenarioId::SustainedEditing | ScenarioId::OrgEditing => {
+        ScenarioId::SustainedEditing | ScenarioId::OrgEditing | ScenarioId::OrgEditingHeavy => {
             require_positive_phase(&mut mismatches, "type-phase-time", result.type_phase_us);
         }
         ScenarioId::MagitStatus | ScenarioId::MagitStatusCompiled | ScenarioId::RegexSearch => {

@@ -82,6 +82,7 @@ const STANDARD_SCENARIOS: &[SuiteScenario] = &[
     suite_scenario(ScenarioId::SustainedEditing, 8.0),
     suite_scenario(ScenarioId::GuiInputLatency, 15.0),
     ratcheted(ScenarioId::OrgEditing, 8.0, 2.0),
+    ratcheted(ScenarioId::OrgEditingHeavy, 8.0, 2.0),
     ratcheted(ScenarioId::MagitStatus, 10.0, 2.0),
     ratcheted(ScenarioId::OrgJournalOpen, 10.0, 2.0),
     ratcheted(ScenarioId::LargeFileEditing, 8.0, 2.0),
