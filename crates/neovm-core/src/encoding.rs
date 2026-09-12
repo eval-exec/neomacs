@@ -1290,7 +1290,7 @@ impl SingleByteCharset {
 /// bytes are present but wrong is `invalid_code:` and produces exactly one
 /// eight-bit character (:1334-1338).
 fn decode_via_utf8(bytes: &[u8], eol: DosEolLookahead) -> DecodedSource {
-    decode_units(bytes, eol, |unit, sink| {
+    decode_units_with(bytes, eol, AsciiRuns::Identity, |unit, sink| {
         let b0 = unit.byte()?;
         if b0 < 0x80 {
             sink.push(u32::from(b0), None);
@@ -2592,6 +2592,23 @@ impl DecodeSink {
         self.last_char = Some(code);
     }
 
+    /// A run of characters that are their own encoding, appended in one copy.
+    ///
+    /// [`CharsetRunBuilder::push`] returns immediately for the `None` charset,
+    /// so a run of ASCII needs no per-character charset bookkeeping at all --
+    /// only the byte copy and the character count.
+    fn push_ascii_run(&mut self, run: &[u8]) {
+        debug_assert!(
+            run.iter().all(|&byte| byte < 0x80),
+            "an ASCII run must hold only bytes that are their own encoding"
+        );
+        self.out.extend_from_slice(run);
+        self.char_index += run.len();
+        if let Some(&last) = run.last() {
+            self.last_char = Some(u32::from(last));
+        }
+    }
+
     /// GNU's `invalid_code:` arm: a byte no rule of this decoder accepts
     /// becomes the eight-bit character `BYTE8_TO_CHAR (c)`
     /// (src/coding.c:1334-1338).
@@ -2669,13 +2686,65 @@ enum DosEolLookahead {
 /// reports one.  BODY decodes exactly one character (or one state change) per
 /// call; a BODY that runs off the end says [`NoMoreSource`], and the bytes it
 /// had taken are put back along with anything it had already pushed.
-fn decode_units<F>(bytes: &[u8], eol: DosEolLookahead, mut body: F) -> DecodedSource
+/// Whether a run of bytes below `0x80` decodes to itself, one character per
+/// byte, carrying no state from one to the next.
+///
+/// True of UTF-8, which is why GNU's `decode_coding_utf_8` runs a bulk ASCII
+/// path instead of its per-character loop. NOT true in general, so this is
+/// opt-in per decoder rather than a property of the driver: ISO-2022 reads
+/// escape sequences out of the same byte range, and the Shift-JIS variants
+/// remap `0x5C` and `0x7E`. Those decoders must see every byte.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AsciiRuns {
+    Identity,
+    PerUnit,
+}
+
+/// How many bytes from `start` decode as themselves under [`AsciiRuns::Identity`].
+///
+/// A carriage return is excluded when the source is being read with GNU's
+/// `eol_dos` lookahead, because a CR that ends the source must be left
+/// UNCONSUMED (it becomes `coding->carryover`) and only the per-unit path
+/// knows how to unwind it.
+fn ascii_run_len(bytes: &[u8], start: usize, eol: DosEolLookahead) -> usize {
+    let stop_at_cr = eol == DosEolLookahead::Required;
+    bytes[start..]
+        .iter()
+        .position(|&byte| byte >= 0x80 || (stop_at_cr && byte == b'\r'))
+        .unwrap_or(bytes.len() - start)
+}
+
+fn decode_units<F>(bytes: &[u8], eol: DosEolLookahead, body: F) -> DecodedSource
+where
+    F: FnMut(&mut UnitReader<'_>, &mut DecodeSink) -> Result<(), NoMoreSource>,
+{
+    decode_units_with(bytes, eol, AsciiRuns::PerUnit, body)
+}
+
+fn decode_units_with<F>(
+    bytes: &[u8],
+    eol: DosEolLookahead,
+    ascii: AsciiRuns,
+    mut body: F,
+) -> DecodedSource
 where
     F: FnMut(&mut UnitReader<'_>, &mut DecodeSink) -> Result<(), NoMoreSource>,
 {
     let mut sink = DecodeSink::with_capacity(bytes.len());
     let mut consumed = 0usize;
     while consumed < bytes.len() {
+        // The bulk ASCII path. Every byte here would otherwise cost a mark, a
+        // `UnitReader`, a closure call, a bounds-checked read and a one-byte
+        // push; source text is overwhelmingly this case, so the per-byte
+        // scaffolding was most of the decode.
+        if ascii == AsciiRuns::Identity {
+            let run = ascii_run_len(bytes, consumed, eol);
+            if run > 0 {
+                sink.push_ascii_run(&bytes[consumed..consumed + run]);
+                consumed += run;
+                continue;
+            }
+        }
         let mark = sink.mark();
         let mut unit = UnitReader {
             bytes,
