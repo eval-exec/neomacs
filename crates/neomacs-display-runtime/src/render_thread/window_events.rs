@@ -4,9 +4,9 @@ use crate::backend::wgpu::{
     NEOMACS_CTRL_MASK, NEOMACS_META_MASK, NEOMACS_SHIFT_MASK, NEOMACS_SUPER_MASK,
 };
 use crate::thread_comm::InputEvent;
+use neovm_host_abi::frontend_event::FrontendLogicalExtent;
 use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
-use neovm_host_abi::frontend_event::FrontendLogicalExtent;
 use winit::window::WindowId;
 
 impl RenderApp {

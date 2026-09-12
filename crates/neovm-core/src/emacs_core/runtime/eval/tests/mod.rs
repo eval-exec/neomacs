@@ -61,7 +61,12 @@ fn subr_call_entry_does_not_look_up_image_or_interactive_metadata() {
     assert!(call.interactive_spec.is_none());
     assert_eq!(global_subr_lookup_count(), 0);
     // The authoritative metadata still lives in the registered entry.
-    assert!(lookup_global_subr_entry(symbol).unwrap().interactive_spec.is_some());
+    assert!(
+        lookup_global_subr_entry(symbol)
+            .unwrap()
+            .interactive_spec
+            .is_some()
+    );
 }
 
 fn install_global_map_for_test(ev: &mut Context, global_map: Value) {
@@ -8736,13 +8741,15 @@ fn unwind_protect_cleanup_signal_overrides_throw() {
 fn cleanup_recursion_preserves_nesting_signal_and_recovery() {
     for lexical in ["nil", "t"] {
         assert_eq!(
-            eval_one(&format!(r##"(progn
+            eval_one(&format!(
+                r##"(progn
                 (defalias 'cleanup-probe
                   (eval '(function (lambda ()
                            (unwind-protect nil (cleanup-probe)))) {lexical}))
                 (list (condition-case err (cleanup-probe)
                         (excessive-lisp-nesting err))
-                      (+ 40 2)))"##)),
+                      (+ 40 2)))"##
+            )),
             "OK ((excessive-lisp-nesting 1601) 42)",
         );
     }
@@ -8751,14 +8758,16 @@ fn cleanup_recursion_preserves_nesting_signal_and_recovery() {
 #[test]
 fn cleanup_throw_replaces_pending_throw_and_runs_outer_cleanup() {
     assert_eq!(
-        eval_one(r##"(let ((trace nil))
+        eval_one(
+            r##"(let ((trace nil))
             (list (catch 'escape
                     (unwind-protect
                         (unwind-protect (throw 'escape 'body)
                           (setq trace (cons 'inner trace))
                           (throw 'escape 'cleanup))
                       (setq trace (cons 'outer trace))))
-                  trace))"##),
+                  trace))"##
+        ),
         "OK (cleanup (outer inner))",
     );
 }
@@ -9745,8 +9754,10 @@ fn application_subr_wrong_arity_uses_subr_object_payload() {
         "(apply (symbol-function 'apply) nil)",
     ] {
         assert_eq!(
-            eval_one(&format!(r##"(condition-case err {form}
-                (error (list (car err) (subrp (nth 1 err)) (nth 2 err))))"##)),
+            eval_one(&format!(
+                r##"(condition-case err {form}
+                (error (list (car err) (subrp (nth 1 err)) (nth 2 err))))"##
+            )),
             "OK (wrong-number-of-arguments t 0)",
             "{form}",
         );
@@ -9756,13 +9767,15 @@ fn application_subr_wrong_arity_uses_subr_object_payload() {
 #[test]
 fn application_subr_identity_survives_function_cell_redefinition() {
     assert_eq!(
-        eval_one(r##"(let ((saved (symbol-function 'funcall)))
+        eval_one(
+            r##"(let ((saved (symbol-function 'funcall)))
             (list (funcall (progn
                              (fset 'funcall (lambda (&rest args) 'redefined))
                              '+)
                            20 22)
                   (funcall nil)
-                  (apply saved '(+ 3 4))))"##),
+                  (apply saved '(+ 3 4))))"##
+        ),
         "OK (42 redefined 7)",
     );
 }
@@ -10041,7 +10054,11 @@ fn application_recursion_preserves_nesting_signal_and_recovery() {
                              (excessive-lisp-nesting err))
                            (+ 40 2)))"##
             );
-            assert_eq!(eval_one(&source), "OK ((excessive-lisp-nesting 1601) 42)", "{source}");
+            assert_eq!(
+                eval_one(&source),
+                "OK ((excessive-lisp-nesting 1601) 42)",
+                "{source}"
+            );
         }
     }
 }
