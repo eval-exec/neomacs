@@ -7,13 +7,30 @@ use super::{CrossEditorParityMetric, Frontend, MetricName, ScenarioId, scenario,
 #[test]
 fn catalog_exposes_the_rust_lsp_typing_workload_as_a_typed_scenario() {
     let scenarios = scenarios();
-    assert_eq!(scenarios.len(), 22);
+    assert_eq!(scenarios.len(), 23);
 
     // The heavy row exists so the light one keeps its baseline: same workload,
     // a whole-file diagnostic set instead of four on adjacent lines.
     // Likewise for Org: the plain row's document carries no links, emphasis,
     // source blocks or lists, so a second row measures the markup a real file
     // has rather than invalidating the first row's baseline.
+    // The third-party suite is deliberately NOT in the standard set: it must
+    // never reach the board's geometric mean, where twelve arithmetic
+    // benchmarks would report something no user feels.
+    assert_eq!(
+        ScenarioId::from_str("elisp-benchmarks"),
+        Ok(ScenarioId::ElispBenchmarks)
+    );
+    assert!(
+        !crate::suite::SuiteId::Standard
+            .scenarios()
+            .iter()
+            .any(|entry| entry.scenario == ScenarioId::ElispBenchmarks),
+        "elisp-benchmarks must stay out of the standard suite: twelve of its \
+         eighteen members are arithmetic, and the board's geometric mean is \
+         supposed to predict what a user feels"
+    );
+
     let org_heavy = scenario(ScenarioId::OrgEditingHeavy);
     assert_eq!(org_heavy.id, ScenarioId::OrgEditingHeavy);
     assert_eq!(org_heavy.id.to_string(), "org-editing-heavy");

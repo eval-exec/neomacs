@@ -63,6 +63,16 @@ pub enum ScenarioId {
     /// `org-journal-open` with the package loaded as byte-code, for the same
     /// reason.
     OrgJournalOpenCompiled,
+    /// GNU ELPA's own Elisp benchmark suite, pinned.
+    ///
+    /// Every other fixture here was written in this repository, and auditing
+    /// them found that each either flattered this engine or hid a defect. A
+    /// third-party suite cannot be shaped to our strengths.
+    ///
+    /// NOT an editor benchmark -- twelve of its eighteen members are
+    /// arithmetic and list compute -- and deliberately absent from
+    /// `STANDARD_SCENARIOS` so it can never enter the board's geometric mean.
+    ElispBenchmarks,
     /// Reading a subprocess's output: spawn, read, decode, insert.
     ///
     /// Every compilation, grep and language-server session pays this path and
@@ -146,6 +156,7 @@ impl ScenarioId {
             Self::MagitStatusHeavy => "magit-status-heavy",
             Self::FileOpen => "file-open",
             Self::ProcessOutput => "process-output",
+            Self::ElispBenchmarks => "elisp-benchmarks",
             Self::LspJsonRpc => "lsp-json-rpc",
         }
     }
@@ -194,6 +205,7 @@ impl FromStr for ScenarioId {
             "magit-status-heavy" => Ok(Self::MagitStatusHeavy),
             "file-open" => Ok(Self::FileOpen),
             "process-output" => Ok(Self::ProcessOutput),
+            "elisp-benchmarks" => Ok(Self::ElispBenchmarks),
             "lsp-json-rpc" => Ok(Self::LspJsonRpc),
             unknown => Err(UnknownScenarioId(unknown.to_string())),
         }
@@ -428,6 +440,14 @@ const SCENARIOS: &[ScenarioSpec] = &[
         cross_editor_parity_metrics: &[],
     },
     ScenarioSpec {
+        id: ScenarioId::ElispBenchmarks,
+        description: "GNU ELPA elisp-benchmarks: the upstream Elisp suite, pinned -- a workload this repository did not write",
+        default_frontend: Frontend::Batch,
+        default_iterations: NonZeroU32::new(1).expect("non-zero scenario default"),
+        primary_metric: MetricName::PerOperationCpuTime,
+        cross_editor_parity_metrics: &[],
+    },
+    ScenarioSpec {
         id: ScenarioId::LspJsonRpc,
         description: "jsonrpc round trip at language-server message size: serialize a request, parse a diagnostics reply",
         default_frontend: Frontend::Batch,
@@ -465,7 +485,8 @@ pub const fn scenario(id: ScenarioId) -> &'static ScenarioSpec {
         ScenarioId::MagitStatusCompiled => &SCENARIOS[14],
         ScenarioId::OrgJournalOpenCompiled => &SCENARIOS[15],
         ScenarioId::RustLspTypingHeavy => &SCENARIOS[16],
-        ScenarioId::LspJsonRpc => &SCENARIOS[21],
+        ScenarioId::LspJsonRpc => &SCENARIOS[22],
+        ScenarioId::ElispBenchmarks => &SCENARIOS[21],
         ScenarioId::ProcessOutput => &SCENARIOS[20],
         ScenarioId::FileOpen => &SCENARIOS[19],
         ScenarioId::MagitStatusHeavy => &SCENARIOS[18],

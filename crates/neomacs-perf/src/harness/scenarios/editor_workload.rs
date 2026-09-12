@@ -652,7 +652,8 @@ pub(crate) fn validate_editor_workload_result(
         ScenarioId::SustainedNativeVideo => {
             unreachable!("native video has a dedicated result validator")
         }
-        ScenarioId::RustLspTyping
+        ScenarioId::ElispBenchmarks
+        | ScenarioId::RustLspTyping
         | ScenarioId::RustLspTypingHeavy
         | ScenarioId::MxTabCompletion
         | ScenarioId::BytecodeCallLoop => {

@@ -499,6 +499,9 @@ impl PerfHarness {
             ScenarioId::BytecodeCallLoop => {
                 scenarios::bytecode::prepare(&self.workspace_root, request, run_directory)
             }
+            ScenarioId::ElispBenchmarks => {
+                scenarios::elisp_benchmarks::prepare(&self.workspace_root, request, run_directory)
+            }
             ScenarioId::EditingSimulation
             | ScenarioId::Startup
             | ScenarioId::SustainedEditing
@@ -510,8 +513,6 @@ impl PerfHarness {
             | ScenarioId::MagitStatusHeavy
             | ScenarioId::FileOpen
             | ScenarioId::ProcessOutput
-            | ScenarioId::ProcessOutput
-            | ScenarioId::FileOpen
             | ScenarioId::LargeFileEditing
             | ScenarioId::Indentation
             | ScenarioId::LspJsonRpc
@@ -895,6 +896,10 @@ enum PreparedWorkload {
     },
     MxTabCompletion,
     BytecodeCallLoop,
+    ElispBenchmarks {
+        package_dir: PathBuf,
+        report: PathBuf,
+    },
     EditorWorkload {
         source: PathBuf,
         repository: Option<PathBuf>,
@@ -1068,6 +1073,15 @@ impl PreparedScenario {
     fn add_workload_environment(&self, command: &mut Command) {
         if matches!(&self.workload, PreparedWorkload::BytecodeCallLoop) {
             command.env("NEOVM_JIT", "0");
+        }
+        if let PreparedWorkload::ElispBenchmarks {
+            package_dir,
+            report,
+        } = &self.workload
+        {
+            command
+                .env("NEOMACS_PERF_ELB_DIR", package_dir)
+                .env("NEOMACS_PERF_ELB_REPORT", report);
         }
         if let PreparedWorkload::RustLspTyping {
             source,
@@ -1522,6 +1536,7 @@ enum ScenarioResult {
     RustLspTyping(scenarios::rust_lsp::RustLspTypingResult),
     MxTabCompletion(scenarios::mx_tab::MxTabCompletionResult),
     BytecodeCallLoop(scenarios::bytecode::BytecodeCallLoopResult),
+    ElispBenchmarks(scenarios::elisp_benchmarks::ElispBenchmarksResult),
     EditorWorkload(scenarios::editor_workload::EditorWorkloadResult),
     OrgJournalOpen(scenarios::org_journal_open::OrgJournalOpenResult),
     SustainedNativeVideo(scenarios::sustained_native_video::SustainedNativeVideoResult),
@@ -1541,6 +1556,7 @@ impl ScenarioResult {
             Self::RustLspTyping(result) => result.elapsed_us,
             Self::MxTabCompletion(result) => result.elapsed_us,
             Self::BytecodeCallLoop(result) => result.elapsed_us,
+            Self::ElispBenchmarks(result) => result.elapsed_us,
             Self::EditorWorkload(result) => result.elapsed_us,
             Self::OrgJournalOpen(result) => result.elapsed_us,
             Self::SustainedNativeVideo(result) => result.elapsed_cpu_us,
@@ -1561,6 +1577,9 @@ fn parse_scenario_result(
         }
         ScenarioId::BytecodeCallLoop => {
             serde_json::from_str(raw).map(ScenarioResult::BytecodeCallLoop)
+        }
+        ScenarioId::ElispBenchmarks => {
+            serde_json::from_str(raw).map(ScenarioResult::ElispBenchmarks)
         }
         ScenarioId::EditingSimulation
         | ScenarioId::Startup
@@ -1785,6 +1804,9 @@ fn result_verdict(
         ScenarioResult::BytecodeCallLoop(result) => {
             scenarios::bytecode::validate_bytecode_call_loop_result(request, result)
         }
+        ScenarioResult::ElispBenchmarks(result) => {
+            scenarios::elisp_benchmarks::validate_elisp_benchmarks_result(request, result)
+        }
         ScenarioResult::EditorWorkload(result) => {
             scenarios::editor_workload::validate_editor_workload_result(request, result)
         }
@@ -1829,6 +1851,12 @@ fn valid_measurements(result: &ScenarioResult, wall_elapsed_us: u128) -> Vec<Mea
         }
         ScenarioResult::BytecodeCallLoop(result) => {
             scenarios::bytecode::valid_bytecode_call_loop_measurements(result, wall_elapsed_us)
+        }
+        ScenarioResult::ElispBenchmarks(result) => {
+            scenarios::elisp_benchmarks::valid_elisp_benchmarks_measurements(
+                result,
+                wall_elapsed_us,
+            )
         }
         ScenarioResult::EditorWorkload(result) => {
             scenarios::editor_workload::valid_editor_workload_measurements(result, wall_elapsed_us)

@@ -3,6 +3,7 @@
 
 pub(crate) mod bytecode;
 pub(crate) mod editor_workload;
+pub(crate) mod elisp_benchmarks;
 pub(crate) mod mx_tab;
 pub(crate) mod org_journal_open;
 pub(crate) mod rust_lsp;

@@ -71,6 +71,7 @@ fn scenario_module_registry_is_pinned() {
         [
             "bytecode",
             "editor_workload",
+            "elisp_benchmarks",
             "mx_tab",
             "org_journal_open",
             "rust_lsp",
