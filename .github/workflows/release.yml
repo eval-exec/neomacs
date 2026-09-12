@@ -221,7 +221,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: macos-notarization-diagnostics
+          name: macos-notarization-diagnostics-aarch64
           path: dist/notary/*.json
           if-no-files-found: ignore
 
@@ -229,6 +229,90 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: macos-aarch64
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/*.tar.gz
+          if-no-files-found: error
+
+  # ── macOS x86_64 (Intel) ──────────────────────────────────────────────
+  # `macos-15-intel` is GitHub's LAST x86_64 runner image, promised only
+  # until August 2027 (actions/runner-images#13045); macos-13, the previous
+  # Intel image, closed down in December 2025.  Build this target natively
+  # while the image exists -- afterwards the only path is cross-compiling
+  # x86_64-apple-darwin on an arm64 runner and running the bootstrap's pdump
+  # generation under Rosetta.
+  build-macos-x86_64:
+    name: build macOS x86_64
+    runs-on: macos-15-intel
+    timeout-minutes: 180
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+      # See the aarch64 job: vendoring rewrites load commands to longer
+      # @executable_path names, so every linked binary needs the reserved
+      # header space.
+      RUSTFLAGS: "-C link-arg=-Wl,-headerpad_max_install_names"
+      # Shared by the compile step and the bootstrap below so both describe
+      # one build.  darwin declares the same cargo-features for either
+      # architecture; a test pins this list to that table.
+      RELEASE_FEATURES: webview,neomacs-layout-engine/freetype-bundled
+    outputs:
+      distribution_mode: ${{ steps.macos-signing.outputs.distribution_mode }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Rust tooling
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-key: release-macos-x86_64
+          target: x86_64-apple-darwin
+
+      - name: Set version env
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      # Same contract as the aarch64 job: the args must match xtask's
+      # initial_cargo_build_args EXACTLY, including NEOMACS_BUILD_PROFILE,
+      # or the bootstrap refingerprints and rebuilds instead of reusing.
+      - name: Compile release binaries
+        env:
+          NEOMACS_BUILD_PROFILE: release
+        run: cargo build -p neomacs --features "$RELEASE_FEATURES" --profile release
+
+      - name: Bootstrap and dump
+        run: cargo xtask fresh-build --release --features "$RELEASE_FEATURES" --skip-build
+
+      - name: Configure Developer ID signing and notarization
+        id: macos-signing
+        env:
+          # The Developer ID certificate and App Store Connect key are
+          # architecture-agnostic; the same secrets sign both macOS jobs.
+          MACOS_REQUIRE_SIGNING: ${{ vars.MACOS_REQUIRE_SIGNING || '0' }}
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: ./scripts/configure-macos-signing-ci.sh
+
+      - name: Build and package complete macOS application
+        run: ./scripts/package-macos-app.sh --skip-build
+
+      - name: Upload notarization diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-notarization-diagnostics-x86_64
+          path: dist/notary/*.json
+          if-no-files-found: ignore
+
+      - name: Upload macOS x86_64 artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-x86_64
           path: |
             dist/*.dmg
             dist/*.zip
@@ -358,6 +442,7 @@ jobs:
     needs:
       - build-linux
       - build-macos-aarch64
+      - build-macos-x86_64
       - build-windows
     runs-on: ubuntu-22.04
     steps:
