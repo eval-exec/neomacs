@@ -30,6 +30,7 @@ let inputSequence = 1n;
 let inputInFlight = false;
 let inputQueue = [];
 let targetFrame = "0";
+let reportedScale = null;
 let activePresentation = null;
 
 function showFailure(error) {
@@ -130,6 +131,7 @@ function installFrame(payload) {
 
 let pendingPresentation = null;
 function didPresentFrame(presentation, target) {
+  reconcileDeviceScale();
   if (pendingPresentation?.presentation === presentation) pendingPresentation = null;
   const events = [{ type: "presentation-activated", presentation, target }];
   if (activePresentation !== null) {
@@ -141,11 +143,28 @@ function didPresentFrame(presentation, target) {
 }
 
 function sendViewport() {
-  enqueueInput([{
-    type: "viewport-changed",
-    ...observeBrowserViewport(globalThis),
-    target: targetFrame,
-  }]);
+  const viewport = observeBrowserViewport(globalThis);
+  reportedScale = viewport.scale_factor;
+  enqueueInput([{ type: "viewport-changed", ...viewport, target: targetFrame }]);
+}
+
+/**
+ * Re-send the viewport if the device scale drifted from what the evaluator was
+ * last told.
+ *
+ * `installDeviceScaleViewportObserver` arms a `(resolution: Xdppx)` media query
+ * for the fast path, but correctness cannot rest on that notification alone: a
+ * scale change with an unchanged CSS viewport emits no `resize`, and Chrome
+ * does not dispatch resolution-query changes at all when the scale moves via
+ * CDP device-metrics emulation -- which is how the HiDPI smoke drives it.
+ *
+ * Checked here because a scale change always provokes a repaint, so a frame is
+ * the one event guaranteed to follow it. Self-limiting: the re-send updates
+ * `reportedScale`, so the next frame finds them equal.
+ */
+function reconcileDeviceScale() {
+  const scale = globalThis.devicePixelRatio || 1;
+  if (reportedScale !== null && scale !== reportedScale) sendViewport();
 }
 
 async function start() {
