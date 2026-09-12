@@ -56,7 +56,7 @@ pub(crate) fn run() -> Result<EditorSessionExit, String> {
     )
     .install()
     .map_err(|error| error.to_string())?;
-    browser_host::report_status("restoring portable runtime image");
+    browser_host::report_status("Verifying runtime image…");
     let startup = decode_startup(browser_host::startup_bytes()?)?;
     let runtime_image = browser_host::runtime_image_bytes()?;
     let runtime_image_id = browser_host::runtime_image_id_bytes()?;
@@ -65,7 +65,7 @@ pub(crate) fn run() -> Result<EditorSessionExit, String> {
         &runtime_image_id,
     )
     .map_err(|error| format!("failed to authenticate browser runtime image: {error}"))?;
-    browser_host::report_status("mounting authenticated runtime resources");
+    browser_host::report_status("Verifying runtime resources…");
     let runtime_resource_bundle = browser_host::runtime_resource_bundle_bytes()?;
     let runtime_resource_id = browser_host::runtime_resource_id_bytes()?;
     let runtime_resource_bundle = RuntimeResourceBundle::from_assets(
@@ -73,11 +73,13 @@ pub(crate) fn run() -> Result<EditorSessionExit, String> {
         &runtime_resource_id,
     )
     .map_err(|error| format!("invalid browser runtime resource assets: {error}"))?;
+    browser_host::report_status("Unpacking Lisp runtime…");
     let runtime_resources = MountedRuntimeResources::from_bundle(
         Path::new(BrowserPaths::RUNTIME_ROOT),
         runtime_resource_bundle,
     )
     .map_err(|error| format!("failed to mount browser runtime resources: {error}"))?;
+    browser_host::report_status("Restoring editor heap…");
     let mut evaluator = runtime_image
         .load_for_with_mounted_runtime_resources(
             neomacs_app::host::HostProfile::WASM,
@@ -133,7 +135,7 @@ pub(crate) fn run() -> Result<EditorSessionExit, String> {
     );
     let (input, frames) = frontend.split();
     session.install_host_input_wait_backend(BrowserWorkerTransport { input, frames });
-    browser_host::report_status("entering editor command loop");
+    browser_host::report_status("Starting editor…");
     Ok(session.run())
 }
 
