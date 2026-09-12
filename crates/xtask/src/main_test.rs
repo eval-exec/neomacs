@@ -885,6 +885,11 @@ fn portable_frontend_ci_reuses_one_runtime_bundle_and_smokes_packaged_wasm() {
     assert!(assets.contains("name: neomacs-portable-runtime-assets"));
 
     let android = github_workflow_job(workflow, "android-package");
+    assert!(
+        android.contains("assembleDebugAndroidTest"),
+        "ViewportProbe is the only runtime check of the packaged app; \
+         `assembleRelease` does not compile it, so it must be built explicitly"
+    );
     assert!(android.contains("needs: portable-runtime-assets"));
     assert!(android.contains("name: neomacs-portable-runtime-assets"));
     assert!(!android.contains("fresh-build --release --portable-seed"));
@@ -898,6 +903,30 @@ fn portable_frontend_ci_reuses_one_runtime_bundle_and_smokes_packaged_wasm() {
     assert!(wasm.contains("browser_opfs_smoke_test.py"));
     assert!(wasm.contains("browser_opfs_smoke.py"));
     assert!(wasm.contains("--headless"));
+
+    // The regression gates for the three P1s the browser target actually hit.
+    // Each is the ONLY thing standing between a fixed bug and its silent
+    // return, so pin the steps: without this, deleting them still passes.
+    assert!(
+        wasm.contains("browser_stack_smoke.py"),
+        "deep-recursion gate: without it, an unsurvivable Worker trap returns unnoticed"
+    );
+    assert!(
+        wasm.contains("--call-style"),
+        "the recursion gate must sweep call shapes, not just one"
+    );
+    assert!(
+        wasm.contains("browser_opfs_write_smoke.py"),
+        "failed-save gate: a quota error must not zero the user's file"
+    );
+    assert!(
+        wasm.contains("browser_input_rejection_smoke.py"),
+        "poison-batch gate: a rejected batch must be retired, not re-parsed forever"
+    );
+    assert!(
+        wasm.contains("browser_hidpi_smoke.py"),
+        "HiDPI gate: a scale change must reach the editor"
+    );
     assert!(!wasm.contains("--enable-unsafe-webgpu"));
 }
 
