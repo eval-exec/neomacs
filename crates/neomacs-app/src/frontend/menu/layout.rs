@@ -2,6 +2,10 @@
 
 use neomacs_display_protocol::{PopupMenuItem, menu::MenuPanel};
 
+// Eight positional measurements, not a bag of options: this was moved verbatim
+// out of the desktop menu code and reshaping its signature here would diverge
+// it from the original it is shared with.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn measure_panel(
     x: f32,
     y: f32,

@@ -108,6 +108,31 @@ jobs:
             -p neomacs \
             --no-deps -- -D warnings
 
+      # The Android and browser adapter crates opt into `[lints] workspace =
+      # true` like the rest, but were never added to the gate above when they
+      # were introduced, so eight crates had no hygiene gate at all.
+      #
+      # A separate step on purpose: these are clean today, while the five above
+      # carry pre-existing findings, so merging the lists would have made this
+      # coverage hostage to unrelated debt.
+      #
+      # `neomacs-android` and `neomacs-wasm*` are linted here for their
+      # host-neutral halves; their platform modules sit behind
+      # `cfg(target_os = "android")` and `cfg(target_family = "wasm")`, which
+      # the `portable-frontends` job compiles for the real targets.
+      - name: Clippy (host adapter crates, default features)
+        run: |
+          cargo clippy \
+            -p neovm-host-abi \
+            -p neomacs-app \
+            -p neomacs-host-runtime \
+            -p neomacs-wgpu-runtime \
+            -p neomacs-wasm-protocol \
+            -p neomacs-wasm \
+            -p neomacs-wasm-worker \
+            -p neomacs-android \
+            --no-deps -- -D warnings
+
       # webview variant for the two crates that expose the feature. This is
       # type-check only (no linking), but neomacs-webview's build.rs runs bindgen
       # and therefore needs the EGL/WPE dev headers; wpe-platform-2.0 is optional

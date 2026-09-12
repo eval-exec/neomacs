@@ -3438,6 +3438,10 @@ impl FrameDisplayState {
         // face and can smear the last item's background across the band.
         let final_x = x_cursor.min(win_x + win_w);
         let right_edge = win_x + win_w;
+        // Ends the closure's mutable borrow of `materialized_row` so the
+        // checks below can read it. Not a `Drop` impl -- the borrow release is
+        // the point, which is what clippy's `drop_non_drop` cannot see.
+        #[allow(clippy::drop_non_drop)]
         drop(push);
         if final_x < right_edge
             && col > 0
