@@ -2003,6 +2003,25 @@ impl<'a> crate::emacs_core::hook_runtime::HookRuntime for Vm<'a> {
     }
 }
 
+/// Cached symbol ids for the arithmetic and comparison builtins the opcode
+/// fast paths dispatch to. Fixed names, resolved once — see
+/// `Vm::dispatch_vm_arith_with_frame` for why the by-name path was a
+/// global-interner lock and a string hash per arithmetic operation.
+static ADD1_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '1+'
+static DIVIDE_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '/'
+static GE_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '>='
+static GT_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '>'
+static LE_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '<='
+static LT_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '<'
+static MAX_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // 'max'
+static MIN_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // 'min'
+static MINUS_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '-'
+static MODULO_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '%'
+static NUMEQ_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '='
+static PLUS_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '+'
+static SUB1_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '1-'
+static TIMES_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '*'
+
 impl<'a> Vm<'a> {
     pub(crate) fn from_context(ctx: &'a mut crate::emacs_core::eval::Context) -> Self {
         Self {
@@ -4534,8 +4553,11 @@ impl<'a> Vm<'a> {
                             }
                         };
                         if let Some((a, b)) = fallback {
-                            let result =
-                                vm_try!(self.dispatch_vm_builtin_with_frame(func, "+", vec![a, b]));
+                            let result = vm_try!(self.dispatch_vm_arith_with_frame(
+                                func,
+                                Self::arith_builtin_id("+", &PLUS_ID),
+                                vec![a, b]
+                            ));
                             stk_push!(result);
                         }
                     }
@@ -4554,17 +4576,20 @@ impl<'a> Vm<'a> {
                                 stk!().pop();
                             } else {
                                 stk!().truncate(len - 2);
-                                let result = vm_try!(self.dispatch_vm_builtin_with_frame(
+                                let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                     func,
-                                    "-",
+                                    Self::arith_builtin_id("-", &MINUS_ID),
                                     vec![a, b]
                                 ));
                                 stk_push!(result);
                             }
                         } else {
                             stk!().truncate(len - 2);
-                            let result =
-                                vm_try!(self.dispatch_vm_builtin_with_frame(func, "-", vec![a, b]));
+                            let result = vm_try!(self.dispatch_vm_arith_with_frame(
+                                func,
+                                Self::arith_builtin_id("-", &MINUS_ID),
+                                vec![a, b]
+                            ));
                             stk_push!(result);
                         }
                     }
@@ -4583,26 +4608,29 @@ impl<'a> Vm<'a> {
                                     stk!().pop();
                                 } else {
                                     stk!().truncate(len - 2);
-                                    let result = vm_try!(self.dispatch_vm_builtin_with_frame(
+                                    let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                         func,
-                                        "*",
+                                        Self::arith_builtin_id("*", &TIMES_ID),
                                         vec![a, b]
                                     ));
                                     stk_push!(result);
                                 }
                             } else {
                                 stk!().truncate(len - 2);
-                                let result = vm_try!(self.dispatch_vm_builtin_with_frame(
+                                let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                     func,
-                                    "*",
+                                    Self::arith_builtin_id("*", &TIMES_ID),
                                     vec![a, b]
                                 ));
                                 stk_push!(result);
                             }
                         } else {
                             stk!().truncate(len - 2);
-                            let result =
-                                vm_try!(self.dispatch_vm_builtin_with_frame(func, "*", vec![a, b]));
+                            let result = vm_try!(self.dispatch_vm_arith_with_frame(
+                                func,
+                                Self::arith_builtin_id("*", &TIMES_ID),
+                                vec![a, b]
+                            ));
                             stk_push!(result);
                         }
                     }
@@ -4623,17 +4651,20 @@ impl<'a> Vm<'a> {
                                 stk!().pop();
                             } else {
                                 stk!().truncate(len - 2);
-                                let result = vm_try!(self.dispatch_vm_builtin_with_frame(
+                                let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                     func,
-                                    "/",
+                                    Self::arith_builtin_id("/", &DIVIDE_ID),
                                     vec![a, b]
                                 ));
                                 stk_push!(result);
                             }
                         } else {
                             stk!().truncate(len - 2);
-                            let result =
-                                vm_try!(self.dispatch_vm_builtin_with_frame(func, "/", vec![a, b]));
+                            let result = vm_try!(self.dispatch_vm_arith_with_frame(
+                                func,
+                                Self::arith_builtin_id("/", &DIVIDE_ID),
+                                vec![a, b]
+                            ));
                             stk_push!(result);
                         }
                     }
@@ -4649,17 +4680,20 @@ impl<'a> Vm<'a> {
                                 stk!().pop();
                             } else {
                                 stk!().truncate(len - 2);
-                                let result = vm_try!(self.dispatch_vm_builtin_with_frame(
+                                let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                     func,
-                                    "%",
+                                    Self::arith_builtin_id("%", &MODULO_ID),
                                     vec![a, b]
                                 ));
                                 stk_push!(result);
                             }
                         } else {
                             stk!().truncate(len - 2);
-                            let result =
-                                vm_try!(self.dispatch_vm_builtin_with_frame(func, "%", vec![a, b]));
+                            let result = vm_try!(self.dispatch_vm_arith_with_frame(
+                                func,
+                                Self::arith_builtin_id("%", &MODULO_ID),
+                                vec![a, b]
+                            ));
                             stk_push!(result);
                         }
                     }
@@ -4687,8 +4721,11 @@ impl<'a> Vm<'a> {
                             }
                         };
                         if let Some(top) = fallback {
-                            let result =
-                                vm_try!(self.dispatch_vm_builtin_with_frame(func, "1+", vec![top]));
+                            let result = vm_try!(self.dispatch_vm_arith_with_frame(
+                                func,
+                                Self::arith_builtin_id("1+", &ADD1_ID),
+                                vec![top]
+                            ));
                             stk_push!(result);
                         }
                     }
@@ -4700,17 +4737,20 @@ impl<'a> Vm<'a> {
                                 *stk!().last_mut().unwrap() = Value::fixnum(n - 1);
                             } else {
                                 stk!().pop();
-                                let result = vm_try!(self.dispatch_vm_builtin_with_frame(
+                                let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                     func,
-                                    "1-",
+                                    Self::arith_builtin_id("1-", &SUB1_ID),
                                     vec![top]
                                 ));
                                 stk_push!(result);
                             }
                         } else {
                             stk!().pop();
-                            let result =
-                                vm_try!(self.dispatch_vm_builtin_with_frame(func, "1-", vec![top]));
+                            let result = vm_try!(self.dispatch_vm_arith_with_frame(
+                                func,
+                                Self::arith_builtin_id("1-", &SUB1_ID),
+                                vec![top]
+                            ));
                             stk_push!(result);
                         }
                     }
@@ -4722,17 +4762,20 @@ impl<'a> Vm<'a> {
                                 *stk!().last_mut().unwrap() = Value::fixnum(-n);
                             } else {
                                 stk!().pop();
-                                let result = vm_try!(self.dispatch_vm_builtin_with_frame(
+                                let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                     func,
-                                    "-",
+                                    Self::arith_builtin_id("-", &MINUS_ID),
                                     vec![top]
                                 ));
                                 stk_push!(result);
                             }
                         } else {
                             stk!().pop();
-                            let result =
-                                vm_try!(self.dispatch_vm_builtin_with_frame(func, "-", vec![top]));
+                            let result = vm_try!(self.dispatch_vm_arith_with_frame(
+                                func,
+                                Self::arith_builtin_id("-", &MINUS_ID),
+                                vec![top]
+                            ));
                             stk_push!(result);
                         }
                     }
@@ -4748,8 +4791,11 @@ impl<'a> Vm<'a> {
                             stk!().pop();
                         } else {
                             stk!().truncate(len - 2);
-                            let result =
-                                vm_try!(self.dispatch_vm_builtin_with_frame(func, "=", vec![a, b]));
+                            let result = vm_try!(self.dispatch_vm_arith_with_frame(
+                                func,
+                                Self::arith_builtin_id("=", &NUMEQ_ID),
+                                vec![a, b]
+                            ));
                             stk_push!(result);
                         }
                     }
@@ -4766,8 +4812,11 @@ impl<'a> Vm<'a> {
                             stk!().pop();
                         } else {
                             stk!().truncate(len - 2);
-                            let result =
-                                vm_try!(self.dispatch_vm_builtin_with_frame(func, ">", vec![a, b]));
+                            let result = vm_try!(self.dispatch_vm_arith_with_frame(
+                                func,
+                                Self::arith_builtin_id(">", &GT_ID),
+                                vec![a, b]
+                            ));
                             stk_push!(result);
                         }
                     }
@@ -4795,8 +4844,11 @@ impl<'a> Vm<'a> {
                             }
                         };
                         if let Some((a, b)) = fallback {
-                            let result =
-                                vm_try!(self.dispatch_vm_builtin_with_frame(func, "<", vec![a, b]));
+                            let result = vm_try!(self.dispatch_vm_arith_with_frame(
+                                func,
+                                Self::arith_builtin_id("<", &LT_ID),
+                                vec![a, b]
+                            ));
                             stk_push!(result);
                         }
                     }
@@ -4813,9 +4865,9 @@ impl<'a> Vm<'a> {
                             stk!().pop();
                         } else {
                             stk!().truncate(len - 2);
-                            let result = vm_try!(self.dispatch_vm_builtin_with_frame(
+                            let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                 func,
-                                "<=",
+                                Self::arith_builtin_id("<=", &LE_ID),
                                 vec![a, b]
                             ));
                             stk_push!(result);
@@ -4834,9 +4886,9 @@ impl<'a> Vm<'a> {
                             stk!().pop();
                         } else {
                             stk!().truncate(len - 2);
-                            let result = vm_try!(self.dispatch_vm_builtin_with_frame(
+                            let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                 func,
-                                ">=",
+                                Self::arith_builtin_id(">=", &GE_ID),
                                 vec![a, b]
                             ));
                             stk_push!(result);
@@ -4851,9 +4903,9 @@ impl<'a> Vm<'a> {
                             stk!().pop();
                         } else {
                             stk!().truncate(len - 2);
-                            let result = vm_try!(self.dispatch_vm_builtin_with_frame(
+                            let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                 func,
-                                "max",
+                                Self::arith_builtin_id("max", &MAX_ID),
                                 vec![a, b]
                             ));
                             stk_push!(result);
@@ -4868,9 +4920,9 @@ impl<'a> Vm<'a> {
                             stk!().pop();
                         } else {
                             stk!().truncate(len - 2);
-                            let result = vm_try!(self.dispatch_vm_builtin_with_frame(
+                            let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                 func,
-                                "min",
+                                Self::arith_builtin_id("min", &MIN_ID),
                                 vec![a, b]
                             ));
                             stk_push!(result);
@@ -7825,6 +7877,34 @@ impl<'a> Vm<'a> {
         }
     }
 
+    /// Dispatch one of the arithmetic/comparison builtins the opcode fast
+    /// paths fall back to, by SYMBOL ID.
+    ///
+    /// The by-name sibling below ends in
+    /// `funcall_general(subr_from_sym_id(builtin_name_id(name)))`, and
+    /// `builtin_name_id` is `lookup_interned(name).unwrap_or_else(|| intern(name))`
+    /// -- a global-interner `RwLock` acquisition and a string hash on EVERY
+    /// arithmetic operation the VM performs. `nbody` in GNU ELPA's
+    /// `elisp-benchmarks` made 734,765 of those calls where it should make
+    /// none, 5.93x GNU's instruction count on pure float work.
+    ///
+    /// None of these names is in `VM_SPECIAL_BUILTIN_NAMES`, so the string
+    /// `match` in `dispatch_vm_builtin_unrooted` always falls through for
+    /// them; going straight to `funcall_general` is the same dispatch without
+    /// the lookup. `vm_special_builtin_ids` already did this for
+    /// `CallBuiltin`; the arithmetic opcodes were left behind.
+    fn dispatch_vm_arith_with_frame(
+        &mut self,
+        func: &ByteCodeFunction,
+        id: SymId,
+        args: impl Into<LispArgVec>,
+    ) -> EvalResult {
+        let args = args.into();
+        self.with_frame_arg_roots(func, args, |vm, args| {
+            vm.ctx.funcall_general(Value::subr_from_sym_id(id), args)
+        })
+    }
+
     fn dispatch_vm_builtin_with_frame(
         &mut self,
         func: &ByteCodeFunction,
@@ -7845,6 +7925,13 @@ impl<'a> Vm<'a> {
     /// level implementations that need `&mut Vm`); everything else is an
     /// ordinary subr. Keyed by `SymId` so the hot dispatch below never resolves
     /// the symbol to a string.
+    /// One `OnceLock` per arithmetic builtin name, so the opcode fast paths
+    /// never re-resolve a fixed name. Mirrors `cached_symbol_id!` in
+    /// `runtime/eval`, which is not in scope here.
+    fn arith_builtin_id(name: &'static str, cell: &'static std::sync::OnceLock<SymId>) -> SymId {
+        *cell.get_or_init(|| intern(name))
+    }
+
     fn vm_special_builtin_ids() -> &'static [SymId; 13] {
         static IDS: std::sync::OnceLock<[SymId; 13]> = std::sync::OnceLock::new();
         IDS.get_or_init(|| crate::emacs_core::eval::VM_SPECIAL_BUILTIN_NAMES.map(intern))
