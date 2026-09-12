@@ -153,7 +153,8 @@ impl RenderApp {
             WindowCommand::SetWindowSize { width, height } => {
                 tracing::debug!("WindowCommand::SetWindowSize {}x{}", width, height);
                 if let Some(primary_state) = self.frame_windows.primary_window_mut() {
-                    primary_state.request_inner_size(width, height);
+                    let outcome = primary_state.request_inner_size(width, height);
+                    self.complete_resize_request(outcome);
                 }
             }
             WindowCommand::ResizeWindow {
@@ -171,7 +172,8 @@ impl RenderApp {
                 );
                 if let Some(window_state) = self.frame_windows.get_mut(emacs_frame_id) {
                     window_state.apply_geometry_hints(geometry_hints);
-                    window_state.request_inner_size(width, height);
+                    let outcome = window_state.request_inner_size(width, height);
+                    self.complete_resize_request(outcome);
                 } else {
                     tracing::warn!(
                         "ResizeWindow requested for unknown frame_id=0x{:x}",

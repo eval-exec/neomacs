@@ -40,5 +40,13 @@
          (when (fboundp 'neomacs--write-frame-snapshot)
            (neomacs--write-frame-snapshot
             (getenv "NEOMACS_GUI_FRAME_SNAPSHOT_JSON") t 'json))
-         (run-at-time 1 nil (lambda () (kill-emacs 0))))
+         ;; Observe the settled native resize, not just the pending Lisp request.
+         (set-frame-width nil 91)
+         (run-at-time
+          1 nil
+          (lambda ()
+            (if (= (frame-width) 91)
+                (kill-emacs 0)
+              (message "Resized geometry: expected 91 columns, got %S" (frame-width))
+              (kill-emacs 1)))))
      (error (message "Desktop font startup regression: %S" err) (kill-emacs 1)))))

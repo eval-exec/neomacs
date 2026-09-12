@@ -66,28 +66,41 @@ impl RunnerKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DisplayHarness {
-    backend: GuiBackend,
+pub enum DisplayHarness {
+    Xvfb,
+    WestonHeadless(WaylandOutput),
+    CurrentDesktopSession,
+}
+
+/// Physical output dimensions and compositor scale are one test environment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaylandOutput {
+    Standard,
+    HiDpi4k,
 }
 
 impl DisplayHarness {
     pub fn for_backend(backend: GuiBackend) -> Self {
-        Self { backend }
+        match backend {
+            GuiBackend::LinuxX11 => Self::Xvfb,
+            GuiBackend::LinuxWayland => Self::WestonHeadless(WaylandOutput::Standard),
+            GuiBackend::Macos | GuiBackend::Windows => Self::CurrentDesktopSession,
+        }
     }
 
     pub fn required_env(&self) -> &'static [&'static str] {
-        match self.backend {
-            GuiBackend::LinuxX11 => &["DISPLAY"],
-            GuiBackend::LinuxWayland => &["XDG_RUNTIME_DIR", "WAYLAND_DISPLAY"],
-            GuiBackend::Macos | GuiBackend::Windows => &[],
+        match self {
+            Self::Xvfb => &["DISPLAY"],
+            Self::WestonHeadless(_) => &["XDG_RUNTIME_DIR", "WAYLAND_DISPLAY"],
+            Self::CurrentDesktopSession => &[],
         }
     }
 
     pub fn start_session(&self, artifact_root: impl AsRef<Path>) -> io::Result<DisplaySession> {
-        match self.backend {
-            GuiBackend::LinuxWayland => start_weston_headless(artifact_root.as_ref()),
-            GuiBackend::LinuxX11 => start_xvfb(artifact_root.as_ref()),
-            GuiBackend::Macos | GuiBackend::Windows => Ok(DisplaySession {
+        match self {
+            Self::WestonHeadless(output) => start_weston_headless(artifact_root.as_ref(), *output),
+            Self::Xvfb => start_xvfb(artifact_root.as_ref()),
+            Self::CurrentDesktopSession => Ok(DisplaySession {
                 child: None,
                 env: Vec::new(),
                 cleanup_dir: None,
@@ -498,7 +511,14 @@ impl GuiCommandRunner for ProcessGuiCommandRunner {
     }
 }
 
-fn start_weston_headless(artifact_root: &Path) -> io::Result<DisplaySession> {
+fn start_weston_headless(
+    artifact_root: &Path,
+    output: WaylandOutput,
+) -> io::Result<DisplaySession> {
+    let (width, height, scale) = match output {
+        WaylandOutput::Standard => (1280, 800, 1),
+        WaylandOutput::HiDpi4k => (3840, 2160, 2),
+    };
     let runtime_dir =
         std::env::temp_dir().join(format!("neomacs-gui-tests-{}", std::process::id()));
     fs::create_dir_all(&runtime_dir)?;
@@ -513,8 +533,9 @@ fn start_weston_headless(artifact_root: &Path) -> io::Result<DisplaySession> {
         .arg(format!("--socket={socket}"))
         .arg("--idle-time=0")
         .arg("--no-config")
-        .arg("--width=1280")
-        .arg("--height=800")
+        .arg(format!("--width={width}"))
+        .arg(format!("--height={height}"))
+        .arg(format!("--scale={scale}"))
         .arg("--fake-seat")
         .arg(format!("--log={}", log_path.display()))
         .env("XDG_RUNTIME_DIR", &runtime_dir)

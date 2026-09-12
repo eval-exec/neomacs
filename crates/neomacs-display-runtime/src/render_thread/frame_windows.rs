@@ -1452,7 +1452,12 @@ impl GuiFrameWindowState {
         self.render.compositor.dirty = true;
     }
 
-    pub(super) fn request_inner_size(&mut self, width: u32, height: u32) {
+    pub(super) fn request_inner_size(
+        &mut self,
+        width: u32,
+        height: u32,
+    ) -> super::surface_resize::ResizeRequestOutcome {
+        use super::surface_resize::ResizeRequestOutcome;
         match &mut self.lifecycle {
             FrameLifecycle::Active { native, .. } => {
                 let content: PhysicalSize<u32> = window_size_from_emacs_pixels(width, height)
@@ -1468,7 +1473,13 @@ impl GuiFrameWindowState {
                         .saturating_add(insets.top)
                         .saturating_add(insets.bottom),
                 );
-                let _ = native.window.request_surface_size(size.into());
+                match native.window.request_surface_size(size.into()) {
+                    Some(size) => ResizeRequestOutcome::Applied {
+                        window: native.window.id(),
+                        size,
+                    },
+                    None => ResizeRequestOutcome::AwaitingConfigure,
+                }
             }
             FrameLifecycle::Pending {
                 width: pw,
@@ -1477,6 +1488,7 @@ impl GuiFrameWindowState {
             } => {
                 *pw = width;
                 *ph = height;
+                ResizeRequestOutcome::PendingRealization
             }
         }
     }

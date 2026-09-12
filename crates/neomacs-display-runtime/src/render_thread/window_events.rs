@@ -148,38 +148,7 @@ impl RenderApp {
                     size.height
                 );
 
-                let emacs_fid = self.emacs_frame_for_window_event(window_id);
-                let is_primary = self.frame_windows.is_primary_winit(window_id);
-                if let Some(device) = self.gpu.as_ref().map(|gpu| gpu.device.clone())
-                    && let Some(ws) = self.frame_windows.get_by_winit_mut(window_id)
-                {
-                    ws.handle_resize(&device, size.width, size.height);
-                    if is_primary {
-                        if let Some(renderer) = &mut self.renderer {
-                            renderer.resize(size.width, size.height);
-                        }
-                        if self.effects.resize_padding.enabled
-                            && let Some(renderer) = self.renderer.as_ref()
-                        {
-                            renderer.trigger_transient_resize_padding(
-                                &mut ws.render.compositor.renderer_effects,
-                                neomacs_display_protocol::frame_time::observe_platform_now()
-                                    .into_instant(),
-                            );
-                        }
-                        ws.render.mark_dirty();
-                    }
-                    let scale_factor = ws.scale_factor();
-                    let (content_width, content_height) = ws.content_size();
-                    let (emacs_w, emacs_h) =
-                        emacs_pixels_from_window_size(content_width, content_height, scale_factor);
-                    self.comms.send_input(InputEvent::WindowResize {
-                        width: emacs_w,
-                        height: emacs_h,
-                        scale_factor,
-                        emacs_frame_id: emacs_fid,
-                    });
-                }
+                self.apply_native_surface_resize(window_id, size);
             }
 
             WindowEvent::Focused(focused) => {

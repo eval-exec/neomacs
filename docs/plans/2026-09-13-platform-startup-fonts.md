@@ -111,9 +111,9 @@ received Linux `-fPIC`, rejected for MSVC. These checks are not reported as
 passing. The source harness, commands and logs are under
 `target/diagnostics/issue-360/`.
 
-A separate fake-native-catalog test seam was proposed to exercise every
-Windows fallback and failure path on Linux. It has not been added while
-awaiting the user's test-seam approval.
+A fake-selector seam was not added. The subsequent platform coverage instead
+uses the approved public Lisp startup seam with process-local Fontconfig
+catalogs (see below).
 
 The Linux release build succeeded after the rebase, and a matching pdump was
 regenerated without byte compilation or autoload regeneration. The tracked
@@ -161,10 +161,10 @@ The owned preparation value can later travel through a nonblocking native
 startup state machine without moving Lisp values or native font handles across
 threads; that larger event-loop lifecycle change is not required here.
 
-The focused bootstrap run has 24 passes and one previously observed failure:
-`bootstrap_batch_startup_error_exits_nonzero_like_gnu` still fails its
-`*Messages*` assertion. It is outside the font/geometry change and is not
-claimed fixed.
+The initial focused bootstrap run had 24 passes and one previously observed
+failure: `bootstrap_batch_startup_error_exits_nonzero_like_gnu` failed its
+`*Messages*` assertion. The subsequent GNU investigation below found that
+assertion was incorrect, rather than a font/geometry regression.
 
 The first geometry rerun exposed a second, native-side mismatch: 745px was
 requested using the correct font, then winit snapped it down to 740px (79 text
@@ -205,3 +205,64 @@ The rebuilt executable/pdump fingerprint is
 `545C52570CE82336FD1326B9317168D5E29C0D20286400BDBDFDDBF082EA8DA6`.
 Native macOS/Windows runtime validation remains unavailable; the GUI evidence
 above is Linux Wayland at 96 logical DPI.
+
+## Follow-up: native resize completion and platform coverage
+
+The startup refactor was committed as `3da868a97` before these follow-ups.
+The GUI fixture now also requests 91 columns and checks the settled result.
+It runs on both the standard output and an actual 3840x2160, scale-2 Weston
+output. Before the completion fix both runs remained at 80 columns
+(`hidpi-red.log`); the high-DPI log confirmed native scale factor 2.
+
+The local winit source contract (`winit-core/src/window.rs:request_surface_size`)
+explicitly permits immediate completion without a later resize event.
+Wayland's implementation returns `Some(applied_size)`. Neomacs discarded that
+return value, leaving GPU/surface and evaluator geometry at the previous size.
+GNU PGTK delegates requests through `xg_frame_set_char_size` and GTK allocation;
+its logical dimensions follow applied native geometry, not merely the request.
+
+`render_thread/surface_resize.rs` now owns a single completion path for native
+events and immediate replies. `ResizeRequestOutcome` distinguishes `Applied`,
+`AwaitingConfigure`, and `PendingRealization`, and is marked `must_use`.
+The completion uses the returned physical size, even when that is an old size
+because the platform rejected a request. It updates the surface, renderer, and
+evaluator notification through the existing coordinate conversion. Requested
+dimensions cannot be mistaken for a confirmed native result.
+
+`platform_startup_test.rs` runs public Lisp startup in isolated child processes
+against native Fontconfig catalogs with controlled family availability. Five
+cases cover Courier New priority, missing-Courier-New advancement, Fixedsys's
+12px fallback, Neomacs's generic last resort, and Cocoa's named fixed-pitch
+12pt policy. Each catalog copies a locally available outline face into its
+own workspace artifact directory and assigns native scan family names. No
+production environment override or fake internal selector is introduced.
+These verify shared policy, not actual AppKit/DirectWrite behavior, and do not
+force every possible driver-opening failure (such as reaching unsized Fixedsys
+after a same-family pixel-size failure).
+
+The batch failure was an incorrect test expectation. GNU
+`keyboard.c:command-error-default-function` prints noninteractive errors to
+`external-debugging-output`, emits a newline, then calls `kill-emacs -1`.
+Independent GNU runs with a shutdown hook showed `boom` on stderr and no
+`boom` entry in `*Messages*`, including with noninteractive backtraces disabled.
+The existing assertion now checks absence from the echo area/message log;
+`tests/batch_startup.rs` separately checks the real executable's stderr and
+exit status 255. No production error-reporting behavior was changed.
+
+Follow-up verification completed:
+
+- Release build and no-byte-compile pdump regeneration passed. Matching
+  fingerprint: `95DF7D65A634705CEB537960E37A62FE7E1DBFFB766BF9740364623AE87FB25E`.
+- All 4 GUI regressions passed, including 80→91 columns at both 1× and 4K/2×.
+  The 2× trace confirms the applied resize returns 844 logical pixels with
+  native scale factor 2; it no longer remains at the old 745-pixel width.
+- All 30 selected bootstrap/platform tests passed, including the corrected
+  batch assertion; all 19 runtime resize tests and 16 GUI harness tests passed.
+- The real batch-process stderr/exit-status test passed.
+- Formatting and diff checks passed. `lisp/ldefs-boot.el` remains unchanged.
+
+Logs: `hidpi-release-build.log`, `hidpi-pdump.log`, `hidpi-gui-green.log`,
+`followup-bootstrap-all.log`, `hidpi-runtime-tests.log`,
+`hidpi-harness-tests.log`, and `batch-process-tests2.log` in the same diagnostic
+directory. GNU batch controls are `batch-gnu{,-no-backtrace}.{stdout,stderr}.log`.
+Native macOS/Windows execution is still not available on this machine.

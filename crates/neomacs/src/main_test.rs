@@ -80,6 +80,10 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "linux")]
+#[path = "platform_startup_test.rs"]
+mod platform_fonts;
+
 fn gui_display() -> BootstrapDisplayConfig {
     let observation = neomacs_display_protocol::DisplayObservation::X11(
         neomacs_display_protocol::X11DisplayObservation::new(
@@ -5885,7 +5889,7 @@ fn bootstrap_batch_startup_error_exits_nonzero_like_gnu() {
     assert_eq!(
         eval.current_message_text(),
         None,
-        "GNU noninteractive message writes to stderr/*Messages*, not the echo area"
+        "GNU noninteractive command errors write to stderr, not the echo area"
     );
     let messages = eval
         .buffer_manager()
@@ -5894,8 +5898,8 @@ fn bootstrap_batch_startup_error_exits_nonzero_like_gnu() {
         .map(|buffer| buffer.buffer_string())
         .unwrap_or_default();
     assert!(
-        messages.lines().any(|line| line == "boom"),
-        "GNU prints `(error STRING)` as STRING before nonzero shutdown; messages={messages:?}"
+        !messages.lines().any(|line| line == "boom"),
+        "GNU keyboard.c:command-error-default-function prints to external-debugging-output, not *Messages*; messages={messages:?}"
     );
 }
 

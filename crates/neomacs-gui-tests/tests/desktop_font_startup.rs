@@ -1,14 +1,24 @@
 use neomacs_gui_tests::{
     DisplayHarness, GuiBackend, GuiRunOptions, GuiRunStatus, GuiScenario, GuiTestPlan,
-    ProcessGuiCommandRunner,
+    ProcessGuiCommandRunner, WaylandOutput,
 };
 use std::{fs, path::PathBuf, process::Command, time::Duration};
 
 #[test]
 #[ignore = "requires release binary/pdump, Weston, glib-compile-schemas, Ubuntu Mono, DejaVu and SVG packages"]
 fn desktop_monospace_font_drives_initial_window_and_svg_metrics() {
+    check_desktop_font_startup(WaylandOutput::Standard, "desktop-font-startup");
+}
+
+#[test]
+#[ignore = "requires release binary/pdump, Weston, glib-compile-schemas, Ubuntu Mono, DejaVu and SVG packages"]
+fn hidpi_desktop_font_preserves_initial_and_resized_column_grid() {
+    check_desktop_font_startup(WaylandOutput::HiDpi4k, "desktop-font-startup-hidpi");
+}
+
+fn check_desktop_font_startup(output: WaylandOutput, scenario: &str) {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let artifacts = root.join("target/neomacs-gui-tests");
+    let artifacts = root.join("target/neomacs-gui-tests").join(scenario);
     let schemas = artifacts.join("desktop-font-startup-schemas");
     fs::create_dir_all(&schemas).unwrap();
     fs::copy(
@@ -24,7 +34,7 @@ fn desktop_monospace_font_drives_initial_window_and_svg_metrics() {
             .success()
     );
     let backend = GuiBackend::LinuxWayland;
-    let session = DisplayHarness::for_backend(backend)
+    let session = DisplayHarness::WestonHeadless(output)
         .start_session(&artifacts)
         .unwrap();
     let binary = std::env::var_os("NEOMACS_GUI_TEST_BINARY")
@@ -35,7 +45,7 @@ fn desktop_monospace_font_drives_initial_window_and_svg_metrics() {
         &root,
         &artifacts,
         GuiScenario::new(
-            "desktop-font-startup",
+            scenario,
             root.join("crates/neomacs-gui-tests/fixtures/desktop-font-startup.el"),
         ),
     )
