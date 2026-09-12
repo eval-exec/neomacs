@@ -316,10 +316,58 @@ fn validate_asset_digest(asset: &Path, digest_file: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Shadow-stack budget for the editor Worker, in bytes.
+///
+/// rustc's wasm target spec passes `-z stack-size=1048576` unconditionally
+/// ("LLD only gives us one page of stack (64k) ... Default to a larger stack
+/// closer to other PC platforms (1MB)"), and wasm-ld places it first, so the
+/// stack occupies linear memory `[0, SIZE)` and grows down toward address 0.
+/// One MiB is not enough for this editor: reading and evaluating a single
+/// deeply nested source form overruns it at a few hundred levels of nesting,
+/// and the overrun is a trap, not a Rust panic -- it bypasses the panic hook,
+/// kills the Worker, and takes every unsaved buffer with it.
+///
+/// Measured in Chrome 149 against the packaged editor, evaluating one form
+/// nested N levels deep:
+///
+/// | stack | outcome                          | initial linear memory |
+/// |-------|----------------------------------|-----------------------|
+/// | 1 MiB | Worker dead at N=400             | 4.9 MiB               |
+/// | 4 MiB | survives past N=6400             | 7.9 MiB               |
+/// | 8 MiB | survives past N=6400             | 11.9 MiB              |
+///
+/// 4 MiB is the knee: it removes the crash, and the cost is +3 MiB of initial
+/// memory per tab because the stack sits below the data segment. Other
+/// interpreters size this the same way (CRuby documents 16 MiB for
+/// `Out of bounds memory access`, Pyodide ships 10 MB, .NET 5 MB).
+///
+/// Note what this does NOT fix, so nobody raises it expecting more: ordinary
+/// deep recursion was already safe at 1 MiB (`max-lisp-eval-depth` signals
+/// `excessive-lisp-nesting` cleanly at 20000 levels), and recursion inside an
+/// `unwind-protect` cleanup form still traps at every size tested -- that one
+/// needs the evaluator's continuation migration, not a bigger stack.
+const WORKER_SHADOW_STACK_BYTES: usize = 4 * 1024 * 1024;
+
+/// The target-scoped rustflags that carry [`WORKER_SHADOW_STACK_BYTES`] to the
+/// wasm link. Separate from its one caller so a test can pin it: losing this
+/// flag reintroduces a crash that no unit test and no `cargo check` can see.
+pub(super) fn worker_shadow_stack_rustflags() -> String {
+    format!("-C link-arg=-zstack-size={WORKER_SHADOW_STACK_BYTES}")
+}
+
 fn build_wasm(repo_root: &Path) -> Result<()> {
     let cargo = env::var_os("CARGO").unwrap_or_else(|| OsString::from("cargo"));
     let status = Command::new(cargo)
         .current_dir(repo_root)
+        // Target-scoped deliberately. Plain `RUSTFLAGS` would also reach host
+        // build scripts, where a wasm link argument fails the build (`libc`'s
+        // script is the first casualty), and `[target.*] rustflags` in
+        // `.cargo/config.toml` is silently overridden by an ambient
+        // `RUSTFLAGS`, which would drop the stack size with no diagnostic.
+        .env(
+            "CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS",
+            worker_shadow_stack_rustflags(),
+        )
         .args([
             "build",
             "--release",
