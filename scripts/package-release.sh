@@ -10,8 +10,9 @@ Build and package a Neomacs binary release archive.
 Options:
   --target TRIPLE Rust target triple, e.g. x86_64-unknown-linux-gnu.
                   Defaults to x86_64-unknown-linux-gnu on Linux,
-                  aarch64-apple-darwin on macOS, x86_64-pc-windows-msvc or
-                  aarch64-pc-windows-msvc on Windows.
+                  aarch64- or x86_64-apple-darwin on macOS,
+                  x86_64-pc-windows-msvc or aarch64-pc-windows-msvc on
+                  Windows.
   --skip-build    Package existing artifacts (target/release, or the directory
                   named by NEOMACS_RELEASE_DIR) without running
                   cargo xtask fresh-build --release.

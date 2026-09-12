@@ -565,13 +565,25 @@ jobs:
   # variables, exercising the runtime-root resolution through the
   # ~/.local/bin symlink chain.
   verify-macos-install-script:
-    name: verify install.sh on macOS from the published release
+    name: verify install.sh on macOS ${{ matrix.arch }} from the published release
     # This MUST depend on create-release: it reads an asset OF the release.
     # It previously ran inside a job that create-release itself depended on, so
     # the release could not be made until a step passed that could only pass
     # once the release existed - a cycle that can never be satisfied.
+    #
+    # install.sh selects the asset by uname, so each arch entry verifies its
+    # own published tarball end to end; the x86_64 entry rides GitHub's last
+    # Intel image (until August 2027, actions/runner-images#13045).
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: aarch64
+            runner: macos-latest
+          - arch: x86_64
+            runner: macos-15-intel
     needs: create-release
-    runs-on: macos-latest
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     steps:
       - name: Run the published installer
