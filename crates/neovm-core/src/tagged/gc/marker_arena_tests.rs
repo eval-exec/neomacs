@@ -36,6 +36,7 @@ fn mk(heap: &mut TaggedHeap, id: u64) -> TaggedValue {
         charpos: id as usize,
         last_position_valid: true,
         next_marker: std::ptr::null_mut(),
+        chained: false,
     })
 }
 fn mk_ptr(v: TaggedValue) -> *const u8 {

@@ -6871,6 +6871,7 @@ impl BufferManager {
                 charpos: 0,
                 last_position_valid: true,
                 next_marker: std::ptr::null_mut(),
+                chained: false,
             });
         marker_value
             .as_veclike_ptr()

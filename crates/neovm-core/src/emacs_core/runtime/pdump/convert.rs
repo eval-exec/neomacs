@@ -1719,6 +1719,7 @@ impl<'a> LoadDecoder<'a> {
                     charpos: marker.charpos,
                     last_position_valid: marker.last_position_valid,
                     next_marker: std::ptr::null_mut(),
+                    chained: false,
                 };
                 let value = if let Some(ptr) =
                     self.mapped_typed_object_for_object::<MarkerObj>(id, "marker")?
@@ -5436,6 +5437,7 @@ fn load_buffer(
                         charpos: dump_marker.charpos,
                         last_position_valid: dump_marker.last_position_valid,
                         next_marker: std::ptr::null_mut(),
+                        chained: false,
                     });
                 scratch
                     .as_veclike_ptr()
@@ -5590,6 +5592,7 @@ fn load_buffer(
                         charpos: 0,
                         last_position_valid: true,
                         next_marker: std::ptr::null_mut(),
+                        chained: false,
                     });
                 scratch
                     .as_veclike_ptr()

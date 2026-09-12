@@ -1351,6 +1351,17 @@ pub struct LispMarker {
     /// `null` if not on a chain. GC sweep order: `unchain_dead_markers`
     /// walks these BEFORE `sweep_objects` frees unmarked markers.
     pub next_marker: *mut crate::tagged::header::MarkerObj,
+    /// Whether this marker is currently spliced into a buffer's chain.
+    ///
+    /// `next_marker` cannot answer this: the chain's TAIL also has a null
+    /// link. Without a bit, "is this marker chained?" costs a walk of the
+    /// whole chain, and the registration path asked it on every marker
+    /// creation -- quadratic against a buffer holding thousands of markers.
+    ///
+    /// Maintained at the only three places chain membership changes:
+    /// `chain_splice_at_head` sets it, `chain_unlink` and the two
+    /// unchain-by-id paths clear it.
+    pub chained: bool,
 }
 
 #[cfg(test)]

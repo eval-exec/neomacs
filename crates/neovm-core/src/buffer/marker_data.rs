@@ -35,6 +35,7 @@ pub(super) fn positioned_marker_data(
         charpos: 0,
         last_position_valid: true,
         next_marker: std::ptr::null_mut(),
+        chained: false,
     };
     set_marker_data_anchor(&mut data, anchor);
     data

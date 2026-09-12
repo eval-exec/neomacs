@@ -2163,6 +2163,7 @@ impl BufferText {
                 if (*curr).data.marker_id == Some(marker_id) {
                     *prev_slot = (*curr).data.next_marker;
                     (*curr).data.next_marker = std::ptr::null_mut();
+                    (*curr).data.chained = false;
                     (*curr).data.buffer = None;
                     return;
                 }
@@ -2351,6 +2352,7 @@ impl BufferText {
                 if belongs_to_killed {
                     *prev_slot = data.next_marker;
                     data.next_marker = std::ptr::null_mut();
+                    data.chained = false;
                     data.buffer = None;
                     // Preserve charpos/bytepos and last_position_valid so
                     // `marker-last-position` keeps GNU semantics across
@@ -2416,7 +2418,16 @@ impl BufferText {
                 (*marker).data.next_marker.is_null(),
                 "chain_splice_at_head: marker is already on a chain"
             );
+            // `chained` must agree with the link state it summarises, or the
+            // O(1) "is this marker chained?" test that replaced a chain walk
+            // would answer wrongly. Checked here so the whole debug suite
+            // proves the bit rather than assuming it.
+            debug_assert!(
+                !(*marker).data.chained,
+                "chain_splice_at_head: marker is already flagged chained"
+            );
             (*marker).data.next_marker = old_head;
+            (*marker).data.chained = true;
         }
         storage.markers_head = marker;
     }
@@ -2443,6 +2454,7 @@ impl BufferText {
                 if curr == marker {
                     *prev_slot = (*curr).data.next_marker;
                     (*curr).data.next_marker = std::ptr::null_mut();
+                    (*curr).data.chained = false;
                     return;
                 }
                 prev_slot = &mut (*curr).data.next_marker;

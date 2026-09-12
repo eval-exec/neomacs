@@ -234,6 +234,7 @@ fn register_marker_for_test(
         charpos: 0,
         last_position_valid: true,
         next_marker: std::ptr::null_mut(),
+        chained: false,
     });
     let marker_ptr = marker_value
         .as_veclike_ptr()

@@ -75,6 +75,7 @@ pub(crate) fn make_marker_value_with_id(
         charpos,
         last_position_valid,
         next_marker: std::ptr::null_mut(),
+        chained: false,
     })
 }
 
@@ -698,7 +699,17 @@ fn register_marker_in_buffers(
         // `existing_mid` matched a chain entry we just removed), the
         // chain_splice_at_head precondition would fire; belt-and-braces
         // unlink from this buffer first.
-        if let Some(ptr) = marker_ptr {
+        //
+        // `chained` makes that question O(1). Asking it by walking -- which is
+        // what an unconditional `unlink_marker_ptr` does, since the walk is how
+        // it discovers the marker is absent -- costs O(markers in the buffer)
+        // on EVERY marker creation, and the answer is "absent" for every
+        // freshly built marker. Magit keeps a marker pair per section, so
+        // building a status buffer paid that walk thousands of times against a
+        // chain thousands long.
+        if let Some(ptr) = marker_ptr
+            && marker.as_marker_data().is_some_and(|data| data.chained)
+        {
             let _ = buffers.unlink_marker_ptr(buf_id, ptr);
         }
         if let (Some(ptr), Some(byte_pos)) = (

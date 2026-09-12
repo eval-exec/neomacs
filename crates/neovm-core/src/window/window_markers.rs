@@ -55,13 +55,29 @@ fn lisp_position_to_usize(lisp_position: LispCharPos1) -> usize {
     usize::try_from(lisp_position.as_i64().max(1)).expect("Lisp character position fits usize")
 }
 
-fn marker_lisp_position(
-    bm: &BufferManager,
-    buffer_id: BufferId,
-    marker_id: u64,
-) -> Option<LispCharPos1> {
-    bm.marker_char_pos(buffer_id, marker_id)
-        .map(|char_pos| LispCharPos1::from_one_based_usize(char_pos.get().saturating_add(1)))
+/// Read a window marker's position straight off the `MarkerObj` the window
+/// already roots.
+///
+/// This is GNU's `XMARKER (w->start)->charpos` (`src/window.c` reads the
+/// marker struct directly everywhere it needs a window position). Looking the
+/// same marker up by id instead means walking the buffer's intrusive marker
+/// chain, which is O(markers in the buffer) -- and this runs three times per
+/// leaf window after EVERY buffer edit, so against a buffer holding thousands
+/// of markers it is quadratic in (edits x markers). Magit is exactly that
+/// buffer: it keeps a marker pair per section, and building a status buffer is
+/// thousands of insertions.
+///
+/// `buffer` is `None` for an unchained marker (`unchain_marker` clears it),
+/// so checking it here reproduces the old lookup's "present in THIS buffer's
+/// chain" answer without the walk.
+fn marker_lisp_position(marker: Value, buffer_id: BufferId) -> Option<LispCharPos1> {
+    let data = marker.as_marker_data()?;
+    if data.buffer != Some(buffer_id) {
+        return None;
+    }
+    Some(LispCharPos1::from_one_based_usize(
+        data.charpos.saturating_add(1),
+    ))
 }
 
 /// Allocate one internal marker and retain its Lisp handle as the precise-GC
@@ -227,29 +243,25 @@ pub fn set_window_old_point_with_marker(
 /// Call this after text edits (insert/delete) so that the window caches
 /// reflect the auto-adjusted marker positions. Only windows whose buffer
 /// matches `edited_buffer_id` need updating.
-pub fn sync_window_positions_from_markers(
-    frame: &mut Frame,
-    bm: &BufferManager,
-    edited_buffer_id: BufferId,
-) {
-    sync_subtree(&mut frame.root_window, bm, edited_buffer_id);
+pub fn sync_window_positions_from_markers(frame: &mut Frame, edited_buffer_id: BufferId) {
+    sync_subtree(&mut frame.root_window, edited_buffer_id);
     if let Some(ref mut mini) = frame.minibuffer_leaf {
-        sync_leaf(mini, bm, edited_buffer_id);
+        sync_leaf(mini, edited_buffer_id);
     }
 }
 
-fn sync_subtree(window: &mut Window, bm: &BufferManager, edited_buffer_id: BufferId) {
+fn sync_subtree(window: &mut Window, edited_buffer_id: BufferId) {
     match window {
-        Window::Leaf { .. } => sync_leaf(window, bm, edited_buffer_id),
+        Window::Leaf { .. } => sync_leaf(window, edited_buffer_id),
         Window::Internal { children, .. } => {
             for child in children {
-                sync_subtree(child, bm, edited_buffer_id);
+                sync_subtree(child, edited_buffer_id);
             }
         }
     }
 }
 
-fn sync_leaf(window: &mut Window, bm: &BufferManager, edited_buffer_id: BufferId) {
+fn sync_leaf(window: &mut Window, edited_buffer_id: BufferId) {
     let Window::Leaf {
         buffer_id,
         window_start,
@@ -269,13 +281,13 @@ fn sync_leaf(window: &mut Window, bm: &BufferManager, edited_buffer_id: BufferId
         return;
     };
 
-    if let Some(position) = marker_lisp_position(bm, *buffer_id, markers.start.raw()) {
+    if let Some(position) = marker_lisp_position(markers.start.root(), *buffer_id) {
         *window_start = position;
     }
-    if let Some(position) = marker_lisp_position(bm, *buffer_id, markers.point.raw()) {
+    if let Some(position) = marker_lisp_position(markers.point.root(), *buffer_id) {
         *point = position;
     }
-    if let Some(position) = marker_lisp_position(bm, *buffer_id, markers.old_point.raw()) {
+    if let Some(position) = marker_lisp_position(markers.old_point.root(), *buffer_id) {
         *old_point = position;
     }
 }
@@ -311,13 +323,13 @@ fn refresh_cloned_subtree_from_shared_markers(window: &mut Window, bm: &BufferMa
             let Some(markers) = position_markers.attached() else {
                 return;
             };
-            if let Some(position) = marker_lisp_position(bm, *buffer_id, markers.start.raw()) {
+            if let Some(position) = marker_lisp_position(markers.start.root(), *buffer_id) {
                 *window_start = position;
             }
-            if let Some(position) = marker_lisp_position(bm, *buffer_id, markers.point.raw()) {
+            if let Some(position) = marker_lisp_position(markers.point.root(), *buffer_id) {
                 *point = position;
             }
-            if let Some(position) = marker_lisp_position(bm, *buffer_id, markers.old_point.raw()) {
+            if let Some(position) = marker_lisp_position(markers.old_point.root(), *buffer_id) {
                 *old_point = position;
             }
         }
@@ -388,12 +400,8 @@ fn attach_subtree(window: &mut Window, bm: &mut BufferManager) {
 }
 
 /// Walk all frames and sync windows for the given buffer.
-pub fn sync_all_frames_for_buffer(
-    frames: &mut FrameManager,
-    bm: &BufferManager,
-    edited_buffer_id: BufferId,
-) {
+pub fn sync_all_frames_for_buffer(frames: &mut FrameManager, edited_buffer_id: BufferId) {
     for frame in frames.frames_mut() {
-        sync_window_positions_from_markers(frame, bm, edited_buffer_id);
+        sync_window_positions_from_markers(frame, edited_buffer_id);
     }
 }

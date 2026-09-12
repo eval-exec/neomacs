@@ -468,11 +468,7 @@ impl crate::emacs_core::eval::Context {
             .and_then(|frame| frame.find_window(window_id))
             .and_then(Window::buffer_id)
         {
-            crate::window::window_markers::sync_all_frames_for_buffer(
-                &mut self.frames,
-                &self.buffers,
-                buffer_id,
-            );
+            crate::window::window_markers::sync_all_frames_for_buffer(&mut self.frames, buffer_id);
         }
         crate::emacs_core::window_cmds::remember_selected_window_point_in_state(
             &mut self.frames,

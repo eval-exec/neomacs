@@ -4763,11 +4763,7 @@ impl Context {
 
     pub fn sync_window_positions(&mut self, buffer_id: crate::buffer::BufferId) {
         for frame in self.frames.frames_mut() {
-            crate::window::window_markers::sync_window_positions_from_markers(
-                frame,
-                &self.buffers,
-                buffer_id,
-            );
+            crate::window::window_markers::sync_window_positions_from_markers(frame, buffer_id);
         }
     }
 

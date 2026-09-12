@@ -12,6 +12,7 @@ fn alloc_marker_for_test(heap: &mut TaggedHeap) -> *mut MarkerObj {
         charpos: 0,
         last_position_valid: false,
         next_marker: std::ptr::null_mut(),
+        chained: false,
     });
     tv.as_veclike_ptr().unwrap() as *mut MarkerObj
 }
@@ -69,4 +70,51 @@ fn chain_unlink_absent_is_noop() {
 
     bt.chain_unlink(absent);
     assert_eq!(bt.chain_walk_collect(), vec![m1]);
+}
+
+/// `LispMarker::chained` must track chain membership exactly: it is the O(1)
+/// answer that replaced walking the chain in `register_marker_in_buffers`, so
+/// a stale `true` costs a pointless walk and a stale `false` skips a needed
+/// unlink and corrupts the chain.
+#[test]
+fn chained_flag_tracks_chain_membership_through_splice_and_unlink() {
+    let mut heap = TaggedHeap::new();
+    set_tagged_heap(&mut heap);
+
+    let bt = BufferText::new();
+    let markers: Vec<*mut MarkerObj> = (0..3)
+        .map(|_| {
+            let ptr = alloc_marker_for_test(&mut heap);
+            // A marker that has never been spliced is not chained.
+            assert!(!unsafe { (*ptr).data.chained });
+            bt.chain_splice_at_head(ptr);
+            assert!(
+                unsafe { (*ptr).data.chained },
+                "splicing must flag the marker chained"
+            );
+            ptr
+        })
+        .collect();
+
+    // Unlinking the TAIL is the case a null `next_marker` cannot tell apart
+    // from "never chained", which is the whole reason the bit exists.
+    let tail = markers[0];
+    assert!(unsafe { (*tail).data.next_marker.is_null() });
+    bt.chain_unlink(tail);
+    assert!(
+        !unsafe { (*tail).data.chained },
+        "unlinking the tail must clear the flag"
+    );
+    for &ptr in &markers[1..] {
+        assert!(unsafe { (*ptr).data.chained }, "survivors stay chained");
+    }
+
+    // Unlinking an absent marker leaves every flag alone.
+    bt.chain_unlink(tail);
+    assert!(!unsafe { (*tail).data.chained });
+
+    // And a cleared marker can be spliced again, which is what
+    // `chain_splice_at_head`'s debug assertion checks.
+    bt.chain_splice_at_head(tail);
+    assert!(unsafe { (*tail).data.chained });
 }

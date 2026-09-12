@@ -517,6 +517,7 @@ fn test_marker(buffer: Option<BufferId>, bytepos: usize, marker_id: u64) -> Valu
         charpos: bytepos,
         last_position_valid: buffer.is_some(),
         next_marker: std::ptr::null_mut(),
+        chained: false,
     })
 }
 

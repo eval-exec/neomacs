@@ -2025,6 +2025,7 @@ impl TaggedHeap {
                         // pass frees the allocation.
                         *prev_slot = (*curr).data.next_marker;
                         (*curr).data.next_marker = std::ptr::null_mut();
+                        (*curr).data.chained = false;
                     }
                 }
             }

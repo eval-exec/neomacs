@@ -10,6 +10,7 @@ fn marker_data_new_fields_default() {
         charpos: 0,
         last_position_valid: false,
         next_marker: std::ptr::null_mut(),
+        chained: false,
     };
     assert_eq!(data.bytepos, 0);
     assert_eq!(data.charpos, 0);

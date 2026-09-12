@@ -1187,17 +1187,30 @@ impl WindowStartMarker {
     const fn raw(self) -> u64 {
         self.id
     }
+
+    /// The rooted Lisp marker, whose `MarkerObj` carries the position.
+    pub(crate) const fn root(self) -> Value {
+        self.gc_root
+    }
 }
 
 impl WindowPointMarker {
     const fn raw(self) -> u64 {
         self.id
     }
+
+    pub(crate) const fn root(self) -> Value {
+        self.gc_root
+    }
 }
 
 impl WindowOldPointMarker {
     const fn raw(self) -> u64 {
         self.id
+    }
+
+    pub(crate) const fn root(self) -> Value {
+        self.gc_root
     }
 }
 

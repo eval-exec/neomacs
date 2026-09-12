@@ -893,6 +893,7 @@ fn file_pdump_loads_marker_object_from_mmap_image() {
             charpos: 7,
             last_position_valid: true,
             next_marker: std::ptr::null_mut(),
+            chained: false,
         }),
     );
 

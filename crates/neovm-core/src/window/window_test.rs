@@ -2250,7 +2250,6 @@ fn window_start_marker_stays_before_insert_at_start() {
         .expect("insert before window start");
     crate::window::window_markers::sync_window_positions_from_markers(
         frames.get_mut(frame_id).expect("frame"),
-        &buffers,
         buffer_id,
     );
 
