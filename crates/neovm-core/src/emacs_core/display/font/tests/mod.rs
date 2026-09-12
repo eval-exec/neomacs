@@ -1,4 +1,5 @@
 use super::*;
+mod system_font_test;
 use crate::buffer::{Buffer, CharPos0};
 use crate::emacs_core::display_host::{AvailableFontFamilyName, FontResolveRequest, FrameFontSize};
 use crate::emacs_core::eval::{
@@ -110,7 +111,9 @@ fn named_font_string_requires_a_representable_positive_point_size() {
             .family
             .as_ref()
             .and_then(|family| family.as_utf8_str()),
-        Some("Example-0.01")
+        // GNU parses the family independently of whether the requested size
+        // can be represented by the frame's tenth-point sizing contract.
+        Some("Example")
     );
     assert_eq!(below_precision.size(), FrameFontSize::Default);
 

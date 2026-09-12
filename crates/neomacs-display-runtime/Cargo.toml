@@ -103,6 +103,8 @@ objc2.workspace = true
 objc2-app-kit = { workspace = true, features = ["NSColor"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# 0.22.9 references GDBusActionGroupClass absent from gio-sys 0.22.8.
+gio = { version = "=0.22.8", default-features = false }
 smithay-clipboard.workspace = true
 x11-dl.workspace = true
 rustix.workspace = true

@@ -2202,7 +2202,9 @@ fn bootstrap_buffers_realize_default_face_from_frame_font_parameter() {
         Some(expected_family.as_str()),
     );
     assert_eq!(default.weight.map(|weight| weight.css_weight()), Some(400));
-    assert_eq!(default.height, Some(FaceHeight::Absolute(100)));
+    // GNU at the fallback 100 DPI opens monospace-10 at 14px and reports
+    // :height 101: the default face describes the realized, rounded font.
+    assert_eq!(default.height, Some(FaceHeight::Absolute(101)));
 }
 
 fn assert_selected_frame_matches_materialized_default_metrics(eval: &Context) {
@@ -2226,6 +2228,7 @@ fn assert_selected_frame_matches_materialized_default_metrics(eval: &Context) {
 fn opening_gui_frame_adoption_does_not_push_stale_window_size() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let mut host = PrimaryWindowDisplayHost {
+        system_fonts: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -2302,6 +2305,7 @@ fn opening_gui_frame_adoption_does_not_push_stale_window_size() {
 fn opening_gui_frame_adoption_applies_fullscreen_mode() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let mut host = PrimaryWindowDisplayHost {
+        system_fonts: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -2356,6 +2360,7 @@ fn opening_gui_frame_adoption_applies_fullscreen_mode() {
 fn primary_display_host_destroy_gui_frame_routes_primary_and_secondary_windows() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let mut host = PrimaryWindowDisplayHost {
+        system_fonts: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -2407,6 +2412,7 @@ fn primary_display_host_destroy_gui_frame_routes_primary_and_secondary_windows()
 fn primary_display_host_popup_menu_routes_primary_and_secondary_frames() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let mut host = PrimaryWindowDisplayHost {
+        system_fonts: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -2481,6 +2487,7 @@ fn primary_image_catalog_lookup_returns_pending_without_waiting_for_render_threa
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let image_metadata = Arc::new(ImageRenderState::default());
     let host = PrimaryWindowDisplayHost {
+        system_fonts: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -2640,6 +2647,7 @@ fn primary_image_catalog_does_not_block_on_render_command_backpressure() {
     let worker_cmd_tx = cmd_tx.clone();
     let worker = std::thread::spawn(move || {
         let host = PrimaryWindowDisplayHost {
+            system_fonts: Default::default(),
             tooltip_client: Default::default(),
             cmd_tx: worker_cmd_tx.clone(),
             render_waker: None,
@@ -2700,6 +2708,7 @@ fn primary_image_catalog_does_not_wait_for_renderer_metadata_lock() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let image_metadata = Arc::new(ImageRenderState::default());
     let host = PrimaryWindowDisplayHost {
+        system_fonts: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -2760,6 +2769,7 @@ fn primary_image_catalog_does_not_wait_for_renderer_metadata_lock() {
 fn primary_display_host_expands_tilde_in_image_file_before_render_command() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let host = PrimaryWindowDisplayHost {
+        system_fonts: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -2844,6 +2854,7 @@ fn primary_display_host_resolve_image_sync_returns_cached_decode_failure_promptl
     let (cmd_tx, _cmd_rx) = crossbeam_channel::unbounded();
     let image_metadata: SharedImageRenderState = Arc::new(ImageRenderState::default());
     let host = PrimaryWindowDisplayHost {
+        system_fonts: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -2911,6 +2922,7 @@ fn primary_display_host_resolve_image_sync_returns_cached_decode_failure_promptl
 fn primary_display_host_request_video_queues_create_once_with_stable_id() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let host = PrimaryWindowDisplayHost {
+        system_fonts: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -2995,6 +3007,7 @@ fn resolved_video_registry_never_evicts_a_still_referenceable_identity() {
 fn primary_display_host_request_video_preserves_uri_source() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let host = PrimaryWindowDisplayHost {
+        system_fonts: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -3042,6 +3055,7 @@ fn primary_display_host_request_video_preserves_uri_source() {
 fn primary_display_host_routes_one_typed_video_session_lifecycle() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let host = PrimaryWindowDisplayHost {
+        system_fonts: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -3099,6 +3113,7 @@ fn primary_display_host_routes_one_typed_video_session_lifecycle() {
 fn primary_display_host_request_webkit_queues_create_and_load_once_with_stable_id() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let host = PrimaryWindowDisplayHost {
+        system_fonts: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -3151,6 +3166,7 @@ fn primary_display_host_request_webkit_queues_create_and_load_once_with_stable_i
 fn primary_display_host_preserves_file_navigation_as_a_typed_path() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let host = PrimaryWindowDisplayHost {
+        system_fonts: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -3193,6 +3209,7 @@ fn primary_display_host_preserves_file_navigation_as_a_typed_path() {
 fn primary_display_host_xwidget_lifecycle_uses_explicit_xwidget_id() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let host = PrimaryWindowDisplayHost {
+        system_fonts: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -3265,6 +3282,7 @@ fn bootstrap_gui_frame_adoption_routes_future_resizes_to_primary_window() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
 
     eval.set_display_host(Box::new(PrimaryWindowDisplayHost {
+        system_fonts: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -3331,6 +3349,7 @@ fn primary_window_resize_does_not_wait_for_host_acknowledgement() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let shared = shared_primary_window_size(843, 489);
     let mut host = PrimaryWindowDisplayHost {
+        system_fonts: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -3396,6 +3415,7 @@ fn primary_window_resize_does_not_wait_for_host_acknowledgement() {
 fn primary_window_display_host_forwards_visual_config_to_renderer() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let mut host = PrimaryWindowDisplayHost {
+        system_fonts: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -3468,6 +3488,7 @@ fn primary_window_display_host_round_trips_clipboard_requests_through_renderer()
         reply.send(Ok(SelectionOwner::OtherProcess)).unwrap();
     });
     let mut host = PrimaryWindowDisplayHost {
+        system_fonts: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -3538,6 +3559,7 @@ fn redisplay_title_sync_formats_frame_title_format_for_primary_window() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
 
     eval.set_display_host(Box::new(PrimaryWindowDisplayHost {
+        system_fonts: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -3585,6 +3607,7 @@ fn frame_host_title_formats_the_restored_runtime_system_name() {
     let _bootstrap = bootstrap_buffers(&mut eval, 843, 489, gui_display());
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     eval.set_display_host(Box::new(PrimaryWindowDisplayHost {
+        system_fonts: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -6497,6 +6520,7 @@ fn frame_snapshot_subr_end_to_end_json_and_text() {
 fn primary_display_host_reports_quality_policy_frame_shader_suppression() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let mut host = PrimaryWindowDisplayHost {
+        system_fonts: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,
@@ -6576,6 +6600,7 @@ fn primary_display_host_routes_typed_terminal_requests_to_the_renderer() {
     let (cmd_tx, cmd_rx) = crossbeam_channel::unbounded();
     let shared_terminals = new_shared_terminals();
     let host = PrimaryWindowDisplayHost {
+        system_fonts: Default::default(),
         tooltip_client: Default::default(),
         cmd_tx: cmd_tx.clone(),
         render_waker: None,

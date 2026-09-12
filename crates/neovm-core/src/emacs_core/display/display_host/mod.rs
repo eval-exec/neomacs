@@ -6,6 +6,9 @@
 use std::fmt::{Display, Formatter};
 use std::num::{NonZeroU16, NonZeroU32};
 
+mod system_fonts;
+pub use system_fonts::{SystemFontName, SystemFontRole, SystemFonts};
+
 use super::eval::{
     FontEntityMetricsRequest, FontOtfCapability, FontPxProbeResult, FontSpecResolveRequest,
     GuiFrameHostRequest, GuiFrameHostSize, PopupMenuRequest, ResolvedFontEntityMetrics,
@@ -228,6 +231,11 @@ pub struct FrameFontRequest {
 }
 
 impl FrameFontRequest {
+    /// Parse native/Fontconfig/XLFD names through the shared Lisp font parser.
+    pub fn from_name(name: &str) -> Option<Self> {
+        crate::emacs_core::font::frame_font_request_from_named_font_string(name)
+    }
+
     pub fn from_face(mut face: RuntimeFace) -> Self {
         let size = face
             .height
@@ -278,6 +286,10 @@ impl TerminalFloatPlacement {
 }
 
 pub trait DisplayHost {
+    fn system_font(&self, _role: SystemFontRole) -> Option<&SystemFontName> {
+        None
+    }
+
     fn realize_gui_frame(&mut self, request: GuiFrameHostRequest) -> Result<(), String>;
     fn resize_gui_frame(&mut self, request: GuiFrameHostRequest) -> Result<(), String>;
     /// Whether this concrete graphical backend can represent ATTRIBUTE.

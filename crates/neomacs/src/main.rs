@@ -106,6 +106,7 @@ pub(crate) mod frame_layout;
 mod image_catalog;
 mod input_bridge;
 mod secondary_tty;
+mod startup_font;
 mod termcap_input;
 pub(crate) mod terminal_capabilities;
 pub(crate) mod tty_frontend;
@@ -337,6 +338,7 @@ struct BootstrapDisplayConfig {
     color_cells: i64,
     background_mode: &'static str,
     interactivity: Interactivity,
+    system_fonts: neovm_core::emacs_core::display_host::SystemFonts,
 }
 
 /// Display kind and its scale facts available before a native window exists.
@@ -890,6 +892,7 @@ fn bootstrap_tty_display_config(interactivity: Interactivity) -> BootstrapDispla
         color_cells: tty_init::detect_tty_color_cells(),
         background_mode: tty_init::detect_tty_background_mode(),
         interactivity,
+        system_fonts: Default::default(),
     }
 }
 
@@ -909,6 +912,7 @@ fn bootstrap_gui_display_config(
         // otherwise. Live frame-parameter updates recompute this later.
         background_mode: "light",
         interactivity,
+        system_fonts: Default::default(),
     }
 }
 
@@ -1115,6 +1119,7 @@ impl ResolvedSurfaceMemo {
 }
 
 struct PrimaryWindowDisplayHost {
+    system_fonts: neovm_core::emacs_core::display_host::SystemFonts,
     tooltip_client: neomacs_display_protocol::tooltip::TooltipClient,
     cmd_tx: crossbeam_channel::Sender<RenderCommand>,
     render_waker: Option<GuiEventLoopWaker>,
@@ -1428,6 +1433,13 @@ fn render_fullscreen_mode(fullscreen: FrameFullscreen) -> WindowFullscreenMode {
 }
 
 impl DisplayHost for PrimaryWindowDisplayHost {
+    fn system_font(
+        &self,
+        role: neovm_core::emacs_core::display_host::SystemFontRole,
+    ) -> Option<&neovm_core::emacs_core::display_host::SystemFontName> {
+        self.system_fonts.get(role)
+    }
+
     fn supports_graphical_face_attribute(&self, attribute: GraphicalFaceAttribute) -> bool {
         neomacs_display_runtime::supports_graphical_face_attribute(attribute)
     }
@@ -3539,6 +3551,7 @@ fn run_gui_evaluator_worker(
     maybe_install_startup_phase_trace(&mut evaluator);
 
     evaluator.set_display_host(Box::new(PrimaryWindowDisplayHost {
+        system_fonts: bootstrap_display.system_fonts.clone(),
         tooltip_client: neomacs_display_protocol::tooltip::TooltipClient::new(
             emacs_comms.tooltip_context.clone(),
         ),
@@ -4058,11 +4071,13 @@ pub fn run(mode: RuntimeMode) {
                 eprintln!("neomacs: failed to resolve graphical display identity: {error:?}");
                 std::process::exit(1);
             });
-        bootstrap_gui_display_config(
+        let mut config = bootstrap_gui_display_config(
             interactivity,
             gui_frame_font_scale_from_observation(observation),
             identity,
-        )
+        );
+        config.system_fonts = neomacs_display_runtime::desktop_fonts::read_system_fonts();
+        config
     } else {
         debug_assert_eq!(startup.frontend, FrontendKind::Tty);
         bootstrap_tty_display_config(interactivity)
@@ -4603,7 +4618,13 @@ fn bootstrap_buffers(
     height: u32,
     display: BootstrapDisplayConfig,
 ) -> BootstrapResult {
-    let frame_metrics = bootstrap_frame_metrics_for_display(&display);
+    let selected_font = (display.frontend() == FrontendKind::Gui)
+        .then(|| startup_font::StartupFont::select(&display))
+        .flatten();
+    let frame_metrics = selected_font.as_ref().map_or_else(
+        || bootstrap_frame_metrics_for_display(&display),
+        |font| font.metrics,
+    );
     let find_or_create_buffer = |eval: &mut Context, name: &str| {
         eval.buffer_manager()
             .find_buffer_by_name(name)
@@ -4723,6 +4744,29 @@ fn bootstrap_buffers(
     // remain the startup policy inputs until normal user configuration runs.
     let (bootstrap_font, bootstrap_font_name) = if display.frontend() == FrontendKind::Tty {
         (Value::NIL, Value::string("fixed"))
+    } else if let Some(font) = selected_font {
+        let selected = font.selected;
+        let name = Value::string(format!(
+            "-*-{}-{}-{}-*-*-{}-*-*-*-*-*-*-*",
+            selected.resolved.family,
+            startup_font_weight_symbol(FontWeight::from_css_weight(selected.resolved.weight)),
+            selected.slant.symbol_name(),
+            selected.metrics.pixel_size,
+        ));
+        let mut face = neovm_core::face::Face::new("default");
+        face.height = Some(FaceHeight::Absolute(
+            display
+                .font_sizing()
+                .face_height_tenths_for_layout_pixels(selected.metrics.pixel_size.max(1)),
+        ));
+        let matched = ResolvedFontMatch {
+            glyph_code: None,
+            font: core_opened_font_from_selection(selected, font_otf_capability_for_file),
+        };
+        (
+            neovm_core::emacs_core::font::opened_font_from_resolved_match(&face, &matched),
+            name,
+        )
     } else {
         (
             bootstrap_default_font_parameter(frame_metrics.font_pixel_size),

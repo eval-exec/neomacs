@@ -1288,16 +1288,6 @@ pub(crate) fn builtin_get_unicode_property_internal(args: Vec<Value>) -> EvalRes
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub(super) const FACE_ATTRIBUTES_VECTOR_LEN: usize = 20;
 
-pub(crate) fn builtin_font_get_system_font(args: Vec<Value>) -> EvalResult {
-    expect_args("font-get-system-font", &args, 0)?;
-    Ok(Value::NIL)
-}
-
-pub(crate) fn builtin_font_get_system_normal_font(args: Vec<Value>) -> EvalResult {
-    expect_args("font-get-system-normal-font", &args, 0)?;
-    Ok(Value::NIL)
-}
-
 fn expect_characterp_from_int(value: &Value) -> Result<char, Flow> {
     match value.kind() {
         ValueKind::Fixnum(n) if n >= 0 => char::from_u32(n as u32).ok_or_else(|| {

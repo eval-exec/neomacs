@@ -16,6 +16,7 @@
 pub mod backend;
 pub(crate) mod clipboard;
 pub mod core;
+pub mod desktop_fonts;
 pub mod display_identity;
 pub mod display_scale;
 pub mod macos_bundle_runtime;

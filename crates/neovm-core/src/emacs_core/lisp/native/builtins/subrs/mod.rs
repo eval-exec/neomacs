@@ -4200,12 +4200,12 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "font-get-system-font",
-        NativeFn::ContextVec(|_ctx, args| builtin_font_get_system_font(args)),
+        NativeFn::ContextVec(crate::emacs_core::font::builtin_font_get_system_font),
         SubrArity::new(0, Some(0)),
     ));
     ctx.register_subr(SubrSpec::new(
         "font-get-system-normal-font",
-        NativeFn::ContextVec(|_ctx, args| builtin_font_get_system_normal_font(args)),
+        NativeFn::ContextVec(crate::emacs_core::font::builtin_font_get_system_normal_font),
         SubrArity::new(0, Some(0)),
     ));
     ctx.register_subr(SubrSpec::new(

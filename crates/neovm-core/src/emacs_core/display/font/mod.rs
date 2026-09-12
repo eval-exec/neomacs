@@ -10,9 +10,11 @@
 //! face-font) lives in `super::xfaces`.
 
 mod subrs;
+mod system_fonts;
 #[cfg(test)]
 pub(crate) use subrs::SUBRS;
 pub(crate) use subrs::register_subrs;
+pub(crate) use system_fonts::{builtin_font_get_system_font, builtin_font_get_system_normal_font};
 
 use crate::emacs_core::error::LispCondition;
 pub(crate) use crate::emacs_core::error::{
@@ -299,71 +301,9 @@ pub(crate) struct LiveFrameFontResolution {
     pub(crate) font_value: Value,
 }
 
-fn frame_font_request_from_named_font_string(name: &str) -> Option<FrameFontRequest> {
-    let trimmed = name.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let mut face = RuntimeFace::new("default");
-
-    if !trimmed.starts_with('-') {
-        if let Some((family, size)) = trimmed.rsplit_once('-')
-            && !family.trim().is_empty()
-            && size.chars().all(|ch| ch.is_ascii_digit() || ch == '.')
-            && size.chars().filter(|&ch| ch == '.').count() <= 1
-            && let Ok(points) = size.parse::<f64>()
-            && let Some(size) = FrameFontSize::points(points)
-        {
-            face.family = Some(Value::string(family.trim().to_string()));
-            return Some(FrameFontRequest::with_size(face, size));
-        }
-        face.family = Some(Value::string(trimmed.to_string()));
-        return Some(FrameFontRequest::from_face(face));
-    }
-
-    let fields = trimmed.split('-').collect::<Vec<_>>();
-    if fields.len() < 12 {
-        return None;
-    }
-
-    let foundry = fields[1];
-    let family = fields[2];
-    let weight = fields[3];
-    let slant = fields[4];
-    let set_width = fields[5];
-    let pixel = fields[7];
-
-    if foundry != "*" && !foundry.is_empty() {
-        face.foundry = Some(Value::string(foundry.to_string()));
-    }
-    if family != "*" && !family.is_empty() {
-        face.family = Some(Value::string(family.to_string()));
-    }
-    if let Some(parsed_weight) = FontWeight::from_symbol(weight) {
-        face.weight = Some(parsed_weight);
-    }
-    face.slant = match slant {
-        "i" | "italic" => Some(FontSlant::Italic),
-        "o" | "oblique" => Some(FontSlant::Oblique),
-        "ri" | "reverse-italic" => Some(FontSlant::ReverseItalic),
-        "ro" | "reverse-oblique" => Some(FontSlant::ReverseOblique),
-        "r" | "normal" | "*" => Some(FontSlant::Normal),
-        _ => None,
-    };
-    face.width = match set_width {
-        "normal" | "*" => Some(FontWidth::Normal),
-        other => FontWidth::from_symbol(other),
-    };
-    let size = pixel
-        .chars()
-        .all(|ch| ch.is_ascii_digit())
-        .then(|| pixel.parse::<i64>().ok())
-        .flatten()
-        .and_then(FrameFontSize::pixels)
-        .unwrap_or(FrameFontSize::Default);
-
-    Some(FrameFontRequest::with_size(face, size))
+pub(crate) fn frame_font_request_from_named_font_string(name: &str) -> Option<FrameFontRequest> {
+    let spec = font_spec_from_name(name.trim())?;
+    frame_font_request_from_value(&spec)
 }
 
 fn frame_font_request_from_value(value: &Value) -> Option<FrameFontRequest> {
