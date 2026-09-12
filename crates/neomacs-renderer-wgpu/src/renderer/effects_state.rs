@@ -406,7 +406,12 @@ impl WgpuRenderer {
     // TRIGGER SIGNATURE: `now` should widen to `EventTime`; it stays an
     // `Instant` only because `neomacs-display-runtime` still bridges through
     // `into_instant()` at the call site.
-    pub fn trigger_sonar_ping(&mut self, cx: f32, cy: f32, now: neomacs_host_runtime::time::Instant) {
+    pub fn trigger_sonar_ping(
+        &mut self,
+        cx: f32,
+        cy: f32,
+        now: neomacs_host_runtime::time::Instant,
+    ) {
         self.fx.sonar_ping.entries.push(SonarPingEntry {
             cx,
             cy,
@@ -444,7 +449,12 @@ impl WgpuRenderer {
     // TRIGGER SIGNATURE: `now` should widen to `EventTime`; it stays an
     // `Instant` only because `neomacs-display-runtime` still bridges through
     // `into_instant()` at the call site.
-    pub fn trigger_text_fade_in(&mut self, window_id: i64, bounds: Rect, now: neomacs_host_runtime::time::Instant) {
+    pub fn trigger_text_fade_in(
+        &mut self,
+        window_id: i64,
+        bounds: Rect,
+        now: neomacs_host_runtime::time::Instant,
+    ) {
         // Replace existing animation for this window
         self.fx
             .text_fade
@@ -602,7 +612,13 @@ impl RendererFrameEffectsRef<'_> {
     // TRIGGER SIGNATURE: `now` should widen to `EventTime`; it stays an
     // `Instant` only because `neomacs-display-runtime` still bridges through
     // `into_instant()` at the call site.
-    fn trigger_click_halo(&mut self, x: f32, y: f32, now: neomacs_host_runtime::time::Instant, duration_ms: u32) {
+    fn trigger_click_halo(
+        &mut self,
+        x: f32,
+        y: f32,
+        now: neomacs_host_runtime::time::Instant,
+        duration_ms: u32,
+    ) {
         self.renderer.fx.click_halo.halos.push(ClickHaloEntry {
             x,
             y,

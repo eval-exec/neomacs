@@ -34,11 +34,16 @@ fn names(value: Value) -> Vec<String> {
 #[test]
 fn virtual_file_modes_match_the_single_user_access_policy() {
     let mut eval = virtual_editor();
-    assert_eq!(eval.eval_str(r##"(list
+    assert_eq!(
+        eval.eval_str(
+            r##"(list
       (file-modes "/virtual-completion/alpha.el")
       (file-modes "/virtual-completion/alpha-dir")
-      (file-modes "/virtual-completion/missing"))"##).unwrap(),
-      Value::list(vec![Value::fixnum(0o600), Value::fixnum(0o700), Value::NIL]));
+      (file-modes "/virtual-completion/missing"))"##
+        )
+        .unwrap(),
+        Value::list(vec![Value::fixnum(0o600), Value::fixnum(0o700), Value::NIL])
+    );
 }
 
 #[test]
@@ -195,16 +200,25 @@ fn mounted_symlink_predicate_and_attributes_share_namespace_targets() {
     use crate::emacs_core::fileio::{MountTableFileSystem, NativeFileSystem};
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tmp");
     std::fs::create_dir_all(&root).unwrap();
-    let fixture = tempfile::Builder::new().prefix("mounted-links-").tempdir_in(root).unwrap();
+    let fixture = tempfile::Builder::new()
+        .prefix("mounted-links-")
+        .tempdir_in(root)
+        .unwrap();
     let directory = fixture.path().canonicalize().unwrap();
     let mut mounts = MountTableFileSystem::new();
-    mounts.mount(Path::new("/host"), Box::new(NativeFileSystem)).unwrap();
+    mounts
+        .mount(Path::new("/host"), Box::new(NativeFileSystem))
+        .unwrap();
     let mut eval = Context::new();
     eval.install_editor_file_system(Box::new(mounts));
     // Missing targets are intentional: both operations describe the link,
     // not the existence or metadata of the target.
     for (name, target, expected) in [
-        ("absolute", directory.join("missing"), format!("/host{}/missing", directory.display())),
+        (
+            "absolute",
+            directory.join("missing"),
+            format!("/host{}/missing", directory.display()),
+        ),
         ("relative", "../missing".into(), "../missing".to_owned()),
     ] {
         std::os::unix::fs::symlink(target, directory.join(name)).unwrap();
@@ -213,7 +227,11 @@ fn mounted_symlink_predicate_and_attributes_share_namespace_targets() {
             format!("(file-symlink-p {filename:?})"),
             format!("(car (file-attributes {filename:?}))"),
         ] {
-            assert_eq!(eval.eval_str(&expression).unwrap().as_utf8_str(), Some(expected.as_str()), "{expression}");
+            assert_eq!(
+                eval.eval_str(&expression).unwrap().as_utf8_str(),
+                Some(expected.as_str()),
+                "{expression}"
+            );
         }
     }
 }

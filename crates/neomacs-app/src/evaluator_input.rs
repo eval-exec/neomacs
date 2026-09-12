@@ -131,8 +131,14 @@ impl<'a> EvaluatorInputBatch<'a> {
     /// Translate one host-neutral frontend event.
     pub fn from_frontend_event(event: &'a FrontendEvent) -> Self {
         match event {
-            FrontendEvent::Ime { session, operation, target } => Self::single(InputEvent::Ime {
-                session: *session, operation: operation.clone(), emacs_frame_id: target.get(),
+            FrontendEvent::Ime {
+                session,
+                operation,
+                target,
+            } => Self::single(InputEvent::Ime {
+                session: *session,
+                operation: operation.clone(),
+                emacs_frame_id: target.get(),
             }),
             FrontendEvent::Key(key) => {
                 Self::from_optional(keyboard::render_key_transport_to_input_event(

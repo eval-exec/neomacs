@@ -2,8 +2,8 @@ use super::*;
 use crate::emacs_core::value::ValueKind;
 use std::io::Write;
 
-mod virtual_filesystem;
 mod large_attributes;
+mod virtual_filesystem;
 
 // Test helpers hold the Context alive in a thread_local so the
 // heap objects in the returned Value survive until the next call.

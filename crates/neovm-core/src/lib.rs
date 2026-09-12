@@ -5,12 +5,12 @@ pub mod emacs_core;
 pub mod encoding;
 pub mod face;
 mod frontend_events;
-mod ime;
 #[cfg(any(test, feature = "fuzzing"))]
 #[doc(hidden)]
 pub mod fuzz_support;
 pub mod gc_trace;
 pub mod heap_types;
+mod ime;
 pub mod keyboard;
 mod keyboard_input;
 pub mod logging;

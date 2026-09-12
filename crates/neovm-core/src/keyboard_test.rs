@@ -25,62 +25,145 @@ use super::*;
 fn ime_session_reports_gnu_text_conversion_event_and_edit_list() {
     use neovm_host_abi::ime::{ImeOperation, ImeSessionId};
     let mut eval = crate::Context::new();
-    eval.handle_ime_operation(ImeSessionId(1), ImeOperation::Begin).unwrap();
-    let event = eval.handle_read_char_input_event(InputEvent::Ime {
-        session: ImeSessionId(1), emacs_frame_id: 0,
-        operation: ImeOperation::Replace { before_bytes: 0, after_bytes: 0, text: "你好".into() },
-    }, TtyInputDecoding::KeyboardCodingSystem).unwrap();
+    eval.handle_ime_operation(ImeSessionId(1), ImeOperation::Begin)
+        .unwrap();
+    let event = eval
+        .handle_read_char_input_event(
+            InputEvent::Ime {
+                session: ImeSessionId(1),
+                emacs_frame_id: 0,
+                operation: ImeOperation::Replace {
+                    before_bytes: 0,
+                    after_bytes: 0,
+                    text: "你好".into(),
+                },
+            },
+            TtyInputDecoding::KeyboardCodingSystem,
+        )
+        .unwrap();
     assert_eq!(event, Some(Value::symbol("text-conversion")));
     // GNU textconv.c records live markers, not integer positions.
-    assert_eq!(eval.eval_str("(markerp (nth 1 (car text-conversion-edits)))").unwrap(), Value::T);
-    assert_eq!(eval.eval_str("(markerp (nth 2 (car text-conversion-edits)))").unwrap(), Value::T);
-    assert_eq!(eval.eval_str("(marker-position (nth 1 (car text-conversion-edits)))").unwrap(), Value::fixnum(1));
-    assert_eq!(eval.eval_str("(marker-position (nth 2 (car text-conversion-edits)))").unwrap(), Value::fixnum(3));
-    assert_eq!(eval.eval_str("(marker-insertion-type (nth 2 (car text-conversion-edits)))").unwrap(), Value::T);
-    assert_eq!(eval.eval_str("(nth 3 (car text-conversion-edits))").unwrap().as_utf8_str(), Some("你好"));
+    assert_eq!(
+        eval.eval_str("(markerp (nth 1 (car text-conversion-edits)))")
+            .unwrap(),
+        Value::T
+    );
+    assert_eq!(
+        eval.eval_str("(markerp (nth 2 (car text-conversion-edits)))")
+            .unwrap(),
+        Value::T
+    );
+    assert_eq!(
+        eval.eval_str("(marker-position (nth 1 (car text-conversion-edits)))")
+            .unwrap(),
+        Value::fixnum(1)
+    );
+    assert_eq!(
+        eval.eval_str("(marker-position (nth 2 (car text-conversion-edits)))")
+            .unwrap(),
+        Value::fixnum(3)
+    );
+    assert_eq!(
+        eval.eval_str("(marker-insertion-type (nth 2 (car text-conversion-edits)))")
+            .unwrap(),
+        Value::T
+    );
+    assert_eq!(
+        eval.eval_str("(nth 3 (car text-conversion-edits))")
+            .unwrap()
+            .as_utf8_str(),
+        Some("你好")
+    );
 }
 
 #[test]
 fn ime_deletion_counts_utf8_bytes_without_splitting_characters() {
     use neovm_host_abi::ime::{ImeOperation, ImeSessionId};
     let mut eval = crate::Context::new();
-    eval.handle_ime_operation(ImeSessionId(1), ImeOperation::Begin).unwrap();
-    eval.handle_ime_operation(ImeSessionId(1), ImeOperation::Replace {
-        before_bytes: 0, after_bytes: 0, text: "a你好😀".into(),
-    }).unwrap();
+    eval.handle_ime_operation(ImeSessionId(1), ImeOperation::Begin)
+        .unwrap();
+    eval.handle_ime_operation(
+        ImeSessionId(1),
+        ImeOperation::Replace {
+            before_bytes: 0,
+            after_bytes: 0,
+            text: "a你好😀".into(),
+        },
+    )
+    .unwrap();
     eval.handle_read_char_input_event(
-        InputEvent::Ime { session: ImeSessionId(1), operation: ImeOperation::Replace {
-            before_bytes: 7, after_bytes: 0, text: "z".into(),
-        }, emacs_frame_id: 0 },
+        InputEvent::Ime {
+            session: ImeSessionId(1),
+            operation: ImeOperation::Replace {
+                before_bytes: 7,
+                after_bytes: 0,
+                text: "z".into(),
+            },
+            emacs_frame_id: 0,
+        },
         TtyInputDecoding::KeyboardCodingSystem,
-    ).unwrap();
-    assert_eq!(eval.eval_str("(buffer-string)").unwrap().as_utf8_str(), Some("a你z"));
+    )
+    .unwrap();
+    assert_eq!(
+        eval.eval_str("(buffer-string)").unwrap().as_utf8_str(),
+        Some("a你z")
+    );
 }
 
 #[test]
 fn ime_deletion_preserves_partial_characters_and_honors_read_only() {
     use neovm_host_abi::ime::{ImeOperation, ImeSessionId};
     let mut eval = crate::Context::new();
-    eval.handle_ime_operation(ImeSessionId(1), ImeOperation::Begin).unwrap();
-    eval.handle_ime_operation(ImeSessionId(1), ImeOperation::Replace {
-        before_bytes: 0, after_bytes: 0, text: "你好".into(),
-    }).unwrap();
+    eval.handle_ime_operation(ImeSessionId(1), ImeOperation::Begin)
+        .unwrap();
+    eval.handle_ime_operation(
+        ImeSessionId(1),
+        ImeOperation::Replace {
+            before_bytes: 0,
+            after_bytes: 0,
+            text: "你好".into(),
+        },
+    )
+    .unwrap();
     eval.handle_read_char_input_event(
-        InputEvent::Ime { session: ImeSessionId(1), operation: ImeOperation::Replace {
-            before_bytes: 1, after_bytes: 0, text: String::new(),
-        }, emacs_frame_id: 0 },
+        InputEvent::Ime {
+            session: ImeSessionId(1),
+            operation: ImeOperation::Replace {
+                before_bytes: 1,
+                after_bytes: 0,
+                text: String::new(),
+            },
+            emacs_frame_id: 0,
+        },
         TtyInputDecoding::KeyboardCodingSystem,
-    ).unwrap();
-    assert_eq!(eval.eval_str("(buffer-string)").unwrap().as_utf8_str(), Some("你好"));
+    )
+    .unwrap();
+    assert_eq!(
+        eval.eval_str("(buffer-string)").unwrap().as_utf8_str(),
+        Some("你好")
+    );
     eval.eval_str("(setq buffer-read-only t)").unwrap();
-    eval.handle_ime_operation(ImeSessionId(2), ImeOperation::Begin).unwrap();
-    assert!(eval.handle_read_char_input_event(
-        InputEvent::Ime { session: ImeSessionId(2), operation: ImeOperation::Replace {
-            before_bytes: 0, after_bytes: 0, text: "wrong".into(),
-        }, emacs_frame_id: 0 },
-        TtyInputDecoding::KeyboardCodingSystem,
-    ).is_err());
-    assert_eq!(eval.eval_str("(buffer-string)").unwrap().as_utf8_str(), Some("你好"));
+    eval.handle_ime_operation(ImeSessionId(2), ImeOperation::Begin)
+        .unwrap();
+    assert!(
+        eval.handle_read_char_input_event(
+            InputEvent::Ime {
+                session: ImeSessionId(2),
+                operation: ImeOperation::Replace {
+                    before_bytes: 0,
+                    after_bytes: 0,
+                    text: "wrong".into(),
+                },
+                emacs_frame_id: 0
+            },
+            TtyInputDecoding::KeyboardCodingSystem,
+        )
+        .is_err()
+    );
+    assert_eq!(
+        eval.eval_str("(buffer-string)").unwrap().as_utf8_str(),
+        Some("你好")
+    );
 }
 
 #[test]
