@@ -67,36 +67,68 @@ impl crate::Context {
             }
         }
         if after_bytes != 0 {
+            // Deleting to the right of the anchor is not supported, but the
+            // session itself is untouched -- retiring it would silently kill
+            // every later commit. The re-anchored path above already restores
+            // for this same condition.
+            self.composition.active = Some(active);
             return Ok(Value::NIL);
         }
+        // The walk borrows the buffer, so decide first and only then touch
+        // `self.composition`.
+        //
+        // A walk or range failure deliberately RETIRES the session: the
+        // platform asked to delete text this session never inserted, which
+        // means its view of the buffer has desynced from ours, and
+        // `ime_session_cannot_delete_before_its_anchor_or_reopen_a_retired_identity`
+        // pins that. Read-only is different -- see below.
+        let walk = {
+            let buffer = self
+                .buffers
+                .current_buffer()
+                .expect("validated insertion anchor");
+            let mut start = active.anchor.point;
+            let mut walked = Some(());
+            while before_bytes > 0 && start > active.start {
+                let Some(ch) = buffer.char_before_emacs_byte_pos(start) else {
+                    walked = None;
+                    break;
+                };
+                let Some(remaining) = before_bytes.checked_sub(ch.len_utf8()) else {
+                    walked = None;
+                    break;
+                };
+                let Some(length) = buffer.char_before_emacs_byte_len(start) else {
+                    walked = None;
+                    break;
+                };
+                start = start.saturating_sub_len(length);
+                before_bytes = remaining;
+            }
+            // Only the text this session inserted is available to the platform.
+            let in_range = before_bytes == 0 && start >= active.start;
+            let read_only = editfns::buffer_read_only_active_in_state(&self.obarray, &[], buffer);
+            walked.filter(|_| in_range).map(|_| (start, read_only))
+        };
+        let Some((start, read_only)) = walk else {
+            return Ok(Value::NIL);
+        };
+        if read_only {
+            // The buffer refused the edit; the composition did not end. One IME
+            // keystroke into a read-only buffer must not disable input entirely.
+            let buffer_id = active.anchor.buffer;
+            self.composition.active = Some(active);
+            return Err(signal(
+                "buffer-read-only",
+                vec![Value::make_buffer(buffer_id)],
+            ));
+        }
+        // Re-acquired after the restore decisions above, which needed `self`
+        // mutably.
         let buffer = self
             .buffers
             .current_buffer()
             .expect("validated insertion anchor");
-        let mut start = active.anchor.point;
-        while before_bytes > 0 && start > active.start {
-            let Some(ch) = buffer.char_before_emacs_byte_pos(start) else {
-                return Ok(Value::NIL);
-            };
-            let Some(remaining) = before_bytes.checked_sub(ch.len_utf8()) else {
-                return Ok(Value::NIL);
-            };
-            let Some(length) = buffer.char_before_emacs_byte_len(start) else {
-                return Ok(Value::NIL);
-            };
-            start = start.saturating_sub_len(length);
-            before_bytes = remaining;
-        }
-        // Only the text this session inserted is available to the platform.
-        if before_bytes != 0 || start < active.start {
-            return Ok(Value::NIL);
-        }
-        if editfns::buffer_read_only_active_in_state(&self.obarray, &[], buffer) {
-            return Err(signal(
-                "buffer-read-only",
-                vec![Value::make_buffer(active.anchor.buffer)],
-            ));
-        }
         let range = EmacsByteRange::new(start, active.anchor.point);
         let target_multibyte = buffer.get_multibyte();
         let start_char = buffer.emacs_byte_pos_to_lisp_char_pos(start).as_i64();
@@ -166,7 +198,11 @@ impl crate::Context {
         });
         let event = self
             .publish_conversion_edits(active.anchor.buffer, deletion.into_iter().chain(insertion));
-        editfns::signal_after_text_change(self, change)?;
+        // The edit has already landed, so the session survives even if an
+        // `after-change-functions` hook signals. Re-arm before propagating:
+        // letting `?` jump past this retired the composition permanently, so a
+        // single signalling hook disabled input for the rest of the session.
+        let after_change = editfns::signal_after_text_change(self, change);
         if let Some(anchor) = updated
             && self.composition.operation_revision == operation_revision
         {
@@ -175,6 +211,7 @@ impl crate::Context {
                 start: active.start,
             });
         }
+        after_change?;
         // GNU read_char returns this command event after conversion edits.
         // Lisp's analyze-text-conversion owns post-self-insert hooks, mode
         // integration, and undo amalgamation; do not duplicate those here.
