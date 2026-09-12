@@ -1672,6 +1672,8 @@ impl Context {
                     RequirePlan::Load {
                         sym_id,
                         name,
+                        requested,
+                        found,
                         path,
                         missing_file,
                     } => {
@@ -1688,12 +1690,24 @@ impl Context {
                         self.require_stack.push(sym_id);
                         let result =
                             super::super::autoload::with_implicit_load_state(self, |eval| {
-                                eval.load_file_internal_with_options(
+                                // GNU's `Frequire` calls `Fload` with the
+                                // bare feature name, so the loader sees a
+                                // REQUESTED name distinct from what `openp`
+                                // found (`src/fns.c`).  Passing only the
+                                // resolved path collapsed the two and made
+                                // `load-history`/`preloaded-file-list` record
+                                // an absolute path under `purify-flag`, where
+                                // GNU records "rx"/"rx.elc".
+                                super::super::load::load_file_with_requested_and_found_options(
+                                    eval,
                                     &path,
+                                    &requested,
+                                    &found,
                                     super::super::load::LoadOptions::implicit_dependency(
                                         missing_file,
                                     ),
-                                )?;
+                                )
+                                .map_err(super::super::error::flow_from_eval_error)?;
                                 eval.refresh_features_from_variable();
                                 finish_require_in_state(&eval.features, sym_id, &name, Some(&path))
                             });

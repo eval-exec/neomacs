@@ -3431,6 +3431,15 @@ pub(crate) enum RequirePlan {
     Load {
         sym_id: SymId,
         name: String,
+        /// The name GNU's `Frequire` hands the loader: FILENAME when the
+        /// caller passed one, otherwise `Fsymbol_name (feature)` (`src/fns.c`)
+        /// -- never a resolved path.  `Fload` relativizes the `load-history`
+        /// entry against THIS name under `purify-flag` and pushes it onto
+        /// `preloaded-file-list`, so collapsing it into `found` is what bakes
+        /// a build-tree path into a dump.
+        requested: crate::heap_types::LispString,
+        /// Where the search actually landed -- GNU's `found`.
+        found: crate::heap_types::LispString,
         path: std::path::PathBuf,
         missing_file: super::load::MissingFilePolicy,
     },
@@ -3505,6 +3514,11 @@ pub(crate) fn plan_require_in_state(
         Some(path) => Ok(RequirePlan::Load {
             sym_id,
             name,
+            // `filename` is already GNU's requested name: the FILENAME
+            // argument when given, else the feature's symbol name.  It was
+            // being computed and then dropped.
+            requested: filename,
+            found: path.clone(),
             path: super::load::load_path_buf(&path),
             missing_file,
         }),

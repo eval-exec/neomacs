@@ -9590,6 +9590,82 @@ fn builtin_load_records_preloaded_files_only_while_purifying() {
 }
 
 #[test]
+fn require_records_the_requested_feature_name_not_the_found_path() {
+    // GNU's `Frequire` (`src/fns.c`) hands the loader the bare feature NAME,
+    // not a resolved path -- it lets `Fload`'s `openp` do the searching:
+    //
+    //     tem = load_with_autoload_queue
+    //       (NILP (filename) ? Fsymbol_name (feature) : filename,
+    //        noerror, Qt, Qnil, (NILP (filename) ? Qt : Qnil));
+    //
+    // That matters under `purify-flag`, where `Fload` relativizes the history
+    // entry against the REQUESTED name (`src/lread.c:1330-1333`) and pushes
+    // the requested name onto `preloaded-file-list` (`src/lread.c:1473`).
+    // Hand it an absolute path instead and both come out absolute, which is
+    // what bakes a build-tree path into a dump.
+    //
+    // Measured on GNU Emacs 31.1, `(let ((purify-flag t)) (require 'rx))`:
+    //   load-history entry  => "rx.elc"
+    //   preloaded-file-list => ("rx")
+    // versus neomacs before this fix:
+    //   load-history entry  => "/abs/.../lisp/emacs-lisp/rx.elc"
+    //   preloaded-file-list => ("/abs/.../lisp/emacs-lisp/rx.elc")
+    crate::test_utils::init_test_tracing();
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock before epoch")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("neovm-require-requested-{unique}"));
+    fs::create_dir_all(&dir).expect("create temp fixture dir");
+    fs::write(
+        dir.join("neovm-require-probe.el"),
+        "(provide 'neovm-require-probe)
+",
+    )
+    .expect("write fixture");
+
+    let mut eval = super::super::eval::Context::new();
+    eval.set_variable(
+        "load-path",
+        Value::list(vec![Value::string(dir.to_string_lossy().to_string())]),
+    );
+    eval.set_variable("purify-flag", Value::T);
+    crate::emacs_core::builtins::misc_eval::builtin_require(
+        &mut eval,
+        vec![Value::symbol("neovm-require-probe")],
+    )
+    .expect("require under purify-flag");
+
+    let recorded = eval
+        .obarray()
+        .symbol_value("preloaded-file-list")
+        .cloned()
+        .unwrap_or(Value::NIL);
+    let recorded = list_to_vec(&recorded).expect("preloaded-file-list is a list");
+    assert_eq!(
+        recorded.first().and_then(|value| value.as_utf8_str()),
+        Some("neovm-require-probe"),
+        "a dumping require records the feature name, never the path it was found at"
+    );
+
+    let history = eval
+        .obarray()
+        .symbol_value("load-history")
+        .cloned()
+        .unwrap_or(Value::NIL);
+    let entries = list_to_vec(&history).expect("load-history is a list");
+    let first =
+        list_to_vec(entries.first().expect("load-history has an entry")).expect("entry is a list");
+    assert_eq!(
+        first.first().and_then(|value| value.as_utf8_str()),
+        Some("neovm-require-probe.el"),
+        "the history entry keeps the requested name's directory (none) and the found basename"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn builtin_load_prepends_history_entry_and_preserves_existing_tail() {
     crate::test_utils::init_test_tracing();
     let unique = SystemTime::now()
