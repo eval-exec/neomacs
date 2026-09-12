@@ -20,6 +20,17 @@
     </header>
     <main id="browser-shell">
       <p id="browser-status" role="status">Loading Neomacs…</p>
+      <div
+        id="browser-progress"
+        role="progressbar"
+        aria-label="Editor download"
+        aria-valuemin="0"
+        aria-valuemax="100"
+        hidden
+      >
+        <div id="browser-progress-track"><div id="browser-progress-bar"></div></div>
+        <span id="browser-progress-label"></span>
+      </div>
       <textarea
         id="browser-text-input"
         aria-label="Neomacs text input"

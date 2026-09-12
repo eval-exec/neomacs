@@ -202,17 +202,27 @@ async function start(message) {
   }
   mailbox = message.mailbox;
   startup = encoder.encode(JSON.stringify(message.startup));
-  const assets = await fetchEditorWorkerAssets(message);
+  // Downloading is the longest startup phase on a real link (about 88 MB on a
+  // first visit) and the compiler streams from the same responses, so report
+  // bytes as they arrive instead of leaving the user watching a still screen.
+  post("status", { message: "Downloading editor…" });
+  const assets = await fetchEditorWorkerAssets(message, undefined, ({ received, total }) => {
+    post("progress", { phase: "download", received, total });
+  });
   runtimeImage = assets.runtimeImage;
   runtimeImageId = assets.runtimeImageId;
   runtimeResourceBundle = assets.runtimeResourceBundle;
   runtimeResourceId = assets.runtimeResourceId;
+  post("status", { message: "Opening persistent storage…" });
   const filesystem = await OriginPrivateFileSystem.open();
   const filesystemImports = suspendingFilesystemImports(
     createOpfsHostImports(filesystem, () => memory),
   );
 
   const waitForInput = jspi ? createJspiWait() : createAtomicsWait();
+  // `instantiateStreaming` compiles while the body is still arriving, so the
+  // download progress above continues to advance during this phase.
+  post("status", { message: "Compiling editor…" });
   const { instance } = await instantiate(
     assets.wasmResponse,
     hostImports(waitForInput, filesystemImports),
