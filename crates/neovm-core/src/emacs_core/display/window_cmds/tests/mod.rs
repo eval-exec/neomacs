@@ -2472,6 +2472,66 @@ fn split_window_side_domain_matches_gnu() {
 }
 
 #[test]
+fn internal_show_cursor_p_accepts_any_window_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // GNU's whole body is one line (`src/dispnew.c`):
+    //
+    //     return decode_any_window (window)->cursor_off_p ? Qnil : Qt;
+    //
+    // `decode_any_window` is the widest decoder there is -- an INTERNAL window
+    // and a DELETED one are both windows, so both are accepted and answer `t`.
+    //
+    // neomacs guarded it with a helper that required a LIVE window while
+    // reporting `windowp`: the predicate named `decode_any_window`'s contract
+    // but the check enforced `decode_live_window`'s.  That is the same
+    // name-divorced-from-check shape as `expect_frame_live_or_nil` and
+    // `expect_window_live_or_nil`, in a third place.
+    let results = bootstrap_eval_with_frame(
+        "(let* ((live (selected-window))
+                (parent (window-parent (progn (split-window-below) (selected-window))))
+                (dead (let ((w (split-window-below))) (delete-window w) w))
+                (probe (lambda (arg) (condition-case e (internal-show-cursor-p arg)
+                                       (wrong-type-argument (car (cdr e)))))))
+           (list (funcall probe live) (funcall probe parent) (funcall probe dead)
+                 (condition-case e (internal-show-cursor-p 'foo)
+                   (wrong-type-argument (car (cdr e))))))",
+    );
+    assert_eq!(results[0], "OK (t t t windowp)");
+}
+
+#[test]
+fn set_minibuffer_window_returns_the_window_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // GNU ends with `return window;` (`src/minibuf.c`):
+    //
+    //     CHECK_WINDOW (window);
+    //     if (! MINI_WINDOW_P (XWINDOW (window)))
+    //       error ("Window is not a minibuffer window");
+    //     minibuf_window = window;
+    //     return window;
+    //
+    // neomacs returned nil from the success path.
+    //
+    // NOTE: the `minibuf_window = window` assignment is still NOT implemented
+    // -- there is no global minibuffer-window slot to write, only a per-frame
+    // one -- so this fixes the return value and not the effect.  In practice
+    // the effect is unobservable here because the guard only admits a window
+    // that already IS some frame's minibuffer window, but it is a real gap and
+    // is called out rather than papered over.
+    let results = bootstrap_eval_with_frame(
+        "(list (eq (set-minibuffer-window (minibuffer-window)) (minibuffer-window))
+               (condition-case e (set-minibuffer-window (selected-window))
+                 (error (car (cdr e))))
+               (condition-case e (set-minibuffer-window 'foo)
+                 (wrong-type-argument (car (cdr e)))))",
+    );
+    assert_eq!(
+        results[0],
+        "OK (t \"Window is not a minibuffer window\" windowp)"
+    );
+}
+
+#[test]
 fn window_line_height_returns_nil_in_batch_after_decoding_window() {
     crate::test_utils::init_test_tracing();
     // GNU bails out of `Fwindow_line_height' before it ever looks at LINE

@@ -3143,7 +3143,15 @@ pub(crate) fn builtin_set_minibuffer_window(
                 args[0].as_window_id().unwrap(),
             )) =>
         {
-            Ok(Value::NIL)
+            // GNU ends `Fset_minibuffer_window' with `return window;'
+            // (`src/minibuf.c'), not nil.
+            //
+            // NOTE: GNU's preceding `minibuf_window = window' is still NOT
+            // performed -- there is no global minibuffer-window slot here,
+            // only a per-frame one.  The guard above admits only a window that
+            // already IS some frame's minibuffer window, so the omission is
+            // unobservable in practice, but it is a real gap.
+            Ok(args[0])
         }
         ValueKind::Veclike(VecLikeType::Window) => Err(signal(
             "error",

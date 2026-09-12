@@ -27,25 +27,21 @@ pub(crate) fn reset_dispnew_thread_locals() {}
 // Window designator helpers
 // ---------------------------------------------------------------------------
 
-fn live_window_designator_p(eval: &mut crate::emacs_core::eval::Context, value: &Value) -> bool {
-    match value.kind() {
-        ValueKind::Veclike(VecLikeType::Window) => eval
-            .frames
-            .find_window_frame_id(WindowId(value.as_window_id().unwrap()))
-            .is_some(),
-        ValueKind::Fixnum(id) if id >= 0 => eval
-            .frames
-            .find_window_frame_id(WindowId(id as u64))
-            .is_some(),
-        _ => false,
-    }
-}
-
+/// GNU's `decode_any_window`: nil is the selected window, and everything else
+/// need only be a WINDOW -- `windowp`, the widest of the three window
+/// predicates.  An INTERNAL window and a DELETED one both pass.
+///
+/// This used to require a LIVE window while still reporting `windowp`: the
+/// predicate named `decode_any_window`'s contract, the check enforced
+/// `decode_live_window`'s.  `internal-show-cursor-p` is one line in GNU --
+/// `return decode_any_window (window)->cursor_off_p ? Qnil : Qt;`
+/// (`src/dispnew.c`) -- and it answers `t` for windows this rejected.
 fn expect_window_designator_eval(
     eval: &mut crate::emacs_core::eval::Context,
     value: &Value,
 ) -> Result<(), Flow> {
-    if value.is_nil() || live_window_designator_p(eval, value) {
+    let _ = &eval;
+    if value.is_nil() || window_id_from_window_designator(value).is_some() {
         Ok(())
     } else {
         Err(signal(
@@ -55,12 +51,12 @@ fn expect_window_designator_eval(
     }
 }
 
+/// A third verbatim copy of this decoder lived here, `Fixnum(id) => WindowId(id)`
+/// and all -- the arm GNU has no counterpart for.  It defers to the one in
+/// `window_cmds`, the mirror of GNU `src/window.c`, so the window type contract
+/// has a single definition.
 fn window_id_from_window_designator(value: &Value) -> Option<WindowId> {
-    match value.kind() {
-        ValueKind::Veclike(VecLikeType::Window) => Some(WindowId(value.as_window_id().unwrap())),
-        ValueKind::Fixnum(id) if id >= 0 => Some(WindowId(id as u64)),
-        _ => None,
-    }
+    crate::emacs_core::window_cmds::window_id_from_designator(value)
 }
 
 fn selected_window_id(eval: &mut crate::emacs_core::eval::Context) -> Option<WindowId> {
