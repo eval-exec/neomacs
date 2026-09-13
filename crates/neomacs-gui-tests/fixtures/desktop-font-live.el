@@ -29,6 +29,49 @@
                             predicate continuation deadline)))
     (error (desktop-font-live-log "LIVE-FONT-FAIL %S" err) (kill-emacs 1))))
 
+(defun desktop-font-live-write (key value)
+  ;; This child inherits only this test's keyfile backend and config root.
+  ;; No writes reach the user's desktop settings.
+  (unless (eq 0 (call-process "gsettings" nil nil nil "set"
+                             "org.gnome.desktop.interface" key value))
+    (error "Isolated GSettings writer failed")))
+
+(defun desktop-font-live-frame-state ()
+  (list (face-attribute 'default :family) (face-attribute 'default :height)
+        (frame-parameter nil 'font) (window-font-width) (window-font-height)
+        (frame-width) (frame-height) (frame-pixel-width) (frame-pixel-height)))
+
+(defun desktop-font-live-unchanged (before font)
+  (unless (and (equal before (desktop-font-live-frame-state))
+               (eq font (face-attribute 'default :font)))
+    (error "Preference-only change reopened the font or changed the frame: %S -> %S"
+           before (desktop-font-live-frame-state))))
+
+(defun desktop-font-live-pass ()
+  (desktop-font-live-log "LIVE-FONT-PASS %S" (desktop-font-live-state))
+  (kill-emacs 0))
+
+(defun desktop-font-live-opt-out ()
+  (setq font-use-system-font nil)
+  (let ((before (desktop-font-live-frame-state))
+        (font (face-attribute 'default :font)))
+    (desktop-font-live-write "monospace-font-name" "DejaVu Sans Mono 16")
+    (desktop-font-live-await
+     (lambda () (equal (font-get-system-font) "DejaVu Sans Mono 16"))
+     (lambda ()
+       (desktop-font-live-unchanged before font)
+       ;; Enabling adoption alone must not replay the skipped preference.
+       ;; A later application update gives an observed native-event barrier.
+       (setq font-use-system-font t)
+       (desktop-font-live-write "font-name" "DejaVu Sans 12")
+       (desktop-font-live-await
+        (lambda () (equal (font-get-system-normal-font) "DejaVu Sans 12"))
+        (lambda ()
+          (desktop-font-live-unchanged before font)
+          (desktop-font-live-pass))
+        (+ (float-time) 8)))
+     (+ (float-time) 8))))
+
 (run-at-time
  0.1 nil
  (lambda ()
@@ -36,14 +79,11 @@
        (progn
          (unless (equal (font-get-system-font) "Ubuntu Mono 13")
            (error "Initial settings are not isolated: %S" (desktop-font-live-state)))
-         (setq font-use-system-font t)
          (desktop-font-live-log "LIVE-FONT-BEFORE %S" (desktop-font-live-state))
-         ;; This child inherits only this test's keyfile backend and config root.
-         ;; No writes reach the user's desktop settings.
-         (unless (eq 0 (call-process "gsettings" nil nil nil "set"
-                                    "org.gnome.desktop.interface"
-                                    "monospace-font-name" "DejaVu Sans Mono 16"))
-           (error "Isolated GSettings writer failed"))
+         (if (equal (getenv "NEOMACS_GUI_LIVE_FONT_CASE") "opt-out")
+             (desktop-font-live-opt-out)
+           (setq font-use-system-font t)
+           (desktop-font-live-write "monospace-font-name" "DejaVu Sans Mono 16")
          (desktop-font-live-await
           (lambda ()
             (and (equal (font-get-system-font) "DejaVu Sans Mono 16")
@@ -55,7 +95,6 @@
           (lambda ()
             (unless (equal (font-get-system-normal-font) "Ubuntu 10")
               (error "Monospace update replaced the application preference"))
-            (desktop-font-live-log "LIVE-FONT-PASS %S" (desktop-font-live-state))
-            (kill-emacs 0))
-          (+ (float-time) 8)))
+            (desktop-font-live-pass))
+          (+ (float-time) 8))))
      (error (desktop-font-live-log "LIVE-FONT-FAIL %S" err) (kill-emacs 1)))))

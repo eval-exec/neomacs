@@ -163,6 +163,14 @@ spec reviews found no remaining first-slice defects; receiver ownership was
 tightened to a single transfer after review. Remaining behavior controls are
 still separate work below, not inferred from this opt-in result.
 
+The opt-out control now passes in both engines (`live-opt-out.log`: 4 live
+tests passed, 0 skipped). It changes the real isolated monospace preference,
+waits for the public query, and checks unchanged face attributes, font-object
+identity and frame geometry. It then enables adoption and changes only the
+application preference. That query refreshes without replaying the skipped
+monospace update or changing the document font. No additional production
+change was needed for these controls.
+
 See [subscription research](../diagnostics/2026-09-13-live-desktop-font-settings.md)
 and the [completed post-rebase checkpoint](../diagnostics/2026-09-13-post-rebase-font-verification.md).
 

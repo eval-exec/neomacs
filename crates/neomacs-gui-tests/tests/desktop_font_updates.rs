@@ -6,16 +6,41 @@ use std::{fs, path::PathBuf, process::Command, time::Duration};
 #[test]
 #[ignore = "requires GNU GUI Emacs, Xvfb, GSettings and Ubuntu Mono/DejaVu fonts"]
 fn gnu_opted_in_frame_follows_live_desktop_font() {
-    check_live_font(GuiBackend::LinuxX11, "gnu-live-font");
+    check_live_font(GuiBackend::LinuxX11, "gnu-live-font", LiveFontCase::OptIn);
 }
 
 #[test]
 #[ignore = "requires release binary/pdump, Weston, GSettings and Ubuntu Mono/DejaVu fonts"]
 fn opted_in_frame_follows_live_desktop_font() {
-    check_live_font(GuiBackend::LinuxWayland, "live-font");
+    check_live_font(GuiBackend::LinuxWayland, "live-font", LiveFontCase::OptIn);
 }
 
-fn check_live_font(backend: GuiBackend, scenario: &str) {
+#[test]
+#[ignore = "requires GNU GUI Emacs, Xvfb, GSettings and Ubuntu Mono/DejaVu fonts"]
+fn gnu_opted_out_frame_keeps_its_font_while_queries_refresh() {
+    check_live_font(
+        GuiBackend::LinuxX11,
+        "gnu-live-opt-out",
+        LiveFontCase::OptOut,
+    );
+}
+
+#[test]
+#[ignore = "requires release binary/pdump, Weston, GSettings and Ubuntu Mono/DejaVu fonts"]
+fn opted_out_frame_keeps_its_font_while_queries_refresh() {
+    check_live_font(
+        GuiBackend::LinuxWayland,
+        "live-opt-out",
+        LiveFontCase::OptOut,
+    );
+}
+
+enum LiveFontCase {
+    OptIn,
+    OptOut,
+}
+
+fn check_live_font(backend: GuiBackend, scenario: &str, case: LiveFontCase) {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let artifacts = root.join("target/neomacs-gui-tests").join(scenario);
     let config = artifacts.join("settings-config");
@@ -60,6 +85,13 @@ fn check_live_font(backend: GuiBackend, scenario: &str) {
     )
     .with_program(binary)
     .with_env("GSETTINGS_BACKEND", "keyfile")
+    .with_env(
+        "NEOMACS_GUI_LIVE_FONT_CASE",
+        match case {
+            LiveFontCase::OptIn => "opt-in",
+            LiveFontCase::OptOut => "opt-out",
+        },
+    )
     .with_env("GSETTINGS_SCHEMA_DIR", schemas.to_string_lossy())
     .with_env("XDG_CONFIG_HOME", config.to_string_lossy());
     if backend == GuiBackend::LinuxX11 {
