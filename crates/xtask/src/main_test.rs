@@ -915,6 +915,25 @@ fn portable_frontend_ci_reuses_one_runtime_bundle_and_smokes_packaged_wasm() {
         wasm.contains("--call-style"),
         "the recursion gate must sweep call shapes, not just one"
     );
+    // The eight forms the continuation driver does not own. They were measured
+    // to signal cleanly at 1600 against the 4 MiB worker stack, so each is a
+    // real gate now; dropping one from the sweep would silently stop testing
+    // that route to the trap.
+    for call_style in [
+        "cond",
+        "cond-test",
+        "and",
+        "or",
+        "while",
+        "catch",
+        "condition-case",
+        "macro",
+    ] {
+        assert!(
+            wasm.contains(call_style),
+            "recursion gate lost the {call_style} call style, a separate route to the Worker trap"
+        );
+    }
     assert!(
         wasm.contains("browser_opfs_write_smoke.py"),
         "failed-save gate: a quota error must not zero the user's file"
