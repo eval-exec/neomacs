@@ -1752,6 +1752,10 @@ fn test_pdump_rejects_corrupt_runtime_managers_section() {
     assert!(matches!(result, Err(DumpError::ImageFormatError(_))));
 }
 
+// The duplicate-slot check is inside `#[cfg(debug_assertions)]`
+// (`runtime/pdump/convert.rs`), so a release build restores the snapshot
+// successfully and this test cannot pass there.
+#[cfg(debug_assertions)]
 #[test]
 fn test_restore_snapshot_rejects_duplicate_obarray_symbol_slots() {
     crate::test_utils::init_test_tracing();
@@ -1777,6 +1781,8 @@ fn test_restore_snapshot_rejects_duplicate_obarray_symbol_slots() {
     }
 }
 
+// Same as above: the guard it exercises is `#[cfg(debug_assertions)]`-only.
+#[cfg(debug_assertions)]
 #[test]
 fn test_restore_snapshot_rejects_global_member_without_symbol_entry() {
     crate::test_utils::init_test_tracing();

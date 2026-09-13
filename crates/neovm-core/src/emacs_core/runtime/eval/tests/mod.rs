@@ -24278,6 +24278,11 @@ fn generic_backtraces_keep_one_and_two_arguments_inline() {
     );
 }
 
+// The guard under test is a `debug_assert_eq!` (`runtime/eval/apply.rs`), so it
+// does not exist in a release build and the `should_panic` can never be
+// satisfied there.  Without this gate the test is a permanent release-suite
+// failure that looks like a real one.
+#[cfg(debug_assertions)]
 #[test]
 #[should_panic(expected = "fast bytecode pop requires its frame to remain the specpdl top")]
 fn bytecode_backtrace_token_rejects_an_unbalanced_fast_pop() {
