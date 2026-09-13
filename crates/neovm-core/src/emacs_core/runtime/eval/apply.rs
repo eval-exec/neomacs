@@ -1690,7 +1690,60 @@ impl Context {
     ) -> EvalResult {
         #[cfg(feature = "jit")]
         {
-            use crate::emacs_core::jit::Plan;
+            use crate::emacs_core::jit::{Plan, cache};
+            // Direct entry, as in `dispatch_bytecode_call_from_stack`: an armed
+            // slot means this function already tiered up, so the heat
+            // dispatcher's threshold/deferral/cap math, the compiled-cache
+            // probe inside `try_run_compiled` and `call_consts`' second
+            // marshal are all redundant — premarshal once and enter the leaf.
+            //
+            // This entry is every call that does NOT come off the operand
+            // stack: `funcall`/`apply`, and every Rust builtin that calls back
+            // into Lisp (`mapcar`, `mapc`, `sort`, process filters, hooks). It
+            // had no armed path at all, so a closure called a million times
+            // from `mapc` re-ran `dispatch_sized` + the cache probe on every
+            // one of them.
+            let nargs = args.len();
+            if let Some((leaf, nonrest, has_rest)) =
+                cache::armed_leaf_for_stack_call(bc_data, nargs)
+            {
+                crate::emacs_core::jit::stats::record_dispatch(true);
+                let ctx_ptr = self as *mut Context;
+                let saved_roots = save_scratch_gc_roots();
+                push_scratch_gc_root(func_value);
+                // The leaf's premarshaled ABI, exactly as `call_consts` builds
+                // it: nil-padded for omitted `&optional`, the tail consed into
+                // the `&rest` slot. `args` is rooted by the caller that built
+                // it (the same contract `call_consts` documents), so the
+                // elements stay live across the cons below.
+                let nil = crate::emacs_core::value::Value::NIL.bits() as i64;
+                let fixed = nargs.min(nonrest);
+                let mut bits: smallvec::SmallVec<[i64; 8]> = args[..fixed]
+                    .iter()
+                    .map(|v| v.bits() as i64)
+                    .chain(std::iter::repeat_n(nil, nonrest - fixed))
+                    .collect();
+                if has_rest {
+                    let rest = if nargs > nonrest {
+                        self.tagged_heap.list_from_slice(&args[nonrest..nargs])
+                    } else {
+                        crate::emacs_core::value::Value::NIL
+                    };
+                    bits.push(rest.bits() as i64);
+                }
+                let native =
+                    cache::run_armed_leaf(ctx_ptr, bc_data, func_value, leaf, bits.as_ptr());
+                restore_scratch_gc_roots(saved_roots);
+                return match native {
+                    Ok(Some(b)) => Ok(crate::emacs_core::value::Value::from_bits(b)),
+                    Ok(None) => {
+                        crate::emacs_core::jit::note_seam_interp_fallback();
+                        let mut vm = super::super::bytecode::Vm::from_context(self);
+                        vm.execute_with_func_value(bc_data, args, func_value)
+                    }
+                    Err(flow) => Err(flow),
+                };
+            }
             match bc_data
                 .jit_runtime()
                 .dispatch_sized(bc_data.executable_ops().len())
@@ -1717,6 +1770,13 @@ impl Context {
                     let native = crate::emacs_core::jit::try_run_compiled(
                         ctx_ptr, bc_data, func_value, &args,
                     );
+                    // Arm the direct entry once its leaf actually ran, so the
+                    // next call of this arity skips the dispatcher and the
+                    // cache probe above — the same hand-off
+                    // `dispatch_bytecode_call_from_stack` makes.
+                    if matches!(native, Ok(Some(_))) {
+                        cache::arm_leaf_slot(ctx_ptr, bc_data);
+                    }
                     restore_scratch_gc_roots(saved_roots);
                     match native {
                         Ok(Some(bits)) => Ok(crate::emacs_core::value::Value::from_bits(bits)),
