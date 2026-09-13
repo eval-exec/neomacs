@@ -15,6 +15,13 @@
 (defun native-presented-advance ()
   (condition-case err
       (let ((receipt (native-presented-receipt)))
+        (when receipt
+          (unless (and (eq (plist-get receipt :outcome) 'presented)
+                       (integerp (plist-get receipt :clock-id))
+                       (natnump (plist-get receipt :seconds))
+                       (natnump (plist-get receipt :nanoseconds))
+                       (< (plist-get receipt :nanoseconds) 1000000000))
+            (error "Confirmed presentation must carry its compositor-clock timestamp: %S" receipt)))
         (when (> (float-time) native-presented-deadline)
           (error "No compositor-confirmed presentation in stage %S; last receipt %S"
                  native-presented-stage receipt))

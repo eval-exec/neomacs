@@ -84,21 +84,69 @@ fn hidpi_8k_decorated_fullscreen_restores_the_requested_column_grid() {
 #[test]
 #[ignore = "requires release binary/pdump, Weston presentation feedback and Ubuntu Mono"]
 fn hidpi_8k_fullscreen_after_confirmed_presentation() {
-    check_fixture(
+    let result = check_fixture(
         WaylandOutput::HiDpi8k,
         "native-resize-presented-8k",
         "native-resize-presented.el",
     );
+    check_receipt_timestamp(&result);
 }
 
 #[test]
 #[ignore = "requires release binary/pdump, Weston presentation feedback and Ubuntu Mono"]
 fn hidpi_8k_slow_desktop_fullscreen_after_confirmed_presentation() {
-    check_fixture_with_desktop(
+    let result = check_fixture_with_desktop(
         WaylandOutput::HiDpi8k,
         "native-resize-presented-slow-8k",
         "native-resize-presented.el",
         WestonDesktop::DefaultPattern,
+    );
+    check_receipt_timestamp(&result);
+}
+
+fn check_receipt_timestamp(result: &GuiRunResult) {
+    let receipt_path = result
+        .artifacts
+        .stdout
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("presentation.sexp");
+    let receipt = fs::read_to_string(receipt_path).unwrap();
+    let words: Vec<_> = receipt
+        .trim()
+        .trim_matches(['(', ')'])
+        .split_whitespace()
+        .collect();
+    let field = |name: &str| -> u64 {
+        words
+            .windows(2)
+            .find(|pair| pair[0] == name)
+            .unwrap_or_else(|| panic!("missing {name} in {receipt}"))[1]
+            .parse()
+            .unwrap()
+    };
+    let seconds = field(":seconds");
+    let timestamp = format!(
+        ".presented({}, {}, {},",
+        seconds >> 32,
+        seconds & 0xffff_ffff,
+        field(":nanoseconds")
+    );
+    let clock = format!(".clock_id({})", field(":clock-id"));
+    let wire = fs::read_to_string(&result.artifacts.stderr).unwrap();
+    // Compare against independent native protocol traffic, not the renderer's
+    // own confirmation log or a timestamp recomputed from its scheduler clock.
+    assert!(
+        wire.lines()
+            .any(|line| line.contains("wp_presentation_feedback") && line.contains(&timestamp)),
+        "receipt timestamp absent from native Presented events: {receipt}"
+    );
+    assert!(
+        wire.lines()
+            .any(|line| line.contains("wp_presentation") && line.contains(&clock)),
+        "receipt clock absent from native ClockId events: {receipt}"
     );
 }
 
@@ -149,6 +197,7 @@ fn check_fixture_with_desktop(
         ),
     )
     .with_program(binary)
+    .with_env("WAYLAND_DEBUG", "client")
     .with_env(
         "NEOMACS_GUI_PRESENTATION_RECEIPT",
         receipt.to_string_lossy(),
