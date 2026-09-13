@@ -19,6 +19,7 @@ pub mod core;
 pub mod display_identity;
 pub mod display_scale;
 pub mod font_defaults;
+pub mod gui_resources;
 pub mod macos_bundle_runtime;
 mod menus;
 mod presentation;

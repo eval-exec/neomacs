@@ -2626,10 +2626,115 @@ pub(crate) fn builtin_x_get_resource(
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args_range("x-get-resource", &args, 2, 4)?;
-    if x_window_system_active(eval) {
-        return Ok(Value::NIL);
+    if !x_window_system_active(eval) {
+        return Err(window_system_not_initialized_error());
     }
-    Err(window_system_not_initialized_error())
+    for (index, value) in args.iter().enumerate() {
+        if !value.is_string() && (index < 2 || !value.is_nil()) {
+            return Err(signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("stringp"), *value],
+            ));
+        }
+    }
+    let component = args.get(2).filter(|value| !value.is_nil());
+    let subclass = args.get(3).filter(|value| !value.is_nil());
+    if component.is_some() != subclass.is_some() {
+        return Err(signal(
+            "error",
+            vec![Value::string(
+                "x-get-resource: must specify both COMPONENT and SUBCLASS or neither",
+            )],
+        ));
+    }
+    let mut name = dynamic_or_global_symbol_value(eval, "x-resource-name")
+        .and_then(|value| display_string_text(&value))
+        .unwrap_or_else(|| "emacs".into());
+    let valid = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_';
+    if name.bytes().any(|byte| !valid(byte)) {
+        name = if name.bytes().filter(|byte| valid(*byte)).count() < 2 {
+            "emacs".into()
+        } else {
+            name.bytes()
+                .map(|byte| if valid(byte) { char::from(byte) } else { '_' })
+                .collect()
+        };
+    }
+    let mut class = dynamic_or_global_symbol_value(eval, "x-resource-class")
+        .and_then(|value| display_string_text(&value))
+        .unwrap_or_else(|| "Emacs".into());
+    eval.assign("x-resource-name", Value::string(&name));
+    eval.assign("x-resource-class", Value::string(&class));
+    class.push('.');
+    class.push_str(&display_string_text(&args[1]).expect("validated string"));
+    if let (Some(component), Some(subclass)) = (component, subclass) {
+        name.push('.');
+        name.push_str(&display_string_text(component).expect("validated string"));
+        class.push('.');
+        class.push_str(&display_string_text(subclass).expect("validated string"));
+    }
+    name.push('.');
+    name.push_str(&display_string_text(&args[0]).expect("validated string"));
+    let query = super::display_host::GuiResourceQuery {
+        name,
+        class,
+        inhibit_native: dynamic_or_global_symbol_value(eval, "inhibit-x-resources")
+            .is_some_and(|value| value.is_truthy()),
+    };
+    Ok(eval
+        .display_host
+        .as_ref()
+        .and_then(|host| host.gui_resource(&query))
+        .filter(|value| !value.is_empty())
+        .map_or(Value::NIL, Value::string))
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn builtin_ns_get_resource(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_args("ns-get-resource", &args, 2)?;
+    if !x_window_system_active(eval) {
+        return Err(window_system_not_initialized_error());
+    }
+    let name = display_string_text(&args[1]).ok_or_else(|| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("stringp"), args[1]],
+        )
+    })?;
+    // GNU ignores OWNER and preserves empty strings in this direct getter.
+    Ok(eval
+        .display_host
+        .as_ref()
+        .and_then(|host| host.ns_resource(&name))
+        .map_or(Value::NIL, Value::string))
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn builtin_ns_set_resource(eval: &mut Context, args: Vec<Value>) -> EvalResult {
+    expect_args("ns-set-resource", &args, 3)?;
+    if !x_window_system_active(eval) {
+        return Err(window_system_not_initialized_error());
+    }
+    let name = display_string_text(&args[1]).ok_or_else(|| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("stringp"), args[1]],
+        )
+    })?;
+    let value = if args[2].is_nil() {
+        None
+    } else {
+        Some(display_string_text(&args[2]).ok_or_else(|| {
+            signal(
+                LispCondition::WrongTypeArgument,
+                vec![Value::symbol("stringp"), args[2]],
+            )
+        })?)
+    };
+    if let Some(host) = eval.display_host.as_mut() {
+        host.set_ns_resource(&name, value.as_deref());
+    }
+    Ok(Value::NIL)
 }
 
 pub(crate) fn builtin_x_list_fonts(
@@ -2949,6 +3054,17 @@ pub(crate) fn builtin_x_open_connection(
 ) -> EvalResult {
     expect_args_range("x-open-connection", &args, 1, 3)?;
     if x_window_system_active(eval) {
+        if let Some(resources) = args.get(1).filter(|value| !value.is_nil()) {
+            let resources = display_string_text(resources).ok_or_else(|| {
+                signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("stringp"), *resources],
+                )
+            })?;
+            if let Some(host) = eval.display_host.as_mut() {
+                host.set_gui_resource_database(&resources);
+            }
+        }
         return Ok(Value::NIL);
     }
     match args[0].kind() {

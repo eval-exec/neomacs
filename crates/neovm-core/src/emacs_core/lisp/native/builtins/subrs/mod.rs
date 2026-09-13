@@ -2555,6 +2555,19 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(crate::emacs_core::display::builtin_x_get_resource),
         SubrArity::new(2, Some(4)),
     ));
+    #[cfg(target_os = "macos")]
+    {
+        ctx.register_subr(SubrSpec::new(
+            "ns-get-resource",
+            NativeFn::ContextVec(crate::emacs_core::display::builtin_ns_get_resource),
+            SubrArity::new(2, Some(2)),
+        ));
+        ctx.register_subr(SubrSpec::new(
+            "ns-set-resource",
+            NativeFn::ContextVec(crate::emacs_core::display::builtin_ns_set_resource),
+            SubrArity::new(3, Some(3)),
+        ));
+    }
     ctx.register_subr(SubrSpec::new(
         "x-list-fonts",
         NativeFn::ContextVec(crate::emacs_core::display::builtin_x_list_fonts),

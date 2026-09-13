@@ -2,6 +2,7 @@ mod menu_buttons_test;
 mod menu_semantics_test;
 mod menu_submenu_test;
 mod menu_test_support;
+mod resources_test;
 
 use super::*;
 use crate::EvalError;

@@ -13,6 +13,8 @@ a claim of completion.
   Windows execution using repository CI runners; strengthen native GUI controls.
 - [ ] GNU platform resources: Windows registry precedence and Cocoa user
   defaults, including initial font policy and public resource lookup.
+  Public queries and later-frame font precedence are implemented with winreg
+  and objc2-foundation; first-native-window resource font discovery remains open.
 - [ ] Weston cached subsurface scale/detach diagnostic: reproduce on stock
   Weston, explain against official protocol/source, correct Neomacs only if
   the evidence identifies a client contract violation. Investigate independent
@@ -24,6 +26,8 @@ a claim of completion.
   A user question is pending because GNU has no Linux-style system-monospace
   subscription on these backends; a Neomacs-specific preference would be a
   separate interface decision, not inferred from nonexistent OS settings.
+  Research established no corresponding GNU subscription. Preserve that behavior
+  unless the user defines a Neomacs-specific preference source.
 - [ ] Grown-minibuffer frame-height accounting: GNU differential regression and
   correction through public Lisp/native-host geometry observations.
 - [ ] Child-frame initial width with chrome: reproduce without suppressing
@@ -51,3 +55,10 @@ resources/settings and the stock Weston diagnostic. Existing macOS fresh-build
 workflow has been dispatched for a baseline. Current CI also has Windows
 runners; native GUI validation will use an explicit display contract rather
 than treating an installer or a cross-compile as display verification.
+
+The resource slice passed 20 public evaluator/frame-creation tests and Linux
+application/runtime/GUI-harness checks. Review found and corrected first-entry
+alist precedence and normalization through the current runtime binding.
+Native adapter tests and the manual `native-display-contract.yml` workflow
+cover platform databases plus actual GUI font/resize behavior. Native execution
+is pending; adapters are not yet claimed verified on their target systems.

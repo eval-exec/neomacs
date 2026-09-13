@@ -248,6 +248,7 @@ raw-window-handle = "0.6"
 # Versions track the objc2 0.6 generation winit already pulls in, so the
 # dependency graph keeps a single objc2 major.
 objc2 = "0.6"
+winreg = "0.56"
 block2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSEvent", "NSView", "NSResponder", "NSWindow"] }
 objc2-foundation = { version = "0.3", features = [

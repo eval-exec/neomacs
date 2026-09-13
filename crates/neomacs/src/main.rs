@@ -1126,6 +1126,7 @@ impl ResolvedSurfaceMemo {
 }
 
 struct PrimaryWindowDisplayHost {
+    resources: neomacs_display_runtime::gui_resources::GuiResources,
     system_fonts: neovm_core::emacs_core::display_host::SystemFonts,
     tooltip_client: neomacs_display_protocol::tooltip::TooltipClient,
     cmd_tx: crossbeam_channel::Sender<RenderCommand>,
@@ -1441,6 +1442,27 @@ fn render_fullscreen_mode(fullscreen: FrameFullscreen) -> WindowFullscreenMode {
 }
 
 impl DisplayHost for PrimaryWindowDisplayHost {
+    #[cfg(target_os = "macos")]
+    fn ns_resource(&self, name: &str) -> Option<String> {
+        self.resources.ns_resource(name)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn set_ns_resource(&mut self, name: &str, value: Option<&str>) {
+        self.resources.set_ns_resource(name, value);
+    }
+
+    fn set_gui_resource_database(&mut self, resources: &str) {
+        self.resources.set_database(resources);
+    }
+
+    fn gui_resource(
+        &self,
+        query: &neovm_core::emacs_core::display_host::GuiResourceQuery,
+    ) -> Option<String> {
+        self.resources.query(query)
+    }
+
     fn update_system_fonts(&mut self, fonts: neovm_core::emacs_core::display_host::SystemFonts) {
         self.system_fonts = fonts;
     }
@@ -3584,6 +3606,7 @@ fn run_gui_evaluator_worker(
     maybe_install_startup_phase_trace(&mut evaluator);
 
     evaluator.set_display_host(Box::new(PrimaryWindowDisplayHost {
+        resources: Default::default(),
         system_fonts: bootstrap_display.font_defaults.system_fonts(),
         tooltip_client: neomacs_display_protocol::tooltip::TooltipClient::new(
             emacs_comms.tooltip_context.clone(),

@@ -285,7 +285,30 @@ impl TerminalFloatPlacement {
     }
 }
 
+/// Fully qualified GNU resource keys. Native backends own their database
+/// precedence, including whether explicit resources bypass inhibition.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GuiResourceQuery {
+    pub name: String,
+    pub class: String,
+    pub inhibit_native: bool,
+}
+
 pub trait DisplayHost {
+    #[cfg(target_os = "macos")]
+    fn ns_resource(&self, _name: &str) -> Option<String> {
+        None
+    }
+
+    #[cfg(target_os = "macos")]
+    fn set_ns_resource(&mut self, _name: &str, _value: Option<&str>) {}
+
+    fn set_gui_resource_database(&mut self, _resources: &str) {}
+
+    fn gui_resource(&self, _query: &GuiResourceQuery) -> Option<String> {
+        None
+    }
+
     /// Refresh native preferences independently of Lisp's font adoption policy.
     fn update_system_fonts(&mut self, _fonts: SystemFonts) {}
 

@@ -3758,6 +3758,7 @@ dependencies = [
  "neovm-core",
  "objc2",
  "objc2-app-kit",
+ "objc2-foundation",
  "parking_lot",
  "pollster",
  "portable-pty",
@@ -3781,6 +3782,7 @@ dependencies = [
  "wgpu-hal",
  "windows-sys 0.61.2",
  "winit",
+ "winreg 0.56.0",
  "x11-dl",
 ]
 
@@ -5145,7 +5147,7 @@ dependencies = [
  "shared_library",
  "shell-words",
  "winapi",
- "winreg",
+ "winreg 0.10.1",
 ]
 
 [[package]]
@@ -8886,6 +8888,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "80d0f4e272c85def139476380b12f9ac60926689dd2e01d4923222f40580869d"
 dependencies = [
  "winapi",
+]
+
+[[package]]
+name = "winreg"
+version = "0.56.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d6f32a0ff4a9f6f01231eb2059cc85479330739333e0e58cadf03b6af2cca10"
+dependencies = [
+ "cfg-if 1.0.4",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

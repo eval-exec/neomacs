@@ -6629,6 +6629,11 @@ fn parse_gui_frame_params(value: Option<&Value>) -> ParsedGuiFrameParams {
         let Some(key) = pair_car.as_symbol_id() else {
             continue;
         };
+        // GNU frame arguments use assq: prepending an entry overrides older
+        // entries, including an explicit nil. Typed fields follow that order.
+        if parsed.all.contains_key(&key) {
+            continue;
+        }
         parsed.all.insert(key, pair_cdr);
         match resolve_sym(key) {
             "name" => parsed.name = stringish_value(&pair_cdr),
@@ -6725,8 +6730,36 @@ fn current_primary_window_size(
 /// new top-level OS window for it.
 pub(crate) fn builtin_x_create_frame(
     eval: &mut super::eval::Context,
-    args: Vec<Value>,
+    mut args: Vec<Value>,
 ) -> EvalResult {
+    expect_args("x-create-frame", &args, 1)?;
+    // GNU gui_display_get_arg resolves frame alist, default-frame-alist,
+    // then the display resource. Keep explicit nil distinct from absence.
+    let font_key = intern("font");
+    if !parse_gui_frame_params(args.first())
+        .all
+        .contains_key(&font_key)
+    {
+        let defaults = eval.eval_symbol_by_id(intern("default-frame-alist")).ok();
+        let default_font = parse_gui_frame_params(defaults.as_ref())
+            .all
+            .get(&font_key)
+            .copied();
+        let font = if let Some(font) = default_font {
+            Some(font)
+        } else if super::display::x_window_system_active(eval) {
+            let resource = super::display::builtin_x_get_resource(
+                eval,
+                vec![Value::string("font"), Value::string("Font")],
+            )?;
+            (!resource.is_nil()).then_some(resource)
+        } else {
+            None
+        };
+        if let Some(font) = font {
+            args[0] = Value::cons(Value::cons(Value::symbol("font"), font), args[0]);
+        }
+    }
     tracing::debug!(
         "builtin_x_create_frame: syncing pending resize events before frame realization"
     );
