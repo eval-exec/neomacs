@@ -1,0 +1,48 @@
+name: Native display contract
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  display:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            target: aarch64-apple-darwin
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install macOS build dependency
+        if: runner.os == 'macOS'
+        run: brew install pkg-config
+      - uses: ./.github/actions/setup-rust
+        with:
+          cache-key: native-display-${{ matrix.target }}
+          target: ${{ matrix.target }}
+          install-nextest: 'true'
+      - name: Native resource adapters
+        run: cargo nextest run --locked -p neomacs-display-runtime --test gui_resources_test
+      - name: Public Lisp resource and geometry contracts
+        run: cargo nextest run --locked -p neovm-core --lib -E 'test(resources_test)|test(frame_resize_test)'
+      - name: Build matching executable and runtime image
+        run: cargo xtask fresh-build --release
+      - name: Native GUI startup, font and resize
+        run: cargo nextest run --locked -p neomacs-gui-tests --test native_display --run-ignored all --test-threads 1
+      - name: Upload native evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-display-${{ matrix.target }}
+          path: target/neomacs-gui-tests/native-display-*/
+          if-no-files-found: warn
