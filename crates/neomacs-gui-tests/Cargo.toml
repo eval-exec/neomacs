@@ -17,3 +17,8 @@ serde_json = "1"
 
 [target.'cfg(unix)'.dev-dependencies]
 libc.workspace = true
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+rustix.workspace = true
+strum.workspace = true
+wayland-client.workspace = true

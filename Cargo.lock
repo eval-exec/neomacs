@@ -3807,7 +3807,10 @@ dependencies = [
  "getrandom 0.4.3",
  "image",
  "libc",
+ "rustix 1.1.4",
  "serde_json",
+ "strum",
+ "wayland-client",
 ]
 
 [[package]]

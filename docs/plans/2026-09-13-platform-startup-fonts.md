@@ -210,8 +210,10 @@ above is Linux Wayland at 96 logical DPI.
 
 The startup refactor was committed as `3da868a97` before these follow-ups.
 The GUI fixture now also requests 91 columns and checks the settled result.
-It runs on both the standard output and an actual 3840x2160, scale-2 Weston
-output. Before the completion fix both runs remained at 80 columns
+It runs on both the standard output and a high-resolution scale-2 Weston
+output. (The original preset supplied 3840x2160 logical dimensions, producing
+7680x4320 physical pixels; the follow-up below corrects the 4K preset.)
+Before the completion fix both runs remained at 80 columns
 (`hidpi-red.log`); the high-DPI log confirmed native scale factor 2.
 
 The local winit source contract (`winit-core/src/window.rs:request_surface_size`)
@@ -253,7 +255,7 @@ Follow-up verification completed:
 
 - Release build and no-byte-compile pdump regeneration passed. Matching
   fingerprint: `95DF7D65A634705CEB537960E37A62FE7E1DBFFB766BF9740364623AE87FB25E`.
-- All 4 GUI regressions passed, including 80→91 columns at both 1× and 4K/2×.
+- All 4 GUI regressions passed, including 80→91 columns at both 1× and 2×.
   The 2× trace confirms the applied resize returns 844 logical pixels with
   native scale factor 2; it no longer remains at the old 745-pixel width.
 - All 30 selected bootstrap/platform tests passed, including the corrected
@@ -266,3 +268,102 @@ Logs: `hidpi-release-build.log`, `hidpi-pdump.log`, `hidpi-gui-green.log`,
 `hidpi-harness-tests.log`, and `batch-process-tests2.log` in the same diagnostic
 directory. GNU batch controls are `batch-gnu{,-no-backtrace}.{stdout,stderr}.log`.
 Native macOS/Windows execution is still not available on this machine.
+
+## Follow-up: resize intent and restoration
+
+The completion/platform coverage above was committed as `cdd992960`.
+
+The stronger GUI assertion exposed a width-only resize changing native height
+from 688 to 612 pixels. GNU `frame.c:Fset_frame_width` passes the existing
+`FRAME_TEXT_HEIGHT` unchanged to `adjust_frame_size`; its tracked GUI oracle
+preserves 720 pixels when requesting 91 columns. Neomacs instead reconstructed
+the unchanged height from rounded character rows and subtracted chrome.
+`FrameResizeRequest::TextWidth` now expresses a width-only intent and preserves
+the exact current text height, including partial rows. Public Lisp/core tests
+and the real desktop-font fixture cover the unchanged-height contract.
+
+A real fullscreen/rejected-resize/restoration cycle then exposed a second
+issue: Lisp `fullscreen = nil` never reached the display host. GNU
+`frame.c:gui_set_fullscreen` maps nil to `FULLSCREEN_NONE` and invokes the
+native fullscreen hook. `FrameFullscreen::Windowed` now represents this
+explicit transition, distinct from an absent or unrecognized request; the
+exhaustive renderer mapping handles it. The GUI failure before this fix is
+recorded in `increments-undecorated-red.log`: restoration remained at the
+fullscreen width, 3840 pixels / 423 columns, instead of 844 / 91.
+
+The approved native-host test seam also covers rejected requests followed by
+duplicate applied-size notifications: public frame geometry remains the actual
+size, and the next width-only request retains that actual height. Tests live
+in `window_cmds/tests/frame_resize_test.rs`, not temporary directories.
+
+The Weston 2× preset now uses 1920x1080 logical dimensions, producing a true
+3840x2160 output; `HiDpi8k` preserves the original 7680x4320 environment under
+an accurate name. The resize fixture normally disables decorations to isolate
+content geometry. `native-resize-decorations.el` retains the decorated control
+at both resolutions: an early run failed entering fullscreen with a Wayland
+buffer-scale error on a client-side decoration subsurface, not the main GPU
+surface. Its root cause has not yet been established. This error did not recur
+in the first rebuilt 4K decorated run; it must not be inferred resolved merely
+from an undecorated run.
+
+With width preservation and fullscreen clearing fixed, both decorated and
+undecorated 4K runs restore 90 columns / 842 pixels rather than the requested
+91 / 844 (`resize-gui-first-build.log`). The resize hints had been labeled
+physical even on a logical-coordinate backend, halving the minimum and
+increments at 2×. Winit snaps configure sizes against that minimum/increment
+grid. GNU `gtkutil.c:xg_wm_set_size_hint` likewise treats toolkit hint units
+explicitly, converting its frame base/increments for the toolkit scale.
+
+`geometry_hints.rs` now uses `window_size_from_emacs_pixels`, exactly as the
+native resize request does. The existing typed coordinate policy selects
+logical sizes for the logical-coordinate backends and physical sizes for X11.
+There is no second platform/DPI policy in the hint adapter, and the X11 native
+base-size hint remains physical. This change is shared across platforms;
+only Linux Wayland has been exercised natively here.
+
+### Remaining 8K decoration failure
+
+**Diagnosis update:** the standalone protocol replay now isolates this to
+Weston 15's cached-subsurface detach validation, and succeeds unchanged on the
+current KDE Wayland desktop. See the
+[reproduction and source analysis](../diagnostics/2026-09-13-weston-subsurface-scale-detach.md).
+The original observations below are retained as investigation history.
+
+The dedicated 8K decorated control reproduced the protocol error again with
+the rebuilt width/fullscreen fixes (`resize-8k-before-hints.log`). Weston is
+15.0.0. The error identifies `wl_surface@24`, a CSD subsurface, and dimensions
+833x44 at scale 2. The earlier protocol trace showed a valid scale-2 decoration
+buffer followed by an explicit null-buffer attach while entering fullscreen.
+
+[Weston's `surface_commit`](https://cgit.freedesktop.org/wayland/weston/tree/libweston/compositor.c)
+checks the previous surface dimensions against pending scale when no pending
+buffer exists. This makes cached-subsurface/null-attach validation a candidate,
+not a confirmed diagnosis. The next isolation should replay that protocol
+sequence without Neomacs/wgpu, then distinguish compositor validation from CSD
+lifecycle and delayed parent commits. No winit, sctk-adwaita, or compositor
+patch has been applied on the basis of this hypothesis.
+
+### Regression coverage
+
+- `resize-window-suite.log`: all 328 core window-command tests passed,
+  including the three new public-Lisp/native-host regressions.
+- `resize-hints-runtime-tests.log`: all 27 selected runtime resize/scale tests
+  passed; `resize-harness-tests.log`: all 16 harness tests passed.
+- `resize-adoption-tests.log`: both main-binary frame-adoption tests passed.
+- `width-height-gnu-final.log`: the real GNU GUI width-only oracle passed.
+- `resize-gui-first-build.log`: width preservation passed at 1× and 4K/2×;
+  both 4K fullscreen controls reached restoration and exposed the hint-unit
+  bug before its fix (844 pixels becoming 842).
+
+Final release verification (`resize-hints-release-build.log`,
+`resize-hints-pdump.log`, `resize-gui-final.log`): the release build and matching
+pdump succeeded, without byte compilation or autoload regeneration. The
+fingerprint is
+`9F24DFCF91DC6CB0EBFF175F15997D5C1452F72209ED9DADC71D30293267FFCE`.
+Six of seven native GUI tests passed, including both startup-failure controls,
+width preservation at 1×/4K2×, and both decorated/undecorated 4K fullscreen
+cycles. Both cycles retained fullscreen size for duplicate rejected requests
+and restored exactly 91 columns / 844 pixels. The 8K decorated regression
+still fails with the CSD protocol error above; it is explicitly marked as a
+known failure, not reported green. Formatting/diff checks passed and
+`lisp/ldefs-boot.el` is unchanged.
