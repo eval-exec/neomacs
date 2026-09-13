@@ -40,6 +40,27 @@ enum LiveFontCase {
     OptOut,
     ExplicitAndFuture,
     Geometry,
+    Repeated,
+}
+
+#[test]
+#[ignore = "requires GNU GUI Emacs, Xvfb, GSettings and Ubuntu Mono/DejaVu fonts"]
+fn gnu_duplicate_font_updates_are_noops_and_distinct_updates_repeat() {
+    check_live_font(
+        GuiBackend::LinuxX11,
+        "gnu-live-repeated",
+        LiveFontCase::Repeated,
+    );
+}
+
+#[test]
+#[ignore = "requires release binary/pdump, Weston presentation feedback, GSettings and fonts"]
+fn duplicate_font_updates_are_noops_and_distinct_updates_repeat() {
+    check_live_font(
+        GuiBackend::LinuxWayland,
+        "live-repeated",
+        LiveFontCase::Repeated,
+    );
 }
 
 #[test]
@@ -134,6 +155,7 @@ fn check_live_font(backend: GuiBackend, scenario: &str, case: LiveFontCase) {
             LiveFontCase::OptOut => "opt-out",
             LiveFontCase::ExplicitAndFuture => "explicit-and-future",
             LiveFontCase::Geometry => "geometry",
+            LiveFontCase::Repeated => "repeated",
         },
     )
     .with_env("GSETTINGS_SCHEMA_DIR", schemas.to_string_lossy())

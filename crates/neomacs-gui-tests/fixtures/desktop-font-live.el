@@ -135,7 +135,7 @@
        (= (frame-text-width) (* 80 (frame-char-width)))
        (= (frame-text-height) (* 24 (frame-char-height)))))
 
-(defun desktop-font-live-geometry ()
+(defun desktop-font-live-geometry (&optional continuation)
   ;; Isolate the font-owned text grid from platform-specific bar chrome.
   (menu-bar-mode -1)
   (tool-bar-mode -1)
@@ -155,9 +155,36 @@
              (desktop-font-live-log "LIVE-GEOMETRY-AFTER %S receipt=%S"
                                     (desktop-font-live-frame-state)
                                     (desktop-font-live-receipt))
-             (desktop-font-live-pass))
+             (funcall (or continuation #'desktop-font-live-pass)))
            (+ (float-time) 8))))))
    (+ (float-time) 8)))
+
+(defun desktop-font-live-repeated ()
+  (desktop-font-live-geometry
+   (lambda ()
+     (let ((before (desktop-font-live-frame-state))
+           (font (face-attribute 'default :font)))
+       (desktop-font-live-write "monospace-font-name" "DejaVu Sans Mono 16")
+       ;; The later role change is an observable native-event barrier. No-op
+       ;; success must not be inferred merely from a timer elapsing.
+       (desktop-font-live-write "font-name" "DejaVu Sans 12")
+       (desktop-font-live-await
+        (lambda () (equal (font-get-system-normal-font) "DejaVu Sans 12"))
+        (lambda ()
+          (desktop-font-live-unchanged before font)
+          (let ((submission (or (plist-get (desktop-font-live-receipt) :submission) 0)))
+            (desktop-font-live-write "monospace-font-name" "Ubuntu Mono 13")
+            (desktop-font-live-await
+             (lambda ()
+               (and (equal (font-get-system-font) "Ubuntu Mono 13")
+                    (equal (face-attribute 'default :family) "Ubuntu Mono")
+                    (= (face-attribute 'default :height) 128)
+                    (= (window-font-width) 9) (= (window-font-height) 18)
+                    (desktop-font-live-grid-ready)
+                    (desktop-font-live-presented submission)))
+             #'desktop-font-live-pass
+             (+ (float-time) 8))))
+        (+ (float-time) 8))))))
 
 (run-at-time
  0.1 nil
@@ -171,5 +198,6 @@
            ("opt-out" (desktop-font-live-opt-out))
            ("explicit-and-future" (desktop-font-live-explicit-and-future))
            ("geometry" (desktop-font-live-geometry))
+           ("repeated" (desktop-font-live-repeated))
            (_ (desktop-font-live-opt-in))))
      (error (desktop-font-live-log "LIVE-FONT-FAIL %S" err) (kill-emacs 1)))))

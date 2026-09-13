@@ -220,6 +220,13 @@ GNU `adjust_frame_size` parity for split-window minimum-size overrides or
 overlapping stale native acknowledgements; those are wider existing resize
 constraints, not verified by the sequential live-font oracle.
 
+Repeated/no-op controls pass in both engines (`live-repeated.log`: 2 passed).
+After the first grid is presented, a duplicate monospace write followed by
+an application-role change leaves the opened font object and all captured
+frame geometry unchanged. The application query supplies an actual event
+barrier. A second distinct monospace update returns to Ubuntu Mono's 9×18
+cell and a presented 80×24 grid. This required no additional production code.
+
 See [subscription research](../diagnostics/2026-09-13-live-desktop-font-settings.md)
 and the [completed post-rebase checkpoint](../diagnostics/2026-09-13-post-rebase-font-verification.md).
 
