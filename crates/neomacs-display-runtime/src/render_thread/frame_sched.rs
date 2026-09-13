@@ -415,10 +415,12 @@ pub(crate) struct DeadlineService {
     pub wake: LoopWake,
 }
 
-/// Presentation outcome, fed back as scheduling input.
+/// Synchronous submission outcome, fed back as scheduling input.
+/// This is not compositor feedback: consuming a plan must not wait for display
+/// confirmation, which can be absent while the window is hidden or occluded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PresentResult {
-    Presented,
+pub(crate) enum SubmissionResult {
+    Submitted,
     /// The native window exists but no editor presentation has reached it yet.
     /// Content ingestion is the producer for the next demand, so retrying an
     /// expose here would create demand with no state change capable of
@@ -835,34 +837,34 @@ impl FrameCoordinator {
         }
     }
 
-    /// Record the presentation outcome and decide the next action.
+    /// Record the submission outcome and decide the next action.
     pub(crate) fn finish_frame(
         &mut self,
         id: NativeWindowId,
         plan: &FramePlan,
-        result: PresentResult,
+        result: SubmissionResult,
         now: EventTime,
     ) -> PacingAction {
         let ws = self.window(id);
         match result {
-            PresentResult::Presented => {}
-            PresentResult::AwaitingContent => {
+            SubmissionResult::Submitted => {}
+            SubmissionResult::AwaitingContent => {
                 // The plan has been consumed.  A committed frame arriving on
                 // the display channel will submit Redisplay and drive the next
                 // presentation; there is nothing useful to retry before then.
             }
-            PresentResult::Skipped => {
+            SubmissionResult::Skipped => {
                 // The plan's work never reached the screen; re-queue it.
                 ws.due
                     .merge(plan.work.to_invalidation(), true, DemandReason::Expose);
             }
-            PresentResult::Occluded => {
+            SubmissionResult::Occluded => {
                 ws.presentation.occluded = true;
                 ws.due
                     .merge(plan.work.to_invalidation(), true, DemandReason::Expose);
                 return PacingAction::Sleep;
             }
-            PresentResult::SurfaceLost => {
+            SubmissionResult::SurfaceLost => {
                 // Retained content is gone; a full repaint is required once
                 // the runtime reconfigures the surface.
                 ws.due.merge(
@@ -877,7 +879,7 @@ impl FrameCoordinator {
                     .merge(plan.work.to_invalidation(), true, DemandReason::Expose);
                 return Self::drive(ws);
             }
-            PresentResult::Timeout => {
+            SubmissionResult::Timeout => {
                 // Bounded retry; never an immediate spin. The retry is
                 // scheduled (not just returned) so next_wake_deadline() keeps
                 // the recovery alive even if the caller drops the action.

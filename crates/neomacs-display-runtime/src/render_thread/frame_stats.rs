@@ -7,6 +7,10 @@
 //! requests, commits, glyph-build passes, presents, commit-to-present
 //! latency) instead of by CPU percentages alone.
 //!
+//! Historical `present` counter/field names measure queue submission and
+//! commit-to-submission latency, not compositor-confirmed display. Keep these
+//! diagnostic names compatible; native presentation receipts are separate.
+//!
 //! All counters are relaxed atomics: every writer runs on the render thread,
 //! and readers only need eventually-consistent totals.
 

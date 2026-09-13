@@ -104,12 +104,13 @@ impl GuiFrameRenderState {
         composition
     }
 
-    /// Make the projection for a frame that has actually been presented.
+    /// Publish the interaction projection of the latest submitted frame.
     ///
     /// The single writer of `compositor.interaction`, and it runs on the
-    /// present path. Until a frame reaches the screen, what the panes look like
-    /// is an intention; hit testing must answer about pixels the user saw.
-    pub(in crate::render_thread) fn publish_presented_projection(
+    /// submission path. Do not publish abandoned render attempts. Input keeps
+    /// using the latest submitted geometry without waiting for optional native
+    /// presentation feedback; this is not proof that the compositor displayed it.
+    pub(in crate::render_thread) fn publish_submitted_projection(
         &mut self,
         projection: Option<neomacs_display_protocol::InteractionProjection>,
     ) {

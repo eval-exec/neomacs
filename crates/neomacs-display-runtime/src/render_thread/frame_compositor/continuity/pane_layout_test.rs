@@ -981,7 +981,7 @@ fn the_settled_projection_replaces_the_morphs_on_the_last_frame() {
         frame_at(origin, 100),
         grid(),
     );
-    render.publish_presented_projection(composition.projection);
+    render.publish_submitted_projection(composition.projection);
     let after_last_frame = render
         .compositor
         .interaction
@@ -1160,7 +1160,7 @@ fn a_sampled_projection_is_not_visible_to_a_hit_test_until_it_has_been_presented
         "nothing was presented, so no projection is in force"
     );
 
-    render.publish_presented_projection(composition.projection);
+    render.publish_submitted_projection(composition.projection);
     assert!(
         render.compositor.interaction.is_some(),
         "presenting the frame is what puts its projection in force"

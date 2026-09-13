@@ -8,15 +8,13 @@
 //!
 //! Must not: draw. Everything here runs after the draw order has either
 //! produced a [`RenderedFrameSurface`] or given up with a typed failure, and
-//! the split is load-bearing: the projection is published *after* the present
-//! and nowhere else, because that is the first instant at which "what is on
-//! screen" is a fact rather than an intention. Publishing it where it is
-//! computed would leave it describing a frame that one of the draw order's
-//! `?` early-returns abandoned, and a pointer event arriving before the next
-//! successful render would resolve against pixels nobody saw.
+//! the split is load-bearing: the projection is published *after submission*,
+//! never for a render attempt abandoned by an early return. Queue submission
+//! is not proof of display. Input deliberately uses the latest submitted
+//! projection without waiting for optional compositor confirmation.
 
 use super::{RenderApp, RenderedFrameSurface};
-use crate::render_thread::frame_sched::PresentResult;
+use crate::render_thread::frame_sched::SubmissionResult;
 use crate::render_thread::{frame_stats, surface_readback};
 
 impl RenderApp {
@@ -31,7 +29,7 @@ impl RenderApp {
         &mut self,
         emacs_frame_id: u64,
         compositor_only_hint: bool,
-    ) -> PresentResult {
+    ) -> SubmissionResult {
         self.render_frame_window_impl(emacs_frame_id, compositor_only_hint)
     }
 
@@ -39,9 +37,9 @@ impl RenderApp {
         &mut self,
         emacs_frame_id: u64,
         compositor_only_hint: bool,
-    ) -> PresentResult {
+    ) -> SubmissionResult {
         if self.lifecycle_flags.shutdown_requested {
-            return PresentResult::Skipped;
+            return SubmissionResult::Skipped;
         }
         self.prepare_frame_state_for_render();
 
@@ -56,10 +54,10 @@ impl RenderApp {
 
         let is_primary_frame = self.frame_windows.is_primary_frame_id(emacs_frame_id);
         let Some(renderer) = self.renderer.as_mut() else {
-            return PresentResult::Timeout;
+            return SubmissionResult::Timeout;
         };
         let Some(window_state) = self.frame_windows.get_mut(emacs_frame_id) else {
-            return PresentResult::Timeout;
+            return SubmissionResult::Timeout;
         };
         if let Some((width, height)) = window_state.synchronize_window_chrome() {
             let (width, height) = crate::render_thread::state::emacs_pixels_from_window_size(
@@ -105,7 +103,7 @@ impl RenderApp {
             Err(failure) => {
                 #[cfg(feature = "video")]
                 renderer.cancel_video_surface_render();
-                return failure.present_result();
+                return failure.submission_result();
             }
         };
         if is_primary_frame {
@@ -178,11 +176,10 @@ impl RenderApp {
             window.pre_present_notify();
         }
         renderer.queue().present(output);
-        // Published here and nowhere else: the projection describes the pixels
-        // that were just handed to the compositor, so this is the first instant
-        // at which "what is on screen" is a fact rather than an intention.
+        // This projection describes the frame just handed to the compositor.
+        // Keep input publication at submission; native confirmation is separate.
         if let Some(window_state) = self.frame_windows.get_mut(emacs_frame_id) {
-            window_state.render.publish_presented_projection(projection);
+            window_state.render.publish_submitted_projection(projection);
         }
         #[cfg(feature = "video")]
         renderer.finish_presented_video_surface();
@@ -196,6 +193,6 @@ impl RenderApp {
                 "child_frame_lifecycle: present_done"
             );
         }
-        PresentResult::Presented
+        SubmissionResult::Submitted
     }
 }

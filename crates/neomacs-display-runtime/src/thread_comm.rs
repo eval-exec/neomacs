@@ -228,6 +228,8 @@ pub enum InputEvent {
         emacs_frame_id: u64,
     },
     /// Renderer installed this presentation as its drawing and hit-test source.
+    /// This editor-snapshot lifetime event is neither GPU submission nor native
+    /// display confirmation. Ingestion emits it independently of frame pacing.
     PresentationActivated {
         presentation: u64,
         emacs_frame_id: u64,

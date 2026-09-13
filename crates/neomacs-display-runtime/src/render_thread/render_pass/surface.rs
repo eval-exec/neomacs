@@ -12,7 +12,7 @@
 //! keeps that work strictly below the acquisition for that reason.
 
 use crate::render_thread::device_loss::{CONSECUTIVE_SURFACE_LOST_THRESHOLD, DeviceLossDetector};
-use crate::render_thread::frame_sched::PresentResult;
+use crate::render_thread::frame_sched::SubmissionResult;
 
 /// Failures before a frame reaches `present`, kept distinct until the frame
 /// coordinator consumes them.  In particular, missing editor content is not a
@@ -27,12 +27,12 @@ pub(super) enum FrameRenderFailure {
 }
 
 impl FrameRenderFailure {
-    pub(super) const fn present_result(self) -> PresentResult {
+    pub(super) const fn submission_result(self) -> SubmissionResult {
         match self {
-            Self::AwaitingContent => PresentResult::AwaitingContent,
-            Self::WindowNotReady | Self::SurfaceTimeout => PresentResult::Timeout,
-            Self::SurfaceLost => PresentResult::SurfaceLost,
-            Self::SurfaceOccluded => PresentResult::Occluded,
+            Self::AwaitingContent => SubmissionResult::AwaitingContent,
+            Self::WindowNotReady | Self::SurfaceTimeout => SubmissionResult::Timeout,
+            Self::SurfaceLost => SubmissionResult::SurfaceLost,
+            Self::SurfaceOccluded => SubmissionResult::Occluded,
         }
     }
 }

@@ -596,7 +596,7 @@ fn demand_submitted_during_render_requests_followup() {
     c.submit_demand(win(1), editor_commit(), now.plus(ms(2)));
     // request_pending was set again by the mid-render submit; finish_frame
     // must not request twice but the demand must survive.
-    let action = c.finish_frame(win(1), &plan, PresentResult::Presented, now.plus(ms(3)));
+    let action = c.finish_frame(win(1), &plan, SubmissionResult::Submitted, now.plus(ms(3)));
     assert_eq!(action, PacingAction::Sleep);
     let next = c.begin_frame(win(1), tick_at(now.plus(ms(17))));
     assert_eq!(next.work, RenderWork::RebuildScene);
@@ -608,7 +608,7 @@ fn timeout_backs_off_instead_of_retrying_immediately() {
     let now = t0();
     c.submit_demand(win(1), composite_cursor(), now);
     let plan = c.begin_frame(win(1), tick_at(now.plus(ms(1))));
-    let action = c.finish_frame(win(1), &plan, PresentResult::Timeout, now.plus(ms(2)));
+    let action = c.finish_frame(win(1), &plan, SubmissionResult::Timeout, now.plus(ms(2)));
     match action {
         PacingAction::WakeAt(at) => assert!(at > now.plus(ms(2))),
         other => panic!("expected bounded backoff, got {:?}", other),
@@ -636,7 +636,7 @@ fn awaiting_content_sleeps_until_a_content_producer_submits_new_demand() {
     let action = c.finish_frame(
         win(1),
         &plan,
-        PresentResult::AwaitingContent,
+        SubmissionResult::AwaitingContent,
         now.plus(ms(2)),
     );
 
@@ -655,7 +655,12 @@ fn surface_lost_requeues_full_repaint() {
     let now = t0();
     c.submit_demand(win(1), composite_cursor(), now);
     let plan = c.begin_frame(win(1), tick_at(now.plus(ms(1))));
-    let action = c.finish_frame(win(1), &plan, PresentResult::SurfaceLost, now.plus(ms(2)));
+    let action = c.finish_frame(
+        win(1),
+        &plan,
+        SubmissionResult::SurfaceLost,
+        now.plus(ms(2)),
+    );
     assert_eq!(action, PacingAction::RequestRedraw);
     let next = c.begin_frame(win(1), tick_at(now.plus(ms(10))));
     assert_eq!(
@@ -674,7 +679,7 @@ fn skipped_present_requeues_work() {
     c.submit_demand(win(1), editor_commit(), now);
     let plan = c.begin_frame(win(1), tick_at(now.plus(ms(1))));
     assert_eq!(plan.work, RenderWork::RebuildScene);
-    let action = c.finish_frame(win(1), &plan, PresentResult::Skipped, now.plus(ms(2)));
+    let action = c.finish_frame(win(1), &plan, SubmissionResult::Skipped, now.plus(ms(2)));
     assert_eq!(action, PacingAction::RequestRedraw);
     let next = c.begin_frame(win(1), tick_at(now.plus(ms(17))));
     assert_eq!(next.work, RenderWork::RebuildScene);
@@ -1047,7 +1052,7 @@ fn an_elapsed_recovery_deadline_becomes_a_redraw_request() {
     let now = t0();
     c.submit_demand(win(1), composite_cursor(), now);
     let plan = c.begin_frame(win(1), tick_at(now.plus(ms(1))));
-    c.finish_frame(win(1), &plan, PresentResult::Timeout, now.plus(ms(2)));
+    c.finish_frame(win(1), &plan, SubmissionResult::Timeout, now.plus(ms(2)));
 
     let woke = now.plus(ms(60));
     // The state that produced the spin: an elapsed deadline sitting in the
@@ -1111,7 +1116,7 @@ fn servicing_never_leaves_an_elapsed_wake_deadline() {
         now,
     );
     let plan = c.begin_frame(win(2), tick_at(now));
-    c.finish_frame(win(2), &plan, PresentResult::Timeout, now);
+    c.finish_frame(win(2), &plan, SubmissionResult::Timeout, now);
 
     for step in [500u64, 1_000, 5_000] {
         let woke = now.plus(ms(step));
