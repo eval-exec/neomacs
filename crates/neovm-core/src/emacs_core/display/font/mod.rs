@@ -254,7 +254,7 @@ pub fn alternative_font_registries(registry: &str) -> Vec<String> {
 
 pub(crate) fn live_frame_designator_in_state(frames: &FrameManager, value: &Value) -> bool {
     match value.kind() {
-        ValueKind::Fixnum(id) if id >= 0 => frames.get(FrameId(id as u64)).is_some(),
+        // No `Fixnum` arm -- an integer is not a frame; see `frame::builtin_framep`.
         ValueKind::Veclike(VecLikeType::Frame) => {
             frames.get(FrameId(value.as_frame_id().unwrap())).is_some()
         }
@@ -264,7 +264,7 @@ pub(crate) fn live_frame_designator_in_state(frames: &FrameManager, value: &Valu
 
 pub(crate) fn frame_id_from_designator(value: &Value) -> Option<FrameId> {
     match value.kind() {
-        ValueKind::Fixnum(id) if id >= 0 => Some(FrameId(id as u64)),
+        // No `Fixnum` arm -- an integer is not a frame; see `frame::builtin_framep`.
         ValueKind::Veclike(VecLikeType::Frame) => Some(FrameId(value.as_frame_id().unwrap())),
         _ => None,
     }
@@ -772,7 +772,7 @@ fn expect_optional_frame_designator_in_state(
 
 pub(crate) fn frame_device_designator_p(value: &Value) -> bool {
     match value.kind() {
-        ValueKind::Fixnum(id) => id >= FRAME_ID_BASE as i64,
+        // No `Fixnum` arm -- an integer is not a frame; see `frame::builtin_framep`.
         ValueKind::Veclike(VecLikeType::Frame) => value.as_frame_id().unwrap() >= FRAME_ID_BASE,
         _ => false,
     }

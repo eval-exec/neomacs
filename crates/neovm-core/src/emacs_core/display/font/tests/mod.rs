@@ -864,12 +864,12 @@ fn list_fonts_rejects_non_font_spec() {
 fn eval_list_fonts_accepts_live_frame_designator() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::Context::new();
-    let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval).0 as i64;
+    let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval).0;
     let result = list_fonts(
         &mut eval,
         vec![
             Value::vector(vec![Value::keyword(FONT_SPEC_TAG)]),
-            Value::fixnum(frame_id),
+            Value::make_frame(frame_id),
         ],
     )
     .unwrap();
@@ -898,12 +898,12 @@ fn find_font_rejects_non_font_spec() {
 fn eval_find_font_accepts_live_frame_designator() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::Context::new();
-    let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval).0 as i64;
+    let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval).0;
     let result = find_font(
         &mut eval,
         vec![
             Value::vector(vec![Value::keyword(FONT_SPEC_TAG)]),
-            Value::fixnum(frame_id),
+            Value::make_frame(frame_id),
         ],
     )
     .unwrap();
@@ -940,8 +940,8 @@ fn font_family_list_rejects_non_nil_frame_designator() {
 fn eval_font_family_list_accepts_live_frame_designator() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::Context::new();
-    let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval).0 as i64;
-    let result = font_family_list(&mut eval, vec![Value::fixnum(frame_id)]).unwrap();
+    let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval).0;
+    let result = font_family_list(&mut eval, vec![Value::make_frame(frame_id)]).unwrap();
     assert!(result.is_nil());
 }
 

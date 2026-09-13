@@ -134,7 +134,7 @@ pub(crate) fn live_frame_designator_p_in_state(
     value: &Value,
 ) -> bool {
     match value.kind() {
-        ValueKind::Fixnum(id) if id >= 0 => frames.get(FrameId(id as u64)).is_some(),
+        // No `Fixnum` arm -- an integer is not a frame; see `frame::builtin_framep`.
         ValueKind::Veclike(VecLikeType::Frame) => {
             frames.get(FrameId(value.as_frame_id().unwrap())).is_some()
         }
@@ -415,9 +415,7 @@ fn frame_window_system_symbol_read_only_in_state(
         None => Ok(selected_frame_window_system_symbol_in_state(frames)),
         Some(v) if v.is_nil() => Ok(selected_frame_window_system_symbol_in_state(frames)),
         Some(v) => match v.kind() {
-            ValueKind::Fixnum(id) if id >= 0 => Ok(frames
-                .get(FrameId(id as u64))
-                .and_then(|frame| frame.effective_window_system())),
+            // No `Fixnum` arm -- an integer is not a frame; see `frame::builtin_framep`.
             ValueKind::Veclike(VecLikeType::Frame) => Ok(frames
                 .get(FrameId(v.as_frame_id().unwrap()))
                 .and_then(|frame| frame.effective_window_system())),

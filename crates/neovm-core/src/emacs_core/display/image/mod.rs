@@ -33,7 +33,7 @@ use strum::{EnumString, IntoStaticStr};
 fn expect_frame_designator(_name: &str, value: &Value) -> Result<(), Flow> {
     match value.kind() {
         ValueKind::Nil => Ok(()),
-        ValueKind::Fixnum(id) if id >= 0 && (id as u64) >= FRAME_ID_BASE => Ok(()),
+        // No `Fixnum` arm -- an integer is not a frame; see `frame::builtin_framep`.
         ValueKind::Veclike(VecLikeType::Frame) if value.as_frame_id().unwrap() >= FRAME_ID_BASE => {
             Ok(())
         }
@@ -642,7 +642,7 @@ fn image_frame_for_arg<'a>(
 ) -> Option<&'a crate::window::Frame> {
     if let Some(frame_arg) = frame_arg.filter(|value| !value.is_nil()) {
         let frame_id = match frame_arg.kind() {
-            ValueKind::Fixnum(id) => crate::window::FrameId(id as u64),
+            // No `Fixnum` arm -- an integer is not a frame; see `frame::builtin_framep`.
             ValueKind::Veclike(VecLikeType::Frame) => {
                 crate::window::FrameId(frame_arg.as_frame_id()?)
             }
@@ -984,7 +984,7 @@ fn image_frame_window_system(
 
     if let Some(frame_arg) = frame_arg.filter(|value| !value.is_nil()) {
         let frame_id = match frame_arg.kind() {
-            ValueKind::Fixnum(id) => crate::window::FrameId(id as u64),
+            // No `Fixnum` arm -- an integer is not a frame; see `frame::builtin_framep`.
             ValueKind::Veclike(VecLikeType::Frame) => {
                 crate::window::FrameId(frame_arg.as_frame_id().expect("checked frame"))
             }
@@ -1385,10 +1385,8 @@ pub(crate) fn builtin_clear_image_cache_in_context(
 }
 
 fn is_frame_designator_value(value: &Value) -> bool {
-    matches!(
-        value.kind(),
-        ValueKind::Fixnum(id) if id >= 0 && (id as u64) >= FRAME_ID_BASE
-    ) || matches!(value.kind(), ValueKind::Veclike(VecLikeType::Frame))
+    // No `Fixnum` arm -- an integer is not a frame; see `frame::builtin_framep`.
+    matches!(value.kind(), ValueKind::Veclike(VecLikeType::Frame))
 }
 
 /// Neomacs shares one image catalog across GUI frames; presence of a display

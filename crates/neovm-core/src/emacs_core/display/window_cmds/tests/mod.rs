@@ -2785,6 +2785,51 @@ fn window_old_size_subrs_reject_the_windows_gnu_rejects() {
 }
 
 #[test]
+fn an_integer_is_not_a_frame_even_when_it_matches_a_frame_id() {
+    crate::test_utils::init_test_tracing();
+    // `3df6e81a4` removed the `Fixnum(n) => Id(n)` designator arm from the
+    // window decoders and from `frame-visible-p`, but `framep` and
+    // `frame-live-p` kept theirs:
+    //
+    //     ValueKind::Fixnum(n) => n as u64,
+    //     ...
+    //     Ok(Value::bool_val(frames.get(FrameId(id)).is_some()))
+    //
+    // Probing `(framep 1)` in batch answers nil and looks fine -- but only
+    // because the sole frame's internal `FrameId` does not happen to be 1.
+    // That is dormant by luck, not by design: hand it an integer that DOES
+    // match a live frame's id and the predicate says t, which is the same type
+    // confusion `3df6e81a4` removed elsewhere.  GNU's `framep` is a
+    // pseudovector tag test and no integer can pass it.
+    //
+    // So this test asks the question with the id the frame actually has,
+    // rather than with a guess that happens to miss.
+    let mut ev = runtime_startup_context();
+    let buf = ev.buffers.current_buffer().expect("current buffer").id;
+    let fid = ev.frames.create_frame("probe", 800, 600, buf);
+    let as_integer = Value::fixnum(fid.0 as i64);
+
+    assert_eq!(
+        crate::emacs_core::frame::builtin_framep(&mut ev, vec![as_integer])
+            .expect("framep must not signal"),
+        Value::NIL,
+        "an integer equal to a live frame's id is still not a frame"
+    );
+    assert_eq!(
+        crate::emacs_core::frame::builtin_frame_live_p(&mut ev, vec![as_integer])
+            .expect("frame-live-p must not signal"),
+        Value::NIL,
+        "an integer equal to a live frame's id is still not a live frame"
+    );
+    // the real frame object still answers t, so the tag path is intact
+    assert_eq!(
+        crate::emacs_core::frame::builtin_framep(&mut ev, vec![Value::make_frame(fid.0)])
+            .expect("framep must not signal"),
+        Value::T
+    );
+}
+
+#[test]
 fn delete_window_internal_refuses_a_parentless_window_like_gnu() {
     crate::test_utils::init_test_tracing();
     // GNU's guard is about the window having NO PARENT, not about how many

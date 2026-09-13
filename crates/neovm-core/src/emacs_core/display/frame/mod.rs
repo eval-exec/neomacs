@@ -322,16 +322,7 @@ pub(crate) fn builtin_select_frame(
     expect_min_args("select-frame", &args, 1)?;
     expect_max_args("select-frame", &args, 2)?;
     let fid = match args[0].kind() {
-        ValueKind::Fixnum(n) => {
-            let fid = FrameId(n as u64);
-            if frames.get(fid).is_none() {
-                return Err(signal(
-                    LispCondition::WrongTypeArgument,
-                    vec![Value::symbol("frame-live-p"), Value::fixnum(n)],
-                ));
-            }
-            fid
-        }
+        // No `Fixnum` arm -- see `builtin_framep`.
         ValueKind::Veclike(VecLikeType::Frame) => {
             let raw_id = args[0].as_frame_id().unwrap();
             let fid = FrameId(raw_id);
@@ -1960,8 +1951,13 @@ pub(crate) fn builtin_frame_visible_p(
 pub(crate) fn builtin_framep(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_args("framep", &args, 1)?;
     let id = match args[0].kind() {
+        // No `Fixnum` arm: GNU's `framep` is a pseudovector tag test, so no
+        // integer can name a frame.  Mapping `Fixnum(n) => FrameId(n)` here
+        // was dormant only because the batch frame's internal id happens not to
+        // be the integer anyone probes with -- hand it an id that DOES match
+        // and the predicate answered t.  Same defect `3df6e81a4` removed from
+        // the window decoders.
         ValueKind::Veclike(VecLikeType::Frame) => args[0].as_frame_id().unwrap(),
-        ValueKind::Fixnum(n) => n as u64,
         _ => return Ok(Value::NIL),
     };
     let Some(frame) = eval.frames.get(FrameId(id)) else {
@@ -1987,8 +1983,13 @@ pub(crate) fn builtin_frame_live_p(
     let frames = &eval.frames;
     expect_args("frame-live-p", &args, 1)?;
     let id = match args[0].kind() {
+        // No `Fixnum` arm: GNU's `framep` is a pseudovector tag test, so no
+        // integer can name a frame.  Mapping `Fixnum(n) => FrameId(n)` here
+        // was dormant only because the batch frame's internal id happens not to
+        // be the integer anyone probes with -- hand it an id that DOES match
+        // and the predicate answered t.  Same defect `3df6e81a4` removed from
+        // the window decoders.
         ValueKind::Veclike(VecLikeType::Frame) => args[0].as_frame_id().unwrap(),
-        ValueKind::Fixnum(n) => n as u64,
         _ => return Ok(Value::NIL),
     };
     Ok(Value::bool_val(frames.get(FrameId(id)).is_some()))

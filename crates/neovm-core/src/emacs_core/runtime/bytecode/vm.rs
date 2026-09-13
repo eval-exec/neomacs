@@ -6227,17 +6227,8 @@ impl<'a> Vm<'a> {
         };
         match val.kind() {
             ValueKind::Nil => Ok(self.ensure_selected_frame_id()),
-            ValueKind::Fixnum(n) => {
-                let fid = FrameId(n as u64);
-                if self.ctx.frames.get(fid).is_some() {
-                    Ok(fid)
-                } else {
-                    Err(signal(
-                        LispCondition::WrongTypeArgument,
-                        vec![Value::symbol(predicate), Value::fixnum(n)],
-                    ))
-                }
-            }
+            // No `Fixnum` arm -- an integer is not a frame; see
+            // `frame::builtin_framep`.
             ValueKind::Veclike(VecLikeType::Frame) => {
                 let id = val.as_frame_id().unwrap();
                 let fid = FrameId(id);

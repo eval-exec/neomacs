@@ -3788,17 +3788,8 @@ pub(crate) fn builtin_window_list(eval: &mut super::eval::Context, args: Vec<Val
     } else {
         let val = args.first().unwrap();
         match val.kind() {
-            ValueKind::Fixnum(n) => {
-                let fid = FrameId(n as u64);
-                if frames.get(fid).is_some() {
-                    fid
-                } else {
-                    return Err(signal(
-                        "error",
-                        vec![Value::string("Window is on a different frame")],
-                    ));
-                }
-            }
+            // No `Fixnum` arm -- an integer is not a frame; see
+            // `frame::builtin_framep`.
             ValueKind::Veclike(VecLikeType::Frame) => {
                 let raw_id = val.as_frame_id().unwrap();
                 let fid = FrameId(raw_id);

@@ -2357,7 +2357,7 @@ fn internal_merge_in_global_face_updates_frame_spec_without_runtime_realization(
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::eval::Context::new();
     let face = Value::symbol("__neovm_internal_merge_global_face_eval");
-    let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval).0 as i64;
+    let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval).0;
 
     builtin_internal_make_lisp_face(&mut eval, vec![face])
         .expect("create dynamic face in live face table");
@@ -2371,7 +2371,7 @@ fn internal_merge_in_global_face_updates_frame_spec_without_runtime_realization(
         ],
     )
     .expect("set defaults background");
-    builtin_internal_merge_in_global_face(&mut eval, vec![face, Value::fixnum(frame_id)])
+    builtin_internal_merge_in_global_face(&mut eval, vec![face, Value::make_frame(frame_id)])
         .expect("merge defaults into selected live face");
 
     assert_eq!(
