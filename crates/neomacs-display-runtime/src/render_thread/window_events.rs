@@ -1,5 +1,5 @@
 use super::RenderApp;
-use super::state::{effective_window_scale_factor, emacs_pixels_from_window_size};
+use super::state::effective_window_scale_factor;
 use crate::backend::wgpu::{
     NEOMACS_CTRL_MASK, NEOMACS_META_MASK, NEOMACS_SHIFT_MASK, NEOMACS_SUPER_MASK,
 };
@@ -396,6 +396,7 @@ impl RenderApp {
             }
 
             WindowEvent::RedrawRequested => {
+                self.complete_pending_scale_change(window_id);
                 super::frame_stats::count(&super::frame_stats::REDRAW_EVENTS);
                 if let Some(emacs_fid) = self.frame_windows.event_frame_for_winit(window_id) {
                     use super::frame_sched::{
@@ -639,7 +640,6 @@ impl RenderApp {
 
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 let effective_scale = effective_window_scale_factor(scale_factor);
-                let is_primary = self.frame_windows.is_primary_winit(window_id);
                 if let Some(ws) = self.frame_windows.get_by_winit_mut(window_id) {
                     tracing::info!(
                         "Scale factor changed for frame 0x{:x}: previous_effective={} raw={} effective={}",
@@ -648,19 +648,7 @@ impl RenderApp {
                         scale_factor,
                         effective_scale
                     );
-                    ws.set_scale_factor(scale_factor);
-                    if is_primary && let Some(ref mut renderer) = self.renderer {
-                        renderer.set_scale_factor(effective_scale as f32);
-                    }
-                    let (native_width, native_height) = ws.content_size();
-                    let (width, height) =
-                        emacs_pixels_from_window_size(native_width, native_height, effective_scale);
-                    self.comms.send_input(InputEvent::WindowResize {
-                        width,
-                        height,
-                        scale_factor: effective_scale,
-                        emacs_frame_id: ws.render.emacs_frame_id,
-                    });
+                    ws.pending_scale_factor = Some(scale_factor);
                 }
             }
 

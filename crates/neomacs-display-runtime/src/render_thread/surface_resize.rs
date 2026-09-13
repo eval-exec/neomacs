@@ -19,6 +19,34 @@ pub(super) enum ResizeRequestOutcome {
 }
 
 impl RenderApp {
+    /// Some backends deliver scale changes without a resize event. Once the
+    /// callback has returned, sample the final native size before rendering or
+    /// waiting. Never reinterpret our cached old size with the new scale.
+    pub(super) fn complete_pending_scale_change(&mut self, window: WindowId) {
+        let size = self.frame_windows.get_by_winit(window).and_then(|ws| {
+            ws.pending_scale_factor?;
+            ws.window().map(|window| window.surface_size())
+        });
+        if let Some(size) = size {
+            self.apply_native_surface_resize(window, size);
+        }
+    }
+
+    pub(super) fn complete_pending_scale_changes(&mut self) {
+        let windows: Vec<_> = self
+            .frame_windows
+            .windows
+            .values()
+            .filter_map(|ws| {
+                ws.pending_scale_factor?;
+                ws.window().map(|window| window.id())
+            })
+            .collect();
+        for window in windows {
+            self.complete_pending_scale_change(window);
+        }
+    }
+
     pub(super) fn complete_resize_request(&mut self, outcome: ResizeRequestOutcome) {
         match outcome {
             ResizeRequestOutcome::Applied { window, size } => {
@@ -44,6 +72,7 @@ impl RenderApp {
             ws.handle_resize(&device, size.width, size.height);
             if is_primary {
                 if let Some(renderer) = &mut self.renderer {
+                    renderer.set_scale_factor(ws.scale_factor() as f32);
                     renderer.resize(size.width, size.height);
                 }
                 if self.effects.resize_padding.enabled

@@ -1,6 +1,6 @@
 use neomacs_gui_tests::{
-    DisplayHarness, GuiBackend, GuiRunOptions, GuiRunStatus, GuiScenario, GuiTestPlan,
-    ProcessGuiCommandRunner, WaylandOutput,
+    DisplayHarness, GuiBackend, GuiRunOptions, GuiRunResult, GuiRunStatus, GuiScenario,
+    GuiTestPlan, ProcessGuiCommandRunner, WaylandOutput,
 };
 use std::{fs, path::PathBuf, process::Command, time::Duration};
 
@@ -16,7 +16,72 @@ fn hidpi_desktop_font_preserves_initial_and_resized_column_grid() {
     check_desktop_font_startup(WaylandOutput::HiDpi4k, "desktop-font-startup-hidpi");
 }
 
+#[test]
+#[ignore = "requires release binary/pdump, Weston, glib-compile-schemas and Ubuntu Mono"]
+fn hidpi_scale_change_never_shrinks_the_logical_frame() {
+    let result = check_fixture(
+        WaylandOutput::HiDpi4k,
+        "native-scale-startup",
+        "native-scale-startup.el",
+    );
+    // Output scale discovery can happen before the Lisp fixture loads. Inspect
+    // the real GUI-to-evaluator input boundary, including that startup interval.
+    let trace = fs::read_to_string(result.artifacts.stdout).unwrap();
+    let scale_two_resizes: Vec<_> = trace
+        .lines()
+        .filter(|line| {
+            line.contains("input-bridge: received display event WindowResize")
+                && line.contains("scale_factor: 2.0")
+        })
+        .collect();
+    assert!(
+        !scale_two_resizes.is_empty(),
+        "must exercise native scale discovery"
+    );
+    for resize in scale_two_resizes {
+        // Ubuntu Mono 13: 80 columns at 9 logical pixels plus 25px of chrome.
+        assert!(
+            resize.contains("width: 745,"),
+            "scale discovery changed logical width: {resize}"
+        );
+    }
+}
+
 fn check_desktop_font_startup(output: WaylandOutput, scenario: &str) {
+    check_fixture(output, scenario, "desktop-font-startup.el");
+}
+
+#[test]
+#[ignore = "requires release binary/pdump, Weston, glib-compile-schemas and Ubuntu Mono"]
+fn hidpi_native_configure_preserves_the_requested_column_grid() {
+    check_fixture(
+        WaylandOutput::HiDpi4k,
+        "native-resize-increments-hidpi",
+        "native-resize-increments.el",
+    );
+}
+
+#[test]
+#[ignore = "requires release binary/pdump, Weston, glib-compile-schemas and Ubuntu Mono"]
+fn hidpi_decorated_fullscreen_restores_the_requested_column_grid() {
+    check_fixture(
+        WaylandOutput::HiDpi4k,
+        "native-resize-decorations-hidpi",
+        "native-resize-decorations.el",
+    );
+}
+
+#[test]
+#[ignore = "known 8K/2x Wayland CSD buffer-scale failure; requires release binary/pdump, Weston and Ubuntu Mono"]
+fn hidpi_8k_decorated_fullscreen_restores_the_requested_column_grid() {
+    check_fixture(
+        WaylandOutput::HiDpi8k,
+        "native-resize-decorations-8k",
+        "native-resize-decorations.el",
+    );
+}
+
+fn check_fixture(output: WaylandOutput, scenario: &str, fixture: &str) -> GuiRunResult {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let artifacts = root.join("target/neomacs-gui-tests").join(scenario);
     let schemas = artifacts.join("desktop-font-startup-schemas");
@@ -46,17 +111,22 @@ fn check_desktop_font_startup(output: WaylandOutput, scenario: &str) {
         &artifacts,
         GuiScenario::new(
             scenario,
-            root.join("crates/neomacs-gui-tests/fixtures/desktop-font-startup.el"),
+            root.join("crates/neomacs-gui-tests/fixtures").join(fixture),
         ),
     )
     .with_program(binary)
+    // Scale startup assertions include the public GUI input stream before
+    // Lisp loads. Do not let the invoking shell silently disable that trace.
+    .with_env("RUST_LOG", "debug")
     .with_env("GSETTINGS_SCHEMA_DIR", schemas.to_string_lossy())
     .with_env("GSETTINGS_BACKEND", "memory");
     for (key, value) in session.env() {
         plan = plan.with_env(key.clone(), value.clone());
     }
     for key in ["NEOMACS_GUI_SVG_LIB_DIR", "NEOMACS_GUI_SVG_TAG_MODE_DIR"] {
-        plan = plan.with_env(key, std::env::var(key).expect("set SVG package directory"));
+        if let Ok(value) = std::env::var(key) {
+            plan = plan.with_env(key, value);
+        }
     }
     let result = plan
         .run_with(
@@ -67,4 +137,5 @@ fn check_desktop_font_startup(output: WaylandOutput, scenario: &str) {
     assert!(!result.timed_out, "{result:#?}");
     assert_eq!(result.exit_code, Some(0), "{result:#?}");
     assert_eq!(result.status, GuiRunStatus::Passed, "{result:#?}");
+    result
 }

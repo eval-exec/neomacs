@@ -72,11 +72,12 @@ pub enum DisplayHarness {
     CurrentDesktopSession,
 }
 
-/// Physical output dimensions and compositor scale are one test environment.
+/// Output resolution and compositor scale are one test environment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WaylandOutput {
     Standard,
     HiDpi4k,
+    HiDpi8k,
 }
 
 impl DisplayHarness {
@@ -517,7 +518,9 @@ fn start_weston_headless(
 ) -> io::Result<DisplaySession> {
     let (width, height, scale) = match output {
         WaylandOutput::Standard => (1280, 800, 1),
-        WaylandOutput::HiDpi4k => (3840, 2160, 2),
+        // Weston takes logical dimensions: this produces a 3840x2160 output.
+        WaylandOutput::HiDpi4k => (1920, 1080, 2),
+        WaylandOutput::HiDpi8k => (3840, 2160, 2),
     };
     let runtime_dir =
         std::env::temp_dir().join(format!("neomacs-gui-tests-{}", std::process::id()));

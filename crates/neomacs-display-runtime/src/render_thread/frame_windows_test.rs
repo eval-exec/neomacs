@@ -334,6 +334,7 @@ fn suspended_surface_cannot_retain_a_drawable_present_mapping() {
 #[test]
 fn zero_size_observation_stays_suspended_after_scale_refresh() {
     let mut window = GuiFrameWindowState {
+        pending_scale_factor: None,
         lifecycle: FrameLifecycle::Pending {
             width: 800,
             height: 600,

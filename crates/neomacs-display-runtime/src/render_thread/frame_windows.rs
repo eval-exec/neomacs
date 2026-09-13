@@ -326,6 +326,9 @@ pub(crate) enum ChromePress {
 /// [`FrameLifecycle::Active`].
 pub(crate) struct GuiFrameWindowState {
     pub(super) lifecycle: FrameLifecycle,
+    /// A scale notification is not yet a size observation. Keep it out of
+    /// committed render geometry until the corresponding native size is known.
+    pub(super) pending_scale_factor: Option<f64>,
     pub render: GuiFrameRenderState,
 }
 
@@ -1367,6 +1370,9 @@ impl GuiFrameWindowState {
     }
 
     pub fn handle_resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+        if let Some(scale_factor) = self.pending_scale_factor.take() {
+            self.set_scale_factor(scale_factor);
+        }
         let SurfaceState::Drawable(surface) = self.observe_surface_size(width, height) else {
             return;
         };
@@ -1379,7 +1385,7 @@ impl GuiFrameWindowState {
         }
     }
 
-    pub fn set_scale_factor(&mut self, scale_factor: f64) {
+    fn set_scale_factor(&mut self, scale_factor: f64) {
         let effective_scale = effective_window_scale_factor(scale_factor);
         match &mut self.lifecycle {
             FrameLifecycle::Active { native, .. } => {
@@ -2021,6 +2027,7 @@ impl GuiFrameWindowManager {
                     self.windows.insert(
                         FrameKey::Adopted(req.emacs_frame_id),
                         GuiFrameWindowState {
+                            pending_scale_factor: None,
                             lifecycle: FrameLifecycle::Active {
                                 native: GuiFrameNativeWindowState {
                                     window_chrome: Default::default(),

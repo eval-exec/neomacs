@@ -266,6 +266,7 @@ impl RenderApp {
             self.recover_from_device_loss(event_loop);
         }
         self.refresh_monitor_snapshot(event_loop, true);
+        self.complete_pending_scale_changes();
         if self.process_commands() {
             self.handle_exiting();
             event_loop.exit();
