@@ -1,6 +1,6 @@
 use crate::buffer::{EmacsBytePos, LispCharPos1};
 use crate::emacs_core::eval::{FontPxProbeResult, GuiFrameHostSize, ResolvedFrameFont};
-use crate::emacs_core::window_cmds::SplitWindowSide;
+use crate::emacs_core::window_cmds::{SplitWindowSide, WindowDomain};
 use crate::emacs_core::{Context, DisplayHost, GuiFrameHostRequest, Value, format_eval_result};
 use crate::face::{FontSlant, FontWeight, FontWidth};
 use crate::heap_types::LispString;
@@ -2782,6 +2782,126 @@ fn window_old_size_subrs_reject_the_windows_gnu_rejects() {
     assert_eq!(
         results[0],
         "OK (window-live-p window-live-p window-live-p window-valid-p window-valid-p window-valid-p no-error)"
+    );
+}
+
+/// Which decoder GNU opens each single-argument WINDOW subr with, extracted
+/// from `src/window.c`, `src/dispnew.c`, `src/xdisp.c` and `src/minibuf.c` by
+/// splitting on `DEFUN (` and reading the `decode_*_window` / `CHECK_*_WINDOW`
+/// in each body.
+///
+/// This table IS the contract.  Keeping it in the tree turns what used to be a
+/// 336-process differential probe against a GNU binary into an ordinary unit
+/// test -- one that runs on every commit, needs no GNU build, and cannot be
+/// fooled by the three ways that probe produced false results (a
+/// build-configuration `#ifdef`, mutating subrs contaminating each other inside
+/// one process, and an argument-position assumption that hid
+/// `buffer-text-pixel-size` entirely).
+const GNU_WINDOW_ARGUMENT_DOMAINS: &[(&str, WindowDomain)] = &[
+    ("delete-window-internal", WindowDomain::Any),
+    ("internal-show-cursor-p", WindowDomain::Any),
+    ("resize-mini-window-internal", WindowDomain::Live),
+    ("run-window-scroll-functions", WindowDomain::Live),
+    ("set-minibuffer-window", WindowDomain::Any),
+    ("uncombine-window", WindowDomain::Valid),
+    ("window-bottom-divider-width", WindowDomain::Live),
+    ("window-buffer", WindowDomain::Any),
+    ("window-bump-use-time", WindowDomain::Live),
+    ("window-combination-limit", WindowDomain::Valid),
+    ("window-cursor-info", WindowDomain::Live),
+    ("window-cursor-type", WindowDomain::Live),
+    ("window-dedicated-p", WindowDomain::Live),
+    ("window-display-table", WindowDomain::Live),
+    ("window-frame", WindowDomain::Valid),
+    ("window-fringes", WindowDomain::Live),
+    ("window-header-line-height", WindowDomain::Live),
+    ("window-hscroll", WindowDomain::Live),
+    ("window-left-child", WindowDomain::Valid),
+    ("window-left-column", WindowDomain::Valid),
+    ("window-margins", WindowDomain::Live),
+    ("window-minibuffer-p", WindowDomain::Valid),
+    ("window-mode-line-height", WindowDomain::Live),
+    ("window-new-normal", WindowDomain::Valid),
+    ("window-new-pixel", WindowDomain::Valid),
+    ("window-new-total", WindowDomain::Valid),
+    ("window-next-buffers", WindowDomain::Live),
+    ("window-next-sibling", WindowDomain::Valid),
+    ("window-old-body-pixel-height", WindowDomain::Live),
+    ("window-old-body-pixel-width", WindowDomain::Live),
+    ("window-old-buffer", WindowDomain::Any),
+    ("window-old-pixel-height", WindowDomain::Valid),
+    ("window-old-pixel-width", WindowDomain::Valid),
+    ("window-old-point", WindowDomain::Live),
+    ("window-parameters", WindowDomain::Valid),
+    ("window-parent", WindowDomain::Valid),
+    ("window-pixel-height", WindowDomain::Valid),
+    ("window-pixel-left", WindowDomain::Valid),
+    ("window-pixel-top", WindowDomain::Valid),
+    ("window-pixel-width", WindowDomain::Valid),
+    ("window-point", WindowDomain::Live),
+    ("window-prev-buffers", WindowDomain::Live),
+    ("window-prev-sibling", WindowDomain::Valid),
+    ("window-right-divider-width", WindowDomain::Live),
+    ("window-scroll-bar-height", WindowDomain::Live),
+    ("window-scroll-bar-width", WindowDomain::Live),
+    ("window-scroll-bars", WindowDomain::Live),
+    ("window-start", WindowDomain::Live),
+    ("window-tab-line-height", WindowDomain::Live),
+    ("window-top-child", WindowDomain::Valid),
+    ("window-top-line", WindowDomain::Valid),
+    ("window-use-time", WindowDomain::Live),
+];
+
+#[test]
+fn every_window_subr_decodes_in_gnus_domain() {
+    crate::test_utils::init_test_tracing();
+    // What each domain must REJECT, which is the half that never mutates --
+    // the subr signals before doing anything, so mutating members of the table
+    // (`delete-window-internal`, `uncombine-window`, ...) are safe to call:
+    //
+    //   every domain : a non-window signals that domain's predicate
+    //   Live         : also rejects an INTERNAL and a DELETED window
+    //   Valid        : also rejects a DELETED window (an internal one is fine)
+    //   Any          : rejects neither -- a deleted window is still a window
+    let mut cases = String::new();
+    for (name, domain) in GNU_WINDOW_ARGUMENT_DOMAINS {
+        let pred = domain.predicate();
+        cases.push_str(&format!("(probe '{name} 'sym '{pred})\n"));
+        match domain {
+            WindowDomain::Live => {
+                cases.push_str(&format!("(probe '{name} 'internal '{pred})\n"));
+                cases.push_str(&format!("(probe '{name} 'dead '{pred})\n"));
+            }
+            WindowDomain::Valid => {
+                cases.push_str(&format!("(probe '{name} 'dead '{pred})\n"));
+            }
+            WindowDomain::Any => {}
+        }
+    }
+
+    let src = format!(
+        "(progn (split-window-below)
+           (let* ((internal (window-parent (selected-window)))
+                  (dead (let ((w (split-window-below))) (delete-window w) w))
+                  (bad nil))
+             (fset 'probe
+               (lambda (fn shape want)
+                 (let* ((arg (cond ((eq shape 'internal) internal)
+                                   ((eq shape 'dead) dead)
+                                   (t 'not-a-window)))
+                        (got (condition-case e (progn (funcall fn arg) 'no-error)
+                               (wrong-type-argument (car (cdr e)))
+                               (error 'other-error))))
+                   (unless (eq got want)
+                     (setq bad (cons (list fn shape :want want :got got) bad))))))
+             {cases}
+             (nreverse bad)))"
+    );
+
+    let results = bootstrap_eval_with_frame(&src);
+    assert_eq!(
+        results[0], "OK nil",
+        "each entry is (SUBR SHAPE :want GNU-PREDICATE :got OURS)"
     );
 }
 
