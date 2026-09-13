@@ -2018,6 +2018,7 @@ static MIN_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // 'min'
 static MINUS_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '-'
 static MODULO_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '%'
 static NUMEQ_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '='
+static ASET_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // 'aset'
 static PLUS_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '+'
 static SUB1_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '1-'
 static TIMES_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '*'
@@ -4555,7 +4556,7 @@ impl<'a> Vm<'a> {
                         if let Some((a, b)) = fallback {
                             let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                 func,
-                                Self::arith_builtin_id("+", &PLUS_ID),
+                                Self::cached_builtin_id("+", &PLUS_ID),
                                 &[a, b]
                             ));
                             stk_push!(result);
@@ -4578,7 +4579,7 @@ impl<'a> Vm<'a> {
                                 stk!().truncate(len - 2);
                                 let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                     func,
-                                    Self::arith_builtin_id("-", &MINUS_ID),
+                                    Self::cached_builtin_id("-", &MINUS_ID),
                                     &[a, b]
                                 ));
                                 stk_push!(result);
@@ -4587,7 +4588,7 @@ impl<'a> Vm<'a> {
                             stk!().truncate(len - 2);
                             let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                 func,
-                                Self::arith_builtin_id("-", &MINUS_ID),
+                                Self::cached_builtin_id("-", &MINUS_ID),
                                 &[a, b]
                             ));
                             stk_push!(result);
@@ -4610,7 +4611,7 @@ impl<'a> Vm<'a> {
                                     stk!().truncate(len - 2);
                                     let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                         func,
-                                        Self::arith_builtin_id("*", &TIMES_ID),
+                                        Self::cached_builtin_id("*", &TIMES_ID),
                                         &[a, b]
                                     ));
                                     stk_push!(result);
@@ -4619,7 +4620,7 @@ impl<'a> Vm<'a> {
                                 stk!().truncate(len - 2);
                                 let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                     func,
-                                    Self::arith_builtin_id("*", &TIMES_ID),
+                                    Self::cached_builtin_id("*", &TIMES_ID),
                                     &[a, b]
                                 ));
                                 stk_push!(result);
@@ -4628,7 +4629,7 @@ impl<'a> Vm<'a> {
                             stk!().truncate(len - 2);
                             let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                 func,
-                                Self::arith_builtin_id("*", &TIMES_ID),
+                                Self::cached_builtin_id("*", &TIMES_ID),
                                 &[a, b]
                             ));
                             stk_push!(result);
@@ -4653,7 +4654,7 @@ impl<'a> Vm<'a> {
                                 stk!().truncate(len - 2);
                                 let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                     func,
-                                    Self::arith_builtin_id("/", &DIVIDE_ID),
+                                    Self::cached_builtin_id("/", &DIVIDE_ID),
                                     &[a, b]
                                 ));
                                 stk_push!(result);
@@ -4662,7 +4663,7 @@ impl<'a> Vm<'a> {
                             stk!().truncate(len - 2);
                             let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                 func,
-                                Self::arith_builtin_id("/", &DIVIDE_ID),
+                                Self::cached_builtin_id("/", &DIVIDE_ID),
                                 &[a, b]
                             ));
                             stk_push!(result);
@@ -4682,7 +4683,7 @@ impl<'a> Vm<'a> {
                                 stk!().truncate(len - 2);
                                 let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                     func,
-                                    Self::arith_builtin_id("%", &MODULO_ID),
+                                    Self::cached_builtin_id("%", &MODULO_ID),
                                     &[a, b]
                                 ));
                                 stk_push!(result);
@@ -4691,7 +4692,7 @@ impl<'a> Vm<'a> {
                             stk!().truncate(len - 2);
                             let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                 func,
-                                Self::arith_builtin_id("%", &MODULO_ID),
+                                Self::cached_builtin_id("%", &MODULO_ID),
                                 &[a, b]
                             ));
                             stk_push!(result);
@@ -4723,7 +4724,7 @@ impl<'a> Vm<'a> {
                         if let Some(top) = fallback {
                             let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                 func,
-                                Self::arith_builtin_id("1+", &ADD1_ID),
+                                Self::cached_builtin_id("1+", &ADD1_ID),
                                 &[top]
                             ));
                             stk_push!(result);
@@ -4739,7 +4740,7 @@ impl<'a> Vm<'a> {
                                 stk!().pop();
                                 let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                     func,
-                                    Self::arith_builtin_id("1-", &SUB1_ID),
+                                    Self::cached_builtin_id("1-", &SUB1_ID),
                                     &[top]
                                 ));
                                 stk_push!(result);
@@ -4748,7 +4749,7 @@ impl<'a> Vm<'a> {
                             stk!().pop();
                             let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                 func,
-                                Self::arith_builtin_id("1-", &SUB1_ID),
+                                Self::cached_builtin_id("1-", &SUB1_ID),
                                 &[top]
                             ));
                             stk_push!(result);
@@ -4764,7 +4765,7 @@ impl<'a> Vm<'a> {
                                 stk!().pop();
                                 let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                     func,
-                                    Self::arith_builtin_id("-", &MINUS_ID),
+                                    Self::cached_builtin_id("-", &MINUS_ID),
                                     &[top]
                                 ));
                                 stk_push!(result);
@@ -4773,7 +4774,7 @@ impl<'a> Vm<'a> {
                             stk!().pop();
                             let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                 func,
-                                Self::arith_builtin_id("-", &MINUS_ID),
+                                Self::cached_builtin_id("-", &MINUS_ID),
                                 &[top]
                             ));
                             stk_push!(result);
@@ -4793,7 +4794,7 @@ impl<'a> Vm<'a> {
                             stk!().truncate(len - 2);
                             let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                 func,
-                                Self::arith_builtin_id("=", &NUMEQ_ID),
+                                Self::cached_builtin_id("=", &NUMEQ_ID),
                                 &[a, b]
                             ));
                             stk_push!(result);
@@ -4814,7 +4815,7 @@ impl<'a> Vm<'a> {
                             stk!().truncate(len - 2);
                             let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                 func,
-                                Self::arith_builtin_id(">", &GT_ID),
+                                Self::cached_builtin_id(">", &GT_ID),
                                 &[a, b]
                             ));
                             stk_push!(result);
@@ -4846,7 +4847,7 @@ impl<'a> Vm<'a> {
                         if let Some((a, b)) = fallback {
                             let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                 func,
-                                Self::arith_builtin_id("<", &LT_ID),
+                                Self::cached_builtin_id("<", &LT_ID),
                                 &[a, b]
                             ));
                             stk_push!(result);
@@ -4867,7 +4868,7 @@ impl<'a> Vm<'a> {
                             stk!().truncate(len - 2);
                             let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                 func,
-                                Self::arith_builtin_id("<=", &LE_ID),
+                                Self::cached_builtin_id("<=", &LE_ID),
                                 &[a, b]
                             ));
                             stk_push!(result);
@@ -4888,7 +4889,7 @@ impl<'a> Vm<'a> {
                             stk!().truncate(len - 2);
                             let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                 func,
-                                Self::arith_builtin_id(">=", &GE_ID),
+                                Self::cached_builtin_id(">=", &GE_ID),
                                 &[a, b]
                             ));
                             stk_push!(result);
@@ -4905,7 +4906,7 @@ impl<'a> Vm<'a> {
                             stk!().truncate(len - 2);
                             let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                 func,
-                                Self::arith_builtin_id("max", &MAX_ID),
+                                Self::cached_builtin_id("max", &MAX_ID),
                                 &[a, b]
                             ));
                             stk_push!(result);
@@ -4922,7 +4923,7 @@ impl<'a> Vm<'a> {
                             stk!().truncate(len - 2);
                             let result = vm_try!(self.dispatch_vm_arith_with_frame(
                                 func,
-                                Self::arith_builtin_id("min", &MIN_ID),
+                                Self::cached_builtin_id("min", &MIN_ID),
                                 &[a, b]
                             ));
                             stk_push!(result);
@@ -6365,7 +6366,12 @@ impl<'a> Vm<'a> {
         call_args.push(vec_val);
         call_args.push(idx_val);
         call_args.push(val);
-        let id = Self::builtin_name_id("aset");
+        // `builtin_name_id` is `lookup_interned(name).unwrap_or_else(|| intern(name))`
+        // -- a global-interner `RwLock` and a string hash. The name here is a
+        // LITERAL, so that was paid on every `aset` from JIT'd code for an id
+        // that never changes. `dhrystone` is string-mutation heavy and spent
+        // ~11% of its run in `lookup_interned` because of this.
+        let id = Self::cached_builtin_id("aset", &ASET_ID);
         let result = if self.named_builtin_fast_path_allowed_id(id) {
             builtins::builtin_aset(call_args.clone().into_vec())?
         } else {
@@ -6387,12 +6393,15 @@ impl<'a> Vm<'a> {
     /// unmodified, full `call_function` (override/advice) otherwise, the
     /// mutating-first-arg string writeback, and the arm's trailing quit poll.
     pub(crate) fn callbuiltin_for_jit(&mut self, name_id: SymId, args: LispArgVec) -> EvalResult {
-        let name = resolve_sym(name_id);
+        // Everything below is keyed on the ID. Resolving the name up front, as
+        // this used to, cost a `SymId -> &str -> SymId` round trip through the
+        // global interner on EVERY builtin call from JIT'd code; the name is
+        // now resolved only on the rare writeback path that compares it.
         let writeback_args = (args.first().is_some_and(|value| value.is_string())
-            && Self::mutates_first_arg_name(name))
+            && Self::mutates_first_arg_sym(name_id))
         .then(|| args.clone());
         let result = if self.named_builtin_fast_path_allowed_id(name_id) {
-            self.dispatch_vm_builtin(name, args)?
+            self.dispatch_vm_builtin_id(name_id, args)?
         } else {
             let func_val = Value::from_sym_id(name_id);
             self.call_function(func_val, args)?
@@ -6403,7 +6412,12 @@ impl<'a> Vm<'a> {
             for value in writeback_args.iter().copied() {
                 self.push_dynamic_vm_root(value);
             }
-            self.maybe_writeback_mutating_first_arg(name, None, writeback_args, &result);
+            self.maybe_writeback_mutating_first_arg(
+                resolve_sym(name_id),
+                None,
+                writeback_args,
+                &result,
+            );
             self.ctx.restore_vm_roots(root_scope);
         }
         self.ctx.maybe_quit()?;
@@ -6415,18 +6429,23 @@ impl<'a> Vm<'a> {
     /// bypass advice; see the interpreter arm's comment), plus writeback and
     /// the trailing quit poll.
     pub(crate) fn callbuiltinsym_for_jit(&mut self, sym: SymId, args: LispArgVec) -> EvalResult {
-        let name = resolve_sym(sym);
+        // See `callbuiltin_for_jit`: id-keyed, name resolved only for writeback.
         let writeback_args = (args.first().is_some_and(|value| value.is_string())
-            && Self::mutates_first_arg_name(name))
+            && Self::mutates_first_arg_sym(sym))
         .then(|| args.clone());
-        let result = self.dispatch_vm_builtin(name, args)?;
+        let result = self.dispatch_vm_builtin_id(sym, args)?;
         if let Some(writeback_args) = writeback_args.as_ref() {
             let root_scope = self.ctx.save_vm_roots();
             self.push_dynamic_vm_root(result);
             for value in writeback_args.iter().copied() {
                 self.push_dynamic_vm_root(value);
             }
-            self.maybe_writeback_mutating_first_arg(name, None, writeback_args, &result);
+            self.maybe_writeback_mutating_first_arg(
+                resolve_sym(sym),
+                None,
+                writeback_args,
+                &result,
+            );
             self.ctx.restore_vm_roots(root_scope);
         }
         self.ctx.maybe_quit()?;
@@ -7926,6 +7945,27 @@ impl<'a> Vm<'a> {
         })
     }
 
+    /// `dispatch_vm_builtin` keyed by SYMBOL ID.
+    ///
+    /// The by-name sibling ends in `builtin_name_id(name)`, which is
+    /// `lookup_interned(name).unwrap_or_else(|| intern(name))` -- so calling it
+    /// with `resolve_sym(id)` is a complete `SymId -> &str -> SymId` round trip
+    /// through the global interner, per call, for an id the caller already
+    /// holds. `neovm_jit_named_builtin` did exactly that: 241,116 of
+    /// `dhrystone`'s `lookup_interned` calls came through here.
+    ///
+    /// Only the thirteen VM-special builtins need the name, because only they
+    /// are matched as strings; everything else goes straight to
+    /// `funcall_general`, which is what the by-name path would have reached
+    /// anyway.
+    fn dispatch_vm_builtin_id(&mut self, id: SymId, args: impl Into<LispArgVec>) -> EvalResult {
+        if Self::vm_special_builtin_ids().contains(&id) {
+            return self.dispatch_vm_builtin(resolve_sym(id), args);
+        }
+        self.ctx
+            .funcall_general(Value::subr_from_sym_id(id), args.into())
+    }
+
     fn dispatch_vm_builtin(&mut self, name: &str, args: impl Into<LispArgVec>) -> EvalResult {
         self.dispatch_vm_builtin_unrooted(name, args.into())
     }
@@ -7934,10 +7974,10 @@ impl<'a> Vm<'a> {
     /// level implementations that need `&mut Vm`); everything else is an
     /// ordinary subr. Keyed by `SymId` so the hot dispatch below never resolves
     /// the symbol to a string.
-    /// One `OnceLock` per arithmetic builtin name, so the opcode fast paths
-    /// never re-resolve a fixed name. Mirrors `cached_symbol_id!` in
+    /// One `OnceLock` per FIXED builtin name, so a hot path never re-resolves
+    /// a name known at compile time. Mirrors `cached_symbol_id!` in
     /// `runtime/eval`, which is not in scope here.
-    fn arith_builtin_id(name: &'static str, cell: &'static std::sync::OnceLock<SymId>) -> SymId {
+    fn cached_builtin_id(name: &'static str, cell: &'static std::sync::OnceLock<SymId>) -> SymId {
         *cell.get_or_init(|| intern(name))
     }
 
