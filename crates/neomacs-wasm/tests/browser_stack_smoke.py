@@ -23,7 +23,14 @@ def main():
         choices=[
             "direct", "argument", "conditional", "conditional-test", "conditional-else",
             "funcall", "apply", "funcall-subr", "apply-subr", "binding",
-            "initializer", "sequential-binding", "sequential-initializer", "protected", "cleanup",
+            "initializer", "sequential-binding", "sequential-initializer", "protected",
+            # Forms the continuation driver does NOT own yet. Each recurses on
+            # the machine stack once per level, so each is a separate way to
+            # reach the shadow-stack trap that `--call-style direct` no longer
+            # reaches. They are listed here so the hole is enumerated rather
+            # than described; CI runs the ones that pass and excludes the rest.
+            "cond", "cond-test", "and", "or", "while", "catch", "condition-case",
+            "macro", "cleanup",
         ],
         default="direct",
     )
@@ -54,6 +61,20 @@ def main():
             "sequential-binding": "(let* ((neomacs-stack-local 42)) (neomacs-stack-probe))",
             "sequential-initializer": "(let* ((neomacs-stack-local (neomacs-stack-probe))) neomacs-stack-local)",
             "protected": "(unwind-protect (neomacs-stack-probe) (setq neomacs-stack-cleanups (1+ neomacs-stack-cleanups)))",
+            "cond": "(cond (t (neomacs-stack-probe)))",
+            "cond-test": "(cond ((neomacs-stack-probe) 1))",
+            "and": "(and t (neomacs-stack-probe))",
+            "or": "(or nil (neomacs-stack-probe))",
+            # Body once, not a spin: the test is true only on the first pass.
+            "while": "(let ((neomacs-stack-again t)) (while neomacs-stack-again (setq neomacs-stack-again nil) (neomacs-stack-probe)))",
+            "catch": "(catch 'neomacs-stack-tag (neomacs-stack-probe))",
+            # The handler must NOT name a condition that `excessive-lisp-nesting`
+            # satisfies, or every level would swallow the signal and the outer
+            # assertion would see a plain return instead.
+            "condition-case": "(condition-case nil (neomacs-stack-probe) (wrong-type-argument nil))",
+            # `when` is a macro, so each level also re-enters macro expansion,
+            # which `eval_sub` still handles recursively.
+            "macro": "(when t (neomacs-stack-probe))",
             "cleanup": "(unwind-protect nil (neomacs-stack-probe))",
         }[args.call_style]
         for limit in args.limits:
