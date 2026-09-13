@@ -1,6 +1,6 @@
 use crate::buffer::{EmacsBytePos, LispCharPos1};
 use crate::emacs_core::eval::{FontPxProbeResult, GuiFrameHostSize, ResolvedFrameFont};
-use crate::emacs_core::window_cmds::{SplitWindowSide, WindowDomain};
+use crate::emacs_core::window_cmds::{FrameDomain, SplitWindowSide, WindowDomain};
 use crate::emacs_core::{Context, DisplayHost, GuiFrameHostRequest, Value, format_eval_result};
 use crate::face::{FontSlant, FontWeight, FontWidth};
 use crate::heap_types::LispString;
@@ -2851,6 +2851,119 @@ const GNU_WINDOW_ARGUMENT_DOMAINS: &[(&str, WindowDomain)] = &[
     ("window-top-line", WindowDomain::Valid),
     ("window-use-time", WindowDomain::Live),
 ];
+
+/// Which decoder GNU opens each FRAME-taking subr with, from `src/frame.c`,
+/// `src/window.c`, `src/dispnew.c` and `src/xdisp.c`.
+///
+/// `decode_any_frame` is `CHECK_FRAME` -- a bare type test that a DELETED frame
+/// still passes -- while `decode_live_frame` is `CHECK_LIVE_FRAME`, i.e.
+/// `FRAME_LIVE_P`, testing `f->terminal` (`src/frame.c:98,107`).
+///
+/// Four subrs GNU decodes here are deliberately ABSENT: `frame-char-height`,
+/// `frame-char-width`, `tool-bar-height` and `tool-bar-pixel-width` all decode
+/// inside an `#ifdef`, so the reference binary's answer depends on how it was
+/// configured rather than on the contract.  `tool-bar-height` is the one that
+/// wasted an afternoon earlier in this campaign, looking for all the world like
+/// a divergence; the extractor that built this table now detects the guard and
+/// drops such subrs automatically, so that mistake cannot be repeated by hand.
+const GNU_FRAME_ARGUMENT_DOMAINS: &[(&str, FrameDomain, &str)] = &[
+    ("current-window-configuration", FrameDomain::Live, "{f}"),
+    ("frame--set-was-invisible", FrameDomain::Live, "{f} nil"),
+    ("frame-after-make-frame", FrameDomain::Live, "{f} nil"),
+    ("frame-bottom-divider-width", FrameDomain::Any, "{f}"),
+    ("frame-child-frame-border-width", FrameDomain::Any, "{f}"),
+    ("frame-focus", FrameDomain::Live, "{f}"),
+    ("frame-fringe-width", FrameDomain::Any, "{f}"),
+    ("frame-id", FrameDomain::Live, "{f}"),
+    ("frame-internal-border-width", FrameDomain::Any, "{f}"),
+    ("frame-native-height", FrameDomain::Any, "{f}"),
+    ("frame-native-width", FrameDomain::Any, "{f}"),
+    ("frame-parameter", FrameDomain::Any, "{f} 'probe"),
+    ("frame-parameters", FrameDomain::Any, "{f}"),
+    ("frame-parent", FrameDomain::Live, "{f}"),
+    ("frame-pointer-visible-p", FrameDomain::Any, "{f}"),
+    ("frame-position", FrameDomain::Live, "{f}"),
+    ("frame-right-divider-width", FrameDomain::Any, "{f}"),
+    ("frame-root-frame", FrameDomain::Live, "{f}"),
+    ("frame-scale-factor", FrameDomain::Live, "{f}"),
+    ("frame-scroll-bar-height", FrameDomain::Any, "{f}"),
+    ("frame-scroll-bar-width", FrameDomain::Any, "{f}"),
+    ("frame-text-cols", FrameDomain::Any, "{f}"),
+    ("frame-text-height", FrameDomain::Any, "{f}"),
+    ("frame-text-lines", FrameDomain::Any, "{f}"),
+    ("frame-text-width", FrameDomain::Any, "{f}"),
+    ("frame-total-cols", FrameDomain::Any, "{f}"),
+    ("frame-total-lines", FrameDomain::Any, "{f}"),
+    ("frame-window-state-change", FrameDomain::Live, "{f}"),
+    ("iconify-frame", FrameDomain::Live, "{f}"),
+    ("lower-frame", FrameDomain::Live, "{f}"),
+    ("make-frame-invisible", FrameDomain::Live, "{f}"),
+    ("make-frame-visible", FrameDomain::Live, "{f}"),
+    ("minibuffer-window", FrameDomain::Live, "{f}"),
+    ("modify-frame-parameters", FrameDomain::Live, "{f} nil"),
+    ("raise-frame", FrameDomain::Live, "{f}"),
+    ("redirect-frame-focus", FrameDomain::Any, "{f}"),
+    ("redraw-frame", FrameDomain::Live, "{f}"),
+    (
+        "run-window-configuration-change-hook",
+        FrameDomain::Live,
+        "{f}",
+    ),
+    ("set-frame-height", FrameDomain::Live, "{f} 10"),
+    ("set-frame-position", FrameDomain::Live, "{f} 0 0"),
+    ("set-frame-size", FrameDomain::Live, "{f} 10 10"),
+    (
+        "set-frame-size-and-position-pixelwise",
+        FrameDomain::Live,
+        "{f} 10 10 0 0",
+    ),
+    ("set-frame-width", FrameDomain::Live, "{f} 10"),
+    ("set-frame-window-state-change", FrameDomain::Live, "{f}"),
+    ("tab-bar-height", FrameDomain::Any, "{f}"),
+    ("window-at", FrameDomain::Live, "0 0 {f}"),
+    ("window-resize-apply", FrameDomain::Live, "{f}"),
+    ("window-resize-apply-total", FrameDomain::Live, "{f}"),
+];
+
+#[test]
+fn every_frame_subr_decodes_in_gnus_domain() {
+    crate::test_utils::init_test_tracing();
+    // A non-frame must signal the domain's predicate.  That is the half
+    // testable from Lisp: `make-frame` fails in batch (in GNU too), so no
+    // DELETED frame can be built here -- the `Live`-rejects-a-dead-frame half
+    // is covered from Rust by
+    // `live_frame_subrs_reject_a_deleted_frame_like_gnu`.
+    //
+    // Rejection happens before any mutation, so the `set-frame-*` and
+    // `iconify-frame` members are safe to call.
+    let mut cases = String::new();
+    for (name, domain, args) in GNU_FRAME_ARGUMENT_DOMAINS {
+        let call = args.replace("{f}", "'not-a-frame");
+        cases.push_str(&format!(
+            "(probe \"{name}\" '{pred} (lambda () ({name} {call})))\n",
+            pred = domain.predicate()
+        ));
+    }
+
+    let src = format!(
+        "(let ((bad nil))
+           (fset 'probe
+             (lambda (fn want thunk)
+               (let ((got (condition-case e (progn (funcall thunk) 'no-error)
+                            (wrong-type-argument (car (cdr e)))
+                            (error 'other-error))))
+                 (unless (eq got want)
+                   (setq bad (cons (list fn :want want :got got) bad))))))
+           {cases}
+           (nreverse bad))"
+    );
+
+    let results = bootstrap_eval_with_frame(&src);
+    assert_eq!(
+        results[0], "OK nil",
+        "each entry is (SUBR :want GNU-PREDICATE :got OURS)"
+    );
+}
 
 /// The multi-argument half of the same contract.  WINDOW is not always the
 /// first argument -- `buffer-text-pixel-size` and `window-line-height` take it
