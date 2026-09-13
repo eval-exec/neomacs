@@ -4633,10 +4633,20 @@ pub(crate) fn builtin_fringe_bitmaps_at_pos(
 ) -> EvalResult {
     expect_args_range("fringe-bitmaps-at-pos", &args, 0, 2)?;
     let window_arg = args.get(1).copied().unwrap_or(Value::NIL);
+    // GNU opens with `w = decode_any_window (window);` (`src/fringe.c`), the
+    // WIDEST decoder -- so a non-window signals `windowp`, not `window-live-p`:
+    //
+    //     (fringe-bitmaps-at-pos nil 'foo)  =>  (wrong-type-argument windowp foo)
+    //
+    // verified against GNU Emacs 31.1.  An internal or deleted window is
+    // accepted by that decode and fails (or, for an internal window, crashes)
+    // further in; neomacs rejecting them early is strictly better behaviour
+    // and is left alone -- what is fixed here is the PREDICATE, which is
+    // observable for every non-window argument.
     validate_optional_window_designator_in_state(
         &eval.frames,
         args.get(1),
-        crate::emacs_core::window_cmds::WindowDomain::Live,
+        crate::emacs_core::window_cmds::WindowDomain::Any,
     )?;
     let Some((frame_id, window_id)) = resolve_live_window_identity(&eval.frames, args.get(1))?
     else {

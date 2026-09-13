@@ -2852,6 +2852,60 @@ const GNU_WINDOW_ARGUMENT_DOMAINS: &[(&str, WindowDomain)] = &[
     ("window-use-time", WindowDomain::Live),
 ];
 
+/// The multi-argument half of the same contract.  WINDOW is not always the
+/// first argument -- `buffer-text-pixel-size` and `window-line-height` take it
+/// second, `format-mode-line` third -- and that is not a detail: the
+/// differential probe this replaces only ever put its value in argument 0, and
+/// `buffer-text-pixel-size` carried a real divergence it therefore could not
+/// see.  The third field is the Lisp argument list, `{w}` marking the slot.
+const GNU_WINDOW_MULTIARG_DOMAINS: &[(&str, WindowDomain, &str)] = &[
+    ("buffer-text-pixel-size", WindowDomain::Live, "nil {w}"),
+    (
+        "coordinates-in-window-p",
+        WindowDomain::Live,
+        "'(0 . 0) {w}",
+    ),
+    ("delete-other-windows-internal", WindowDomain::Valid, "{w}"),
+    ("format-mode-line", WindowDomain::Any, "\"\" nil {w}"),
+    ("fringe-bitmaps-at-pos", WindowDomain::Any, "nil {w}"),
+    ("internal-show-cursor", WindowDomain::Any, "{w} nil"),
+    ("pos-visible-in-window-p", WindowDomain::Live, "nil {w}"),
+    (
+        "set-window-buffer",
+        WindowDomain::Live,
+        "{w} (current-buffer)",
+    ),
+    ("set-window-cursor-type", WindowDomain::Live, "{w} nil"),
+    ("set-window-dedicated-p", WindowDomain::Live, "{w} nil"),
+    ("set-window-display-table", WindowDomain::Live, "{w} nil"),
+    ("set-window-fringes", WindowDomain::Live, "{w} nil"),
+    ("set-window-hscroll", WindowDomain::Live, "{w} 0"),
+    ("set-window-margins", WindowDomain::Live, "{w} nil"),
+    ("set-window-new-normal", WindowDomain::Valid, "{w}"),
+    ("set-window-new-pixel", WindowDomain::Valid, "{w} 10"),
+    ("set-window-new-total", WindowDomain::Valid, "{w} 10"),
+    ("set-window-next-buffers", WindowDomain::Live, "{w} nil"),
+    ("set-window-parameter", WindowDomain::Any, "{w} 'probe nil"),
+    ("set-window-point", WindowDomain::Live, "{w} 1"),
+    ("set-window-prev-buffers", WindowDomain::Live, "{w} nil"),
+    ("set-window-scroll-bars", WindowDomain::Live, "{w}"),
+    ("set-window-start", WindowDomain::Live, "{w} 1"),
+    ("set-window-vscroll", WindowDomain::Live, "{w} 0"),
+    ("window-body-height", WindowDomain::Live, "{w}"),
+    ("window-body-width", WindowDomain::Live, "{w}"),
+    ("window-end", WindowDomain::Live, "{w}"),
+    ("window-line-height", WindowDomain::Live, "nil {w}"),
+    ("window-lines-pixel-dimensions", WindowDomain::Live, "{w}"),
+    ("window-normal-size", WindowDomain::Valid, "{w}"),
+    ("window-parameter", WindowDomain::Any, "{w} 'probe"),
+    ("window-text-height", WindowDomain::Live, "{w}"),
+    ("window-text-pixel-size", WindowDomain::Live, "{w}"),
+    ("window-text-width", WindowDomain::Live, "{w}"),
+    ("window-total-height", WindowDomain::Valid, "{w}"),
+    ("window-total-width", WindowDomain::Valid, "{w}"),
+    ("window-vscroll", WindowDomain::Live, "{w}"),
+];
+
 #[test]
 fn every_window_subr_decodes_in_gnus_domain() {
     crate::test_utils::init_test_tracing();
@@ -2892,6 +2946,55 @@ fn every_window_subr_decodes_in_gnus_domain() {
                         (got (condition-case e (progn (funcall fn arg) 'no-error)
                                (wrong-type-argument (car (cdr e)))
                                (error 'other-error))))
+                   (unless (eq got want)
+                     (setq bad (cons (list fn shape :want want :got got) bad))))))
+             {cases}
+             (nreverse bad)))"
+    );
+
+    let results = bootstrap_eval_with_frame(&src);
+    assert_eq!(
+        results[0], "OK nil",
+        "each entry is (SUBR SHAPE :want GNU-PREDICATE :got OURS)"
+    );
+}
+
+#[test]
+fn every_multiarg_window_subr_decodes_in_gnus_domain() {
+    crate::test_utils::init_test_tracing();
+    // Same rejection-only contract as the single-argument table, and safe for
+    // the same reason: a subr signals before it mutates, so the `set-window-*`
+    // members never take effect.
+    let mut cases = String::new();
+    for (name, domain, args) in GNU_WINDOW_MULTIARG_DOMAINS {
+        let pred = domain.predicate();
+        let mut shapes = vec!["'not-a-window"];
+        match domain {
+            WindowDomain::Live => {
+                shapes.push("internal");
+                shapes.push("dead");
+            }
+            WindowDomain::Valid => shapes.push("dead"),
+            WindowDomain::Any => {}
+        }
+        for shape in shapes {
+            let call = args.replace("{w}", shape);
+            cases.push_str(&format!(
+                "(probe \"{name}\" \"{shape}\" '{pred} (lambda () ({name} {call})))\n"
+            ));
+        }
+    }
+
+    let src = format!(
+        "(progn (split-window-below)
+           (let* ((internal (window-parent (selected-window)))
+                  (dead (let ((w (split-window-below))) (delete-window w) w))
+                  (bad nil))
+             (fset 'probe
+               (lambda (fn shape want thunk)
+                 (let ((got (condition-case e (progn (funcall thunk) 'no-error)
+                              (wrong-type-argument (car (cdr e)))
+                              (error 'other-error))))
                    (unless (eq got want)
                      (setq bad (cons (list fn shape :want want :got got) bad))))))
              {cases}
