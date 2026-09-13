@@ -4636,7 +4636,7 @@ impl Context {
         } else if sym_id == max_lisp_eval_depth_symbol()
             && let Some(depth) = value.as_fixnum()
         {
-            self.max_depth = depth.max(100) as usize;
+            self.max_depth = super::stack_growth::LispDepthLimit::CURRENT.clamp(depth);
         }
     }
 
