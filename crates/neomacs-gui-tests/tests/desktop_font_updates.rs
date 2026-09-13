@@ -38,6 +38,27 @@ fn opted_out_frame_keeps_its_font_while_queries_refresh() {
 enum LiveFontCase {
     OptIn,
     OptOut,
+    ExplicitAndFuture,
+}
+
+#[test]
+#[ignore = "requires GNU GUI Emacs, Xvfb, GSettings and Ubuntu Mono/DejaVu fonts"]
+fn gnu_live_font_overrides_current_fonts_and_sets_future_defaults() {
+    check_live_font(
+        GuiBackend::LinuxX11,
+        "gnu-live-explicit-future",
+        LiveFontCase::ExplicitAndFuture,
+    );
+}
+
+#[test]
+#[ignore = "requires release binary/pdump, Weston, GSettings and Ubuntu Mono/DejaVu fonts"]
+fn live_font_overrides_current_fonts_and_sets_future_defaults() {
+    check_live_font(
+        GuiBackend::LinuxWayland,
+        "live-explicit-future",
+        LiveFontCase::ExplicitAndFuture,
+    );
 }
 
 fn check_live_font(backend: GuiBackend, scenario: &str, case: LiveFontCase) {
@@ -90,6 +111,7 @@ fn check_live_font(backend: GuiBackend, scenario: &str, case: LiveFontCase) {
         match case {
             LiveFontCase::OptIn => "opt-in",
             LiveFontCase::OptOut => "opt-out",
+            LiveFontCase::ExplicitAndFuture => "explicit-and-future",
         },
     )
     .with_env("GSETTINGS_SCHEMA_DIR", schemas.to_string_lossy())

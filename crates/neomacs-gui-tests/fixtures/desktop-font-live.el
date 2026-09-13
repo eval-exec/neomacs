@@ -72,6 +72,43 @@
         (+ (float-time) 8)))
      (+ (float-time) 8))))
 
+(defun desktop-font-live-opt-in (&optional continuation)
+  (setq font-use-system-font t)
+  (desktop-font-live-write "monospace-font-name" "DejaVu Sans Mono 16")
+  (desktop-font-live-await
+   (lambda ()
+     (and (equal (font-get-system-font) "DejaVu Sans Mono 16")
+          (equal (face-attribute 'default :family) "DejaVu Sans Mono")
+          ;; Independently observed in GNU X11 at 96 logical DPI.
+          (= (face-attribute 'default :height) 158)
+          (= (window-font-width) 13)
+          (= (window-font-height) 25)))
+   (lambda ()
+     (unless (equal (font-get-system-normal-font) "Ubuntu 10")
+       (error "Monospace update replaced the application preference"))
+     (funcall (or continuation #'desktop-font-live-pass)))
+   (+ (float-time) 8)))
+
+(defun desktop-font-live-explicit-and-future ()
+  (set-frame-font "DejaVu Sans Mono 12")
+  (let ((existing (make-frame '((font . "Ubuntu Mono 11")))))
+    (desktop-font-live-opt-in
+     (lambda ()
+       (unless (and (equal (face-attribute 'default :family existing) "DejaVu Sans Mono")
+                    (= (face-attribute 'default :height existing) 158))
+         (error "Explicit font on another existing frame escaped opt-in: %S"
+                (frame-parameters existing)))
+       (let ((future (make-frame))
+             (explicit (make-frame '((font . "Ubuntu Mono 11")))))
+         (unless (and (equal (face-attribute 'default :family future) "DejaVu Sans Mono")
+                      (= (face-attribute 'default :height future) 158))
+           (error "Ordinary future frame did not inherit live defaults: %S"
+                  (frame-parameters future)))
+         (unless (equal (face-attribute 'default :family explicit) "Ubuntu Mono")
+           (error "Explicit future-frame font lost precedence: %S"
+                  (frame-parameters explicit)))
+         (desktop-font-live-pass))))))
+
 (run-at-time
  0.1 nil
  (lambda ()
@@ -80,21 +117,8 @@
          (unless (equal (font-get-system-font) "Ubuntu Mono 13")
            (error "Initial settings are not isolated: %S" (desktop-font-live-state)))
          (desktop-font-live-log "LIVE-FONT-BEFORE %S" (desktop-font-live-state))
-         (if (equal (getenv "NEOMACS_GUI_LIVE_FONT_CASE") "opt-out")
-             (desktop-font-live-opt-out)
-           (setq font-use-system-font t)
-           (desktop-font-live-write "monospace-font-name" "DejaVu Sans Mono 16")
-         (desktop-font-live-await
-          (lambda ()
-            (and (equal (font-get-system-font) "DejaVu Sans Mono 16")
-                 (equal (face-attribute 'default :family) "DejaVu Sans Mono")
-                 ;; Independently observed in GNU X11 at 96 logical DPI.
-                 (= (face-attribute 'default :height) 158)
-                 (= (window-font-width) 13)
-                 (= (window-font-height) 25)))
-          (lambda ()
-            (unless (equal (font-get-system-normal-font) "Ubuntu 10")
-              (error "Monospace update replaced the application preference"))
-            (desktop-font-live-pass))
-          (+ (float-time) 8))))
+         (pcase (getenv "NEOMACS_GUI_LIVE_FONT_CASE")
+           ("opt-out" (desktop-font-live-opt-out))
+           ("explicit-and-future" (desktop-font-live-explicit-and-future))
+           (_ (desktop-font-live-opt-in))))
      (error (desktop-font-live-log "LIVE-FONT-FAIL %S" err) (kill-emacs 1)))))

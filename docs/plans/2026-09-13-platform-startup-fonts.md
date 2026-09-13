@@ -171,6 +171,14 @@ application preference. That query refreshes without replaying the skipped
 monospace update or changing the document font. No additional production
 change was needed for these controls.
 
+The explicit/current/future-frame oracle also passes in both engines
+(`live-explicit-future.log`: 6 live tests passed, 0 skipped). Two existing
+frames start with different explicit fonts; an enabled desktop update replaces
+both. An ordinary newly created frame inherits the updated default, while a
+new frame with its own explicit font keeps that request. The existing GNU
+Lisp/Custom path already implements this precedence; no Rust policy override
+was added.
+
 See [subscription research](../diagnostics/2026-09-13-live-desktop-font-settings.md)
 and the [completed post-rebase checkpoint](../diagnostics/2026-09-13-post-rebase-font-verification.md).
 
