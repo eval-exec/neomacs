@@ -2785,6 +2785,45 @@ fn window_old_size_subrs_reject_the_windows_gnu_rejects() {
 }
 
 #[test]
+fn delete_window_internal_refuses_a_parentless_window_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // GNU's guard is about the window having NO PARENT, not about how many
+    // leaves the frame has (`src/window.c`):
+    //
+    //     parent = w->parent;
+    //     if (NILP (parent))
+    //       error ("Attempt to delete minibuffer or sole ordinary window");
+    //     else if (NILP (w->prev) && NILP (w->next))
+    //       error ("Attempt to delete sole window of parent");
+    //
+    // Exactly two windows on a frame are parentless: the minibuffer and the
+    // root.  neomacs tested `minibuffer || window_list().len() <= 1`, and
+    // `window_list` counts LEAVES -- so after a split the root is an internal
+    // window, the frame has two leaves, and the root slipped through to the
+    // resize step:
+    //
+    //   (delete-window-internal ROOT)  GNU "Attempt to delete minibuffer or
+    //                                      sole ordinary window"
+    //                                  neomacs "Deletion failed"
+    //
+    // The minibuffer already matched, because it was special-cased by identity
+    // rather than by the property GNU actually tests.
+    let results = bootstrap_eval_with_frame(
+        "(progn (split-window-below)
+           (let* ((live (selected-window)) (root (frame-root-window)))
+             (list (eq (window-parent live) root)
+                   (window-parent root)
+                   (condition-case e (delete-window-internal root) (error (car (cdr e))))
+                   (condition-case e (delete-window-internal (minibuffer-window))
+                     (error (car (cdr e)))))))",
+    );
+    assert_eq!(
+        results[0],
+        "OK (t nil \"Attempt to delete minibuffer or sole ordinary window\" \"Attempt to delete minibuffer or sole ordinary window\")"
+    );
+}
+
+#[test]
 fn live_frame_subrs_reject_a_deleted_frame_like_gnu() {
     crate::test_utils::init_test_tracing();
     // GNU's two frame decoders differ in more than the predicate they name

@@ -4275,10 +4275,19 @@ pub(crate) fn builtin_delete_window_internal(
     let frame = frames
         .get(fid)
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
-    let is_minibuffer = frame.minibuffer_window == Some(wid);
-    let is_sole_ordinary_window = frame.window_list().len() <= 1;
-
-    if is_minibuffer || is_sole_ordinary_window {
+    // GNU's guard is that the window has NO PARENT (`src/window.c`):
+    //
+    //     parent = w->parent;
+    //     if (NILP (parent))
+    //       error ("Attempt to delete minibuffer or sole ordinary window");
+    //
+    // Exactly two windows on a frame are parentless -- the minibuffer and the
+    // root -- and the message names both.  Testing `minibuffer ||
+    // window_list().len() <= 1` instead came close but not close enough:
+    // `window_list` counts LEAVES, so once the frame is split the root is an
+    // internal window with two leaves under it, and deleting the ROOT slipped
+    // past this to fail later as a plain "Deletion failed".
+    if window_parent_id(frame, wid).is_none() {
         return Err(signal(
             "error",
             vec![Value::string(
