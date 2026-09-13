@@ -227,6 +227,38 @@ frame geometry unchanged. The application query supplies an actual event
 barrier. A second distinct monospace update returns to Ubuntu Mono's 9×18
 cell and a presented 80×24 grid. This required no additional production code.
 
+The inhibited-resize GNU control exposed a second real geometry gap:
+Neomacs kept 1069×600 pixels after returning to the smaller Ubuntu font,
+but still reported 80 columns rather than the 116 now available
+(`live-inhibited-red.log`). A confirmed-fullscreen Wayland control reproduced
+the same stale-column behavior (`live-fullscreen-red.log`). GNU's
+`adjust_frame_size` recomputes logical/window geometry even when native resize
+is inhibited. `Frame::refresh_geometry_for_changed_font` now performs that
+local recomputation while retaining pending native resize intent.
+
+Review identified why ordinary native-resize acknowledgement logic could not
+be used unmodified: it cleared an unsent explicit request. The regression at
+the previously approved public-Lisp/native-host seam, in
+`window_cmds/tests/frame_resize_test.rs`, reproduced the lost request and now
+passes (`live-inhibited-pending-red.log`, `live-inhibited-pending-green.log`).
+The pending request and its sent/unsent status, plus the exact defer flag,
+remain owned by `Frame`. The superseded release build was canceled, and the
+corrected full build passed (`live-inhibited-final-build.log`) with matching
+fingerprint `2D4F66AABDC881F2677C457E9FD2F31460992620D973D09DFAEF610141E737C8`.
+Final verification passes: 1,558 selected runtime/core/layout tests, 19
+separate bare-core capability tests, and all 42 selected GUI/harness tests
+(15 live-font, 11 baseline GUI, 16 harness; zero GUI/harness skips). The final
+native run uses two concurrent tests. `lisp/ldefs-boot.el` retains its original
+SHA-256. See the [final verification record](../diagnostics/2026-09-13-live-font-verification.md).
+
+The 40×10 child-frame grid control passes in GNU and Neomacs
+(`live-child-no-chrome.log`). It disables fringe/scrollbar chrome explicitly;
+the first setup attempt exposed the existing child-frame width/chrome
+convention difference before any live update. No child startup-size fix is
+claimed. Fullscreen live-update behavior is exercised natively in Neomacs
+Wayland; its GNU policy is sourced from `frame.c`, since the Xvfb GNU oracle
+has no window manager to exercise native fullscreen transitions.
+
 See [subscription research](../diagnostics/2026-09-13-live-desktop-font-settings.md)
 and the [completed post-rebase checkpoint](../diagnostics/2026-09-13-post-rebase-font-verification.md).
 

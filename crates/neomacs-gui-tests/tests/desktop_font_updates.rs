@@ -41,6 +41,51 @@ enum LiveFontCase {
     ExplicitAndFuture,
     Geometry,
     Repeated,
+    Inhibited,
+    Child,
+    Fullscreen,
+}
+
+#[test]
+#[ignore = "requires release binary/pdump, Weston presentation feedback, GSettings and fonts"]
+fn fullscreen_font_update_keeps_pixels_and_refreshes_columns() {
+    check_live_font(
+        GuiBackend::LinuxWayland,
+        "live-fullscreen",
+        LiveFontCase::Fullscreen,
+    );
+}
+
+#[test]
+#[ignore = "requires GNU GUI Emacs, Xvfb, GSettings and Ubuntu Mono/DejaVu fonts"]
+fn gnu_live_font_preserves_child_frame_grid() {
+    check_live_font(GuiBackend::LinuxX11, "gnu-live-child", LiveFontCase::Child);
+}
+
+#[test]
+#[ignore = "requires release binary/pdump, Weston, GSettings and fonts"]
+fn live_font_preserves_child_frame_grid() {
+    check_live_font(GuiBackend::LinuxWayland, "live-child", LiveFontCase::Child);
+}
+
+#[test]
+#[ignore = "requires GNU GUI Emacs, Xvfb, GSettings and Ubuntu Mono/DejaVu fonts"]
+fn gnu_inhibited_font_resize_keeps_pixels_and_refreshes_columns() {
+    check_live_font(
+        GuiBackend::LinuxX11,
+        "gnu-live-inhibited",
+        LiveFontCase::Inhibited,
+    );
+}
+
+#[test]
+#[ignore = "requires release binary/pdump, Weston presentation feedback, GSettings and fonts"]
+fn inhibited_font_resize_keeps_pixels_and_refreshes_columns() {
+    check_live_font(
+        GuiBackend::LinuxWayland,
+        "live-inhibited",
+        LiveFontCase::Inhibited,
+    );
 }
 
 #[test]
@@ -156,6 +201,9 @@ fn check_live_font(backend: GuiBackend, scenario: &str, case: LiveFontCase) {
             LiveFontCase::ExplicitAndFuture => "explicit-and-future",
             LiveFontCase::Geometry => "geometry",
             LiveFontCase::Repeated => "repeated",
+            LiveFontCase::Inhibited => "inhibited",
+            LiveFontCase::Child => "child",
+            LiveFontCase::Fullscreen => "fullscreen",
         },
     )
     .with_env("GSETTINGS_SCHEMA_DIR", schemas.to_string_lossy())

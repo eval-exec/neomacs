@@ -186,6 +186,73 @@
              (+ (float-time) 8))))
         (+ (float-time) 8))))))
 
+(defun desktop-font-live-inhibited ()
+  (desktop-font-live-geometry
+   (lambda ()
+     (setq frame-inhibit-implied-resize t)
+     (desktop-font-live-keep-pixels))))
+
+(defun desktop-font-live-keep-pixels ()
+  (let ((pixels (list (frame-pixel-width) (frame-pixel-height)))
+        (submission (or (plist-get (desktop-font-live-receipt) :submission) 0)))
+    (desktop-font-live-write "monospace-font-name" "Ubuntu Mono 13")
+    (desktop-font-live-await
+     (lambda ()
+       (and (equal (font-get-system-font) "Ubuntu Mono 13")
+            (equal (face-attribute 'default :family) "Ubuntu Mono")
+            (= (window-font-width) 9) (= (window-font-height) 18)
+            (desktop-font-live-presented submission)))
+     (lambda ()
+       (unless (equal pixels (list (frame-pixel-width) (frame-pixel-height)))
+         (error "Inhibited font update changed native pixels"))
+       (unless (= (frame-width) (/ (frame-text-width) (frame-char-width)))
+         (error "Inhibited font update left stale columns: %S text=%S"
+                (desktop-font-live-frame-state) (frame-text-width)))
+       (desktop-font-live-pass))
+     (+ (float-time) 8))))
+
+(defun desktop-font-live-fullscreen ()
+  (desktop-font-live-geometry
+   (lambda ()
+     (let ((width (frame-pixel-width)) (height (frame-pixel-height))
+           (submission (or (plist-get (desktop-font-live-receipt) :submission) 0)))
+       (set-frame-parameter nil 'fullscreen 'fullboth)
+       (desktop-font-live-await
+        (lambda () (and (> (frame-pixel-width) width) (> (frame-pixel-height) height)
+                        (desktop-font-live-presented submission)))
+        (lambda ()
+          (setq frame-inhibit-implied-resize nil)
+          (desktop-font-live-keep-pixels))
+        (+ (float-time) 8))))))
+
+(defun desktop-font-live-child ()
+  (let ((child (make-frame `((parent-frame . ,(selected-frame))
+                             (font . "Ubuntu Mono 13") (minibuffer . nil)
+                             (width . 40) (height . 10) (undecorated . t)
+                             (left-fringe . 0) (right-fringe . 0)
+                             (vertical-scroll-bars . nil) (internal-border-width . 0)
+                             (menu-bar-lines . 0) (tool-bar-lines . 0)))))
+    (desktop-font-live-log "LIVE-CHILD-BEFORE %S text=%S"
+                           (frame-parameters child)
+                           (list (frame-text-width child) (frame-text-height child)))
+    (desktop-font-live-await
+     (lambda () (and (= (frame-text-width child) (* 40 9))
+                     (= (frame-text-height child) (* 10 18))))
+     (lambda ()
+       (desktop-font-live-opt-in
+        (lambda ()
+          (desktop-font-live-log "LIVE-CHILD-AFTER %S text=%S"
+                                 (frame-parameters child)
+                                 (list (frame-text-width child) (frame-text-height child)))
+          (desktop-font-live-await
+           (lambda ()
+             (and (= (frame-char-width child) 13) (= (frame-char-height child) 25)
+                  (= (frame-text-width child) (* 40 13))
+                  (= (frame-text-height child) (* 10 25))))
+           #'desktop-font-live-pass
+           (+ (float-time) 8)))))
+     (+ (float-time) 8))))
+
 (run-at-time
  0.1 nil
  (lambda ()
@@ -195,9 +262,13 @@
            (error "Initial settings are not isolated: %S" (desktop-font-live-state)))
          (desktop-font-live-log "LIVE-FONT-BEFORE %S" (desktop-font-live-state))
          (pcase (getenv "NEOMACS_GUI_LIVE_FONT_CASE")
+           ("opt-in" (desktop-font-live-opt-in))
            ("opt-out" (desktop-font-live-opt-out))
            ("explicit-and-future" (desktop-font-live-explicit-and-future))
            ("geometry" (desktop-font-live-geometry))
            ("repeated" (desktop-font-live-repeated))
-           (_ (desktop-font-live-opt-in))))
+           ("inhibited" (desktop-font-live-inhibited))
+           ("child" (desktop-font-live-child))
+           ("fullscreen" (desktop-font-live-fullscreen))
+           (_ (error "Unknown live font case: %S" (getenv "NEOMACS_GUI_LIVE_FONT_CASE")))))
      (error (desktop-font-live-log "LIVE-FONT-FAIL %S" err) (kill-emacs 1)))))

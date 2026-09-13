@@ -556,9 +556,19 @@ pub(crate) fn sync_live_frame_font_state(
     if old_metrics == (frame.char_width, frame.char_height, frame.font_pixel_size)
         || frame.effective_window_system().is_none()
         || eval.display_host.is_none()
-        || (horizontal == FontChangeGeometryPolicy::PreserveAllocatedPixels
-            && vertical == FontChangeGeometryPolicy::PreserveAllocatedPixels)
     {
+        return;
+    }
+    if horizontal == FontChangeGeometryPolicy::PreserveAllocatedPixels
+        && vertical == FontChangeGeometryPolicy::PreserveAllocatedPixels
+    {
+        // GNU adjust_frame_size still derives new character dimensions and
+        // resizes the window tree when an implied native resize is inhibited
+        // (frame.c:909-930,1076-1082). No native acknowledgement will arrive to
+        // do that work for us when the allocated pixels have not changed.
+        if let Some(frame) = eval.frames.get_mut(frame_id) {
+            frame.refresh_geometry_for_changed_font(&eval.buffers);
+        }
         return;
     }
     // GNU new_font -> adjust_frame_size(..., 3, ..., Qfont). Preferences supply

@@ -1,6 +1,69 @@
 use super::*;
 
 #[test]
+fn inhibited_font_change_preserves_an_unsent_explicit_resize() {
+    let mut eval = Context::new();
+    let buffer = eval.buffers.create_buffer("*font-resize*");
+    let fid = eval.frames.create_frame("F1", 800, 600, buffer);
+    let frame = eval.frames.get_mut(fid).unwrap();
+    frame.set_window_system(Some(Value::symbol("neo")));
+    frame.char_width = 8.0;
+    frame.char_height = 16.0;
+    let host = RecordingDisplayHost::with_resolved_frame_font(remapped_mono_font_metrics());
+    let requests = host.resized.clone();
+    eval.set_display_host(Box::new(host));
+    eval.eval_str("(internal-set-lisp-face-attribute 'default :font \"Remapped Mono-24\" nil)")
+        .unwrap();
+    assert_eq!(requests.borrow().len(), 1);
+    eval.eval_str("(modify-frame-parameters nil '((width . 80) (height . 25)))")
+        .unwrap();
+
+    let mut host = RecordingDisplayHost::with_resolved_frame_font(resolved_frame_font(
+        "Small Mono",
+        "SmallMono-Regular",
+        128,
+        FontPxProbeResult {
+            pixel_size: 17,
+            height: 18,
+            ascent: 14,
+            descent: 4,
+            max_width: 9,
+            space_width: 9,
+            average_width: 9,
+        },
+    ));
+    host.resized = requests.clone();
+    eval.set_display_host(Box::new(host));
+    eval.eval_str("(setq frame-inhibit-implied-resize t)")
+        .unwrap();
+    eval.eval_str("(internal-set-lisp-face-attribute 'default :font \"Small Mono-13\" nil)")
+        .unwrap();
+    assert_eq!(
+        requests.borrow().len(),
+        1,
+        "inhibition must not request another native resize"
+    );
+
+    let (tx, rx) = crossbeam_channel::unbounded();
+    eval.input_rx = Some(rx);
+    tx.send(crate::keyboard::InputEvent::Resize {
+        width: 745,
+        height: 450,
+        scale_factor: 1.0,
+        emacs_frame_id: fid.0,
+    })
+    .unwrap();
+    eval.eval_str("(frame-native-width)").unwrap();
+    let requests = requests.borrow();
+    assert_eq!(
+        requests.len(),
+        2,
+        "the explicit request must still reach the host"
+    );
+    assert_eq!((requests[1].width, requests[1].height), (745, 450));
+}
+
+#[test]
 fn clearing_fullscreen_requests_native_window_restoration() {
     let mut eval = Context::new();
     let buffer = eval.buffers.create_buffer("*fullscreen*");

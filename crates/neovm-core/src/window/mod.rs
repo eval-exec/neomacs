@@ -4856,6 +4856,17 @@ impl Frame {
         }
     }
 
+    /// Recompute character/window geometry at the current pixel allocation
+    /// after a font change. This local refresh acknowledges no native request;
+    /// outstanding explicit resize intent must remain available to flush/wait.
+    pub(crate) fn refresh_geometry_for_changed_font(&mut self, buffers: &BufferManager) {
+        let pending = self.pending_gui_resize.take();
+        let defer = self.defer_next_gui_parameter_resize;
+        self.resize_pixelwise_with_buffer_constraints(buffers, self.width, self.height);
+        self.pending_gui_resize = pending;
+        self.defer_next_gui_parameter_resize = defer;
+    }
+
     /// Apply a live physical frame resize while honoring Lisp-visible window
     /// constraints carried by displayed buffers.
     pub fn resize_pixelwise_with_buffer_constraints(
