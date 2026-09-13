@@ -286,6 +286,9 @@ impl TerminalFloatPlacement {
 }
 
 pub trait DisplayHost {
+    /// Refresh native preferences independently of Lisp's font adoption policy.
+    fn update_system_fonts(&mut self, _fonts: SystemFonts) {}
+
     fn system_font(&self, _role: SystemFontRole) -> Option<&SystemFontName> {
         None
     }

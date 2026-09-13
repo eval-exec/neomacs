@@ -106,6 +106,9 @@ sound = ["rodio"]
 # `neomacs-webview`'s feature directly, and advertising the layer without the
 # backend leaves `xwidget-webkit-browse-url` failing at creation.
 webview = []
+# The Linux display runtime enables this when it links its native GSettings
+# adapter. Bare evaluator builds must not advertise a native subscription.
+desktop-font-settings = []
 # Opt-in per-char validator for the display-motion stop cache (indent.rs
 # DisplayStopCache): re-runs every DisplayStopProp probe on each fast-path char
 # and asserts the cached stop skipped nothing. OFF by default (like GNU's

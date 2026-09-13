@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.desktop.interface" path="/org/gnome/desktop/interface/">
+    <key name="monospace-font-name" type="s"><default>'Ubuntu Mono 13'</default></key>
+    <key name="font-name" type="s"><default>'Ubuntu 10'</default></key>
+    <key name="toolbar-style" type="s"><default>'both-horiz'</default></key>
+  </schema>
+</schemalist>

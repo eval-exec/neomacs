@@ -1348,6 +1348,11 @@ pub enum InputEvent {
     MonitorsChanged {
         monitors: Vec<crate::emacs_core::builtins::NeomacsMonitorInfo>,
     },
+    /// Native desktop preferences, distinct from installed-font catalog changes.
+    SystemFontsChanged {
+        fonts: crate::emacs_core::display_host::SystemFonts,
+        display: neomacs_display_protocol::GraphicalDisplayIdentity,
+    },
     /// Window-selection change.
     SelectWindow { window_id: crate::window::WindowId },
     /// Window-manager close request.
@@ -4067,6 +4072,12 @@ impl crate::emacs_core::eval::Context {
                         &[terminal],
                     )?;
                 }
+                InputEvent::SystemFontsChanged { fonts, display } => {
+                    if self.handle_system_fonts_input_event(fonts, display)? {
+                        outcome =
+                            outcome.merge(SpecialInputServiceOutcome::resize_with_redisplay());
+                    }
+                }
                 InputEvent::MouseMove {
                     x,
                     y,
@@ -4122,6 +4133,47 @@ impl crate::emacs_core::eval::Context {
         ));
 
         Ok(outcome)
+    }
+
+    fn handle_system_fonts_input_event(
+        &mut self,
+        fonts: crate::emacs_core::display_host::SystemFonts,
+        display: neomacs_display_protocol::GraphicalDisplayIdentity,
+    ) -> Result<bool, crate::emacs_core::error::Flow> {
+        use crate::emacs_core::display_host::SystemFontRole;
+
+        let Some(host) = self.display_host.as_mut() else {
+            return Ok(false);
+        };
+        let changes = [SystemFontRole::Monospace, SystemFontRole::Application]
+            .map(|role| (role, host.system_font(role) != fonts.get(role)));
+        // Queries must see the new facts even when font-use-system-font is nil.
+        host.update_system_fonts(fonts);
+        let mut font_event = false;
+        for (role, changed) in changes {
+            if !changed {
+                continue;
+            }
+            let setting = match role {
+                SystemFontRole::Monospace => {
+                    if self.eval_symbol("font-use-system-font")?.is_nil() {
+                        continue;
+                    }
+                    "monospace-font-name"
+                }
+                SystemFontRole::Application => "font-name",
+            };
+            let event = Value::list(vec![
+                Value::symbol("config-changed-event"),
+                Value::symbol(setting),
+                Value::string(display.terminal_name()),
+            ]);
+            // The existing Lisp handler checks opt-in again and applies via
+            // set-frame-font, including its current/future-frame semantics.
+            let handled = self.execute_special_event_if_bound(event)?;
+            font_event |= handled && role == SystemFontRole::Monospace;
+        }
+        Ok(font_event)
     }
 
     /// The display lost its GPU device and rebuilt from scratch
@@ -5118,6 +5170,12 @@ impl crate::emacs_core::eval::Context {
                 let terminal = crate::emacs_core::terminal::pure::terminal_handle_value();
                 let _ =
                     crate::emacs_core::hook_runtime::run_named_hook(self, hook_sym, &[terminal])?;
+                Ok(None)
+            }
+            InputEvent::SystemFontsChanged { fonts, display } => {
+                if self.handle_system_fonts_input_event(fonts, display)? {
+                    self.redisplay();
+                }
                 Ok(None)
             }
             InputEvent::SelectWindow { window_id } => {

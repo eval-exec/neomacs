@@ -227,8 +227,8 @@ fn dbusbind_is_absent_and_its_row_names_the_missing_transport() {
     assert!(because.contains("no D-Bus transport"), "{because:?}");
 }
 
-/// The derived list is exactly the one this build had before ledger 192, less
-/// `dbusbind`, in GNU's own order.
+/// The derived list includes this build's implemented capabilities in GNU's
+/// own order, and excludes unsupported transports such as `dbusbind`.
 ///
 /// `features` reads newest-provided first (`src/fns.c:3751` conses), so the
 /// order is a fact about `main`'s `syms_of_*` sequence and is observable from
@@ -254,6 +254,11 @@ fn the_derived_list_keeps_gnus_relative_order() {
     }
     if cfg!(neomacs_have_lcms2) {
         expected.push("lcms2");
+    }
+    if cfg!(all(target_os = "linux", feature = "desktop-font-settings")) {
+        // GNU syms_of_xsettings provides system-font-setting before
+        // dynamic-setting (xsettings.c:1409,1417); features is newest first.
+        expected.extend(["dynamic-setting", "system-font-setting"]);
     }
     expected.extend([
         "multi-tty",

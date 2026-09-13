@@ -242,9 +242,9 @@ const XWIDGET_LAYER: &str = "ledger 190/192: xwidget.rs implements GNU's xwidget
 /// `crates/neovm-oracle-tests/src/snarf_documentation_boundp_clause.rs:116`.  Both
 /// pins compare against a GNU built with X, where `syms_of_xsettings` runs.
 /// `lisp/cus-start.el:932` independently says the opposite -- it gates
-/// `font-use-system-font` on `(featurep 'system-font-setting)`, which is nil
-/// here -- so this is a row where GNU's two authorities agree with each other
-/// and only the oracle reference disagrees.
+/// `font-use-system-font` on `(featurep 'system-font-setting)`. Linux builds
+/// linking the native adapter now provide that capability; the oracle pin
+/// continues to explain the bound variables on platforms without it.
 const XSETTINGS_ORACLE_PIN: &str = "ledger 199: font-use-system-font is (car byte-boolean-vars) at \
      defvar_bool_byte_boolean_vars.rs:42 and xft-settings is pinned bound at \
      snarf_documentation_boundp_clause.rs:116, both against a GNU built with X";

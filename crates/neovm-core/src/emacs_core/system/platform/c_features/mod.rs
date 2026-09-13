@@ -301,16 +301,28 @@ pub(crate) fn gnu_c_features() -> [GnuCFeature; 30] {
             name: "dynamic-setting",
             gnu_site: "src/xsettings.c:1417",
             gnu_guard: BuildOption("HAVE_X_WINDOWS/HAVE_PGTK/HAVE_HAIKU/HAVE_ANDROID"),
-            here: NotBuilt {
-                because: NO_GNU_WINDOW_SYSTEM,
+            here: cfg_select! {
+                all(target_os = "linux", feature = "desktop-font-settings") => Implemented {
+                    by: "font_defaults/linux.rs owns the native GSettings subscription; \
+                         keyboard.rs dispatches config-changed-event to dynamic-setting.el",
+                },
+                _ => NotBuilt {
+                    because: "this build does not link the Linux native desktop-font subscription",
+                },
             },
         },
         GnuCFeature {
             name: "system-font-setting",
             gnu_site: "src/xsettings.c:1409",
             gnu_guard: BuildOption("(USE_CAIRO|HAVE_XFT) && (HAVE_GCONF|HAVE_GSETTINGS)"),
-            here: NotBuilt {
-                because: NO_GNU_WINDOW_SYSTEM,
+            here: cfg_select! {
+                all(target_os = "linux", feature = "desktop-font-settings") => Implemented {
+                    by: "font_defaults/linux.rs reads native font preferences; keyboard.rs \
+                         refreshes system font queries and honors font-use-system-font",
+                },
+                _ => NotBuilt {
+                    because: "this build does not link the Linux native desktop-font subscription",
+                },
             },
         },
         GnuCFeature {

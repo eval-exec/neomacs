@@ -19,7 +19,7 @@ independently choose a second font for a Lisp face.
 neomacs-display-runtime/src/font_defaults/
   mod.rs       native discovery dispatch via cfg_select!
   policy.rs    owned platform defaults, ordered selection, typed candidates
-  linux.rs     GSettings snapshot, no GTK initialization
+  linux.rs     owned GSettings discovery/subscription thread, no GTK initialization
   macos.rs     AppKit fixed-pitch name, native startup thread only
 
 neomacs/src/startup_font.rs
@@ -69,9 +69,10 @@ are distinct enum values. Positive point/pixel conversion uses existing
 `FrameFontSize` and `FontSizing`; no native zero-size sentinel enters the opened
 font representation. Device/backing scale is not part of these point requests.
 
-Explicit Lisp/default-face changes remain authoritative after startup. The
-policy is evaluated only during bootstrap, never during redisplay. It does not
-reset fonts in response to frame redraws.
+The initial selection policy runs only during bootstrap, never during
+redisplay. Explicit Lisp/default-face changes remain in effect unless the user
+opts into GNU's dynamic desktop-font policy with `font-use-system-font`.
+Redraws do not reapply desktop preferences.
 
 ## Deliberate limits and follow-ups
 
@@ -82,9 +83,9 @@ reset fonts in response to frame redraws.
 - This does not implement GNU Windows's Emacs registry-resource lookup or
   Cocoa's resource database. Existing explicit Lisp configuration remains in
   its existing startup path.
-- Live Linux desktop setting changes still need a typed event/subscription
-  path, separate from installed-font catalog changes. Discovery refresh and
-  the `font-use-system-font` opt-in must remain separate responsibilities.
+- Linux live changes use the owned subscription described below, separate
+  from installed-font catalog changes. Other native subscription adapters,
+  GConf, and XSettings remain unsupported.
 - Initial geometry now follows evaluator-side font opening through the
   readiness protocol below. Explicit font changes made later by Lisp remain
   in the existing frame-update path; this is not a rewrite of every startup
@@ -93,6 +94,79 @@ reset fonts in response to frame redraws.
   A source-level adapter check is not a native launch or a full cross-build.
 
 ## Verification
+
+### Live Linux preferences (continuation)
+
+`observe_font_defaults` returns a `FontDefaultsObserver` with initial facts,
+an owned preference receiver, and native subscription ownership. On Linux,
+startup discovery and monitoring construct GSettings on the same private GIO
+context: the default backend's file monitors also bind to their initial
+construction context. The callback connects before watched keys are read.
+It rereads preferences and suppresses identical snapshots. It supplies no
+rendering metrics. AppKit startup discovery remains on the main thread;
+unsupported subscriptions expose an inactive receiver explicitly.
+
+The Linux display adapter enables core's `desktop-font-settings` build
+capability. Its existing feature table then advertises `dynamic-setting` and
+`system-font-setting`, allowing `loadup.el` to load the Lisp handler and Custom
+to expose `font-use-system-font`. A bare evaluator does not enable this
+capability. The receiver is transferred once to its input consumer.
+
+The evaluator owns the observer through startup and its command loop. Its
+input bridge transports `SystemFontsChanged` with the graphical display
+identity through the existing input channel and wakeup mechanism. Servicing
+that event first updates the display host's public system-font facts, even
+when adoption is disabled. Changed roles then become the existing Lisp
+`config-changed-event` forms, with the monospace event gated by
+`font-use-system-font`. `dynamic-setting.el` checks the option again and uses
+the existing `set-frame-font`/font-realization path. Application preference
+changes do not choose document fonts.
+
+Normal exit, startup failure, and unwinding release subscription ownership.
+Shutdown sets an atomic stop flag, wakes the private context and joins the
+worker; Settings and signal handlers are destroyed on that worker. This
+stops subscription callbacks. GLib retains its default settings backend as
+process-global state, so it is not a claim that all GLib monitors are freed.
+No production timer, compositor delay, or new font measurement is involved.
+
+The public native-settings/Lisp GUI seam was approved in the handoff. Tests
+use separate `gsettings` processes with a private keyfile backend and config
+root. GNU at 96 DPI supplies the expected realized metrics. The first
+Neomacs red run, `live-red.log`, retained `Ubuntu Mono 13` in both its query
+and frame after the writer changed the preference to `DejaVu Sans Mono 16`.
+GNU passed with a 13×25 cell and default-face height 158. Further control
+slices and final verification are recorded as they complete.
+
+The first native subscription build refreshed the query but did not change
+the face (`live-adoption-diagnostic.log`): its feature table still declared
+`dynamic-setting` unavailable, leaving the special-event handler unbound.
+A temporary explicit load made the same GUI regression pass
+(`live-adoption-explicit-load.log`). That diagnostic load was removed; the
+build capability above makes normal image construction load the handler.
+
+The canonical startup regression now passes in both GNU X11 and Neomacs
+Wayland, with no explicit handler load (`live-feature-gui.log`: 2 passed,
+0 skipped). The existing GUI selection also passes unchanged
+(`live-feature-baseline-gui.log`: 11 passed, 0 skipped). The full user-requested
+`cargo xtask fresh-build --release` completed with matching executable/image
+fingerprint `D0F966B8EF4F6317B99F914E90AC4EC695DD4ADDAE79D65B3890C99A35B32173`.
+`lisp/ldefs-boot.el` retains its recorded SHA-256. The earlier no-byte-compile
+build left stale generated bytecode; those test refusals were resolved by
+the full build, without weakening the freshness check. Bare-core feature
+coverage passes separately (11 passed), so Cargo feature unification cannot
+hide accidentally advertising a native adapter in an evaluator-only build.
+The combined runtime/core/layout selection passed 1,556 of 1,557 tests; its
+one failure was the previous unconditional feature-absence expectation.
+After correcting that expectation for linked native adapters, all eight
+coupled-variable tests passed (`live-coupled-vars-green.log`). Standards and
+spec reviews found no remaining first-slice defects; receiver ownership was
+tightened to a single transfer after review. Remaining behavior controls are
+still separate work below, not inferred from this opt-in result.
+
+See [subscription research](../diagnostics/2026-09-13-live-desktop-font-settings.md)
+and the [completed post-rebase checkpoint](../diagnostics/2026-09-13-post-rebase-font-verification.md).
+
+### Earlier startup verification
 
 The pre-agreed public default-face/bootstrap test seam has a Cocoa sizing
 regression: with a Cocoa observation, the previous code opened 10px and the

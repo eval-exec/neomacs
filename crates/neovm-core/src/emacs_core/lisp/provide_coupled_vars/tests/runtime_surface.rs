@@ -15,14 +15,9 @@ use crate::emacs_core::provide_coupled_vars::{
 };
 use crate::test_utils::runtime_startup_eval_one;
 
-/// The features every row in the table is conditioned on are absent here.
-///
-/// The table says nothing at all about a build that HAS one of these; it is a
-/// list of things this build cannot have.  If a future build gains GTK, the
-/// rows stop applying and this test is what says so, loudly, before the scan
-/// below starts reporting nonsense.
+/// Keep the table's feature assumptions aligned with linked native adapters.
 #[test]
-fn the_features_the_table_is_conditioned_on_are_all_absent() {
+fn the_features_the_table_is_conditioned_on_match_the_linked_adapters() {
     crate::test_utils::init_test_tracing();
     let result = runtime_startup_eval_one(
         "(list (featurep 'x) (featurep 'gtk) (featurep 'cairo) (featurep 'motif)
@@ -37,11 +32,16 @@ fn the_features_the_table_is_conditioned_on_are_all_absent() {
     // xwidget rows below stop being policy exceptions on that platform and
     // become GNU-consistent -- the variables are bound because the feature is
     // present, which is exactly what GNU does.
-    let expected = if cfg!(neomacs_have_wkwebview) {
-        "OK (nil nil nil nil nil nil nil nil nil nil t nil nil nil)"
-    } else {
-        "OK (nil nil nil nil nil nil nil nil nil nil nil nil nil nil)"
-    };
+    let mut expected = ["nil"; 14];
+    if cfg!(neomacs_have_wkwebview) {
+        expected[10] = "t";
+    }
+    // Linux's owned GSettings adapter supplies dynamic-setting even though
+    // this build does not link GNU's GTK/X window-system implementation.
+    if cfg!(all(target_os = "linux", feature = "desktop-font-settings")) {
+        expected[13] = "t";
+    }
+    let expected = format!("OK ({})", expected.join(" "));
     assert_eq!(result, expected);
 }
 

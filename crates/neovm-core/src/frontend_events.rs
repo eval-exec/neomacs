@@ -245,6 +245,7 @@ fn semantics(event: &InputEvent) -> FrontendEventSemantics {
         InputEvent::MonitorsChanged { .. } => {
             special(PendingPolicy::Filterable("monitors-changed"), false, true)
         }
+        InputEvent::SystemFontsChanged { .. } => special(PendingPolicy::Never, false, true),
         InputEvent::SelectWindow { .. } => {
             special(PendingPolicy::Filterable("select-window"), true, false)
         }

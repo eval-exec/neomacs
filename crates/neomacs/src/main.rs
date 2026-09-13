@@ -1441,6 +1441,10 @@ fn render_fullscreen_mode(fullscreen: FrameFullscreen) -> WindowFullscreenMode {
 }
 
 impl DisplayHost for PrimaryWindowDisplayHost {
+    fn update_system_fonts(&mut self, fonts: neovm_core::emacs_core::display_host::SystemFonts) {
+        self.system_fonts = fonts;
+    }
+
     fn system_font(
         &self,
         role: neovm_core::emacs_core::display_host::SystemFontRole,
@@ -3308,6 +3312,7 @@ fn run_gui_main_thread(
     mode: RuntimeMode,
     startup: StartupOptions,
     bootstrap_display: BootstrapDisplayConfig,
+    font_observer: neomacs_display_runtime::font_defaults::FontDefaultsObserver,
 ) {
     let render_waker = GuiEventLoopWaker::new(event_loop.create_proxy());
 
@@ -3325,6 +3330,7 @@ fn run_gui_main_thread(
         startup,
         startup_reply,
         bootstrap_display,
+        font_observer,
         emacs_comms,
         Arc::clone(&gui_image_metadata),
         Arc::clone(&shared_monitors),
@@ -3412,6 +3418,7 @@ fn spawn_gui_evaluator_worker(
     startup: StartupOptions,
     startup_reply: startup_frame::StartupFrameReply,
     bootstrap_display: BootstrapDisplayConfig,
+    font_observer: neomacs_display_runtime::font_defaults::FontDefaultsObserver,
     emacs_comms: EmacsComms,
     gui_image_metadata: SharedImageRenderState,
     shared_monitors: SharedMonitorInfo,
@@ -3435,6 +3442,7 @@ fn spawn_gui_evaluator_worker(
                     startup,
                     startup_reply,
                     bootstrap_display,
+                    font_observer,
                     emacs_comms,
                     gui_image_metadata,
                     shared_monitors,
@@ -3529,6 +3537,7 @@ fn run_gui_evaluator_worker(
     startup: StartupOptions,
     startup_reply: startup_frame::StartupFrameReply,
     bootstrap_display: BootstrapDisplayConfig,
+    mut font_observer: neomacs_display_runtime::font_defaults::FontDefaultsObserver,
     emacs_comms: EmacsComms,
     gui_image_metadata: SharedImageRenderState,
     shared_monitors: SharedMonitorInfo,
@@ -3550,6 +3559,7 @@ fn run_gui_evaluator_worker(
         unreachable!("GUI evaluator requires graphical bootstrap configuration");
     };
     configure_terminal_runtime(TerminalRuntimeConfig::window_system(identity.clone()));
+    let font_display = identity.clone();
     evaluator.set_variable("dump-mode", Value::NIL);
     // GNU's window-system terminal inits do not measure a line speed, they
     // assert one: `baud_rate = 19200' in `x_term_init' (src/xterm.c:32279) and
@@ -3614,6 +3624,7 @@ fn run_gui_evaluator_worker(
     let (input_tx, input_rx) = crossbeam_channel::unbounded();
     let secondary_ttys = secondary_tty::SecondaryTtyRegistry::default();
     let display_input_rx = emacs_comms.input_rx;
+    let mut font_changes = font_observer.take_changes();
     let primary_window_size_for_input = Arc::clone(&primary_window_size);
     let quit_requested = Arc::clone(&evaluator.quit_requested);
     // Cross-platform wakeup: wake the evaluator's wait loop AFTER queueing input
@@ -3626,7 +3637,31 @@ fn run_gui_evaluator_worker(
     std::thread::Builder::new()
         .name("input-bridge".to_string())
         .spawn(move || {
-            while let Ok(event) = display_input_rx.recv() {
+            loop {
+                let event = crossbeam_channel::select! {
+                    recv(display_input_rx) -> event => match event {
+                        Ok(event) => event,
+                        Err(_) => break,
+                    },
+                    recv(font_changes) -> fonts => {
+                        let Ok(fonts) = fonts else {
+                            font_changes = crossbeam_channel::never();
+                            continue;
+                        };
+                        if input_tx.send(neovm_core::keyboard::InputEvent::SystemFontsChanged {
+                            fonts,
+                            display: font_display.clone(),
+                        }).is_err() {
+                            break;
+                        }
+                        if let Some(notifier) = &input_notifier
+                            && let Err(error) = notifier.notify()
+                        {
+                            tracing::error!(%error, "font preferences failed to wake evaluator");
+                        }
+                        continue;
+                    }
+                };
                 let should_log = input_bridge::should_log_display_event(&event);
                 if should_log {
                     tracing::debug!("input-bridge: received display event {:?}", event);
@@ -3702,6 +3737,10 @@ fn run_gui_evaluator_worker(
     maybe_prepopulate_aot(mode, &evaluator);
     tracing::info!("Entering GNU command loop on GUI evaluator worker...");
     let exit_status = evaluator.recursive_edit();
+    // Stop/join the native settings owner on every normal shutdown, before
+    // the evaluator is deliberately retained for process exit. Unwinding and
+    // failed startup also drop this guard.
+    drop(font_observer);
     if exit_status.is_ok() {
         tracing::info!("Command loop exited normally");
     } else {
@@ -4089,6 +4128,7 @@ pub fn run(mode: RuntimeMode) {
         None
     };
     let interactivity = Interactivity::from_noninteractive(startup.noninteractive);
+    let mut gui_font_observer = None;
     let bootstrap_display = if let Some(event_loop) = gui_event_loop.as_ref() {
         let observation = observe_event_loop_display(event_loop);
         let system_name: String = hostname::get()
@@ -4100,14 +4140,19 @@ pub fn run(mode: RuntimeMode) {
                 eprintln!("neomacs: failed to resolve graphical display identity: {error:?}");
                 std::process::exit(1);
             });
-        let font_defaults =
-            neomacs_display_runtime::font_defaults::read_font_defaults(identity.backend());
+        let font_observer =
+            neomacs_display_runtime::font_defaults::observe_font_defaults(identity.backend())
+                .unwrap_or_else(|error| {
+                    eprintln!("neomacs: failed to observe desktop fonts: {error}");
+                    std::process::exit(1);
+                });
         let mut config = bootstrap_gui_display_config(
             interactivity,
             gui_frame_font_scale_from_observation(observation),
             identity,
         );
-        config.font_defaults = font_defaults;
+        config.font_defaults = font_observer.initial().clone();
+        gui_font_observer = Some(font_observer);
         config
     } else {
         debug_assert_eq!(startup.frontend, FrontendKind::Tty);
@@ -4129,6 +4174,7 @@ pub fn run(mode: RuntimeMode) {
             mode,
             startup,
             bootstrap_display,
+            gui_font_observer.expect("GUI frontend captured native font preferences"),
         );
         log_clean_process_exit(process_started_at, &process_args);
         return;
