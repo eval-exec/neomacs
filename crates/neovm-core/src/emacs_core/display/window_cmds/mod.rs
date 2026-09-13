@@ -165,8 +165,7 @@ pub(crate) fn builtin_coordinates_in_window_p(
     // GNU decodes WINDOW before it `CHECK_CONS`es COORDINATES.
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.get(1), WindowDomain::Live)?;
+    let live = decode_live_window_in_state(frames, buffers, args.get(1))?;
 
     if !args[0].is_cons() {
         return Err(signal(
@@ -187,7 +186,9 @@ pub(crate) fn builtin_coordinates_in_window_p(
     let x = number(args[0].cons_car())?;
     let y = number(args[0].cons_cdr())?;
 
-    let w = get_window(frames, fid, wid)?;
+    // A live window is a valid one; widening is the allowed direction.
+    let window: ValidWindow = live.into();
+    let w = get_window(frames, window)?;
     let (left, top) = (w.left_col() as f64, w.top_line() as f64);
     let width = match window_total_width_impl(frames, buffers, vec![args[1]])?.kind() {
         ValueKind::Fixnum(n) => n as f64,
@@ -203,7 +204,9 @@ pub(crate) fn builtin_coordinates_in_window_p(
         return Ok(Value::NIL);
     }
 
-    let chrome = |line| body_geometry::chrome_height_pixels(frames, buffers, fid, wid, line);
+    let chrome = |line| {
+        body_geometry::chrome_height_pixels(frames, buffers, window.frame(), window.window(), line)
+    };
     let mode_line = chrome(WindowChromeLine::ModeLine)? as f64;
     let tab_line = chrome(WindowChromeLine::TabLine)? as f64;
     let header_line = chrome(WindowChromeLine::HeaderLine)? as f64;
@@ -219,8 +222,8 @@ pub(crate) fn builtin_coordinates_in_window_p(
         return Ok(Value::symbol("header-line"));
     }
     // ON_VERTICAL_BORDER: the last column of a window that is not rightmost.
-    if let Some(frame) = frames.get(fid)
-        && !window_is_rightmost(frame, wid)
+    if let Some(frame) = frames.get(window.frame())
+        && !window_is_rightmost(frame, window.window())
         && x >= left + width - 1.0
     {
         return Ok(Value::symbol("vertical-line"));
@@ -984,13 +987,148 @@ fn get_leaf(frames: &FrameManager, fid: FrameId, wid: WindowId) -> Result<&Windo
 }
 
 /// Look up any window (leaf or internal) by id, including the root window.
-fn get_window(frames: &FrameManager, fid: FrameId, wid: WindowId) -> Result<&Window, Flow> {
+// ---------------------------------------------------------------------------
+// Proof-carrying window tokens
+//
+// GNU's three window decoders are not interchangeable, and which one a subr
+// calls is a contract fixed by its C (`src/window.c`).  Every bug in this
+// family so far has been a subr performing a different check from the one it
+// names -- a predicate string that drifted from the lookup beside it, or a
+// second helper answering the same question differently (which became a
+// Lisp-reachable panic in `internal-merge-in-global-face`).
+//
+// These types make the decode's OUTPUT carry the proof.  The fields are
+// private and no constructor is exported, so the only way to hold one is to
+// have actually decoded -- an accessor that demands a token therefore cannot be
+// reached with an id that skipped the check.  Widening is allowed, because
+// GNU's domains nest (live windows are valid, valid windows are windows);
+// narrowing is not, because that is the direction that loses a guarantee.
+//
+//     LiveWindow  ⊂  ValidWindow  ⊂  AnyWindow
+//     window-live-p  window-valid-p  windowp
+// ---------------------------------------------------------------------------
+
+/// A window that passed GNU's `decode_live_window` (`CHECK_LIVE_WINDOW`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct LiveWindow {
+    frame: FrameId,
+    window: WindowId,
+}
+
+/// A window that passed GNU's `decode_valid_window` (`CHECK_VALID_WINDOW`);
+/// an INTERNAL window qualifies, a deleted one does not.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ValidWindow {
+    frame: FrameId,
+    window: WindowId,
+}
+
+/// A window that passed GNU's `decode_any_window` (`CHECK_WINDOW`); a DELETED
+/// window qualifies, so this carries no frame -- a deleted window has none.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct AnyWindow {
+    window: WindowId,
+}
+
+impl LiveWindow {
+    pub(crate) fn frame(self) -> FrameId {
+        self.frame
+    }
+    pub(crate) fn window(self) -> WindowId {
+        self.window
+    }
+}
+
+impl ValidWindow {
+    pub(crate) fn frame(self) -> FrameId {
+        self.frame
+    }
+    pub(crate) fn window(self) -> WindowId {
+        self.window
+    }
+}
+
+impl AnyWindow {
+    pub(crate) fn window(self) -> WindowId {
+        self.window
+    }
+}
+
+impl From<LiveWindow> for ValidWindow {
+    /// Every live window is a valid one -- GNU's `WINDOW_LIVE_P` is
+    /// `WINDOWP (w) && BUFFERP (w->contents)`, `WINDOW_VALID_P` the weaker
+    /// `WINDOWP (w) && !NILP (w->contents)`.
+    fn from(w: LiveWindow) -> Self {
+        Self {
+            frame: w.frame,
+            window: w.window,
+        }
+    }
+}
+
+impl From<ValidWindow> for AnyWindow {
+    fn from(w: ValidWindow) -> Self {
+        Self { window: w.window }
+    }
+}
+
+impl From<LiveWindow> for AnyWindow {
+    fn from(w: LiveWindow) -> Self {
+        Self { window: w.window }
+    }
+}
+
+/// GNU `decode_live_window`: nil is the selected window, everything else must
+/// be live.
+pub(crate) fn decode_live_window_in_state(
+    frames: &mut FrameManager,
+    buffers: &mut BufferManager,
+    arg: Option<&Value>,
+) -> Result<LiveWindow, Flow> {
+    let (frame, window) =
+        resolve_window_id_with_pred_in_state(frames, buffers, arg, WindowDomain::Live)?;
+    Ok(LiveWindow { frame, window })
+}
+
+/// GNU's bare `CHECK_VALID_WINDOW (window)` -- no nil defaulting, for the subrs
+/// whose C spells the check that way (`window-combination-limit` and its
+/// setter).
+pub(crate) fn check_valid_window_in_state(
+    frames: &mut FrameManager,
+    buffers: &mut BufferManager,
+    arg: &Value,
+) -> Result<ValidWindow, Flow> {
+    let (frame, window) = check_window_id_in_state(frames, buffers, arg, WindowDomain::Valid)?;
+    Ok(ValidWindow { frame, window })
+}
+
+/// GNU `decode_valid_window`: nil is the selected window, an INTERNAL window is
+/// accepted, a deleted one is not.
+pub(crate) fn decode_valid_window_in_state(
+    frames: &mut FrameManager,
+    buffers: &mut BufferManager,
+    arg: Option<&Value>,
+) -> Result<ValidWindow, Flow> {
+    let (frame, window) =
+        resolve_window_id_with_pred_in_state(frames, buffers, arg, WindowDomain::Valid)?;
+    Ok(ValidWindow { frame, window })
+}
+
+/// Read a window out of the tree.
+///
+/// Takes a [`ValidWindow`] rather than a bare id: reaching a window at all
+/// means it passed `decode_valid_window` or stronger, which is exactly GNU's
+/// precondition for touching `w->contents`.  Before this the signature was
+/// `(frames, FrameId, WindowId)` and any pair of integers would do -- which is
+/// how `resize-mini-window-internal` came to accept an internal window by
+/// calling `as_window_id()` and skipping the decoders entirely.
+fn get_window(frames: &FrameManager, w: ValidWindow) -> Result<&Window, Flow> {
     let frame = frames
-        .get(fid)
+        .get(w.frame())
         .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
     // find_window checks root_window tree + minibuffer_leaf
     frame
-        .find_window(wid)
+        .find_window(w.window())
         .ok_or_else(|| signal("error", vec![Value::string("Window not found")]))
 }
 
@@ -2836,9 +2974,8 @@ pub(crate) fn builtin_window_left_column(
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-left-column", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
-    let w = get_window(frames, fid, wid)?;
+    let window = decode_valid_window_in_state(frames, buffers, args.first())?;
+    let w = get_window(frames, window)?;
     // GNU `Fwindow_left_column` returns `w->left_col` directly. See
     // `Window::left_col`.
     Ok(Value::fixnum(w.left_col()))
@@ -2851,9 +2988,8 @@ pub(crate) fn builtin_window_top_line(
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-top-line", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
-    let w = get_window(frames, fid, wid)?;
+    let window = decode_valid_window_in_state(frames, buffers, args.first())?;
+    let w = get_window(frames, window)?;
     // GNU `Fwindow_top_line` returns `w->top_line` directly (the stored
     // character-line edge maintained by the resize passes, decoupled from pixel
     // geometry -- it includes FRAME_TOP_MARGIN, which has no pixel height in
@@ -2922,10 +3058,9 @@ pub(crate) fn builtin_window_pixel_left(
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-pixel-left", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
-    let w = get_window(frames, fid, wid)?;
-    let frame = frames.get(fid);
+    let window = decode_valid_window_in_state(frames, buffers, args.first())?;
+    let w = get_window(frames, window)?;
+    let frame = frames.get(window.frame());
     let graphical = frame.is_some_and(|frame| frame.effective_window_system().is_some());
     let cw = frame.map(|frame| frame.char_width).unwrap_or(8.0);
     let left = if graphical {
@@ -2948,10 +3083,9 @@ pub(crate) fn builtin_window_pixel_top(
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-pixel-top", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
-    let w = get_window(frames, fid, wid)?;
-    let frame = frames.get(fid);
+    let window = decode_valid_window_in_state(frames, buffers, args.first())?;
+    let w = get_window(frames, window)?;
+    let frame = frames.get(window.frame());
     let graphical = frame.is_some_and(|frame| frame.effective_window_system().is_some());
     let ch = frame.map(|frame| frame.char_height).unwrap_or(16.0);
     let top = if graphical {
@@ -3519,9 +3653,8 @@ pub(crate) fn builtin_window_pixel_height(
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-pixel-height", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
-    let w = get_window(frames, fid, wid)?;
+    let window = decode_valid_window_in_state(frames, buffers, args.first())?;
+    let w = get_window(frames, window)?;
     // GNU `Fwindow_pixel_height` returns `w->pixel_height` directly.  This is
     // synchronous window-layout state and exists before the first redisplay;
     // it is not a query against the last frame presented by the renderer.
@@ -3538,9 +3671,8 @@ pub(crate) fn builtin_window_pixel_width(
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_max_args("window-pixel-width", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
-    let w = get_window(frames, fid, wid)?;
+    let window = decode_valid_window_in_state(frames, buffers, args.first())?;
+    let w = get_window(frames, window)?;
     // GNU `Fwindow_pixel_width` returns `w->pixel_width` directly.  Keep this
     // public Lisp primitive on the logical-layout side of the geometry seam.
     Ok(Value::fixnum(window_width_pixels(w)))
@@ -3724,10 +3856,12 @@ pub(crate) fn window_total_height_impl(
 ) -> EvalResult {
     expect_max_args("window-total-height", &args, 2)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
-    let w = get_window(frames, fid, wid)?;
-    let ch = frames.get(fid).map(|f| f.char_height).unwrap_or(16.0);
+    let window = decode_valid_window_in_state(frames, buffers, args.first())?;
+    let w = get_window(frames, window)?;
+    let ch = frames
+        .get(window.frame())
+        .map(|f| f.char_height)
+        .unwrap_or(16.0);
     Ok(Value::fixnum(window_height_lines(w, ch)))
 }
 /// `(window-total-width &optional WINDOW ROUND)` -> integer.
@@ -3747,10 +3881,12 @@ pub(crate) fn window_total_width_impl(
 ) -> EvalResult {
     expect_max_args("window-total-width", &args, 2)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, args.first(), WindowDomain::Valid)?;
-    let w = get_window(frames, fid, wid)?;
-    let cw = frames.get(fid).map(|f| f.char_width).unwrap_or(8.0);
+    let window = decode_valid_window_in_state(frames, buffers, args.first())?;
+    let w = get_window(frames, window)?;
+    let cw = frames
+        .get(window.frame())
+        .map(|f| f.char_width)
+        .unwrap_or(8.0);
     Ok(Value::fixnum(window_width_cols(w, cw)))
 }
 /// `(window-list &optional FRAME MINIBUF WINDOW)` -> list of window objects.
@@ -4154,8 +4290,8 @@ pub(crate) fn split_window_internal_impl_in_state_with_normal(
     normal_size: Value,
     combination_limit: CombinationLimit,
 ) -> EvalResult {
-    let (fid, wid) =
-        resolve_window_id_with_pred_in_state(frames, buffers, Some(&window), WindowDomain::Valid)?;
+    let target = decode_valid_window_in_state(frames, buffers, Some(&window))?;
+    let (fid, wid) = (target.frame(), target.window());
 
     // GNU's `window_point` reads the selected window's live buffer point.  Keep
     // the leaf cache in sync before cloning the window tree so a same-buffer
@@ -4185,7 +4321,7 @@ pub(crate) fn split_window_internal_impl_in_state_with_normal(
 
     // Use the same buffer as the window being split.
     let buf_id = {
-        let w = get_window(frames, fid, wid)?;
+        let w = get_window(frames, target)?;
         if let Some(buffer_id) = w.buffer_id() {
             buffer_id
         } else {
@@ -7256,8 +7392,8 @@ pub(crate) fn builtin_window_combination_limit(
     let (frames, buffers) = (&mut eval.frames, &mut eval.buffers);
     expect_args("window-combination-limit", &args, 1)?;
     let _ = ensure_selected_frame_id_in_state(frames, buffers);
-    let (fid, wid) = check_window_id_in_state(frames, buffers, &args[0], WindowDomain::Valid)?;
-    let w = get_window(frames, fid, wid)?;
+    let window = check_valid_window_in_state(frames, buffers, &args[0])?;
+    let w = get_window(frames, window)?;
     match w.combination_limit() {
         Some(true) => Ok(Value::T),
         Some(false) => Ok(Value::NIL),
