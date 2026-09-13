@@ -6960,7 +6960,18 @@ impl<'a> Vm<'a> {
     ///
     /// SAFETY: `args_ptr` addresses `nargs` valid tagged words that stay valid
     /// for the whole call (the caller's own native call-args slot).
+    ///
+    /// `#[inline(always)]` is load-bearing, not a hint. Extracting this body
+    /// out of `call_armed_callee_native` as a plain `fn` cost the speculated
+    /// path a call frame and its cross-inlining — `neovm_jit_call_spec` went
+    /// from 154 Ir/call to 84 + 104 — and `listlen-tc` (100M speculated
+    /// self-recursive calls) regressed 10.8% in instructions, `fibn` 9.0%.
+    /// Plain `#[inline]` was DECLINED at this size: the frame was still there
+    /// in the callgrind profile and the regression was unchanged to three
+    /// digits. Both entries are single-caller shims for their own C-ABI shim,
+    /// so forcing it restores the one-frame shape each had.
     #[cfg(feature = "jit")]
+    #[inline(always)]
     fn run_leaf_native_to_native(
         ctx: &mut crate::emacs_core::eval::Context,
         callee: Value,
