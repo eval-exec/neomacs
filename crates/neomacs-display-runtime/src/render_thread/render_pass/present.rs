@@ -160,11 +160,21 @@ impl RenderApp {
         }
         // Let winit arm platform pacing (the Wayland surface frame
         // callback) for the upcoming present; a no-op elsewhere.
-        if let Some(window) = self
-            .frame_windows
-            .get(emacs_frame_id)
-            .and_then(|window_state| window_state.window())
+        if let Some(window_state) = self.frame_windows.get(emacs_frame_id)
+            && let Some(window) = window_state.window()
         {
+            let (width, height) = window_state.content_size();
+            let logical_size = crate::render_thread::state::emacs_pixels_from_window_size(
+                width,
+                height,
+                window_state.scale_factor(),
+            );
+            self.presentation_observer.before_present(
+                window.as_ref(),
+                emacs_frame_id,
+                logical_size,
+                window_state.scale_factor(),
+            );
             window.pre_present_notify();
         }
         renderer.queue().present(output);

@@ -267,6 +267,7 @@ impl RenderApp {
         }
         self.refresh_monitor_snapshot(event_loop, true);
         self.complete_pending_scale_changes();
+        self.presentation_observer.dispatch_pending();
         if self.process_commands() {
             self.handle_exiting();
             event_loop.exit();
@@ -928,6 +929,7 @@ impl RenderApp {
         tracing::info!("Event loop exiting, cleaning up GPU resources");
 
         self.window_icon.shutdown();
+        self.presentation_observer.shutdown();
 
         // The Wayland clipboard borrows Winit's wl_display. Stop its worker
         // before dropping any native windows or the event-loop connection.

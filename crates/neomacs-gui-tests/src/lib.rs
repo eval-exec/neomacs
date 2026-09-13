@@ -80,6 +80,14 @@ pub enum WaylandOutput {
     HiDpi8k,
 }
 
+/// Normal tests avoid background rasterization. The patterned profile exists
+/// to exercise genuine compositor startup latency in presentation regressions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WestonDesktop {
+    Solid,
+    DefaultPattern,
+}
+
 impl DisplayHarness {
     pub fn for_backend(backend: GuiBackend) -> Self {
         match backend {
@@ -516,6 +524,14 @@ fn start_weston_headless(
     artifact_root: &Path,
     output: WaylandOutput,
 ) -> io::Result<DisplaySession> {
+    start_weston_with_desktop(artifact_root, output, WestonDesktop::Solid)
+}
+
+pub fn start_weston_with_desktop(
+    artifact_root: &Path,
+    output: WaylandOutput,
+    desktop: WestonDesktop,
+) -> io::Result<DisplaySession> {
     let (width, height, scale) = match output {
         WaylandOutput::Standard => (1280, 800, 1),
         // Weston takes logical dimensions: this produces a 3840x2160 output.
@@ -530,13 +546,22 @@ fn start_weston_headless(
     let log_path = artifact_root.join("weston-headless.log");
 
     let socket = format!("neomacs-gui-tests-{}", std::process::id());
-    let mut child = Command::new("weston")
+    let mut command = Command::new("weston");
+    match desktop {
+        WestonDesktop::Solid => {
+            command.arg("--config").arg(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/weston-headless.ini"),
+            );
+        }
+        WestonDesktop::DefaultPattern => {
+            command.arg("--no-config");
+        }
+    }
+    let mut child = command
         .arg("--backend=headless")
         .arg("--renderer=pixman")
         .arg(format!("--socket={socket}"))
         .arg("--idle-time=0")
-        .arg("--config")
-        .arg(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/weston-headless.ini"))
         .arg(format!("--width={width}"))
         .arg(format!("--height={height}"))
         .arg(format!("--scale={scale}"))

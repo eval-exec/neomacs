@@ -1,5 +1,8 @@
 # Native scale observations must not fabricate logical resizes
 
+Follow-up: [the separate 8K output-readiness investigation](2026-09-13-weston-output-readiness.md)
+identifies the startup stall and verifies presentation-gated fullscreen tests.
+
 ## Reproduction and failing regression
 
 `cargo nextest run -p neomacs-gui-tests --test desktop_font_startup -E

@@ -1,6 +1,6 @@
 use neomacs_gui_tests::{
-    DisplayHarness, GuiBackend, GuiRunOptions, GuiRunResult, GuiRunStatus, GuiScenario,
-    GuiTestPlan, ProcessGuiCommandRunner, WaylandOutput,
+    GuiBackend, GuiRunOptions, GuiRunResult, GuiRunStatus, GuiScenario, GuiTestPlan,
+    ProcessGuiCommandRunner, WaylandOutput, WestonDesktop, start_weston_with_desktop,
 };
 use std::{fs, path::PathBuf, process::Command, time::Duration};
 
@@ -72,7 +72,7 @@ fn hidpi_decorated_fullscreen_restores_the_requested_column_grid() {
 }
 
 #[test]
-#[ignore = "known 8K/2x Wayland CSD buffer-scale failure; requires release binary/pdump, Weston and Ubuntu Mono"]
+#[ignore = "requires release binary/pdump, Weston and Ubuntu Mono"]
 fn hidpi_8k_decorated_fullscreen_restores_the_requested_column_grid() {
     check_fixture(
         WaylandOutput::HiDpi8k,
@@ -81,9 +81,45 @@ fn hidpi_8k_decorated_fullscreen_restores_the_requested_column_grid() {
     );
 }
 
+#[test]
+#[ignore = "requires release binary/pdump, Weston presentation feedback and Ubuntu Mono"]
+fn hidpi_8k_fullscreen_after_confirmed_presentation() {
+    check_fixture(
+        WaylandOutput::HiDpi8k,
+        "native-resize-presented-8k",
+        "native-resize-presented.el",
+    );
+}
+
+#[test]
+#[ignore = "requires release binary/pdump, Weston presentation feedback and Ubuntu Mono"]
+fn hidpi_8k_slow_desktop_fullscreen_after_confirmed_presentation() {
+    check_fixture_with_desktop(
+        WaylandOutput::HiDpi8k,
+        "native-resize-presented-slow-8k",
+        "native-resize-presented.el",
+        WestonDesktop::DefaultPattern,
+    );
+}
+
 fn check_fixture(output: WaylandOutput, scenario: &str, fixture: &str) -> GuiRunResult {
+    check_fixture_with_desktop(output, scenario, fixture, WestonDesktop::Solid)
+}
+
+fn check_fixture_with_desktop(
+    output: WaylandOutput,
+    scenario: &str,
+    fixture: &str,
+    desktop: WestonDesktop,
+) -> GuiRunResult {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let artifacts = root.join("target/neomacs-gui-tests").join(scenario);
+    let receipt = artifacts.join("presentation.sexp");
+    match fs::remove_file(&receipt) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => panic!("remove previous presentation receipt: {error}"),
+    }
     let schemas = artifacts.join("desktop-font-startup-schemas");
     fs::create_dir_all(&schemas).unwrap();
     fs::copy(
@@ -99,9 +135,7 @@ fn check_fixture(output: WaylandOutput, scenario: &str, fixture: &str) -> GuiRun
             .success()
     );
     let backend = GuiBackend::LinuxWayland;
-    let session = DisplayHarness::WestonHeadless(output)
-        .start_session(&artifacts)
-        .unwrap();
+    let session = start_weston_with_desktop(&artifacts, output, desktop).unwrap();
     let binary = std::env::var_os("NEOMACS_GUI_TEST_BINARY")
         .map(PathBuf::from)
         .unwrap_or_else(|| root.join("target/release/neomacs"));
@@ -115,6 +149,10 @@ fn check_fixture(output: WaylandOutput, scenario: &str, fixture: &str) -> GuiRun
         ),
     )
     .with_program(binary)
+    .with_env(
+        "NEOMACS_GUI_PRESENTATION_RECEIPT",
+        receipt.to_string_lossy(),
+    )
     // Scale startup assertions include the public GUI input stream before
     // Lisp loads. Do not let the invoking shell silently disable that trace.
     .with_env("RUST_LOG", "debug")
