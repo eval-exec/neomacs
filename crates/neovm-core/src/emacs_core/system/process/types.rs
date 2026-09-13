@@ -750,9 +750,16 @@ pub struct Process {
     /// `status_notify`'s membership test (:7892) and NOT the same bit as
     /// `status_notify_pending` (GNU's `raw_status_new`).
     pub(crate) status_ticks: StatusChangeTicks,
-    /// Start of the bounded Windows grace period for observing an owner exit
-    /// before notifying an implicit stderr pipe whose EOF arrived first.
-    #[cfg(windows)]
+    /// Start of the bounded grace period for observing an owner exit before
+    /// notifying an implicit stderr pipe whose EOF arrived first.
+    ///
+    /// GNU needs no such timer: `status_notify` walks `Vprocess_alist` in ONE
+    /// pass (src/process.c:7873), and the owner is prepended AFTER its pipe
+    /// (`Fmake_process` creates the pipe at :1883 and the process at :1892,
+    /// `make_process` conses onto the front at :953), so the owner's sentinel
+    /// always runs before the pipe is reached and removed.  This port services
+    /// whichever descriptor the poller reports, so it has to wait for the
+    /// owner's exit to become observable instead.
     pub(super) stderr_pipe_owner_status_deferred_at: Option<Instant>,
     /// Kernel child-status transition delivered by the wait backend but not
     /// yet published to the process sentinel.  This includes stop/continue as
@@ -5311,10 +5318,7 @@ impl ProcessManager {
     pub(super) fn deactivate_process_io(poller: Option<&polling::Poller>, proc: &mut Process) {
         Self::unregister_process_poll_sources(poller, proc);
         drop(std::mem::take(&mut proc.live_io));
-        #[cfg(windows)]
-        {
-            proc.stderr_pipe_owner_status_deferred_at = None;
-        }
+        proc.stderr_pipe_owner_status_deferred_at = None;
         proc.gnutls_initstage = GnutlsInitStage::Empty;
         proc.gnutls_boot_parameters = Value::NIL;
     }
@@ -5555,7 +5559,6 @@ impl ProcessManager {
             status: process_status_run_value(),
             status_notify_pending: false,
             status_ticks: StatusChangeTicks::default(),
-            #[cfg(windows)]
             stderr_pipe_owner_status_deferred_at: None,
             pending_status: Value::NIL,
             buffer,
@@ -8208,18 +8211,36 @@ impl super::super::eval::Context {
                 outcome.absorb(self.run_process_status_notification(owner_id, target_process)?);
                 return Ok(false);
             }
+        }
 
-            let deferred_at = self
-                .processes
-                .get(pid)
-                .and_then(|pipe| pipe.stderr_pipe_owner_status_deferred_at);
-            if deferred_at.is_none_or(|at| at.elapsed() < Duration::from_millis(100)) {
-                if let Some(pipe) = self.processes.get_mut(pid) {
-                    pipe.stderr_pipe_owner_status_deferred_at
-                        .get_or_insert_with(Instant::now);
-                }
-                return Ok(false);
+        // The owner has not exited YET.  Give it a bounded grace period rather
+        // than publishing the pipe's death now.
+        //
+        // This used to be Windows-only, and the asymmetry was the bug: on every
+        // other platform the pipe was notified the instant its EOF was
+        // serviced, so a child that wrote to stderr and exited immediately
+        // afterwards could have its pipe removed from the alist in the window
+        // between the two -- and its own sentinel then found
+        // `get-buffer-process' nil where GNU still has the pipe attached and
+        // `closed'.  Reproduced at 1 run in 10 of the process suite.
+        //
+        // The grace has to be bounded, and expiring it is CORRECT rather than a
+        // fallback: when the owner really does outlive its stderr by a long
+        // way, GNU removes the pipe too.  Verified with
+        // `sh -c "printf boom 1>&2; exec 2>&-; sleep 0.3; printf x"`, where GNU
+        // and this port both answer `GONE'.  What GNU guarantees is only the
+        // tie-break when both events are pending together, which is exactly
+        // what the wait restores.
+        let deferred_at = self
+            .processes
+            .get(pid)
+            .and_then(|pipe| pipe.stderr_pipe_owner_status_deferred_at);
+        if deferred_at.is_none_or(|at| at.elapsed() < Duration::from_millis(100)) {
+            if let Some(pipe) = self.processes.get_mut(pid) {
+                pipe.stderr_pipe_owner_status_deferred_at
+                    .get_or_insert_with(Instant::now);
             }
+            return Ok(false);
         }
         Ok(true)
     }
