@@ -2023,17 +2023,49 @@ static PLUS_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '+'
 static SUB1_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '1-'
 static TIMES_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // '*'
 
+/// The three process-wide, env-derived settings every `Vm` copies in, read as
+/// ONE cached unit.
+///
+/// Each used to be its own `OnceLock`, so every `Vm::from_context` paid three
+/// initialized-flag branches and three acquire fences — and the JIT's generic
+/// call shim builds a `Vm` per call, which put those reads on the
+/// native->native seam. They all derive from environment variables read at
+/// process start and none can change afterwards, so one cache serves all three
+/// and a racing double read resolves to the same value.
+#[cfg(feature = "jit")]
+#[derive(Clone, Copy)]
+struct VmProcessKnobs {
+    tier_policy: BytecodeTierPolicy,
+    bcall_tier_skipped: bool,
+    bcall_cache_forced: bool,
+}
+
+#[cfg(feature = "jit")]
+impl VmProcessKnobs {
+    #[inline]
+    fn get() -> Self {
+        static KNOBS: std::sync::OnceLock<VmProcessKnobs> = std::sync::OnceLock::new();
+        *KNOBS.get_or_init(|| Self {
+            tier_policy: BytecodeTierPolicy::for_process(),
+            bcall_tier_skipped: crate::emacs_core::jit::jit_bcall_tier_skipped(),
+            bcall_cache_forced: crate::emacs_core::jit::jit_bcall_cache_forced(),
+        })
+    }
+}
+
 impl<'a> Vm<'a> {
     pub(crate) fn from_context(ctx: &'a mut crate::emacs_core::eval::Context) -> Self {
+        #[cfg(feature = "jit")]
+        let knobs = VmProcessKnobs::get();
         Self {
             ctx,
             recent_interpreter_call: RecentInterpreterCall::EMPTY,
             #[cfg(feature = "jit")]
-            bytecode_tier_policy: BytecodeTierPolicy::for_process(),
+            bytecode_tier_policy: knobs.tier_policy,
             #[cfg(feature = "jit")]
-            bcall_tier_skipped: crate::emacs_core::jit::jit_bcall_tier_skipped(),
+            bcall_tier_skipped: knobs.bcall_tier_skipped,
             #[cfg(feature = "jit")]
-            bcall_cache_forced: crate::emacs_core::jit::jit_bcall_cache_forced(),
+            bcall_cache_forced: knobs.bcall_cache_forced,
         }
     }
 
@@ -6853,16 +6885,96 @@ impl<'a> Vm<'a> {
         // on the native stack). See `resolve_compiled_leaf_ptr` for the full
         // invariant. (NOT "the cache never evicts" — it can; audit #1.)
         let leaf = unsafe { &*ptr };
+        // Debug-build evidence that the fast path actually fires (vs silently
+        // falling back to call_for_jit on every call). Counted here rather
+        // than in the shared runner below so it stays a count of SPECULATED
+        // calls, not of every native-to-native call.
+        #[cfg(debug_assertions)]
+        if leaf.accepts(nargs) {
+            crate::emacs_core::jit::compile::SPEC_FAST_CALL_COUNT.fetch_add(1, Ordering::Relaxed);
+        }
+        Self::run_leaf_native_to_native(ctx, callee, bc, leaf, args_ptr, nargs)
+    }
+
+    /// Native-to-native call of a callee that is ALREADY a bytecode value —
+    /// no symbol, so nothing to speculate on and nothing to re-validate.
+    ///
+    /// This is the shape the byte compiler produces for every function that is
+    /// named only lexically: `cl-flet`/`cl-labels` locals, `lambda` literals
+    /// passed to `mapcar`/`sort`, a closure held in a variable. The compiler
+    /// puts the bytecode object straight into the constants vector and emits
+    /// `Bcall` on it, so the callee is a *compile-time literal* — more
+    /// statically known than a symbol, which still needs an obarray epoch
+    /// check. Yet [`find_spec_sites`](crate::emacs_core::jit::compile) tags
+    /// only SYMBOL constants, so before this entry every such call took the
+    /// fully generic shim: six frames, two argument copies and two scratch-root
+    /// scopes to reach a leaf that
+    /// [`call_armed_callee_native`](Self::call_armed_callee_native) reaches in
+    /// one.
+    ///
+    /// The leaf comes from the callee function's OWN armed slot
+    /// (`cache::armed_leaf_for_stack_call`) rather than a per-call-site cache:
+    /// that is the same epoch-checked, heat-advancing probe the tier
+    /// dispatcher uses, so re-tiering and slot retirement keep working, and a
+    /// callee that has not tiered up yet simply returns `None` and warms up
+    /// through the generic path.
+    ///
+    /// `None` = not fast-pathable (debugger armed, not bytecode, no armed
+    /// leaf, wrong arity); the caller must take the strict path.
+    ///
+    /// SAFETY: `args_ptr` addresses `nargs` valid tagged words (the caller's
+    /// native call-args slot), valid for the whole call.
+    #[cfg(feature = "jit")]
+    pub(crate) fn call_armed_bytecode_value_native(
+        ctx: &mut crate::emacs_core::eval::Context,
+        callee: Value,
+        args_ptr: *const i64,
+        nargs: usize,
+    ) -> Option<crate::emacs_core::jit::cache::NativeCallOutcome> {
+        // GNU `bytecode.c:798`, as in `call_armed_callee_native`: an armed
+        // `debug_on_next_call` must enter the entry debugger, which this path
+        // cannot do mid-call, so it deopts to the strict path.
+        if ctx.debug_on_next_call_is_armed() {
+            return None;
+        }
+        let bc = callee.get_bytecode_data()?;
+        let ptr = crate::emacs_core::jit::cache::armed_leaf_for_native_call(bc, nargs)?;
+        // SAFETY: `armed_leaf_for_native_call` returns a leaf armed under the
+        // current `leaf_slot_epoch` — see its own contract.
+        let leaf = unsafe { &*ptr };
+        Self::run_leaf_native_to_native(ctx, callee, bc, leaf, args_ptr, nargs)
+    }
+
+    /// Run `leaf` for `callee` with `args_ptr` as the argument words, without
+    /// leaving native code — the shared tail of both native-to-native entries
+    /// ([`call_armed_callee_native`](Self::call_armed_callee_native) for a
+    /// speculated symbol site, [`call_armed_bytecode_value_native`](Self::call_armed_bytecode_value_native)
+    /// for a callee that is already a bytecode VALUE). The two differ only in
+    /// how they find the leaf; everything a call must still do — arity signal
+    /// deferral, backtrace frame, depth guard, the pass-through/marshal split
+    /// and the frame pop — is here, once.
+    ///
+    /// `None` means the call cannot be fast-pathed and the caller must take
+    /// the strict path (which signals `wrong-number-of-arguments` exactly as
+    /// the interpreter would).
+    ///
+    /// SAFETY: `args_ptr` addresses `nargs` valid tagged words that stay valid
+    /// for the whole call (the caller's own native call-args slot).
+    #[cfg(feature = "jit")]
+    fn run_leaf_native_to_native(
+        ctx: &mut crate::emacs_core::eval::Context,
+        callee: Value,
+        bc: &ByteCodeFunction,
+        leaf: &crate::emacs_core::jit::compile::CompiledLeaf,
+        args_ptr: *const i64,
+        nargs: usize,
+    ) -> Option<crate::emacs_core::jit::cache::NativeCallOutcome> {
         if !leaf.accepts(nargs) {
             // Wrong arg count: defer to the strict path, which signals
             // wrong-number-of-arguments exactly as the interpreter would.
             return None;
         }
         let pure = leaf.is_pure_passthrough(nargs);
-        // Debug-build evidence that the fast path actually fires (vs silently
-        // falling back to call_for_jit on every call).
-        #[cfg(debug_assertions)]
-        crate::emacs_core::jit::compile::SPEC_FAST_CALL_COUNT.fetch_add(1, Ordering::Relaxed);
         // BACKTRACE PARITY (cc-mode clean-build fix): the interpreter call path
         // pushes a backtrace frame for the callee (call_function_from_stack_args);
         // this native-to-native fast path must too, or `backtrace-frame` walks a

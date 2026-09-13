@@ -68,9 +68,23 @@ thread_local! {
 /// compiles. There is no end-of-process dump — thread_locals have no clean
 /// exit hook — so the periodic line is the record.
 fn summary_enabled() -> bool {
-    use std::sync::OnceLock;
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var("NEOVM_JIT_COMPILE_STATS").as_deref() == Ok("1"))
+    // Cached in a plain relaxed `u8` rather than a `OnceLock<bool>`: the
+    // per-call recorders below sit on the JIT's native->native call seam, and
+    // there a `OnceLock` read costs its initialized-flag branch plus an
+    // acquire fence on every call, while this costs one load and one compare.
+    // `0` = not read yet, `1` = off, `2` = on; the env var cannot change
+    // under us, so a racing double read resolves to the same value.
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static ENABLED: AtomicU8 = AtomicU8::new(0);
+    match ENABLED.load(Ordering::Relaxed) {
+        1 => false,
+        2 => true,
+        _ => {
+            let on = std::env::var("NEOVM_JIT_COMPILE_STATS").as_deref() == Ok("1");
+            ENABLED.store(1 + u8::from(on), Ordering::Relaxed);
+            on
+        }
+    }
 }
 
 /// Record one JIT compile attempt at the cache-miss seam: `elapsed` wall time
@@ -163,10 +177,20 @@ pub(crate) fn format_summary(s: &CompileStats) -> String {
 }
 
 /// Record one `dispatch_sized` consultation and its verdict.
+///
+/// Split gate/body: the gate is called once per JIT call on the direct-entry
+/// seam, so it must inline into the caller as a load and a branch instead of
+/// costing a call frame to discover the counters are off.
+#[inline]
 pub(crate) fn record_dispatch(said_compiled: bool) {
-    if !summary_enabled() {
-        return;
+    if summary_enabled() {
+        record_dispatch_enabled(said_compiled);
     }
+}
+
+#[cold]
+#[inline(never)]
+fn record_dispatch_enabled(said_compiled: bool) {
     STATS.with(|cell| {
         let mut stats = cell.get();
         stats.dispatch_consulted += 1;
@@ -200,10 +224,16 @@ pub(crate) fn record_retier() {
 /// Separate from `record_compile` on purpose: a compile is a cost, an entry is
 /// the only thing that can repay it, and the two had no relationship in the
 /// stats until this existed.
+#[inline]
 pub(crate) fn record_native_entry() {
-    if !summary_enabled() {
-        return;
+    if summary_enabled() {
+        record_native_entry_enabled();
     }
+}
+
+#[cold]
+#[inline(never)]
+fn record_native_entry_enabled() {
     STATS.with(|cell| {
         let mut stats = cell.get();
         stats.native_entries += 1;

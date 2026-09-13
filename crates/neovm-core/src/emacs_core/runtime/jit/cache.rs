@@ -1026,6 +1026,40 @@ pub(crate) fn armed_leaf_for_stack_call(
     ))
 }
 
+/// The armed leaf for a NATIVE-to-native call at `nargs`, or `None` to let the
+/// generic seam handle this call.
+///
+/// Same probe as [`armed_leaf_for_stack_call`] — same epoch check, same arity
+/// check, same heat bookkeeping in place of `dispatch_sized` — with one
+/// difference that matters: it tests the re-tier crossing BEFORE advancing the
+/// heat instead of after. A caller that declines here falls through to the
+/// generic seam, which probes the same slot again; if this probe had already
+/// bumped, the second bump would carry the heat PAST `retier_heat()` and the
+/// re-tier would never fire for that function. Declining without a bump leaves
+/// the crossing for the generic seam's own probe to see.
+#[inline]
+pub(crate) fn armed_leaf_for_native_call(
+    func: &ByteCodeFunction,
+    nargs: usize,
+) -> Option<*const CompiledLeaf> {
+    let rt = func.jit_runtime();
+    let leaf = rt.armed_leaf_slot(leaf_slot_epoch())?;
+    #[cfg(test)]
+    if rt.force_interpret_for_test() {
+        return None;
+    }
+    // SAFETY: armed from a live `COMPILED` entry under the current epoch — see
+    // `armed_leaf_for_stack_call`.
+    if !unsafe { (*leaf).accepts(nargs) } {
+        return None;
+    }
+    if super::retier_heat().is_some_and(|at| rt.peek_heat().saturating_add(1) == at) {
+        return None;
+    }
+    rt.bump_heat();
+    Some(leaf)
+}
+
 /// Run a leaf returned by `armed_leaf_for_stack_call` on `args_ptr`
 /// (its premarshaled `Value` bits, NOT a pointer into the operand stack: a
 /// nested call's shim pushes onto it and may reallocate). Same result shape

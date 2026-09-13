@@ -481,37 +481,77 @@ pub extern "C" fn neovm_jit_call(
     out: *mut i64,
 ) -> i64 {
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
+        use crate::emacs_core::jit::cache::NativeCallOutcome;
         let func_val = Value::from_bits(func_bits as usize);
         let nargs = nargs as usize;
         {
-            // Fast path: plain builtin symbol callee — no Vm, no scratch
-            // roots (interned symbol callees are obarray-rooted; the args
-            // are staged on the GC-traced bc_buf), loads-only quit check.
-            // Falls through to the full path on any other callee shape.
+            // Polled path: no quit is due, so the arguments are staged on the
+            // GC-traced `bc_buf` ONCE and both dispatches below read that same
+            // span. The builtin probe is tried first (no Vm, no scratch roots
+            // — interned symbol callees are obarray-rooted); anything else
+            // falls through to the full path WITHOUT re-staging the arguments,
+            // which is what the slow path below had to do when this block
+            // owned its own push/truncate pair.
             // SAFETY: seam-provided dormant Context (fn-level contract).
-            let ctx = unsafe { &mut *(ctx as *mut Context) };
-            if func_val.is_symbol() && ctx.maybe_quit_hot_ok() {
-                let args_start = ctx.bc_buf.len();
-                for i in 0..nargs {
-                    // SAFETY: generated code stored `nargs` words at args_ptr.
-                    let v = Value::from_bits(unsafe { *args_ptr.add(i) } as usize);
-                    ctx.bc_buf.push(v);
-                }
-                let fast = Vm::call_builtin_symbol_for_jit(ctx, func_val, args_start, nargs);
-                ctx.bc_buf.truncate(args_start);
-                if let Some(res) = fast {
-                    return match res {
-                        Ok(value) => {
+            let ctx_ref = unsafe { &mut *(ctx as *mut Context) };
+            if ctx_ref.maybe_quit_hot_ok() {
+                // NATIVE-TO-NATIVE: the callee is already a bytecode object —
+                // what the compiler emits for a `cl-flet` local, a `lambda`
+                // literal or any closure held in a variable, where the object
+                // itself sits in the constants vector. Pass the caller's
+                // call-args slot straight to its leaf: no bc_buf staging, no
+                // premarshal, no scratch-root scope, no `Vm` (the callee's
+                // backtrace frame roots it, and the poll above already
+                // returned Ok without collecting). `None` = not fast-pathable
+                // (not yet tiered up, wrong arity, debugger armed) and the
+                // staged generic path below runs it — and tiers it up.
+                // SAFETY: `args_ptr` is the generated code's call-args slot,
+                // holding `nargs` words for the whole call.
+                if func_val.is_bytecode()
+                    && let Some(outcome) =
+                        Vm::call_armed_bytecode_value_native(ctx_ref, func_val, args_ptr, nargs)
+                {
+                    return match outcome {
+                        NativeCallOutcome::Value(value) => {
                             // SAFETY: `out` is the generated code's result slot.
                             unsafe { *out = value.bits() as i64 };
                             STATUS_OK
                         }
-                        Err(flow) => {
-                            stash_pending_flow(flow);
-                            STATUS_SIGNAL
+                        NativeCallOutcome::FlowStashed => STATUS_SIGNAL,
+                        // `run_leaf_native_to_native` resolves its own Fallback
+                        // through the interpreter rerun.
+                        NativeCallOutcome::Fallback => {
+                            unreachable!("Fallback outcome at the generic call shim")
                         }
                     };
                 }
+                let args_start = ctx_ref.bc_buf.len();
+                for i in 0..nargs {
+                    // SAFETY: generated code stored `nargs` words at args_ptr.
+                    let v = Value::from_bits(unsafe { *args_ptr.add(i) } as usize);
+                    ctx_ref.bc_buf.push(v);
+                }
+                if func_val.is_symbol()
+                    && let Some(res) =
+                        Vm::call_builtin_symbol_for_jit(ctx_ref, func_val, args_start, nargs)
+                {
+                    ctx_ref.bc_buf.truncate(args_start);
+                    return jit_call_status(res, out);
+                }
+                // `maybe_quit_hot_ok` above tested exactly `maybe_quit`'s
+                // fast-path condition (the same four loads plus the profiler
+                // tick) and nothing between here and there can set any of
+                // them, so the generic path does not poll a second time.
+                let saved = save_scratch_gc_roots();
+                // The callee is not on bc_buf, so it needs an explicit scratch
+                // root across the call (which may GC); the arguments are
+                // already rooted on bc_buf.
+                push_scratch_gc_root(func_val);
+                let mut vm = Vm::from_context(ctx_ref);
+                let res = vm.call_for_jit_stack(func_val, args_start, nargs);
+                vm.bc_buf_truncate(args_start);
+                restore_scratch_gc_roots(saved);
+                return jit_call_status(res, out);
             }
         }
         let saved = save_scratch_gc_roots();
@@ -542,22 +582,31 @@ pub extern "C" fn neovm_jit_call(
                 let mut vm = Vm::from_context(ctx);
                 let res = vm.call_for_jit_stack(func_val, args_start, nargs);
                 vm.bc_buf_truncate(args_start);
-                match res {
-                    Ok(value) => {
-                        // SAFETY: `out` is the generated code's result stack slot.
-                        unsafe { *out = value.bits() as i64 };
-                        STATUS_OK
-                    }
-                    Err(flow) => {
-                        stash_pending_flow(flow);
-                        STATUS_SIGNAL
-                    }
-                }
+                jit_call_status(res, out)
             }
         };
         restore_scratch_gc_roots(saved);
         status
     })
+}
+
+/// Deliver a call shim's result to the generated code: the value bits through
+/// its result slot, or the `Flow` stashed for the seam to re-raise.
+///
+/// SAFETY: `out` is the generated code's result stack slot, valid for a write
+/// for the duration of the shim call (the call-shim contract).
+#[inline]
+fn jit_call_status(res: Result<Value, Flow>, out: *mut i64) -> i64 {
+    match res {
+        Ok(value) => {
+            unsafe { *out = value.bits() as i64 };
+            STATUS_OK
+        }
+        Err(flow) => {
+            stash_pending_flow(flow);
+            STATUS_SIGNAL
+        }
+    }
 }
 
 /// `apply` a function from JIT code with the interpreter's `Op::Apply`

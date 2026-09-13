@@ -384,15 +384,36 @@ pub(crate) fn force_profit_defer_for_test(factor: Option<u32>) {
 /// Heat at which a fast-allocator leaf is rebuilt with the full allocator
 /// ([`RuntimeState::RETIER_FACTOR`] × [`hot_threshold`]); `None` = never
 /// (`NEOVM_JIT_RETIER_FACTOR=0`).
+/// `retier_heat` cache: `0` = not read yet, `u64::MAX` = no re-tier crossing,
+/// else `1 + heat`. The env var it derives from cannot change under us, so a
+/// racing double read resolves to the same value.
+static RETIER_HEAT_CACHE: AtomicU64 = AtomicU64::new(0);
+
+#[inline]
 pub fn retier_heat() -> Option<u32> {
-    static AT: OnceLock<Option<u32>> = OnceLock::new();
-    *AT.get_or_init(|| {
-        let factor = std::env::var("NEOVM_JIT_RETIER_FACTOR")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(RuntimeState::RETIER_FACTOR);
-        (factor != 0).then(|| hot_threshold().saturating_mul(factor))
-    })
+    // A plain relaxed load rather than a `OnceLock<Option<u32>>` read: the
+    // armed-leaf entry consults this on EVERY compiled call, and there a
+    // `OnceLock` costs its initialized-flag branch plus an acquire fence.
+    match RETIER_HEAT_CACHE.load(Ordering::Relaxed) {
+        0 => retier_heat_init(),
+        u64::MAX => None,
+        at => Some((at - 1) as u32),
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn retier_heat_init() -> Option<u32> {
+    let factor = std::env::var("NEOVM_JIT_RETIER_FACTOR")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(RuntimeState::RETIER_FACTOR);
+    let at = (factor != 0).then(|| hot_threshold().saturating_mul(factor));
+    RETIER_HEAT_CACHE.store(
+        at.map_or(u64::MAX, |heat| u64::from(heat) + 1),
+        Ordering::Relaxed,
+    );
+    at
 }
 
 /// Largest body (in ops) the JIT tiers up at all; bigger bodies stay on the
@@ -866,6 +887,14 @@ impl RuntimeState {
         let now = self.heat.load(Ordering::Relaxed).saturating_add(1);
         self.heat.store(now, Ordering::Relaxed);
         now
+    }
+
+    /// The heat WITHOUT advancing it — for a probe that may decline and let
+    /// another probe of the same call do the advancing.
+    #[cfg(feature = "jit")]
+    #[inline]
+    pub(crate) fn peek_heat(&self) -> u32 {
+        self.heat.load(Ordering::Relaxed)
     }
 
     #[cfg(all(feature = "jit", test))]
