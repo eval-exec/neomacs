@@ -20,6 +20,21 @@ pub(super) enum PreparedForm {
         body: Value,
         scope: ActiveCleanupScope,
     },
+    /// A macro call's expansion, to be evaluated in place of the call.
+    ///
+    /// Returned instead of recursing into `eval_sub`, so nesting through
+    /// macros costs one more entry on the driver's stack rather than a fresh
+    /// stack of Rust frames per level. That is the only lever left for the
+    /// browser target, where the machine stack cannot be grown: see
+    /// `runtime::stack_growth::LispDepthLimit`.
+    ///
+    /// Needs no `Continuation` of its own. The enclosing
+    /// `Continuation::Form`, pushed before this form was prepared, already
+    /// unbinds the specpdl past the expansion's `GcRoot` and decrements
+    /// `depth` -- so the expansion stays rooted for exactly as long as it is
+    /// being evaluated, and `max-lisp-eval-depth` counts the same two levels
+    /// per macro call that the recursive shape counted.
+    MacroExpansion(Value),
 }
 
 pub(super) struct PreparedCall {
@@ -88,6 +103,63 @@ enum Continuation {
     Sequence {
         cursor: usize,
     },
+}
+
+/// `Arguments` sets the size of EVERY element of the driver's `Vec`, because
+/// an enum is as wide as its widest variant. So a new small variant is free,
+/// and a new wide one silently taxes every push and pop in the evaluator --
+/// a cost that shows up in a profile, never in a diff. Pin it, so growth is
+/// a compile error instead.
+const _: () = assert!(
+    size_of::<Continuation>() == size_of::<(usize, usize, usize, CallTarget, usize)>(),
+    "a Continuation variant grew past `Arguments`; that cost lands on every push",
+);
+
+impl Continuation {
+    /// A Lisp value this continuation is the SOLE keeper of, if any.
+    ///
+    /// Every arm returns `None`, and that is the design rather than an
+    /// accident. `trace_roots` cannot see the driver's stack at all: the
+    /// `Vec<Continuation>` is a local of [`Context::eval_with_continuations`],
+    /// and a collection can run while it is live -- at the driver's own safe
+    /// point, and inside any subr the driver invokes. What makes that sound is
+    /// the invariant this module's header states: a continuation stores
+    /// INDICES into arenas `trace_roots` already walks -- `bc_buf`
+    /// (`gc_pacing.rs:42`) and the `specpdl` -- not a `Value` of its own.
+    ///
+    /// `Lambda` is the single arm that physically holds one (`body`), and
+    /// `apply.rs` roots it on the specpdl for as long as the continuation
+    /// lives, so it too returns `None`.
+    ///
+    /// EXHAUSTIVE ON PURPOSE -- no catch-all arm. A new variant must say which
+    /// side of the invariant it falls on instead of being absorbed by a
+    /// `_ => None`, because returning `Some` here is a declaration that
+    /// nothing else keeps the value alive: a use-after-free waiting for the
+    /// first collection under load. The driver asserts against it. This is the
+    /// rule `SpecBinding`'s root walk states for the same reason
+    /// (`gc_pacing.rs:148-158`): a root story is the one match where "the
+    /// compiler did not complain" and "the value is marked" have to be the
+    /// same sentence.
+    const fn unrooted_value(&self) -> Option<Value> {
+        match self {
+            // Indices into `bc_buf`, which `trace_roots` walks.
+            Self::Form { .. }
+            | Self::Arguments { .. }
+            | Self::Body { .. }
+            | Self::Conditional { .. }
+            | Self::Sequence { .. } => None,
+            // Specpdl marks and temp-root arena bases: no value of their own.
+            Self::Application { .. }
+            | Self::Let { .. }
+            | Self::Cleanup { .. }
+            | Self::SequenceScope { .. } => None,
+            // An interned symbol id; the obarray keeps the symbol alive.
+            Self::NamedFunction { .. } => None,
+            // Holds `body`, rooted on the specpdl by `apply.rs` for the whole
+            // life of this continuation.
+            Self::Lambda { .. } => None,
+        }
+    }
 }
 
 /// Re-entrant evaluator entries borrow separate storage. Returning it empty
@@ -163,6 +235,18 @@ impl Context {
                         Step::Return(Err(flow))
                     } else {
                         if self.gc_safe_point_exact_should_collect() {
+                            // The one place the driver's stack is both live
+                            // and about to be collected over. See
+                            // `Continuation::unrooted_value`: `trace_roots`
+                            // never sees this Vec, so a variant that keeps a
+                            // value by itself is a use-after-free here.
+                            debug_assert!(
+                                continuations
+                                    .iter()
+                                    .all(|pending| pending.unrooted_value().is_none()),
+                                "a live continuation is the sole keeper of a Lisp value, \
+                                 and the collector about to run cannot see this stack",
+                            );
                             self.collect_at_eval_safe_point(form);
                         }
                         let original_fun = self.unwrap_symbol(form.cons_car());
@@ -189,6 +273,7 @@ impl Context {
                                 continuations.push(Continuation::Cleanup { scope });
                                 Step::Eval(body)
                             }
+                            Ok(PreparedForm::MacroExpansion(expanded)) => Step::Eval(expanded),
                             Ok(PreparedForm::Conditional(forms)) => {
                                 let branches = self.bc_buf.len();
                                 self.bc_buf.push(forms.then_form);
