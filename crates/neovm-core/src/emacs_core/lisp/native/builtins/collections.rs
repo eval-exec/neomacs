@@ -165,8 +165,19 @@ pub(crate) fn aset_string_replacement(
     Ok(*array)
 }
 
+/// `aset` for callers that own their argument vector (the subr table).
+///
+/// Delegates to the slice form: nothing in the body needs ownership, and the
+/// VM's hot paths already hold their three arguments on the stack. Requiring a
+/// `Vec` there cost a `SmallVec` clone plus a heap allocation per `aset`
+/// (`dhrystone`: 370,708 clones and 305,131 `Vec::from_iter` calls).
 pub(crate) fn builtin_aset(args: Vec<Value>) -> EvalResult {
-    expect_args("aset", &args, 3)?;
+    builtin_aset_args(&args)
+}
+
+/// `aset` reading its arguments in place.
+pub(crate) fn builtin_aset_args(args: &[Value]) -> EvalResult {
+    expect_args("aset", args, 3)?;
     // GNU src/data.c:Faset starts with CHECK_FIXNUM (idx) before checking
     // whether ARRAY is mutable by `aset`.
     let idx_fixnum = expect_fixnum(&args[1])?;

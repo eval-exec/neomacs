@@ -389,6 +389,7 @@ mod quit_regression_test;
 #[cfg(test)]
 #[path = "tests/architecture/runtime_string_guard.rs"]
 mod runtime_string_guard_test;
+
 #[cfg(test)]
 #[path = "display/shader_surface/tests/runtime.rs"]
 mod shader_surface_test;
@@ -398,6 +399,9 @@ mod stale_bytecode_test;
 #[cfg(test)]
 #[path = "runtime/symbol/tests/function_regression.rs"]
 mod symbol_function_regression_test;
+#[cfg(test)]
+#[path = "tests/architecture/symbol_id_guard.rs"]
+mod symbol_id_guard_test;
 #[cfg(test)]
 #[path = "runtime/symbol/tests/plist_regression.rs"]
 mod symbol_plist_regression_test;

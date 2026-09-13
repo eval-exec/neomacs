@@ -5214,7 +5214,7 @@ impl<'a> Vm<'a> {
                         ) {
                             result
                         } else {
-                            vm_try!(builtins::builtin_aset(call_args.clone().into_vec()))
+                            vm_try!(builtins::builtin_aset_args(&call_args))
                         };
                         let root_scope = self.ctx.save_vm_roots();
                         self.push_dynamic_vm_root(result);
@@ -6373,9 +6373,12 @@ impl<'a> Vm<'a> {
         // ~11% of its run in `lookup_interned` because of this.
         let id = Self::cached_builtin_id("aset", &ASET_ID);
         let result = if self.named_builtin_fast_path_allowed_id(id) {
-            builtins::builtin_aset(call_args.clone().into_vec())?
+            builtins::builtin_aset_args(&call_args)?
         } else {
             let func_val = Value::from_sym_id(id);
+            // `call_function` consumes the args; the writeback below re-reads
+            // them from the three `Copy` values still in scope, so this clone
+            // is the only one that is actually needed.
             self.call_function(func_val, call_args.clone())?
         };
         let root_scope = self.ctx.save_vm_roots();
