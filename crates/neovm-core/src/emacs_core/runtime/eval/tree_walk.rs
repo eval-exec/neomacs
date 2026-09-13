@@ -135,7 +135,7 @@ impl Context {
             .and_then(|value| value.as_fixnum())
             // GNU raises a limit below 100 before it signals
             // (`src/eval.c:2587-2588`) so a handler has room to run.
-            .map(|n| n.max(100) as usize)
+            .map(|n| super::super::stack_growth::LispDepthLimit::CURRENT.clamp(n))
     }
 
     /// GNU `eval_sub` (`src/eval.c:2585`): `lisp_eval_depth++` and one
@@ -177,7 +177,7 @@ impl Context {
             && let Some(v) = self.obarray.symbol_value_id(max_lisp_eval_depth_symbol())
             && let Some(n) = v.as_fixnum()
         {
-            let new_max = n.max(100) as usize;
+            let new_max = super::super::stack_growth::LispDepthLimit::CURRENT.clamp(n);
             if new_max != self.max_depth {
                 self.max_depth = new_max;
             }
