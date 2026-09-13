@@ -8212,6 +8212,12 @@ fn modify_frame_parameters_after_live_font_change_defers_gui_resize_until_geomet
     )
     .expect("set live default face font");
 
+    // GNU's new-font hook now requests an implied resize immediately. The
+    // explicit width/height override below must still remain deferred until
+    // the geometry query, and the allocation still awaits a native reply.
+    assert_eq!(resized.borrow().len(), 1);
+    resized.borrow_mut().clear();
+
     let out = ev
         .eval_str_each("(modify-frame-parameters (selected-frame) '((width . 80) (height . 25)))");
     assert!(

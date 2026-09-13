@@ -24,7 +24,10 @@
   (condition-case err
       (cond ((funcall predicate) (funcall continuation))
             ((> (float-time) deadline)
-             (error "Live font update timed out: %S" (desktop-font-live-state)))
+             (error "Live font update timed out: %S geometry=%S text=%S receipt=%S"
+                    (desktop-font-live-state) (desktop-font-live-frame-state)
+                    (list (frame-text-width) (frame-text-height))
+                    (desktop-font-live-receipt)))
             (t (run-at-time 0.05 nil #'desktop-font-live-await
                             predicate continuation deadline)))
     (error (desktop-font-live-log "LIVE-FONT-FAIL %S" err) (kill-emacs 1))))
@@ -109,6 +112,53 @@
                   (frame-parameters explicit)))
          (desktop-font-live-pass))))))
 
+(defun desktop-font-live-receipt ()
+  (let ((file (getenv "NEOMACS_GUI_PRESENTATION_RECEIPT")))
+    (when (and file (file-exists-p file))
+      (with-temp-buffer (insert-file-contents file) (read (current-buffer))))))
+
+(defun desktop-font-live-presented (after)
+  (or (not (getenv "NEOMACS_GUI_PRESENTATION_RECEIPT"))
+      (let ((receipt (desktop-font-live-receipt)))
+        (and receipt
+             (eq (plist-get receipt :outcome) 'presented)
+             (> (plist-get receipt :submission) after)
+             (= (plist-get receipt :width) (frame-pixel-width))
+             (= (plist-get receipt :height) (frame-pixel-height))
+             (integerp (plist-get receipt :clock-id))
+             (natnump (plist-get receipt :seconds))
+             (natnump (plist-get receipt :nanoseconds))
+             (< (plist-get receipt :nanoseconds) 1000000000)))))
+
+(defun desktop-font-live-grid-ready ()
+  (and (= (frame-width) 80) (= (frame-text-lines) 24)
+       (= (frame-text-width) (* 80 (frame-char-width)))
+       (= (frame-text-height) (* 24 (frame-char-height)))))
+
+(defun desktop-font-live-geometry ()
+  ;; Isolate the font-owned text grid from platform-specific bar chrome.
+  (menu-bar-mode -1)
+  (tool-bar-mode -1)
+  (set-frame-size nil 80 24)
+  (desktop-font-live-await
+   (lambda () (and (desktop-font-live-grid-ready)
+                   (desktop-font-live-presented 0)))
+   (lambda ()
+     (let ((submission (or (plist-get (desktop-font-live-receipt) :submission) 0)))
+       (desktop-font-live-log "LIVE-GEOMETRY-BEFORE %S" (desktop-font-live-frame-state))
+       (desktop-font-live-opt-in
+        (lambda ()
+          (desktop-font-live-await
+           (lambda () (and (desktop-font-live-grid-ready)
+                           (desktop-font-live-presented submission)))
+           (lambda ()
+             (desktop-font-live-log "LIVE-GEOMETRY-AFTER %S receipt=%S"
+                                    (desktop-font-live-frame-state)
+                                    (desktop-font-live-receipt))
+             (desktop-font-live-pass))
+           (+ (float-time) 8))))))
+   (+ (float-time) 8)))
+
 (run-at-time
  0.1 nil
  (lambda ()
@@ -120,5 +170,6 @@
          (pcase (getenv "NEOMACS_GUI_LIVE_FONT_CASE")
            ("opt-out" (desktop-font-live-opt-out))
            ("explicit-and-future" (desktop-font-live-explicit-and-future))
+           ("geometry" (desktop-font-live-geometry))
            (_ (desktop-font-live-opt-in))))
      (error (desktop-font-live-log "LIVE-FONT-FAIL %S" err) (kill-emacs 1)))))

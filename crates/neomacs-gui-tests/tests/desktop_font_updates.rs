@@ -39,6 +39,27 @@ enum LiveFontCase {
     OptIn,
     OptOut,
     ExplicitAndFuture,
+    Geometry,
+}
+
+#[test]
+#[ignore = "requires GNU GUI Emacs, Xvfb, GSettings and Ubuntu Mono/DejaVu fonts"]
+fn gnu_live_font_preserves_the_character_grid() {
+    check_live_font(
+        GuiBackend::LinuxX11,
+        "gnu-live-geometry",
+        LiveFontCase::Geometry,
+    );
+}
+
+#[test]
+#[ignore = "requires release binary/pdump, Weston presentation feedback, GSettings and fonts"]
+fn live_font_preserves_the_presented_character_grid() {
+    check_live_font(
+        GuiBackend::LinuxWayland,
+        "live-geometry",
+        LiveFontCase::Geometry,
+    );
 }
 
 #[test]
@@ -112,10 +133,21 @@ fn check_live_font(backend: GuiBackend, scenario: &str, case: LiveFontCase) {
             LiveFontCase::OptIn => "opt-in",
             LiveFontCase::OptOut => "opt-out",
             LiveFontCase::ExplicitAndFuture => "explicit-and-future",
+            LiveFontCase::Geometry => "geometry",
         },
     )
     .with_env("GSETTINGS_SCHEMA_DIR", schemas.to_string_lossy())
     .with_env("XDG_CONFIG_HOME", config.to_string_lossy());
+    if backend == GuiBackend::LinuxWayland {
+        let receipt = artifacts.join("presentation.sexp");
+        if receipt.exists() {
+            fs::remove_file(&receipt).unwrap();
+        }
+        plan = plan.with_env(
+            "NEOMACS_GUI_PRESENTATION_RECEIPT",
+            receipt.to_string_lossy(),
+        );
+    }
     if backend == GuiBackend::LinuxX11 {
         plan = plan.with_env("GDK_BACKEND", "x11").with_args([
             "-Q".to_string(),

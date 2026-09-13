@@ -179,6 +179,47 @@ new frame with its own explicit font keeps that request. The existing GNU
 Lisp/Custom path already implements this precedence; no Rust policy override
 was added.
 
+The stronger geometry oracle exposed an existing missing implied resize:
+after adopting the new 13×25 font, Neomacs still presented its old 745×432
+allocation (`live-geometry-red-text-grid.log`). GNU retained an 80×24 text
+grid by growing its window. The fixture uses `frame-text-lines` and exact
+text pixels to measure this grid; the existing `frame-height` parameter can
+undercount a grown minibuffer during setup. Menu/tool bars are disabled by
+their public mode commands to keep this oracle independent of toolkit chrome.
+
+The font-realization entry point now captures the existing text grid (or a
+pending requested grid), installs the opened font, and sends the implied
+resize through the existing frame resize interface. Native acknowledgement
+still owns the allocation. Each axis respects `frame-inhibit-implied-resize`
+and fullscreen state; child frames use the existing local resize fallback.
+New-frame construction keeps its separate metrics-only entry point. No
+preference adapter or renderer measures a second font. A Wayland pass requires
+a later native Presented receipt, matching dimensions and carrying the
+compositor timestamp; font attributes and requested frame parameters alone
+cannot satisfy it. Full `xtask fresh-build --release` completed with matching
+fingerprint `6427BEDA02BB31C4A20F87FAA89B797CE72368E66AE4509F7BB9284294CE8E4F`.
+All eight live GUI/GNU checks pass (`live-geometry-gui.log`), including native
+presentation at 1069×600 with an 80×24 text grid. The generated bootstrap Lisp
+hash is unchanged.
+
+The baseline selection passed nine tests while two concurrent Weston sessions
+lost their peer connections, without a Lisp font/geometry assertion or a
+logged Weston protocol error (`live-geometry-baseline-gui.log`). Their raw
+artifacts are retained under `geometry-baseline-peer-reset/`. Both pass when
+rerun separately (`live-geometry-baseline-isolated.log`). This is recorded as
+an unexplained concurrent compositor failure, not silently relabeled a code
+fix or a proven resource-exhaustion diagnosis.
+
+The focused geometry selection passed 543 of 544 tests. The sole failure
+expected no implied resize after a font change, which is the behavior this
+slice intentionally adds. Its explicit-followup/deferred-ack assertions remain
+intact, and the adjusted test passes (`live-geometry-deferred-green.log`).
+Review confirmed the opened-font/native-resize boundary and removed an
+incorrect blanket child-frame exclusion. This work does not establish full
+GNU `adjust_frame_size` parity for split-window minimum-size overrides or
+overlapping stale native acknowledgements; those are wider existing resize
+constraints, not verified by the sequential live-font oracle.
+
 See [subscription research](../diagnostics/2026-09-13-live-desktop-font-settings.md)
 and the [completed post-rebase checkpoint](../diagnostics/2026-09-13-post-rebase-font-verification.md).
 

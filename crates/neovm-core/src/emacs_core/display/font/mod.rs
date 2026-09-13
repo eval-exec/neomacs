@@ -467,23 +467,33 @@ fn resolve_live_frame_font_request_in_state(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FontChangeGeometryPolicy {
     PreserveAllocatedPixels,
-    ResetMinibufferToFontLine,
+    PreserveCharacterGrid,
+}
+
+#[derive(Clone, Copy)]
+enum FontResizeAxis {
+    Horizontal,
+    Vertical,
 }
 
 impl FontChangeGeometryPolicy {
-    fn for_live_frame(frame: &crate::window::Frame, inhibit: Value) -> Self {
+    fn for_live_frame(frame: &crate::window::Frame, inhibit: Value, axis: FontResizeAxis) -> Self {
         let fullscreen = frame.parameter("fullscreen").unwrap_or(Value::NIL);
-        let vertically_fullscreen =
-            !fullscreen.is_nil() && fullscreen != Value::symbol("fullwidth");
+        let fills_axis = !fullscreen.is_nil()
+            && fullscreen
+                != Value::symbol(match axis {
+                    FontResizeAxis::Horizontal => "fullheight",
+                    FontResizeAxis::Vertical => "fullwidth",
+                });
         if inhibit == Value::T
             || inhibit == Value::symbol("force")
             || list_iter(inhibit).any(|parameter| parameter == Value::symbol("font"))
-            || vertically_fullscreen
+            || fills_axis
             || frame.effective_window_system().is_none()
         {
             Self::PreserveAllocatedPixels
         } else {
-            Self::ResetMinibufferToFontLine
+            Self::PreserveCharacterGrid
         }
     }
 }
@@ -502,15 +512,87 @@ pub(crate) fn sync_live_frame_font_state(
         .symbol_value("frame-inhibit-implied-resize")
         .copied()
         .unwrap_or(Value::NIL);
-    let geometry_policy = FontChangeGeometryPolicy::for_live_frame(frame, inhibit);
+    let horizontal =
+        FontChangeGeometryPolicy::for_live_frame(frame, inhibit, FontResizeAxis::Horizontal);
+    let vertical =
+        FontChangeGeometryPolicy::for_live_frame(frame, inhibit, FontResizeAxis::Vertical);
+    let old_metrics = (frame.char_width, frame.char_height, frame.font_pixel_size);
+    // A second font change can arrive before the first native resize completes.
+    // Carry the requested grid forward instead of dividing the old allocation
+    // by metrics which already belong to the newer font.
+    let (cols, lines) = frame.pending_gui_resize.as_ref().map_or_else(
+        || {
+            (
+                (super::window_cmds::frame_text_width_pixels_in_state(&eval.frames, frame_id)
+                    as f32
+                    / frame.char_width.max(1.0))
+                .floor()
+                .max(1.0) as u32,
+                (super::window_cmds::frame_text_height_pixels(frame) as f32
+                    / frame.char_height.max(1.0))
+                .floor()
+                .max(1.0) as u32,
+            )
+        },
+        |pending| {
+            (
+                pending.width_cols.max(1) as u32,
+                pending.total_lines.max(1) as u32,
+            )
+        },
+    );
     sync_live_frame_font_state_in_state(
         &mut eval.frames,
         &mut eval.display_host,
         frame_id,
         requested,
         resolution,
-        geometry_policy,
+        vertical,
     );
+
+    let Some(frame) = eval.frames.get(frame_id) else {
+        return;
+    };
+    if old_metrics == (frame.char_width, frame.char_height, frame.font_pixel_size)
+        || frame.effective_window_system().is_none()
+        || eval.display_host.is_none()
+        || (horizontal == FontChangeGeometryPolicy::PreserveAllocatedPixels
+            && vertical == FontChangeGeometryPolicy::PreserveAllocatedPixels)
+    {
+        return;
+    }
+    // GNU new_font -> adjust_frame_size(..., 3, ..., Qfont). Preferences supply
+    // no metrics: both dimensions come from the opened font just installed.
+    // Inhibited axes retain their allocation, including partial character rows.
+    let width = match horizontal {
+        FontChangeGeometryPolicy::PreserveCharacterGrid => {
+            cols.saturating_mul(frame.char_width.max(1.0).round() as u32)
+        }
+        FontChangeGeometryPolicy::PreserveAllocatedPixels => {
+            super::window_cmds::frame_text_width_pixels_in_state(&eval.frames, frame_id)
+        }
+    };
+    let height = match vertical {
+        FontChangeGeometryPolicy::PreserveCharacterGrid => {
+            lines.saturating_mul(frame.char_height.max(1.0).round() as u32)
+        }
+        FontChangeGeometryPolicy::PreserveAllocatedPixels => {
+            super::window_cmds::frame_text_height_pixels(frame)
+        }
+    };
+    if let Err(err) = super::frame::request_live_gui_frame_resize_and_keep_pending(
+        &mut eval.frames,
+        &eval.buffers,
+        &mut eval.display_host,
+        frame_id,
+        super::window_cmds::FrameResizeRequest::TextPixels { width, height },
+    ) {
+        tracing::warn!(
+            "failed to request implied font resize for frame 0x{:x}: {:?}",
+            frame_id.0,
+            err
+        );
+    }
 }
 
 fn sync_live_frame_font_state_in_state(
@@ -583,19 +665,17 @@ fn sync_live_frame_font_state_in_state(
     // the character edges for any metric change, own or shared minibuffer.
     // The next redisplay re-grows the mini-window for multi-line content.
     //
-    // Not ported, deliberately: the implied native resize itself (the frame
-    // keeps its pixel size and the root loses lines; only an explicit
-    // width/height parameter is deferred through
-    // `defer_next_gui_parameter_resize` below), the `width`/`height` frame
-    // parameters in the new units (`resize_pixelwise` owns those), and the
-    // per-toolkit gates that skip the whole resize -- NS when the view is
-    // fullscreen (src/nsterm.m:11425), X for tooltip frames (src/xterm.c:
-    // 27178) -- under which GNU keeps a grown mini-window's pixel height.
-    if line_height_changed && geometry_policy == FontChangeGeometryPolicy::ResetMinibufferToFontLine
-    {
+    // The live evaluator entry point requests the implied native resize and
+    // retains the pending grid until acknowledgement. New-frame construction
+    // only installs metrics here; it has no prior native allocation to resize.
+    if line_height_changed && geometry_policy == FontChangeGeometryPolicy::PreserveCharacterGrid {
         frame.shrink_mini_window();
     }
     if geometry_changed {
+        frame.sync_menu_bar_height_from_parameters();
+        frame.sync_tool_bar_height_from_parameters();
+        frame.sync_tab_bar_height_from_parameters();
+        frame.sync_compact_bar_height_from_parameters();
         frame.sync_window_area_bounds();
     }
 
@@ -637,7 +717,7 @@ pub(crate) fn sync_live_frame_font_parameter_in_state(
         frame_id,
         &requested,
         &resolution,
-        FontChangeGeometryPolicy::ResetMinibufferToFontLine,
+        FontChangeGeometryPolicy::PreserveCharacterGrid,
     );
 }
 
