@@ -910,11 +910,14 @@ pub struct VideoImportCounts {
 /// end-to-end claim.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct VideoPresentationCounts {
+    /// GPU draw submissions containing this video.
     pub submitted_frames: u64,
+    /// Legacy diagnostic field: completed surface handoffs via queue.present.
+    /// This does not count compositor-confirmed presentations or scanout.
     pub presented_frames: u64,
 }
 
-/// Renderer-observed spacing between successful surface presentations.
+/// CPU-observed spacing between completed surface submissions.
 ///
 /// Percentiles cover the renderer's bounded recent observation window.  They
 /// measure the complete composited surface cadence for frames containing this

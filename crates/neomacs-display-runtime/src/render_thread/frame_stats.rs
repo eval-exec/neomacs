@@ -4,7 +4,7 @@
 //! Process-wide monotonic counters incremented from the render thread's
 //! scheduling and presentation hot points. They change no policy; they exist
 //! so scheduling changes can be judged by structural evidence (wakeups,
-//! requests, commits, glyph-build passes, presents, commit-to-present
+//! requests, commits, glyph-build passes, submissions, commit-to-submission
 //! latency) instead of by CPU percentages alone.
 //!
 //! Historical `present` counter/field names measure queue submission and
@@ -39,8 +39,8 @@ pub(super) static REDRAW_EVENTS: AtomicU64 = AtomicU64::new(0);
 pub(super) static SCENE_COMMITS: AtomicU64 = AtomicU64::new(0);
 /// Root glyph build/render passes (the expensive static-scene path).
 pub(super) static ROOT_GLYPH_PASSES: AtomicU64 = AtomicU64::new(0);
-/// Surface presents on top-level frame windows.
-pub(super) static SURFACE_PRESENTS: AtomicU64 = AtomicU64::new(0);
+/// Surface submissions on top-level frame windows.
+pub(super) static SURFACE_SUBMISSIONS: AtomicU64 = AtomicU64::new(0);
 /// Frame plans by render work class (frame scheduling plan, Stage 2).
 pub(super) static PLAN_NONE: AtomicU64 = AtomicU64::new(0);
 pub(super) static PLAN_COMPOSITE_ONLY: AtomicU64 = AtomicU64::new(0);
@@ -70,13 +70,13 @@ static PLAN_DEMAND_REASONS: [AtomicU64; super::frame_sched::DemandReason::COUNT]
 /// scheduled explains the tick. Kept as standing evidence for architectural
 /// invariant 12 ("every scheduled frame has at least one inspectable demand
 /// reason"), which a counter can attest and a code reading cannot.
-pub(super) static UNATTRIBUTED_PRESENT_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
-/// Microseconds from the most recently consumed scene commit to its present.
-pub(super) static LAST_COMMIT_TO_PRESENT_US: AtomicU64 = AtomicU64::new(0);
-/// Worst observed commit-to-present latency in microseconds.
-pub(super) static MAX_COMMIT_TO_PRESENT_US: AtomicU64 = AtomicU64::new(0);
+pub(super) static UNATTRIBUTED_SUBMISSION_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
+/// Microseconds from the pending scene commit to surface submission.
+pub(super) static LAST_COMMIT_TO_SUBMISSION_US: AtomicU64 = AtomicU64::new(0);
+/// Worst observed commit-to-submission latency in microseconds.
+pub(super) static MAX_COMMIT_TO_SUBMISSION_US: AtomicU64 = AtomicU64::new(0);
 
-/// Commit-to-present latency histogram: sample counts per log-scale microsecond
+/// Commit-to-submission latency histogram: sample counts per log-scale microsecond
 /// bucket (upper bounds in [`FRAME_TIME_BUCKET_UPPER_US`]). Lets a reader derive
 /// frame-time percentiles (p50/p95/p99) rather than only last/max.
 static FRAME_TIME_BUCKETS: [AtomicU64; 8] = [
@@ -105,7 +105,7 @@ fn record_frame_time(latency_us: u64) {
 
 /// Monotonic anchor for converting observations to storable microsecond ticks.
 static EPOCH: std::sync::OnceLock<EventTime> = std::sync::OnceLock::new();
-/// Microsecond tick (vs EPOCH) of the oldest scene commit not yet presented;
+/// Microsecond tick (vs EPOCH) of the oldest scene commit not yet submitted;
 /// 0 = none pending. Approximate under multiple windows, which is acceptable
 /// for Stage 0 evidence.
 static PENDING_COMMIT_TICK_US: AtomicU64 = AtomicU64::new(0);
@@ -191,23 +191,23 @@ pub(super) fn count_plan(window: NativeWindowId, plan: &FramePlan) {
     }
 }
 
-/// Record that a scene commit arrived; starts the commit-to-present clock if
-/// no earlier commit is still waiting to reach the screen.
+/// Record that a scene commit arrived; starts the commit-to-submission clock if
+/// no earlier commit is still waiting for submission.
 pub(super) fn note_scene_commit(now: EventTime) {
     count(&SCENE_COMMITS);
     let tick = tick_us(now);
     let _ = PENDING_COMMIT_TICK_US.compare_exchange(0, tick, Ordering::Relaxed, Ordering::Relaxed);
 }
 
-/// Record a top-level present; closes the commit-to-present measurement when
+/// Record a top-level submission; closes the commit-to-submission measurement when
 /// a commit is pending.
-pub(super) fn note_present(now: EventTime) {
-    count(&SURFACE_PRESENTS);
+pub(super) fn note_submission(now: EventTime) {
+    count(&SURFACE_SUBMISSIONS);
     let pending = PENDING_COMMIT_TICK_US.swap(0, Ordering::Relaxed);
     if pending != 0 {
         let latency_us = tick_us(now).saturating_sub(pending);
-        LAST_COMMIT_TO_PRESENT_US.store(latency_us, Ordering::Relaxed);
-        MAX_COMMIT_TO_PRESENT_US.fetch_max(latency_us, Ordering::Relaxed);
+        LAST_COMMIT_TO_SUBMISSION_US.store(latency_us, Ordering::Relaxed);
+        MAX_COMMIT_TO_SUBMISSION_US.fetch_max(latency_us, Ordering::Relaxed);
         record_frame_time(latency_us);
     }
 }
@@ -223,6 +223,7 @@ pub struct FrameSchedSnapshot {
     pub redraw_events: u64,
     pub scene_commits: u64,
     pub root_glyph_passes: u64,
+    /// Surface submissions; historical field name retained for diagnostics.
     pub presents: u64,
     pub plan_none: u64,
     pub plan_composite_only: u64,
@@ -230,9 +231,11 @@ pub struct FrameSchedSnapshot {
     pub plan_rebuild_scene: u64,
     pub retained_static_builds: u64,
     pub composite_only_frames: u64,
+    /// Latest commit-to-submission latency; historical diagnostic field name.
     pub last_commit_to_present_us: u64,
+    /// Maximum commit-to-submission latency; historical diagnostic field name.
     pub max_commit_to_present_us: u64,
-    /// Commit-to-present latency histogram (counts per bucket; bounds in
+    /// Commit-to-submission latency histogram (counts per bucket; bounds in
     /// [`FRAME_TIME_BUCKET_UPPER_US`]).
     pub frame_time_buckets: [u64; 8],
     /// Planned frames per demand reason, indexed as [`DEMAND_REASON_NAMES`].
@@ -290,18 +293,18 @@ pub fn snapshot() -> FrameSchedSnapshot {
         redraw_events: REDRAW_EVENTS.load(Ordering::Relaxed),
         scene_commits: SCENE_COMMITS.load(Ordering::Relaxed),
         root_glyph_passes: ROOT_GLYPH_PASSES.load(Ordering::Relaxed),
-        presents: SURFACE_PRESENTS.load(Ordering::Relaxed),
+        presents: SURFACE_SUBMISSIONS.load(Ordering::Relaxed),
         plan_none: PLAN_NONE.load(Ordering::Relaxed),
         plan_composite_only: PLAN_COMPOSITE_ONLY.load(Ordering::Relaxed),
         plan_repaint_layers: PLAN_REPAINT_LAYERS.load(Ordering::Relaxed),
         plan_rebuild_scene: PLAN_REBUILD_SCENE.load(Ordering::Relaxed),
         retained_static_builds: RETAINED_STATIC_BUILDS.load(Ordering::Relaxed),
         composite_only_frames: COMPOSITE_ONLY_FRAMES.load(Ordering::Relaxed),
-        last_commit_to_present_us: LAST_COMMIT_TO_PRESENT_US.load(Ordering::Relaxed),
-        max_commit_to_present_us: MAX_COMMIT_TO_PRESENT_US.load(Ordering::Relaxed),
+        last_commit_to_present_us: LAST_COMMIT_TO_SUBMISSION_US.load(Ordering::Relaxed),
+        max_commit_to_present_us: MAX_COMMIT_TO_SUBMISSION_US.load(Ordering::Relaxed),
         frame_time_buckets: std::array::from_fn(|i| FRAME_TIME_BUCKETS[i].load(Ordering::Relaxed)),
         demand_reasons: std::array::from_fn(|i| PLAN_DEMAND_REASONS[i].load(Ordering::Relaxed)),
-        unattributed_present_attempts: UNATTRIBUTED_PRESENT_ATTEMPTS.load(Ordering::Relaxed),
+        unattributed_present_attempts: UNATTRIBUTED_SUBMISSION_ATTEMPTS.load(Ordering::Relaxed),
     }
 }
 

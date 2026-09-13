@@ -51,9 +51,9 @@ impl PopupHost {
         role: super::PopupRole,
     ) -> Result<Option<neomacs_display_protocol::DrawableSurface>, String> {
         let parent = match self.surfaces.last() {
-            Some(parent) if parent.presented => parent.window.clone(),
-            // A child can only be created after its parent maps. Defer until
-            // the parent's redraw instead of exposing native readiness rules.
+            Some(parent) if parent.submitted => parent.window.clone(),
+            // Submit the parent's buffer before creating a child role. Native
+            // presentation feedback is not required to advance this hierarchy.
             Some(_) => return Ok(None),
             None => root,
         };
@@ -81,12 +81,15 @@ impl PopupHost {
         self.surfaces.get(depth).map(PopupSurface::geometry)
     }
 
-    /// Borrowed native parent for another passive popup. The parent must map
-    /// before a child can be created; callers retain child-before-parent teardown.
-    pub fn mapped_window(&self, depth: usize) -> Option<std::sync::Arc<dyn winit::window::Window>> {
+    /// Borrowed parent after its first buffer submission. Callers retain
+    /// child-before-parent teardown; this is not a compositor confirmation.
+    pub fn submitted_window(
+        &self,
+        depth: usize,
+    ) -> Option<std::sync::Arc<dyn winit::window::Window>> {
         self.surfaces
             .get(depth)
-            .filter(|s| s.presented)
+            .filter(|s| s.submitted)
             .map(|s| s.window.clone())
     }
     pub fn request_redraw(&self) {
@@ -107,7 +110,7 @@ impl PopupHost {
         surface.geometry()
     }
 
-    /// Acquire and present within one borrow of the hierarchy. Callers receive
+    /// Acquire and submit within one borrow of the hierarchy. Callers receive
     /// only a drawing target, never a native window or an owned surface image.
     /// The painter must submit its commands before returning.
     pub fn draw(
@@ -139,7 +142,7 @@ impl PopupHost {
         ));
         popup.window.pre_present_notify();
         queue.present(output);
-        popup.presented = true;
+        popup.submitted = true;
     }
     pub fn truncate(&mut self, depth: usize) {
         // Vec::truncate does not promise the child-before-parent native order.

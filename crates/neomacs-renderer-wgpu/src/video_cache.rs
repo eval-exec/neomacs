@@ -49,24 +49,24 @@ impl NativeVideoSessionId {
 }
 
 #[derive(Default)]
-enum SurfacePresentationState {
+enum SurfaceSubmissionState {
     #[default]
     Inactive,
     Recording(HashSet<VideoId>),
 }
 
-/// Renderer-owned submission and surface-presentation evidence.
+/// Renderer-owned GPU-draw and surface-submission evidence.
 ///
 /// A surface transaction is explicit: submissions outside one are still
-/// counted, but only IDs recorded between begin and successful present can
-/// advance the presented count. Cancellation drops that pending evidence.
+/// counted, but only IDs recorded between begin and surface submission advance
+/// the legacy `presented_frames` count. Cancellation drops pending evidence.
 #[derive(Default)]
-struct VideoPresentationTracker {
+struct VideoSubmissionTracker {
     counts: HashMap<VideoId, neomacs_video::VideoPresentationCounts>,
-    timing: HashMap<VideoId, PresentationTimingState>,
+    timing: HashMap<VideoId, SubmissionTimingState>,
     gpu_timing_status: neomacs_video::VideoGpuTimingStatus,
     gpu_timing: HashMap<VideoId, GpuTimingState>,
-    surface: SurfacePresentationState,
+    surface: SurfaceSubmissionState,
 }
 
 #[derive(Default)]
@@ -86,11 +86,11 @@ impl GpuTimingState {
     }
 }
 
-const PRESENTATION_TIMING_WINDOW: usize = 4096;
+const SUBMISSION_TIMING_WINDOW: usize = 4096;
 
 #[derive(Default)]
-struct PresentationTimingState {
-    last_presented_at: Option<std::time::Instant>,
+struct SubmissionTimingState {
+    last_submitted_at: Option<std::time::Instant>,
     intervals_us: VecDeque<u64>,
     interval_samples: u64,
     interval_total_us: u64,
@@ -98,12 +98,12 @@ struct PresentationTimingState {
     interval_max_us: Option<u64>,
 }
 
-impl PresentationTimingState {
-    fn record(&mut self, presented_at: std::time::Instant) {
-        let Some(previous) = self.last_presented_at.replace(presented_at) else {
+impl SubmissionTimingState {
+    fn record(&mut self, submitted_at: std::time::Instant) {
+        let Some(previous) = self.last_submitted_at.replace(submitted_at) else {
             return;
         };
-        let Some(interval) = presented_at.checked_duration_since(previous) else {
+        let Some(interval) = submitted_at.checked_duration_since(previous) else {
             return;
         };
         let interval_us = u64::try_from(interval.as_micros()).unwrap_or(u64::MAX);
@@ -117,7 +117,7 @@ impl PresentationTimingState {
             self.interval_max_us
                 .map_or(interval_us, |old| old.max(interval_us)),
         );
-        if self.intervals_us.len() == PRESENTATION_TIMING_WINDOW {
+        if self.intervals_us.len() == SUBMISSION_TIMING_WINDOW {
             self.intervals_us.pop_front();
         }
         self.intervals_us.push_back(interval_us);
@@ -146,12 +146,12 @@ fn percentile(sorted: &[u64], percentile: usize) -> Option<u64> {
     sorted.get(rank.saturating_sub(1)).copied()
 }
 
-impl VideoPresentationTracker {
+impl VideoSubmissionTracker {
     fn begin_measurement_epoch(&mut self) {
         self.counts.clear();
         self.timing.clear();
         self.gpu_timing.clear();
-        self.surface = SurfacePresentationState::Inactive;
+        self.surface = SurfaceSubmissionState::Inactive;
     }
 
     fn set_gpu_timing_status(&mut self, status: neomacs_video::VideoGpuTimingStatus) {
@@ -159,7 +159,7 @@ impl VideoPresentationTracker {
     }
 
     fn begin_surface(&mut self) {
-        self.surface = SurfacePresentationState::Recording(HashSet::new());
+        self.surface = SurfaceSubmissionState::Recording(HashSet::new());
     }
 
     fn record_submitted(&mut self, ids: impl IntoIterator<Item = VideoId>) {
@@ -167,34 +167,31 @@ impl VideoPresentationTracker {
         for id in unique {
             let counts = self.counts.entry(id).or_default();
             counts.submitted_frames = counts.submitted_frames.saturating_add(1);
-            if let SurfacePresentationState::Recording(pending) = &mut self.surface {
+            if let SurfaceSubmissionState::Recording(pending) = &mut self.surface {
                 pending.insert(id);
             }
         }
     }
 
-    fn finish_presented_surface(&mut self) {
-        // CPU STOPWATCH, NOT A VISUAL PHASE: this feeds the presentation
-        // interval histogram (p50/p95/p99) that diagnoses how the compositor
-        // actually paced us. Dating it to the frame's predicted presentation
-        // would make it measure the schedule we asked for instead of the one
-        // we got, which is exactly the discrepancy it exists to expose.
-        self.finish_presented_surface_at(std::time::Instant::now());
+    fn finish_submitted_surface(&mut self) {
+        // Measure actual CPU-side handoff intervals, not predicted scheduler
+        // timestamps. These samples do not establish native presentation times.
+        self.finish_submitted_surface_at(std::time::Instant::now());
     }
 
-    fn finish_presented_surface_at(&mut self, presented_at: std::time::Instant) {
-        let SurfacePresentationState::Recording(pending) = std::mem::take(&mut self.surface) else {
+    fn finish_submitted_surface_at(&mut self, submitted_at: std::time::Instant) {
+        let SurfaceSubmissionState::Recording(pending) = std::mem::take(&mut self.surface) else {
             return;
         };
         for id in pending {
             let counts = self.counts.entry(id).or_default();
             counts.presented_frames = counts.presented_frames.saturating_add(1);
-            self.timing.entry(id).or_default().record(presented_at);
+            self.timing.entry(id).or_default().record(submitted_at);
         }
     }
 
     fn cancel_surface(&mut self) {
-        self.surface = SurfacePresentationState::Inactive;
+        self.surface = SurfaceSubmissionState::Inactive;
     }
 
     fn counts(&self, id: VideoId) -> neomacs_video::VideoPresentationCounts {
@@ -204,7 +201,7 @@ impl VideoPresentationTracker {
     fn timing(&self, id: VideoId) -> neomacs_video::VideoPresentationTiming {
         self.timing
             .get(&id)
-            .map_or_else(Default::default, PresentationTimingState::diagnostics)
+            .map_or_else(Default::default, SubmissionTimingState::diagnostics)
     }
 
     fn record_gpu_frame_time(&mut self, ids: impl IntoIterator<Item = VideoId>, duration_us: u64) {
@@ -228,7 +225,7 @@ impl VideoPresentationTracker {
         self.counts.remove(&id);
         self.timing.remove(&id);
         self.gpu_timing.remove(&id);
-        if let SurfacePresentationState::Recording(pending) = &mut self.surface {
+        if let SurfaceSubmissionState::Recording(pending) = &mut self.surface {
             pending.remove(&id);
         }
     }
@@ -524,7 +521,7 @@ pub struct VideoCache {
     native_to_video: HashMap<NativeVideoSessionId, VideoId>,
     accounting: Vec<crate::media_budget::MediaAccounting>,
     gpu_accounting: VideoGpuAccounting,
-    presentation: VideoPresentationTracker,
+    presentation: VideoSubmissionTracker,
     terminal_diagnostics: HashMap<VideoId, neomacs_video::VideoSessionDiagnostics>,
     last_service: VideoServiceResult,
 }
@@ -564,7 +561,7 @@ impl VideoCache {
             native_to_video: HashMap::new(),
             accounting: Vec::new(),
             gpu_accounting: VideoGpuAccounting::default(),
-            presentation: VideoPresentationTracker::default(),
+            presentation: VideoSubmissionTracker::default(),
             terminal_diagnostics: HashMap::new(),
             last_service: VideoServiceResult::default(),
         }
@@ -757,8 +754,8 @@ impl VideoCache {
         self.presentation.cancel_surface();
     }
 
-    pub(crate) fn finish_presented_surface(&mut self) {
-        self.presentation.finish_presented_surface();
+    pub(crate) fn finish_submitted_surface(&mut self) {
+        self.presentation.finish_submitted_surface();
     }
 
     pub(crate) fn record_submitted_frames(&mut self, ids: impl IntoIterator<Item = VideoId>) {

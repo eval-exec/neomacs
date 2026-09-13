@@ -342,16 +342,16 @@ impl WgpuRenderer {
         self.caches.video.begin_surface_render();
     }
 
-    /// Discard presentation evidence when the swapchain render did not finish.
+    /// Discard pending submission evidence when the swapchain render did not finish.
     #[cfg(feature = "video")]
     pub fn cancel_video_surface_render(&mut self) {
         self.caches.video.cancel_surface_render();
     }
 
-    /// Promote submitted video draws after their swapchain image is presented.
+    /// Record surface handoff after queue.present returns for these video draws.
     #[cfg(feature = "video")]
-    pub fn finish_presented_video_surface(&mut self) {
-        self.caches.video.finish_presented_surface();
+    pub fn finish_submitted_video_surface(&mut self) {
+        self.caches.video.finish_submitted_surface();
     }
 
     /// Get video dimensions

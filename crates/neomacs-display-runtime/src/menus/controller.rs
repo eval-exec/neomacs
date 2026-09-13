@@ -98,7 +98,7 @@ impl MenuPresentation {
             // Never insert a passive sibling beneath an already-open submenu.
             if depth + 1 == self.panels.len() {
                 if let (Some(parent), Some(request)) =
-                    (self.host.mapped_window(depth), self.request.as_ref())
+                    (self.host.submitted_window(depth), self.request.as_ref())
                 {
                     let policy = request.tooltips.as_ref().unwrap();
                     let panel = request.session.panel(depth).unwrap();

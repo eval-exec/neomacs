@@ -182,8 +182,8 @@ impl RenderApp {
             window_state.render.publish_submitted_projection(projection);
         }
         #[cfg(feature = "video")]
-        renderer.finish_presented_video_surface();
-        frame_stats::note_present(neomacs_display_protocol::frame_time::observe_platform_now());
+        renderer.finish_submitted_video_surface();
+        frame_stats::note_submission(neomacs_display_protocol::frame_time::observe_platform_now());
 
         if !child_frame_ids.is_empty() || !removed_child_frame_ids.is_empty() {
             tracing::debug!(

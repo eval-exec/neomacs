@@ -86,7 +86,7 @@ impl PopupSurface {
             window,
             _parent: parent,
             config,
-            presented: false,
+            submitted: false,
         })
     }
 }

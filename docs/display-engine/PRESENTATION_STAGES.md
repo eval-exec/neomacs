@@ -46,9 +46,14 @@ renamed blindly:
 | --- | --- |
 | `PresentationId`, `PresentationActivated`, `PresentationRetired` | Immutable evaluator snapshot identity and lifetime. One snapshot can produce many animation submissions. Renaming these to native submission IDs would be incorrect. |
 | `PresentedPointer`, `PresentedHitQuery`, `PresentMapping` | Geometry/identity witnesses used by the interaction model. Not native feedback receipts. Their coordinate-safety guarantees remain intact. |
-| Popup `presented` flag in `presentation/host.rs` | Set immediately after popup queue submission; permits child popup creation. It must not become a wait for optional native confirmation. Local naming can be tightened in a separate popup-only change. |
+| Popup `submitted` flag and `submitted_window` accessor | Set immediately after popup queue submission; permits child popup creation without waiting for optional native confirmation. |
 | `frame_stats` fields containing `present` | Historical queue-submission counters and commit-to-submission measurements. Log fields are retained for existing tooling, with their semantics documented in the module. Not scanout latency. |
-| `finish_presented_video_surface` / video `presented_frames` | Optional video adapter records surface submission evidence and local timing after `queue.present`. This audit does not claim those counters are native display acknowledgments or change their exported contract. |
+| `finish_submitted_video_surface` / exported video `presented_frames` | Optional video adapter records surface submission evidence and local timing after `queue.present`. Internal tracker names use submission; the historical exported counter remains compatible. Neither records native display acknowledgments. |
+
+The follow-up cleanup also names private frame counters and their recording
+method `submission`. Exported snapshot and log fields containing `present`
+remain unchanged. The video-enabled runtime, video cache, and video model
+nextest selection passed all 991 tests (695 excluded or skipped).
 
 The renderer's “compositor” is also distinct from the OS compositor. A
 Neomacs composition transform can be valid without the OS having displayed

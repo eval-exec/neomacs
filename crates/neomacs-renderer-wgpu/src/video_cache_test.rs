@@ -168,7 +168,7 @@ fn native_session_identity_is_distinct_from_stable_video_identity() {
 #[test]
 fn presentation_tracker_distinguishes_gpu_submission_from_surface_present() {
     let id = VideoId::new(17);
-    let mut tracker = super::VideoPresentationTracker::default();
+    let mut tracker = super::VideoSubmissionTracker::default();
 
     tracker.begin_surface();
     tracker.record_submitted([id, id]);
@@ -179,7 +179,7 @@ fn presentation_tracker_distinguishes_gpu_submission_from_surface_present() {
             presented_frames: 0,
         }
     );
-    tracker.finish_presented_surface();
+    tracker.finish_submitted_surface();
     assert_eq!(
         tracker.counts(id),
         neomacs_video::VideoPresentationCounts {
@@ -203,13 +203,13 @@ fn presentation_tracker_distinguishes_gpu_submission_from_surface_present() {
 #[test]
 fn presentation_tracker_reports_exact_frame_pacing_percentiles() {
     let id = VideoId::new(18);
-    let mut tracker = super::VideoPresentationTracker::default();
+    let mut tracker = super::VideoSubmissionTracker::default();
     let started = Instant::now();
 
     for offset_ms in [0, 16, 33, 50, 100] {
         tracker.begin_surface();
         tracker.record_submitted([id]);
-        tracker.finish_presented_surface_at(started + Duration::from_millis(offset_ms));
+        tracker.finish_submitted_surface_at(started + Duration::from_millis(offset_ms));
     }
 
     assert_eq!(
@@ -230,7 +230,7 @@ fn presentation_tracker_reports_exact_frame_pacing_percentiles() {
 fn presentation_tracker_aggregates_supported_gpu_pass_timings() {
     let first = VideoId::new(19);
     let second = VideoId::new(20);
-    let mut tracker = super::VideoPresentationTracker::default();
+    let mut tracker = super::VideoSubmissionTracker::default();
 
     tracker.set_gpu_timing_status(neomacs_video::VideoGpuTimingStatus::Enabled);
     tracker.record_gpu_frame_time([first, second, first], 750);
@@ -253,12 +253,12 @@ fn presentation_tracker_aggregates_supported_gpu_pass_timings() {
 fn measurement_epoch_discards_warmup_distributions() {
     let id = VideoId::new(19);
     let started = Instant::now();
-    let mut tracker = super::VideoPresentationTracker::default();
+    let mut tracker = super::VideoSubmissionTracker::default();
     tracker.set_gpu_timing_status(neomacs_video::VideoGpuTimingStatus::Enabled);
     for offset_ms in [0, 16, 116] {
         tracker.begin_surface();
         tracker.record_submitted([id]);
-        tracker.finish_presented_surface_at(started + Duration::from_millis(offset_ms));
+        tracker.finish_submitted_surface_at(started + Duration::from_millis(offset_ms));
     }
     tracker.record_gpu_frame_time([id], 9_000);
 
@@ -266,7 +266,7 @@ fn measurement_epoch_discards_warmup_distributions() {
     for offset_ms in [200, 216, 233] {
         tracker.begin_surface();
         tracker.record_submitted([id]);
-        tracker.finish_presented_surface_at(started + Duration::from_millis(offset_ms));
+        tracker.finish_submitted_surface_at(started + Duration::from_millis(offset_ms));
     }
     tracker.record_gpu_frame_time([id], 200);
 

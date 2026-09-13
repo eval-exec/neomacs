@@ -8,7 +8,7 @@ pub(super) struct PopupSurface {
     pub(super) window: Arc<dyn Window>,
     pub(in crate::presentation) _parent: Arc<dyn Window>,
     pub(super) config: wgpu::SurfaceConfiguration,
-    pub(super) presented: bool,
+    pub(super) submitted: bool,
 }
 
 impl PopupSurface {

@@ -109,7 +109,7 @@ impl Tooltips {
                     ticket.cancel();
                 }
                 if let TooltipSource::Lisp(ticket) = &source
-                    && mapped.host.mapped_window(0).is_some()
+                    && mapped.host.submitted_window(0).is_some()
                 {
                     ticket.mark_visible();
                 }
@@ -239,7 +239,7 @@ impl Tooltips {
                 mapped.host.draw(depth, device, queue, |target| {
                     renderer.render_native_tooltip(target, &mapped.paint, &mut mapped.atlas)
                 });
-                if mapped.host.mapped_window(depth).is_some() {
+                if mapped.host.submitted_window(depth).is_some() {
                     if let TooltipSource::Lisp(ticket) = &mapped.ready.source {
                         ticket.mark_visible();
                     }

@@ -442,7 +442,7 @@ impl RenderApp {
                     super::frame_stats::count_plan(sched_id, &plan);
                     if plan.reasons.is_empty() {
                         super::frame_stats::count(
-                            &super::frame_stats::UNATTRIBUTED_PRESENT_ATTEMPTS,
+                            &super::frame_stats::UNATTRIBUTED_SUBMISSION_ATTEMPTS,
                         );
                         debug_assert!(
                             false,
