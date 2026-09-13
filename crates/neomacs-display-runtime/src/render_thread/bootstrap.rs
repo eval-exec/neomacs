@@ -1,10 +1,13 @@
+use super::startup::{
+    self, InitialWindow, InitialWindowReceiver, InitialWindowSize, RenderLoopError,
+};
 use super::{RenderApp, SharedImageRenderState, SharedMonitorInfo, surface_readback};
 use crate::render_thread::frame_windows::{FrameLifecycle, GuiFrameNativeWindowState};
 use crate::render_thread::state::RenderGpuContext;
 use crate::thread_comm::{InputEvent, RenderComms};
 use neomacs_renderer_wgpu::WgpuRenderer;
 use std::sync::Arc;
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::event_loop::{ActiveEventLoop, EventLoop};
 #[cfg(target_os = "linux")]
 use winit::platform::wayland::EventLoopBuilderExtWayland;
 #[cfg(target_os = "linux")]
@@ -470,12 +473,34 @@ pub(crate) fn run_render_loop_with_event_loop(
     poll_when_idle: bool,
     #[cfg(feature = "neo-term")] shared_terminals: crate::terminal::SharedTerminals,
 ) -> Result<(), String> {
-    tracing::info!("Render thread starting");
+    run_render_loop_with_startup(
+        event_loop,
+        comms,
+        InitialWindow::Ready {
+            size: InitialWindowSize { width, height },
+            evaluator: None,
+        },
+        title,
+        image_metadata,
+        shared_monitors,
+        poll_when_idle,
+        #[cfg(feature = "neo-term")]
+        shared_terminals,
+    )
+    .map_err(|error| error.to_string())
+}
 
-    // Start with WaitUntil to avoid busy-polling; about_to_wait() adjusts dynamically
-    event_loop.set_control_flow(ControlFlow::WaitUntil(
-        std::time::Instant::now() + std::time::Duration::from_millis(16),
-    ));
+fn run_render_loop_with_startup(
+    event_loop: EventLoop,
+    comms: RenderComms,
+    initial: InitialWindow,
+    title: String,
+    image_metadata: SharedImageRenderState,
+    shared_monitors: SharedMonitorInfo,
+    poll_when_idle: bool,
+    #[cfg(feature = "neo-term")] shared_terminals: crate::terminal::SharedTerminals,
+) -> Result<(), RenderLoopError> {
+    tracing::info!("Render thread starting");
 
     #[cfg(feature = "video")]
     let video_wake = {
@@ -492,29 +517,32 @@ pub(crate) fn run_render_loop_with_event_loop(
         })
     };
 
-    let mut app = RenderApp::new(
-        comms,
-        width,
-        height,
-        title,
-        image_metadata,
-        shared_monitors,
-        poll_when_idle,
-        #[cfg(feature = "neo-term")]
-        shared_terminals,
-    );
-    #[cfg(feature = "video")]
-    {
-        app.video_wake = video_wake;
-    }
-    #[cfg(feature = "webview")]
-    {
-        app.webview_wake = webview_wake;
-    }
-
     tracing::info!("Render thread entering winit event loop");
-    let exit_input = app.comms.input_tx.clone();
-    let result = event_loop.run_app(app);
+    let exit_input = comms.input_tx.clone();
+    let result = startup::run(event_loop, initial, move |size| {
+        let app = RenderApp::new(
+            comms,
+            size.width,
+            size.height,
+            title,
+            image_metadata,
+            shared_monitors,
+            poll_when_idle,
+            #[cfg(feature = "neo-term")]
+            shared_terminals,
+        );
+        #[cfg(any(feature = "video", feature = "webview"))]
+        let mut app = app;
+        #[cfg(feature = "video")]
+        {
+            app.video_wake = video_wake;
+        }
+        #[cfg(feature = "webview")]
+        {
+            app.webview_wake = webview_wake;
+        }
+        app
+    });
     if let Err(ref e) = result {
         tracing::error!("Event loop error: {:?}", e);
     }
@@ -525,7 +553,7 @@ pub(crate) fn run_render_loop_with_event_loop(
     tracing::info!("Render thread exiting, sending WindowClose to Emacs");
     let _ = exit_input.send(InputEvent::WindowClose { emacs_frame_id: 0 });
 
-    result.map_err(|err| format!("Event loop error: {err}"))
+    result
 }
 
 /// Run the render loop on the current OS thread. Product GUI startup uses
@@ -534,31 +562,28 @@ pub(crate) fn run_render_loop_with_event_loop(
 pub fn run_render_loop_current_thread(
     event_loop: EventLoop,
     comms: RenderComms,
-    width: u32,
-    height: u32,
+    initial: InitialWindowReceiver,
     title: String,
     image_metadata: SharedImageRenderState,
     shared_monitors: SharedMonitorInfo,
-) -> Result<(), String> {
+) -> Result<(), RenderLoopError> {
     #[cfg(feature = "neo-term")]
     let shared_terminals = crate::terminal::new_shared_terminals();
     #[cfg(feature = "neo-term")]
     return run_render_loop_current_thread_with_terminals(
         event_loop,
         comms,
-        width,
-        height,
+        initial,
         title,
         image_metadata,
         shared_monitors,
         shared_terminals,
     );
     #[cfg(not(feature = "neo-term"))]
-    run_render_loop_with_event_loop(
+    run_render_loop_with_startup(
         event_loop,
         comms,
-        width,
-        height,
+        InitialWindow::Waiting(initial),
         title,
         image_metadata,
         shared_monitors,
@@ -575,18 +600,16 @@ pub fn run_render_loop_current_thread(
 pub fn run_render_loop_current_thread_with_terminals(
     event_loop: EventLoop,
     comms: RenderComms,
-    width: u32,
-    height: u32,
+    initial: InitialWindowReceiver,
     title: String,
     image_metadata: SharedImageRenderState,
     shared_monitors: SharedMonitorInfo,
     shared_terminals: crate::terminal::SharedTerminals,
-) -> Result<(), String> {
-    run_render_loop_with_event_loop(
+) -> Result<(), RenderLoopError> {
+    run_render_loop_with_startup(
         event_loop,
         comms,
-        width,
-        height,
+        InitialWindow::Waiting(initial),
         title,
         image_metadata,
         shared_monitors,

@@ -46,10 +46,6 @@ fn allowlist() -> BTreeMap<&'static str, &'static str> {
              begin_fps_cpu_span; the frame sample is the same for both ends of \
              that span, so it cannot measure it.",
         ),
-        (
-            "src/render_thread/bootstrap.rs",
-            "Runs before RenderApp exists: no coordinator, no tick, no frame.",
-        ),
     ])
 }
 

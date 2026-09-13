@@ -22,6 +22,7 @@ mod media;
 mod pointer_events;
 pub(in crate::render_thread) mod render_pass;
 mod render_quality;
+mod startup;
 mod state;
 mod surface_readback;
 mod terminal_commands;
@@ -49,6 +50,10 @@ mod window_events;
 pub use bootstrap::run_render_loop_current_thread_with_terminals;
 pub use bootstrap::{build_render_event_loop, run_render_loop, run_render_loop_current_thread};
 pub(crate) use lifecycle::PopupCommit;
+pub use startup::{
+    InitialWindowLifetime, InitialWindowReceiver, InitialWindowReply, InitialWindowSize,
+    RenderLoopError,
+};
 use state::{FpsCounter, ImeCursorArea, RenderApp};
 pub use state::{
     ImageDecodeTerminal, ImageRenderState, ImageTerminalProbe, ImageTerminalPublication,

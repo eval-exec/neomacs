@@ -55,27 +55,3 @@ impl PreparedGuiFrame {
         )
     }
 }
-
-type StartupResult = Result<PrimaryWindowSize, StartupFrameError>;
-
-/// Consumed by either success or failure. Dropping it during evaluator unwind
-/// disconnects the receiver, so the native thread cannot wait forever on panic.
-pub(super) struct StartupFrameReply(crossbeam_channel::Sender<StartupResult>);
-
-impl StartupFrameReply {
-    pub(super) fn channel() -> (Self, crossbeam_channel::Receiver<StartupResult>) {
-        let (tx, rx) = crossbeam_channel::bounded(1);
-        (Self(tx), rx)
-    }
-
-    pub(super) fn ready(
-        self,
-        frame: &PreparedGuiFrame,
-    ) -> Result<(), crossbeam_channel::SendError<StartupResult>> {
-        self.0.send(Ok(frame.size()))
-    }
-
-    pub(super) fn failed(self, error: StartupFrameError) {
-        let _ = self.0.send(Err(error));
-    }
-}

@@ -295,6 +295,10 @@ and identical SVG source. Logs are `platform-release-build.log`,
 
 ## Font-owned initial geometry (2026-09-13 follow-up)
 
+The native readiness wait described in this checkpoint is superseded by the
+[nonblocking startup lifecycle](2026-09-13-nonblocking-startup.md). The evaluator
+still owns the opened font and its initial geometry.
+
 The previous native-thread bootstrap measured generic monospace, while the
 evaluator later selected the desktop font. Under the controlled Ubuntu Mono
 13pt preference, GNU reported `(frame-width) = 80` but Neomacs reported 70.

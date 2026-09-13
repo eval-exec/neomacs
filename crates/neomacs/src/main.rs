@@ -3318,7 +3318,10 @@ fn run_gui_main_thread(
 
     let comms = ThreadComms::new();
     let (emacs_comms, render_comms) = comms.split();
-    let (startup_reply, startup_ready) = startup_frame::StartupFrameReply::channel();
+    let (startup_reply, startup_ready) =
+        neomacs_display_runtime::render_thread::InitialWindowReply::channel(
+            event_loop.create_proxy(),
+        );
     let gui_image_metadata: SharedImageRenderState =
         Arc::new(neomacs_display_runtime::render_thread::ImageRenderState::default());
     let shared_monitors: SharedMonitorInfo = Arc::new((Mutex::new(Vec::new()), Condvar::new()));
@@ -3339,39 +3342,16 @@ fn run_gui_main_thread(
         render_waker.clone(),
     );
 
-    // No native window or GPU resources exist until the evaluator has opened
-    // the font that owns the initial grid geometry. A disconnected reply means
-    // startup unwound; joining propagates its original panic instead of hanging.
-    let PrimaryWindowSize { width, height } = match startup_ready.recv() {
-        Ok(Ok(size)) => size,
-        result => {
-            if let Ok(Err(error)) = result {
-                eprintln!("neomacs: {error}");
-            }
-            match evaluator_handle.join() {
-                Err(payload) => std::panic::resume_unwind(payload),
-                Ok(exit) => std::process::exit(if exit.exit_code == 0 {
-                    1
-                } else {
-                    exit.exit_code
-                }),
-            }
-        }
-    };
-
-    tracing::info!(
-        "GUI event loop entering on OS main thread ({}x{})",
-        width,
-        height
-    );
+    // Enter winit immediately. Its startup lifecycle waits without blocking
+    // native dispatch, and creates the first window only with font-owned size.
+    tracing::info!("GUI event loop entering on OS main thread while evaluator prepares");
     let render_result = {
         #[cfg(feature = "neo-term")]
         {
             run_render_loop_current_thread_with_terminals(
                 event_loop,
                 render_comms,
-                width,
-                height,
+                startup_ready,
                 "Neomacs".to_string(),
                 Arc::clone(&gui_image_metadata),
                 Arc::clone(&shared_monitors),
@@ -3383,8 +3363,7 @@ fn run_gui_main_thread(
             run_render_loop_current_thread(
                 event_loop,
                 render_comms,
-                width,
-                height,
+                startup_ready,
                 "Neomacs".to_string(),
                 Arc::clone(&gui_image_metadata),
                 Arc::clone(&shared_monitors),
@@ -3393,6 +3372,16 @@ fn run_gui_main_thread(
     };
     if let Err(err) = &render_result {
         tracing::error!("GUI event loop exited with error: {err}");
+        eprintln!("neomacs: {err}");
+    }
+    if matches!(
+        render_result,
+        Err(neomacs_display_runtime::render_thread::RenderLoopError::StartupInterrupted(_))
+    ) {
+        // Native display loss can happen while the evaluator is inside an
+        // external font/image read. Joining it would reintroduce the startup
+        // hang. No native frame was installed; terminate the failed process.
+        std::process::exit(1);
     }
 
     let evaluator_exit = match evaluator_handle.join() {
@@ -3416,7 +3405,7 @@ fn run_gui_main_thread(
 fn spawn_gui_evaluator_worker(
     mode: RuntimeMode,
     startup: StartupOptions,
-    startup_reply: startup_frame::StartupFrameReply,
+    startup_reply: neomacs_display_runtime::render_thread::InitialWindowReply,
     bootstrap_display: BootstrapDisplayConfig,
     font_observer: neomacs_display_runtime::font_defaults::FontDefaultsObserver,
     emacs_comms: EmacsComms,
@@ -3535,7 +3524,7 @@ fn maybe_drain_aot_pgo(_mode: RuntimeMode, _evaluator: &Context) {}
 fn run_gui_evaluator_worker(
     mode: RuntimeMode,
     startup: StartupOptions,
-    startup_reply: startup_frame::StartupFrameReply,
+    startup_reply: neomacs_display_runtime::render_thread::InitialWindowReply,
     bootstrap_display: BootstrapDisplayConfig,
     mut font_observer: neomacs_display_runtime::font_defaults::FontDefaultsObserver,
     emacs_comms: EmacsComms,
@@ -3571,15 +3560,20 @@ fn run_gui_evaluator_worker(
     let prepared = match startup_frame::PreparedGuiFrame::prepare(bootstrap_display.clone()) {
         Ok(frame) => frame,
         Err(error) => {
-            startup_reply.failed(error);
+            startup_reply.failed(error.to_string());
             return EvaluatorExit::STARTUP_FAILED;
         }
     };
     let size = prepared.size();
     let primary_window_size: SharedPrimaryWindowSize = Arc::new(Mutex::new(size));
-    if startup_reply.ready(&prepared).is_err() {
+    let Some(_native_startup) =
+        startup_reply.ready(neomacs_display_runtime::render_thread::InitialWindowSize {
+            width: size.width,
+            height: size.height,
+        })
+    else {
         return EvaluatorExit::STARTUP_FAILED;
-    }
+    };
     let _bootstrap = prepared.install(&mut evaluator);
     let frame_id = evaluator
         .frame_manager()
