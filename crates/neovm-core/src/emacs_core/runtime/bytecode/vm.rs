@@ -4545,20 +4545,31 @@ impl<'a> Vm<'a> {
                                     cursor.len = len - 1;
                                     None
                                 } else {
-                                    cursor.len = len - 2;
-                                    Some((a, b))
+                                    // LEAVE both operands on the stack. `vm_try!`
+                                    // publishes the cursor before the call, so
+                                    // they stay rooted on `bc_buf` for its whole
+                                    // duration -- no copy into a `LispArgVec`, no
+                                    // root frame, no per-argument root push. This
+                                    // is GNU's `Bplus` slow arm, which is
+                                    // `Fplus (2, &TOP)`: a pointer INTO the live
+                                    // stack. Popping first (as this did) put the
+                                    // operands above the published length, which
+                                    // is precisely what forced the copy and the
+                                    // explicit rooting.
+                                    Some(len - 2)
                                 }
                             } else {
-                                cursor.len = len - 2;
-                                Some((a, b))
+                                Some(len - 2)
                             }
                         };
-                        if let Some((a, b)) = fallback {
-                            let result = vm_try!(self.dispatch_vm_arith_with_frame(
-                                func,
-                                Self::cached_builtin_id("+", &PLUS_ID),
-                                &[a, b]
+                        if let Some(args_start) = fallback {
+                            let result = vm_try!(self.call_function_from_stack_args(
+                                Value::subr_from_sym_id(Self::cached_builtin_id("+", &PLUS_ID)),
+                                args_start,
+                                2,
+                                true,
                             ));
+                            cursor.len = args_start;
                             stk_push!(result);
                         }
                     }
