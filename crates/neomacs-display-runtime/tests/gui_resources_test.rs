@@ -109,23 +109,37 @@ fn windows_resources_preserve_gnu_precedence_types_and_empty_values() {
 fn cocoa_resources_use_standard_defaults_class_and_gnu_boolean_prefixes() {
     use neomacs_display_runtime::gui_resources::GuiResources;
     use neovm_core::emacs_core::display_host::GuiResourceQuery;
-    use objc2::rc::autoreleasepool;
-    use objc2_foundation::{NSDictionary, NSString, NSUserDefaults};
+    use objc2::rc::{Retained, autoreleasepool};
+    use objc2::runtime::AnyObject;
+    use objc2_foundation::{NSArgumentDomain, NSDictionary, NSNumber, NSString, NSUserDefaults};
 
     autoreleasepool(|_| {
         let defaults = NSUserDefaults::standardUserDefaults();
-        let domain = NSString::from_str("NeomacsResourceContract");
+        // SAFETY: Foundation's immutable constant is valid for the process lifetime.
+        let domain = unsafe { NSArgumentDomain };
         let key = NSString::from_str("ResourceContract");
-        // A volatile suite is process-local and never changes desktop defaults.
-        defaults.addSuiteNamed(&domain);
-        struct Suite<'a>(&'a NSUserDefaults, &'a NSString);
-        impl Drop for Suite<'_> {
+        // NSArgumentDomain is volatile and is always in the defaults search
+        // list. A custom volatile domain is not searched by addSuiteNamed.
+        struct ArgumentDomain<'a> {
+            defaults: &'a NSUserDefaults,
+            name: &'a NSString,
+            previous: Retained<NSDictionary<NSString, AnyObject>>,
+        }
+        impl Drop for ArgumentDomain<'_> {
             fn drop(&mut self) {
-                self.0.removeSuiteNamed(self.1);
-                self.0.removeVolatileDomainForName(self.1);
+                // SAFETY: this is the unchanged property-list dictionary read
+                // from this domain before installing the test fixture.
+                unsafe {
+                    self.defaults
+                        .setVolatileDomain_forName(&self.previous, self.name);
+                }
             }
         }
-        let _suite = Suite(&defaults, &domain);
+        let _domain = ArgumentDomain {
+            defaults: &defaults,
+            name: domain,
+            previous: defaults.volatileDomainForName(domain),
+        };
         let resources = GuiResources::default();
         let mut query = GuiResourceQuery {
             name: "ignored.font".into(),
@@ -145,10 +159,24 @@ fn cocoa_resources_use_standard_defaults_class_and_gnu_boolean_prefixes() {
             );
             // SAFETY: the dictionary contains only NSString keys and values.
             unsafe {
-                defaults.setVolatileDomain_forName(&dictionary, &domain);
+                defaults.setVolatileDomain_forName(&dictionary, domain);
             }
+            assert_eq!(defaults.stringForKey(&key).as_deref(), Some(&*value));
             assert_eq!(resources.query(&query).as_deref(), Some(expected));
         }
+        let number = NSNumber::new_i32(42);
+        let custom_key = NSString::from_str("Custom.ResourceContract");
+        let dictionary = NSDictionary::<NSString, AnyObject>::from_slices(
+            &[&*key, &*custom_key],
+            &[&*number, &*number],
+        );
+        // SAFETY: NSNumber is a supported property-list value.
+        unsafe {
+            defaults.setVolatileDomain_forName(&dictionary, domain);
+        }
+        assert_eq!(resources.query(&query).as_deref(), Some("42"));
+        query.class = "Custom.ResourceContract".into();
+        assert_eq!(resources.query(&query).as_deref(), Some("42"));
         query.inhibit_native = true;
         assert_eq!(resources.query(&query), None);
     });
