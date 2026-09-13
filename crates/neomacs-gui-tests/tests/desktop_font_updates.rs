@@ -35,6 +35,8 @@ fn opted_out_frame_keeps_its_font_while_queries_refresh() {
     );
 }
 
+#[derive(strum::AsRefStr)]
+#[strum(serialize_all = "kebab-case")]
 enum LiveFontCase {
     OptIn,
     OptOut,
@@ -43,6 +45,8 @@ enum LiveFontCase {
     Repeated,
     Inhibited,
     Child,
+    ChildChrome,
+    Minimum,
     Fullscreen,
 }
 
@@ -66,6 +70,46 @@ fn gnu_live_font_preserves_child_frame_grid() {
 #[ignore = "requires release binary/pdump, Weston, GSettings and fonts"]
 fn live_font_preserves_child_frame_grid() {
     check_live_font(GuiBackend::LinuxWayland, "live-child", LiveFontCase::Child);
+}
+
+#[test]
+#[ignore = "requires GNU GUI Emacs, Xvfb, GSettings and fonts"]
+fn gnu_child_chrome_preserves_initial_and_live_font_text_grid() {
+    check_live_font(
+        GuiBackend::LinuxX11,
+        "gnu-live-child-chrome",
+        LiveFontCase::ChildChrome,
+    );
+}
+
+#[test]
+#[ignore = "requires release binary/pdump, Weston, GSettings and fonts"]
+fn child_chrome_preserves_initial_and_live_font_text_grid() {
+    check_live_font(
+        GuiBackend::LinuxWayland,
+        "live-child-chrome",
+        LiveFontCase::ChildChrome,
+    );
+}
+
+#[test]
+#[ignore = "requires GNU GUI Emacs, Xvfb, GSettings and fonts"]
+fn gnu_split_window_minimum_overrides_font_resize_inhibition() {
+    check_live_font(
+        GuiBackend::LinuxX11,
+        "gnu-live-minimum",
+        LiveFontCase::Minimum,
+    );
+}
+
+#[test]
+#[ignore = "requires release binary/pdump, Weston, GSettings and fonts"]
+fn split_window_minimum_overrides_font_resize_inhibition() {
+    check_live_font(
+        GuiBackend::LinuxWayland,
+        "live-minimum",
+        LiveFontCase::Minimum,
+    );
 }
 
 #[test]
@@ -193,19 +237,7 @@ fn check_live_font(backend: GuiBackend, scenario: &str, case: LiveFontCase) {
     )
     .with_program(binary)
     .with_env("GSETTINGS_BACKEND", "keyfile")
-    .with_env(
-        "NEOMACS_GUI_LIVE_FONT_CASE",
-        match case {
-            LiveFontCase::OptIn => "opt-in",
-            LiveFontCase::OptOut => "opt-out",
-            LiveFontCase::ExplicitAndFuture => "explicit-and-future",
-            LiveFontCase::Geometry => "geometry",
-            LiveFontCase::Repeated => "repeated",
-            LiveFontCase::Inhibited => "inhibited",
-            LiveFontCase::Child => "child",
-            LiveFontCase::Fullscreen => "fullscreen",
-        },
-    )
+    .with_env("NEOMACS_GUI_LIVE_FONT_CASE", case.as_ref())
     .with_env("GSETTINGS_SCHEMA_DIR", schemas.to_string_lossy())
     .with_env("XDG_CONFIG_HOME", config.to_string_lossy());
     if backend == GuiBackend::LinuxWayland {

@@ -6541,7 +6541,8 @@ fn x_create_frame_with_parent_frame_creates_gui_child_overlay_without_host_windo
     );
     assert_eq!(child.left_pos, 30);
     assert_eq!(child.top_pos, 40);
-    assert_eq!(child.width, 200);
+    // 20 text columns plus default fringes (8+8) and scrollbar (one cell).
+    assert_eq!(child.width, 226);
     assert_eq!(child.height, 100);
     assert_eq!(child.char_width, 10.0);
     assert_eq!(child.char_height, 20.0);
@@ -6918,12 +6919,13 @@ fn x_create_frame_accepts_text_pixel_size_on_gui_child_frame() {
 
     let child = ev.frames.get(child_id).expect("child frame");
     assert_eq!(requests.borrow().len(), 0);
-    assert_eq!(child.width, 194);
+    // 190 text pixels, default horizontal chrome (26), and two 2px borders.
+    assert_eq!(child.width, 220);
     assert_eq!(child.height, 82);
     assert_eq!(child.internal_border_width(), 2);
     assert_eq!(
         *child.root_window.bounds(),
-        crate::window::Rect::new(2.0, 2.0, 190.0, 78.0)
+        crate::window::Rect::new(2.0, 2.0, 216.0, 78.0)
     );
 }
 

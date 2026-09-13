@@ -3320,7 +3320,7 @@ pub(crate) fn builtin_internal_set_lisp_face_attribute(
                     if face_name == "default"
                         && let FontFaceRealizationTarget::LiveFrame(frame_id) = target
                     {
-                        sync_live_frame_font_state(eval, frame_id, &value, &resolution);
+                        sync_live_frame_font_state(eval, frame_id, &value, &resolution)?;
                     }
                 }
             } else if face_name == "default"
@@ -3330,7 +3330,7 @@ pub(crate) fn builtin_internal_set_lisp_face_attribute(
                 // font against its own display metrics after a family, height,
                 // weight, slant, or width change.
                 for frame_id in changed_live_frames.iter().copied() {
-                    sync_live_default_face_font_state(eval, frame_id);
+                    sync_live_default_face_font_state(eval, frame_id)?;
                 }
             }
 

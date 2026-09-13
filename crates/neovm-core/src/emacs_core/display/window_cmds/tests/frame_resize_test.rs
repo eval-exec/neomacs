@@ -1,6 +1,125 @@
 use super::*;
 
 #[test]
+fn font_resize_propagates_nonlocal_exits_from_window_minimum_policy() {
+    let mut eval = Context::new();
+    let buffer = eval.buffers.create_buffer("*font-minimum-exit*");
+    let fid = eval.frames.create_frame("minimum-exit", 800, 600, buffer);
+    let frame = eval.frames.get_mut(fid).unwrap();
+    frame.set_window_system(Some(Value::symbol("neo")));
+    frame.char_width = 8.0;
+    frame.char_height = 16.0;
+    let host = RecordingDisplayHost::with_resolved_frame_font(remapped_mono_font_metrics());
+    let requests = host.resized.clone();
+    eval.set_display_host(Box::new(host));
+    let result = eval
+        .eval_str(
+            r#"(progn
+          (fset 'frame-windows-min-size (lambda (&rest args) (throw 'minimum 'escaped)))
+          (catch 'minimum
+            (internal-set-lisp-face-attribute 'default :font "Remapped Mono-24" nil)
+            'swallowed))"#,
+        )
+        .unwrap();
+    assert_eq!(result, Value::symbol("escaped"));
+    assert!(requests.borrow().is_empty());
+}
+
+#[test]
+fn explicit_frame_minimum_overrides_inhibited_font_resize_on_only_that_axis() {
+    let mut eval = Context::new();
+    let buffer = eval.buffers.create_buffer("*font-minimum*");
+    let fid = eval.frames.create_frame("minimum", 800, 600, buffer);
+    let frame = eval.frames.get_mut(fid).unwrap();
+    frame.set_window_system(Some(Value::symbol("neo")));
+    frame.char_width = 8.0;
+    frame.char_height = 16.0;
+    let host = RecordingDisplayHost::with_resolved_frame_font(remapped_mono_font_metrics());
+    let requests = host.resized.clone();
+    eval.set_display_host(Box::new(host));
+    eval.eval_str(
+        r#"(progn
+       (modify-frame-parameters nil '((min-width . 120)))
+       (setq frame-inhibit-implied-resize t)
+       (internal-set-lisp-face-attribute 'default :font "Remapped Mono-24" nil))"#,
+    )
+    .unwrap();
+    let requests = requests.borrow();
+    let request = requests
+        .last()
+        .expect("minimum must trigger a native resize");
+    assert_eq!(request.width, 120 * 16);
+    assert_eq!(request.height, 600);
+}
+
+#[test]
+fn native_resize_counts_the_entire_grown_minibuffer_in_frame_height() {
+    let mut eval = Context::new();
+    let buffer = eval.buffers.create_buffer("*grown-minibuffer*");
+    let fid = eval.frames.create_frame("grown", 640, 384, buffer);
+    let frame = eval.frames.get_mut(fid).unwrap();
+    frame.set_window_system(Some(Value::symbol("neo")));
+    frame.char_width = 8.0;
+    frame.char_height = 16.0;
+    frame.resize_pixelwise(640, 384);
+    frame.grow_mini_window_with_max_lines(2, 10.0);
+    assert_eq!(
+        frame.minibuffer_leaf.as_ref().unwrap().bounds().height,
+        48.0
+    );
+    eval.set_display_host(Box::new(RecordingDisplayHost::new()));
+    eval.apply_resize_input_event(720, 384, 1.0, fid.0, false);
+    assert_eq!(
+        eval.eval_str("(frame-text-lines)").unwrap().as_int(),
+        Some(24)
+    );
+    assert_eq!(
+        eval.eval_str("(frame-parameter nil 'height)")
+            .unwrap()
+            .as_int(),
+        Some(24)
+    );
+    assert_eq!(
+        eval.eval_str("(window-pixel-height (minibuffer-window))")
+            .unwrap()
+            .as_int(),
+        Some(48)
+    );
+}
+
+#[test]
+fn child_initial_text_columns_include_explicit_fringe_and_border_chrome() {
+    let mut eval = Context::new();
+    let buffer = eval.buffers.create_buffer("*child-chrome*");
+    let fid = eval.frames.create_frame("parent", 640, 480, buffer);
+    let frame = eval.frames.get_mut(fid).unwrap();
+    frame.set_window_system(Some(Value::symbol("neo")));
+    frame.char_width = 8.0;
+    frame.char_height = 16.0;
+    let host = RecordingDisplayHost::new();
+    let realized = host.realized.clone();
+    eval.set_display_host(Box::new(host));
+    let result = eval
+        .eval_str(
+            r#"
+      (let ((child (x-create-frame
+          (list (cons 'parent-frame (selected-frame))
+                '(width . 40) '(height . 10) '(minibuffer . nil)
+                '(internal-border-width . 3) '(left-fringe . 7) '(right-fringe . 11)
+                '(vertical-scroll-bars . nil) '(menu-bar-lines . 0)
+                '(tool-bar-lines . 0) '(tab-bar-lines . 0)))))
+        (list (frame-text-cols child) (frame-text-width child) (frame-native-width child)))
+    "#,
+        )
+        .unwrap();
+    assert_eq!(result.to_string(), "(40 320 344)");
+    assert!(
+        realized.borrow().is_empty(),
+        "child must not create a top-level native window"
+    );
+}
+
+#[test]
 fn inhibited_font_change_preserves_an_unsent_explicit_resize() {
     let mut eval = Context::new();
     let buffer = eval.buffers.create_buffer("*font-resize*");

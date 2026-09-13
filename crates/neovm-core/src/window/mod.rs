@@ -4780,7 +4780,13 @@ impl Frame {
         } else {
             let root_height = self.root_window.bounds().height;
             let text_lines = (root_height / char_height).floor().max(1.0) as i64;
-            let total_lines = text_lines.saturating_add(i64::from(self.minibuffer_leaf.is_some()));
+            // GNU FRAME_LINES includes the entire minibuffer allocation. A
+            // grown minibuffer redistributes the text area without losing rows.
+            let mini_height = self
+                .minibuffer_leaf
+                .as_ref()
+                .map_or(0.0, |mini| mini.bounds().height);
+            let total_lines = ((root_height + mini_height) / char_height).floor().max(1.0) as i64;
             self.set_parameter(Value::symbol("height"), Value::fixnum(total_lines));
             self.set_parameter(
                 Value::symbol("neovm--frame-text-lines"),

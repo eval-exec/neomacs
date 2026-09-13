@@ -7010,6 +7010,21 @@ pub(crate) fn x_create_frame_impl(
             frame.sync_window_area_bounds();
         }
     }
+    if is_child_frame {
+        // Resolve text dimensions after installing effective chrome and the
+        // child's opened font. The provisional inherited metrics above cannot
+        // size an explicit child font or account for its fringes/scrollbars.
+        let frame = frames.get(fid).expect("new child frame exists");
+        let width = parsed.width.map_or_else(
+            || frame_text_width_pixels_in_state(frames, fid),
+            |size| frame_size_param_to_pixels(size, frame.char_width),
+        );
+        let height = parsed.height.map_or_else(
+            || frame_text_height_pixels(frame),
+            |size| frame_size_param_to_pixels(size, frame.char_height),
+        );
+        resize_live_gui_frame(frames, buffers, display_host, fid, width, height, false)?;
+    }
     super::frame::position::apply_frame_position(frames, fid, parsed.left, parsed.top);
     if !is_child_frame && let Some(host) = display_host.as_mut() {
         let geometry_hints = frames

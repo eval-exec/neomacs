@@ -498,23 +498,58 @@ impl FontChangeGeometryPolicy {
     }
 }
 
+/// GNU frame_windows_min_size first honors a frame parameter, then asks the
+/// loaded window.el implementation. Keep window-tree recursion owned by Lisp.
+fn frame_minimum_inner_pixels(
+    eval: &mut super::eval::Context,
+    frame_id: FrameId,
+    axis: FontResizeAxis,
+) -> Result<u32, Flow> {
+    let Some(frame) = eval.frames.get(frame_id) else {
+        return Ok(1);
+    };
+    let (parameter, unit) = match axis {
+        FontResizeAxis::Horizontal => ("min-width", frame.char_width),
+        FontResizeAxis::Vertical => ("min-height", frame.char_height),
+    };
+    if let Some(cells) = frame.parameter(parameter).and_then(|value| value.as_int()) {
+        return Ok((cells.max(1).min(i64::from(u32::MAX)) as u32)
+            .saturating_mul(unit.max(1.0).round() as u32));
+    }
+    let value = eval.funcall_general(
+        Value::symbol("frame-windows-min-size"),
+        vec![
+            Value::make_frame(frame_id.0),
+            Value::bool_val(matches!(axis, FontResizeAxis::Horizontal)),
+            Value::NIL,
+            Value::T,
+        ],
+    )?;
+    let minimum = value.as_int().ok_or_else(|| {
+        signal(
+            "wrong-type-argument",
+            vec![Value::symbol("integerp"), value],
+        )
+    })?;
+    Ok(minimum.max(1).min(i64::from(u32::MAX)) as u32)
+}
+
 pub(crate) fn sync_live_frame_font_state(
     eval: &mut super::eval::Context,
     frame_id: FrameId,
     requested: &Value,
     resolution: &LiveFrameFontResolution,
-) {
+) -> Result<(), Flow> {
     let Some(frame) = eval.frames.get(frame_id) else {
-        return;
+        return Ok(());
     };
     let inhibit = eval
-        .obarray()
-        .symbol_value("frame-inhibit-implied-resize")
-        .copied()
+        .eval_symbol_by_id(intern("frame-inhibit-implied-resize"))
+        .ok()
         .unwrap_or(Value::NIL);
-    let horizontal =
+    let mut horizontal =
         FontChangeGeometryPolicy::for_live_frame(frame, inhibit, FontResizeAxis::Horizontal);
-    let vertical =
+    let mut vertical =
         FontChangeGeometryPolicy::for_live_frame(frame, inhibit, FontResizeAxis::Vertical);
     let old_metrics = (frame.char_width, frame.char_height, frame.font_pixel_size);
     // A second font change can arrive before the first native resize completes.
@@ -551,13 +586,27 @@ pub(crate) fn sync_live_frame_font_state(
     );
 
     let Some(frame) = eval.frames.get(frame_id) else {
-        return;
+        return Ok(());
     };
     if old_metrics == (frame.char_width, frame.char_height, frame.font_pixel_size)
         || frame.effective_window_system().is_none()
         || eval.display_host.is_none()
     {
-        return;
+        return Ok(());
+    }
+    let min_inner_width = frame_minimum_inner_pixels(eval, frame_id, FontResizeAxis::Horizontal)?;
+    let min_inner_height = frame_minimum_inner_pixels(eval, frame_id, FontResizeAxis::Vertical)?;
+    let Some(frame) = eval.frames.get(frame_id) else {
+        return Ok(());
+    };
+    let border = (frame.internal_border_width().max(0) as u32).saturating_mul(2);
+    // GNU inhibit mode 3 permits inhibition only while existing allocation
+    // still satisfies the window minima, independently on each axis.
+    if frame.width.saturating_sub(border) < min_inner_width {
+        horizontal = FontChangeGeometryPolicy::PreserveCharacterGrid;
+    }
+    if super::window_cmds::frame_text_height_pixels(frame) < min_inner_height {
+        vertical = FontChangeGeometryPolicy::PreserveCharacterGrid;
     }
     if horizontal == FontChangeGeometryPolicy::PreserveAllocatedPixels
         && vertical == FontChangeGeometryPolicy::PreserveAllocatedPixels
@@ -569,23 +618,23 @@ pub(crate) fn sync_live_frame_font_state(
         if let Some(frame) = eval.frames.get_mut(frame_id) {
             frame.refresh_geometry_for_changed_font(&eval.buffers);
         }
-        return;
+        return Ok(());
     }
     // GNU new_font -> adjust_frame_size(..., 3, ..., Qfont). Preferences supply
     // no metrics: both dimensions come from the opened font just installed.
     // Inhibited axes retain their allocation, including partial character rows.
     let width = match horizontal {
-        FontChangeGeometryPolicy::PreserveCharacterGrid => {
-            cols.saturating_mul(frame.char_width.max(1.0).round() as u32)
-        }
+        FontChangeGeometryPolicy::PreserveCharacterGrid => cols
+            .saturating_mul(frame.char_width.max(1.0).round() as u32)
+            .max(min_inner_width.saturating_sub(frame.horizontal_non_text_width().max(0) as u32)),
         FontChangeGeometryPolicy::PreserveAllocatedPixels => {
             super::window_cmds::frame_text_width_pixels_in_state(&eval.frames, frame_id)
         }
     };
     let height = match vertical {
-        FontChangeGeometryPolicy::PreserveCharacterGrid => {
-            lines.saturating_mul(frame.char_height.max(1.0).round() as u32)
-        }
+        FontChangeGeometryPolicy::PreserveCharacterGrid => lines
+            .saturating_mul(frame.char_height.max(1.0).round() as u32)
+            .max(min_inner_height),
         FontChangeGeometryPolicy::PreserveAllocatedPixels => {
             super::window_cmds::frame_text_height_pixels(frame)
         }
@@ -603,6 +652,7 @@ pub(crate) fn sync_live_frame_font_state(
             err
         );
     }
+    Ok(())
 }
 
 fn sync_live_frame_font_state_in_state(
@@ -747,17 +797,17 @@ pub(crate) fn default_face_font_attr_affects_frame_font(attr: LFaceAttr) -> bool
 pub(crate) fn sync_live_default_face_font_state(
     eval: &mut super::eval::Context,
     frame_id: FrameId,
-) {
+) -> Result<(), Flow> {
     if eval
         .frames
         .get(frame_id)
         .is_none_or(|frame| frame.effective_window_system().is_none())
     {
-        return;
+        return Ok(());
     }
 
     let Some(vector) = lookup_frame_lisp_face_vector(eval, frame_id, "default") else {
-        return;
+        return Ok(());
     };
     let requested_face = runtime_face_from_lisp_face_vector("default", vector);
     let realized = eval
@@ -776,12 +826,12 @@ pub(crate) fn sync_live_default_face_font_state(
             frame_id = frame_id.0,
             "default-face font change did not produce an opened font; preserving live frame state"
         );
-        return;
+        return Ok(());
     };
     let font_value = build_frame_font_object_from_resolution(&requested_face, &realized);
     let resolution = LiveFrameFontResolution { font_value };
 
-    sync_live_frame_font_state(eval, frame_id, &font_value, &resolution);
+    sync_live_frame_font_state(eval, frame_id, &font_value, &resolution)
 }
 
 fn expect_optional_frame_designator_in_state(

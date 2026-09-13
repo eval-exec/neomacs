@@ -131,7 +131,7 @@
              (< (plist-get receipt :nanoseconds) 1000000000)))))
 
 (defun desktop-font-live-grid-ready ()
-  (and (= (frame-width) 80) (= (frame-text-lines) 24)
+  (and (= (frame-width) 80) (= (frame-text-lines) 24) (= (frame-height) 24)
        (= (frame-text-width) (* 80 (frame-char-width)))
        (= (frame-text-height) (* 24 (frame-char-height)))))
 
@@ -225,19 +225,47 @@
           (desktop-font-live-keep-pixels))
         (+ (float-time) 8))))))
 
-(defun desktop-font-live-child ()
+(defun desktop-font-live-minimum ()
+  (menu-bar-mode -1)
+  (tool-bar-mode -1)
+  (setq window-min-width 40)
+  ;; 450px is a whole number of both 18px and 25px rows, so the X11
+  ;; window manager's size increments cannot obscure axis inhibition.
+  (set-frame-size nil 100 25)
+  (desktop-font-live-await
+   (lambda () (and (= (frame-width) 100) (= (frame-text-lines) 25)))
+   (lambda ()
+     (split-window-right)
+     (modify-frame-parameters nil '((min-width . nil) (min-height . nil)))
+     (setq frame-inhibit-implied-resize t)
+     (let ((width (frame-native-width)) (height (frame-native-height))
+           (submission (or (plist-get (desktop-font-live-receipt) :submission) 0)))
+       (desktop-font-live-opt-in
+        (lambda ()
+          (desktop-font-live-await
+           (lambda ()
+             (and (> (frame-native-width) width)
+                  (>= (frame-native-width) (frame-windows-min-size nil t nil t))
+                  (= (frame-native-height) height)
+                  (desktop-font-live-presented submission)))
+           #'desktop-font-live-pass
+           (+ (float-time) 8))))))
+   (+ (float-time) 8)))
+
+(defun desktop-font-live-child (&optional chrome)
   (let ((child (make-frame `((parent-frame . ,(selected-frame))
                              (font . "Ubuntu Mono 13") (minibuffer . nil)
                              (width . 40) (height . 10) (undecorated . t)
-                             (left-fringe . 0) (right-fringe . 0)
-                             (vertical-scroll-bars . nil) (internal-border-width . 0)
+                             (left-fringe . ,(if chrome 7 0)) (right-fringe . ,(if chrome 11 0))
+                             (vertical-scroll-bars . nil) (internal-border-width . ,(if chrome 3 0))
                              (menu-bar-lines . 0) (tool-bar-lines . 0)))))
     (desktop-font-live-log "LIVE-CHILD-BEFORE %S text=%S"
                            (frame-parameters child)
                            (list (frame-text-width child) (frame-text-height child)))
     (desktop-font-live-await
      (lambda () (and (= (frame-text-width child) (* 40 9))
-                     (= (frame-text-height child) (* 10 18))))
+                     (= (frame-text-height child) (* 10 18))
+                     (or (not chrome) (= (frame-native-width child) (+ (* 40 9) 24)))))
      (lambda ()
        (desktop-font-live-opt-in
         (lambda ()
@@ -269,6 +297,8 @@
            ("repeated" (desktop-font-live-repeated))
            ("inhibited" (desktop-font-live-inhibited))
            ("child" (desktop-font-live-child))
+           ("child-chrome" (desktop-font-live-child t))
+           ("minimum" (desktop-font-live-minimum))
            ("fullscreen" (desktop-font-live-fullscreen))
            (_ (error "Unknown live font case: %S" (getenv "NEOMACS_GUI_LIVE_FONT_CASE")))))
      (error (desktop-font-live-log "LIVE-FONT-FAIL %S" err) (kill-emacs 1)))))

@@ -62,3 +62,17 @@ alist precedence and normalization through the current runtime binding.
 Native adapter tests and the manual `native-display-contract.yml` workflow
 cover platform databases plus actual GUI font/resize behavior. Native execution
 is pending; adapters are not yet claimed verified on their target systems.
+The first macOS run compiled the adapter, then exposed a fixture error: a
+custom volatile domain was not searched. The fixture now uses NSArgumentDomain
+and restores it afterward; numeric values and custom resource classes are also
+covered. A native rerun is required.
+
+The geometry slice corrects grown-minibuffer frame-height accounting, child
+initial fringe/border allocation, and per-axis font-change minimum overrides.
+GNU oracles passed the child-chrome, frame-height, and split-minimum scenarios.
+After review, Lisp minimum-policy nonlocal exits propagate rather than being
+swallowed; its regression failed before the fix. The 24 selected frame creation
+and resize tests passed (`geometry-reviewed-green.log`). LiveFontCase uses
+strum::AsRefStr with kebab-case names. Neomacs GUI validation awaits a fresh build;
+deliberately grown native minibuffer and child scrollbar/different-font controls
+still need coverage. No native-presentation claim follows from core tests.
