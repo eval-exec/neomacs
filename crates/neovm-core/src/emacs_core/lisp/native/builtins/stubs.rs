@@ -1048,23 +1048,21 @@ fn describe_vector_char_name(code: i64) -> String {
     }
 }
 
-pub(crate) fn builtin_frame_set_was_invisible(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_frame_set_was_invisible(
+    eval: &mut crate::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_args("frame--set-was-invisible", &args, 2)?;
-    expect_frame_in_domain(&args[0], FrameDomain::Live)?;
+    expect_live_frame_or_nil(eval, &args[0])?;
     Ok(args[1])
 }
 
-pub(crate) fn builtin_frame_after_make_frame(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_frame_after_make_frame(
+    eval: &mut crate::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_args("frame-after-make-frame", &args, 2)?;
-    expect_frame_in_domain(&args[0], FrameDomain::Live)?;
-    Ok(Value::NIL)
-}
-
-#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn builtin_frame_ancestor_p(args: Vec<Value>) -> EvalResult {
-    expect_args("frame-ancestor-p", &args, 2)?;
-    expect_frame_in_domain(&args[0], FrameDomain::Live)?;
-    expect_frame_in_domain(&args[1], FrameDomain::Live)?;
+    expect_live_frame_or_nil(eval, &args[0])?;
     Ok(Value::NIL)
 }
 
@@ -1086,19 +1084,13 @@ pub(crate) fn builtin_frame_child_frame_border_width(args: Vec<Value>) -> EvalRe
     Ok(Value::fixnum(0))
 }
 
-#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn builtin_frame_focus(args: Vec<Value>) -> EvalResult {
-    expect_args_range("frame-focus", &args, 0, 1)?;
-    if let Some(frame) = args.first() {
-        expect_frame_in_domain(frame, FrameDomain::Live)?;
-    }
-    Ok(Value::NIL)
-}
-
-pub(crate) fn builtin_frame_font_cache(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_frame_font_cache(
+    eval: &mut crate::emacs_core::eval::Context,
+    args: Vec<Value>,
+) -> EvalResult {
     expect_args_range("frame-font-cache", &args, 0, 1)?;
     if let Some(frame) = args.first() {
-        expect_frame_in_domain(frame, FrameDomain::Live)?;
+        expect_live_frame_or_nil(eval, frame)?;
     }
     Ok(Value::NIL)
 }
@@ -1137,15 +1129,6 @@ pub(crate) fn builtin_frame_or_buffer_changed_p(args: Vec<Value>) -> EvalResult 
     Err(signal(LispCondition::VoidVariable, vec![*symbol]))
 }
 
-#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn builtin_frame_parent(args: Vec<Value>) -> EvalResult {
-    expect_args_range("frame-parent", &args, 0, 1)?;
-    if let Some(frame) = args.first() {
-        expect_frame_in_domain(frame, FrameDomain::Live)?;
-    }
-    Ok(Value::NIL)
-}
-
 pub(crate) fn builtin_frame_pointer_visible_p(args: Vec<Value>) -> EvalResult {
     expect_args_range("frame-pointer-visible-p", &args, 0, 1)?;
     if let Some(frame) = args.first() {
@@ -1177,15 +1160,6 @@ pub(crate) fn builtin_frame_scroll_bar_width(args: Vec<Value>) -> EvalResult {
         expect_frame_in_domain(frame, FrameDomain::Any)?;
     }
     Ok(Value::fixnum(0))
-}
-
-#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-pub(crate) fn builtin_frame_window_state_change(args: Vec<Value>) -> EvalResult {
-    expect_args_range("frame-window-state-change", &args, 0, 1)?;
-    if let Some(frame) = args.first() {
-        expect_frame_in_domain(frame, FrameDomain::Live)?;
-    }
-    Ok(Value::NIL)
 }
 
 // --- frame.c missing builtins ---
@@ -1416,6 +1390,27 @@ pub(super) fn expect_window_valid_or_nil(value: &Value) -> Result<(), Flow> {
 /// frame is accepted where GNU rejects it.  These callers hold no
 /// `FrameManager`, so closing that gap means giving them `eval` first; it is a
 /// separate change and is NOT fixed here.
+/// GNU's `decode_live_frame`: nil is the selected frame and everything else must
+/// be a LIVE one -- `CHECK_LIVE_FRAME` is `FRAME_LIVE_P`, which tests
+/// `f->terminal`, so a DELETED frame is rejected (`src/frame.c:98`).
+///
+/// [`expect_frame_in_domain`] cannot express that: it only tag-tests, so it
+/// accepts a deleted frame.  That is fine for `decode_any_frame`, whose
+/// `CHECK_FRAME` really is just a type test, and wrong for every `Live` caller.
+/// Answering it needs the frame table, hence `eval`.
+pub(super) fn expect_live_frame_or_nil(
+    eval: &mut crate::emacs_core::eval::Context,
+    value: &Value,
+) -> Result<(), Flow> {
+    crate::emacs_core::window_cmds::resolve_frame_id_in_state(
+        &mut eval.frames,
+        &mut eval.buffers,
+        Some(value),
+        FrameDomain::Live,
+    )
+    .map(|_| ())
+}
+
 pub(super) fn expect_frame_in_domain(value: &Value, domain: FrameDomain) -> Result<(), Flow> {
     if value.is_nil() || value.is_frame() {
         Ok(())

@@ -4225,12 +4225,12 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "frame--set-was-invisible",
-        NativeFn::ContextVec(|_ctx, args| builtin_frame_set_was_invisible(args)),
+        NativeFn::ContextVec(builtin_frame_set_was_invisible),
         SubrArity::new(2, Some(2)),
     ));
     ctx.register_subr(SubrSpec::new(
         "frame-after-make-frame",
-        NativeFn::ContextVec(|_ctx, args| builtin_frame_after_make_frame(args)),
+        NativeFn::ContextVec(builtin_frame_after_make_frame),
         SubrArity::new(2, Some(2)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -4255,7 +4255,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "frame-font-cache",
-        NativeFn::ContextVec(|_ctx, args| builtin_frame_font_cache(args)),
+        NativeFn::ContextVec(builtin_frame_font_cache),
         SubrArity::new(0, Some(1)),
     ));
     ctx.register_subr(SubrSpec::new(
@@ -4671,7 +4671,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(
         SubrSpec::new(
             "lower-frame",
-            NativeFn::ContextVec(|_ctx, args| builtin_lower_frame(args)),
+            NativeFn::ContextVec(builtin_lower_frame),
             SubrArity::new(0, Some(1)),
         )
         .interactive(crate::emacs_core::interactive::BuiltinInteractiveSpec::String("")),

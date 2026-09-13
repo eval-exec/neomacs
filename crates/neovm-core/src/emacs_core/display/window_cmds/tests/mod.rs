@@ -2785,6 +2785,67 @@ fn window_old_size_subrs_reject_the_windows_gnu_rejects() {
 }
 
 #[test]
+fn live_frame_subrs_reject_a_deleted_frame_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // GNU's two frame decoders differ in more than the predicate they name
+    // (`src/frame.c:98,107`):
+    //
+    //     decode_live_frame: if (NILP (frame)) frame = selected_frame;
+    //                        CHECK_LIVE_FRAME (frame);   /* frame-live-p */
+    //     decode_any_frame:  if (NILP (frame)) frame = selected_frame;
+    //                        CHECK_FRAME (frame);        /* framep       */
+    //
+    // `CHECK_FRAME` passes a DELETED frame -- it is still a frame object -- so
+    // the `Any` callers are right to test only the type tag.  `CHECK_LIVE_FRAME`
+    // is `FRAME_LIVE_P`, which tests `f->terminal`, so the `Live` callers must
+    // consult the frame table and reject a deleted frame.
+    //
+    // `expect_frame_in_domain` only tag-tests, so the `Live` callers still
+    // built on it accepted a deleted frame.  This cannot be shown from Lisp in
+    // batch -- `make-frame` fails there, in GNU and neomacs alike, so no
+    // deleted frame can be constructed -- which is why it is tested from Rust,
+    // where `create_frame` + `delete_frame` can build one.
+    let mut ev = runtime_startup_context();
+    let buf = ev.buffers.current_buffer().expect("current buffer").id;
+    let doomed = ev.frames.create_frame("doomed", 800, 600, buf);
+    let dead = Value::make_frame(doomed.0);
+    ev.frames.delete_frame(doomed);
+    assert!(
+        ev.frames.get(doomed).is_none(),
+        "precondition: the frame must really be gone from the table"
+    );
+
+    // `framep` still answers t for it, exactly as GNU's CHECK_FRAME would.
+    let still_a_frame = crate::emacs_core::frame::builtin_framep(&mut ev, vec![dead])
+        .expect("framep must not signal");
+    assert_eq!(
+        still_a_frame,
+        Value::NIL,
+        "a deleted frame is gone from the table"
+    );
+
+    // `frame--set-was-invisible`, `frame-after-make-frame` and
+    // `frame-font-cache` share the same defect but live in a private module, so
+    // `lower-frame` stands in for the group here.
+    for (name, result) in [(
+        "lower-frame",
+        crate::emacs_core::builtins::symbols::builtin_lower_frame(&mut ev, vec![dead]),
+    )] {
+        match result {
+            Err(crate::emacs_core::error::Flow::Signal(sig)) => {
+                assert_eq!(sig.symbol_name(), "wrong-type-argument", "{name}");
+                assert_eq!(
+                    sig.data,
+                    vec![Value::symbol("frame-live-p"), dead],
+                    "{name} must name frame-live-p for a deleted frame"
+                );
+            }
+            other => panic!("{name}: expected frame-live-p signal, got {other:?}"),
+        }
+    }
+}
+
+#[test]
 fn frame_geometry_subrs_name_gnus_decoder_predicate() {
     crate::test_utils::init_test_tracing();
     // Which predicate a frame subr names is fixed by which decoder GNU's C

@@ -741,9 +741,14 @@ fn frame_face_hash_table_uses_eq_test() {
 #[test]
 fn frame_set_was_invisible_returns_new_state() {
     crate::test_utils::init_test_tracing();
-    let out =
-        crate::emacs_core::builtins::builtin_frame_set_was_invisible(vec![Value::NIL, Value::T])
-            .unwrap();
+    // Takes a Context now: GNU's `decode_live_frame` must consult the frame
+    // table to reject a DELETED frame, which a tag-only check cannot do.
+    let mut eval = crate::test_utils::runtime_startup_context();
+    let out = crate::emacs_core::builtins::builtin_frame_set_was_invisible(
+        &mut eval,
+        vec![Value::NIL, Value::T],
+    )
+    .unwrap();
     assert_eq!(out, Value::T);
 }
 

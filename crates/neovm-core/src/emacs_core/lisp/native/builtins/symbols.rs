@@ -5669,15 +5669,14 @@ pub(crate) fn builtin_kill_emacs(eval: &mut super::eval::Context, args: Vec<Valu
 /// lowering itself has no effect without a window system, but the type check
 /// is not conditional on one -- accepting every argument silently is how a
 /// caller passing the wrong object learns nothing.
-pub(crate) fn builtin_lower_frame(args: Vec<Value>) -> EvalResult {
+pub(crate) fn builtin_lower_frame(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_args_range("lower-frame", &args, 0, 1)?;
     if let Some(frame) = args.first() {
         // GNU's `Flower_frame' decodes with `decode_live_frame'
-        // (`src/frame.c'), so this really is `frame-live-p'.
-        super::stubs::expect_frame_in_domain(
-            frame,
-            crate::emacs_core::window_cmds::FrameDomain::Live,
-        )?;
+        // (`src/frame.c'), which is `CHECK_LIVE_FRAME' -- a DELETED frame is
+        // rejected, not merely a non-frame.  The tag-only check that used to be
+        // here returned nil for a deleted frame.
+        super::stubs::expect_live_frame_or_nil(eval, frame)?;
     }
     Ok(Value::NIL)
 }
