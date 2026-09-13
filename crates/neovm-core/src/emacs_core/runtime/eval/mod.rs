@@ -5794,12 +5794,13 @@ impl Context {
                 self.with_macro_expansion_scope(|eval| eval.apply_lambda(func, arg_values));
             let expanded = self.unbind_to_with_result(bt_count, expanded);
             let expanded = expanded?;
-            let expanded_root_count = self.specpdl.len();
+            // Root the expansion and hand it back for the driver to
+            // evaluate, rather than recursing through `eval_sub`. The
+            // enclosing `Continuation::Form` unbinds past this root and
+            // decrements `depth`, so both the rooting window and the
+            // `max-lisp-eval-depth` count are what the recursive shape had.
             self.push_specpdl_root(expanded);
-            let result = self.eval_sub(expanded);
-            return self
-                .unbind_to_with_result(expanded_root_count, result)
-                .map(PreparedForm::Value);
+            return Ok(PreparedForm::MacroExpansion(expanded));
         }
         if cons_head_symbol_id(&func) == Some(macro_symbol()) {
             // Cons-cell macro: (macro . fn) — GNU eval.c:2730
@@ -5815,12 +5816,13 @@ impl Context {
             let expanded = self.with_macro_expansion_scope(|eval| eval.apply(macro_fn, arg_values));
             let expanded = self.unbind_to_with_result(bt_count, expanded);
             let expanded = expanded?;
-            let expanded_root_count = self.specpdl.len();
+            // Root the expansion and hand it back for the driver to
+            // evaluate, rather than recursing through `eval_sub`. The
+            // enclosing `Continuation::Form` unbinds past this root and
+            // decrements `depth`, so both the rooting window and the
+            // `max-lisp-eval-depth` count are what the recursive shape had.
             self.push_specpdl_root(expanded);
-            let result = self.eval_sub(expanded);
-            return self
-                .unbind_to_with_result(expanded_root_count, result)
-                .map(PreparedForm::Value);
+            return Ok(PreparedForm::MacroExpansion(expanded));
         }
 
         // GNU eval.c:2606-2614: for SUBRP `fun`, check arity
