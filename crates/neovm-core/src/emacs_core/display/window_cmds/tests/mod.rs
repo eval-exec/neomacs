@@ -15,6 +15,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 mod body_geometry_test;
 mod frame_position_test;
+mod frame_resize_test;
 
 #[test]
 fn frame_scale_factor_reads_the_selected_frames_presented_device_scale() {

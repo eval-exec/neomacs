@@ -5020,8 +5020,16 @@ impl FrameSizeParam {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FrameResizeRequest {
-    TextPixels { width: u32, height: u32 },
-    Cells { cols: i64, total_lines: i64 },
+    /// Preserve the current text height exactly, including partial rows.
+    TextWidth(u32),
+    TextPixels {
+        width: u32,
+        height: u32,
+    },
+    Cells {
+        cols: i64,
+        total_lines: i64,
+    },
 }
 
 impl FrameResizeRequest {
@@ -5031,6 +5039,12 @@ impl FrameResizeRequest {
         fid: FrameId,
     ) -> Result<(u32, u32), Flow> {
         match self {
+            Self::TextWidth(width) => {
+                let frame = frames
+                    .get(fid)
+                    .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
+                Ok((width.max(1), frame_text_height_pixels(frame)))
+            }
             Self::TextPixels { width, height } => Ok((width.max(1), height.max(1))),
             Self::Cells { cols, total_lines } => {
                 live_gui_resize_pixels_from_logical_size(frames, fid, cols, total_lines)
@@ -5047,6 +5061,12 @@ impl FrameResizeRequest {
             .get(fid)
             .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
         Ok(match self {
+            Self::TextWidth(width) => (
+                ((width as f32) / frame.char_width.max(1.0))
+                    .floor()
+                    .max(1.0) as i64,
+                frame_total_lines(frame),
+            ),
             Self::Cells { cols, total_lines } => (cols.max(1), total_lines.max(1)),
             Self::TextPixels { width, height } => {
                 let char_width = frame.char_width.max(1.0);

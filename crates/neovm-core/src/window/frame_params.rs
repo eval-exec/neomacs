@@ -87,6 +87,9 @@ pub enum FrameParam {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, EnumString, IntoStaticStr)]
 #[strum(serialize_all = "kebab-case")]
 pub enum FrameFullscreen {
+    /// Lisp nil explicitly requests restoration; it is not a missing request.
+    #[strum(serialize = "nil")]
+    Windowed,
     Fullboth,
     Fullscreen,
     Fullwidth,
@@ -96,6 +99,9 @@ pub enum FrameFullscreen {
 
 impl FrameFullscreen {
     pub fn from_symbol_value(value: &Value) -> Option<Self> {
+        if value.is_nil() {
+            return Some(Self::Windowed);
+        }
         value.as_symbol_name()?.parse().ok()
     }
 

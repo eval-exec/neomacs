@@ -778,32 +778,12 @@ pub(crate) fn builtin_set_frame_width(
     let text_width_px = check_frame_pixels(&args[1], pixelwise, char_width)?;
     if uses_window_system_pixels {
         if ctx.display_host.is_some() && !pretend {
-            let desired_cols = ((text_width_px as f32) / char_width.max(1.0))
-                .floor()
-                .max(1.0) as i64;
-            let desired_total_lines = {
-                let frame = ctx
-                    .frames
-                    .get(fid)
-                    .ok_or_else(|| signal("error", vec![Value::string("Frame not found")]))?;
-                frame_total_lines(frame)
-            };
             request_live_gui_frame_resize_and_keep_pending(
                 &mut ctx.frames,
                 &ctx.buffers,
                 &mut ctx.display_host,
                 fid,
-                if pixelwise {
-                    FrameResizeRequest::TextPixels {
-                        width: text_width_px,
-                        height: current_text_height_px,
-                    }
-                } else {
-                    FrameResizeRequest::Cells {
-                        cols: desired_cols,
-                        total_lines: desired_total_lines,
-                    }
-                },
+                FrameResizeRequest::TextWidth(text_width_px),
             )?;
         } else {
             request_live_gui_frame_resize(

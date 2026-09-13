@@ -1431,6 +1431,7 @@ impl PrimaryWindowDisplayHost {
 
 fn render_fullscreen_mode(fullscreen: FrameFullscreen) -> WindowFullscreenMode {
     match fullscreen {
+        FrameFullscreen::Windowed => WindowFullscreenMode::None,
         FrameFullscreen::Fullboth => WindowFullscreenMode::Fullboth,
         FrameFullscreen::Fullscreen => WindowFullscreenMode::Fullscreen,
         FrameFullscreen::Fullwidth => WindowFullscreenMode::Fullwidth,
