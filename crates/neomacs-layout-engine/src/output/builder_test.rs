@@ -2281,7 +2281,9 @@ fn retained_buffer_mouse_face_uses_replayed_row_geometry() {
     );
     builder.end_window();
 
-    let state = builder.finish(10, 2, 8.0, 16.0);
+    // Contain the offset window so this test observes row replay, not clipping
+    // against the presentation's pixel extent.
+    let state = builder.finish(12, 3, 8.0, 16.0);
     let source = derive_window_pointer_source(&state);
     let regions = source.regions();
     assert_eq!(regions.len(), 1);
