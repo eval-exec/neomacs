@@ -51,6 +51,57 @@ fn initial_frame_metrics_reject_non_renderable_geometry() {
 }
 
 #[test]
+fn gui_surface_reserves_enabled_frame_bars_before_first_input() {
+    let mut evaluator = Context::new();
+    prepare_initial_editor_surface(
+        &mut evaluator,
+        InitialEditorSurfaceSpec::gui(
+            InitialFrameMetrics::new(800, 600, 8.0, 16.0, 16.0).unwrap(),
+            FrontendScaleFactor::new(1.0).unwrap(),
+            FrameDisplayIdentity::default(),
+            InitialDisplayType::Color,
+            InitialBackgroundMode::Dark,
+            InitialFrameFont::named("Monospace"),
+        ),
+    );
+    let frame = evaluator.frame_manager_mut().selected_frame_mut().unwrap();
+    // GUI toolbar buttons include image margins/relief: 39 px at this font.
+    for (menu, tool, tab, expected_top) in [(0, 0, 1, 16.0), (1, 1, 1, 71.0), (0, 0, 0, 0.0)] {
+        for (name, lines) in [
+            ("menu-bar-lines", menu),
+            ("tool-bar-lines", tool),
+            ("tab-bar-lines", tab),
+        ] {
+            frame.set_parameter(Value::symbol(name), Value::fixnum(lines));
+        }
+        frame.sync_menu_bar_height_from_parameters();
+        frame.sync_tool_bar_height_from_parameters();
+        frame.sync_tab_bar_height_from_parameters();
+        assert_eq!(frame.root_window().bounds().y, expected_top);
+    }
+}
+
+#[test]
+fn initial_tty_surface_reserves_chrome_only_for_interactive_sessions() {
+    for (batch, expected_top) in [(true, 0.0), (false, 1.0)] {
+        let mut evaluator = Context::new();
+        prepare_initial_editor_surface(
+            &mut evaluator,
+            InitialEditorSurfaceSpec::tty(
+                InitialFrameMetrics::new(80, 25, 1.0, 1.0, 1.0).unwrap(),
+                batch,
+            ),
+        );
+        let frame = evaluator.frame_manager_mut().selected_frame_mut().unwrap();
+        assert_eq!(frame.root_window().bounds().y, expected_top);
+        // Visibility is independent of whether bars participate in layout.
+        frame.visibility = neovm_core::window::FrameVisibility::Iconified;
+        frame.sync_window_area_bounds();
+        assert_eq!(frame.root_window().bounds().y, expected_top);
+    }
+}
+
+#[test]
 fn named_initial_font_keeps_parameter_and_public_name_identical() {
     let mut evaluator = Context::new();
     let metrics = InitialFrameMetrics::new(320, 240, 8.0, 16.0, 16.0).unwrap();

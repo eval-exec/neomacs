@@ -336,6 +336,15 @@ pub fn prepare_initial_editor_surface_with_gui_setup(
     }
 
     let kind = spec.kind;
+    let chrome_layout = match &kind {
+        InitialEditorSurfaceKind::Gui { .. }
+        | InitialEditorSurfaceKind::Tty {
+            initial_frame: false,
+        } => neovm_core::window::FrameChromeLayout::Realized,
+        InitialEditorSurfaceKind::Tty {
+            initial_frame: true,
+        } => neovm_core::window::FrameChromeLayout::Unrealized,
+    };
     let font = match &kind {
         InitialEditorSurfaceKind::Gui { font, .. } => *font,
         InitialEditorSurfaceKind::Tty { .. } => {
@@ -476,6 +485,9 @@ pub fn prepare_initial_editor_surface_with_gui_setup(
             bounds.height = minibuffer_height;
             bounds.width = width as f32;
         }
+        // Establish display participation only after all metrics, host setup,
+        // and minibuffer bounds are installed. No frontend repair is needed.
+        frame_state.set_chrome_layout(chrome_layout);
     }
     evaluator.create_window_markers_for_minibuffer(frame, minibuffer);
 

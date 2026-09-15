@@ -744,7 +744,7 @@ fn make_terminal_frame_opens_and_owns_an_explicit_secondary_tty() {
     assert_eq!(opened_frame.height, 43);
     assert_eq!(opened_frame.char_width, 1.0);
     assert_eq!(opened_frame.char_height, 1.0);
-    assert!(opened_frame.displays_chrome);
+    assert!(opened_frame.displays_chrome());
     assert_eq!(
         opened_frame
             .minibuffer_leaf
