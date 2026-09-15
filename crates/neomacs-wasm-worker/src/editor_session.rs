@@ -91,6 +91,13 @@ pub(crate) fn run() -> Result<EditorSessionExit, String> {
         runtime_resource_bundle,
     )
     .map_err(|error| format!("failed to mount browser runtime resources: {error}"))?;
+    let runtime_resources = if let Some((archive, id)) = browser_host::package_assets()? {
+        let packages = RuntimeResourceBundle::from_assets(&archive, &id)
+            .and_then(|bundle| MountedRuntimeResources::from_bundle(Path::new(BrowserPaths::RUNTIME_ROOT), bundle))
+            .map_err(|error| format!("invalid browser package resources: {error}"))?;
+        runtime_resources.try_extend(packages)
+            .map_err(|error| format!("browser package resources conflict: {error}"))?
+    } else { runtime_resources };
     browser_host::report_startup_phase(StartupPhase::Restore);
     let mut evaluator = runtime_image
         .load_for_with_mounted_runtime_resources(

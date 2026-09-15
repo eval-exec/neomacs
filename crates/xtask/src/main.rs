@@ -5,6 +5,7 @@ mod portable_assets;
 mod production_capabilities;
 mod window_icon;
 mod wasm_package;
+mod wasm_packages;
 
 // SINGLE SOURCE OF TRUTH (ledger 206): the recipe for every Lisp file this
 // build generates by running one of GNU's own awk scripts.  The same file is

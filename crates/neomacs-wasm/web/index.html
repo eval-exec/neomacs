@@ -58,6 +58,7 @@
         ["storage", "Open persistent storage"],
         ["worker-compile", "Compile editor worker"],
         ["worker-probe", "Check worker suspend/resume"],
+        ["packages", "Download and verify landing-page packages"],
         ["verify-image", "Verify runtime image"],
         ["verify-resources", "Verify runtime resources"],
         ["unpack", "Unpack and mount Lisp runtime"],
@@ -114,7 +115,7 @@
           phaseStarts.set(id, performance.now());
           phaseDetail(id, "Started");
           status.textContent = row.querySelector(".phase-label").textContent + "…";
-          if (id === "frontend-download" || id === "worker-download") {
+          if (id === "frontend-download" || id === "worker-download" || id === "packages") {
             row.querySelector(".phase-heading").insertBefore(
               document.querySelector("#browser-progress"), row.querySelector("small"));
           }
