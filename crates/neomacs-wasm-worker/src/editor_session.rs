@@ -86,18 +86,19 @@ pub(crate) fn run() -> Result<EditorSessionExit, String> {
         "Mounting bundled resources at {}",
         BrowserPaths::RUNTIME_ROOT
     ));
-    let runtime_resources = MountedRuntimeResources::from_bundle(
+    let mut runtime_resources = MountedRuntimeResources::from_bundle(
         Path::new(BrowserPaths::RUNTIME_ROOT),
         runtime_resource_bundle,
     )
     .map_err(|error| format!("failed to mount browser runtime resources: {error}"))?;
-    let runtime_resources = if let Some((archive, id)) = browser_host::package_assets()? {
-        let packages = RuntimeResourceBundle::from_assets(&archive, &id)
+    if let Some((archive, id)) = browser_host::package_assets()? {
+        let result = RuntimeResourceBundle::from_assets(&archive, &id)
             .and_then(|bundle| MountedRuntimeResources::from_bundle(Path::new(BrowserPaths::RUNTIME_ROOT), bundle))
-            .map_err(|error| format!("invalid browser package resources: {error}"))?;
-        runtime_resources.try_extend(packages)
-            .map_err(|error| format!("browser package resources conflict: {error}"))?
-    } else { runtime_resources };
+            .and_then(|packages| runtime_resources.try_extend(packages));
+        if let Err(error) = result {
+            browser_host::report_status(&format!("Optional package resources unavailable: {error}; continuing with core runtime"));
+        }
+    }
     browser_host::report_startup_phase(StartupPhase::Restore);
     let mut evaluator = runtime_image
         .load_for_with_mounted_runtime_resources(
