@@ -29,6 +29,31 @@ def main():
             editor.driver.get(args.url)
             editor.wait_ready()
             editor.wait_for_presentation()
+            editor.wait_for_frame_text("default landing page", contains="Welcome to the browser editor.")
+            editor.eval_expression(
+                '''(progn
+                  (unless (and (eq neomacs-wasm-startup-profile 'landing)
+                               (featurep 'treemacs) (featurep 'doom-themes)
+                               (not neomacs-wasm-package-error)
+                               (treemacs-get-local-window)
+                               (get-buffer-window "*NEO Emacs About*")
+                               (memq 'doom-one (custom-available-themes)))
+                    (error "landing packages missing: %S" neomacs-wasm-package-error))
+                  (message "DEFAULT-LANDING-READY"))''',
+                "DEFAULT-LANDING-READY",
+            )
+            artifacts = Path(args.artifacts_dir)
+            artifacts.mkdir(parents=True, exist_ok=True)
+            editor.driver.save_screenshot(str(artifacts / "default-landing.png"))
+            editor.eval_expression(
+                '''(progn (neomacs-wasm-landing-theme 'doom-one)
+                  (unless (and (equal custom-enabled-themes '(doom-one))
+                               (equal (face-background 'default) "#282c34"))
+                    (error "doom-one theme not applied"))
+                  (message "DOOM-THEME-APPLIED"))''',
+                "DOOM-THEME-APPLIED",
+            )
+            editor.driver.save_screenshot(str(artifacts / "dark-landing.png"))
             init = '''(setq neomacs-wasm-startup-profile 'editor)
 (setq neomacs-wasm-test-init-count (1+ (or (bound-and-true-p neomacs-wasm-test-init-count) 0)))
 (which-key-mode -1)
@@ -101,6 +126,9 @@ def main():
                 '''(progn (neomacs-wasm-landing-open)
                   (unless (equal (buffer-string) "(setq neomacs-wasm-test-evaluation (+ 1 2))")
                     (error "playground edits were lost"))
+                  (unless (and (treemacs-get-local-window)
+                               (get-buffer-window "*NEO Emacs About*"))
+                    (error "reopening lost a landing sidebar"))
                   (message "PLAYGROUND-PRESERVED"))''',
                 "PLAYGROUND-PRESERVED",
             )

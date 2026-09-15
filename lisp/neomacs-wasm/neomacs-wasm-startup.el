@@ -20,7 +20,7 @@
   "NEO Emacs in the browser."
   :group 'environment)
 
-(defcustom neomacs-wasm-startup-profile 'editor
+(defcustom neomacs-wasm-startup-profile 'landing
   "Initial browser editor layout.
 Set this in your personal init file.  `editor' preserves normal Emacs startup;
 `landing' opens the welcome/playground layout unless your init already chose

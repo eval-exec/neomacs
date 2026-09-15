@@ -52,6 +52,12 @@ def assert_split_orientation(
 
 
 def exercise_native_keyboard(editor: BrowserEditorHarness) -> None:
+    # The product opens its landing page by default. Exercise traditional
+    # scratch-buffer commands in an explicitly selected scratch layout.
+    editor.eval_expression(
+        '(progn (switch-to-buffer "*scratch*") (delete-other-windows) (message "SCRATCH-READY"))',
+        "SCRATCH-READY",
+    )
     editor.click_editor_canvas()
     editor.type_native_meta_prefix("x")
     editor.wait_for_frame_text("the native M-x prompt", contains="M-x")

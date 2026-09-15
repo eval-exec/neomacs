@@ -64,9 +64,9 @@ seed or overwrite it. GNU startup's ordinary init discovery also retains its
 The source-controlled defaults live separately in `lisp/neomacs-wasm/`:
 
 - `neomacs-wasm-startup.el`: browser policy and startup-profile selection.
-- `neomacs-wasm-packages.el`: available package defaults (currently bundled
-  which-key; personal init can disable it).
-- `neomacs-wasm-landing.el`: optional welcome/playground window layout.
+- `neomacs-wasm-packages.el`: Treemacs, doom-themes, and bundled which-key
+  defaults; personal init can override them.
+- `neomacs-wasm-landing.el`: the default welcome/playground window layout.
 
 The worker mounts runtime resources and OPFS first, loads shipped defaults,
 then enters shared Emacs startup. Shared startup loads personal initialization
@@ -76,25 +76,42 @@ running and does not take ownership of subsequent resizes or window changes.
 An init-selected buffer (`initial-buffer-choice`) or existing custom window
 layout takes precedence over automatic landing setup.
 
-Normal editor startup remains the default. To opt into the landing profile:
+The WASM build opens the landing page automatically, without generating an
+init file. Personal configuration is optional:
 
 ```elisp
-(setq neomacs-wasm-startup-profile 'landing)
 (setq neomacs-wasm-landing-personal-info "Your own introduction here.\n")
+;; To opt out of the landing page:
+;; (setq neomacs-wasm-startup-profile 'editor)
 ;; Optional: override the bundled default.
 ;; (which-key-mode -1)
 ```
 
-Wide layouts show welcome and an empty `emacs-lisp-mode` playground side by
-side, with an optional personal sidebar on sufficiently wide frames. Narrow
+Wide layouts show Treemacs on the left, welcome and an empty `emacs-lisp-mode`
+playground in the center, and a personal sidebar on the right. Medium layouts
+omit the personal sidebar and then Treemacs as space decreases. Narrow
 layouts show welcome; the other buffers remain accessible with `C-x b`.
 `M-x neomacs-wasm-landing-open` reopens the layout without erasing playground
 edits. Set the profile to `editor` to retain ordinary scratch-buffer startup.
 
-This is the startup/configuration foundation: the separate pinned Treemacs and
-doom-themes download/cache bundle is **not implemented yet**. Neither package
-is vendored or fetched by these Lisp modules. `M-x load-theme` lists themes
-already present in the runtime; no default theme is changed here.
+`cargo xtask build-wasm` fetches exact Git objects from `packages.lock.toml`
+into ignored `target/wasm-package-sources/`. Treemacs uses the upstream 3.2
+release; dependencies and doom-themes are pinned too. Sources, icons, and
+available license files form a separate deterministic `packages.bundle`.
+No third-party source is tracked by git or written into the user's home.
+
+The browser downloads that optional bundle during the package startup phase,
+verifies SHA-256, and caches it by digest using Cache Storage. Each reuse is
+verified again; Rust validates the archive and mounts it read-only alongside
+the core runtime. Package files cannot replace core files. A download failure
+starts the basic landing page; reload retries. Clearing browser site data also
+clears this cache. Old package versions may remain until site data is cleared.
+
+Treemacs browses `/neomacs-fake`; Git, Python collapsing, and file watchers are
+disabled because the browser has no native subprocesses. which-key is enabled.
+Doom One Light or Doom One matches the browser's initial light/dark appearance;
+the welcome page's theme action selects from installed themes. Personal init
+runs after these defaults and can load any other available theme.
 
 ## Basic acceptance checks
 
