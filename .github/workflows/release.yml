@@ -196,11 +196,19 @@ jobs:
       # artifact only when package, features and profile agree.
       RELEASE_FEATURES: video,neomacs-layout-engine/freetype-bundled
     steps:
-      # The image ships no git, and `actions/checkout` reaches for it, so this
-      # has to come first.  No `curl` here on purpose: the image ships
-      # `curl-minimal`, which already provides the binary, and asking for the
-      # full package is a hard conflict on el9 ("curl-minimal conflicts with
-      # curl provided by curl").
+      # Absolutely first, before anything invokes dnf: dnf honors TMPDIR, the
+      # job points TMPDIR at the workspace, and that subdirectory does not exist
+      # until this creates it.  Otherwise the git install below dies with
+      #   Cannot create temporary file - mkstemp .../tmp/librepo-tmp-XXXX:
+      #   No such file or directory
+      # (mkdir is in the base image; git is not.)
+      - name: Prepare workspace temp directory
+        run: mkdir -p "$TMPDIR"
+
+      # The image ships no git, and `actions/checkout` reaches for it.  No
+      # `curl` here on purpose: the image ships `curl-minimal`, which already
+      # provides the binary, and asking for the full package is a hard conflict
+      # on el9 ("curl-minimal conflicts with curl provided by curl").
       - name: Install git for checkout
         run: dnf install -y git tar gzip which
 
@@ -214,9 +222,6 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # package-release.sh reads the version from git tags
-
-      - name: Prepare workspace temp directory
-        run: mkdir -p "$TMPDIR"
 
       # el9 package names, derived from the workspace's own pkg-config and
       # build.rs probes rather than translated from scripts/ci/setup-linux.sh:
