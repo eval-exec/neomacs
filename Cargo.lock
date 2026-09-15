@@ -3813,6 +3813,7 @@ dependencies = [
  "sha2",
  "tar",
  "tempfile",
+ "tracing",
 ]
 
 [[package]]
