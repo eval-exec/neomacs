@@ -29,7 +29,16 @@
 
 (define-derived-mode neomacs-wasm-landing-mode special-mode "NEO"
   "Read-only landing page; use TAB and RET or click an action."
-  (setq-local truncate-lines nil word-wrap t cursor-type nil))
+  (setq-local truncate-lines nil
+              truncate-partial-width-windows nil
+              word-wrap t cursor-type nil))
+
+(defun neomacs-wasm-landing--header (label hint)
+  "Give the current pane a role LABEL and a useful HINT."
+  (setq-local header-line-format
+              (list (propertize (concat "  " label "  ")
+                                'face 'neomacs-wasm-landing-heading)
+                    (propertize (concat " / " hint) 'face 'shadow))))
 
 (defun neomacs-wasm-landing--heading (text)
   (insert (propertize text 'face 'neomacs-wasm-landing-heading) "\n\n"))
@@ -42,11 +51,15 @@
 (defun neomacs-wasm-landing-playground ()
   "Select the playground without erasing existing work."
   (interactive)
-  (let ((buffer (or (get-buffer "*NEO Emacs Playground*")
-                    (with-current-buffer (get-buffer-create "*NEO Emacs Playground*")
-                      (emacs-lisp-mode)
-                      (current-buffer)))))
-    (pop-to-buffer buffer)))
+  (pop-to-buffer (neomacs-wasm-landing--playground-buffer)))
+
+(defun neomacs-wasm-landing--playground-buffer ()
+  "Return the editable playground, initializing it only once."
+  (or (get-buffer "*NEO Emacs Playground*")
+      (with-current-buffer (get-buffer-create "*NEO Emacs Playground*")
+        (emacs-lisp-mode)
+        (neomacs-wasm-landing--header "PLAYGROUND" "Emacs Lisp | C-x C-e to evaluate")
+        (current-buffer))))
 
 (defun neomacs-wasm-landing-init ()
   "Visit personal configuration in the browser's persistent home."
@@ -67,6 +80,8 @@
       (erase-buffer)
       (insert "\n" (propertize "NEO Emacs" 'face 'neomacs-wasm-landing-title) "\n\n")
       (insert (propertize "YOUR EDITOR. IN YOUR BROWSER." 'face 'shadow) "\n\n")
+      (insert (propertize "  WEBASSEMBLY  /  LIVE LISP  /  YOUR RULES  "
+                          'face 'neomacs-wasm-landing-heading) "\n\n")
       (insert "Welcome to the browser editor.\n"
               "A living Lisp environment. Explore it,\n"
               "change it, and make it yours.\n\n")
@@ -94,6 +109,7 @@
                 neomacs-wasm-package-error "\nReload the page to retry.\n")))
     (goto-char (point-min))
     (neomacs-wasm-landing-mode)
+    (neomacs-wasm-landing--header "WELCOME" "Explore | Experiment | Make it yours")
     (set-buffer-modified-p nil)
     (current-buffer)))
 
@@ -115,6 +131,7 @@
                 "subprocesses or unrestricted networking.\n"))
       (goto-char (point-min))
       (neomacs-wasm-landing-mode)
+      (neomacs-wasm-landing--header "ABOUT" "Built in the open")
       (set-buffer-modified-p nil)
       (current-buffer))))
 
@@ -127,7 +144,9 @@
                          (expand-file-name "~") "Your files")))
             (unless (eq (car result) 'success)
               (error "Cannot create browser workspace: %S" result))))
-        (unless (treemacs-get-local-window) (treemacs)))
+        (unless (treemacs-get-local-window) (treemacs))
+        (with-current-buffer (window-buffer (treemacs-get-local-window))
+          (neomacs-wasm-landing--header "FILES" "Browser home")))
     (error
      (setq neomacs-wasm-package-error (error-message-string error-data))
      (neomacs-wasm-landing--welcome))))
@@ -140,9 +159,9 @@ edits.  Only this command or initial startup arranges the windows."
   (interactive)
   (let ((welcome (neomacs-wasm-landing--welcome))
         (info (neomacs-wasm-landing--about)))
-    (unless (get-buffer "*NEO Emacs Playground*")
-      (with-current-buffer (get-buffer-create "*NEO Emacs Playground*")
-        (emacs-lisp-mode)))
+    (neomacs-wasm-landing--playground-buffer)
+    (when (bound-and-true-p tab-bar-mode)
+      (tab-bar-rename-tab "NEO / Playground"))
     ;; Select a non-side leaf before deleting the old window layout.
     (select-window
      (or (seq-find (lambda (window) (not (window-parameter window 'window-side)))

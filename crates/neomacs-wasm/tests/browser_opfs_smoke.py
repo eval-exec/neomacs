@@ -55,7 +55,10 @@ def exercise_native_keyboard(editor: BrowserEditorHarness) -> None:
     # The product opens its landing page by default. Exercise traditional
     # scratch-buffer commands in an explicitly selected scratch layout.
     editor.eval_expression(
-        '(progn (switch-to-buffer "*scratch*") (delete-other-windows) (message "SCRATCH-READY"))',
+        '''(progn (switch-to-buffer "*scratch*")
+          (dolist (window (window-list))
+            (when (window-parameter window 'window-side) (delete-window window)))
+          (delete-other-windows) (message "SCRATCH-READY"))''',
         "SCRATCH-READY",
     )
     editor.click_editor_canvas()
