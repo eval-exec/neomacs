@@ -5685,7 +5685,11 @@ fn bootstrap_load_path_entries_with_filesystem(
 /// The default `load-path`: the site-lisp directories in front of the
 /// bundled Lisp tree, mirroring the list GNU's `init_lread` hands to the
 /// `EMACSLOADPATH` splice (`src/lread.c:5477-5489`).
-fn default_load_path_entries(lisp_dir: &Path, site_lisp: &[PathBuf], filesystem: Option<&dyn super::fileio::EditorFileSystem>) -> Vec<Value> {
+fn default_load_path_entries(
+    lisp_dir: &Path,
+    site_lisp: &[PathBuf],
+    filesystem: Option<&dyn super::fileio::EditorFileSystem>,
+) -> Vec<Value> {
     let mut entries: Vec<Value> = site_lisp
         .iter()
         .map(|dir| {
@@ -5789,7 +5793,12 @@ fn runtime_load_path_entries(
     } else {
         Vec::new()
     };
-    runtime_load_path_entries_from_os_with_filesystem(lisp_dir, std::env::var_os("EMACSLOADPATH"), &site_lisp, Some(filesystem))
+    runtime_load_path_entries_from_os_with_filesystem(
+        lisp_dir,
+        std::env::var_os("EMACSLOADPATH"),
+        &site_lisp,
+        Some(filesystem),
+    )
 }
 
 /// Testable core of [`runtime_load_path_entries`].
