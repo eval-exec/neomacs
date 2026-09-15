@@ -31,14 +31,8 @@
   "Read-only landing page; use TAB and RET or click an action."
   (setq-local truncate-lines nil
               truncate-partial-width-windows nil
-              word-wrap t cursor-type nil))
-
-(defun neomacs-wasm-landing--header (label hint)
-  "Give the current pane a role LABEL and a useful HINT."
-  (setq-local header-line-format
-              (list (propertize (concat "  " label "  ")
-                                'face 'neomacs-wasm-landing-heading)
-                    (propertize (concat " / " hint) 'face 'shadow))))
+              word-wrap t cursor-type nil
+              header-line-format nil))
 
 (defun neomacs-wasm-landing--heading (text)
   (insert (propertize text 'face 'neomacs-wasm-landing-heading) "\n\n"))
@@ -58,7 +52,7 @@
   (or (get-buffer "*NEO Emacs Playground*")
       (with-current-buffer (get-buffer-create "*NEO Emacs Playground*")
         (emacs-lisp-mode)
-        (neomacs-wasm-landing--header "PLAYGROUND" "Emacs Lisp | C-x C-e to evaluate")
+        (setq-local header-line-format nil)
         (current-buffer))))
 
 (defun neomacs-wasm-landing-init ()
@@ -109,7 +103,6 @@
                 neomacs-wasm-package-error "\nReload the page to retry.\n")))
     (goto-char (point-min))
     (neomacs-wasm-landing-mode)
-    (neomacs-wasm-landing--header "WELCOME" "Explore | Experiment | Make it yours")
     (set-buffer-modified-p nil)
     (current-buffer)))
 
@@ -131,7 +124,6 @@
                 "subprocesses or unrestricted networking.\n"))
       (goto-char (point-min))
       (neomacs-wasm-landing-mode)
-      (neomacs-wasm-landing--header "ABOUT" "Built in the open")
       (set-buffer-modified-p nil)
       (current-buffer))))
 
@@ -146,7 +138,7 @@
               (error "Cannot create browser workspace: %S" result))))
         (unless (treemacs-get-local-window) (treemacs))
         (with-current-buffer (window-buffer (treemacs-get-local-window))
-          (neomacs-wasm-landing--header "FILES" "Browser home")))
+          (setq-local header-line-format nil)))
     (error
      (setq neomacs-wasm-package-error (error-message-string error-data))
      (neomacs-wasm-landing--welcome))))
