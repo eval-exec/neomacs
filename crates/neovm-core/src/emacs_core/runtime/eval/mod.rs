@@ -3145,6 +3145,9 @@ pub struct Context {
     pub(crate) pending_pixel_scroll: Option<crate::keyboard::PendingPixelScroll>,
     /// Host-display bridge for GUI frame realization.
     pub display_host: Option<Box<dyn DisplayHost>>,
+    /// Font capabilities for surfaces without a native window host. Never
+    /// implies popup, window-management, shader, or media capabilities.
+    pub(crate) font_query_host: Option<Box<dyn super::display_host::FontQueryHost>>,
     /// Frontend-owned opener for additional text terminals requested by
     /// `make-terminal-frame`. The VM owns identities; platform code owns the
     /// device, raw-mode, input, renderer, and lifecycle resources.
@@ -5369,6 +5372,17 @@ impl Context {
     // -----------------------------------------------------------------------
     // Public API
     // -----------------------------------------------------------------------
+
+    /// Install evaluator-thread fonts without claiming native window ownership.
+    pub fn install_font_query_host(&mut self, host: Box<dyn super::display_host::FontQueryHost>) {
+        self.font_query_host = Some(host);
+    }
+
+    /// A native display retains its own font policy; direct surfaces use the
+    /// independently installed font capability.
+    pub(crate) fn font_queries(&mut self) -> Option<&mut dyn super::display_host::FontQueryHost> {
+        super::display_host::font_queries_for_hosts(&mut self.display_host, &mut self.font_query_host)
+    }
 
     /// Evaluate a Lisp expression string. Convenience for tests.
     /// Reads via the Value-native reader and evaluates via eval_sub.

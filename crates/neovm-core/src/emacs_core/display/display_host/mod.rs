@@ -3,6 +3,10 @@
 //! This is Neomacs integration machinery, not a port of GNU Emacs
 //! src/eval.c, so it stays outside the GNU mirror module.
 
+mod font_queries;
+pub use font_queries::FontQueryHost;
+pub(crate) use font_queries::font_queries_for_hosts;
+
 use std::fmt::{Display, Formatter};
 use std::num::{NonZeroU16, NonZeroU32};
 

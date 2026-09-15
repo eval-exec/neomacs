@@ -405,7 +405,7 @@ pub(crate) fn resolve_live_frame_font_request(
 ) -> LiveFrameFontResolution {
     resolve_live_frame_font_request_in_state(
         &eval.frames,
-        &mut eval.display_host,
+        super::display_host::font_queries_for_hosts(&mut eval.display_host, &mut eval.font_query_host),
         frame_id,
         requested,
     )
@@ -413,7 +413,7 @@ pub(crate) fn resolve_live_frame_font_request(
 
 fn resolve_live_frame_font_request_in_state(
     frames: &FrameManager,
-    display_host: &mut Option<Box<dyn super::eval::DisplayHost>>,
+    font_queries: Option<&mut dyn super::display_host::FontQueryHost>,
     frame_id: FrameId,
     requested: &Value,
 ) -> LiveFrameFontResolution {
@@ -450,8 +450,7 @@ fn resolve_live_frame_font_request_in_state(
     };
     let requested_face = request.face().clone();
 
-    let realized = display_host
-        .as_mut()
+    let realized = font_queries
         .and_then(|host| host.resolve_frame_font(frame_id, request).ok())
         .flatten();
     let font_value = realized
@@ -767,8 +766,14 @@ pub(crate) fn sync_live_frame_font_parameter_in_state(
     frame_id: FrameId,
     requested: Value,
 ) {
-    let resolution =
-        resolve_live_frame_font_request_in_state(frames, display_host, frame_id, &requested);
+    let resolution = resolve_live_frame_font_request_in_state(
+        frames,
+        display_host
+            .as_mut()
+            .map(|host| host as &mut dyn super::display_host::FontQueryHost),
+        frame_id,
+        &requested,
+    );
     // This entry point is used while constructing a new GUI frame, before
     // it has a live allocation to preserve (GNU's after_make_frame gate).
     sync_live_frame_font_state_in_state(
@@ -811,8 +816,7 @@ pub(crate) fn sync_live_default_face_font_state(
     };
     let requested_face = runtime_face_from_lisp_face_vector("default", vector);
     let realized = eval
-        .display_host
-        .as_mut()
+        .font_queries()
         .and_then(|host| {
             host.resolve_frame_font(
                 frame_id,
@@ -2361,7 +2365,7 @@ fn match_font_spec_request(
     eval: &mut super::eval::Context,
     request: super::eval::FontSpecResolveRequest,
 ) -> EvalResult {
-    let Some(host) = eval.display_host.as_mut() else {
+    let Some(host) = eval.font_queries() else {
         return Ok(Value::NIL);
     };
     let matched = host
@@ -2386,7 +2390,7 @@ pub(crate) fn clear_font_cache(args: Vec<Value>) -> EvalResult {
 pub(crate) fn font_family_list(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_max_args("font-family-list", &args, 1)?;
     let frame_id = find_font_frame_id(eval, args.first())?;
-    let Some(host) = eval.display_host.as_mut() else {
+    let Some(host) = eval.font_queries() else {
         return Ok(Value::NIL);
     };
     let families = host
@@ -2645,8 +2649,7 @@ pub(crate) fn resolve_current_buffer_remapped_default_face_font(
     let remapping = FaceRemapping::from_lisp(&remapping_value);
     let face_table = runtime_face_table_from_frame_lisp_faces(eval, frame_id, true);
     let remapped_default = face_table.resolve_with_remapping("default", &remapping);
-    eval.display_host
-        .as_mut()?
+    eval.font_queries()?
         .resolve_frame_font(frame_id, FrameFontRequest::from_face(remapped_default))
         .ok()
         .flatten()
@@ -3181,8 +3184,7 @@ fn font_info_vector_for_entity(
         font_vector_get_flexible(&elems, name).and_then(|value| font_value_text_lisp_string(&value))
     };
     let opened = eval
-        .display_host
-        .as_mut()
+        .font_queries()
         .and_then(|host| {
             host.probe_font_entity_metrics(super::eval::FontEntityMetricsRequest {
                 frame_id,
@@ -3304,8 +3306,7 @@ fn font_full_name(fields: &[Value], pixel_size: i64) -> String {
 
 /// `(opentype GSUB . GPOS)` for a font file, or nil when unavailable.
 fn otf_capability_lisp(eval: &mut super::eval::Context, file: &str) -> Value {
-    eval.display_host
-        .as_mut()
+    eval.font_queries()
         .and_then(|host| host.font_otf_capability(file, 0).ok())
         .flatten()
         .as_ref()
@@ -3358,8 +3359,7 @@ pub(crate) fn resolve_font_match(
     face: &RuntimeFace,
     fontset_base_face: &RuntimeFace,
 ) -> Option<super::eval::ResolvedFontMatch> {
-    eval.display_host
-        .as_mut()
+    eval.font_queries()
         .and_then(|host| {
             host.resolve_font_for_char(super::display_host::FontResolveRequest {
                 frame_id,
