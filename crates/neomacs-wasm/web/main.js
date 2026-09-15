@@ -14,6 +14,7 @@ import {
   initializeWasmFrontend,
   observeFirstEditorPresentation,
 } from "./wasm-bootstrap.mjs";
+import { observeAssetDownload } from "./worker-assets.mjs";
 
 const MAILBOX_CAPACITY = 1024 * 1024;
 const MAILBOX_HEADER_BYTES = 16;
@@ -50,15 +51,20 @@ const megabytes = (bytes) => (bytes / MIB).toFixed(1);
 /**
  * Render transfer progress.
  *
- * Deliberately independent of the status line: `instantiateStreaming` compiles
- * from the same body it is still downloading, so bytes keep arriving after the
- * phase has moved on to compiling. The status line owns the phase name and the
- * bar owns the byte count; neither overwrites the other.
+ * `instantiateStreaming` compiles from the body it is still downloading.
+ * Stream completion, not compiler status or an estimated percentage, decides
+ * when to hide the bar and switch to the text-only initialization state.
  *
  * `total` is null when a response withheld its `Content-Length` — show bytes
  * received and an indeterminate bar rather than inventing a percentage.
  */
-function showProgress(received, total) {
+function showProgress(received, total, complete = false) {
+  if (status.dataset.state === "failed" || status.dataset.state === "ready") return;
+  if (complete) {
+    hideProgress();
+    status.textContent = "Starting NEO Emacs…";
+    return;
+  }
   if (!progress || !progressBar) return;
   progress.hidden = false;
   if (total) {
@@ -181,12 +187,16 @@ async function start() {
   // The frontend module is ~10 MiB and is fetched and compiled on this thread
   // before the Worker is even spawned, so without this the first seconds of a
   // cold load report nothing at all.
-  status.textContent = "Loading editor frontend…";
+  status.textContent = "Downloading editor frontend…";
+  const frontend = observeAssetDownload(
+    await fetch(new URL("./neomacs_wasm_bg.wasm", import.meta.url)),
+    ({ received, total, complete }) => showProgress(received, total, complete),
+  );
   await initializeWasmFrontend(
     init,
-    new URL("./neomacs_wasm_bg.wasm", import.meta.url),
+    frontend,
   );
-  status.textContent = "Starting editor Worker…";
+  status.textContent = "Starting NEO Emacs…";
   set_presentation_callback(didPresentFrame);
   void observeFirstEditorPresentation(
     wait_for_first_editor_presentation,
@@ -216,7 +226,7 @@ async function start() {
       worker.postMessage({ type: "wake-probe" });
     } else if (message?.type === "ready") {
       workerStrategy = message.strategy;
-      status.textContent = "Restoring Neomacs editor session…";
+      if (progress.hidden) status.textContent = "Starting NEO Emacs…";
       installBrowserInput({
         root: globalThis,
         textInput: document.querySelector("#browser-text-input"),
@@ -245,9 +255,13 @@ async function start() {
         worker.terminate();
       }
     } else if (message?.type === "progress") {
-      showProgress(message.received, message.total);
+      showProgress(message.received, message.total, message.complete);
     } else if (message?.type === "status") {
-      status.textContent = message.message;
+      // Compilation overlaps the streamed download. Only byte progress owns
+      // the transition out of downloading; later phases remain text-only.
+      if (message.phase === "download") {
+        status.textContent = "Downloading editor and runtime assets…";
+      }
     } else if (message?.type === "failed") {
       showFailure(new Error(message.message));
       worker.terminate();
