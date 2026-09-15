@@ -57,6 +57,8 @@ def main():
                 "USER-INIT-HONORED",
             )
             print("PASS: persistent user init loaded once; user defaults win; editor profile opens scratch")
+            editor.invoke_mx("neomacs-wasm-landing-open")
+            editor.wait_for_frame_text("landing command in editor profile", contains="Welcome to the browser editor.")
             landing_init = '''(setq neomacs-wasm-startup-profile 'landing)
 (setq neomacs-wasm-landing-personal-info "A test user's introduction.")
 '''
@@ -84,11 +86,20 @@ def main():
                   (message "LANDING-READY"))''',
                 "LANDING-READY",
             )
-            editor.type_native_text("(+ 1 2)")
+            editor.type_native_text("(setq neomacs-wasm-test-evaluation (+ 1 2))")
             editor.wait_for_frame_text("playground editing", contains="(+ 1 2)")
+            editor.type_native_control_key("x")
+            editor.type_native_control_key("e")
+            editor.eval_expression(
+                '''(progn
+                  (unless (equal (bound-and-true-p neomacs-wasm-test-evaluation) 3)
+                    (error "C-x C-e did not evaluate the playground expression"))
+                  (message "PLAYGROUND-EVALUATED"))''',
+                "PLAYGROUND-EVALUATED",
+            )
             editor.eval_expression(
                 '''(progn (neomacs-wasm-landing-open)
-                  (unless (equal (buffer-string) "(+ 1 2)")
+                  (unless (equal (buffer-string) "(setq neomacs-wasm-test-evaluation (+ 1 2))")
                     (error "playground edits were lost"))
                   (message "PLAYGROUND-PRESERVED"))''',
                 "PLAYGROUND-PRESERVED",
@@ -96,7 +107,7 @@ def main():
             artifacts = Path(args.artifacts_dir)
             artifacts.mkdir(parents=True, exist_ok=True)
             editor.driver.save_screenshot(str(artifacts / "landing.png"))
-            print("PASS: landing profile, personal sidebar, which-key, editable persistent playground")
+            print("PASS: landing command/profile, personal sidebar, which-key, Lisp evaluation; edits survive reopening")
         except Exception:
             editor.capture_failure_artifacts(args.artifacts_dir)
             raise

@@ -3,6 +3,9 @@
 (require 'ert)
 (require 'neomacs-wasm-startup)
 
+(ert-deftest neomacs-wasm-command-available-in-editor-profile ()
+  (should (commandp 'neomacs-wasm-landing-open)))
+
 (ert-deftest neomacs-wasm-profile-respects-user-buffer-choice ()
   (save-window-excursion
     (let ((neomacs-wasm-startup-profile 'landing)
