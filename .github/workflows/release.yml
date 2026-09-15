@@ -130,12 +130,19 @@ jobs:
       # --formats: the audit hard-errors on a requested format that is absent,
       # and this job no longer produces the .rpm (`build-linux-rpm` does, and
       # audits it there).
+      #
+      # --tar-version only on a tag: the value comes from GITHUB_REF_NAME, which
+      # on a `workflow_dispatch` run is the BRANCH name, and the audit then looks
+      # for neomacs-<branch>-<triple>.tar.gz, finds nothing and fails.  That made
+      # every dispatch of this workflow red in this step -- which is the one way
+      # to exercise a release-workflow change without cutting a tag.
       - name: Verify packaged artifacts and GLIBC baseline
         run: |
-          ./scripts/test-linux-release-artifacts.sh \
-            --target "${{ matrix.target }}" \
-            --tar-version "$VERSION" \
-            --formats tar,appimage,deb
+          args=(--target "${{ matrix.target }}" --formats tar,appimage,deb)
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            args+=(--tar-version "$VERSION")
+          fi
+          ./scripts/test-linux-release-artifacts.sh "${args[@]}"
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -294,9 +301,15 @@ jobs:
       - name: Install the package on el9 (no --nodeps)
         run: |
           dnf install -y ./dist/*.rpm
-          if rpm -qp --requires ./dist/*.rpm | grep -qiE 'ncurses|tinfo'; then
+          # Match the symbol VERSION stamp, not the library name.  What #388
+          # shipped was
+          #   libtinfo.so.6(NCURSES6_TINFO_5.0.19991023)(64bit)
+          # while what an el9 build correctly records is the empty version,
+          #   libtinfo.so.6()(64bit)
+          # and an earlier version of this check rejected that correct line.
+          if rpm -qp --requires ./dist/*.rpm | grep -qE 'NCURSES'; then
             echo "the package carries a versioned ncurses/tinfo requirement:" >&2
-            rpm -qp --requires ./dist/*.rpm | grep -iE 'ncurses|tinfo' >&2
+            rpm -qp --requires ./dist/*.rpm | grep -E 'NCURSES' >&2
             echo "these are unsatisfiable on Fedora -- see issue #388" >&2
             exit 1
           fi
