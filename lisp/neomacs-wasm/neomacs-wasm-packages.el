@@ -24,7 +24,7 @@
     (error "Package download unavailable; reload the page to retry"))
   (dolist (directory '("dash" "s" "ht" "pfuture" "avy" "ace-window"
                        "hydra" "posframe" "cfrs" "treemacs/src/elisp"
-                       "doom-themes" "doom-themes/themes"))
+                       "doom-themes" "doom-themes/themes" "compat" "cond-let" "keycast"))
     (add-to-list 'load-path (expand-file-name directory neomacs-wasm-packages--root)))
   (add-to-list 'custom-theme-load-path
                (expand-file-name "doom-themes/themes" neomacs-wasm-packages--root))
@@ -42,14 +42,20 @@
   (treemacs-filewatch-mode -1)
   (setq treemacs-collapse-dirs 0)
   (require 'doom-themes)
-  ;; Match the browser's opening appearance; personal init runs afterwards.
-  (load-theme (if (eq (frame-parameter nil 'background-mode) 'dark)
-                  'doom-one 'doom-one-light) t))
+  ;; The landing page has a dark visual identity; personal init runs afterwards.
+  (load-theme 'doom-one t)
+  (require 'keycast)
+  (keycast-tab-bar-mode 1))
 
 (defun neomacs-wasm-packages-initialize ()
   "Install package defaults before personal init, tolerating optional failure."
+  (remove-hook 'before-init-hook #'neomacs-wasm-packages-initialize)
   (require 'which-key)
   (which-key-mode 1)
+  (require 'tab-bar)
+  (require 'tab-line)
+  (tab-bar-mode 1)
+  (global-tab-line-mode 1)
   (condition-case error-data
       (neomacs-wasm-packages--activate)
     (error (setq neomacs-wasm-package-error (error-message-string error-data)))))

@@ -26,12 +26,12 @@ export async function fetchPackageAssets(manifestUrl, {
   if (cached) {
     const bytes = new Uint8Array(await cached.arrayBuffer());
     if (bytes.length <= MAX_PACKAGE_BYTES && await digest(bytes) === manifest.sha256) {
-      onDetail("Using cached Treemacs and doom-themes bundle");
+      onDetail("Using cached Treemacs, doom-themes, and keycast bundle");
       onProgress?.({received: bytes.length, total: bytes.length, complete: true});
       return {archive: bytes, id: new TextEncoder().encode(manifest.sha256)};
     }
   }
-  onDetail("Downloading Treemacs 3.2, doom-themes, and Lisp dependencies");
+  onDetail("Downloading Treemacs 3.2, doom-themes, keycast, and Lisp dependencies");
   const download = await fetcher(new URL("packages.bundle", manifestUrl), {signal: AbortSignal.timeout(30000)});
   if (!download.ok) throw new Error(`package download: HTTP ${download.status}`);
   const rawLength = download.headers.get("Content-Length");

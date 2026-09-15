@@ -45,7 +45,9 @@ The worker calls this once per editor session, before `normal-top-level'."
   (require 'url-neomacs-http)
   (url-neomacs-http-enable)
   (require 'neomacs-wasm-packages)
-  (neomacs-wasm-packages-initialize)
+  ;; GNU initializes delayed Customize defaults before this hook. Themes and
+  ;; other package UI policy must not run against the still-dumped variables.
+  (add-hook 'before-init-hook #'neomacs-wasm-packages-initialize -90)
   (add-hook 'window-setup-hook #'neomacs-wasm-startup-finish 90))
 
 (provide 'neomacs-wasm-startup)
