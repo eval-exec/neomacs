@@ -1,73 +1,168 @@
-;;; neomacs-wasm-landing.el --- Browser welcome and playground -*- lexical-binding: t; -*-
+;;; neomacs-wasm-landing.el --- The NEO Emacs landing page -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026 Free Software Foundation, Inc.
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
 
-;; An optional, one-time startup layout using ordinary Emacs windows and
-;; buffers.  No resize hook owns the user's layout after startup.  Third-party
-;; sidebars can be integrated when their browser asset bundle is available.
+;; The landing page is the editor: ordinary buffers, buttons, faces, and
+;; windows.  No DOM imitation or resize hook takes over the user's layout.
 
 ;;; Code:
 
 (require 'neomacs-wasm-startup)
+(require 'button)
+(require 'seq)
 
-(defcustom neomacs-wasm-landing-personal-info nil
-  "Personal introduction for the landing page's right sidebar.
-Nil omits the sidebar.  Narrow frames omit it too; its buffer remains
-available through `switch-to-buffer' after opening a landing page."
+(defcustom neomacs-wasm-landing-personal-info
+  "eval-exec\n\nBuilding NEO Emacs in the open.\n\nThis is a working preview. Feedback and contributions are welcome."
+  "Introduction in the landing page's right sidebar; nil omits the sidebar."
   :type '(choice (const :tag "No personal sidebar" nil) string)
   :group 'neomacs-wasm)
 
-(defun neomacs-wasm-landing--text-buffer (name text)
-  "Return a read-only buffer NAME containing TEXT."
-  (with-current-buffer (get-buffer-create name)
+(defface neomacs-wasm-landing-title
+  '((t (:inherit font-lock-function-name-face :weight bold :height 1.6)))
+  "Landing page title." :group 'neomacs-wasm)
+(defface neomacs-wasm-landing-heading
+  '((t (:inherit font-lock-keyword-face :weight bold)))
+  "Landing page section heading." :group 'neomacs-wasm)
+
+(define-derived-mode neomacs-wasm-landing-mode special-mode "NEO"
+  "Read-only landing page; use TAB and RET or click an action."
+  (setq-local truncate-lines nil word-wrap t cursor-type nil))
+
+(defun neomacs-wasm-landing--heading (text)
+  (insert (propertize text 'face 'neomacs-wasm-landing-heading) "\n\n"))
+
+(defun neomacs-wasm-landing--action (label command)
+  (insert-text-button label 'follow-link t
+                      'action (lambda (_) (call-interactively command)))
+  (insert "\n"))
+
+(defun neomacs-wasm-landing-playground ()
+  "Select the playground without erasing existing work."
+  (interactive)
+  (let ((buffer (or (get-buffer "*NEO Emacs Playground*")
+                    (with-current-buffer (get-buffer-create "*NEO Emacs Playground*")
+                      (emacs-lisp-mode)
+                      (current-buffer)))))
+    (pop-to-buffer buffer)))
+
+(defun neomacs-wasm-landing-init ()
+  "Visit personal configuration in the browser's persistent home."
+  (interactive)
+  (find-file (expand-file-name "init.el" user-emacs-directory)))
+
+(defun neomacs-wasm-landing-theme (theme)
+  "Select installed THEME, replacing previously enabled themes."
+  (interactive
+   (list (intern (completing-read "Theme: " (custom-available-themes) nil t))))
+  (let ((previous custom-enabled-themes))
+    (load-theme theme t)
+    (dolist (old previous) (unless (eq old theme) (disable-theme old)))))
+
+(defun neomacs-wasm-landing--welcome ()
+  (with-current-buffer (get-buffer-create "*NEO Emacs*")
     (let ((inhibit-read-only t))
       (erase-buffer)
-      (insert text)
-      (goto-char (point-min)))
-    (special-mode)
-    (setq-local truncate-lines nil
-                word-wrap t)
+      (insert "\n" (propertize "NEO Emacs" 'face 'neomacs-wasm-landing-title) "\n\n")
+      (insert (propertize "YOUR EDITOR. IN YOUR BROWSER." 'face 'shadow) "\n\n")
+      (insert "Welcome to the browser editor.\n"
+              "A living Lisp environment. Explore it,\n"
+              "change it, and make it yours.\n\n")
+      (neomacs-wasm-landing--heading "START EXPLORING")
+      (neomacs-wasm-landing--action "  Open the Lisp playground  →" #'neomacs-wasm-landing-playground)
+      (neomacs-wasm-landing--action "  Browse your files         →" #'dired)
+      (neomacs-wasm-landing--action "  Choose a theme            →" #'neomacs-wasm-landing-theme)
+      (neomacs-wasm-landing--action "  Edit your init.el         →" #'neomacs-wasm-landing-init)
+      (insert "\n")
+      (neomacs-wasm-landing--heading "A FEW KEYS TO GET STARTED")
+      (insert "M-x         Run any editor command\n"
+              "C-x b       Switch buffers\n"
+              "C-x C-f     Open or create a file\n"
+              "C-x C-e     Evaluate Lisp before point\n"
+              "C-g         Cancel the current command\n\n"
+              "Pause after a key prefix: which-key helps.\n\n")
+      (neomacs-wasm-landing--heading "YOURS TO EXPERIMENT WITH")
+      (insert "Type an expression in the empty playground.\n"
+              "Try (+ 1 2), then C-x C-e.\n\n"
+              "Your home is /neomacs-fake. Saved files\n"
+              "stay in this browser's storage for this site.\n"
+              "Unsaved buffers do not survive a reload.\n")
+      (when (bound-and-true-p neomacs-wasm-package-error)
+        (insert "\nOptional packages unavailable:\n"
+                neomacs-wasm-package-error "\nReload the page to retry.\n")))
+    (goto-char (point-min))
+    (neomacs-wasm-landing-mode)
     (set-buffer-modified-p nil)
     (current-buffer)))
 
+(defun neomacs-wasm-landing--about ()
+  (when neomacs-wasm-landing-personal-info
+    (with-current-buffer (get-buffer-create "*NEO Emacs About*")
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert "\n")
+        (neomacs-wasm-landing--heading "FROM THE AUTHOR")
+        (insert neomacs-wasm-landing-personal-info "\n\n")
+        (neomacs-wasm-landing--heading "THE PROJECT")
+        (insert "github.com/\neval-exec/neomacs\n\n"
+                "The project link in the title bar opens\n"
+                "GitHub in a new browser tab.\n\n")
+        (neomacs-wasm-landing--heading "WORK IN PROGRESS")
+        (insert "Desktop-class ideas,\nbrowser-sized possibilities.\n\n"
+                "This preview does not provide native\n"
+                "subprocesses or unrestricted networking.\n"))
+      (goto-char (point-min))
+      (neomacs-wasm-landing-mode)
+      (set-buffer-modified-p nil)
+      (current-buffer))))
+
+(defun neomacs-wasm-landing--tree ()
+  "Open a browser-home tree without making optional failure abort the page."
+  (condition-case error-data
+      (save-selected-window
+        (unless (treemacs-workspace->projects (treemacs-current-workspace))
+          (let ((result (treemacs-do-add-project-to-workspace
+                         (expand-file-name "~") "Your files")))
+            (unless (eq (car result) 'success)
+              (error "Cannot create browser workspace: %S" result))))
+        (unless (treemacs-get-local-window) (treemacs)))
+    (error
+     (setq neomacs-wasm-package-error (error-message-string error-data))
+     (neomacs-wasm-landing--welcome))))
+
 (defun neomacs-wasm-landing-open ()
-  "Open the welcome page and an editable Emacs Lisp playground.
-Wide windows show both side by side.  Narrow windows show the welcome page;
-the playground is available using `switch-to-buffer'.  Reopening never erases
-playground edits.  Explicit invocation replaces the current window layout."
+  "Open the landing page, Treemacs, playground, and personal sidebar.
+Medium frames omit the personal sidebar; narrow frames show welcome only.
+All buffers remain accessible with C-x b.  Reopening preserves playground
+edits.  Only this command or initial startup arranges the windows."
   (interactive)
-  (let* ((welcome (neomacs-wasm-landing--text-buffer
-                   "*NEO Emacs*"
-                   (concat "NEO Emacs — Working in progress\n\n"
-                           "https://github.com/eval-exec/neomacs\n\n"
-                           "Welcome to the browser editor.\n\n"
-                           "M-x                 Run a command\n"
-                           "C-x b               Switch buffers\n"
-                           "C-x C-f             Open a file\n"
-                           "M-x load-theme      Choose an installed theme\n\n"
-                           "Try Emacs Lisp in *NEO Emacs Playground*.\n"
-                           "C-x C-e evaluates the expression before point.\n\n"
-                           "Personal configuration: ~/.emacs.d/init.el\n"
-                           "Files in your browser home persist on this origin.\n")))
-         (playground (or (get-buffer "*NEO Emacs Playground*")
-                         (with-current-buffer (get-buffer-create "*NEO Emacs Playground*")
-                           (emacs-lisp-mode)
-                           (current-buffer))))
-         (info (when neomacs-wasm-landing-personal-info
-                 (neomacs-wasm-landing--text-buffer
-                  "*NEO Emacs About*" neomacs-wasm-landing-personal-info))))
+  (let ((welcome (neomacs-wasm-landing--welcome))
+        (info (neomacs-wasm-landing--about)))
+    (unless (get-buffer "*NEO Emacs Playground*")
+      (with-current-buffer (get-buffer-create "*NEO Emacs Playground*")
+        (emacs-lisp-mode)))
+    ;; Select a non-side leaf before deleting the old window layout.
+    (select-window
+     (or (seq-find (lambda (window) (not (window-parameter window 'window-side)))
+                   (window-list))
+         (selected-window)))
+    ;; Treemacs protects its side window from `delete-other-windows'.
+    ;; Explicitly close old side windows so repeated layout has the same width.
+    (dolist (window (window-list))
+      (when (window-parameter window 'window-side) (delete-window window)))
     (delete-other-windows)
     (switch-to-buffer welcome)
-    (when (and info (>= (window-total-width) 160))
-      (display-buffer-in-side-window
-       info '((side . right) (slot . 0) (window-width . 28))))
-    (when (>= (window-total-width) 100)
-      (let ((right (split-window-right)))
-        (set-window-buffer right playground)
-        (select-window right)))))
+    (let ((width (window-total-width)))
+      (when (and (>= width 130) (featurep 'treemacs))
+        (neomacs-wasm-landing--tree))
+      (when (and info (>= width 170))
+        (display-buffer-in-side-window info '((side . right) (slot . 0) (window-width . 26))))
+      (when (>= (window-total-width) 85)
+        (let ((right (split-window-right)))
+          (set-window-buffer right (get-buffer "*NEO Emacs Playground*"))
+          (select-window right))))))
 
 (provide 'neomacs-wasm-landing)
 ;;; neomacs-wasm-landing.el ends here
