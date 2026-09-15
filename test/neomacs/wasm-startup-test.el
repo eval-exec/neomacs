@@ -63,6 +63,13 @@
           (with-current-buffer "*NEO Emacs*"
             (should (derived-mode-p 'org-mode))
             (should buffer-read-only)
+            (should (eq buffer-face-mode-face 'neomacs-wasm-landing-body))
+            (dolist (face '(org-level-1 org-level-2 org-level-3))
+              (should (assq face face-remapping-alist)))
+            (should (facep 'neomacs-wasm-landing-body))
+            (should (facep 'neomacs-wasm-welcome-heading))
+            (should-not (equal (face-attribute 'neomacs-wasm-landing-body :family)
+                               (face-attribute 'neomacs-wasm-welcome-heading :family)))
             (should (string-match-p "C-x C-e" (buffer-string)))
             (should (string-match-p "Unsaved buffers" (buffer-string)))))
       (dolist (name '("*NEO Emacs*" "*NEO Emacs Playground*" "*NEO Emacs About*"))

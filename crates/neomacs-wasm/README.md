@@ -96,6 +96,14 @@ layouts show welcome; the other buffers remain accessible with `C-x b`.
 `M-x neomacs-wasm-landing-open` reopens the layout without erasing playground
 edits. Set the profile to `editor` to retain ordinary scratch-buffer startup.
 
+The welcome buffer uses local face remapping: proportional sans-serif prose,
+contrasting serif Org headings, and heading scales of 1.8×, 1.4×, and 1.15×
+for levels one through three. The playground keeps its monospace font.
+Customize `neomacs-wasm-landing-body` and `neomacs-wasm-welcome-heading` to
+choose other families. The portable font catalog supplies Hack, Ubuntu Light,
+and Noto Serif Regular from pinned font dependencies; it does not discover
+the browser host's installed fonts.
+
 `cargo xtask build-wasm` fetches exact Git objects from `packages.lock.toml`
 into ignored `target/wasm-package-sources/`. Treemacs uses the upstream 3.2
 release; dependencies and doom-themes are pinned too. Sources, icons, and

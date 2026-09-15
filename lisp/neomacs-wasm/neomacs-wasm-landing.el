@@ -14,6 +14,7 @@
 (require 'button)
 (require 'seq)
 (require 'org)
+(require 'face-remap)
 
 (defcustom neomacs-wasm-landing-personal-info
   "eval-exec\n\nBuilding NEO Emacs in the open.\n\nThis is a working preview. Feedback and contributions are welcome."
@@ -21,12 +22,15 @@
   :type '(choice (const :tag "No personal sidebar" nil) string)
   :group 'neomacs-wasm)
 
-(defface neomacs-wasm-landing-title
-  '((t (:inherit font-lock-function-name-face :weight bold :height 1.6)))
-  "Landing page title." :group 'neomacs-wasm)
+(defface neomacs-wasm-landing-body
+  '((t (:inherit variable-pitch :family "Ubuntu")))
+  "Proportional type for the landing page prose." :group 'neomacs-wasm)
 (defface neomacs-wasm-landing-heading
   '((t (:inherit font-lock-keyword-face :weight bold)))
-  "Landing page section heading." :group 'neomacs-wasm)
+  "Landing sidebar section heading." :group 'neomacs-wasm)
+(defface neomacs-wasm-welcome-heading
+  '((t (:inherit font-lock-keyword-face :family "Noto Serif" :weight normal)))
+  "Contrasting proportional type for landing page headings." :group 'neomacs-wasm)
 
 (define-derived-mode neomacs-wasm-landing-mode special-mode "NEO"
   "Read-only landing page; use TAB and RET or click an action."
@@ -44,6 +48,14 @@
               org-hide-leading-stars t
               org-fontify-whole-heading-line t
               header-line-format nil)
+  (buffer-face-set 'neomacs-wasm-landing-body)
+  (cl-loop for face in '(org-level-1 org-level-2 org-level-3 org-level-4
+                        org-level-5 org-level-6 org-level-7 org-level-8)
+           for height in '(1.8 1.4 1.15 1.05 1.05 1.05 1.05 1.05)
+           do (face-remap-add-relative face (list :height height)
+                                      'neomacs-wasm-welcome-heading))
+  (dolist (face '(org-code org-verbatim))
+    (face-remap-add-relative face 'neomacs-wasm-landing-body))
   (setq buffer-read-only t))
 
 (defconst neomacs-wasm-landing--examples
@@ -149,7 +161,8 @@
               "Select the playground on the right. If it is hidden,\n"
               "use the /Enter the playground/ action below.\n"
               "Then press =C-x C-e= to evaluate =(+ 1 2)=.\n"
-              "The answer appears at the bottom of the editor.\n"
+              "The answer appears at the bottom of the editor.\n\n"
+              "*** Make it your own\n"
               "Change a number. Evaluate again. That is the idea:\n"
               "a short conversation between you and your editor.\n\n")
       (neomacs-wasm-landing--action "  Enter the playground  →" #'neomacs-wasm-landing-playground)
