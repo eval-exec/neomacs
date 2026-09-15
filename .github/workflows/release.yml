@@ -638,6 +638,13 @@ jobs:
   # ── GitHub Release ────────────────────────────────────────────────────
   create-release:
     name: create release
+    # Same guard the three publishing jobs below already carry.  Without it a
+    # `workflow_dispatch` run -- which is how a release workflow gets validated
+    # without cutting a tag -- would publish a release named after the branch,
+    # and `verify-install-script` would then try to verify it.  With it, a
+    # dispatch builds and verifies everything (including the el9 RPM and the
+    # Fedora install) and publishes nothing; only a `v*` tag push releases.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
       discussions: write
