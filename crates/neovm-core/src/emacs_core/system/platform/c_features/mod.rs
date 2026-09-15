@@ -340,6 +340,7 @@ pub(crate) fn gnu_c_features() -> [GnuCFeature; 30] {
             gnu_guard: BuildOption("HAVE_X_WINDOWS/HAVE_PGTK/HAVE_HAIKU/HAVE_ANDROID"),
             here: cfg_select! {
                 all(target_os = "linux", feature = "desktop-font-settings") => Implemented {
+                    hosts: NativeOnly,
                     by: "font_defaults/linux.rs owns the native GSettings subscription; \
                          keyboard.rs dispatches config-changed-event to dynamic-setting.el",
                 },
@@ -354,6 +355,7 @@ pub(crate) fn gnu_c_features() -> [GnuCFeature; 30] {
             gnu_guard: BuildOption("(USE_CAIRO|HAVE_XFT) && (HAVE_GCONF|HAVE_GSETTINGS)"),
             here: cfg_select! {
                 all(target_os = "linux", feature = "desktop-font-settings") => Implemented {
+                    hosts: NativeOnly,
                     by: "font_defaults/linux.rs reads native font preferences; keyboard.rs \
                          refreshes system font queries and honors font-use-system-font",
                 },
