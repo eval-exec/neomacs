@@ -4,7 +4,7 @@
 //! The native thread receives only geometry, never Lisp values or font handles.
 
 use super::startup_font::{BootstrapFont, StartupFont};
-use super::{BootstrapDisplayConfig, InitialEditorSurface, Context, FrontendKind, PrimaryWindowSize};
+use super::{BootstrapDisplayConfig, Context, FrontendKind, InitialEditorSurface, PrimaryWindowSize};
 
 #[derive(Debug, strum::Display)]
 pub(super) enum StartupFrameError {
