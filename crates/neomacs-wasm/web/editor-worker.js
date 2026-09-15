@@ -209,9 +209,9 @@ async function start(message) {
   // Downloading is the longest startup phase on a real link (about 88 MB on a
   // first visit) and the compiler streams from the same responses, so report
   // bytes as they arrive instead of leaving the user watching a still screen.
-  post("status", { message: "Downloading editor…" });
-  const assets = await fetchEditorWorkerAssets(message, undefined, ({ received, total }) => {
-    post("progress", { phase: "download", received, total });
+  post("status", { phase: "download", message: "Downloading editor…" });
+  const assets = await fetchEditorWorkerAssets(message, undefined, (progress) => {
+    post("progress", { phase: "download", ...progress });
   });
   runtimeImage = assets.runtimeImage;
   runtimeImageId = assets.runtimeImageId;

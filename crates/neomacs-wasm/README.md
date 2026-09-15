@@ -10,6 +10,10 @@ python crates/neomacs-wasm/tools/preview.py --directory tmp/editor-browser
 ```
 
 Open <http://127.0.0.1:4173/>. The preview server binds only to loopback.
+Startup shows byte progress for frontend and runtime downloads, then a
+text-only “Starting NEO Emacs…” message until the first editor frame. When a
+response has no usable size (including compressed transfers), the bar is
+indeterminate and displays received bytes without inventing a percentage.
 Production hosting must use HTTPS, serve `.wasm` as `application/wasm`, and
 send these headers on the page and worker resources:
 
@@ -50,6 +54,7 @@ python crates/neomacs-wasm/tests/browser_basic_smoke.py --browser chrome --headl
 python crates/neomacs-wasm/tests/browser_basic_smoke.py --browser firefox --headless --artifacts-dir tmp/firefox-basic
 node --test crates/neomacs-wasm/web/*.test.mjs
 cargo test -p xtask wasm
+python crates/neomacs-wasm/tests/browser_download_smoke.py --artifacts-dir tmp/download-smoke
 ```
 
 Use `--binary PATH` to select an installed browser. Tests use isolated profiles
