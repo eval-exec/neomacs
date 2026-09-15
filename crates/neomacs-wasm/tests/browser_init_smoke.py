@@ -70,11 +70,22 @@ def main():
             editor.wait_ready()
             editor.wait_for_presentation()
             editor.wait_for_frame_text("default landing page", contains="Welcome to the browser editor.")
+            startup_frames = editor.startup_frame_payloads()
+            assert startup_frames, "no startup presentations captured"
+            for initial_frame in startup_frames:
+                chrome_bottom = max((band["bounds"]["y"] + band["bounds"]["height"]
+                                     for band in initial_frame["frame_chrome"]["bands"]), default=0)
+                assert all(window["pixel_bounds"]["y"] >= chrome_bottom
+                           for window in initial_frame["window_matrices"]), \
+                    "startup presentation places windows behind frame bars"
             assert not any(
                 row["role"] == "HeaderLine"
                 for window in editor.frame_payload()["window_matrices"]
                 for row in window["matrix"]["rows"]
             ), "landing header lines should be disabled before any editor input"
+            artifacts = Path(args.artifacts_dir)
+            artifacts.mkdir(parents=True, exist_ok=True)
+            editor.driver.save_screenshot(str(artifacts / "first-presentation.png"))
             if args.block_packages:
                 editor.eval_expression(
                     '''(progn
@@ -100,8 +111,6 @@ def main():
                   (message "DEFAULT-LANDING-READY"))''',
                 "DEFAULT-LANDING-READY",
             )
-            artifacts = Path(args.artifacts_dir)
-            artifacts.mkdir(parents=True, exist_ok=True)
             editor.driver.save_screenshot(str(artifacts / "default-landing.png"))
             editor.eval_expression(
                 '''(progn (neomacs-wasm-landing-theme 'doom-one)
