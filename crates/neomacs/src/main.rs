@@ -3102,15 +3102,8 @@ fn sync_selected_gui_chrome_state(eval: &mut Context) {
         if frame.effective_window_system().is_none() {
             return;
         }
-        // A shown GUI frame realizes its menu/tab/tool bars into the frame's
-        // top margin (GNU's FRAME_TOP_MARGIN), so the window text area — and
-        // the windows' tab/header lines — must sit below them.  The reused
-        // initial GUI frame is created after `run()`'s interactive
-        // `displays_chrome` pass, so it would otherwise keep the default
-        // `false` and lay the root window at y=0, hidden behind the bars.
-        // Mark it here (the GUI-only chrome sync) before the height-driven
-        // `sync_window_area_bounds`, so the reflow reserves the chrome rows.
-        frame.displays_chrome = true;
+        // Shared surface initialization owns chrome realization. This pass
+        // only updates native menu/tool-bar content and its measured geometry.
         frame.set_parameter(
             FrameParam::MenuBarLines.symbol(),
             Value::fixnum(if menu_items.is_empty() || compact_bar_enabled {
@@ -4420,8 +4413,7 @@ pub fn run(mode: RuntimeMode) {
         // skip this block, leaving `displays_chrome` false so their
         // `window-edges` stay GNU-batch-compatible (root at line 0).
         for frame in evaluator.frame_manager_mut().frames_mut() {
-            frame.displays_chrome = true;
-            frame.sync_window_area_bounds();
+            frame.set_chrome_layout(neovm_core::window::FrameChromeLayout::Realized);
         }
 
         let (input_tx, input_rx) = crossbeam_channel::unbounded();

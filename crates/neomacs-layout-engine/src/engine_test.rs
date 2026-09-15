@@ -29072,7 +29072,7 @@ fn layout_frame_rust_publishes_authoritative_frame_chrome() {
         let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         frame.parent_frame = Value::NIL;
         frame.window_system = Some(Value::symbol("neomacs"));
-        frame.displays_chrome = true;
+        frame.set_chrome_layout(neovm_core::window::FrameChromeLayout::Realized);
         frame.char_height = 18.0;
         frame
             .parameters

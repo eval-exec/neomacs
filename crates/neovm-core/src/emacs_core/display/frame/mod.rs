@@ -1156,7 +1156,11 @@ fn apply_terminal_viewport_to_tty_frame(
     size: super::terminal::pure::TtyFrameSize,
     displays_chrome: bool,
 ) {
-    frame.displays_chrome = displays_chrome;
+    frame.set_chrome_layout(if displays_chrome {
+        crate::window::FrameChromeLayout::Realized
+    } else {
+        crate::window::FrameChromeLayout::Unrealized
+    });
     if frame_is_top_level_non_window(frame) {
         frame.resize_pixelwise_with_buffer_constraints(buffers, size.columns(), size.rows());
     }
@@ -2094,7 +2098,7 @@ pub(crate) fn set_top_level_non_window_pixelwise_totals(
     // Only realized (displayed) chrome adds rows over FRAME_LINES; a
     // non-displayed frame (--batch) keeps FRAME_TOTAL_LINES == FRAME_LINES,
     // matching GNU's batch geometry that the oracle pins.
-    let top_margin = if frame.displays_chrome {
+    let top_margin = if frame.displays_chrome() {
         frame.frame_top_margin()
     } else {
         0

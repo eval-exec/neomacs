@@ -3431,7 +3431,7 @@ fn frame_resize_pixelwise_reserves_tab_bar_height_above_root_window_tree() {
     frame.char_height = 20.0;
     // GNU offsets the tab-bar only on a displayed frame (commit 1030f559b);
     // mark this test frame displayed so the reflow reserves the bar.
-    frame.displays_chrome = true;
+    frame.set_chrome_layout(crate::window::FrameChromeLayout::Realized);
     frame.set_parameter(Value::symbol("tab-bar-lines"), Value::fixnum(1));
 
     frame.sync_tab_bar_height_from_parameters();

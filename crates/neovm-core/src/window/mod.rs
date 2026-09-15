@@ -24,6 +24,8 @@ mod chrome;
 pub use chrome::WindowChromePresence;
 mod display;
 pub(crate) use display::WindowScrollUpdate;
+mod frame_chrome;
+pub use frame_chrome::FrameChromeLayout;
 mod frame_params;
 pub mod geometry;
 mod history;
@@ -576,7 +578,7 @@ pub struct FrameLayoutInputState {
     pub(crate) geometry: (u32, u32, u32, u32, u32),
     pub(crate) device_scale_bits: u64,
     pub(crate) visible: bool,
-    pub(crate) displays_chrome: bool,
+    pub(crate) chrome_layout: FrameChromeLayout,
     pub(crate) has_window_system: bool,
     pub(crate) window_system_symbol: Option<SymId>,
 }
@@ -3646,7 +3648,7 @@ pub struct Frame {
     /// `FRAME_MENU_BAR_LINES` into `FRAME_TOP_MARGIN` only on a shown frame).
     /// Set on interactively displayed frames; left false for non-displayed
     /// frames (e.g. `--batch`), so window-edge coordinates match GNU there.
-    pub displays_chrome: bool,
+    chrome_layout: FrameChromeLayout,
     /// GNU `struct frame.title`: explicit title override, or nil.
     pub title: Value,
     /// Menu bar height in pixels.
@@ -3818,7 +3820,7 @@ impl Frame {
             },
             visibility: FrameVisibility::Visible,
             // Set true only once an interactive frontend displays this frame.
-            displays_chrome: false,
+            chrome_layout: FrameChromeLayout::Unrealized,
             title: Value::NIL,
             menu_bar_height: 0,
             tool_bar_height: 0,
@@ -3985,7 +3987,7 @@ impl Frame {
             ),
             device_scale_bits: self.device_scale_factor.to_bits(),
             visible: self.visibility.is_visible(),
-            displays_chrome: self.displays_chrome,
+            chrome_layout: self.chrome_layout,
             has_window_system: window_system.is_some(),
             window_system_symbol: window_system.and_then(Value::as_symbol_id),
         }
@@ -4318,7 +4320,7 @@ impl Frame {
     }
 
     fn window_text_area_bounds(&self) -> Rect {
-        self.window_text_area_bounds_with_chrome(self.displays_chrome)
+        self.window_text_area_bounds_with_chrome(self.displays_chrome())
     }
 
     pub fn sync_window_area_bounds(&mut self) {
@@ -5143,7 +5145,7 @@ impl Frame {
             // reduces FRAME_LINES; a non-displayed frame (--batch) keeps
             // FRAME_TOTAL_LINES == FRAME_LINES, matching GNU's batch geometry.
             let total_terminal_lines = (self.height as f32 / char_height).floor().max(1.0) as i64;
-            let top_margin = if self.displays_chrome {
+            let top_margin = if self.displays_chrome() {
                 self.frame_top_margin()
             } else {
                 0
@@ -5320,7 +5322,7 @@ impl Frame {
         }
         let unit = self.char_height.max(1.0);
         let inner_height = self
-            .window_area_bounds_with_chrome(self.displays_chrome)
+            .window_area_bounds_with_chrome(self.displays_chrome())
             .height;
         let maximum = (max_lines * unit).max(unit).min(inner_height);
         let requested = content_height_px.max(unit);

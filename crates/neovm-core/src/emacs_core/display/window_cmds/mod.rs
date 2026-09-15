@@ -5294,7 +5294,7 @@ pub(crate) fn frame_is_top_level_non_window(frame: &crate::window::Frame) -> boo
 /// matching the batch geometry the oracle pins (frame-total-lines == frame-height).
 pub(crate) fn frame_realized_lines(frame: &crate::window::Frame) -> i64 {
     let total = frame.lines() as i64;
-    let top_margin = if frame.displays_chrome {
+    let top_margin = if frame.displays_chrome() {
         frame.frame_top_margin()
     } else {
         0
@@ -7043,7 +7043,7 @@ pub(crate) fn x_create_frame_impl(
         // bars occupy window rows (GNU realizes FRAME_TOP_MARGIN only on shown
         // frames). Mark it displaying chrome before the area reflow so the bar
         // rows are reserved above the root window.
-        frame.displays_chrome = true;
+        frame.set_chrome_layout(crate::window::FrameChromeLayout::Realized);
         frame.sync_tab_bar_height_from_parameters();
         frame.sync_menu_bar_height_from_parameters();
         frame.sync_tool_bar_height_from_parameters();

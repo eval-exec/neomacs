@@ -8653,7 +8653,7 @@ fn modify_frame_parameters_tab_bar_lines_reflows_root_window_tree() {
         // GNU offsets the tab/tool-bar only on a displayed frame (commit
         // 1030f559b); mark this test frame displayed so the reflow reserves
         // the bar above the root window.
-        frame.displays_chrome = true;
+        frame.set_chrome_layout(crate::window::FrameChromeLayout::Realized);
     }
 
     let out = ev.eval_str_each("(modify-frame-parameters (selected-frame) '((tab-bar-lines . 1)))");
@@ -8688,7 +8688,7 @@ fn modify_frame_parameters_tool_bar_lines_reflows_root_window_tree() {
         // GNU offsets the tab/tool-bar only on a displayed frame (commit
         // 1030f559b); mark this test frame displayed so the reflow reserves
         // the bar above the root window.
-        frame.displays_chrome = true;
+        frame.set_chrome_layout(crate::window::FrameChromeLayout::Realized);
     }
 
     let out =

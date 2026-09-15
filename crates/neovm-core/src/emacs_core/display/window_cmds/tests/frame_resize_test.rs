@@ -341,7 +341,7 @@ fn width_only_gui_resize_keeps_exact_native_height_with_chrome_and_partial_row()
     frame.char_height = 18.0;
     frame.menu_bar_height = 18;
     frame.tool_bar_height = 41;
-    frame.displays_chrome = true;
+    frame.set_chrome_layout(crate::window::FrameChromeLayout::Realized);
     frame.resize_pixelwise(745, 688);
     let host = RecordingDisplayHost::new();
     let requests = host.resized.clone();
@@ -374,7 +374,7 @@ fn rejected_and_duplicate_native_resize_completions_preserve_actual_geometry() {
     frame.char_height = 18.0;
     frame.menu_bar_height = 18;
     frame.tool_bar_height = 41;
-    frame.displays_chrome = true;
+    frame.set_chrome_layout(crate::window::FrameChromeLayout::Realized);
     frame.resize_pixelwise(745, 688);
     let host = RecordingDisplayHost::new();
     let requests = host.resized.clone();
