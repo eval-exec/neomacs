@@ -55,6 +55,13 @@ class BrowserEditorHarness:
     def install_frame_observer(self) -> None:
         source = """
                 globalThis.__neomacsLastFrame = null;
+                globalThis.__neomacsConsoleErrors = [];
+                const originalConsoleError = console.error;
+                console.error = (...arguments_) => {
+                  globalThis.__neomacsConsoleErrors.push(arguments_.map(
+                    value => value?.stack ?? String(value)).join(" "));
+                  originalConsoleError.apply(console, arguments_);
+                };
                 globalThis.__neomacsStartupFrames = [];
                 globalThis.__neomacsMessages = [];
                 const NativeWorker = globalThis.Worker;
@@ -467,13 +474,29 @@ class BrowserEditorHarness:
         except Exception as error:  # noqa: BLE001 - preserve the original failure
             errors.append(f"page source: {error}")
         try:
+            frame_bytes = self.driver.execute_script(
+                "return Array.from(new Uint8Array(globalThis.__neomacsLastFrame || new ArrayBuffer()))"
+            )
+            (output / "frame.cbor").write_bytes(bytes(frame_bytes))
+        except Exception as error:  # noqa: BLE001 - preserve the original failure
+            errors.append(f"frame bytes: {error}")
+        try:
             state = {
-                "frame_text": self.frame_text(),
-                "startup_frame_texts": self.observed_startup_frame_texts(),
                 "worker_messages": self.driver.execute_script(
                     "return globalThis.__neomacsMessages || []"
                 ),
+                "console_errors": self.driver.execute_script(
+                    "return globalThis.__neomacsConsoleErrors || []"
+                ),
             }
+            for name, read in (
+                ("frame_text", self.frame_text),
+                ("startup_frame_texts", self.observed_startup_frame_texts),
+            ):
+                try:
+                    state[name] = read()
+                except Exception as error:  # noqa: BLE001 - keep console errors on malformed frames
+                    errors.append(f"{name}: {error}")
             (output / "browser-state.json").write_text(
                 json.dumps(state, indent=2, sort_keys=True),
                 encoding="utf-8",
