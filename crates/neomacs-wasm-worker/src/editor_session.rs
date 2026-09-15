@@ -144,7 +144,7 @@ pub(crate) fn run() -> Result<EditorSessionExit, String> {
         Path::new(BrowserPaths::RUNTIME_ROOT).join("bin"),
         Path::new(BrowserPaths::HOME),
     )
-    .with_arguments(["--quick", "--no-splash"]);
+    .with_arguments(["--no-site-file", "--no-x-resources", "--no-splash"]);
     configure_interactive_gui_startup(&mut evaluator, surface, &invocation)
         .map_err(|error| format!("failed to configure browser startup: {error:?}"))?;
 
