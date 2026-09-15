@@ -13,6 +13,9 @@
 
 (add-to-list 'load-path (file-name-directory (or load-file-name buffer-file-name)))
 
+(autoload 'neomacs-wasm-landing-open "neomacs-wasm-landing"
+  "Open the welcome page and an editable Emacs Lisp playground." t)
+
 (defgroup neomacs-wasm nil
   "NEO Emacs in the browser."
   :group 'environment)
@@ -32,7 +35,6 @@ a buffer or window layout."
              (not initial-buffer-choice)
              (one-window-p t)
              (equal (buffer-name (window-buffer)) "*scratch*"))
-    (require 'neomacs-wasm-landing)
     (neomacs-wasm-landing-open)))
 
 (defun neomacs-wasm-startup-initialize ()

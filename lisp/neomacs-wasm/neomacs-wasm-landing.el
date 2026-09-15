@@ -49,7 +49,7 @@ playground edits.  Explicit invocation replaces the current window layout."
                            "C-x C-f             Open a file\n"
                            "M-x load-theme      Choose an installed theme\n\n"
                            "Try Emacs Lisp in *NEO Emacs Playground*.\n"
-                           "C-j evaluates the expression before point.\n\n"
+                           "C-x C-e evaluates the expression before point.\n\n"
                            "Personal configuration: ~/.emacs.d/init.el\n"
                            "Files in your browser home persist on this origin.\n")))
          (playground (or (get-buffer "*NEO Emacs Playground*")
