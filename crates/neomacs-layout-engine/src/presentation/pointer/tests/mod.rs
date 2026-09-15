@@ -36,7 +36,7 @@ fn pointer_projection_uses_authoritative_row_origin_and_start_column() {
     row.rebuild_pointer_runs(8.0, 80.0);
     let mut matrix = GlyphMatrix::new(1, 10);
     matrix.rows[0] = neomacs_display_protocol::glyph_matrix::MatrixRow::new(row);
-    let mut state = FrameDisplayState::new(10, 1, 8.0, 16.0);
+    let mut state = FrameDisplayState::new(12, 4, 8.0, 16.0);
     state.window_matrices.push(WindowMatrixEntry {
         window_id: DisplayWindowId::new(4),
         matrix,
@@ -65,7 +65,7 @@ fn pointer_projection_supports_window_chrome_rows_from_the_same_matrix() {
     row.rebuild_pointer_runs(8.0, 80.0);
     let mut matrix = GlyphMatrix::new(1, 10);
     matrix.rows[0] = neomacs_display_protocol::glyph_matrix::MatrixRow::new(row);
-    let mut state = FrameDisplayState::new(10, 1, 8.0, 16.0);
+    let mut state = FrameDisplayState::new(12, 4, 8.0, 16.0);
     state.window_matrices.push(WindowMatrixEntry {
         window_id: DisplayWindowId::new(4),
         matrix,
@@ -128,4 +128,39 @@ fn pointer_projection_preserves_image_primitive_kind_in_window_chrome() {
         source.appearances()[0].paint_spans()[0].kind(),
         PresentedPrimitiveKind::Image
     );
+}
+
+#[test]
+fn pointer_projection_clips_rounded_window_edges_to_the_frame() {
+    // Browser pixel extents need not be multiples of the character width.
+    // The last window can therefore extend past the presentation's drawable.
+    for role in [GlyphRowRole::ModeLine, GlyphRowRole::Text] {
+        let mut row = GlyphRow::new(role);
+        row.pixel_x = 510.0;
+        row.height_px = 19.0;
+        let token = row.intern_pointer_appearance(pointer()).unwrap();
+        row.glyphs[GlyphArea::Text.index()].push(Glyph {
+            pointer_appearance: Some(token),
+            ..Glyph::char('x', FaceId::new(0), 0).with_pixel_width(50.0)
+        });
+        row.rebuild_pointer_runs(10.0, 560.0);
+        let mut matrix = GlyphMatrix::new(1, 56);
+        matrix.rows[0] = neomacs_display_protocol::glyph_matrix::MatrixRow::new(row);
+        let mut state = FrameDisplayState::new(134, 33, 10.0, 19.0);
+        state.frame_pixel_width = 1348.0;
+        state.frame_pixel_height = 630.0;
+        state.window_matrices.push(WindowMatrixEntry {
+            window_id: DisplayWindowId::new(8),
+            matrix,
+            pixel_bounds: Rect::new(790.0, 620.0, 560.0, 19.0),
+            text_pixel_bounds: Rect::new(790.0, 620.0, 560.0, 19.0),
+            text_clip_bounds: None,
+            selected: true,
+        });
+
+        let source = window_pointer_source_map(&state).unwrap();
+        let bounds = source.regions()[0].bounds();
+        assert_eq!(bounds, FrameRect::new(1300.0, 620.0, 48.0, 10.0).unwrap());
+        assert_eq!(source.appearances()[0].paint_spans()[0].clip(), bounds);
+    }
 }
