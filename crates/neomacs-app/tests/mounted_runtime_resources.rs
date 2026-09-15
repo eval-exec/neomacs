@@ -10,12 +10,13 @@ mod support;
 
 #[test]
 fn separately_authenticated_packages_extend_resources_without_overwriting_files() {
-    let base = mounted_runtime_resources(&[("lisp/startup.el", b"startup"), ("etc/NEWS", b"news")]);
+    let mut combined =
+        mounted_runtime_resources(&[("lisp/startup.el", b"startup"), ("etc/NEWS", b"news")]);
     let packages = mounted_runtime_resources(&[
         ("lisp/packages/tree.el", b"tree"),
         ("etc/packages", b"licenses"),
     ]);
-    let combined = base.try_extend(packages).unwrap();
+    combined.try_extend(packages).unwrap();
     assert_eq!(
         combined.file_contents(Path::new("/neomacs/lisp/packages/tree.el")),
         Some(b"tree".as_slice())
@@ -27,6 +28,10 @@ fn separately_authenticated_packages_extend_resources_without_overwriting_files(
     let collision =
         mounted_runtime_resources(&[("lisp/startup.el", b"replacement"), ("etc/other", b"other")]);
     assert!(combined.try_extend(collision).is_err());
+    assert_eq!(
+        combined.file_contents(Path::new("/neomacs/lisp/startup.el")),
+        Some(b"startup".as_slice())
+    );
 }
 
 #[test]

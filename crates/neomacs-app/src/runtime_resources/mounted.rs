@@ -26,7 +26,7 @@ pub struct MountedRuntimeResources {
 impl MountedRuntimeResources {
     /// Combine independently authenticated resource sets at the same root.
     /// Shared directories are allowed; no bundle can replace another's files.
-    pub fn try_extend(mut self, other: Self) -> Result<Self, RuntimeResourceError> {
+    pub fn try_extend(&mut self, other: Self) -> Result<(), RuntimeResourceError> {
         if self.mount_root != other.mount_root {
             return Err(RuntimeResourceError::UnownedArchivePath(other.mount_root));
         }
@@ -45,7 +45,7 @@ impl MountedRuntimeResources {
         }
         self.files.extend(other.files);
         self.directories.extend(other.directories);
-        Ok(self)
+        Ok(())
     }
 
     /// Authenticate and mount a deterministic runtime resource bundle.
