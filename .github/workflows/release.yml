@@ -196,13 +196,12 @@ jobs:
       # artifact only when package, features and profile agree.
       RELEASE_FEATURES: video,neomacs-layout-engine/freetype-bundled
     steps:
-      # Absolutely first, before anything invokes dnf: dnf honors TMPDIR, the
-      # job points TMPDIR at the workspace, and that subdirectory does not exist
-      # until this creates it.  Otherwise the git install below dies with
+      # TMPDIR must exist before the first dnf runs -- dnf honors TMPDIR, the job
+      # points it at the workspace, and dnf dies without it:
       #   Cannot create temporary file - mkstemp .../tmp/librepo-tmp-XXXX:
       #   No such file or directory
-      # (mkdir is in the base image; git is not.)
-      - name: Prepare workspace temp directory
+      # (mkdir is in the base image; git is not, hence the install below.)
+      - name: Prepare workspace temp directory (for the dnf below)
         run: mkdir -p "$TMPDIR"
 
       # The image ships no git, and `actions/checkout` reaches for it.  No
@@ -222,6 +221,13 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # package-release.sh reads the version from git tags
+
+      # Again, because checkout cleans the workspace first (`git clean -ffdx`
+      # with its default `clean: true`, and -x removes ignored paths like
+      # tmp/).  Without this the very next dnf step fails on mkstemp, which is
+      # how the first CI dispatch of this job spent its time.
+      - name: Prepare workspace temp directory (for the build)
+        run: mkdir -p "$TMPDIR"
 
       # el9 package names, derived from the workspace's own pkg-config and
       # build.rs probes rather than translated from scripts/ci/setup-linux.sh:
