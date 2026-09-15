@@ -10,13 +10,18 @@ python crates/neomacs-wasm/tools/preview.py --directory tmp/editor-browser
 ```
 
 Open <http://127.0.0.1:4173/>. The preview server binds only to loopback.
-Startup shows byte progress for frontend and runtime downloads, then a
-text-only “Starting NEO Emacs…” message until the first editor frame. When a
+Startup shows the full phase checklist immediately: pending, in progress,
+done, or failed. Checkboxes are read-only. Download and compilation phases
+can be active simultaneously. Phases form one top-to-bottom list. Each
+download bar appears in its phase's heading after the text (wrapping within
+that phase on narrow screens). Indented sublists record start/completion times,
+durations, and available byte counts, mount paths, and frame settings. When a
 response has no usable size (including compressed transfers), the bar is
 indeterminate and displays received bytes without inventing a percentage.
-The status and bar share one overlay. The first visible editor frame removes
+The checklist, status, and bar share one overlay. The first visible editor frame removes
 that entire overlay from layout and painting immediately; late download
-messages cannot restore it. Later runtime failures can show a text-only error.
+messages cannot restore it. Startup failures retain the checklist for diagnosis;
+later runtime failures show a text-only error without reviving the checklist.
 Production hosting must use HTTPS, serve `.wasm` as `application/wasm`, and
 send these headers on the page and worker resources:
 

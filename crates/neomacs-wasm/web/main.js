@@ -35,6 +35,15 @@ let targetFrame = "0";
 let reportedScale = null;
 let activePresentation = null;
 
+function updatePhase(phase, state) {
+  // The checklist owner enforces its terminal-state policy.
+  document.dispatchEvent(new CustomEvent("neomacs:startup-phase", { detail: {phase, state} }));
+}
+
+function phaseDetail(phase, message) {
+  document.dispatchEvent(new CustomEvent("neomacs:startup-detail", { detail: {phase, message} }));
+}
+
 function showFailure(error) {
   settleStartup("failed", `Neomacs failed: ${error instanceof Error ? error.message : String(error)}`);
   console.error(error);
@@ -47,6 +56,8 @@ function startupIsSettled() {
 function settleStartup(state, message) {
   // A presentation promise may resolve after startup has already failed.
   if (state === "ready" && startupIsSettled()) return;
+  updatePhase(state === "ready" ? "first-frame" : null, state === "ready" ? "done" : "failed");
+  if (state === "ready") document.querySelector("#browser-startup-log").hidden = true;
   status.dataset.state = state;
   status.textContent = message;
   hideProgress();
@@ -76,7 +87,6 @@ function showProgress(received, total, complete = false) {
   if (startupIsSettled()) return;
   if (complete) {
     hideProgress();
-    status.textContent = "Starting NEO Emacs…";
     return;
   }
   if (!progress || !progressBar) return;
@@ -188,6 +198,7 @@ function reconcileDeviceScale() {
 }
 
 async function start() {
+  updatePhase("frontend-modules", "done");
   if (typeof Worker !== "function") {
     throw new Error("this browser does not expose module Workers");
   }
@@ -201,16 +212,24 @@ async function start() {
   // The frontend module is ~10 MiB and is fetched and compiled on this thread
   // before the Worker is even spawned, so without this the first seconds of a
   // cold load report nothing at all.
-  status.textContent = "Downloading editor frontend…";
+  updatePhase("frontend-download", "active");
   const frontend = observeAssetDownload(
     await fetch(new URL("./neomacs_wasm_bg.wasm", import.meta.url)),
-    ({ received, total, complete }) => showProgress(received, total, complete),
+    ({ received, total, complete }) => {
+      showProgress(received, total, complete);
+      if (complete) {
+        phaseDetail("frontend-download", `Received ${received} bytes`);
+        updatePhase("frontend-download", "done");
+      }
+    },
   );
+  updatePhase("frontend-init", "active");
   await initializeWasmFrontend(
     init,
     frontend,
   );
-  status.textContent = "Starting NEO Emacs…";
+  updatePhase("frontend-init", "done");
+  updatePhase("worker-start", "active");
   set_presentation_callback(didPresentFrame);
   void observeFirstEditorPresentation(
     wait_for_first_editor_presentation,
@@ -238,7 +257,6 @@ async function start() {
       worker.postMessage({ type: "wake-probe" });
     } else if (message?.type === "ready") {
       workerStrategy = message.strategy;
-      if (progress.hidden && !startupIsSettled()) status.textContent = "Starting NEO Emacs…";
       installBrowserInput({
         root: globalThis,
         textInput: document.querySelector("#browser-text-input"),
@@ -268,12 +286,16 @@ async function start() {
       }
     } else if (message?.type === "progress") {
       showProgress(message.received, message.total, message.complete);
-    } else if (message?.type === "status") {
-      // Compilation overlaps the streamed download. Only byte progress owns
-      // the transition out of downloading; later phases remain text-only.
-      if (message.phase === "download" && !startupIsSettled()) {
-        status.textContent = "Downloading editor and runtime assets…";
+      if (message.complete) {
+        phaseDetail("worker-download", `Received ${message.received} bytes`);
+        updatePhase("worker-download", "done");
       }
+    } else if (message?.type === "startup-phase") {
+      updatePhase(message.phase, message.state);
+    } else if (message?.type === "startup-detail") {
+      phaseDetail(message.phase, message.message);
+    } else if (message?.type === "status") {
+      // Informational runtime messages do not determine checklist completion.
     } else if (message?.type === "failed") {
       showFailure(new Error(message.message));
       worker.terminate();
