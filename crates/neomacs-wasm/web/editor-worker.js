@@ -31,6 +31,17 @@ function post(type, payload = {}, transfer = []) {
   self.postMessage({ type, ...payload }, transfer);
 }
 
+function phase(id, state) {
+  post("startup-phase", { phase: id, state });
+}
+
+let runtimePhase = null;
+function advanceRuntimePhase(id) {
+  if (runtimePhase) phase(runtimePhase, "done");
+  runtimePhase = id;
+  phase(id, "active");
+}
+
 function supportsJspi() {
   return typeof WebAssembly.Suspending === "function"
     && typeof WebAssembly.promising === "function";
@@ -156,9 +167,11 @@ function hostImports(waitForInput, filesystemImports) {
           return 0;
         }
       },
-      post_status: (source, length) => post("status", {
+      post_status: (source, length) => post("startup-detail", {
+        phase: runtimePhase,
         message: decodeMemoryString(source, length),
       }),
+      post_startup_phase: (source, length) => advanceRuntimePhase(decodeMemoryString(source, length)),
       post_failure: (source, length) => post("failed", {
         message: decodeMemoryString(source, length),
       }),
@@ -198,6 +211,7 @@ async function instantiate(response, imports) {
 }
 
 async function start(message) {
+  phase("worker-start", "done");
   const jspi = supportsJspi();
   if (!jspi && !globalThis.crossOriginIsolated) {
     throw new Error(
@@ -209,7 +223,7 @@ async function start(message) {
   // Downloading is the longest startup phase on a real link (about 88 MB on a
   // first visit) and the compiler streams from the same responses, so report
   // bytes as they arrive instead of leaving the user watching a still screen.
-  post("status", { phase: "download", message: "Downloading editor…" });
+  phase("worker-download", "active");
   const assets = await fetchEditorWorkerAssets(message, undefined, (progress) => {
     post("progress", { phase: "download", ...progress });
   });
@@ -217,22 +231,24 @@ async function start(message) {
   runtimeImageId = assets.runtimeImageId;
   runtimeResourceBundle = assets.runtimeResourceBundle;
   runtimeResourceId = assets.runtimeResourceId;
-  post("status", { message: "Opening persistent storage…" });
+  phase("storage", "active");
   const filesystem = jspi
     ? await OriginPrivateFileSystem.open()
     : await openBlockingFileSystem();
+  phase("storage", "done");
   const imports = createOpfsHostImports(filesystem, () => memory);
   const filesystemImports = jspi ? suspendingFilesystemImports(imports) : imports;
 
   const waitForInput = jspi ? createJspiWait() : createAtomicsWait();
   // `instantiateStreaming` compiles while the body is still arriving, so the
   // download progress above continues to advance during this phase.
-  post("status", { message: "Compiling editor…" });
+  phase("worker-compile", "active");
   const { instance } = await instantiate(
     assets.wasmResponse,
     hostImports(waitForInput, filesystemImports),
   );
   memory = instance.exports.memory;
+  phase("worker-compile", "done");
   const probe = instance.exports.neomacs_wasm_worker_probe;
   const run = instance.exports.neomacs_wasm_worker_run;
   if (typeof probe !== "function" || typeof run !== "function") {
@@ -240,11 +256,13 @@ async function start(message) {
   }
 
   const promisedProbe = jspi ? WebAssembly.promising(probe) : probe;
+  phase("worker-probe", "active");
   const proof = await promisedProbe(5000);
   if (proof !== RESUMED_INPUT && proof !== RESUMED_TIMEOUT) {
     throw new Error(`editor Worker suspension resumed with invalid proof 0x${proof.toString(16)}`);
   }
   probing = false;
+  phase("worker-probe", "done");
   const state = mailboxState();
   if (state) {
     Atomics.store(state, 1, 0);
