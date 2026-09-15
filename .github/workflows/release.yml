@@ -112,11 +112,11 @@ jobs:
             --target "${{ matrix.target }}" \
             --skip-build --no-smoke
 
-      - name: Package .rpm
-        run: |
-          ./scripts/package-rpm.sh \
-            --target "${{ matrix.target }}" \
-            --skip-build --no-smoke
+      # No .rpm here: this runner is Ubuntu, and rpmbuild derives a package's
+      # library Requires from the host's rpm and libraries, so an RPM built
+      # here encodes Ubuntu's ncurses and glibc symbol versions and is
+      # unsatisfiable on Fedora (issue #388).  `build-linux-rpm` builds it
+      # inside el9 instead.
 
       # The AppImage carries the same product as the tarball, so linuxdeploy
       # bundles its GStreamer closure into the image; codec plugin families
@@ -127,11 +127,15 @@ jobs:
             --target "${{ matrix.target }}" \
             --skip-build --no-smoke
 
+      # --formats: the audit hard-errors on a requested format that is absent,
+      # and this job no longer produces the .rpm (`build-linux-rpm` does, and
+      # audits it there).
       - name: Verify packaged artifacts and GLIBC baseline
         run: |
           ./scripts/test-linux-release-artifacts.sh \
             --target "${{ matrix.target }}" \
-            --tar-version "$VERSION"
+            --tar-version "$VERSION" \
+            --formats tar,appimage,deb
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -141,8 +145,206 @@ jobs:
             dist/*.tar.gz
             dist/*.AppImage
             dist/*.deb
-            dist/*.rpm
           if-no-files-found: error
+
+  # ── RPM (built and packaged inside el9, its target distro) ────────────
+  #
+  # Why this is not built on the ubuntu runner: rpmbuild derives each package's
+  # library Requires from the payload's ELF *and* the build host's rpm, so an
+  # Ubuntu-built binary records Ubuntu's ncurses and glibc symbol versions:
+  #
+  #     nothing provides libtinfo.so.6(NCURSES6_TINFO_5.0.19991023)(64bit)
+  #
+  # Fedora publishes no such symbol version, so the package was uninstallable
+  # there (issue #388).  Building inside el9 makes el9's glibc (2.34) and
+  # unversioned ncurses the recorded requirements, so ONE artifact installs on
+  # RHEL 9 / Rocky / Alma and upward on Fedora 43+, and it still satisfies the
+  # GLIBC 2.35 ceiling that `test-linux-release-artifacts.sh` enforces.
+  build-linux-rpm:
+    name: build RPM el9 ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
+    # The image is pinned by index digest, like the Dockerfiles under docker/:
+    # this entire job's correctness rests on el9's ncurses having no symbol
+    # version stamps and its glibc being 2.34, so the image that was verified is
+    # the image that runs.  It is a multi-arch index, so each runner pulls its
+    # own architecture and nothing runs under emulation.
+    container:
+      image: quay.io/almalinuxorg/almalinux:9@sha256:3da647417303590fea18439c87421a886d4245fef358cf131d0e0ce7b23f4236
+    timeout-minutes: 120
+    # The default shell inside a container job is `sh`; bash also buys the
+    # `-o pipefail` the other jobs get from the runner's bash template.
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+      # Same reason as build-linux: keep large temporary files on the workspace
+      # volume rather than wherever the container's /tmp lands.
+      TMPDIR: ${{ github.workspace }}/tmp
+      # Must match build-linux exactly: xtask's bootstrap reuses the compile
+      # artifact only when package, features and profile agree.
+      RELEASE_FEATURES: video,neomacs-layout-engine/freetype-bundled
+    steps:
+      # The image ships no git, and `actions/checkout` reaches for it, so this
+      # has to come first.  No `curl` here on purpose: the image ships
+      # `curl-minimal`, which already provides the binary, and asking for the
+      # full package is a hard conflict on el9 ("curl-minimal conflicts with
+      # curl provided by curl").
+      - name: Install git for checkout
+        run: dnf install -y git tar gzip which
+
+      # Before checkout, not after: the container runs as root while the mounted
+      # workspace may be owned by another uid, and git refuses a repository it
+      # does not consider owned without this.
+      - name: Mark the workspace safe for git
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # package-release.sh reads the version from git tags
+
+      - name: Prepare workspace temp directory
+        run: mkdir -p "$TMPDIR"
+
+      # el9 package names, derived from the workspace's own pkg-config and
+      # build.rs probes rather than translated from scripts/ci/setup-linux.sh:
+      # most of that Ubuntu list is dead weight here (X11, Wayland and Vulkan
+      # are dlopen'ed; openssl, gnutls, libxml2, cairo and pango are not
+      # dependencies at all).  Three entries are easy to miss and mandatory:
+      #   libdrm-devel  gstreamer-allocators-sys links drm (the .pc file passes
+      #                 -ldrm), which the payload's DT_NEEDED does not reveal
+      #   gawk          neovm-core/build.rs generates Lisp with awk and panics
+      #                 without GNU awk
+      #   gcc-c++       simdutf (via rio-vt) compiles C++ and links libstdc++
+      #   diffutils     the artifact audit shells out to cmp; a minimal image
+      #                 has no cmp, only the Ubuntu runner did
+      # The second install is the runtime closure: the packaging scripts execute
+      # the binary they stage, and rpmbuild runs its brp scripts over it.
+      - name: Install build and packaging dependencies (dnf)
+        run: |
+          # Everything below resolves from BaseOS/AppStream, and the AlmaLinux
+          # image enables CRB by default -- the enable is kept only for images
+          # that ship it off, and it is not allowed to fail the job.
+          dnf install -y dnf-plugins-core
+          dnf config-manager --set-enabled crb || echo "crb: not enabled (not needed for this list)"
+          dnf install -y \
+            make binutils cpio diffutils file gcc gcc-c++ pkgconf-pkg-config \
+            gawk ncurses-devel fontconfig-devel freetype-devel glib2-devel \
+            gstreamer1-devel gstreamer1-plugins-base-devel libdrm-devel \
+            zlib-devel lcms2-devel rpm-build
+          dnf install -y gstreamer1 gstreamer1-plugins-base glib2 fontconfig \
+            freetype ncurses-libs libstdc++ zlib libdrm
+
+      - name: Set up Rust tooling
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-key: release-linux-rpm-el9-${{ matrix.arch }}
+          target: ${{ matrix.target }}
+
+      - name: Compile release binaries
+        env:
+          NEOMACS_BUILD_PROFILE: release
+        run: >-
+          cargo build -p neomacs
+          --features "$RELEASE_FEATURES"
+          --profile release
+
+      - name: Bootstrap and dump
+        run: cargo xtask fresh-build --release --features "$RELEASE_FEATURES" --skip-build
+
+      # `%{?dist}` is defined here, so the file is
+      # neomacs-<version>-1.el9.<arch>.rpm.
+      - name: Package .rpm
+        run: |
+          ./scripts/package-rpm.sh \
+            --target "${{ matrix.target }}" \
+            --skip-build --no-smoke
+
+      # The point of the whole job: the package's own declared dependencies,
+      # resolved by a real transaction on the distro it targets.  This is the
+      # check that issue #388 needed and nothing performed.
+      #
+      # The ncurses assertion is deliberately fatal rather than informational:
+      # the correctness argument rests on el9's ncurses having no symbol
+      # version stamps, and if a future image ever grew them this job must stop
+      # rather than ship a package only el9 can install.
+      - name: Install the package on el9 (no --nodeps)
+        run: |
+          dnf install -y ./dist/*.rpm
+          if rpm -qp --requires ./dist/*.rpm | grep -qiE 'ncurses|tinfo'; then
+            echo "the package carries a versioned ncurses/tinfo requirement:" >&2
+            rpm -qp --requires ./dist/*.rpm | grep -iE 'ncurses|tinfo' >&2
+            echo "these are unsatisfiable on Fedora -- see issue #388" >&2
+            exit 1
+          fi
+          /usr/bin/neomacs --version
+          timeout 60 /usr/bin/neomacs --batch --eval "(kill-emacs 0)"
+
+      # No --tar-version here: this job's dist/ holds exactly one tarball, and
+      # pinning it to ${GITHUB_REF_NAME#v} would break a `workflow_dispatch` run
+      # from a branch, where that is the branch name and not a version.
+      - name: Verify packaged artifacts and GLIBC baseline
+        run: |
+          ./scripts/test-linux-release-artifacts.sh \
+            --target "${{ matrix.target }}" \
+            --formats tar,rpm
+
+      - name: Upload RPM artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rpm-el9-${{ matrix.arch }}
+          path: dist/*.rpm
+          if-no-files-found: error
+
+  # ── Fedora install guard ──────────────────────────────────────────────
+  #
+  # The el9 RPM exists to be installable on Fedora; this installs the built
+  # artifact there, on a real Fedora, with no --nodeps.  Without it the release
+  # could ship an unsatisfiable package again and only a user would notice.
+  #
+  # x86_64 only: an aarch64 Fedora container would have to emulate, so the
+  # aarch64 RPM is not covered by this check.  Its Requires come from the same
+  # spec and the same el9 build, and `build-linux-rpm` installs it on el9, so
+  # the exposure is a Fedora-aarch64-specific packaging difference.
+  verify-rpm-on-fedora:
+    name: verify RPM installs on Fedora
+    needs:
+      - build-linux-rpm
+    runs-on: ubuntu-24.04
+    container:
+      image: registry.fedoraproject.org/fedora:44
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install extraction tools for the artifact download
+        run: dnf install -y tar unzip
+
+      - name: Download the RPM built on el9
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: rpm-el9-x86_64
+          path: dist
+
+      - name: Install it on Fedora and run it
+        run: |
+          ls -l ./dist/*.rpm
+          dnf install -y ./dist/*.rpm
+          neomacs --version
+          timeout 60 neomacs --batch --eval "(kill-emacs 0)"
 
   # ── macOS aarch64 (Apple Silicon) ─────────────────────────────────────
   build-macos-aarch64:
@@ -441,6 +643,13 @@ jobs:
       discussions: write
     needs:
       - build-linux
+      # The RPM comes from el9, not from build-linux, so the release waits for
+      # it here or the artifact list would be missing a package the notes link.
+      - build-linux-rpm
+      # And it waits for the Fedora install to succeed: that job exists to catch
+      # a recurrence of issue #388, which it cannot do if a failing install
+      # still publishes the release.
+      - verify-rpm-on-fedora
       - build-macos-aarch64
       - build-macos-x86_64
       - build-windows

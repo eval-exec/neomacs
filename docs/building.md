@@ -92,6 +92,39 @@ cargo xtask fresh-build --release
 Other distributions should follow similar dependency installation with their
 package manager.
 
+## Linux (Fedora, RHEL 9+, and their rebuilds)
+
+```bash
+# Install dependencies
+sudo dnf install -y \
+  gcc gcc-c++ make binutils pkgconf-pkg-config gawk \
+  ncurses-devel fontconfig-devel freetype-devel glib2-devel \
+  gstreamer1-devel gstreamer1-plugins-base-devel libdrm-devel \
+  zlib-devel lcms2-devel
+# On el9 several of these live in CRB:
+#   sudo dnf config-manager --set-enabled crb
+
+# Install Rust (if not already installed)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Build NEO Emacs (compiles Rust, bootstraps Elisp, generates pdump)
+cargo xtask fresh-build --release
+
+# Run
+./target/release/neomacs
+```
+
+`libdrm-devel` and `gawk` are easy to miss — the first is linked by
+`gstreamer-allocators`, the second generates Lisp during the build — and
+`gcc-c++` is required because `simdutf` (via `rio-vt`) compiles C++. The inline
+browser (`--features webview`) additionally needs WPE WebKit
+(`wpewebkit-devel`, `libwpe-devel`, `wpebackend-fdo-devel`), `libsoup3-devel`
+and `clang-devel` for bindgen.
+
+The distributed `.rpm` is built on the target distro family rather than on the
+packaging host; see [releasing-linux.md](releasing-linux.md) for why, and for
+the container command.
+
 ## macOS (Experimental)
 
 macOS support is experimental — see

@@ -134,6 +134,11 @@ Linux artifact carries it: the `.deb` and `.rpm` declare the dependency, and the
 AppImage bundles that closure, though codec plugin families still come from the
 host.
 
+The `.rpm` is built inside an el9 container, so it installs on RHEL 9, Rocky,
+Alma and Fedora 43+ — a package built on Ubuntu cannot, because `rpmbuild`
+records the build host's ncurses and glibc symbol versions as requirements. See
+[releasing-linux.md](docs/releasing-linux.md).
+
 <details>
 <summary><b>Build from source</b></summary>
 

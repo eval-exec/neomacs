@@ -148,6 +148,14 @@ neomacs_verify_archlib \
   "$payload/usr/share/neomacs"
 
 cat >"$rpm_topdir/SPECS/neomacs.spec" <<SPEC
+# The payload is a prebuilt binary that Cargo already stripped (strip =
+# "debuginfo" in Cargo.toml), so a debuginfo subpackage would carry nothing.
+# Without this, rpmbuild on el9 and Fedora emits neomacs-debuginfo anyway --
+# redhat-rpm-config enables that by default there -- and the release would grow
+# a second, useless .rpm beside the real one.
+# This comment names no macro on purpose: rpm expands them even inside
+# comments, and expanding the debuginfo macro here corrupts the whole header.
+%global debug_package %{nil}
 Name:           neomacs
 Version:        ${version}
 Release:        1%{?dist}
@@ -200,11 +208,23 @@ rpmbuild -bb \
   --target "$rpm_arch" \
   "$rpm_topdir/SPECS/neomacs.spec"
 
-rpm_file="$(find "$rpm_topdir/RPMS" -name '*.rpm' -type f | head -1)"
-if [[ -z "$rpm_file" ]]; then
-  echo "rpmbuild did not produce an .rpm" >&2
+# Select the package by name rather than by "first .rpm found": on a host with
+# redhat-rpm-config (any el9/Fedora, where it arrives with rpm-build) rpmbuild
+# also emits neomacs-debuginfo-*, and `find | head -1` would happily copy THAT
+# -- an artifact with no /usr/bin/neomacs, which installs to a binary-less
+# package.  `%global debug_package %{nil}` in the spec above suppresses it; this
+# keeps the selection honest even if a future spec change stops doing that.
+mapfile -t rpm_files < <(
+  find "$rpm_topdir/RPMS" -type f \
+    -name "neomacs-${version}-1*.${rpm_arch}.rpm" \
+    -not -name '*-debuginfo-*' -not -name '*-debugsource-*' | sort
+)
+if ((${#rpm_files[@]} != 1)); then
+  echo "expected exactly one neomacs-${version}-1*.${rpm_arch}.rpm under $rpm_topdir/RPMS; found ${#rpm_files[@]}" >&2
+  find "$rpm_topdir/RPMS" -type f -name '*.rpm' -print >&2
   exit 1
 fi
+rpm_file="${rpm_files[0]}"
 
 cp "$rpm_file" "$dist_dir/"
 rm -rf "$rpm_topdir"
