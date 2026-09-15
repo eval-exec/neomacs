@@ -14,6 +14,9 @@ Startup shows byte progress for frontend and runtime downloads, then a
 text-only “Starting NEO Emacs…” message until the first editor frame. When a
 response has no usable size (including compressed transfers), the bar is
 indeterminate and displays received bytes without inventing a percentage.
+The status and bar share one overlay. The first visible editor frame removes
+that entire overlay from layout and painting immediately; late download
+messages cannot restore it. Later runtime failures can show a text-only error.
 Production hosting must use HTTPS, serve `.wasm` as `application/wasm`, and
 send these headers on the page and worker resources:
 
