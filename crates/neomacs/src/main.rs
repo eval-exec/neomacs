@@ -4826,10 +4826,7 @@ fn bootstrap_buffers_with_font(
                 "dark" => InitialBackgroundMode::Dark,
                 _ => InitialBackgroundMode::Light,
             },
-            InitialFrameFont::new(
-                bootstrap_font,
-                bootstrap_font_name,
-            ),
+            InitialFrameFont::new(bootstrap_font, bootstrap_font_name),
         ),
         BootstrapDisplayKind::Tty { .. } => {
             InitialEditorSurfaceSpec::tty(metrics, display.interactivity.is_batch())

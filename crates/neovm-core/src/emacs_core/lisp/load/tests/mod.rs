@@ -169,6 +169,35 @@ fn load_path_entry_strings(entries: &[Value]) -> Vec<String> {
 }
 
 #[test]
+fn runtime_load_path_preserves_site_lisp_with_virtual_bundled_directories() {
+    use crate::emacs_core::fileio::{EditorFileSystem, MemoryFileSystem};
+
+    let filesystem = MemoryFileSystem::new();
+    let lisp_dir = Path::new("/rebase-virtual-runtime/lisp");
+    filesystem
+        .create_directory(lisp_dir, true)
+        .expect("virtual Lisp directory");
+    filesystem
+        .create_directory(&lisp_dir.join("emacs-lisp"), true)
+        .expect("virtual Lisp subsystem");
+    let site_lisp = PathBuf::from("/rebase-virtual-runtime/site-lisp");
+    let entries = runtime_load_path_entries_from_os_with_filesystem(
+        lisp_dir,
+        None,
+        std::slice::from_ref(&site_lisp),
+        Some(&filesystem),
+    );
+
+    let paths = load_path_entry_strings(&entries);
+    assert_eq!(
+        paths.first().map(String::as_str),
+        Some("/rebase-virtual-runtime/site-lisp")
+    );
+    assert!(paths.contains(&"/rebase-virtual-runtime/lisp".to_owned()));
+    assert!(paths.contains(&"/rebase-virtual-runtime/lisp/emacs-lisp".to_owned()));
+}
+
+#[test]
 fn runtime_load_path_uses_defaults_when_emacsloadpath_is_unset() {
     let temp = tempdir().expect("tempdir");
     let lisp_dir = temp.path().join("lisp");
