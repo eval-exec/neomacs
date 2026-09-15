@@ -78,7 +78,7 @@ def main():
             assert driver.execute_script("return arguments[0].getClientRects().length", element) == 0
         states = driver.execute_script("return globalThis.downloadStates")
         expected = ["page", "release", "frontend-modules", "frontend-download", "frontend-init",
-                    "worker-start", "worker-download", "storage", "worker-compile", "worker-probe",
+                    "worker-start", "worker-download", "storage", "worker-compile", "worker-probe", "packages",
                     "verify-image", "verify-resources", "unpack", "restore", "mounts", "configure",
                     "lisp", "first-frame"]
         initial = next(s for s in states if s["phases"])

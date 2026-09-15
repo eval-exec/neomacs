@@ -287,8 +287,9 @@ async function start() {
     } else if (message?.type === "progress") {
       showProgress(message.received, message.total, message.complete);
       if (message.complete) {
-        phaseDetail("worker-download", `Received ${message.received} bytes`);
-        updatePhase("worker-download", "done");
+        const phase = message.phase === "packages" ? "packages" : "worker-download";
+        phaseDetail(phase, `Received ${message.received} bytes`);
+        updatePhase(phase, "done");
       }
     } else if (message?.type === "startup-phase") {
       updatePhase(message.phase, message.state);

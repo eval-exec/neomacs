@@ -36,6 +36,10 @@ unsafe extern "C" {
     safe fn copy_runtime_resource_bundle(destination: *mut u8, capacity: u32) -> u32;
     safe fn runtime_resource_id_len() -> u32;
     safe fn copy_runtime_resource_id(destination: *mut u8, capacity: u32) -> u32;
+    safe fn package_bundle_len() -> u32;
+    safe fn copy_package_bundle(destination: *mut u8, capacity: u32) -> u32;
+    safe fn package_id_len() -> u32;
+    safe fn copy_package_id(destination: *mut u8, capacity: u32) -> u32;
     safe fn input_len() -> u32;
     safe fn copy_input(destination: *mut u8, capacity: u32) -> u32;
     #[link_name = "acknowledge_input"]
@@ -138,6 +142,17 @@ pub(crate) fn runtime_resource_id_bytes() -> Result<Vec<u8>, String> {
         MAX_RUNTIME_RESOURCE_ID_BYTES,
         |buffer| copy_runtime_resource_id(buffer.as_mut_ptr(), buffer.len() as u32),
     )
+}
+
+/// Optional assets may be unavailable offline; core editing must still start.
+pub(crate) fn package_assets() -> Result<Option<(Vec<u8>, Vec<u8>)>, String> {
+    let length = package_bundle_len();
+    if length == 0 { return Ok(None); }
+    let archive = copy_host_bytes("package bundle", length, MAX_RUNTIME_RESOURCE_BUNDLE_BYTES,
+        |buffer| copy_package_bundle(buffer.as_mut_ptr(), buffer.len() as u32))?;
+    let id = copy_host_bytes("package ID", package_id_len(), MAX_RUNTIME_RESOURCE_ID_BYTES,
+        |buffer| copy_package_id(buffer.as_mut_ptr(), buffer.len() as u32))?;
+    Ok(Some((archive, id)))
 }
 
 pub(crate) fn take_input_bytes() -> Result<Vec<u8>, String> {

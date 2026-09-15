@@ -1,4 +1,5 @@
 import { fetchEditorWorkerAssets } from "./worker-assets.mjs";
+import { fetchPackageAssets } from "./packages.mjs";
 import { createHttpHostImports } from "./network/host.mjs";
 import { WorkerWait, HostWake } from "./worker-wait.mjs";
 import { WorkerInput } from "./worker-input.mjs";
@@ -21,6 +22,7 @@ let runtimeImage = null;
 let runtimeImageId = null;
 let runtimeResourceBundle = null;
 let runtimeResourceId = null;
+let packageAssets = null;
 let startup = null;
 let mailbox = null;
 const queuedInput = new WorkerInput(receipt => self.postMessage(receipt));
@@ -153,6 +155,10 @@ function hostImports(waitForInput, filesystemImports) {
       runtime_resource_id_len: () => runtimeResourceId?.byteLength ?? 0,
       copy_runtime_resource_id: (destination, capacity) =>
         copyToMemory(runtimeResourceId, destination, capacity),
+      package_bundle_len: () => packageAssets?.archive.byteLength ?? 0,
+      copy_package_bundle: (destination, capacity) => copyToMemory(packageAssets?.archive, destination, capacity),
+      package_id_len: () => packageAssets?.id.byteLength ?? 0,
+      copy_package_id: (destination, capacity) => copyToMemory(packageAssets?.id, destination, capacity),
       input_len: () => currentInput()?.byteLength ?? 0,
       copy_input: (destination, capacity) => copyToMemory(currentInput(), destination, capacity),
       acknowledge_input: acknowledgeInput,
@@ -263,6 +269,17 @@ async function start(message) {
   }
   probing = false;
   phase("worker-probe", "done");
+  phase("packages", "active");
+  try {
+    packageAssets = await fetchPackageAssets(new URL("./packages.json", import.meta.url), {
+      onProgress: progress => post("progress", {phase: "packages", ...progress}),
+      onDetail: message => post("startup-detail", {phase: "packages", message}),
+    });
+  } catch (error) {
+    post("startup-detail", {phase: "packages", message:
+      `Optional packages unavailable: ${error.message}. Starting basic landing page; reload to retry.`});
+  }
+  phase("packages", "done");
   const state = mailboxState();
   if (state) {
     Atomics.store(state, 1, 0);
