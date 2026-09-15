@@ -1,4 +1,4 @@
-"""Shared Chrome configuration for Neomacs browser integration tests."""
+"""Browser configuration and editor observations for integration tests."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from selenium import webdriver
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.remote.websocket_connection import WebSocketConnection
 
 
 def chrome_binary(explicit: str | None) -> str | None:
@@ -52,10 +53,7 @@ class BrowserEditorHarness:
         self.completed_startup_frame_texts: list[str] = []
 
     def install_frame_observer(self) -> None:
-        self.driver.execute_cdp_cmd(
-            "Page.addScriptToEvaluateOnNewDocument",
-            {
-                "source": """
+        source = """
                 globalThis.__neomacsLastFrame = null;
                 globalThis.__neomacsStartupFrames = [];
                 globalThis.__neomacsMessages = [];
@@ -79,9 +77,27 @@ class BrowserEditorHarness:
                     });
                   }
                 };
-                """,
-            },
-        )
+                """
+        if self.driver.name != "firefox":
+            self.driver.execute_cdp_cmd(
+                "Page.addScriptToEvaluateOnNewDocument", {"source": source}
+            )
+            return
+
+        # Firefox has no CDP. Install the same observer in the page's default
+        # realm before its modules run, using standard WebDriver BiDi.
+        def preload():
+            result = yield {
+                "method": "script.addPreloadScript",
+                "params": {"functionDeclaration": "() => {" + source + "}"},
+            }
+            return result
+
+        connection = WebSocketConnection(self.driver.capabilities["webSocketUrl"])
+        try:
+            connection.execute(preload())
+        finally:
+            connection.close()
 
     def wait_ready(self) -> None:
         deadline = time.monotonic() + self.timeout
