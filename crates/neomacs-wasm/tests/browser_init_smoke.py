@@ -2,13 +2,49 @@
 """User init survives browser restart and overrides shipped WASM defaults."""
 
 import argparse
+from contextlib import contextmanager
+from functools import partial
+from http.server import ThreadingHTTPServer
 import json
 from pathlib import Path
+import sys
 from tempfile import TemporaryDirectory
+from threading import Thread
+from urllib.parse import urlsplit
 
 from selenium import webdriver
 
 from browser_test_support import BrowserEditorHarness, chrome_options
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from tools.preview import PreviewHandler
+
+
+@contextmanager
+def package_failure_preview(directory):
+    """Fail the real worker request, independent of browser CDP target scopes."""
+    if directory is None:
+        yield None
+        return
+
+    class Handler(PreviewHandler):
+        def do_GET(self):
+            if urlsplit(self.path).path.endswith("/packages.bundle"):
+                self.send_error(503, "Package download unavailable for acceptance test")
+            else:
+                super().do_GET()
+
+        def log_message(self, format, *args):
+            pass
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), partial(Handler, directory=str(directory.resolve()))) as server:
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            yield f"http://127.0.0.1:{server.server_port}/"
+        finally:
+            server.shutdown()
+            thread.join()
 
 
 def main():
@@ -18,19 +54,19 @@ def main():
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--timeout", type=float, default=90)
     parser.add_argument("--artifacts-dir", required=True)
-    parser.add_argument("--block-packages", action="store_true")
+    parser.add_argument("--block-packages", type=Path, metavar="DISTRIBUTION",
+                        help="serve this build temporarily with packages.bundle returning HTTP 503")
     args = parser.parse_args()
-    with TemporaryDirectory(prefix="browser-init-", dir=Path(__file__).resolve().parents[3] / "tmp") as profile:
+    if args.block_packages and not (args.block_packages / "index.html").is_file():
+        parser.error("--block-packages must point to a packaged browser distribution")
+    with package_failure_preview(args.block_packages) as failure_url, TemporaryDirectory(prefix="browser-init-", dir=Path(__file__).resolve().parents[3] / "tmp") as profile:
         options = chrome_options(args.binary, args.headless)
         options.add_argument(f"--user-data-dir={profile}")
         options.add_argument("--window-size=1800,1100")
         editor = BrowserEditorHarness(webdriver.Chrome(options=options), args.timeout)
         try:
-            if args.block_packages:
-                editor.driver.execute_cdp_cmd("Network.enable", {})
-                editor.driver.execute_cdp_cmd("Network.setBlockedURLs", {"urls": ["*packages.bundle*"]})
             editor.install_frame_observer()
-            editor.driver.get(args.url)
+            editor.driver.get(failure_url or args.url)
             editor.wait_ready()
             editor.wait_for_presentation()
             editor.wait_for_frame_text("default landing page", contains="Welcome to the browser editor.")
