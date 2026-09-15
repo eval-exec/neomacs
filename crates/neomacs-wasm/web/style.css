@@ -67,33 +67,38 @@ canvas {
   #browser-titlebar { background: #f3f4f6; }
 }
 
-#browser-status {
+#browser-startup {
   position: absolute;
   z-index: 1;
-  margin: 0;
+  inset-block-start: 0;
+  inset-inline: 0;
+  display: grid;
+  gap: 0.6rem;
   padding: 0.65rem 0.8rem;
-  color: #aeb7c6;
   pointer-events: none;
 }
 
-#browser-status[data-state="ready"] {
-  opacity: 0;
-  transition: opacity 200ms ease-out 500ms;
+/* Author display rules override the browser's default [hidden] styling.
+   Hidden startup UI must have no layout, paint, or accessibility presence. */
+#browser-startup[hidden],
+#browser-progress[hidden] {
+  display: none;
+}
+
+#browser-status {
+  margin: 0;
+  color: #aeb7c6;
+  overflow-wrap: anywhere;
 }
 
 #browser-status[data-state="failed"] {
   color: #ff8080;
 }
 
-/* Download progress. Sits just under the status line, which owns the phase
-   name; this owns the byte count. Both are decoration over the editor
-   surface, so neither takes pointer events. */
+/* Status and download progress share one flow layout and startup lifetime. */
 #browser-progress {
-  position: absolute;
-  z-index: 1;
-  inset-block-start: 2.4rem;
-  inset-inline-start: 0.8rem;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.6rem;
   pointer-events: none;
