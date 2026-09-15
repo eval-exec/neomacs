@@ -34,6 +34,24 @@ fn interactive_gui_startup_materializes_host_identity_and_gnu_command_line_state
 
     configure_interactive_gui_startup(&mut evaluator, surface, &startup).unwrap();
 
+    // GNU frame-notice-user-settings compares later init changes with the
+    // parameters used to create the opening frame, even when the host made it.
+    assert_eq!(
+        evaluator
+            .eval_str("(cdr (assq 'width frame-initial-frame-alist))")
+            .unwrap(),
+        Value::fixnum(40)
+    );
+    evaluator
+        .eval_str("(modify-frame-parameters nil '((width . 55)))")
+        .unwrap();
+    assert_eq!(
+        evaluator
+            .eval_str("(cdr (assq 'width frame-initial-frame-alist))")
+            .unwrap(),
+        Value::fixnum(40)
+    );
+
     assert_eq!(
         evaluator.obarray().symbol_value("command-line-processed"),
         Some(&Value::NIL),

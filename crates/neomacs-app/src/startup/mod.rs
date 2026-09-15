@@ -110,7 +110,9 @@ pub fn configure_interactive_gui_startup(
            (if (fboundp 'frame-set-background-mode)
                (frame-set-background-mode (selected-frame) t))
            (if (fboundp 'face-set-after-frame-default)
-               (face-set-after-frame-default (selected-frame))))",
+               (face-set-after-frame-default (selected-frame)))
+           (setq frame-initial-frame-alist
+                 (frame-parameters frame-initial-frame)))",
     )?;
     Ok(())
 }
