@@ -147,6 +147,13 @@ class BrowserEditorHarness:
         )
         return cbor2.loads(bytes(values)) if values else {}
 
+    def startup_frame_payloads(self) -> list[dict[str, object]]:
+        frames = self.driver.execute_script(
+            "return (globalThis.__neomacsStartupFrames || []).map("
+            "frame => Array.from(new Uint8Array(frame)))"
+        )
+        return [cbor2.loads(bytes(values)) for values in frames]
+
     def assert_active_cursor(self, description: str) -> dict[str, object]:
         payload = self.frame_payload()
         cursor = payload.get("phys_cursor")
