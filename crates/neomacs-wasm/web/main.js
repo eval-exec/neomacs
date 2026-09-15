@@ -293,6 +293,7 @@ async function start() {
       }
     } else if (message?.type === "startup-phase") {
       updatePhase(message.phase, message.state);
+      if (message.phase === "packages" && message.state === "done") hideProgress();
     } else if (message?.type === "startup-detail") {
       phaseDetail(message.phase, message.message);
     } else if (message?.type === "status") {
