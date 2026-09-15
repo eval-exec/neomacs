@@ -26,8 +26,8 @@ assets=(
   neomacs-9.8.7-aarch64-unknown-linux-gnu.AppImage
   neomacs_9.8.7_amd64.deb
   neomacs_9.8.7_arm64.deb
-  neomacs-9.8.7-1.x86_64.rpm
-  neomacs-9.8.7-1.aarch64.rpm
+  neomacs-9.8.7-1.el9.x86_64.rpm
+  neomacs-9.8.7-1.el9.aarch64.rpm
   neomacs-9.8.7-x86_64-unknown-linux-gnu.tar.gz
   neomacs-9.8.7-aarch64-unknown-linux-gnu.tar.gz
   neomacs-9.8.7-aarch64-apple-darwin.dmg

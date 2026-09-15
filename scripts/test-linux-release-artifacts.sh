@@ -248,7 +248,11 @@ test_deb() {
 
 test_rpm() {
   local artifact root
-  artifact="$(find_one RPM-package "neomacs-*-1.${rpm_arch}.rpm")"
+  # The glob tolerates the build host's dist tag: the RPM is built inside the
+  # target distro (el9, see `build-linux-rpm` in .github/workflows/release.yml),
+  # so `%{?dist}` makes it neomacs-<version>-1.el9.<arch>.rpm rather than
+  # neomacs-<version>-1.<arch>.rpm.
+  artifact="$(find_one RPM-package "neomacs-*-1.*${rpm_arch}.rpm")"
   root="$work_dir/rpm"
   mkdir -p "$root"
   rpm2cpio "$artifact" | (

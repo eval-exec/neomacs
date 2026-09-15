@@ -7,6 +7,20 @@ Usage: scripts/package-rpm.sh [--target TRIPLE] [--skip-build] [--no-smoke]
 
 Build and package an .rpm for NEO Emacs.
 
+Run this ON THE TARGET DISTRO FAMILY, on a host whose libraries the binary was
+linked against -- not on whichever machine is convenient.  rpmbuild derives the
+library Requires from the payload's ELF and from the build host's rpm, so a
+package built on Debian/Ubuntu encodes THAT host's ncurses and glibc symbol
+versions, and Fedora cannot satisfy them:
+
+    nothing provides libtinfo.so.6(NCURSES6_TINFO_5.0.19991023)(64bit)
+
+That was issue #388.  The release workflow therefore builds and packages this
+RPM inside an el9 container (see the `build-linux-rpm` job in
+.github/workflows/release.yml): rpmbuild then records el9's dependencies, and
+because el9's glibc (2.34) and ncurses carry no version stamps, the one
+artifact installs on RHEL 9 / Rocky / Alma AND upward on Fedora 43+.
+
 Requires rpmbuild to be installed.
 
 Options:
@@ -15,7 +29,8 @@ Options:
   --no-smoke      Do not smoke-test the binary.
 
 Output:
-  dist/neomacs-{version}-1.{arch}.rpm
+  dist/neomacs-{version}-1[<dist>].{arch}.rpm   (the dist tag comes from the
+                                                build host: .el9, .fc44, ...)
 USAGE
 }
 
@@ -143,8 +158,6 @@ URL:            https://github.com/eval-exec/neomacs
 
 Requires:       fontconfig
 Requires:       glib2
-Requires:       cairo
-Requires:       pango
 Recommends:     gstreamer1-plugins-base
 Recommends:     gstreamer1-plugins-good
 Recommends:     gstreamer1-plugins-bad-free

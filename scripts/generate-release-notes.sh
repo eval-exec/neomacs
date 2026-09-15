@@ -80,12 +80,30 @@ fi
 version="${tag#v}"
 release_base="https://github.com/$repository/releases/download/$tag"
 
+# The RPM is built inside its target distro (see `build-linux-rpm` in
+# .github/workflows/release.yml), so its name carries that host's dist tag:
+# neomacs-<version>-1.el9.<arch>.rpm.  Derive the name from the release
+# directory instead of hardcoding the tag -- the tag is a property of the build
+# host, and a hardcoded one would silently break these links the day the RPM
+# moves to another distro.
+find_rpm_asset() {
+  local arch="$1"
+  local matches=()
+  mapfile -t matches < <(find "$dist_dir" -maxdepth 1 -type f -name "neomacs-$version-1.*$arch.rpm" -print | sort)
+  if ((${#matches[@]} != 1)); then
+    echo "expected exactly one RPM for $arch in $dist_dir; found ${#matches[@]}" >&2
+    printf '  %s\n' "${matches[@]}" >&2
+    exit 1
+  fi
+  basename "${matches[0]}"
+}
+
 linux_x86_appimage="neomacs-$version-x86_64-unknown-linux-gnu.AppImage"
 linux_arm_appimage="neomacs-$version-aarch64-unknown-linux-gnu.AppImage"
 linux_x86_deb="neomacs_${version}_amd64.deb"
 linux_arm_deb="neomacs_${version}_arm64.deb"
-linux_x86_rpm="neomacs-$version-1.x86_64.rpm"
-linux_arm_rpm="neomacs-$version-1.aarch64.rpm"
+linux_x86_rpm="$(find_rpm_asset x86_64)"
+linux_arm_rpm="$(find_rpm_asset aarch64)"
 linux_x86_tarball="neomacs-$version-x86_64-unknown-linux-gnu.tar.gz"
 linux_arm_tarball="neomacs-$version-aarch64-unknown-linux-gnu.tar.gz"
 macos_arm_dmg="neomacs-$version-aarch64-apple-darwin.dmg"
