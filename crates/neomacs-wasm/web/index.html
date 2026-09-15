@@ -20,6 +20,7 @@
     </header>
     <main id="browser-shell">
       <section id="browser-startup" aria-label="Editor startup">
+        <ol id="browser-startup-log" aria-label="Startup checklist"></ol>
         <p id="browser-status" role="status">Loading Neomacs…</p>
         <div
           id="browser-progress"
@@ -29,8 +30,8 @@
           aria-valuemax="100"
           hidden
         >
-          <div id="browser-progress-track"><div id="browser-progress-bar"></div></div>
           <span id="browser-progress-label"></span>
+          <div id="browser-progress-track"><div id="browser-progress-bar"></div></div>
         </div>
       </section>
       <textarea
@@ -44,6 +45,92 @@
     </main>
     <script type="module">
       const status = document.querySelector("#browser-status");
+      const history = document.querySelector("#browser-startup-log");
+      const started = performance.now();
+      const phaseStarts = new Map();
+      const phases = [
+        ["page", "Load webpage"], ["release", "Resolve release"],
+        ["frontend-modules", "Load styles and frontend modules"],
+        ["frontend-download", "Download editor frontend"],
+        ["frontend-init", "Compile and initialize frontend"],
+        ["worker-start", "Start editor worker"],
+        ["worker-download", "Download editor and runtime assets"],
+        ["storage", "Open persistent storage"],
+        ["worker-compile", "Compile editor worker"],
+        ["worker-probe", "Check worker suspend/resume"],
+        ["verify-image", "Verify runtime image"],
+        ["verify-resources", "Verify runtime resources"],
+        ["unpack", "Unpack and mount Lisp runtime"],
+        ["restore", "Restore editor heap"],
+        ["mounts", "Mount home and temporary storage"],
+        ["configure", "Configure editor frame and fonts"],
+        ["lisp", "Configure browser Lisp startup"],
+        ["first-frame", "Start session and present first editor frame"],
+      ];
+      const rows = new Map(phases.map(([id, label]) => {
+        const row = document.createElement("li");
+        row.dataset.phase = id;
+        row.dataset.state = "pending";
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.disabled = true;
+        checkbox.setAttribute("aria-label", label);
+        const text = document.createElement("span");
+        text.className = "phase-label";
+        text.textContent = label;
+        const state = document.createElement("small");
+        state.textContent = "Pending";
+        const heading = document.createElement("div");
+        heading.className = "phase-heading";
+        heading.append(checkbox, text, state);
+        const details = document.createElement("ul");
+        details.className = "phase-details";
+        row.append(heading, details);
+        history.append(row);
+        return [id, row];
+      }));
+      function phaseDetail(id, message) {
+        if (["ready", "failed", "stopped"].includes(status.dataset.state)) return;
+        const row = rows.get(id);
+        if (!row || typeof message !== "string") return;
+        const line = document.createElement("li");
+        line.textContent = `[${((performance.now() - started) / 1000).toFixed(3)}s] ${message}`;
+        row.querySelector(".phase-details").append(line);
+      }
+      function updatePhase(id, state) {
+        if (["ready", "failed", "stopped"].includes(status.dataset.state)) return;
+        if (!["pending", "active", "done", "failed"].includes(state)) return;
+        if (state === "failed" && !id) {
+          for (const [key, row] of rows) if (row.dataset.state === "active") updatePhase(key, "failed");
+          return;
+        }
+        const row = rows.get(id);
+        if (!row || row.dataset.state === "done" || row.dataset.state === state) return;
+        row.dataset.state = state;
+        row.querySelector("input").checked = state === "done";
+        row.querySelector("input").indeterminate = state === "active";
+        row.querySelector("small").textContent = {pending: "Pending", active: "In progress", done: "Done", failed: "Failed"}[state];
+        if (state === "active") {
+          phaseStarts.set(id, performance.now());
+          phaseDetail(id, "Started");
+          status.textContent = row.querySelector(".phase-label").textContent + "…";
+          if (id === "frontend-download" || id === "worker-download") {
+            row.querySelector(".phase-heading").insertBefore(
+              document.querySelector("#browser-progress"), row.querySelector("small"));
+          }
+          row.scrollIntoView({block: "nearest"});
+        } else if (state === "done") {
+          const began = phaseStarts.get(id);
+          phaseDetail(id, began === undefined ? "Completed" : `Completed in ${((performance.now() - began) / 1000).toFixed(3)}s`);
+        } else if (state === "failed") phaseDetail(id, "Failed; see error below");
+      }
+      document.addEventListener("neomacs:startup-phase", event => {
+        updatePhase(event.detail?.phase, event.detail?.state);
+      });
+      document.addEventListener("neomacs:startup-detail", event => {
+        phaseDetail(event.detail?.phase, event.detail?.message);
+      });
+      updatePhase("page", "done");
 
       function installIcon(url) {
         const link = document.createElement("link");
@@ -71,6 +158,7 @@
       }
 
       async function loadCurrentRelease() {
+        updatePhase("release", "active");
         const response = await fetch("./manifest.json", { cache: "no-store" });
         if (!response.ok) {
           throw new Error(`failed to fetch release manifest: ${response.status}`);
@@ -79,7 +167,10 @@
         if (manifest.schema !== 1 || typeof manifest.entry !== "string") {
           throw new Error("unsupported Neomacs browser release manifest");
         }
+        phaseDetail("release", `Selected ${manifest.entry}`);
 
+        updatePhase("release", "done");
+        updatePhase("frontend-modules", "active");
         if (typeof manifest.favicon === "string") installIcon(manifest.favicon);
         if (typeof manifest.stylesheet === "string") {
           await installStylesheet(manifest.stylesheet);
@@ -89,6 +180,7 @@
       }
 
       loadCurrentRelease().catch((error) => {
+        updatePhase(null, "failed");
         status.dataset.state = "failed";
         status.textContent = `Neomacs failed to start: ${
           error instanceof Error ? error.message : String(error)
