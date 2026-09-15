@@ -15,14 +15,73 @@ const FAMILY: &str = "Hack";
 const POST_SCRIPT_NAME: &str = "Hack-Regular";
 const STABLE_KEY: &str = "packaged:hack-regular:epaint-0.36.1#0";
 
-fn shared_bytes() -> Arc<Vec<u8>> {
-    static BYTES: OnceLock<Arc<Vec<u8>>> = OnceLock::new();
-    Arc::clone(BYTES.get_or_init(|| Arc::new(epaint_default_fonts::HACK_REGULAR.to_vec())))
+#[derive(Clone, Copy)]
+enum PackagedFace {
+    Hack,
+    Ubuntu,
+    NotoSerif,
 }
 
-fn face() -> ttf_parser::Face<'static> {
-    ttf_parser::Face::parse(epaint_default_fonts::HACK_REGULAR, 0)
-        .expect("the packaged Hack font must remain a valid single-face SFNT")
+impl PackagedFace {
+    const ALL: [Self; 3] = [Self::Hack, Self::Ubuntu, Self::NotoSerif];
+
+    fn family(self) -> &'static str {
+        match self {
+            Self::Hack => FAMILY,
+            Self::Ubuntu => "Ubuntu",
+            Self::NotoSerif => "Noto Serif",
+        }
+    }
+
+    fn key(self) -> &'static str {
+        match self {
+            Self::Hack => STABLE_KEY,
+            Self::Ubuntu => "packaged:ubuntu-light:epaint-0.36.1#0",
+            Self::NotoSerif => "packaged:noto-serif-regular:oxifont-0.2.2#0",
+        }
+    }
+
+    fn postscript_name(self) -> &'static str {
+        match self {
+            Self::Hack => POST_SCRIPT_NAME,
+            Self::Ubuntu => "Ubuntu-Light",
+            Self::NotoSerif => "NotoSerif-Regular",
+        }
+    }
+
+    fn bytes(self) -> &'static [u8] {
+        match self {
+            Self::Hack => epaint_default_fonts::HACK_REGULAR,
+            Self::Ubuntu => epaint_default_fonts::UBUNTU_LIGHT,
+            Self::NotoSerif => oxifont_bundled::NOTO_SERIF_REGULAR,
+        }
+    }
+
+    fn shared_bytes(self) -> Arc<Vec<u8>> {
+        static HACK: OnceLock<Arc<Vec<u8>>> = OnceLock::new();
+        static UBUNTU: OnceLock<Arc<Vec<u8>>> = OnceLock::new();
+        static NOTO_SERIF: OnceLock<Arc<Vec<u8>>> = OnceLock::new();
+        let storage = match self {
+            Self::Hack => &HACK,
+            Self::Ubuntu => &UBUNTU,
+            Self::NotoSerif => &NOTO_SERIF,
+        };
+        Arc::clone(storage.get_or_init(|| Arc::new(self.bytes().to_vec())))
+    }
+
+    fn face(self) -> ttf_parser::Face<'static> {
+        ttf_parser::Face::parse(self.bytes(), 0)
+            .expect("packaged fonts must remain valid single-face SFNTs")
+    }
+
+    fn from_family(family: &str) -> Option<Self> {
+        match family.to_ascii_lowercase().as_str() {
+            "default" | "fixed" | "monospace" | "hack" => Some(Self::Hack),
+            "sans" | "sans-serif" | "ubuntu" => Some(Self::Ubuntu),
+            "serif" | "noto serif" => Some(Self::NotoSerif),
+            _ => None,
+        }
+    }
 }
 
 fn design_metrics(face: &ttf_parser::Face<'_>) -> PlatformFontDesignMetrics {
@@ -56,37 +115,30 @@ fn design_metrics(face: &ttf_parser::Face<'_>) -> PlatformFontDesignMetrics {
     }
 }
 
-fn candidate() -> PlatformFontCandidate {
-    let face = face();
+fn candidate(font: PackagedFace) -> PlatformFontCandidate {
+    let face = font.face();
     PlatformFontCandidate {
         identity: ResolvedFontIdentity::from_memory(
             FontBackendKind::Packaged,
-            STABLE_KEY.to_owned(),
+            font.key().to_owned(),
             0,
-            Some(POST_SCRIPT_NAME.to_owned()),
+            Some(font.postscript_name().to_owned()),
         ),
         locator: PlatformFontCandidateLocator::Native,
         metadata: PlatformFontMetadata {
-            foundry: Some("Source Foundry".to_owned()),
-            family: FAMILY.to_owned(),
-            weight: Some(400),
+            foundry: None,
+            family: font.family().to_owned(),
+            weight: Some(face.weight().to_number()),
             slant: FontSlant::Normal,
             width: Some(FontWidth::Normal),
-            spacing: Some(100),
+            spacing: Some(if face.is_monospaced() { 100 } else { 0 }),
             design_metrics: Some(design_metrics(&face)),
             size: PlatformFontSize::Scalable,
         },
     }
 }
 
-fn is_generic_family(family: &str) -> bool {
-    matches!(
-        family.to_ascii_lowercase().as_str(),
-        "default" | "fixed" | "monospace" | "sans-serif" | "serif"
-    )
-}
-
-/// One-face application catalog used by Android and browser products.
+/// Immutable application catalog used by Android and browser products.
 #[derive(Debug, Default)]
 pub struct PackagedFontBackend;
 
@@ -96,40 +148,48 @@ impl FontBackend for PackagedFontBackend {
     }
 
     fn list_families(&self) -> Vec<FontFamilyName> {
-        vec![FontFamilyName::new(FAMILY).expect("packaged family is non-empty")]
+        PackagedFace::ALL
+            .into_iter()
+            .map(|font| FontFamilyName::new(font.family()).expect("packaged family is non-empty"))
+            .collect()
     }
 
     fn resolve_family(&self, family: &str) -> String {
-        if family.eq_ignore_ascii_case(FAMILY) || is_generic_family(family) {
-            FAMILY.to_owned()
-        } else {
-            family.to_owned()
-        }
+        PackagedFace::from_family(family)
+            .map_or_else(|| family.to_owned(), |font| font.family().to_owned())
     }
 
     fn family_prefers_monospace(&self, family: &str) -> bool {
-        family.eq_ignore_ascii_case(FAMILY) || is_generic_family(family)
+        matches!(PackagedFace::from_family(family), Some(PackagedFace::Hack))
     }
 
     fn list_candidates(&self, query: &FontCandidateQuery) -> Vec<FontCandidate> {
-        if let FontCandidateScope::Family(family) = &query.scope
-            && !family.as_str().eq_ignore_ascii_case(FAMILY)
-        {
-            return Vec::new();
-        }
-        let face = face();
-        if !query.coverage_is_satisfied_by(|codepoint| {
-            char::from_u32(codepoint).is_some_and(|ch| face.glyph_index(ch).is_some())
-        }) {
-            return Vec::new();
-        }
-        vec![FontCandidate {
-            matched: candidate(),
-        }]
+        PackagedFace::ALL
+            .into_iter()
+            .filter(|font| {
+                if let FontCandidateScope::Family(family) = &query.scope
+                    && !self
+                        .resolve_family(family.as_str())
+                        .eq_ignore_ascii_case(font.family())
+                {
+                    return false;
+                }
+                let face = font.face();
+                query.coverage_is_satisfied_by(|codepoint| {
+                    char::from_u32(codepoint).is_some_and(|ch| face.glyph_index(ch).is_some())
+                })
+            })
+            .map(|font| FontCandidate {
+                matched: candidate(font),
+            })
+            .collect()
     }
 
     fn finalize_match(&self, matched: PlatformFontCandidate) -> Option<PlatformFontMatch> {
-        let asset = FontMemoryAsset::new(STABLE_KEY, shared_bytes(), 0)?;
+        let font = PackagedFace::ALL
+            .into_iter()
+            .find(|font| font.key() == matched.identity.stable_key)?;
+        let asset = FontMemoryAsset::new(font.key(), font.shared_bytes(), 0)?;
         matched.into_memory_match(asset)
     }
 
@@ -173,6 +233,48 @@ mod tests {
             matched.asset.bytes(),
             Some(epaint_default_fonts::HACK_REGULAR)
         );
+    }
+
+    #[test]
+    fn packaged_sans_serif_is_proportional_and_distinct_from_monospace() {
+        let backend = PackagedFontBackend;
+        let family = backend.resolve_family("sans-serif");
+        assert_ne!(family, backend.resolve_family("monospace"));
+        assert!(!backend.family_prefers_monospace(&family));
+        let mut query = query(super::super::RequiredFontCoverage::Character('N'));
+        query.scope = FontCandidateScope::Family(FontFamilyName::new(family).unwrap());
+        let candidate = backend.list_candidates(&query).pop().unwrap();
+        assert_eq!(candidate.matched.metadata.spacing, Some(0));
+        let matched = backend.finalize_match(candidate.matched).unwrap();
+        let face = ttf_parser::Face::parse(matched.asset.bytes().unwrap(), 0).unwrap();
+        assert_ne!(
+            face.glyph_hor_advance(face.glyph_index('i').unwrap()),
+            face.glyph_hor_advance(face.glyph_index('W').unwrap())
+        );
+    }
+
+    #[test]
+    fn packaged_generic_families_materialize_distinct_faces() {
+        let backend = PackagedFontBackend;
+        let mut identities = std::collections::HashSet::new();
+        for (alias, family, monospace) in [
+            ("monospace", "Hack", true),
+            ("sans-serif", "Ubuntu", false),
+            ("serif", "Noto Serif", false),
+        ] {
+            assert_eq!(backend.resolve_family(alias), family);
+            assert_eq!(backend.family_prefers_monospace(alias), monospace);
+            let mut query = query(super::super::RequiredFontCoverage::Character('N'));
+            query.scope = FontCandidateScope::Family(FontFamilyName::new(alias).unwrap());
+            let candidates = backend.list_candidates(&query);
+            assert_eq!(candidates.len(), 1);
+            let matched = backend
+                .finalize_match(candidates.into_iter().next().unwrap().matched)
+                .unwrap();
+            assert!(identities.insert(matched.identity.stable_key));
+            let face = ttf_parser::Face::parse(matched.asset.bytes().unwrap(), 0).unwrap();
+            assert_eq!(face.is_monospaced(), monospace);
+        }
     }
 
     #[test]
