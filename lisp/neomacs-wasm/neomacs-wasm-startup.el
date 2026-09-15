@@ -19,9 +19,21 @@
 
 (defcustom neomacs-wasm-startup-profile 'editor
   "Initial browser editor layout.
-Set this in your personal init file; `editor' preserves normal Emacs startup."
-  :type '(choice (const editor))
+Set this in your personal init file.  `editor' preserves normal Emacs startup;
+`landing' opens the welcome/playground layout unless your init already chose
+a buffer or window layout."
+  :type '(choice (const editor) (const landing))
   :group 'neomacs-wasm)
+
+(defun neomacs-wasm-startup-finish ()
+  "Apply the chosen profile once, after user initialization and frame setup."
+  (remove-hook 'window-setup-hook #'neomacs-wasm-startup-finish)
+  (when (and (eq neomacs-wasm-startup-profile 'landing)
+             (not initial-buffer-choice)
+             (one-window-p t)
+             (equal (buffer-name (window-buffer)) "*scratch*"))
+    (require 'neomacs-wasm-landing)
+    (neomacs-wasm-landing-open)))
 
 (defun neomacs-wasm-startup-initialize ()
   "Install browser defaults before personal initialization.
@@ -31,7 +43,8 @@ The worker calls this once per editor session, before `normal-top-level'."
   (require 'url-neomacs-http)
   (url-neomacs-http-enable)
   (require 'neomacs-wasm-packages)
-  (neomacs-wasm-packages-initialize))
+  (neomacs-wasm-packages-initialize)
+  (add-hook 'window-setup-hook #'neomacs-wasm-startup-finish 90))
 
 (provide 'neomacs-wasm-startup)
 ;;; neomacs-wasm-startup.el ends here

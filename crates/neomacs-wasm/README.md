@@ -53,6 +53,49 @@ clearing site data deletes it. Browser quota and eviction rules still apply.
 File rename is reported as unsupported when the browser cannot provide the
 required move operation; it is not silently replaced with copy-and-delete.
 
+## Personal initialization and shipped defaults
+
+Edit `~/.emacs.d/init.el` inside the editor (`C-x C-f`), save it, and reload the
+page. Its browser filesystem path is `/neomacs-fake/.emacs.d/init.el`; it lives
+in persistent origin-private storage, not in the source repository. We never
+seed or overwrite it. GNU startup's ordinary init discovery also retains its
+`early-init.el`, legacy `~/.emacs`, and error-reporting behavior.
+
+The source-controlled defaults live separately in `lisp/neomacs-wasm/`:
+
+- `neomacs-wasm-startup.el`: browser policy and startup-profile selection.
+- `neomacs-wasm-packages.el`: available package defaults (currently bundled
+  which-key; personal init can disable it).
+- `neomacs-wasm-landing.el`: optional welcome/playground window layout.
+
+The worker mounts runtime resources and OPFS first, loads shipped defaults,
+then enters shared Emacs startup. Shared startup loads personal initialization
+and runs the window-setup hook after frame settings. No UI-thread evaluator or
+second init-file loader is involved. The landing hook removes itself after
+running and does not take ownership of subsequent resizes or window changes.
+An init-selected buffer (`initial-buffer-choice`) or existing custom window
+layout takes precedence over automatic landing setup.
+
+Normal editor startup remains the default. To opt into the landing profile:
+
+```elisp
+(setq neomacs-wasm-startup-profile 'landing)
+(setq neomacs-wasm-landing-personal-info "Your own introduction here.\n")
+;; Optional: override the bundled default.
+;; (which-key-mode -1)
+```
+
+Wide layouts show welcome and an empty `emacs-lisp-mode` playground side by
+side, with an optional personal sidebar on sufficiently wide frames. Narrow
+layouts show welcome; the other buffers remain accessible with `C-x b`.
+`M-x neomacs-wasm-landing-open` reopens the layout without erasing playground
+edits. Set the profile to `editor` to retain ordinary scratch-buffer startup.
+
+This is the startup/configuration foundation: the separate pinned Treemacs and
+doom-themes download/cache bundle is **not implemented yet**. Neither package
+is vendored or fetched by these Lisp modules. `M-x load-theme` lists themes
+already present in the runtime; no default theme is changed here.
+
 ## Basic acceptance checks
 
 Install `tests/requirements.txt` in a virtual environment under `tmp/`, then run:
@@ -60,6 +103,7 @@ Install `tests/requirements.txt` in a virtual environment under `tmp/`, then run
 ```sh
 python crates/neomacs-wasm/tests/browser_basic_smoke.py --browser chrome --headless --artifacts-dir tmp/chrome-basic
 python crates/neomacs-wasm/tests/browser_basic_smoke.py --browser firefox --headless --artifacts-dir tmp/firefox-basic
+python crates/neomacs-wasm/tests/browser_init_smoke.py --headless --artifacts-dir tmp/browser-init
 node --test crates/neomacs-wasm/web/*.test.mjs
 cargo test -p xtask wasm
 python crates/neomacs-wasm/tests/browser_download_smoke.py --artifacts-dir tmp/download-smoke
