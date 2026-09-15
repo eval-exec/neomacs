@@ -86,12 +86,13 @@ def main():
         assert any(p["state"] == "pending" for p in initial["phases"])
         assert all(p["state"] == "done" and p["checked"] and p["details"] > 0 for p in states[-1]["phases"]), states[-1]
         assert all(s["vertical"] for s in states), "phases must form one vertical list"
-        for phase in ("frontend-download", "worker-download"):
+        download_phases = ("frontend-download", "worker-download", "packages")
+        for phase in download_phases:
             assert any(s["displayed"] and "MiB" in s["label"] and any(
                 p["id"] == phase and p["active"] for p in s["phases"]) and s["owner"] == phase for s in states), states
         assert any(sum(p["active"] for p in s["phases"]) > 1 for s in states), "overlapping phases should remain active"
         for state in states:
-            if state["phases"] and all(p["state"] == "done" for p in state["phases"] if p["id"] in ("frontend-download", "worker-download")):
+            if state["phases"] and all(p["state"] == "done" for p in state["phases"] if p["id"] in download_phases):
                 assert not state["displayed"], state
         assert states[-1]["hidden"], states
         driver.save_screenshot(str(artifact_dir / "ready.png"))
