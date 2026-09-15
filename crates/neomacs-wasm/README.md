@@ -87,8 +87,10 @@ init file. Personal configuration is optional:
 ;; (which-key-mode -1)
 ```
 
-Wide layouts show Treemacs on the left, welcome and an empty `emacs-lisp-mode`
-playground in the center, and a personal sidebar on the right. Medium layouts
+Wide layouts show Treemacs on the left, an Org-mode introduction and an
+`emacs-lisp-mode` playground with runnable examples in the center, and a personal
+sidebar on the right. The playground cursor starts after `(+ 1 2)`: press
+`C-x C-e` to evaluate it. Examples are inserted only once. Medium layouts
 omit the personal sidebar and then Treemacs as space decreases. Narrow
 layouts show welcome; the other buffers remain accessible with `C-x b`.
 `M-x neomacs-wasm-landing-open` reopens the layout without erasing playground

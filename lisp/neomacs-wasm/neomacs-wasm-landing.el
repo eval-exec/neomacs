@@ -13,6 +13,7 @@
 (require 'neomacs-wasm-startup)
 (require 'button)
 (require 'seq)
+(require 'org)
 
 (defcustom neomacs-wasm-landing-personal-info
   "eval-exec\n\nBuilding NEO Emacs in the open.\n\nThis is a working preview. Feedback and contributions are welcome."
@@ -34,6 +35,69 @@
               word-wrap t cursor-type nil
               header-line-format nil))
 
+(define-derived-mode neomacs-wasm-welcome-mode org-mode "NEO Org"
+  "An Org introduction to the live editor.  TAB folds its headings."
+  (setq-local truncate-lines nil
+              truncate-partial-width-windows nil
+              word-wrap t
+              org-hide-emphasis-markers t
+              org-hide-leading-stars t
+              org-fontify-whole-heading-line t
+              header-line-format nil)
+  (setq buffer-read-only t))
+
+(defconst neomacs-wasm-landing--examples
+  ";; NEO Emacs / your live Lisp playground
+;;
+;; Ready? Press C-x C-e now: hold Ctrl, press x,
+;; then (still holding Ctrl) press e. Result: 3.
+;; For each next example, put the cursor AFTER
+;; its final closing parenthesis, then C-x C-e.
+
+(+ 1 2)
+
+;; 01 / Make the editor say hello
+(message \"Hello from Lisp, inside your browser!\")
+
+;; 02 / Change the words. Run it again.
+(concat \"An editor is \" \"a place to think.\")
+
+;; 03 / Little programs, immediate answers
+(mapcar (lambda (n) (* n n)) '(1 2 3 4 5))
+;; => (1 4 9 16 25)
+
+;; 04 / Ask the editor about itself
+(list :buffer (buffer-name)
+      :mode major-mode
+      :characters (buffer-size))
+
+;; 05 / Change this buffer's appearance
+(text-scale-set 1)
+;; Back to the original size:
+(text-scale-set 0)
+
+;; 06 / Turn an idea into an editor command
+;; Evaluate the WHOLE defun, then M-x neo-greet.
+(defun neo-greet ()
+  \"Say hello from the playground.\"
+  (interactive)
+  (message \"You just taught your editor a new command.\"))
+
+;; 07 / Generate something you can keep
+;; Creates another buffer; C-x b brings you back.
+(with-current-buffer (get-buffer-create \"*NEO Notes*\")
+  (goto-char (point-max))
+  (insert \"One small expression. One new possibility.\\n\")
+  (display-buffer (current-buffer)))
+
+;; Keep exploring:
+;; C-h f  describe a function     C-g  cancel
+;; C-/    undo an edit            M-x write-file  save as
+;; Saving preserves the text, not live Lisp state.
+;; Unsaved buffers disappear when you reload.
+"
+  "Starter forms inserted once into a newly created playground.")
+
 (defun neomacs-wasm-landing--heading (text)
   (insert (propertize text 'face 'neomacs-wasm-landing-heading) "\n\n"))
 
@@ -53,6 +117,10 @@
       (with-current-buffer (get-buffer-create "*NEO Emacs Playground*")
         (emacs-lisp-mode)
         (setq-local header-line-format nil)
+        (insert neomacs-wasm-landing--examples)
+        (goto-char (point-min))
+        (search-forward "(+ 1 2)")
+        (set-buffer-modified-p nil)
         (current-buffer))))
 
 (defun neomacs-wasm-landing-init ()
@@ -72,37 +140,63 @@
   (with-current-buffer (get-buffer-create "*NEO Emacs*")
     (let ((inhibit-read-only t))
       (erase-buffer)
-      (insert "\n" (propertize "NEO Emacs" 'face 'neomacs-wasm-landing-title) "\n\n")
-      (insert (propertize "YOUR EDITOR. IN YOUR BROWSER." 'face 'shadow) "\n\n")
-      (insert (propertize "  WEBASSEMBLY  /  LIVE LISP  /  YOUR RULES  "
-                          'face 'neomacs-wasm-landing-heading) "\n\n")
-      (insert "Welcome to the browser editor.\n"
-              "A living Lisp environment. Explore it,\n"
-              "change it, and make it yours.\n\n")
-      (neomacs-wasm-landing--heading "START EXPLORING")
-      (neomacs-wasm-landing--action "  Open the Lisp playground  →" #'neomacs-wasm-landing-playground)
-      (neomacs-wasm-landing--action "  Browse your files         →" #'dired)
-      (neomacs-wasm-landing--action "  Choose a theme            →" #'neomacs-wasm-landing-theme)
-      (neomacs-wasm-landing--action "  Edit your init.el         →" #'neomacs-wasm-landing-init)
-      (insert "\n")
-      (neomacs-wasm-landing--heading "A FEW KEYS TO GET STARTED")
-      (insert "M-x         Run any editor command\n"
-              "C-x b       Switch buffers\n"
-              "C-x C-f     Open or create a file\n"
-              "C-x C-e     Evaluate Lisp before point\n"
-              "C-g         Cancel the current command\n\n"
-              "Pause after a key prefix: which-key helps.\n\n")
-      (neomacs-wasm-landing--heading "YOURS TO EXPERIMENT WITH")
-      (insert "Type an expression in the empty playground.\n"
-              "Try (+ 1 2), then C-x C-e.\n\n"
-              "Your home is /neomacs-fake. Saved files\n"
-              "stay in this browser's storage for this site.\n"
-              "Unsaved buffers do not survive a reload.\n")
+      (insert "* NEO Emacs\n"
+              "/Not a screenshot. An editor you can change./\n\n"
+              "Welcome to the browser editor.\n"
+              "Rust underneath. Emacs Lisp at your fingertips.\n"
+              "Running here, in your browser, through WebAssembly.\n\n"
+              "** Your first little spark\n"
+              "Select the playground on the right. If it is hidden,\n"
+              "use the /Enter the playground/ action below.\n"
+              "Then press =C-x C-e= to evaluate =(+ 1 2)=.\n"
+              "The answer appears at the bottom of the editor.\n"
+              "Change a number. Evaluate again. That is the idea:\n"
+              "a short conversation between you and your editor.\n\n")
+      (neomacs-wasm-landing--action "  Enter the playground  →" #'neomacs-wasm-landing-playground)
+      (insert "\n** This page is part of the editor\n"
+              "You are reading an Org-mode buffer, not a web-page overlay.\n"
+              "Put the cursor on a heading and press =TAB= to fold it.\n"
+              "The playground is an Emacs Lisp buffer. Both are yours\n"
+              "to explore with the same windows, commands, and keys.\n\n"
+              "** Follow your curiosity\n"
+              "Start with arithmetic. Make a message. Generate a list.\n"
+              "Then define a command and run it with =M-x neo-greet=.\n"
+              "The examples are small on purpose: change one thing,\n"
+              "see what happens, and build from there.\n\n")
+      (neomacs-wasm-landing--action "  Find a different mood / choose a theme  →" #'neomacs-wasm-landing-theme)
+      (neomacs-wasm-landing--action "  Explore your browser files  →" #'dired)
+      (neomacs-wasm-landing--action "  Make it personal / edit init.el  →" #'neomacs-wasm-landing-init)
+      (insert "\n** A small map of the keyboard\n"
+              "- =C-x C-e= :: Evaluate the expression before the cursor.\n"
+              "- =C-x o= :: Move to another editor window.\n"
+              "- =C-x b= :: Switch to another buffer.\n"
+              "- =C-x 2= / =C-x 3= :: Split below / beside.\n"
+              "- =M-x= :: Find and run a command (Alt+x).\n"
+              "- =C-h f= :: Ask what a function does.\n"
+              "- =C-g= :: Cancel. A good key to remember.\n\n"
+              "Pause after a prefix: which-key offers the next keys.\n\n"
+              "** Keep the good experiments\n"
+              "Use =M-x write-file= to save under =/neomacs-fake/=.\n"
+              "Saved files live in this site's browser storage.\n"
+              "They are not files in your computer's home directory.\n"
+              "Unsaved buffers and live Lisp definitions do not survive\n"
+              "a reload. Clearing site data can remove saved files, too.\n\n"
+              "** Built in the open. Still becoming.\n"
+              "NEO Emacs explores a Rust implementation of Emacs\n"
+              "with a graphical frontend and an Emacs Lisp heart.\n"
+              "This browser edition is a working preview, not a promise\n"
+              "that every desktop package already works here.\n\n"
+              "Native subprocesses are unavailable; browser networking\n"
+              "has browser restrictions. Expect unfinished edges.\n"
+              "Found one? A small reproduction is a great contribution.\n"
+              "Open the GitHub link in the title bar to join the project.\n\n"
+              "/Read a little. Evaluate something. Make it yours./\n")
       (when (bound-and-true-p neomacs-wasm-package-error)
         (insert "\nOptional packages unavailable:\n"
                 neomacs-wasm-package-error "\nReload the page to retry.\n")))
     (goto-char (point-min))
-    (neomacs-wasm-landing-mode)
+    (neomacs-wasm-welcome-mode)
+    (org-show-all)
     (set-buffer-modified-p nil)
     (current-buffer)))
 

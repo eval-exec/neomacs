@@ -13,6 +13,8 @@ from threading import Thread
 from urllib.parse import urlsplit
 
 from selenium import webdriver
+from selenium.webdriver.common.action_chains import ActionChains
+from selenium.webdriver.common.keys import Keys
 
 from browser_test_support import BrowserEditorHarness, chrome_options
 
@@ -192,11 +194,52 @@ def main():
                                (get-buffer-window "*NEO Emacs*")
                                (get-buffer-window "*NEO Emacs Playground*")
                                (eq major-mode 'emacs-lisp-mode)
-                               (= (buffer-size) 0)
+                               (equal (preceding-sexp) '(+ 1 2))
+                               (with-current-buffer "*NEO Emacs*"
+                                 (and (derived-mode-p 'org-mode) buffer-read-only))
                                (get-buffer-window "*NEO Emacs About*"))
                     (error "landing windows not ready"))
-                  (message "LANDING-READY"))''',
+                  (setq values nil eval-expression-debug-on-error nil)
+                  (message (concat "LANDING-" "READY")))''',
                 "LANDING-READY",
+            )
+            editor.eval_expression(
+                '''(progn
+                  (select-window (get-buffer-window "*NEO Emacs*"))
+                  (goto-char (point-min))
+                  (message (concat "ORG-" "READY")))''',
+                "ORG-READY",
+            )
+            ActionChains(editor.driver).send_keys(Keys.TAB).perform()
+            editor.eval_expression(
+                '''(progn
+                  (save-excursion
+                    (goto-char (point-min)) (forward-line 1)
+                    (unless (invisible-p (point)) (error "Org TAB did not fold the introduction")))
+                  (org-show-all)
+                  (goto-char (point-min))
+                  (search-forward "  Enter the playground  →") (backward-char 1)
+                  (unless (button-at (point)) (error "Landing action is not a button"))
+                  (message (concat "ORG-ACTION-" "READY")))''',
+                "ORG-ACTION-READY",
+            )
+            ActionChains(editor.driver).send_keys(Keys.ENTER).perform()
+            editor.eval_expression(
+                '''(progn
+                  (unless (and (equal (buffer-name) "*NEO Emacs Playground*")
+                               (equal (preceding-sexp) '(+ 1 2)))
+                    (error "Org playground action did not preserve the first example"))
+                  (message (concat "ORG-ACTION-" "PASSED")))''',
+                "ORG-ACTION-PASSED",
+            )
+            editor.type_native_control_key("x")
+            editor.type_native_control_key("e")
+            editor.eval_expression(
+                '''(progn
+                  (unless (memq 3 values) (error "starter example did not evaluate to 3"))
+                  (erase-buffer)
+                  (message (concat "STARTER-" "EVALUATED")))''',
+                "STARTER-EVALUATED",
             )
             editor.type_native_text("(setq neomacs-wasm-test-evaluation (+ 1 2))")
             editor.wait_for_frame_text("playground editing", contains="(+ 1 2)")
