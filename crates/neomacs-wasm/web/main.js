@@ -20,6 +20,7 @@ const MAILBOX_CAPACITY = 1024 * 1024;
 const MAILBOX_HEADER_BYTES = 16;
 const encoder = new TextEncoder();
 const status = document.querySelector("#browser-status");
+const startupOverlay = document.querySelector("#browser-startup");
 const progress = document.querySelector("#browser-progress");
 const progressBar = document.querySelector("#browser-progress-bar");
 const progressLabel = document.querySelector("#browser-progress-label");
@@ -35,10 +36,23 @@ let reportedScale = null;
 let activePresentation = null;
 
 function showFailure(error) {
-  status.dataset.state = "failed";
-  status.textContent = `Neomacs failed to start: ${error instanceof Error ? error.message : String(error)}`;
-  hideProgress();
+  settleStartup("failed", `Neomacs failed: ${error instanceof Error ? error.message : String(error)}`);
   console.error(error);
+}
+
+function startupIsSettled() {
+  return ["ready", "failed", "stopped"].includes(status.dataset.state);
+}
+
+function settleStartup(state, message) {
+  // A presentation promise may resolve after startup has already failed.
+  if (state === "ready" && startupIsSettled()) return;
+  status.dataset.state = state;
+  status.textContent = message;
+  hideProgress();
+  // Retain the status host for later runtime failures, but remove the entire
+  // startup layout from rendering immediately on the first editor frame.
+  startupOverlay.hidden = state === "ready";
 }
 
 function hideProgress() {
@@ -59,7 +73,7 @@ const megabytes = (bytes) => (bytes / MIB).toFixed(1);
  * received and an indeterminate bar rather than inventing a percentage.
  */
 function showProgress(received, total, complete = false) {
-  if (status.dataset.state === "failed" || status.dataset.state === "ready") return;
+  if (startupIsSettled()) return;
   if (complete) {
     hideProgress();
     status.textContent = "Starting NEO Emacs…";
@@ -201,9 +215,7 @@ async function start() {
   void observeFirstEditorPresentation(
     wait_for_first_editor_presentation,
     (presentation) => {
-      status.textContent = `Neomacs ready (${workerStrategy} Worker suspension, presentation ${presentation})`;
-      status.dataset.state = "ready";
-      hideProgress();
+      settleStartup("ready", `Neomacs ready (${workerStrategy} Worker suspension, presentation ${presentation})`);
     },
     (error) => {
       showFailure(error);
@@ -226,7 +238,7 @@ async function start() {
       worker.postMessage({ type: "wake-probe" });
     } else if (message?.type === "ready") {
       workerStrategy = message.strategy;
-      if (progress.hidden) status.textContent = "Starting NEO Emacs…";
+      if (progress.hidden && !startupIsSettled()) status.textContent = "Starting NEO Emacs…";
       installBrowserInput({
         root: globalThis,
         textInput: document.querySelector("#browser-text-input"),
@@ -259,15 +271,15 @@ async function start() {
     } else if (message?.type === "status") {
       // Compilation overlaps the streamed download. Only byte progress owns
       // the transition out of downloading; later phases remain text-only.
-      if (message.phase === "download") {
+      if (message.phase === "download" && !startupIsSettled()) {
         status.textContent = "Downloading editor and runtime assets…";
       }
     } else if (message?.type === "failed") {
       showFailure(new Error(message.message));
       worker.terminate();
     } else if (message?.type === "exited") {
-      status.dataset.state = message.exitCode === 0 ? "stopped" : "failed";
-      status.textContent = `Neomacs stopped (status ${message.exitCode})`;
+      settleStartup(message.exitCode === 0 ? "stopped" : "failed",
+        `Neomacs stopped (status ${message.exitCode})`);
       worker = null;
     }
   };
