@@ -96,12 +96,18 @@ pub(crate) fn window_pointer_source_map(
                     row_bounds.x + row.pixel_x.max(0.0)
                 };
                 let x = row_origin + run.x;
-                let visible_left = x.max(row_clip.x);
-                let visible_top = y.max(row_clip.y);
+                // Character-sized windows can overrun a pixel-sized drawable
+                // at the last column/row.  Clip both hit regions and their
+                // paint spans to the actual presentation, not only the window.
+                let visible_left = x.max(row_clip.x).max(0.0);
+                let visible_top = y.max(row_clip.y).max(0.0);
                 let visible_right = (x + run.width)
                     .min(row_clip.x + row_clip.width)
-                    .min(row_bounds.x + row_bounds.width);
-                let visible_bottom = (y + row_height).min(row_clip.y + row_clip.height);
+                    .min(row_bounds.x + row_bounds.width)
+                    .min(state.frame_pixel_width);
+                let visible_bottom = (y + row_height)
+                    .min(row_clip.y + row_clip.height)
+                    .min(state.frame_pixel_height);
                 if let Some(pointer) = row.pointer_appearance(run.appearance).copied()
                     && visible_right > visible_left
                     && visible_bottom > visible_top
