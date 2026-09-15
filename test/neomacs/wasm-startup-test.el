@@ -3,6 +3,9 @@
 (require 'ert)
 (require 'neomacs-wasm-startup)
 
+(ert-deftest neomacs-wasm-build-defaults-to-landing ()
+  (should (eq (default-value 'neomacs-wasm-startup-profile) 'landing)))
+
 (ert-deftest neomacs-wasm-command-available-in-editor-profile ()
   (should (commandp 'neomacs-wasm-landing-open)))
 
