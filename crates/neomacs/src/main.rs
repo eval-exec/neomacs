@@ -139,7 +139,6 @@ use neomacs_app::initial_surface::{
     InitialBackgroundMode, InitialDisplayType, InitialEditorSurface, InitialEditorSurfaceSpec,
     InitialFrameFont, InitialFrameMetrics, prepare_initial_editor_surface_with_gui_setup,
 };
-use neomacs_app::font_queries::{core_opened_font_from_selection, font_otf_capability_for_file};
 use neomacs_app::presentation::{EditorPresentationRuntime, PresentationMetrics};
 use neomacs_app::session::{EditorSession, SessionRedisplayAction};
 use neomacs_display_protocol::{SelectionOwner, VideoId, VisualConfig, WebViewId};
@@ -222,7 +221,7 @@ use neovm_core::emacs_core::value::list_length;
 use neovm_core::emacs_core::{
     Context, DisplayHost, GraphicalFaceAttribute, GuiFrameHostRequest, PopupMenuRequest,
 };
-use neovm_core::face::{FaceHeight, FontWeight};
+use neovm_core::face::FontWeight;
 use neovm_core::heap_types::LispString;
 use neovm_core::window::{
     FrameDisplayIdentity, FrameFullscreen, FrameId, FrameParam, FrameVisibility, Window,
@@ -4410,17 +4409,6 @@ impl BootstrapFrameMetrics {
     };
 }
 
-fn font_weight_symbol(weight: FontWeight) -> &'static str {
-    weight.symbol_name()
-}
-
-fn startup_font_weight_symbol(weight: FontWeight) -> &'static str {
-    match weight {
-        FontWeight::Normal => "regular",
-        _ => font_weight_symbol(weight),
-    }
-}
-
 #[cfg(test)]
 fn bootstrap_frame_metrics() -> BootstrapFrameMetrics {
     bootstrap_frame_metrics_for_font_sizing(FontSizing::native_gui())
@@ -4470,34 +4458,12 @@ fn bootstrap_buffers_with_font(
     font: startup_font::BootstrapFont,
 ) -> InitialEditorSurface {
     let frame_metrics = font.metrics();
-    let (bootstrap_font, bootstrap_font_name) = match font {
-        startup_font::BootstrapFont::Tty => (Value::NIL, Value::string("fixed")),
+    let bootstrap_font = match font {
+        startup_font::BootstrapFont::Tty => InitialFrameFont::new(Value::NIL, Value::string("fixed")),
         startup_font::BootstrapFont::Gui(font) => {
-            let selected = font.into_selected();
-            let name = Value::string(format!(
-                "-*-{}-{}-{}-*-*-{}-*-*-*-*-*-*-*",
-                selected.resolved.family,
-                startup_font_weight_symbol(FontWeight::from_css_weight(selected.resolved.weight)),
-                selected.slant.symbol_name(),
-                selected.metrics.pixel_size,
-            ));
-            let mut face = neovm_core::face::Face::new("default");
-            face.height = Some(FaceHeight::Absolute(
-                display
-                    .font_sizing()
-                    .face_height_tenths_for_layout_pixels(selected.metrics.pixel_size.max(1)),
-            ));
-            let matched = ResolvedFontMatch {
-                glyph_code: None,
-                font: core_opened_font_from_selection(selected, font_otf_capability_for_file),
-            };
-            (
-                neovm_core::emacs_core::font::opened_font_from_resolved_match(&face, &matched),
-                name,
-            )
+            InitialFrameFont::opened(font.into_selected(), display.font_sizing())
         }
     };
-
     let metrics = InitialFrameMetrics::new(
         width,
         height,
@@ -4521,7 +4487,7 @@ fn bootstrap_buffers_with_font(
                 "dark" => InitialBackgroundMode::Dark,
                 _ => InitialBackgroundMode::Light,
             },
-            InitialFrameFont::new(bootstrap_font, bootstrap_font_name),
+            bootstrap_font,
         ),
         BootstrapDisplayKind::Tty { .. } => {
             InitialEditorSurfaceSpec::tty(metrics, display.interactivity.is_batch())

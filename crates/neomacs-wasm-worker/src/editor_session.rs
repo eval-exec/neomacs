@@ -29,23 +29,32 @@ use crate::browser_host::{self, HostWake, StartupPhase};
 const OPENING_FONT_FAMILY: &str = "monospace";
 const OPENING_FONT_WEIGHT: u16 = 400;
 
-fn initial_frame_metrics(startup: &BrowserEditorStartup) -> Result<InitialFrameMetrics, String> {
+fn initial_frame_font(
+    startup: &BrowserEditorStartup,
+) -> Result<(InitialFrameMetrics, InitialFrameFont), String> {
     let font_pixel_size = startup.font_pixel_size();
-    let font = FontMetricsService::new().font_metrics(
-        OPENING_FONT_FAMILY,
-        OPENING_FONT_WEIGHT,
-        false,
-        font_pixel_size,
-    );
+    let font = FontMetricsService::new()
+        .select_font_for_char(
+            'M',
+            OPENING_FONT_FAMILY,
+            OPENING_FONT_WEIGHT,
+            false,
+            font_pixel_size,
+        )
+        .ok_or_else(|| "could not open the browser startup font".to_owned())?;
     let extent = startup.logical_extent();
-    InitialFrameMetrics::new(
+    let metrics = InitialFrameMetrics::new(
         extent.width(),
         extent.height(),
-        font.char_width,
-        font.line_height,
-        font_pixel_size,
+        font.metrics.average_width.max(1) as f32,
+        font.metrics.height.max(1) as f32,
+        font.metrics.pixel_size.max(1) as f32,
     )
-    .map_err(|error| format!("invalid browser opening geometry: {error}"))
+    .map_err(|error| format!("invalid browser opening geometry: {error}"))?;
+    Ok((
+        metrics,
+        InitialFrameFont::opened(font, FontSizing::logical()),
+    ))
 }
 
 pub(crate) fn run() -> Result<EditorSessionExit, String> {
@@ -130,7 +139,7 @@ pub(crate) fn run() -> Result<EditorSessionExit, String> {
         "Opening font: {OPENING_FONT_FAMILY}; device scale: {}",
         startup.scale_factor()
     ));
-    let metrics = initial_frame_metrics(&startup)?;
+    let (metrics, font) = initial_frame_font(&startup)?;
     let background = match startup.color_scheme() {
         BrowserColorScheme::Light => InitialBackgroundMode::Light,
         BrowserColorScheme::Dark => InitialBackgroundMode::Dark,
@@ -144,7 +153,7 @@ pub(crate) fn run() -> Result<EditorSessionExit, String> {
             FrameDisplayIdentity::default(),
             InitialDisplayType::Color,
             background,
-            InitialFrameFont::named(OPENING_FONT_FAMILY),
+            font,
         ),
     );
     let invocation = InteractiveGuiStartup::new(

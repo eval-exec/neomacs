@@ -55,6 +55,30 @@ fn scalable_session_exposes_its_default_font_to_lisp() {
 }
 
 #[test]
+fn opening_font_seeds_the_lisp_face_at_its_rendered_size() {
+    let mut eval = Context::new();
+    let font = neomacs_layout_engine::font::metrics::FontMetricsService::new()
+        .select_font_for_char('M', "Monospace", 400, false, 16.0)
+        .unwrap();
+    prepare_initial_editor_surface(
+        &mut eval,
+        InitialEditorSurfaceSpec::gui(
+            InitialFrameMetrics::new(800, 600, 8.0, 19.0, 16.0).unwrap(),
+            FrontendScaleFactor::ONE,
+            Default::default(),
+            InitialDisplayType::Color,
+            InitialBackgroundMode::Dark,
+            InitialFrameFont::opened(font, FontSizing::logical()),
+        ),
+    );
+    assert_eq!(
+        eval.eval_str("(internal-get-lisp-face-attribute 'default :height nil)")
+            .unwrap(),
+        Value::fixnum(120)
+    );
+}
+
+#[test]
 fn fonts_do_not_claim_window_or_shader_ownership() {
     let (mut eval, _runtime) = scalable_session();
     assert!(eval.display_host.is_none());
