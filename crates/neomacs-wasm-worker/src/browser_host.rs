@@ -44,6 +44,7 @@ unsafe extern "C" {
     fn imported_reject_input(source: *const u8, length: u32);
     safe fn publish_frame(source: *const u8, length: u32) -> u32;
     safe fn post_status(source: *const u8, length: u32);
+    safe fn post_startup_phase(source: *const u8, length: u32);
     safe fn post_failure(source: *const u8, length: u32);
     safe fn fs_stat(path: *const u8, path_length: u32) -> u32;
     safe fn fs_read(path: *const u8, path_length: u32) -> u32;
@@ -200,6 +201,32 @@ pub(crate) fn send_frame(bytes: &[u8]) -> Result<(), String> {
 
 pub(crate) fn report_status(message: &str) {
     post_status(message.as_ptr(), message.len() as u32);
+}
+
+/// Stable phase identifiers, separate from presentation labels in the shell.
+pub(crate) enum StartupPhase {
+    VerifyImage,
+    VerifyResources,
+    Unpack,
+    Restore,
+    Mounts,
+    Configure,
+    Lisp,
+    FirstFrame,
+}
+
+pub(crate) fn report_startup_phase(phase: StartupPhase) {
+    let id = match phase {
+        StartupPhase::VerifyImage => "verify-image",
+        StartupPhase::VerifyResources => "verify-resources",
+        StartupPhase::Unpack => "unpack",
+        StartupPhase::Restore => "restore",
+        StartupPhase::Mounts => "mounts",
+        StartupPhase::Configure => "configure",
+        StartupPhase::Lisp => "lisp",
+        StartupPhase::FirstFrame => "first-frame",
+    };
+    post_startup_phase(id.as_ptr(), id.len() as u32);
 }
 
 pub(crate) fn report_failure(message: &str) {

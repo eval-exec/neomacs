@@ -24,7 +24,7 @@ use neovm_core::emacs_core::fileio::{
 };
 use neovm_core::window::FrameDisplayIdentity;
 
-use crate::browser_host::{self, HostWake};
+use crate::browser_host::{self, HostWake, StartupPhase};
 
 const OPENING_FONT_FAMILY: &str = "monospace";
 const OPENING_FONT_WEIGHT: u16 = 400;
@@ -56,36 +56,53 @@ pub(crate) fn run() -> Result<EditorSessionExit, String> {
     )
     .install()
     .map_err(|error| error.to_string())?;
-    browser_host::report_status("Verifying runtime image…");
+    browser_host::report_startup_phase(StartupPhase::VerifyImage);
     let startup = decode_startup(browser_host::startup_bytes()?)?;
     let runtime_image = browser_host::runtime_image_bytes()?;
     let runtime_image_id = browser_host::runtime_image_id_bytes()?;
+    browser_host::report_status(&format!(
+        "Runtime image: {} bytes; checking supplied digest",
+        runtime_image.len()
+    ));
     let runtime_image = AuthenticatedPortableRuntimeImage::from_assets(
         &runtime_image,
         &runtime_image_id,
     )
     .map_err(|error| format!("failed to authenticate browser runtime image: {error}"))?;
-    browser_host::report_status("Verifying runtime resources…");
+    browser_host::report_startup_phase(StartupPhase::VerifyResources);
     let runtime_resource_bundle = browser_host::runtime_resource_bundle_bytes()?;
     let runtime_resource_id = browser_host::runtime_resource_id_bytes()?;
+    browser_host::report_status(&format!(
+        "Runtime resource bundle: {} bytes; checking supplied digest",
+        runtime_resource_bundle.len()
+    ));
     let runtime_resource_bundle = RuntimeResourceBundle::from_assets(
         &runtime_resource_bundle,
         &runtime_resource_id,
     )
     .map_err(|error| format!("invalid browser runtime resource assets: {error}"))?;
-    browser_host::report_status("Unpacking Lisp runtime…");
+    browser_host::report_startup_phase(StartupPhase::Unpack);
+    browser_host::report_status(&format!(
+        "Mounting bundled resources at {}",
+        BrowserPaths::RUNTIME_ROOT
+    ));
     let runtime_resources = MountedRuntimeResources::from_bundle(
         Path::new(BrowserPaths::RUNTIME_ROOT),
         runtime_resource_bundle,
     )
     .map_err(|error| format!("failed to mount browser runtime resources: {error}"))?;
-    browser_host::report_status("Restoring editor heap…");
+    browser_host::report_startup_phase(StartupPhase::Restore);
     let mut evaluator = runtime_image
         .load_for_with_mounted_runtime_resources(
             neomacs_app::host::HostProfile::WASM,
             runtime_resources,
         )
         .map_err(|error| format!("failed to restore browser runtime image: {error}"))?;
+    browser_host::report_startup_phase(StartupPhase::Mounts);
+    browser_host::report_status(&format!(
+        "Persistent home: {}; temporary storage: {}",
+        BrowserPaths::HOME, BrowserPaths::TEMPORARY
+    ));
     let mut filesystem = MountTableFileSystem::new();
     filesystem
         .mount(
@@ -100,6 +117,11 @@ pub(crate) fn run() -> Result<EditorSessionExit, String> {
         )
         .map_err(|error| format!("failed to mount browser temporary storage: {error}"))?;
     evaluator.install_editor_file_system(Box::new(filesystem));
+    browser_host::report_startup_phase(StartupPhase::Configure);
+    browser_host::report_status(&format!(
+        "Opening font: {OPENING_FONT_FAMILY}; device scale: {}",
+        startup.scale_factor()
+    ));
     let metrics = initial_frame_metrics(&startup)?;
     let background = match startup.color_scheme() {
         BrowserColorScheme::Light => InitialBackgroundMode::Light,
@@ -126,6 +148,7 @@ pub(crate) fn run() -> Result<EditorSessionExit, String> {
     configure_interactive_gui_startup(&mut evaluator, surface, &invocation)
         .map_err(|error| format!("failed to configure browser startup: {error:?}"))?;
 
+    browser_host::report_startup_phase(StartupPhase::Lisp);
     crate::startup::configure_lisp(&mut evaluator)?;
 
     let (mut session, frontend) = EditorSession::attach(
@@ -135,7 +158,7 @@ pub(crate) fn run() -> Result<EditorSessionExit, String> {
     );
     let (input, frames) = frontend.split();
     session.install_host_input_wait_backend(BrowserWorkerTransport { input, frames });
-    browser_host::report_status("Starting editor…");
+    browser_host::report_startup_phase(StartupPhase::FirstFrame);
     Ok(session.run())
 }
 
