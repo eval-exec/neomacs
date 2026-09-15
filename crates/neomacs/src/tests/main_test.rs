@@ -2317,7 +2317,9 @@ fn opening_gui_frame_adoption_does_not_push_stale_window_size() {
         primary_window_adopted: false,
         primary_frame_id: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
-        font_metrics: None,
+        font_queries: neomacs_app::font_queries::FontQueryService::new(
+            FontSizing::gnu_x11_fallback(),
+        ),
         primary_window_size: shared_primary_window_size(1600, 1800),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
@@ -2395,7 +2397,9 @@ fn opening_gui_frame_adoption_applies_fullscreen_mode() {
         primary_window_adopted: false,
         primary_frame_id: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
-        font_metrics: None,
+        font_queries: neomacs_app::font_queries::FontQueryService::new(
+            FontSizing::gnu_x11_fallback(),
+        ),
         primary_window_size: shared_primary_window_size(1600, 1800),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
@@ -2454,7 +2458,9 @@ fn primary_display_host_destroy_gui_frame_routes_primary_and_secondary_windows()
             (FrameId(0x100000001), LispString::from_utf8("primary")),
             (FrameId(0x100000002), LispString::from_utf8("secondary")),
         ])),
-        font_metrics: None,
+        font_queries: neomacs_app::font_queries::FontQueryService::new(
+            FontSizing::gnu_x11_fallback(),
+        ),
         primary_window_size: shared_primary_window_size(1600, 1800),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
@@ -2504,7 +2510,9 @@ fn primary_display_host_popup_menu_routes_primary_and_secondary_frames() {
         primary_window_adopted: true,
         primary_frame_id: Some(FrameId(0x100000001)),
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
-        font_metrics: None,
+        font_queries: neomacs_app::font_queries::FontQueryService::new(
+            FontSizing::gnu_x11_fallback(),
+        ),
         primary_window_size: shared_primary_window_size(1600, 1800),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
@@ -2588,7 +2596,9 @@ fn primary_image_catalog_lookup_returns_pending_without_waiting_for_render_threa
         primary_window_adopted: false,
         primary_frame_id: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
-        font_metrics: None,
+        font_queries: neomacs_app::font_queries::FontQueryService::new(
+            FontSizing::gnu_x11_fallback(),
+        ),
         primary_window_size: shared_primary_window_size(1600, 1800),
         image_catalog: test_image_catalog(&cmd_tx, Arc::clone(&image_metadata)),
         #[cfg(feature = "video")]
@@ -2753,7 +2763,9 @@ fn primary_image_catalog_does_not_block_on_render_command_backpressure() {
             primary_window_adopted: false,
             primary_frame_id: None,
             last_window_titles: Mutex::new(std::collections::HashMap::new()),
-            font_metrics: None,
+            font_queries: neomacs_app::font_queries::FontQueryService::new(
+                FontSizing::gnu_x11_fallback(),
+            ),
             primary_window_size: shared_primary_window_size(1600, 1800),
             image_catalog: test_image_catalog(
                 &worker_cmd_tx,
@@ -2815,7 +2827,9 @@ fn primary_image_catalog_does_not_wait_for_renderer_metadata_lock() {
         primary_window_adopted: false,
         primary_frame_id: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
-        font_metrics: None,
+        font_queries: neomacs_app::font_queries::FontQueryService::new(
+            FontSizing::gnu_x11_fallback(),
+        ),
         primary_window_size: shared_primary_window_size(1600, 1800),
         image_catalog: test_image_catalog(&cmd_tx, Arc::clone(&image_metadata)),
         #[cfg(feature = "video")]
@@ -2880,7 +2894,9 @@ fn primary_display_host_expands_tilde_in_image_file_before_render_command() {
         primary_window_adopted: false,
         primary_frame_id: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
-        font_metrics: None,
+        font_queries: neomacs_app::font_queries::FontQueryService::new(
+            FontSizing::gnu_x11_fallback(),
+        ),
         primary_window_size: shared_primary_window_size(1600, 1800),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
@@ -2966,7 +2982,9 @@ fn primary_display_host_resolve_image_sync_returns_cached_decode_failure_promptl
         primary_window_adopted: false,
         primary_frame_id: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
-        font_metrics: None,
+        font_queries: neomacs_app::font_queries::FontQueryService::new(
+            FontSizing::gnu_x11_fallback(),
+        ),
         primary_window_size: shared_primary_window_size(1600, 1800),
         image_catalog: test_image_catalog(&cmd_tx, Arc::clone(&image_metadata)),
         #[cfg(feature = "video")]
@@ -3042,7 +3060,9 @@ fn primary_display_host_request_video_queues_create_once_with_stable_id() {
         primary_window_adopted: false,
         primary_frame_id: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
-        font_metrics: None,
+        font_queries: neomacs_app::font_queries::FontQueryService::new(
+            FontSizing::gnu_x11_fallback(),
+        ),
         primary_window_size: shared_primary_window_size(1600, 1800),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
@@ -3128,7 +3148,9 @@ fn primary_display_host_request_video_preserves_uri_source() {
         primary_window_adopted: false,
         primary_frame_id: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
-        font_metrics: None,
+        font_queries: neomacs_app::font_queries::FontQueryService::new(
+            FontSizing::gnu_x11_fallback(),
+        ),
         primary_window_size: shared_primary_window_size(1600, 1800),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
@@ -3177,7 +3199,9 @@ fn primary_display_host_routes_one_typed_video_session_lifecycle() {
         primary_window_adopted: false,
         primary_frame_id: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
-        font_metrics: None,
+        font_queries: neomacs_app::font_queries::FontQueryService::new(
+            FontSizing::gnu_x11_fallback(),
+        ),
         primary_window_size: shared_primary_window_size(1600, 1800),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
@@ -3236,7 +3260,9 @@ fn primary_display_host_request_webkit_queues_create_and_load_once_with_stable_i
         primary_window_adopted: false,
         primary_frame_id: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
-        font_metrics: None,
+        font_queries: neomacs_app::font_queries::FontQueryService::new(
+            FontSizing::gnu_x11_fallback(),
+        ),
         primary_window_size: shared_primary_window_size(1600, 1800),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
@@ -3290,7 +3316,9 @@ fn primary_display_host_preserves_file_navigation_as_a_typed_path() {
         primary_window_adopted: false,
         primary_frame_id: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
-        font_metrics: None,
+        font_queries: neomacs_app::font_queries::FontQueryService::new(
+            FontSizing::gnu_x11_fallback(),
+        ),
         primary_window_size: shared_primary_window_size(1600, 1800),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
@@ -3334,7 +3362,9 @@ fn primary_display_host_xwidget_lifecycle_uses_explicit_xwidget_id() {
         primary_window_adopted: false,
         primary_frame_id: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
-        font_metrics: None,
+        font_queries: neomacs_app::font_queries::FontQueryService::new(
+            FontSizing::gnu_x11_fallback(),
+        ),
         primary_window_size: shared_primary_window_size(1600, 1800),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
@@ -3408,7 +3438,9 @@ fn bootstrap_gui_frame_adoption_routes_future_resizes_to_primary_window() {
         primary_window_adopted: false,
         primary_frame_id: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
-        font_metrics: None,
+        font_queries: neomacs_app::font_queries::FontQueryService::new(
+            FontSizing::gnu_x11_fallback(),
+        ),
         primary_window_size: shared_primary_window_size(843, 489),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
@@ -3476,7 +3508,9 @@ fn primary_window_resize_does_not_wait_for_host_acknowledgement() {
         primary_window_adopted: true,
         primary_frame_id: Some(FrameId(0x100000001)),
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
-        font_metrics: None,
+        font_queries: neomacs_app::font_queries::FontQueryService::new(
+            FontSizing::gnu_x11_fallback(),
+        ),
         primary_window_size: Arc::clone(&shared),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
@@ -3543,7 +3577,9 @@ fn primary_window_display_host_forwards_visual_config_to_renderer() {
         primary_window_adopted: true,
         primary_frame_id: Some(FrameId(0x100000001)),
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
-        font_metrics: None,
+        font_queries: neomacs_app::font_queries::FontQueryService::new(
+            FontSizing::gnu_x11_fallback(),
+        ),
         primary_window_size: shared_primary_window_size(843, 489),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
@@ -3617,7 +3653,9 @@ fn primary_window_display_host_round_trips_clipboard_requests_through_renderer()
         primary_window_adopted: true,
         primary_frame_id: Some(FrameId(0x100000001)),
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
-        font_metrics: None,
+        font_queries: neomacs_app::font_queries::FontQueryService::new(
+            FontSizing::gnu_x11_fallback(),
+        ),
         primary_window_size: shared_primary_window_size(843, 489),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
@@ -3689,7 +3727,9 @@ fn redisplay_title_sync_formats_frame_title_format_for_primary_window() {
         primary_window_adopted: false,
         primary_frame_id: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
-        font_metrics: None,
+        font_queries: neomacs_app::font_queries::FontQueryService::new(
+            FontSizing::gnu_x11_fallback(),
+        ),
         primary_window_size: shared_primary_window_size(843, 489),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
@@ -3738,7 +3778,9 @@ fn frame_host_title_formats_the_restored_runtime_system_name() {
         primary_window_adopted: false,
         primary_frame_id: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
-        font_metrics: None,
+        font_queries: neomacs_app::font_queries::FontQueryService::new(
+            FontSizing::gnu_x11_fallback(),
+        ),
         primary_window_size: shared_primary_window_size(843, 489),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
@@ -6666,7 +6708,9 @@ fn primary_display_host_reports_quality_policy_frame_shader_suppression() {
         primary_window_adopted: false,
         primary_frame_id: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
-        font_metrics: None,
+        font_queries: neomacs_app::font_queries::FontQueryService::new(
+            FontSizing::gnu_x11_fallback(),
+        ),
         primary_window_size: shared_primary_window_size(1600, 900),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
@@ -6747,7 +6791,9 @@ fn primary_display_host_routes_typed_terminal_requests_to_the_renderer() {
         primary_window_adopted: false,
         primary_frame_id: None,
         last_window_titles: Mutex::new(std::collections::HashMap::new()),
-        font_metrics: None,
+        font_queries: neomacs_app::font_queries::FontQueryService::new(
+            FontSizing::gnu_x11_fallback(),
+        ),
         primary_window_size: shared_primary_window_size(1600, 900),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
