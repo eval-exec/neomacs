@@ -1,6 +1,18 @@
 # Product dependencies, not vendored sources. Update pins deliberately and test
 # the browser landing page. The builder archives these exact Git objects.
 [[package]]
+name = "keycast"
+url = "https://github.com/tarsius/keycast"
+revision = "a6518e1b48b08ba883e9b1a2db0872d5bf3d85f4"
+[[package]]
+name = "compat"
+url = "https://github.com/emacs-compat/compat"
+revision = "df03e91f1fc47503ca71e11dd507ed18ca8b5ab0"
+[[package]]
+name = "cond-let"
+url = "https://github.com/tarsius/cond-let"
+revision = "3b88187fe067d4ca3dec3ef8a329b0ce18bdb356"
+[[package]]
 name = "treemacs"
 url = "https://github.com/Alexander-Miller/treemacs"
 revision = "55079b017fb821a34ace398cd3d8c5b556a22f6d"

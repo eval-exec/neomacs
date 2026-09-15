@@ -109,9 +109,12 @@ clears this cache. Old package versions may remain until site data is cleared.
 
 Treemacs browses `/neomacs-fake`; Git, Python collapsing, and file watchers are
 disabled because the browser has no native subprocesses. which-key is enabled.
-Doom One Light or Doom One matches the browser's initial light/dark appearance;
-the welcome page's theme action selects from installed themes. Personal init
-runs after these defaults and can load any other available theme.
+The default design uses Doom One's dark palette, a frame tab bar, buffer tab
+lines, and pane-specific header lines. Keycast (`keycast-tab-bar-mode`) shows
+command feedback in the tab bar. It and its dependencies are pinned in the
+same optional package bundle. The welcome page's theme action selects from
+installed themes. Personal init runs after these defaults and can change the
+theme or disable any of these modes.
 
 ## Basic acceptance checks
 
@@ -121,6 +124,7 @@ Install `tests/requirements.txt` in a virtual environment under `tmp/`, then run
 python crates/neomacs-wasm/tests/browser_basic_smoke.py --browser chrome --headless --artifacts-dir tmp/chrome-basic
 python crates/neomacs-wasm/tests/browser_basic_smoke.py --browser firefox --headless --artifacts-dir tmp/firefox-basic
 python crates/neomacs-wasm/tests/browser_init_smoke.py --headless --artifacts-dir tmp/browser-init
+python crates/neomacs-wasm/tests/browser_init_smoke.py --headless --block-packages --artifacts-dir tmp/browser-fallback
 node --test crates/neomacs-wasm/web/*.test.mjs
 cargo test -p xtask wasm
 python crates/neomacs-wasm/tests/browser_download_smoke.py --artifacts-dir tmp/download-smoke
