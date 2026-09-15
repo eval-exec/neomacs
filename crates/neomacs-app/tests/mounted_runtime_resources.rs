@@ -9,6 +9,27 @@ use support::runtime_resources::{content_id, mounted_runtime_resources, runtime_
 mod support;
 
 #[test]
+fn separately_authenticated_packages_extend_resources_without_overwriting_files() {
+    let base = mounted_runtime_resources(&[("lisp/startup.el", b"startup"), ("etc/NEWS", b"news")]);
+    let packages = mounted_runtime_resources(&[
+        ("lisp/packages/tree.el", b"tree"),
+        ("etc/packages", b"licenses"),
+    ]);
+    let combined = base.try_extend(packages).unwrap();
+    assert_eq!(
+        combined.file_contents(Path::new("/neomacs/lisp/packages/tree.el")),
+        Some(b"tree".as_slice())
+    );
+    assert_eq!(
+        combined.file_contents(Path::new("/neomacs/lisp/startup.el")),
+        Some(b"startup".as_slice())
+    );
+    let collision =
+        mounted_runtime_resources(&[("lisp/startup.el", b"replacement"), ("etc/other", b"other")]);
+    assert!(combined.try_extend(collision).is_err());
+}
+
+#[test]
 fn runtime_resource_bundle_rejects_a_noncanonical_identity() {
     let archive = runtime_archive(&[("lisp/loadup.el", b"lisp"), ("etc/NEWS", b"etc")]);
 

@@ -20,7 +20,8 @@ use super::portable_assets::{
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
-pub(super) const WEB_BUNDLE_SOURCE_FILES: [&str; 13] = [
+pub(super) const WEB_BUNDLE_SOURCE_FILES: [&str; 14] = [
+    "packages.mjs",
     "storage/blocking.mjs",
     "storage/worker.js",
     "network/http.mjs",
@@ -247,6 +248,7 @@ fn package(options: WasmPackageOptions) -> Result<()> {
     )?;
     copy_web_bundle_sources(&options.repo_root, &staged_bundle)?;
     copy_portable_assets(&options.portable_assets, &staged_bundle)?;
+    super::wasm_packages::package(&options.repo_root, &staged_bundle)?;
     copy_browser_shell(&options.repo_root, staging.path())?;
     let bundle_id = publish_browser_bundle(&staged_bundle, staging.path())?;
 

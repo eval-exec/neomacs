@@ -1,0 +1,46 @@
+# Product dependencies, not vendored sources. Update pins deliberately and test
+# the browser landing page. The builder archives these exact Git objects.
+[[package]]
+name = "treemacs"
+url = "https://github.com/Alexander-Miller/treemacs"
+revision = "55079b017fb821a34ace398cd3d8c5b556a22f6d"
+[[package]]
+name = "doom-themes"
+url = "https://github.com/doomemacs/themes"
+revision = "53645a905dfb3055db52f5d418d5ef612027e062"
+[[package]]
+name = "dash"
+url = "https://github.com/magnars/dash.el"
+revision = "d3a84021dbe48dba63b52ef7665651e0cf02e915"
+[[package]]
+name = "s"
+url = "https://github.com/magnars/s.el"
+revision = "b4b8c03fcef316a27f75633fe4bb990aeff6e705"
+[[package]]
+name = "ht"
+url = "https://github.com/Wilfred/ht.el"
+revision = "1c49aad1c820c86f7ee35bf9fff8429502f60fef"
+[[package]]
+name = "pfuture"
+url = "https://github.com/Alexander-Miller/pfuture"
+revision = "19b53aebbc0f2da31de6326c495038901bffb73c"
+[[package]]
+name = "avy"
+url = "https://github.com/abo-abo/avy"
+revision = "933d1f36cca0f71e4acb5fac707e9ae26c536264"
+[[package]]
+name = "ace-window"
+url = "https://github.com/abo-abo/ace-window"
+revision = "77115afc1b0b9f633084cf7479c767988106c196"
+[[package]]
+name = "hydra"
+url = "https://github.com/abo-abo/hydra"
+revision = "59a2a45a35027948476d1d7751b0f0215b1e61aa"
+[[package]]
+name = "posframe"
+url = "https://github.com/tumashu/posframe"
+revision = "74c8c56131ed866db47ae4191364b72dd4852456"
+[[package]]
+name = "cfrs"
+url = "https://github.com/Alexander-Miller/cfrs"
+revision = "981bddb3fb9fd9c58aed182e352975bd10ad74c8"
