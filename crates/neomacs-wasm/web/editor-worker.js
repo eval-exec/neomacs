@@ -2,6 +2,7 @@ import { fetchEditorWorkerAssets } from "./worker-assets.mjs";
 import { createHttpHostImports } from "./network/host.mjs";
 import { WorkerWait, HostWake } from "./worker-wait.mjs";
 import { WorkerInput } from "./worker-input.mjs";
+import { openBlockingFileSystem } from "./storage/blocking.mjs";
 import {
   OriginPrivateFileSystem,
   createOpfsHostImports,
@@ -88,7 +89,10 @@ function currentInputSequence() {
   const input = mailboxInput();
   if (input === null) return null;
   try {
-    const sequence = JSON.parse(decoder.decode(input))?.sequence;
+    // TextDecoder does not accept SharedArrayBuffer-backed views in Firefox.
+    // The producer cannot reuse the mailbox until acknowledgement; decode a
+    // local snapshot while that handshake guarantees its contents are stable.
+    const sequence = JSON.parse(decoder.decode(input.slice()))?.sequence;
     return typeof sequence === "string" ? sequence : null;
   } catch {
     return null;
@@ -195,9 +199,9 @@ async function instantiate(response, imports) {
 
 async function start(message) {
   const jspi = supportsJspi();
-  if (!jspi) {
+  if (!jspi && !globalThis.crossOriginIsolated) {
     throw new Error(
-      "neomacs-wasm requires the WebAssembly JavaScript Promise Integration available in current Chrome releases",
+      "neomacs-wasm requires JSPI or cross-origin isolation for browser storage",
     );
   }
   mailbox = message.mailbox;
@@ -214,10 +218,11 @@ async function start(message) {
   runtimeResourceBundle = assets.runtimeResourceBundle;
   runtimeResourceId = assets.runtimeResourceId;
   post("status", { message: "Opening persistent storage…" });
-  const filesystem = await OriginPrivateFileSystem.open();
-  const filesystemImports = suspendingFilesystemImports(
-    createOpfsHostImports(filesystem, () => memory),
-  );
+  const filesystem = jspi
+    ? await OriginPrivateFileSystem.open()
+    : await openBlockingFileSystem();
+  const imports = createOpfsHostImports(filesystem, () => memory);
+  const filesystemImports = jspi ? suspendingFilesystemImports(imports) : imports;
 
   const waitForInput = jspi ? createJspiWait() : createAtomicsWait();
   // `instantiateStreaming` compiles while the body is still arriving, so the

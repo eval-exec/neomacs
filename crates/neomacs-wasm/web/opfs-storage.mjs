@@ -28,7 +28,7 @@ export const HOST_STATUS = Object.freeze({
   OTHER: 10,
 });
 
-class HostFileSystemError extends Error {
+export class HostFileSystemError extends Error {
   constructor(status, message, options = {}) {
     super(message, options);
     this.name = "HostFileSystemError";
@@ -359,8 +359,8 @@ export class OriginPrivateFileSystem {
 
 /**
  * Build the raw imports consumed by `BrowserOpfsFileSystem` in the editor
- * Worker. Operation calls are asynchronous; the caller wraps them in JSPI's
- * `WebAssembly.Suspending` before instantiation.
+ * Worker. Promise-based adapters use JSPI; blocking worker adapters return
+ * the same results synchronously. Encoding and error policy stay shared.
  */
 export function createOpfsHostImports(filesystem, getMemory) {
   const decoder = new TextDecoder("utf-8", { fatal: true });
@@ -383,16 +383,25 @@ export function createOpfsHostImports(filesystem, getMemory) {
     }
   }
 
-  async function perform(operation) {
+  function perform(operation, accept = () => {}) {
     resultBytes = new Uint8Array();
     resultMetadata = null;
     resultError = "";
-    try {
-      await operation();
+    function succeeded(value) {
+      accept(value);
       return HOST_STATUS.OK;
-    } catch (error) {
+    }
+    function failed(error) {
       resultError = error instanceof Error ? error.message : String(error);
       return statusForError(error);
+    }
+    try {
+      const result = operation();
+      return result instanceof Promise
+        ? result.then(succeeded).catch(failed)
+        : succeeded(result);
+    } catch (error) {
+      return failed(error);
     }
   }
 
@@ -403,25 +412,21 @@ export function createOpfsHostImports(filesystem, getMemory) {
   }
 
   return {
-    fs_stat: (path, length) => perform(async () => {
-      resultMetadata = await filesystem.stat(pathFromMemory(path, length));
-    }),
-    fs_read: (path, length) => perform(async () => {
-      resultBytes = await filesystem.read(pathFromMemory(path, length));
-    }),
-    fs_read_directory: (path, length) => perform(async () => {
-      resultBytes = encoder.encode(JSON.stringify(
-        await filesystem.readDirectory(pathFromMemory(path, length)),
-      ));
-    }),
+    fs_stat: (path, length) => perform(
+      () => filesystem.stat(pathFromMemory(path, length)),
+      value => { resultMetadata = value; }),
+    fs_read: (path, length) => perform(
+      () => filesystem.read(pathFromMemory(path, length)),
+      value => { resultBytes = value; }),
+    fs_read_directory: (path, length) => perform(
+      () => filesystem.readDirectory(pathFromMemory(path, length)),
+      value => { resultBytes = encoder.encode(JSON.stringify(value)); }),
     fs_write: (path, pathLength, source, sourceLength, mode, offset, sync) =>
-      perform(async () => {
-        resultMetadata = await filesystem.write(
+      perform(() => filesystem.write(
           pathFromMemory(path, pathLength),
           memoryBytes(source, sourceLength).slice(),
           { mode, offset, sync: sync !== 0 },
-        );
-      }),
+        ), value => { resultMetadata = value; }),
     fs_create_directory: (path, length, parents) => perform(() =>
       filesystem.createDirectory(pathFromMemory(path, length), parents !== 0)),
     fs_remove_file: (path, length) => perform(() =>
@@ -434,9 +439,9 @@ export function createOpfsHostImports(filesystem, getMemory) {
         pathFromMemory(to, toLength),
         replace !== 0,
       )),
-    fs_canonicalize: (path, length) => perform(async () => {
-      resultBytes = encoder.encode(await filesystem.canonicalize(pathFromMemory(path, length)));
-    }),
+    fs_canonicalize: (path, length) => perform(
+      () => filesystem.canonicalize(pathFromMemory(path, length)),
+      value => { resultBytes = encoder.encode(value); }),
     fs_result_kind: () => resultMetadata?.kind ?? 0,
     fs_result_len: () => resultMetadata?.len ?? resultBytes.byteLength,
     fs_result_modified_milliseconds: () => resultMetadata?.modifiedMilliseconds ?? Number.NaN,
