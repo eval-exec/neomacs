@@ -70,6 +70,11 @@ def main():
             editor.wait_ready()
             editor.wait_for_presentation()
             editor.wait_for_frame_text("default landing page", contains="Welcome to the browser editor.")
+            assert not any(
+                row["role"] == "HeaderLine"
+                for window in editor.frame_payload()["window_matrices"]
+                for row in window["matrix"]["rows"]
+            ), "landing header lines should be disabled before any editor input"
             if args.block_packages:
                 editor.eval_expression(
                     '''(progn
@@ -86,7 +91,7 @@ def main():
                   (unless (and (eq neomacs-wasm-startup-profile 'landing)
                                (featurep 'treemacs) (featurep 'doom-themes)
                                keycast-tab-bar-mode tab-bar-mode global-tab-line-mode
-                               tab-line-mode header-line-format
+                               tab-line-mode (not header-line-format)
                                (not neomacs-wasm-package-error)
                                (treemacs-get-local-window)
                                (get-buffer-window "*NEO Emacs About*")

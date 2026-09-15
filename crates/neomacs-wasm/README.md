@@ -109,8 +109,8 @@ clears this cache. Old package versions may remain until site data is cleared.
 
 Treemacs browses `/neomacs-fake`; Git, Python collapsing, and file watchers are
 disabled because the browser has no native subprocesses. which-key is enabled.
-The default design uses Doom One's dark palette, a frame tab bar, buffer tab
-lines, and pane-specific header lines. Keycast (`keycast-tab-bar-mode`) shows
+The default design uses Doom One's dark palette, a frame tab bar, and buffer tab
+lines, with landing-pane header lines disabled. Keycast (`keycast-tab-bar-mode`) shows
 command feedback in the tab bar. It and its dependencies are pinned in the
 same optional package bundle. The welcome page's theme action selects from
 installed themes. Personal init runs after these defaults and can change the
