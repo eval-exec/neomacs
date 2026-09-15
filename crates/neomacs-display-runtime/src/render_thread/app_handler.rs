@@ -25,7 +25,7 @@ impl ApplicationHandler for RenderApp {
             }
             if matches!(event, WindowEvent::CloseRequested | WindowEvent::Destroyed) {
                 self.comms
-                    .send_input(crate::thread_comm::InputEvent::WindowClose { emacs_frame_id: 0 });
+                    .send_input(crate::thread_comm::InputEvent::close_requested(0));
                 self.lifecycle_flags.shutdown_requested = true;
                 self.handle_exiting();
                 event_loop.exit();

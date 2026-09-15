@@ -89,12 +89,14 @@ impl RenderApp {
             let (content_width, content_height) = ws.content_size();
             let (width, height) =
                 emacs_pixels_from_window_size(content_width, content_height, scale_factor);
-            self.comms.send_input(InputEvent::WindowResize {
-                width,
-                height,
-                scale_factor,
-                emacs_frame_id: emacs_fid,
-            });
+            self.comms.send_input(
+                InputEvent::viewport_changed(
+                    neovm_host_abi::frontend_event::FrontendLogicalExtent::new(width, height),
+                    scale_factor,
+                    emacs_fid,
+                )
+                .expect("winit supplies a valid display scale"),
+            );
         }
     }
 }
