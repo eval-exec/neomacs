@@ -20,6 +20,8 @@ use neovm_core::window::{
 
 use crate::frontend_event::FrontendScaleFactor;
 
+mod font;
+
 /// Invalid geometry at the evaluator/frontend startup boundary.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InvalidInitialFrameMetrics {
@@ -106,10 +108,10 @@ impl InitialFrameFont {
         Self { parameter, name }
     }
 
-    /// Use one host-selected family/name for both Lisp-visible font slots.
+    /// Store an unrealized selector in both Lisp-visible font slots.
     ///
-    /// Portable adapters use this when they have a stable public font name
-    /// but no native opened-font object to expose as `font-parameter` yet.
+    /// A GUI adapter that has measured an opening font must use [`Self::opened`]
+    /// instead: a family name alone cannot seed that font's realized face size.
     #[must_use]
     pub fn named(name: impl Into<String>) -> Self {
         let name = Value::string(name.into());

@@ -95,13 +95,15 @@ fn create_evaluator(
     evaluator.set_max_depth(1600);
 
     let font_pixel_size = font_sizing.face_height_to_layout_pixels(100);
-    let metrics = FontMetricsService::new().font_metrics("Monospace", 400, false, font_pixel_size);
+    let font = FontMetricsService::new()
+        .select_font_for_char('M', "Monospace", 400, false, font_pixel_size)
+        .ok_or_else(|| "could not open the Android startup font".to_owned())?;
     let frame_metrics = InitialFrameMetrics::new(
         logical_extent.width(),
         logical_extent.height(),
-        metrics.char_width.max(1.0),
-        metrics.line_height.max(1.0),
-        font_pixel_size,
+        font.metrics.average_width.max(1) as f32,
+        font.metrics.height.max(1) as f32,
+        font.metrics.pixel_size.max(1) as f32,
     )
     .map_err(|error| format!("invalid Android opening geometry: {error}"))?;
     let surface = prepare_initial_editor_surface(
@@ -112,7 +114,7 @@ fn create_evaluator(
             Default::default(),
             InitialDisplayType::Color,
             InitialBackgroundMode::Light,
-            InitialFrameFont::named("Monospace"),
+            InitialFrameFont::opened(font, font_sizing),
         ),
     );
     let startup = InteractiveGuiStartup::new("neomacs-android", runtime_root, &app_data);
