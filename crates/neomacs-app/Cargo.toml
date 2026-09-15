@@ -8,6 +8,7 @@ repository.workspace = true
 description = "Host-neutral application contracts for Neomacs"
 
 [dependencies]
+tracing.workspace = true
 crossbeam-channel.workspace = true
 flate2.workspace = true
 neomacs-display-protocol.workspace = true
