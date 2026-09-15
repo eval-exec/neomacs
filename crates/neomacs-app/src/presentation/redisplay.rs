@@ -144,6 +144,10 @@ impl RedisplayRuntime {
         engine.synchronize(self.query_seed.borrow().clone());
     }
 
+    pub fn uses_scalable_metrics(&self) -> bool {
+        self.cosmic_metrics_enabled.get()
+    }
+
     pub fn disable_cosmic_metrics(&self) {
         self.engine.borrow_mut().disable_cosmic_metrics();
         self.cosmic_metrics_enabled.set(false);

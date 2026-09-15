@@ -56,6 +56,7 @@ impl FramePublishResult {
 #[derive(Clone)]
 pub struct EditorPresentationRuntime {
     runtime: Rc<RedisplayRuntime>,
+    font_queries: crate::font_queries::FontQueryService,
 }
 
 impl EditorPresentationRuntime {
@@ -69,6 +70,10 @@ impl EditorPresentationRuntime {
         }
         Self {
             runtime: Rc::new(runtime),
+            font_queries: crate::font_queries::FontQueryService::new(match metrics {
+                PresentationMetrics::Scalable(sizing) => sizing,
+                PresentationMetrics::CellGrid => FontSizing::native_gui(),
+            }),
         }
     }
 
@@ -79,6 +84,7 @@ impl EditorPresentationRuntime {
 
     /// Switch this session to scalable fonts with the given DPI policy.
     pub fn use_scalable_metrics(&self, font_sizing: FontSizing) {
+        self.font_queries.set_font_sizing(font_sizing);
         self.runtime.set_font_sizing(font_sizing);
         self.runtime.enable_cosmic_metrics();
     }
@@ -189,8 +195,13 @@ impl EditorPresentationRuntime {
         });
     }
 
-    /// Install both evaluator observation adapters owned by this runtime.
+    /// Install evaluator observation and font queries owned by this runtime.
+    /// Native displays retain their font provider; direct surfaces gain fonts
+    /// without acquiring window-management or popup capabilities.
     pub fn install_evaluator_query_hooks(&self, evaluator: &mut Context) {
+        if self.runtime.uses_scalable_metrics() && evaluator.display_host.is_none() {
+            evaluator.install_font_query_host(Box::new(self.font_queries.clone()));
+        }
         self.install_frame_snapshot_hook(evaluator);
         self.install_window_layout_query_hook(evaluator);
     }
