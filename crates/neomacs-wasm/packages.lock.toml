@@ -25,6 +25,10 @@ name = "nerd-icons"
 url = "https://github.com/rainstormstudio/nerd-icons.el"
 revision = "17faac7977242b470732efd417d3bcc8eb5a830e"
 [[package]]
+name = "nerd-icons-completion"
+url = "https://github.com/rainstormstudio/nerd-icons-completion"
+revision = "45b585d972192a3eaeb239e15e55de7f46f8920a"
+[[package]]
 name = "treemacs-nerd-icons"
 url = "https://github.com/rainstormstudio/treemacs-nerd-icons"
 revision = "0c5ddcb978da639f01ddb023febc40fc755171e5"

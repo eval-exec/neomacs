@@ -25,7 +25,8 @@
   (dolist (directory '("dash" "s" "ht" "pfuture" "avy" "ace-window"
                        "hydra" "posframe" "cfrs" "treemacs/src/elisp"
                        "doom-themes" "doom-themes/themes" "compat" "cond-let" "keycast"
-                       "nerd-icons" "nerd-icons/data" "treemacs-nerd-icons" "nerd-icons-dired"
+                       "nerd-icons" "nerd-icons/data" "nerd-icons-completion"
+                       "treemacs-nerd-icons" "nerd-icons-dired"
                        "org-modern" "doom-modeline" "shrink-path" "f" "consult"))
     (add-to-list 'load-path (expand-file-name directory neomacs-wasm-packages--root)))
   (add-to-list 'custom-theme-load-path

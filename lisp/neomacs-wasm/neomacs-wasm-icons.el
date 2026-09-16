@@ -7,7 +7,14 @@
 ;;; Code:
 
 (require 'tab-line)
-(require 'nerd-icons)
+
+;; Optional browser packages are mounted at startup, not during native builds.
+(defvar nerd-icons-font-family)
+(defvar treemacs-nerd-icons-tab)
+(declare-function nerd-icons-icon-for-buffer "ext:nerd-icons" (&rest arg-overrides))
+(declare-function nerd-icons-completion-mode "ext:nerd-icons-completion" (&optional arg))
+(declare-function nerd-icons-dired-mode "ext:nerd-icons-dired" (&optional arg))
+(declare-function treemacs-load-theme "ext:treemacs-icons" (name))
 
 (defun neomacs-wasm-icons-tab-name (buffer &optional _buffers)
   "Return BUFFER's tab label with its file or major-mode icon."
@@ -21,7 +28,8 @@
        (buffer-name buffer)))))
 
 (defun neomacs-wasm-icons-initialize ()
-  "Use the shared Nerd Icons font in the tree, tabs, and Dired."
+  "Use the shared Nerd Icons font in the tree, tabs, Dired, and completion."
+  (require 'nerd-icons)
   (if (not (member nerd-icons-font-family (font-family-list)))
       (message "Nerd Icons font unavailable; keeping ordinary labels")
     ;; Configure before theme creation: tabs otherwise produce variable gaps.
@@ -30,6 +38,9 @@
     (treemacs-load-theme "nerd-icons")
     (require 'nerd-icons-dired)
     (add-hook 'dired-mode-hook #'nerd-icons-dired-mode)
+    ;; Standard completion affixes work with Fido and Consult's mixed sources.
+    (require 'nerd-icons-completion)
+    (nerd-icons-completion-mode 1)
     (setq tab-line-tab-name-function #'neomacs-wasm-icons-tab-name)
     (tab-line-force-update t)))
 
