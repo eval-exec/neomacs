@@ -19,6 +19,7 @@
 
 (defvar-local neomacs-wasm-landing--banner-data nil)
 (defvar-local neomacs-wasm-landing--banner-image nil)
+(defvar-local neomacs-wasm-landing--banner-overlay nil)
 (defvar-local neomacs-wasm-landing--playground-positioned nil)
 
 (defcustom neomacs-wasm-landing-playground-file "~/playground.el"
@@ -36,7 +37,9 @@ Only image geometry changes; never rearrange the user's windows."
         (let ((width (max 1 (min 800 (- (apply #'min
                                       (mapcar (lambda (window) (window-body-width window t))
                                               windows)) 16)))))
-          (unless (equal width (plist-get (cdr neomacs-wasm-landing--banner-image) :width))
+          (unless (and (equal width (plist-get (cdr neomacs-wasm-landing--banner-image) :width))
+                       (overlayp neomacs-wasm-landing--banner-overlay)
+                       (overlay-buffer neomacs-wasm-landing--banner-overlay))
             (condition-case error-data
                 (let ((image (create-image neomacs-wasm-landing--banner-data
                                            'svg t :width width :scale 1 :ascent 'center))
@@ -50,8 +53,16 @@ Only image geometry changes; never rearrange the user's windows."
                   (save-excursion
                     (goto-char (point-min))
                     (when (looking-at "\\[\\[file:[^\n]+\\]\\]")
-                      (put-text-property (match-beginning 0) (match-end 0)
-                                         'display image)))
+                      ;; Font-lock (including Org Modern) owns display text
+                      ;; properties. Keep the image in its own overlay so
+                      ;; refontification cannot erase it.
+                      (unless (overlayp neomacs-wasm-landing--banner-overlay)
+                        (setq neomacs-wasm-landing--banner-overlay
+                              (make-overlay (match-beginning 0) (match-end 0))))
+                      (move-overlay neomacs-wasm-landing--banner-overlay
+                                    (match-beginning 0) (match-end 0))
+                      (overlay-put neomacs-wasm-landing--banner-overlay 'display image)
+                      (overlay-put neomacs-wasm-landing--banner-overlay 'evaporate t)))
                   (set-buffer-modified-p nil))
               (error (message "Landing banner: %s" (error-message-string error-data))))))))))
 
