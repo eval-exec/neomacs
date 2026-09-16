@@ -22,8 +22,9 @@ The checklist, status, and bar share one overlay. The first visible editor frame
 that entire overlay from layout and painting immediately; late download
 messages cannot restore it. Startup failures retain the checklist for diagnosis;
 later runtime failures show a text-only error without reviving the checklist.
-Production hosting must use HTTPS, serve `.wasm` as `application/wasm`, and
-send these headers on the page and worker resources:
+Production hosting must use HTTPS and serve `.wasm` as `application/wasm`.
+For browsers without JSPI, also send these headers on the page and worker
+resources:
 
 ```text
 Cross-Origin-Opener-Policy: same-origin
@@ -33,6 +34,28 @@ Cross-Origin-Embedder-Policy: require-corp
 These headers enable shared-memory worker waits in browsers without JSPI.
 Experimental browser flags are not required by the application. An available
 WebGL/WebGPU graphics backend is still necessary.
+
+## GitHub Pages preview
+
+`.github/workflows/wasm-pages.yml` publishes the `android-wasm-runtime` branch
+to <https://eval-exec.github.io/neomacs/>. Pushes to that branch trigger the
+workflow; it does not publish `main` or pull requests. GitHub Pages must use
+**GitHub Actions** as its source, and the `github-pages` environment must allow
+deployments from `android-wasm-runtime`. The manual dispatch trigger becomes
+available once GitHub also knows the workflow on the repository's default branch.
+
+The workflow fresh-builds the portable runtime with `cargo xtask fresh-build`,
+packages the runtime and pinned Lisp packages, and builds optimized WebAssembly.
+Before deployment, Chrome checks the site under `/neomacs/` on an ordinary
+static server without isolation headers. After deployment, it checks the public
+URL against the expected bundle ID, then verifies the landing layout, loading
+overlay lifetime, typing, saving, browser-restart persistence, and About avatar
+and profile link. Both checks upload screenshots and failure diagnostics.
+
+Pages cannot configure the isolation headers above, so this deployment needs
+a browser with JSPI (tested in default Chrome). It is a work-in-progress preview,
+not a promise of compatibility with every browser. Storage belongs to the
+`eval-exec.github.io` origin and is separate from the local preview's storage.
 
 ## Landing content
 
