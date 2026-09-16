@@ -191,6 +191,8 @@ clears this cache. Old package versions may remain until site data is cleared.
 
 Treemacs browses `/neomacs-fake`; Git, Python collapsing, and file watchers are
 disabled because the browser has no native subprocesses. which-key is enabled.
+Its initial idle delay is 0.5 seconds; subsequent popups in the same key
+sequence use 0.1 seconds. Personal init may override both settings.
 The default design uses `doom-one`, a frame tab bar, and buffer tab
 lines, with landing-pane header lines disabled. Keycast (`keycast-tab-bar-mode`) shows
 command feedback in the tab bar. It and its dependencies are pinned in the

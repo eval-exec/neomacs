@@ -88,6 +88,14 @@ def main():
             artifacts = Path(args.artifacts_dir)
             artifacts.mkdir(parents=True, exist_ok=True)
             editor.driver.save_screenshot(str(artifacts / "first-presentation.png"))
+            editor.eval_expression(
+                '''(message (concat "WHICH-KEY-DELAYS-" "%s")
+                    (if (and which-key-mode
+                             (equal which-key-idle-delay 0.5)
+                             (equal which-key-idle-secondary-delay 0.1))
+                        "PASS" "FAIL"))''',
+                "WHICH-KEY-DELAYS-PASS", failure_marker="WHICH-KEY-DELAYS-FAIL",
+            )
             if args.block_packages:
                 editor.eval_expression(
                     '''(progn

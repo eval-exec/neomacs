@@ -11,6 +11,9 @@
 
 ;;; Code:
 
+(defvar which-key-idle-delay)
+(defvar which-key-idle-secondary-delay)
+
 (defvar neomacs-wasm-package-error nil
   "Reason optional landing packages are unavailable, or nil.")
 
@@ -72,6 +75,8 @@
   "Install package defaults before personal init, tolerating optional failure."
   (remove-hook 'before-init-hook #'neomacs-wasm-packages-initialize)
   (require 'which-key)
+  (setq which-key-idle-delay 0.5
+        which-key-idle-secondary-delay 0.1)
   (which-key-mode 1)
   (require 'icomplete)
   (fido-vertical-mode 1)
