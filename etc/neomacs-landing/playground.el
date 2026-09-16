@@ -34,13 +34,6 @@
   (interactive)
   (message "You just taught your editor a new command."))
 
-;; 07 / Generate something you can keep
-;; Creates another buffer; C-x b brings you back.
-(with-current-buffer (get-buffer-create "*NEO Notes*")
-  (goto-char (point-max))
-  (insert "One small expression. One new possibility.\n")
-  (display-buffer (current-buffer)))
-
 ;; Keep exploring:
 ;; C-h f  describe a function     C-g  cancel
 ;; C-/    undo an edit            M-x write-file  save as
