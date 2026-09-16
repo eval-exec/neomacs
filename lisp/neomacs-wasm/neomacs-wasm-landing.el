@@ -265,7 +265,7 @@ edits.  Only this command or initial startup arranges the windows."
           (select-window right)))))
   (add-hook 'window-size-change-functions #'neomacs-wasm-landing--resize-banner)
   (neomacs-wasm-landing--resize-banner)
-  (when neomacs-wasm-package-error
+  (when (bound-and-true-p neomacs-wasm-package-error)
     (message "Optional landing packages unavailable: %s. Reload to retry."
              neomacs-wasm-package-error)))
 

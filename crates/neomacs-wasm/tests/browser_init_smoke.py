@@ -128,8 +128,7 @@ def main():
                   (with-temp-file "/neomacs-fake/landing-check.el" (insert ";; A file opened through Treemacs"))
                   (select-window (treemacs-get-local-window))
                   (treemacs-refresh)
-                  (goto-char (point-min))
-                  (search-forward "landing-check.el")
+                  (treemacs-goto-file-node "/neomacs-fake/landing-check.el")
                   (message "TREE-FILE-SELECTED"))''',
                 "TREE-FILE-SELECTED",
             )
