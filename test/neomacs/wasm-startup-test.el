@@ -133,6 +133,9 @@
                       (lambda (url &rest _) (setq opened url))))
                  (button-activate button))
                (should (equal opened "https://github.com/eval-exec")))
+             (should (string-match-p
+                      (regexp-quote "https://github.com/eval-exec/neomacs")
+                      (buffer-string)))
              (should (file-readable-p
                       (expand-file-name "neomacs-landing/author.jpg" data-directory)))
              (should buffer-read-only)))
