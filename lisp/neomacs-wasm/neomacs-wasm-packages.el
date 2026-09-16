@@ -24,7 +24,8 @@
     (error "Package download unavailable; reload the page to retry"))
   (dolist (directory '("dash" "s" "ht" "pfuture" "avy" "ace-window"
                        "hydra" "posframe" "cfrs" "treemacs/src/elisp"
-                       "doom-themes" "doom-themes/themes" "compat" "cond-let" "keycast"))
+                       "doom-themes" "doom-themes/themes" "compat" "cond-let" "keycast"
+                       "nerd-icons" "nerd-icons/data" "treemacs-nerd-icons" "nerd-icons-dired"))
     (add-to-list 'load-path (expand-file-name directory neomacs-wasm-packages--root)))
   (add-to-list 'custom-theme-load-path
                (expand-file-name "doom-themes/themes" neomacs-wasm-packages--root))
@@ -41,6 +42,8 @@
   ;; The curated source bundle has no package-generated autoload file.
   ;; treemacs-mode binds mouse commands without requiring their definitions.
   (require 'treemacs-mouse-interface)
+  (require 'neomacs-wasm-icons)
+  (neomacs-wasm-icons-initialize)
   (treemacs-git-mode -1)
   (treemacs-filewatch-mode -1)
   (setq treemacs-collapse-dirs 0)
