@@ -10,11 +10,11 @@ from selenium import webdriver
 from browser_test_support import BrowserEditorHarness, chrome_options
 
 
-def click(driver, count):
-    # features.org in the shipped tree at this fixed logical viewport.
+def click(driver, count, position):
+    x, y = position
     for kind in ("mousePressed", "mouseReleased"):
         driver.execute_cdp_cmd("Input.dispatchMouseEvent", {
-            "type": kind, "x": 100, "y": 150, "button": "left",
+            "type": kind, "x": x, "y": y, "button": "left",
             "buttons": 1 if kind == "mousePressed" else 0, "clickCount": count,
         })
 
@@ -36,7 +36,14 @@ def main():
         editor.wait_ready()
         editor.wait_for_frame_text("landing", contains="Welcome to the browser editor.")
         editor.timeout = 10
-        click(driver, 1)
+        tree = editor.wait_for_window_matrices("tree", contains="features.org", count=1)[0]
+        row = next(row for row in tree["matrix"]["rows"]
+                   if "features.org" in editor.matrix_text({"matrix": {"rows": [row]}}))
+        canvas = driver.find_element("css selector", "canvas").rect
+        position = (canvas["x"] + tree["text_pixel_bounds"]["x"] + 90,
+                    canvas["y"] + tree["text_pixel_bounds"]["y"]
+                    + row["pixel_y"] + row["height_px"] / 2)
+        click(driver, 1, position)
         time.sleep(0.5)
         editor.eval_expression('''(progn
           (unless (and (eq (selected-window) (treemacs-get-local-window))
@@ -45,9 +52,9 @@ def main():
                            (line-beginning-position) (line-end-position))))
             (error (concat "Mouse did not " "select the tree file")))
           (message (concat "TREE-CLICK-" "SELECTED")))''', "TREE-CLICK-SELECTED")
-        click(driver, 1)
+        click(driver, 1, position)
         time.sleep(0.06)
-        click(driver, 2)
+        click(driver, 2, position)
         editor.wait_for_frame_text("double-clicked features file",
                                   contains="An Emacs from the future",
                                   excludes="Wrong type argument: commandp")

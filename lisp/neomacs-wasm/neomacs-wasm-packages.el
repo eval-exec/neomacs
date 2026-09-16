@@ -31,7 +31,7 @@
   ;; No package-manager generated files are installed in the user's directory.
   (dolist (feature '(dash s ht pfuture avy ace-window lv hydra posframe cfrs))
     (require feature))
-  (setq treemacs-no-png-images t
+  (setq treemacs-no-png-images nil
         treemacs-python-executable nil
         treemacs-collapse-dirs 0
         treemacs-read-string-input 'from-minibuffer
