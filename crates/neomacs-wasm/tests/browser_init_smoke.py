@@ -100,6 +100,13 @@ def main():
                 print("PASS: blocked optional package download still opens an editable landing page")
                 return
             editor.eval_expression(
+                '''(message (concat "DEFAULT-THEME-" "%s")
+                    (if (and (equal custom-enabled-themes '(doom-solarized-dark))
+                             (equal (face-background 'default) "#002b36"))
+                        "PASS" "FAIL"))''',
+                "DEFAULT-THEME-PASS", failure_marker="DEFAULT-THEME-FAIL",
+            )
+            editor.eval_expression(
                 '''(progn
                   (unless (and (eq neomacs-wasm-startup-profile 'landing)
                                (featurep 'treemacs) (featurep 'doom-themes)
