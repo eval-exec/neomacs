@@ -211,6 +211,7 @@ canvas {
 
 #browser-pending-link:not([hidden]) {
   position: absolute;
+  pointer-events: auto;
   z-index: 20;
   inset: auto 1rem 1rem 1rem;
   padding: 0.8rem 1rem;

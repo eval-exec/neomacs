@@ -107,6 +107,13 @@ def main():
         fallback = driver.find_element("css selector", "#browser-pending-link a")
         assert fallback.get_attribute("href") == "https://github.com/eval-exec"
         assert fallback.get_attribute("target") == "_blank"
+        fallback.click()
+        deadline = time.monotonic() + 10
+        while len(driver.window_handles) < 2:
+            if time.monotonic() >= deadline:
+                raise AssertionError("Fallback link did not open a tab")
+            time.sleep(0.1)
+        assert not driver.find_element("id", "browser-pending-link").is_displayed()
         print("PASS: About avatar paints; name opens profile; blocked popup offers a link")
     except Exception:
         editor.capture_failure_artifacts(str(artifacts))
