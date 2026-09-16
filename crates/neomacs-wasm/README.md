@@ -73,9 +73,11 @@ The landing banner reads `assets/banner.svg`, packaged at
 `etc/images/neomacs-banner.svg`, through the editor filesystem. Its display
 property fits the visible Org pane and scrolls with the buffer.
 
-This first browser image adapter does not support direct `:file` specs or
-external SVG resources: read files through Lisp and pass their bytes as
-`:data`. It uses a 32 MiB resident-image admission limit; `image-flush` and
+Packaged runtime images also support direct `:file` specs, including Treemacs's
+bundled graphical icons. The worker shares the evaluator's immutable resource
+store; it does not copy the entire runtime bundle. User-file images still need
+to be read through Lisp and passed as `:data`; external SVG resources are not
+supported. It uses a 32 MiB resident-image admission limit; `image-flush` and
 `clear-image-cache` release entries. It does not implement automatic eviction
 or animation-cache invalidation yet. Decoding is CPU work in the worker;
 cached drawing is GPU work, not a zero-copy pipeline.
