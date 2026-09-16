@@ -19,6 +19,11 @@
       </span>
     </header>
     <main id="browser-shell">
+      <aside id="browser-pending-link" role="status" hidden>
+        Your browser blocked a new tab. Open:
+        <a target="_blank" rel="noopener noreferrer"></a>
+        <button type="button" aria-label="Dismiss link">×</button>
+      </aside>
       <section id="browser-startup" aria-label="Editor startup">
         <ol id="browser-startup-log" aria-label="Startup checklist"></ol>
         <p id="browser-status" role="status">Loading Neomacs…</p>

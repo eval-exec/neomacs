@@ -33,6 +33,7 @@ const LOCALIZED_SUBR_CATALOG: &[SubrBatch] = &[
     crate::emacs_core::font::SUBRS,
     crate::emacs_core::neo::effects::SUBRS,
     crate::emacs_core::network::http::SUBRS,
+    crate::emacs_core::network::navigation::SUBRS,
 ];
 
 #[cfg(test)]
@@ -5747,6 +5748,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     crate::emacs_core::neo::effects::register_subrs(ctx);
     crate::emacs_core::network::http::register_subrs(ctx);
+    crate::emacs_core::network::navigation::register_subrs(ctx);
     ctx.register_subr(SubrSpec::new(
         "neomacs-display-monitor-attributes-list",
         NativeFn::ContextVec(builtin_neomacs_display_monitor_attributes_list),

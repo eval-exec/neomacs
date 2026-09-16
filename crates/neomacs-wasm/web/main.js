@@ -16,6 +16,7 @@ import {
   observeFirstEditorPresentation,
 } from "./wasm-bootstrap.mjs";
 import { observeAssetDownload } from "./worker-assets.mjs";
+import { openExternalUrl } from "./navigation.mjs";
 
 const MAILBOX_CAPACITY = 1024 * 1024;
 const MAILBOX_HEADER_BYTES = 16;
@@ -25,6 +26,12 @@ const startupOverlay = document.querySelector("#browser-startup");
 const progress = document.querySelector("#browser-progress");
 const progressBar = document.querySelector("#browser-progress-bar");
 const progressLabel = document.querySelector("#browser-progress-label");
+const pendingLink = document.querySelector("#browser-pending-link");
+const pendingLinkAnchor = pendingLink.querySelector("a");
+pendingLink.querySelector("button").addEventListener("click", () => {
+  pendingLink.hidden = true;
+});
+pendingLinkAnchor.addEventListener("click", () => { pendingLink.hidden = true; });
 
 let worker = null;
 let workerStrategy = null;
@@ -285,6 +292,16 @@ async function start() {
       } catch (error) {
         showFailure(error);
         worker.terminate();
+      }
+    } else if (message?.type === "open-external-url") {
+      // Worker processing may outlive the click's transient user activation.
+      // Do not discard the requested URL when the browser blocks a new tab.
+      if (openExternalUrl(message.url)) {
+        pendingLink.hidden = true;
+      } else {
+        pendingLinkAnchor.href = message.url;
+        pendingLinkAnchor.textContent = message.url;
+        pendingLink.hidden = false;
       }
     } else if (message?.type === "progress") {
       showProgress(message.received, message.total, message.complete);

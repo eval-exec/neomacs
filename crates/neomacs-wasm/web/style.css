@@ -208,3 +208,18 @@ canvas {
   width: 100%;
   height: 100%;
 }
+
+#browser-pending-link:not([hidden]) {
+  position: absolute;
+  z-index: 20;
+  inset: auto 1rem 1rem 1rem;
+  padding: 0.8rem 1rem;
+  border: 1px solid #6ea8fe;
+  border-radius: 0.5rem;
+  background: #20242c;
+  color: #fff;
+  overflow-wrap: anywhere;
+}
+
+#browser-pending-link a { color: #9dc4ff; }
+#browser-pending-link button { float: right; }

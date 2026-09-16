@@ -1,6 +1,7 @@
 import { fetchEditorWorkerAssets } from "./worker-assets.mjs";
 import { fetchPackageAssets } from "./packages.mjs";
 import { createHttpHostImports } from "./network/host.mjs";
+import { createNavigationHostImports } from "./navigation.mjs";
 import { WorkerWait, HostWake } from "./worker-wait.mjs";
 import { WorkerInput } from "./worker-input.mjs";
 import { openBlockingFileSystem } from "./storage/blocking.mjs";
@@ -183,6 +184,7 @@ function hostImports(waitForInput, filesystemImports) {
       }),
       ...filesystemImports,
       ...createHttpHostImports(() => memory, () => workerWait.notify()),
+      ...createNavigationHostImports(() => memory, url => post("open-external-url", { url })),
     },
   };
 }

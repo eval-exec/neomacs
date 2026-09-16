@@ -8,6 +8,7 @@
 //! - Process output buffer management
 
 pub(crate) mod http;
+pub(crate) mod navigation;
 
 #[cfg(test)]
 use crate::emacs_core::error::LispCondition;

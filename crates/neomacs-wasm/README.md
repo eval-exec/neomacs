@@ -53,6 +53,14 @@ Org's in-memory parser cache remains enabled, but its persistent disk cache is
 disabled by default: Org's temporary-file rename crosses the browser's `/tmp`
 and persistent-home mounts. This does not disable saving Org documents.
 
+The `*About*` sidebar displays the author's bundled GitHub avatar and a name
+button linking to the profile. The avatar uses the shared image renderer and
+requires no third-party startup request. Browser startup configures `browse-url`
+to send HTTP/HTTPS navigation requests from the VM worker to the page. Clicking
+a link opens a separate tab; if popup blocking prevents that, the page offers
+an ordinary clickable link instead. This does not fetch the page into EWW or
+change browser CORS restrictions. Personal init can override the opener.
+
 ## Font resources
 
 Browser presentation protocol v6 transfers immutable font bytes as binary
