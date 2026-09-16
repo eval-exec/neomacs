@@ -58,17 +58,20 @@ def main():
         try:
             editor.install_frame_observer()
             editor.driver.get(url)
+            editor.wait_ready()
+            editor.wait_for_frame_text("landing", contains="Welcome to the browser editor.")
             title = editor.driver.find_element("id", "browser-window-title")
             assert "NEO Emacs (WebAssembly build)" in title.text, title.text
             warning = editor.driver.find_element("id", "browser-build-warning")
             assert warning.is_displayed()
-            assert warning.text == "EXPERIMENTAL · INCOMPLETE · WORK IN PROGRESS", warning.text
+            assert warning.get_property("textContent").strip() == (
+                "Experimental · Incomplete · Work in progress"
+            ), warning.text
+            assert warning.value_of_css_property("text-transform") == "uppercase"
             assert "landing page still needs substantial polish" in title.text, title.text
             link = title.find_element("tag name", "a")
             assert link.get_attribute("href") == "https://github.com/eval-exec/neomacs"
             assert link.get_attribute("target") == "_blank"
-            editor.wait_ready()
-            editor.wait_for_frame_text("landing", contains="Welcome to the browser editor.")
             editor.wait_for_window_matrices("About", contains="@eval-exec", count=1)
             assert not editor.driver.find_element("id", "browser-startup").is_displayed()
             assert warning.is_displayed(), "The warning disappeared with the startup overlay"
