@@ -43,7 +43,9 @@ def main():
             "PACKAGES-PASS",
             failure_marker="PACKAGES-FAIL:",
         )
-        editor.invoke_mx("consult-buffer")
+        ActionChains(driver).key_down(Keys.CONTROL).send_keys("x").key_up(
+            Keys.CONTROL
+        ).send_keys("b").perform()
         editor.wait_for_frame_text("Consult buffer prompt", contains="Switch to:")
         editor.commit_text("*scratch*")
         editor.dispatch_key("Enter")

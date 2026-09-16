@@ -56,8 +56,9 @@
   (setq doom-modeline-env-version nil)
   (require 'doom-modeline)
   (doom-modeline-mode 1)
-  ;; Expose Consult commands without overriding Fido or personal key bindings.
+  ;; Personal init runs afterwards and may override this landing-page binding.
   (require 'consult)
+  (global-set-key (kbd "C-x b") #'consult-buffer)
   (require 'org-modern)
   ;; These folding markers are covered by the browser's packaged text fonts.
   (setq org-modern-fold-stars '(("▶" . "▼") ("▷" . "▽")))
