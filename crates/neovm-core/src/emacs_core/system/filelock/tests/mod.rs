@@ -111,7 +111,7 @@ fn current_lock_owner_recognizes_dangling_symlink_lockfiles() {
         .expect("create lock symlink");
 
     assert!(matches!(
-        current_lock_owner(&lock_path, "testhost").expect("read lock owner"),
+        current_lock_owner(&NativeFileSystem, &lock_path, "testhost").expect("read lock owner"),
         LockOwner::Current
     ));
 }
@@ -126,7 +126,7 @@ fn dead_pid_lock_on_this_host_is_zapped_and_reported_free() {
     // a pid that cannot exist (> pid_max default of 4194304).
     let contents = "someone@testhost.999999999";
     std::os::unix::fs::symlink(contents, &lock_path).expect("symlink lock");
-    match current_lock_owner(&lock_path, "testhost").expect("owner check") {
+    match current_lock_owner(&NativeFileSystem, &lock_path, "testhost").expect("owner check") {
         LockOwner::None => {}
         LockOwner::Current => panic!("stale lock cannot be ours"),
         LockOwner::Other(clasher) => panic!("stale lock must be zapped, got owner {clasher:?}"),
@@ -146,7 +146,7 @@ fn live_pid_lock_on_this_host_names_the_other_owner() {
     // which GNU treats as alive.
     let contents = "someone@testhost.1";
     std::os::unix::fs::symlink(contents, &lock_path).expect("symlink lock");
-    match current_lock_owner(&lock_path, "testhost").expect("owner check") {
+    match current_lock_owner(&NativeFileSystem, &lock_path, "testhost").expect("owner check") {
         LockOwner::Other(clasher) => {
             assert_eq!(clasher.user, "someone");
             assert_eq!(clasher.pid, 1);
@@ -361,7 +361,7 @@ fn empty_lock_file_is_zapped_and_reported_free() {
     let dir = tempfile::tempdir().expect("tempdir");
     let lock_path = dir.path().join(".#empty");
     fs::write(&lock_path, b"").expect("write empty lock");
-    match current_lock_owner(&lock_path, "testhost").expect("owner check") {
+    match current_lock_owner(&NativeFileSystem, &lock_path, "testhost").expect("owner check") {
         LockOwner::None => {}
         _ => panic!("empty lock file must be zapped and reported free"),
     }
@@ -451,7 +451,7 @@ fn stale_boot_time_zaps_even_a_live_pid() {
     if system_boot_time_sec() == 0 {
         return; // GNU also omits the comparison when boot time is unavailable.
     }
-    match current_lock_owner(&lock_path, "testhost").expect("owner check") {
+    match current_lock_owner(&NativeFileSystem, &lock_path, "testhost").expect("owner check") {
         LockOwner::None => {}
         _ => panic!("previous-boot lock must be stale"),
     }
