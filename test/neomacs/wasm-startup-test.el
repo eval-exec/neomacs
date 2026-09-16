@@ -120,4 +120,29 @@
           (with-current-buffer buffer (set-buffer-modified-p nil))
           (kill-buffer buffer))))))
 
+(ert-deftest neomacs-wasm-about-has-author-picture-and-profile-link ()
+  (neomacs-wasm-test--with-site
+   (save-window-excursion
+     (unwind-protect
+         (progn
+           (neomacs-wasm-landing-open)
+           (with-current-buffer "*About*"
+             (goto-char (point-min))
+             (search-forward "Eval Exec")
+             (let ((button (button-at (1- (point))))
+                   opened)
+               (should button)
+               ;; The browser/OS opener is the external boundary here.
+               (let ((browse-url-browser-function
+                      (lambda (url &rest _) (setq opened url))))
+                 (button-activate button))
+               (should (equal opened "https://github.com/eval-exec")))
+             (should (file-readable-p
+                      (expand-file-name "neomacs-landing/author.jpg" data-directory)))
+             (should buffer-read-only)))
+       (dolist (name '("*NEO Emacs*" "*Playgorund*" "*About*"))
+         (when-let* ((buffer (get-buffer name)))
+           (with-current-buffer buffer (set-buffer-modified-p nil))
+           (kill-buffer buffer)))))))
+
 ;;; wasm-startup-test.el ends here
