@@ -3892,6 +3892,20 @@ name = "neomacs-host-runtime"
 version = "0.0.18"
 
 [[package]]
+name = "neomacs-image"
+version = "0.0.18"
+dependencies = [
+ "flate2",
+ "image",
+ "imagesize 0.15.0",
+ "neomacs-display-protocol",
+ "resvg",
+ "simplecss",
+ "svgtypes",
+ "tracing",
+]
+
+[[package]]
 name = "neomacs-layout-engine"
 version = "0.0.18"
 dependencies = [
@@ -3988,23 +4002,19 @@ dependencies = [
  "ash",
  "bytemuck",
  "cosmic-text",
- "flate2",
  "fontdb",
  "image",
- "imagesize 0.15.0",
  "libc",
  "naga",
  "neomacs-display-protocol",
  "neomacs-font-materializer",
  "neomacs-host-runtime",
+ "neomacs-image",
  "neomacs-layout-engine",
  "neomacs-test-fonts",
  "neomacs-video",
  "pollster",
- "resvg",
  "rustc-hash 2.1.3",
- "simplecss",
- "svgtypes",
  "swash",
  "thiserror 2.0.20",
  "tracing",
@@ -4125,7 +4135,9 @@ version = "0.0.18"
 dependencies = [
  "ciborium",
  "neomacs-app",
+ "neomacs-display-protocol",
  "neomacs-host-runtime",
+ "neomacs-image",
  "neomacs-layout-engine",
  "neomacs-wasm-protocol",
  "neovm-core",

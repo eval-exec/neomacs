@@ -12,7 +12,7 @@ publish = false
 
 [dependencies]
 getrandom.workspace = true
-image.workspace = true
+image = { workspace = true, default-features = true }
 serde_json = "1"
 
 [dev-dependencies]

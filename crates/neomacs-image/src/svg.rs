@@ -13,7 +13,7 @@ use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
 
-use crate::image_cache::constrain_raster_extent;
+use crate::decoder::constrain_raster_extent;
 use neomacs_display_protocol::{
     ImageColorContext, ImageIntrinsicExtent, ImageRealization, ImageRotation, ImageSizeSpec,
     ResolvedImageGeometry,

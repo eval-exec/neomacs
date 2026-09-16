@@ -1,0 +1,29 @@
+[package]
+name = "neomacs-image"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "CPU image decoding shared by native and browser Neomacs"
+
+[dependencies]
+neomacs-display-protocol.workspace = true
+imagesize.workspace = true
+flate2.workspace = true
+resvg.workspace = true
+svgtypes.workspace = true
+simplecss.workspace = true
+tracing.workspace = true
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+image = { workspace = true, default-features = true }
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+# Keep the raw worker independent of wasm-bindgen. The default AVIF encoder
+# pulls in browser bindings through rav1e; decoding does not need that encoder
+# or Rayon's native worker pool.
+image = { workspace = true, features = ["bmp", "dds", "exr", "ff", "gif", "hdr", "ico", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp"] }
+
+[lints]
+workspace = true

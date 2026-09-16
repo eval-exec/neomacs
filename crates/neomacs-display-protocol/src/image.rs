@@ -661,7 +661,8 @@ pub struct ImageRasterSpace;
 pub struct ImageReportedSpace;
 
 /// A two-dimensional image extent whose coordinate space is part of its type.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(bound = "")]
 pub struct ImageExtent<Space> {
     width: u32,
     height: u32,
@@ -737,11 +738,44 @@ impl From<ImageNativeExtent> for ImageIntrinsicExtent {
 /// Keeping the spaces in one value gives bitmap and SVG decoders one sizing
 /// operation and one rotation operation. Callers can no longer independently
 /// recompute one of the three output extents with subtly different rounding.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct ResolvedImageGeometry {
     layout: ImageLayoutExtent,
     reported: ImageReportedExtent,
     raster: ImageRasterExtent,
+}
+
+/// Decoder-owned facts shared by native and remote image consumers.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ImageMetadata {
+    pub layout: ImageLayoutExtent,
+    pub reported: ImageReportedExtent,
+    pub background: u32,
+    pub background_transparent: bool,
+    pub mask: ImageMaskKind,
+    pub embedded: ImageEmbeddedMetadata,
+}
+
+/// Owned decoded pixels. No evaluator references or GPU objects cross this seam.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DecodedImage {
+    pub load: ImageLoadToken,
+    pub geometry: ResolvedImageGeometry,
+    pub data: Vec<u8>,
+    pub metadata: ImageMetadata,
+}
+
+impl DecodedImage {
+    /// Validate an upload received from a separate worker before GPU allocation.
+    pub fn validate(&self) -> bool {
+        let raster = self.geometry.raster();
+        raster.width() > 0 && raster.height() > 0
+            && raster.width() <= 4096 && raster.height() <= 4096
+            && (raster.width() as usize).checked_mul(raster.height() as usize)
+                .and_then(|pixels| pixels.checked_mul(4)) == Some(self.data.len())
+            && self.geometry.layout() == self.metadata.layout
+            && self.geometry.reported() == self.metadata.reported
+    }
 }
 
 impl ResolvedImageGeometry {

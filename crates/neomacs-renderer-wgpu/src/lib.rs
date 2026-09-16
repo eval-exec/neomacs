@@ -13,20 +13,16 @@ pub mod glyph_atlas;
 #[cfg(feature = "video")]
 mod gpu_frame_timing;
 pub mod image_cache;
-mod image_sequence;
 pub mod media_budget;
 pub mod renderer;
 pub mod shader_surface;
 pub mod shader_surface_cache;
-mod svg;
 #[cfg(test)]
 #[path = "texture_discipline_test.rs"]
 mod texture_discipline_test;
 pub mod tooltip_layout;
-pub use svg::SvgResourceContext;
+pub use neomacs_image::{SvgResourceContext, xbm, xpm};
 pub mod vertex;
-pub mod xbm;
-pub mod xpm;
 
 #[cfg(test)]
 #[path = "shader_layout_test.rs"]

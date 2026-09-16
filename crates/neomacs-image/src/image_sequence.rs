@@ -171,13 +171,13 @@ impl ImageSequenceCacheState {
 /// every `:index` mutation. Concurrent misses may decode redundantly rather
 /// than holding the mutex across decoder work; publication coalesces them into
 /// one resident entry and retirement fences every late result.
-pub(crate) struct ImageSequenceCache {
+pub struct ImageSequenceCache {
     max_bytes: usize,
     state: Mutex<ImageSequenceCacheState>,
 }
 
 impl ImageSequenceCache {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self::with_max_bytes(DEFAULT_SEQUENCE_CACHE_BYTES)
     }
 
@@ -266,7 +266,7 @@ impl ImageSequenceCache {
         state.finish_decode(sequence);
     }
 
-    pub(crate) fn retire(&self, retirement: ImageSequenceRetirement) {
+    pub fn retire(&self, retirement: ImageSequenceRetirement) {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         match retirement {
             ImageSequenceRetirement::One(sequence) => {
@@ -322,7 +322,7 @@ impl ImageSequenceCache {
         }
     }
 
-    pub(crate) fn resident_bytes(&self) -> usize {
+    pub fn resident_bytes(&self) -> usize {
         self.state
             .lock()
             .unwrap_or_else(|error| error.into_inner())
