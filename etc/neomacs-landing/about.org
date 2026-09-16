@@ -1,0 +1,18 @@
+* Building NEO Emacs in the open
+[[file:index.org][← Home]]
+
+** FROM THE AUTHOR
+eval-exec
+
+Building NEO Emacs in the open.
+An editor is a place to think, to experiment, and to make your own tools.
+This landing page is an invitation to do all three.
+
+** The project
+NEO Emacs explores a Rust core, a graphical frontend, and an Emacs Lisp heart.
+The browser edition brings that work somewhere you can try without installing
+a desktop application. It is a working preview, with unfinished edges.
+
+- [[https://github.com/eval-exec/neomacs][Source, issues, and discussions]]
+- [[https://neomacs.org][The NEO Emacs website]]
+- [[file:contribute.org][Contribute or support the project]]

@@ -1,0 +1,20 @@
+* Help shape the editor
+[[file:index.org][← Home]]
+
+** Start with something small
+Improve a page, simplify an example, or describe an unexpected behavior.
+These pages are ordinary Org files in =etc/neomacs-landing/= in the repository.
+Presentation and startup code live separately in =lisp/neomacs-wasm/=.
+
+** A useful bug report
+Include the browser and platform, exact commands or keys, expected behavior,
+and what happened instead. A short Lisp reproduction is especially useful.
+For performance reports, describe the buffer and interaction, not just
+"it feels slow". Never include private files or personal configuration secrets.
+
+[[https://github.com/eval-exec/neomacs/issues][Open the issue tracker]]
+
+** Support the work
+Code, testing, documentation, and thoughtful feedback all help.
+If you want to support development financially, visit
+[[https://github.com/sponsors/eval-exec][GitHub Sponsors]].
