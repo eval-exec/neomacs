@@ -34,6 +34,23 @@ These headers enable shared-memory worker waits in browsers without JSPI.
 Experimental browser flags are not required by the application. An available
 WebGL/WebGPU graphics backend is still necessary.
 
+## Inline images
+
+Inline `:data` images use the shared native decoder in the editor worker and
+the shared wgpu image cache in the frontend. Redisplay queues missing images;
+decoding happens at the worker's wait boundary (or during an explicit Lisp
+`image-size` query). Pixels transfer once per realization, not on each redraw.
+The landing banner reads `assets/banner.svg`, packaged at
+`etc/images/neomacs-banner.svg`, through the editor filesystem. Its display
+property fits the visible Org pane and scrolls with the buffer.
+
+This first browser image adapter does not support direct `:file` specs or
+external SVG resources: read files through Lisp and pass their bytes as
+`:data`. It uses a 32 MiB resident-image admission limit; `image-flush` and
+`clear-image-cache` release entries. It does not implement automatic eviction
+or animation-cache invalidation yet. Decoding is CPU work in the worker;
+cached drawing is GPU work, not a zero-copy pipeline.
+
 ## Storage and evaluator ownership
 
 `Context` and Lisp evaluation live only in the editor worker. The filesystem

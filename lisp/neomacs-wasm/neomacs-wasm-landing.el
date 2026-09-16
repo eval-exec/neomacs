@@ -15,6 +15,35 @@
 (require 'seq)
 (require 'org)
 (require 'face-remap)
+(require 'image)
+
+(defvar-local neomacs-wasm-landing--banner-data nil)
+(defvar-local neomacs-wasm-landing--banner-image nil)
+
+(defun neomacs-wasm-landing--resize-banner (&optional frame)
+  "Fit the inline banner to the smallest visible landing pane on FRAME.
+Only image geometry changes; never rearrange the user's windows."
+  (when-let* ((buffer (get-buffer "*NEO Emacs*"))
+              (windows (get-buffer-window-list buffer nil (or frame t))))
+    (with-current-buffer buffer
+      (when (and neomacs-wasm-landing--banner-data (display-images-p))
+        (let ((width (max 1 (min 800 (- (apply #'min
+                                      (mapcar (lambda (window) (window-body-width window t))
+                                              windows)) 16)))))
+          (unless (equal width (plist-get (cdr neomacs-wasm-landing--banner-image) :width))
+            (condition-case error-data
+                (let ((image (create-image neomacs-wasm-landing--banner-data
+                                           'svg t :width width :scale 1 :ascent 'center))
+                      (inhibit-read-only t))
+                  ;; Explicit loading is outside redisplay. Report a real
+                  ;; decoder failure instead of leaving an invisible banner.
+                  (image-size image t)
+                  (when neomacs-wasm-landing--banner-image
+                    (image-flush neomacs-wasm-landing--banner-image))
+                  (setq neomacs-wasm-landing--banner-image image)
+                  (put-text-property (point-min) (1+ (point-min)) 'display image)
+                  (set-buffer-modified-p nil))
+              (error (message "Landing banner: %s" (error-message-string error-data))))))))))
 
 (defcustom neomacs-wasm-landing-personal-info
   "eval-exec\n\nBuilding NEO Emacs in the open.\n\nThis is a working preview. Feedback and contributions are welcome."
@@ -210,6 +239,15 @@
                 neomacs-wasm-package-error "\nReload the page to retry.\n")))
     (goto-char (point-min))
     (neomacs-wasm-welcome-mode)
+    (let ((banner (expand-file-name "images/neomacs-banner.svg" data-directory)))
+      (when (and (display-images-p) (file-readable-p banner))
+        (setq neomacs-wasm-landing--banner-data
+              (with-temp-buffer
+                (set-buffer-multibyte nil)
+                (insert-file-contents-literally banner)
+                (buffer-string)))
+        (let ((inhibit-read-only t))
+          (insert " \n\n"))))
     (org-show-all)
     (set-buffer-modified-p nil)
     (current-buffer)))
@@ -281,7 +319,9 @@ edits.  Only this command or initial startup arranges the windows."
       (when (>= (window-total-width) 85)
         (let ((right (split-window-right)))
           (set-window-buffer right (get-buffer "*NEO Emacs Playground*"))
-          (select-window right))))))
+          (select-window right)))))
+  (add-hook 'window-size-change-functions #'neomacs-wasm-landing--resize-banner)
+  (neomacs-wasm-landing--resize-banner))
 
 (provide 'neomacs-wasm-landing)
 ;;; neomacs-wasm-landing.el ends here
