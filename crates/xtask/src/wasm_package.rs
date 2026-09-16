@@ -20,7 +20,8 @@ use super::portable_assets::{
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
-pub(super) const WEB_BUNDLE_SOURCE_FILES: [&str; 15] = [
+pub(super) const WEB_BUNDLE_SOURCE_FILES: [&str; 16] = [
+    "navigation.mjs",
     "font-licenses.txt",
     "packages.mjs",
     "storage/blocking.mjs",

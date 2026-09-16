@@ -20,6 +20,12 @@
   "NEO Emacs in the browser."
   :group 'environment)
 
+(declare-function neomacs-open-external-url "neomacs" (url))
+
+(defun neomacs-wasm-browse-url (url &optional _new-window)
+  "Open HTTP or HTTPS URL in a browser tab, without starting a subprocess."
+  (neomacs-open-external-url url))
+
 (defcustom neomacs-wasm-startup-profile 'landing
   "Initial browser editor layout.
 Set this in your personal init file.  `editor' preserves normal Emacs startup;
@@ -41,6 +47,8 @@ a buffer or window layout."
   "Install browser defaults before personal initialization.
 The worker calls this once per editor session, before `normal-top-level'."
   (setq ls-lisp-use-insert-directory-program nil)
+  (require 'browse-url)
+  (setq browse-url-browser-function #'neomacs-wasm-browse-url)
   ;; Keep Org's in-memory parser cache, but not its cross-session disk cache:
   ;; org-persist renames from /tmp into user-emacs-directory, which are
   ;; separate browser mounts.  This default runs before personal init.
