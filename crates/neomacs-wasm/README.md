@@ -65,14 +65,22 @@ terminates the stream; it cannot silently skip a resource-bearing packet.
 
 ## Nerd Icons
 
-The landing profile uses `nerd-icons`, `treemacs-nerd-icons`, and
-`nerd-icons-dired` for the sidebar, tab labels, and Dired. Their pinned Git
+The landing profile uses `nerd-icons`, `treemacs-nerd-icons`,
+`nerd-icons-dired`, and `nerd-icons-completion` for the sidebar, tab labels,
+Dired, and minibuffer candidates. Their pinned Git
 sources and `Symbols Nerd Font Mono` font are downloaded as part of the package
 bundle, not vendored in this repository or installed on the user's system.
 The worker validates and registers the font before editor startup; glyphs use
 the same font selection, shaping, and shared replay transport as ordinary text.
 `lisp/neomacs-wasm/neomacs-wasm-icons.el` owns the Lisp integration, which runs
 before personal init so users can override it.
+
+`C-x b` keeps `consult-buffer` and shows icons for its buffer candidates;
+`C-x C-f` keeps ordinary `find-file` and shows file and directory icons.
+Both use the existing Fido vertical completion interface and bundled font.
+No Marginalia, replacement completion frontend, or system font installation
+is required. Personal init can disable completion icons with
+`(nerd-icons-completion-mode -1)`.
 
 ## Inline images
 
@@ -199,6 +207,7 @@ python crates/neomacs-wasm/tests/browser_basic_smoke.py --browser chrome --headl
 python crates/neomacs-wasm/tests/browser_basic_smoke.py --browser firefox --headless --artifacts-dir tmp/firefox-basic
 python crates/neomacs-wasm/tests/browser_init_smoke.py --headless --artifacts-dir tmp/browser-init
 python crates/neomacs-wasm/tests/browser_treemacs_smoke.py --headless --artifacts-dir tmp/browser-treemacs
+python crates/neomacs-wasm/tests/browser_completion_icons_smoke.py --headless --artifacts-dir tmp/browser-completion-icons
 python crates/neomacs-wasm/tests/browser_init_smoke.py --headless --block-packages tmp/wasm-dist --artifacts-dir tmp/browser-fallback
 node --test crates/neomacs-wasm/web/*.test.mjs
 cargo test -p xtask wasm
