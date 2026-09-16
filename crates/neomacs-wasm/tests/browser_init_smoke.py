@@ -101,8 +101,8 @@ def main():
                 return
             editor.eval_expression(
                 '''(message (concat "DEFAULT-THEME-" "%s")
-                    (if (and (equal custom-enabled-themes '(doom-solarized-dark))
-                             (equal (face-background 'default) "#002b36"))
+                    (if (and (equal custom-enabled-themes '(doom-one))
+                             (equal (face-background 'default) "#282c34"))
                         "PASS" "FAIL"))''',
                 "DEFAULT-THEME-PASS", failure_marker="DEFAULT-THEME-FAIL",
             )
