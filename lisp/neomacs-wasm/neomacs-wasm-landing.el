@@ -37,7 +37,8 @@
   (setq-local truncate-lines nil
               truncate-partial-width-windows nil
               word-wrap t cursor-type nil
-              header-line-format nil))
+              header-line-format nil)
+  (buffer-face-set 'neomacs-wasm-landing-body))
 
 (define-derived-mode neomacs-wasm-welcome-mode org-mode "NEO Org"
   "An Org introduction to the live editor.  TAB folds its headings."

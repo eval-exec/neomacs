@@ -47,10 +47,14 @@ def main():
         subsection = row_font(frame, "Make it your own")
         body = row_font(frame, "Welcome to the browser editor.")
         code = row_font(frame, '(message "Hello from Lisp')
+        about = row_font(frame, "FROM THE AUTHOR")
+        about_body = row_font(frame, "Building NEO Emacs")
         assert title["family"] == section["family"] == subsection["family"] == "Noto Serif"
         assert title["pixel_size"] > section["pixel_size"] > subsection["pixel_size"] > body["pixel_size"]
         assert body["family"] == "Ubuntu", body
         assert code["family"] == "Hack", code
+        assert about["family"] == "Ubuntu", about
+        assert about_body["family"] == "Ubuntu", about_body
         driver.save_screenshot(str(artifacts / "typography.png"))
         print("PASS: serif H1 > H2 > H3; proportional Ubuntu prose; monospace Hack code")
         print({name: (font["family"], font["pixel_size"])
