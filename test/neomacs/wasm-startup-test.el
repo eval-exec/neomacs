@@ -108,17 +108,14 @@
             (emacs-lisp-mode)
             (insert-file-contents
              (expand-file-name "etc/neomacs-landing/playground.el" neomacs-wasm-test--root))
+            (should-not (string-match-p ";; 07 /" (buffer-string)))
             (goto-char (point-min))
             (let (form)
               (while (setq form (condition-case nil (read (current-buffer))
                                   (end-of-file nil)))
                 (eval form t)))
-            (should (commandp 'neo-greet))
-            (should (get-buffer "*NEO Notes*")))
-        (if previous-command (fset 'neo-greet previous-command) (fmakunbound 'neo-greet))
-        (when-let* ((buffer (get-buffer "*NEO Notes*")))
-          (with-current-buffer buffer (set-buffer-modified-p nil))
-          (kill-buffer buffer))))))
+            (should (commandp 'neo-greet)))
+        (if previous-command (fset 'neo-greet previous-command) (fmakunbound 'neo-greet))))))
 
 (ert-deftest neomacs-wasm-about-has-author-picture-and-profile-link ()
   (neomacs-wasm-test--with-site
