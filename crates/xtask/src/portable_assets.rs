@@ -130,6 +130,10 @@ fn write_runtime_archive(
             collect_entries(&source, PathBuf::from(root), &mut entries)?;
         }
     }
+    let banner = runtime_root.join("assets/banner.svg");
+    if banner.is_file() {
+        entries.push((banner, PathBuf::from("etc/images/neomacs-banner.svg")));
+    }
     entries.sort_by(|left, right| left.1.cmp(&right.1));
 
     let mut temporary = NamedTempFile::new_in(output_dir)?;
