@@ -63,6 +63,17 @@ cache keeps only the latest frame's resources, while older presentations retain
 their own shared font ownership. A transport or post-decode validation failure
 terminates the stream; it cannot silently skip a resource-bearing packet.
 
+## Nerd Icons
+
+The landing profile uses `nerd-icons`, `treemacs-nerd-icons`, and
+`nerd-icons-dired` for the sidebar, tab labels, and Dired. Their pinned Git
+sources and `Symbols Nerd Font Mono` font are downloaded as part of the package
+bundle, not vendored in this repository or installed on the user's system.
+The worker validates and registers the font before editor startup; glyphs use
+the same font selection, shaping, and shared replay transport as ordinary text.
+`lisp/neomacs-wasm/neomacs-wasm-icons.el` owns the Lisp integration, which runs
+before personal init so users can override it.
+
 ## Inline images
 
 Inline `:data` images use the shared native decoder in the editor worker and
@@ -73,8 +84,7 @@ The landing banner reads `assets/banner.svg`, packaged at
 `etc/images/neomacs-banner.svg`, through the editor filesystem. Its display
 property fits the visible Org pane and scrolls with the buffer.
 
-Packaged runtime images also support direct `:file` specs, including Treemacs's
-bundled graphical icons. The worker shares the evaluator's immutable resource
+Packaged runtime images also support direct `:file` specs. The worker shares the evaluator's immutable resource
 store; it does not copy the entire runtime bundle. User-file images still need
 to be read through Lisp and passed as `:data`; external SVG resources are not
 supported. It uses a 32 MiB resident-image admission limit; `image-flush` and

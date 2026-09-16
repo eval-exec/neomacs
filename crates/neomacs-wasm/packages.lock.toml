@@ -1,6 +1,18 @@
 # Product dependencies, not vendored sources. Update pins deliberately and test
 # the browser landing page. The builder archives these exact Git objects.
 [[package]]
+name = "nerd-icons"
+url = "https://github.com/rainstormstudio/nerd-icons.el"
+revision = "17faac7977242b470732efd417d3bcc8eb5a830e"
+[[package]]
+name = "treemacs-nerd-icons"
+url = "https://github.com/rainstormstudio/treemacs-nerd-icons"
+revision = "0c5ddcb978da639f01ddb023febc40fc755171e5"
+[[package]]
+name = "nerd-icons-dired"
+url = "https://github.com/rainstormstudio/nerd-icons-dired"
+revision = "104acd8879528b8115589f35f1bbcbe231ad732f"
+[[package]]
 name = "keycast"
 url = "https://github.com/tarsius/keycast"
 revision = "a6518e1b48b08ba883e9b1a2db0872d5bf3d85f4"

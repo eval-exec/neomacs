@@ -110,6 +110,11 @@ pub(crate) fn run() -> Result<EditorSessionExit, String> {
         }
     }
     browser_host::report_startup_phase(StartupPhase::Restore);
+    if let Err(error) = crate::fonts::initialize(&runtime_resources) {
+        browser_host::report_status(&format!(
+            "Optional package fonts unavailable: {error}; continuing with core fonts"
+        ));
+    }
     let mut evaluator = runtime_image
         .load_for_with_mounted_runtime_resources(
             neomacs_app::host::HostProfile::WASM,
