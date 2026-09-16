@@ -8,6 +8,8 @@ use neomacs_app::host::HostProfile;
 mod platform;
 #[cfg(any(target_family = "wasm", test))]
 mod presentation_readiness;
+#[cfg(any(target_family = "wasm", test))]
+mod wheel;
 
 pub use neomacs_wasm_protocol as worker_protocol;
 

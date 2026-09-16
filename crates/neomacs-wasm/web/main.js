@@ -1,6 +1,7 @@
 import init, {
   install_worker_presentation,
   browser_pointer_input,
+  browser_scroll_input,
   set_presentation_callback,
   wait_for_first_editor_presentation,
   worker_protocol_version,
@@ -264,6 +265,7 @@ async function start() {
         targetFrame: () => targetFrame,
         sendViewport,
         observePointer: browser_pointer_input,
+        observeScroll: browser_scroll_input,
       });
       sendViewport();
       flushInput();
