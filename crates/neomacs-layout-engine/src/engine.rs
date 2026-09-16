@@ -470,8 +470,7 @@ fn resolve_window_display_source_params(
         params.previous_visible_end = None;
     }
     params.space_image_catalog = evaluator
-        .display_host
-        .as_ref()
+        .media_host()
         .and_then(|host| host.image_catalog_shared())
         .map(crate::types::SharedImageCatalog);
     let params = &params;
@@ -4072,7 +4071,7 @@ impl LayoutEngine {
                 .with_automatic_composition(crate::neovm_bridge::current_string_composition_rules(
                     evaluator,
                 )),
-            evaluator.display_host.as_deref(),
+            evaluator.media_host(),
         )?;
         let FrameTabBarDisplayRowRender::Measured(measured) = rendered_tab_bar else {
             return None;

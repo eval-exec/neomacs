@@ -544,7 +544,7 @@ impl<'face, 'emit> DisplayRowCurrentTextSourceState<'face, 'emit> {
             source_state,
             context: DisplayRowRenderContext::new(
                 self.face_resolver,
-                self.evaluator.display_host.as_deref(),
+                self.evaluator.media_host(),
                 self.face_ids,
             )
             .with_automatic_composition(self.automatic_composition),
@@ -576,7 +576,7 @@ impl<'face, 'emit> DisplayRowCurrentTextSourceState<'face, 'emit> {
             source_state,
             context: DisplayRowRenderContext::new(
                 self.face_resolver,
-                self.evaluator.display_host.as_deref(),
+                self.evaluator.media_host(),
                 self.face_ids,
             )
             .with_automatic_composition(self.automatic_composition),
@@ -746,7 +746,7 @@ impl<'a> TextRowOutputRenderState<'a> {
     }
 
     fn display_host(&self) -> Option<&dyn DisplayHost> {
-        self.evaluator.display_host.as_deref()
+        self.evaluator.media_host()
     }
 
     fn evaluator(&self) -> &Context {
@@ -819,7 +819,7 @@ impl<'a> TextRowOutputRenderState<'a> {
             font_metrics,
             measurement_mode,
             face_resolver,
-            self.evaluator.display_host.as_deref(),
+            self.evaluator.media_host(),
             face_ids,
             self.automatic_composition,
         )

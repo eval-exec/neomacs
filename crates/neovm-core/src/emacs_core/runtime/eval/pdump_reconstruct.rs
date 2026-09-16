@@ -148,6 +148,7 @@ impl Context {
             scroll_goal: None,
             pending_pixel_scroll: None,
             display_host: None,
+            image_host: None,
             font_query_host: None,
             tty_frame_host_factory: None,
             visual_config: neomacs_display_protocol::VisualConfig::default(),

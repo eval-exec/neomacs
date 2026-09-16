@@ -3145,6 +3145,7 @@ pub struct Context {
     pub(crate) pending_pixel_scroll: Option<crate::keyboard::PendingPixelScroll>,
     /// Host-display bridge for GUI frame realization.
     pub display_host: Option<Box<dyn DisplayHost>>,
+    image_host: Option<super::display_host::ImageHostAdapter>,
     /// Font capabilities for surfaces without a native window host. Never
     /// implies popup, window-management, shader, or media capabilities.
     pub(crate) font_query_host: Option<Box<dyn super::display_host::FontQueryHost>>,
@@ -5376,6 +5377,18 @@ impl Context {
     /// Install evaluator-thread fonts without claiming native window ownership.
     pub fn install_font_query_host(&mut self, host: Box<dyn super::display_host::FontQueryHost>) {
         self.font_query_host = Some(host);
+    }
+
+    /// Install image lookup without claiming native windows or replacing fonts.
+    pub fn install_image_host(&mut self, host: Box<dyn super::display_host::ImageHost>) {
+        self.image_host = Some(super::display_host::ImageHostAdapter(host));
+    }
+
+    /// Read-only media capabilities. Window ownership uses `display_host` only.
+    pub fn media_host(&self) -> Option<&dyn DisplayHost> {
+        self.display_host.as_deref().or_else(|| {
+            self.image_host.as_ref().map(|host| host as &dyn DisplayHost)
+        })
     }
 
     /// A native display retains its own font policy; direct surfaces use the

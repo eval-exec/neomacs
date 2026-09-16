@@ -3065,7 +3065,7 @@ impl crate::emacs_core::eval::Context {
                     // Async media completed or lost renderer residency, so
                     // retained image glyphs must not be reused. Reconcile the
                     // exact identity before bumping media_generation.
-                    if let Some(host) = self.display_host.as_ref() {
+                    if let Some(host) = self.media_host() {
                         host.reconcile_image_catalog_for_media_rebuild(event);
                     }
                     self.invalidate_media();

@@ -313,6 +313,40 @@ impl GuiResourceQuery {
     }
 }
 
+/// Image capability independent of native window ownership and font queries.
+pub trait ImageHost {
+    fn resolve_image_sync(&self, request: super::image_catalog::ImageResolveRequest)
+        -> Result<Option<super::image_catalog::ReadyImage>, String>;
+    fn image_catalog(&self) -> &dyn super::image_catalog::ImageCatalog;
+    fn image_catalog_shared(&self) -> std::rc::Rc<dyn super::image_catalog::ImageCatalog>;
+}
+
+/// Compatibility view for the layout engine's existing read-only media seam.
+/// Never installed as the Context's native display host.
+pub(crate) struct ImageHostAdapter(pub Box<dyn ImageHost>);
+
+impl DisplayHost for ImageHostAdapter {
+    fn realize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+        Err("image capability does not own windows".to_owned())
+    }
+    fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
+        Err("image capability does not own windows".to_owned())
+    }
+    fn resolve_image_sync(&self, request: super::image_catalog::ImageResolveRequest)
+        -> Result<Option<super::image_catalog::ReadyImage>, String> {
+        self.0.resolve_image_sync(request)
+    }
+    fn image_catalog(&self) -> Option<&dyn super::image_catalog::ImageCatalog> {
+        Some(self.0.image_catalog())
+    }
+    fn image_catalog_shared(&self) -> Option<std::rc::Rc<dyn super::image_catalog::ImageCatalog>> {
+        Some(self.0.image_catalog_shared())
+    }
+    fn reconcile_image_catalog_for_media_rebuild(&self, event: super::image_catalog::ImageStateEvent) {
+        self.0.image_catalog().reconcile_renderer_state(event);
+    }
+}
+
 pub trait DisplayHost {
     #[cfg(target_os = "macos")]
     fn ns_resource(&self, _name: &str) -> Option<String> {

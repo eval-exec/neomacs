@@ -889,7 +889,7 @@ pub(crate) fn builtin_image_size_in_context(eval: &mut Context, args: Vec<Value>
             vec![Value::string("Window system frame should be used")],
         )
     })?;
-    let Some(display_host) = eval.display_host.as_ref() else {
+    let Some(display_host) = eval.media_host() else {
         return Err(signal(
             "error",
             vec![Value::string("Window system frame should be used")],
@@ -1038,7 +1038,7 @@ pub(crate) fn builtin_image_mask_p_in_context(eval: &mut Context, args: Vec<Valu
             vec![Value::string("Window system frame should be used")],
         )
     })?;
-    let Some(display_host) = eval.display_host.as_ref() else {
+    let Some(display_host) = eval.media_host() else {
         return Err(signal(
             "error",
             vec![Value::string("Window system frame should be used")],
@@ -1201,12 +1201,12 @@ pub(crate) fn builtin_image_flush_in_context(eval: &mut Context, args: Vec<Value
     let all_frames = args.get(1).is_some_and(|value| value.is_t());
     if !all_frames {
         require_image_window_system_frame(eval, "image-flush", args.get(1))?;
-    } else if eval.display_host.is_none() {
+    } else if eval.media_host().is_none() {
         // Batch/no-host: accept FRAME=t without work (historic batch contract).
         return Ok(Value::NIL);
     }
 
-    if eval.display_host.is_none() {
+    if eval.media_host().is_none() {
         return Err(signal(
             "error",
             vec![Value::string("Window system frame should be used")],
@@ -1226,8 +1226,7 @@ pub(crate) fn builtin_image_flush_in_context(eval: &mut Context, args: Vec<Value
         ));
     };
     let invalidated = eval
-        .display_host
-        .as_ref()
+        .media_host()
         .and_then(|host| host.image_catalog())
         .is_some_and(|catalog| {
             catalog
@@ -1305,8 +1304,7 @@ pub(crate) fn builtin_clear_image_cache_in_context(
                 .and_then(image_resolve_source_from_items);
             if let Some(source) = source
                 && let Some(catalog) = eval
-                    .display_host
-                    .as_ref()
+                    .media_host()
                     .and_then(|host| host.image_catalog())
             {
                 catalog.invalidate_animation(ImageAnimationInvalidation::Source(source));
@@ -1322,8 +1320,7 @@ pub(crate) fn builtin_clear_image_cache_in_context(
         if let Some(path) = filter.as_utf8_str() {
             require_image_display_host(eval)?;
             let invalidated = eval
-                .display_host
-                .as_ref()
+                .media_host()
                 .and_then(|host| host.image_catalog())
                 .is_some_and(|catalog| {
                     catalog
@@ -1336,8 +1333,7 @@ pub(crate) fn builtin_clear_image_cache_in_context(
                 eval.invalidate_media();
             }
             if let Some(catalog) = eval
-                .display_host
-                .as_ref()
+                .media_host()
                 .and_then(|host| host.image_catalog())
             {
                 catalog.invalidate_animation(ImageAnimationInvalidation::All);
@@ -1346,8 +1342,7 @@ pub(crate) fn builtin_clear_image_cache_in_context(
         }
         // Unknown filter object: accept without clearing (no dependency match).
         if let Some(catalog) = eval
-            .display_host
-            .as_ref()
+            .media_host()
             .and_then(|host| host.image_catalog())
         {
             catalog.invalidate_animation(ImageAnimationInvalidation::All);
@@ -1366,16 +1361,14 @@ pub(crate) fn builtin_clear_image_cache_in_context(
     }
 
     let invalidated = eval
-        .display_host
-        .as_ref()
+        .media_host()
         .and_then(|host| host.image_catalog())
         .is_some_and(|catalog| catalog.invalidate(ImageInvalidation::All).changed());
     if invalidated {
         eval.invalidate_media();
     }
     if let Some(catalog) = eval
-        .display_host
-        .as_ref()
+        .media_host()
         .and_then(|host| host.image_catalog())
     {
         catalog.invalidate_animation(ImageAnimationInvalidation::All);
@@ -1392,7 +1385,7 @@ fn is_frame_designator_value(value: &Value) -> bool {
 /// Neomacs shares one image catalog across GUI frames; presence of a display
 /// host is the practical gate for cache mutation (like a live window-system).
 fn require_image_display_host(eval: &Context) -> Result<(), Flow> {
-    if eval.display_host.is_none() {
+    if eval.media_host().is_none() {
         return Err(signal(
             "error",
             vec![Value::string("Window system frame should be used")],
@@ -1418,8 +1411,7 @@ pub(crate) fn builtin_image_cache_size_in_context(
 ) -> EvalResult {
     expect_args("image-cache-size", &args, 0)?;
     let bytes = eval
-        .display_host
-        .as_ref()
+        .media_host()
         .and_then(|host| host.image_catalog())
         .map(|catalog| catalog.cached_size_bytes())
         .unwrap_or(0);
@@ -1495,7 +1487,7 @@ pub(crate) fn builtin_image_metadata_in_context(
     ) else {
         return Ok(Value::NIL);
     };
-    let display_host = eval.display_host.as_ref().ok_or_else(|| {
+    let display_host = eval.media_host().ok_or_else(|| {
         signal(
             "error",
             vec![Value::string("Window system frame should be used")],
@@ -1542,7 +1534,7 @@ pub(crate) fn builtin_neomacs_image_extent_in_context(
     ) else {
         return Ok(Value::NIL);
     };
-    let display_host = eval.display_host.as_ref().expect("checked host");
+    let display_host = eval.media_host().expect("checked host");
     let resolved = display_host
         .resolve_image_sync(request)
         .map_err(|message| signal("error", vec![Value::string(message)]))?;

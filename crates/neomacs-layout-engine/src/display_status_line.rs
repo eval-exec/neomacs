@@ -1066,7 +1066,7 @@ impl<'face> WindowChromeDisplayRowRenderRequest<'face> {
             .with_automatic_composition(automatic_composition);
         let mut rendered = self.row.render_row(
             &mut render_services,
-            state.evaluator.display_host.as_deref(),
+            state.evaluator.media_host(),
         )?;
         rendered.rendered.remap_root_string_provenance(
             crate::display_row::root_lisp_string_id(),
