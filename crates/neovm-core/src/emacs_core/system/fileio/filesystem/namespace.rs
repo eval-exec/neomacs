@@ -131,6 +131,16 @@ impl EditorFileSystem for EditorFileSystemNamespace {
         self.host.access(path, mode)
     }
 
+    fn open_read(&self, path: &Path) -> io::Result<Box<dyn super::FileReader + '_>> {
+        if self.runtime_store_for(path).is_some() {
+            return match self.require_runtime_node(path)? {
+                RuntimeResourceNode::File(contents) => Ok(Box::new(std::io::Cursor::new(contents))),
+                RuntimeResourceNode::Directory => Err(io::Error::from(ErrorKind::IsADirectory)),
+            };
+        }
+        self.host.open_read(path)
+    }
+
     fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
         if self.runtime_store_for(path).is_some() {
             return match self.require_runtime_node(path)? {

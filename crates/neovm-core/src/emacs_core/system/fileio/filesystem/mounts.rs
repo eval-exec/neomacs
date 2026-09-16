@@ -167,6 +167,11 @@ impl EditorFileSystem for MountTableFileSystem {
         }
     }
 
+    fn open_read(&self, path: &Path) -> io::Result<Box<dyn super::FileReader + '_>> {
+        let (mount, relative) = self.route(path)?;
+        mount.filesystem.open_read(&relative)
+    }
+
     fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
         let (mount, relative) = self.route(path)?;
         mount.filesystem.read(&relative)

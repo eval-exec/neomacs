@@ -1017,6 +1017,75 @@ fn documentation_property_eval_reads_compiled_doc_ref() {
 }
 
 #[test]
+fn compiled_documentation_reads_only_virtual_filesystem() {
+    use crate::emacs_core::fileio::{
+        EditorFileSystem, MemoryFileSystem, WriteMode, WriteRequest,
+    };
+    let filesystem = MemoryFileSystem::new();
+    let directory = std::path::Path::new("/virtual-doc-regression");
+    filesystem.create_directory(directory, true).unwrap();
+    filesystem
+        .write(
+            &directory.join("fixture.elc"),
+            b"#@11 compiled doc\x1f",
+            WriteRequest { mode: WriteMode::CreateNew, sync: false },
+        )
+        .unwrap();
+    let mut context = super::super::eval::Context::new();
+    context.install_editor_file_system(Box::new(filesystem));
+    assert_virtual_compiled_documentation(&mut context);
+}
+
+#[test]
+fn compiled_documentation_reads_borrowed_runtime_resources() {
+    use crate::emacs_core::fileio::{RuntimeResourceNode, RuntimeResourceStore};
+    use std::path::Path;
+
+    struct DocResources;
+    impl RuntimeResourceStore for DocResources {
+        fn mount_root(&self) -> &Path {
+            Path::new("/virtual-doc-regression")
+        }
+
+        fn node(&self, path: &Path) -> Option<RuntimeResourceNode<'_>> {
+            if path == self.mount_root() {
+                Some(RuntimeResourceNode::Directory)
+            } else if path == self.mount_root().join("fixture.elc") {
+                Some(RuntimeResourceNode::File(b"#@11 compiled doc\x1f"))
+            } else {
+                None
+            }
+        }
+
+        fn directory_entries(&self, path: &Path) -> Option<Vec<std::ffi::OsString>> {
+            (path == self.mount_root()).then(|| vec!["fixture.elc".into()])
+        }
+    }
+
+    let mut context = Context::new();
+    context.install_runtime_resource_store(Box::new(DocResources));
+    assert_virtual_compiled_documentation(&mut context);
+}
+
+fn assert_virtual_compiled_documentation(context: &mut Context) {
+    let value = context.eval_str(r##"(progn
+      (put 'virtual-doc-function 'function-documentation
+           '("/virtual-doc-regression/fixture.elc" . 5))
+      (documentation 'virtual-doc-function t))"##).unwrap();
+    assert_eq!(value.as_utf8_str(), Some("compiled doc"));
+    let value = context.eval_str(r##"(progn
+      (put 'virtual-doc-variable 'variable-documentation
+           '("/virtual-doc-regression/fixture.elc" . -5))
+      (documentation-property 'virtual-doc-variable 'variable-documentation t))"##).unwrap();
+    assert_eq!(value.as_utf8_str(), Some("compiled doc"));
+    let value = context.eval_str(r##"(progn
+      (defalias 'function-documentation
+        (lambda (_) '("/virtual-doc-regression/fixture.elc" . 5)))
+      (documentation (lambda () nil) t))"##).unwrap();
+    assert_eq!(value.as_utf8_str(), Some("compiled doc"));
+}
+
+#[test]
 fn documentation_property_eval_load_path_integer_property_returns_string() {
     crate::test_utils::init_test_tracing();
     let mut evaluator = snarfed_context();

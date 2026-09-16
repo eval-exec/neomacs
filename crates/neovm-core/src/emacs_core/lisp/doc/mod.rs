@@ -20,7 +20,7 @@ use super::intern::{intern, resolve_sym};
 use super::value::*;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::expect_args;
-use std::fs::File;
+use crate::emacs_core::fileio::EditorFileSystem;
 use std::io::{ErrorKind, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
@@ -59,16 +59,7 @@ pub(crate) fn builtin_documentation(
     let mut try_reload = documentation_dynamic_reload(eval);
     loop {
         let (plan, lisp_directory) = documentation_plan(eval, &args)?;
-        let outcome = execute_documentation_plan(
-            plan,
-            |execution| match execution {
-                DocumentationExecution::Eval(value) => eval.eval_value(&value),
-                DocumentationExecution::FunctionDoc(function) => {
-                    eval.apply(Value::symbol("function-documentation"), vec![function])
-                }
-            },
-            lisp_directory.as_deref(),
-        )?;
+        let outcome = execute_documentation_plan(plan, eval, lisp_directory.as_deref())?;
         match outcome {
             DocumentationOutcome::Value(value) => {
                 return finish_documentation_result(value, raw, |value| {
@@ -93,11 +84,6 @@ enum DocumentationPlan {
     /// `reread_doc_file` and takes its one `goto retry`
     /// (`src/doc.c:371-377`, `:441-447`).
     Unresolved(DocReread),
-}
-
-enum DocumentationExecution {
-    Eval(Value),
-    FunctionDoc(Value),
 }
 
 /// What a `documentation`/`documentation-property` lookup produced, with GNU's
@@ -190,18 +176,18 @@ fn perform_doc_reread(eval: &mut super::eval::Context, reread: DocReread) -> Res
 
 fn execute_documentation_plan(
     plan: DocumentationPlan,
-    mut execute: impl FnMut(DocumentationExecution) -> EvalResult,
+    eval: &mut super::eval::Context,
     lisp_directory: Option<&str>,
 ) -> Result<DocumentationOutcome, Flow> {
     match plan {
         DocumentationPlan::Final(value) => Ok(DocumentationOutcome::Value(value)),
         DocumentationPlan::Eval(value) => {
-            execute(DocumentationExecution::Eval(value)).map(DocumentationOutcome::Value)
+            eval.eval_value(&value).map(DocumentationOutcome::Value)
         }
         DocumentationPlan::Unresolved(reread) => Ok(DocumentationOutcome::Unresolved(reread)),
         DocumentationPlan::FunctionDoc(function) => {
-            let doc = execute(DocumentationExecution::FunctionDoc(function))?;
-            documentation_result_from_raw_doc(lisp_directory, doc)
+            let doc = eval.apply(Value::symbol("function-documentation"), vec![function])?;
+            documentation_result_from_raw_doc(eval.editor_file_system(), lisp_directory, doc)
         }
     }
 }
@@ -255,7 +241,11 @@ fn documentation_plan(
             super::builtins::symbols::symbol_property_get(eval, args[0], prop_key)?.1
             && !prop.is_nil()
         {
-            let plan = documentation_plan_from_property_value(lisp_directory.as_deref(), prop)?;
+            let plan = documentation_plan_from_property_value(
+                eval.editor_file_system(),
+                lisp_directory.as_deref(),
+                prop,
+            )?;
             return Ok((plan, lisp_directory));
         }
     }
@@ -274,6 +264,7 @@ fn documentation_plan(
 }
 
 fn documentation_result_from_raw_doc(
+    filesystem: &dyn EditorFileSystem,
     lisp_directory: Option<&str>,
     value: Value,
 ) -> Result<DocumentationOutcome, Flow> {
@@ -283,7 +274,7 @@ fn documentation_result_from_raw_doc(
 
     if let Some((file, position)) = compiled_doc_ref(&value) {
         return Ok(
-            match load_compiled_doc_string(lisp_directory, &file, position)? {
+            match load_compiled_doc_string(filesystem, lisp_directory, &file, position)? {
                 DocStringRead::Resolved(text) => DocumentationOutcome::Value(text),
                 DocStringRead::Unresolved => {
                     DocumentationOutcome::Unresolved(DocReread::LoadCompiledFile(file))
@@ -432,6 +423,7 @@ fn quoted_macro_invalid_designator(function: &Value) -> Option<EvalResult> {
 }
 
 fn documentation_plan_from_property_value(
+    filesystem: &dyn EditorFileSystem,
     lisp_directory: Option<&str>,
     value: Value,
 ) -> Result<DocumentationPlan, Flow> {
@@ -450,7 +442,7 @@ fn documentation_plan_from_property_value(
 
     if let Some((file, position)) = compiled_doc_ref(&value) {
         return Ok(
-            match load_compiled_doc_string(lisp_directory, &file, position)? {
+            match load_compiled_doc_string(filesystem, lisp_directory, &file, position)? {
                 DocStringRead::Resolved(text) => DocumentationPlan::Final(text),
                 DocStringRead::Unresolved => {
                     DocumentationPlan::Unresolved(DocReread::LoadCompiledFile(file))
@@ -572,13 +564,14 @@ enum DocStringRead {
 }
 
 fn load_compiled_doc_string(
+    filesystem: &dyn EditorFileSystem,
     lisp_directory: Option<&str>,
     file: &str,
     position: i64,
 ) -> Result<DocStringRead, Flow> {
     let position = position.unsigned_abs();
     let resolved = resolve_compiled_doc_path(lisp_directory, file);
-    let mut handle = match File::open(&resolved) {
+    let mut handle = match filesystem.open_read(&resolved) {
         Ok(file_handle) => file_handle,
         Err(err) if matches!(err.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => {
             return Ok(DocStringRead::Resolved(Value::string(format!(
@@ -732,14 +725,7 @@ pub(crate) fn builtin_documentation_property(
     let mut try_reload = documentation_dynamic_reload(eval);
     loop {
         let plan = documentation_property_plan(eval, &args)?;
-        let outcome = execute_documentation_plan(
-            plan,
-            |execution| match execution {
-                DocumentationExecution::Eval(value) => eval.eval_value(&value),
-                DocumentationExecution::FunctionDoc(_) => unreachable!(),
-            },
-            None,
-        )?;
+        let outcome = execute_documentation_plan(plan, eval, None)?;
         match outcome {
             DocumentationOutcome::Value(value) => {
                 return finish_documentation_result(value, raw, |value| {
@@ -817,7 +803,11 @@ fn documentation_property_plan(
                 };
                 return Ok(DocumentationPlan::Final(Value::string(doc)));
             }
-            documentation_plan_from_property_value(lisp_directory.as_deref(), value)
+            documentation_plan_from_property_value(
+                eval.editor_file_system(),
+                lisp_directory.as_deref(),
+                value,
+            )
         }
         _ => Ok(DocumentationPlan::Final(Value::NIL)),
     }
