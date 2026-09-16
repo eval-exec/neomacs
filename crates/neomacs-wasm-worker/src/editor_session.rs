@@ -177,7 +177,10 @@ pub(crate) fn run() -> Result<EditorSessionExit, String> {
         || {},
     );
     let (input, frames) = frontend.split();
-    session.install_host_input_wait_backend(BrowserWorkerTransport { input, frames, images });
+    session.install_host_input_wait_backend(BrowserWorkerTransport {
+        input, frames, images,
+        presentations: neomacs_wasm_protocol::presentation::PresentationEncoder::default(),
+    });
     browser_host::report_startup_phase(StartupPhase::FirstFrame);
     Ok(session.run())
 }
@@ -195,6 +198,7 @@ struct BrowserWorkerTransport {
     input: FrontendInputPort,
     frames: FrontendFrameInbox,
     images: Rc<crate::images::BrowserImages>,
+    presentations: neomacs_wasm_protocol::presentation::PresentationEncoder,
 }
 
 impl BrowserWorkerTransport {
@@ -208,12 +212,11 @@ impl BrowserWorkerTransport {
             }
             FrontendFrameReceive::Frame(pending) => pending,
         };
-        let mut bytes = Vec::new();
         let (images, retired_images) = self.images.take_updates();
         let presentation = neomacs_wasm_protocol::BrowserPresentation {
             frame: pending.hand_off_to_remote_frontend(), images, retired_images,
         };
-        ciborium::ser::into_writer(&presentation, &mut bytes).map_err(|error| {
+        let bytes = self.presentations.encode(presentation).map_err(|error| {
             HostInputWaitError::new(format!("failed to encode browser presentation: {error}"))
         })?;
         browser_host::send_frame(&bytes).map_err(HostInputWaitError::new)?;

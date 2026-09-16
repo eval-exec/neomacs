@@ -7,7 +7,6 @@ import argparse
 import time
 from pathlib import Path
 
-import cbor2
 from selenium import webdriver
 
 from browser_test_support import BrowserEditorHarness, chrome_options
@@ -46,7 +45,7 @@ def latest_frame(driver: webdriver.Chrome) -> dict[str, object]:
         "return Array.from(new Uint8Array("
         "globalThis.__neomacsLastFrame || new ArrayBuffer()))"
     )
-    return cbor2.loads(bytes(values)) if values else {}
+    return BrowserEditorHarness.decode_presentation(values)
 
 
 def wait_for_logical_geometry(
