@@ -127,11 +127,10 @@
          (progn
            (neomacs-wasm-landing-open)
            (with-current-buffer "*About*"
-             (goto-char (point-min))
-             (search-forward "Eval Exec")
-             (let ((button (button-at (1- (point))))
+             (let ((button (next-button (point-min)))
                    opened)
                (should button)
+               (should (equal (button-label button) "Eval Exec"))
                ;; The browser/OS opener is the external boundary here.
                (let ((browse-url-browser-function
                       (lambda (url &rest _) (setq opened url))))
