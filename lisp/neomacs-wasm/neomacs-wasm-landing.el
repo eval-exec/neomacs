@@ -286,7 +286,7 @@ edits.  Only this command or initial startup arranges the windows."
       (when (and (>= width 130) (featurep 'treemacs))
         (neomacs-wasm-landing--tree))
       (when (and info (>= width 170))
-        (display-buffer-in-side-window info '((side . right) (slot . 0) (window-width . 26))))
+        (display-buffer-in-side-window info '((side . right) (slot . 0) (window-width . 33))))
       (when (>= (window-total-width) 85)
         (let ((right (split-window-right)))
           (set-window-buffer right (get-buffer "*Playgorund*"))
