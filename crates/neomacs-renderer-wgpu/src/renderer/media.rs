@@ -275,6 +275,14 @@ impl WgpuRenderer {
         self.caches.image.process_pending(&self.device, &self.queue)
     }
 
+    /// Queue pixels decoded by a remote worker for the ordinary GPU upload path.
+    pub fn accept_decoded_image(
+        &mut self,
+        image: neomacs_display_protocol::DecodedImage,
+    ) -> Result<(), &'static str> {
+        self.caches.image.accept_decoded(image)
+    }
+
     /// Load video from file path (async - returns immediately)
     /// Returns video ID, frames decode in background
     #[cfg(feature = "video")]
