@@ -549,6 +549,14 @@ impl Context {
         self.sync_charset_runtime_resources();
     }
 
+    /// Share immutable packaged resources with worker-local host services.
+    /// This does not expose the evaluator or grant access to mutable user files.
+    pub fn runtime_resource_store(
+        &self,
+    ) -> Option<std::rc::Rc<dyn crate::emacs_core::fileio::RuntimeResourceStore>> {
+        self.editor_file_system.runtime_resources()
+    }
+
     pub(crate) fn sync_charset_runtime_resources(&self) {
         crate::emacs_core::charset::install_runtime_resource_store(
             self.editor_file_system.runtime_resources(),

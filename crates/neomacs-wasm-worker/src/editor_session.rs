@@ -167,7 +167,7 @@ pub(crate) fn run() -> Result<EditorSessionExit, String> {
         .map_err(|error| format!("failed to configure browser startup: {error:?}"))?;
 
     browser_host::report_startup_phase(StartupPhase::Lisp);
-    let images = Rc::new(crate::images::BrowserImages::default());
+    let images = Rc::new(crate::images::BrowserImages::new(evaluator.runtime_resource_store()));
     evaluator.install_image_host(Box::new(crate::images::BrowserImageHost(images.clone())));
     crate::startup::configure_lisp(&mut evaluator)?;
 
