@@ -1,0 +1,166 @@
+name: neomacs-wasm Pages preview
+
+on:
+  push:
+    branches: [android-wasm-runtime]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Keep deployment and public-site verification together: another run must not
+# replace the release while this run is checking its published bundle identity.
+concurrency:
+  group: neomacs-wasm-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/android-wasm-runtime'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    outputs:
+      bundle: ${{ steps.release.outputs.bundle }}
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_BUILD_JOBS: "1"
+      CARGO_INCREMENTAL: "0"
+      RUST_BACKTRACE: "1"
+      RUST_LOG: warn
+      TMPDIR: ${{ github.workspace }}/tmp
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Prepare build directories
+        run: mkdir -p "$TMPDIR/pages-artifacts"
+
+      - name: Check workflow syntax
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/wasm-pages.yml
+
+      - name: Install native build dependencies
+        run: ./scripts/ci/setup-linux.sh build
+
+      - name: Set up Rust tooling
+        uses: ./.github/actions/setup-rust
+        with:
+          cache-key: wasm-pages-linux-x86_64
+          target: wasm32-unknown-unknown
+          install-nextest: true
+
+      - name: Test browser packaging and JavaScript contracts
+        run: |
+          cargo nextest run -p xtask -E 'test(~wasm)'
+          node --test crates/neomacs-wasm/web/*.test.mjs crates/neomacs-wasm/web/network/*.test.mjs
+
+      - name: Fresh-build portable runtime
+        run: >-
+          cargo xtask fresh-build --release --portable-seed
+          --portable-runtime-image "$TMPDIR/neomacs.portable" --low-memory
+
+      - name: Package runtime assets
+        run: >-
+          cargo xtask package-portable-assets
+          --portable-runtime-image "$TMPDIR/neomacs.portable"
+          --output-dir "$TMPDIR/pages-assets"
+
+      - name: Build release WebAssembly distribution
+        run: >-
+          cargo xtask build-wasm --portable-assets "$TMPDIR/pages-assets"
+          --output-dir "$TMPDIR/pages-static/neomacs"
+
+      - name: Record release identity
+        id: release
+        run: |
+          bundle=$(jq -r .bundle_id "$TMPDIR/pages-static/neomacs/manifest.json")
+          echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
+
+      - name: Install browser test dependencies
+        run: |
+          python3 -m venv "$TMPDIR/pages-venv"
+          "$TMPDIR/pages-venv/bin/pip" install --disable-pip-version-check \
+            -r crates/neomacs-wasm/tests/requirements.txt
+          google-chrome --version
+          chromedriver --version
+
+      - name: Verify plain static hosting at the project subpath
+        env:
+          EXPECTED_BUNDLE: ${{ steps.release.outputs.bundle }}
+        run: |
+          python3 -m http.server 4173 --bind 127.0.0.1 \
+            --directory "$TMPDIR/pages-static" > "$TMPDIR/pages-artifacts/http.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          "$TMPDIR/pages-venv/bin/python" crates/neomacs-wasm/tests/browser_pages_smoke.py \
+            --url http://127.0.0.1:4173/neomacs/ --expected-bundle "$EXPECTED_BUNDLE" \
+            --artifacts-dir "$TMPDIR/pages-artifacts"
+          "$TMPDIR/pages-venv/bin/python" crates/neomacs-wasm/tests/browser_about_smoke.py \
+            --headless --url http://127.0.0.1:4173/neomacs/ \
+            --artifacts-dir "$TMPDIR/pages-artifacts"
+
+      - name: Upload browser diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pages-static-browser-check
+          path: ${{ env.TMPDIR }}/pages-artifacts
+          retention-days: 7
+
+      - name: Upload Pages site
+        uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
+        with:
+          path: ${{ env.TMPDIR }}/pages-static/neomacs
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    outputs:
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy preview
+        id: deployment
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
+
+  verify-public-site:
+    needs: [build, deploy]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      TMPDIR: ${{ github.workspace }}/tmp
+      PAGE_URL: ${{ needs.deploy.outputs.url }}
+      EXPECTED_BUNDLE: ${{ needs.build.outputs.bundle }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install browser test dependencies
+        run: |
+          mkdir -p "$TMPDIR/pages-artifacts"
+          python3 -m venv "$TMPDIR/pages-venv"
+          "$TMPDIR/pages-venv/bin/pip" install --disable-pip-version-check \
+            -r crates/neomacs-wasm/tests/requirements.txt
+          google-chrome --version
+          chromedriver --version
+
+      - name: Check the deployed site in default Chrome
+        run: |
+          "$TMPDIR/pages-venv/bin/python" crates/neomacs-wasm/tests/browser_pages_smoke.py \
+            --url "$PAGE_URL" --expected-bundle "$EXPECTED_BUNDLE" \
+            --artifacts-dir "$TMPDIR/pages-artifacts"
+          "$TMPDIR/pages-venv/bin/python" crates/neomacs-wasm/tests/browser_about_smoke.py \
+            --headless --url "$PAGE_URL" --artifacts-dir "$TMPDIR/pages-artifacts"
+          printf 'Verified [%s](%s) in Chrome: landing layout, typing, saving, persistence and About avatar.\n' \
+            "$PAGE_URL" "$PAGE_URL" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload public-site screenshots and diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pages-public-browser-check
+          path: ${{ env.TMPDIR }}/pages-artifacts
+          retention-days: 7
