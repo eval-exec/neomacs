@@ -92,7 +92,7 @@ pub(super) fn package(repo: &Path, output: &Path) -> Result<()> {
             }
             let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("");
             let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-            if !matches!(extension, "el" | "png" | "svg")
+            if !matches!(extension, "el" | "png" | "svg" | "ttf" | "otf")
                 && !name.starts_with("LICENSE")
                 && !name.starts_with("COPYING")
             {

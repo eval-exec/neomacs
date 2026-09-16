@@ -30,7 +30,7 @@ pub use linux::FontconfigBackend;
 #[cfg(target_os = "macos")]
 pub use macos::CoreTextBackend;
 #[cfg(any(target_os = "android", target_family = "wasm", test))]
-pub use packaged::PackagedFontBackend;
+pub use packaged::{PackagedFontBackend, install_packaged_fonts};
 #[cfg(windows)]
 pub use windows::DirectWriteBackend;
 

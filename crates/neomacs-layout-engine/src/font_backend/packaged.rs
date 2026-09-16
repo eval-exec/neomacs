@@ -15,21 +15,80 @@ const FAMILY: &str = "Hack";
 const POST_SCRIPT_NAME: &str = "Hack-Regular";
 const STABLE_KEY: &str = "packaged:hack-regular:epaint-0.36.1#0";
 
+struct AdditionalFace {
+    asset: FontMemoryAsset,
+    family: String,
+    postscript_name: String,
+}
+
+static ADDITIONAL_FACES: OnceLock<Vec<AdditionalFace>> = OnceLock::new();
+
+/// Install authenticated product font assets before the first catalog query.
+/// The catalog is immutable thereafter, so cached matches and shared replay
+/// identities cannot silently change underneath a running editor.
+pub fn install_packaged_fonts(assets: Vec<FontMemoryAsset>) -> Result<(), &'static str> {
+    let mut fonts = Vec::new();
+    for asset in assets {
+        if PackagedFace::ALL
+            .iter()
+            .any(|font| font.key() == asset.key())
+            || fonts
+                .iter()
+                .any(|font: &AdditionalFace| font.asset.key() == asset.key())
+        {
+            return Err("duplicate packaged font identity");
+        }
+        let face = ttf_parser::Face::parse(asset.bytes(), asset.face_index())
+            .map_err(|_| "invalid packaged font face")?;
+        let name = |id| {
+            face.names()
+                .into_iter()
+                .filter(|name| name.name_id == id)
+                .find_map(|name| name.to_string())
+        };
+        let family = name(ttf_parser::name_id::TYPOGRAPHIC_FAMILY)
+            .or_else(|| name(ttf_parser::name_id::FAMILY))
+            .filter(|name| !name.is_empty())
+            .ok_or("packaged font has no family name")?;
+        let postscript_name =
+            name(ttf_parser::name_id::POST_SCRIPT_NAME).unwrap_or_else(|| family.clone());
+        fonts.push(AdditionalFace {
+            asset,
+            family,
+            postscript_name,
+        });
+    }
+    ADDITIONAL_FACES
+        .set(fonts)
+        .map_err(|_| "packaged font catalog already initialized")
+}
+
 #[derive(Clone, Copy)]
 enum PackagedFace {
     Hack,
     Ubuntu,
     NotoSerif,
+    Additional(&'static AdditionalFace),
 }
 
 impl PackagedFace {
     const ALL: [Self; 3] = [Self::Hack, Self::Ubuntu, Self::NotoSerif];
+
+    fn all() -> impl Iterator<Item = Self> {
+        Self::ALL.into_iter().chain(
+            ADDITIONAL_FACES
+                .get_or_init(Vec::new)
+                .iter()
+                .map(Self::Additional),
+        )
+    }
 
     fn family(self) -> &'static str {
         match self {
             Self::Hack => FAMILY,
             Self::Ubuntu => "Ubuntu",
             Self::NotoSerif => "Noto Serif",
+            Self::Additional(font) => &font.family,
         }
     }
 
@@ -38,6 +97,7 @@ impl PackagedFace {
             Self::Hack => STABLE_KEY,
             Self::Ubuntu => "packaged:ubuntu-light:epaint-0.36.1#0",
             Self::NotoSerif => "packaged:noto-serif-regular:oxifont-0.2.2#0",
+            Self::Additional(font) => font.asset.key(),
         }
     }
 
@@ -46,6 +106,7 @@ impl PackagedFace {
             Self::Hack => POST_SCRIPT_NAME,
             Self::Ubuntu => "Ubuntu-Light",
             Self::NotoSerif => "NotoSerif-Regular",
+            Self::Additional(font) => &font.postscript_name,
         }
     }
 
@@ -54,6 +115,7 @@ impl PackagedFace {
             Self::Hack => epaint_default_fonts::HACK_REGULAR,
             Self::Ubuntu => epaint_default_fonts::UBUNTU_LIGHT,
             Self::NotoSerif => oxifont_bundled::NOTO_SERIF_REGULAR,
+            Self::Additional(font) => font.asset.bytes(),
         }
     }
 
@@ -65,13 +127,21 @@ impl PackagedFace {
             Self::Hack => &HACK,
             Self::Ubuntu => &UBUNTU,
             Self::NotoSerif => &NOTO_SERIF,
+            Self::Additional(font) => return font.asset.shared_bytes(),
         };
         Arc::clone(storage.get_or_init(|| Arc::new(self.bytes().to_vec())))
     }
 
     fn face(self) -> ttf_parser::Face<'static> {
-        ttf_parser::Face::parse(self.bytes(), 0)
+        ttf_parser::Face::parse(self.bytes(), self.face_index())
             .expect("packaged fonts must remain valid single-face SFNTs")
+    }
+
+    fn face_index(self) -> u32 {
+        match self {
+            Self::Additional(font) => font.asset.face_index(),
+            _ => 0,
+        }
     }
 
     fn from_family(family: &str) -> Option<Self> {
@@ -79,7 +149,7 @@ impl PackagedFace {
             "default" | "fixed" | "monospace" | "hack" => Some(Self::Hack),
             "sans" | "sans-serif" | "ubuntu" => Some(Self::Ubuntu),
             "serif" | "noto serif" => Some(Self::NotoSerif),
-            _ => None,
+            _ => Self::all().find(|font| font.family().eq_ignore_ascii_case(family)),
         }
     }
 }
@@ -121,7 +191,7 @@ fn candidate(font: PackagedFace) -> PlatformFontCandidate {
         identity: ResolvedFontIdentity::from_memory(
             FontBackendKind::Packaged,
             font.key().to_owned(),
-            0,
+            font.face_index(),
             Some(font.postscript_name().to_owned()),
         ),
         locator: PlatformFontCandidateLocator::Native,
@@ -148,8 +218,7 @@ impl FontBackend for PackagedFontBackend {
     }
 
     fn list_families(&self) -> Vec<FontFamilyName> {
-        PackagedFace::ALL
-            .into_iter()
+        PackagedFace::all()
             .map(|font| FontFamilyName::new(font.family()).expect("packaged family is non-empty"))
             .collect()
     }
@@ -164,8 +233,7 @@ impl FontBackend for PackagedFontBackend {
     }
 
     fn list_candidates(&self, query: &FontCandidateQuery) -> Vec<FontCandidate> {
-        PackagedFace::ALL
-            .into_iter()
+        PackagedFace::all()
             .filter(|font| {
                 if let FontCandidateScope::Family(family) = &query.scope
                     && !self
@@ -186,10 +254,8 @@ impl FontBackend for PackagedFontBackend {
     }
 
     fn finalize_match(&self, matched: PlatformFontCandidate) -> Option<PlatformFontMatch> {
-        let font = PackagedFace::ALL
-            .into_iter()
-            .find(|font| font.key() == matched.identity.stable_key)?;
-        let asset = FontMemoryAsset::new(font.key(), font.shared_bytes(), 0)?;
+        let font = PackagedFace::all().find(|font| font.key() == matched.identity.stable_key)?;
+        let asset = FontMemoryAsset::new(font.key(), font.shared_bytes(), font.face_index())?;
         matched.into_memory_match(asset)
     }
 
