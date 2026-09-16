@@ -153,6 +153,10 @@ impl EditorFileSystem for NativeFileSystem {
         }
     }
 
+    fn open_read(&self, path: &Path) -> io::Result<Box<dyn super::FileReader + '_>> {
+        Ok(Box::new(std::fs::File::open(path)?))
+    }
+
     fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
         fs::read(path)
     }

@@ -14,7 +14,7 @@ pub(crate) use binary_mode::builtin_set_binary_mode;
 pub use filesystem::{
     AccessMode, AccessPermissions, BrowserFileSystemLayout, EditorFileSystem,
     FileAttributeSnapshot, FileAttributeType, FileEntryKind, FileIdentity, FileMetadata, FileMode,
-    FilePrincipal, FileStability, FileSystemSpace, FileTimestamp, MemoryFileSystem,
+    FilePrincipal, FileReader, FileStability, FileSystemSpace, FileTimestamp, MemoryFileSystem,
     MountTableFileSystem, TemporaryEntry, WriteMode, WriteRequest,
 };
 pub(crate) use filesystem::{
