@@ -7,6 +7,7 @@ use std::rc::Rc;
 use neomacs_display_protocol::{DecodedImage, ImageSequenceId};
 use neomacs_image::portable::{EncodedImage, PortableImageDecoder};
 use neovm_core::emacs_core::display_host::ImageHost;
+use neovm_core::emacs_core::fileio::RuntimeResourceStore;
 use neovm_core::emacs_core::image_catalog::*;
 
 // Below the renderer's 64 MiB cache limit. Admission rather than silent GPU
@@ -15,6 +16,7 @@ const MAX_RESIDENT_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Default)]
 pub(crate) struct BrowserImages {
+    resources: Option<Rc<dyn RuntimeResourceStore>>,
     entries: RefCell<HashMap<ImageResolveRequest, ImageLookup>>,
     next_id: Cell<u32>,
     decoder: PortableImageDecoder,
@@ -24,6 +26,13 @@ pub(crate) struct BrowserImages {
 }
 
 impl BrowserImages {
+    pub(crate) fn new(resources: Option<Rc<dyn RuntimeResourceStore>>) -> Self {
+        Self {
+            resources,
+            ..Self::default()
+        }
+    }
+
     fn resolve(&self, request: &ImageResolveRequest) -> ImageLookup {
         let pending = match self.entries.borrow().get(request) {
             Some(ImageLookup::Pending(pending)) => pending.clone(),
@@ -36,10 +45,13 @@ impl BrowserImages {
                 ImageResolveSource::Data(ImageDataSource::WithBaseUri { .. }) => {
                     return Err("browser images with external SVG resources are not supported");
                 }
-                ImageResolveSource::File(_) => {
-                    return Err(
-                        "browser image files must be read through the editor filesystem and supplied as :data",
-                    );
+                ImageResolveSource::File(path) => {
+                    let path = std::str::from_utf8(path.as_bytes())
+                        .map_err(|_| "browser image file names must be UTF-8")?;
+                    self.resources.as_ref()
+                        .and_then(|resources| resources.file_contents(std::path::Path::new(path)))
+                        .ok_or("browser image file is not a packaged runtime resource; supply user images as :data")?
+                        .to_vec()
                 }
             };
             let image = self.decoder.decode(EncodedImage {
