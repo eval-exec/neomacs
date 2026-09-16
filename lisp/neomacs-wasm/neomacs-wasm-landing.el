@@ -162,7 +162,7 @@ Only image geometry changes; never rearrange the user's windows."
       (copy-file (expand-file-name "playground.el" (neomacs-wasm-landing--root))
                  file nil))
     (with-current-buffer (find-file-noselect file)
-      (rename-buffer "*NEO Emacs Playground*" t)
+      (rename-buffer "*Playgorund*" t)
       (setq-local header-line-format nil)
       (display-line-numbers-mode 1)
       (unless (bound-and-true-p neomacs-wasm-landing--playground-positioned)
@@ -203,7 +203,7 @@ Only image geometry changes; never rearrange the user's windows."
 
 (defun neomacs-wasm-landing--about ()
   (when neomacs-wasm-landing-personal-info
-    (with-current-buffer (get-buffer-create "*NEO Emacs About*")
+    (with-current-buffer (get-buffer-create "*About*")
       (let ((inhibit-read-only t))
         (erase-buffer)
         (insert "\n")
@@ -272,7 +272,7 @@ edits.  Only this command or initial startup arranges the windows."
         (display-buffer-in-side-window info '((side . right) (slot . 0) (window-width . 26))))
       (when (>= (window-total-width) 85)
         (let ((right (split-window-right)))
-          (set-window-buffer right (get-buffer "*NEO Emacs Playground*"))
+          (set-window-buffer right (get-buffer "*Playgorund*"))
           (select-window right)))))
   (add-hook 'window-size-change-functions #'neomacs-wasm-landing--resize-banner)
   (neomacs-wasm-landing--resize-banner)

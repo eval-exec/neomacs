@@ -12,7 +12,7 @@
   `(progn
      (require 'neomacs-wasm-landing)
      (when (seq-some #'get-buffer
-                     '("*NEO Emacs*" "*NEO Emacs Playground*" "*NEO Emacs About*"))
+                     '("*NEO Emacs*" "*Playgorund*" "*About*"))
        (ert-skip "Do not change an existing interactive landing session"))
      (make-directory (expand-file-name "tmp/" neomacs-wasm-test--root) t)
      (let* ((directory (make-temp-file
@@ -58,17 +58,18 @@
      (unwind-protect
          (progn
            (neomacs-wasm-landing-open)
-           (with-current-buffer "*NEO Emacs Playground*"
+           (should (get-buffer "*About*"))
+           (with-current-buffer "*Playgorund*"
              (should (eq major-mode 'emacs-lisp-mode))
              (should (string-match-p (regexp-quote "(+ 1 2)") (buffer-string)))
              (should (equal (eval (preceding-sexp) t) 3))
              (erase-buffer)
              (insert "(+ 1 2)"))
            (neomacs-wasm-landing-open)
-           (with-current-buffer "*NEO Emacs Playground*"
+           (with-current-buffer "*Playgorund*"
              (should (equal (buffer-string) "(+ 1 2)")))
            (should (get-buffer "*NEO Emacs*")))
-       (dolist (name '("*NEO Emacs*" "*NEO Emacs Playground*" "*NEO Emacs About*"))
+       (dolist (name '("*NEO Emacs*" "*Playgorund*" "*About*"))
          (when-let* ((buffer (get-buffer name)))
            (with-current-buffer buffer (set-buffer-modified-p nil))
            (kill-buffer buffer)))))))
@@ -91,9 +92,9 @@
                                 (face-attribute 'neomacs-wasm-welcome-heading :family)))
              (should (string-match-p "C-x C-e" (buffer-string)))
              (should (string-match-p "Save before reloading" (buffer-string))))
-           (with-current-buffer "*NEO Emacs About*"
+           (with-current-buffer "*About*"
              (should (eq buffer-face-mode-face 'neomacs-wasm-landing-body))))
-       (dolist (name '("*NEO Emacs*" "*NEO Emacs Playground*" "*NEO Emacs About*"))
+       (dolist (name '("*NEO Emacs*" "*Playgorund*" "*About*"))
          (when-let* ((buffer (get-buffer name)))
            (with-current-buffer buffer (set-buffer-modified-p nil))
            (kill-buffer buffer)))))))
