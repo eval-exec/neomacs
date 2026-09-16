@@ -48,7 +48,9 @@ def main():
         editor.wait_ready()
         editor.wait_for_presentation()
         editor.eval_expression('''(with-current-buffer "*NEO Emacs*"
-          (let* ((image (get-text-property (point-min) 'display))
+          (font-lock-flush)
+          (font-lock-ensure)
+          (let* ((image (get-char-property (point-min) 'display))
                  (size (and image (image-size image t)))
                  (window (get-buffer-window (current-buffer))))
             (unless (and size (> (car size) 100)
@@ -66,7 +68,7 @@ def main():
                 raise AssertionError("editor did not follow browser resize")
             time.sleep(0.1)
         editor.eval_expression('''(with-current-buffer "*NEO Emacs*"
-          (let* ((image (get-text-property (point-min) 'display))
+          (let* ((image (get-char-property (point-min) 'display))
                  (width (car (image-size image t)))
                  (window (get-buffer-window (current-buffer))))
             (unless (<= width (window-body-width window t))
