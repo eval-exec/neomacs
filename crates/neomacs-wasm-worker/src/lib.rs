@@ -16,6 +16,9 @@ std::cfg_select! {
 }
 
 #[cfg(any(target_family = "wasm", test))]
+mod images;
+
+#[cfg(any(target_family = "wasm", test))]
 const INPUT_WAKE: u32 = 1;
 #[cfg(any(target_family = "wasm", test))]
 const TIMEOUT_WAKE: u32 = 2;

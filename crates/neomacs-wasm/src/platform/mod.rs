@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use neomacs_app::lifecycle::{FrontendLifecycle, LifecycleAction, LifecycleEvent};
 use neomacs_display_protocol::FrameGlyphBuffer;
-use neomacs_display_protocol::{FrameDisplayState, SealedFramePresentation};
+use neomacs_display_protocol::SealedFramePresentation;
 use neomacs_layout_engine::bootstrap_frame::PortableBootstrapFrameBuilder;
 use neomacs_wgpu_runtime::{
     PresentationOutcome, SurfaceCursorVisibility, SurfaceFrameRenderer, SurfaceWindow,
@@ -52,6 +52,8 @@ thread_local! {
     });
     static POINTER_FRONTEND: RefCell<std::rc::Weak<RefCell<Option<PresentedFrontend>>>> = RefCell::new(std::rc::Weak::new());
     static WORKER_FRAME: RefCell<Option<FrameGlyphBuffer>> = const { RefCell::new(None) };
+    static WORKER_IMAGES: RefCell<Vec<neomacs_display_protocol::DecodedImage>> = const { RefCell::new(Vec::new()) };
+    static RETIRED_IMAGES: RefCell<Vec<neomacs_display_protocol::ImageId>> = const { RefCell::new(Vec::new()) };
     static WORKER_WINDOW: RefCell<Option<SurfaceWindow>> = const { RefCell::new(None) };
     static FIRST_EDITOR_PRESENTATION: RefCell<FirstEditorPresentationLatch> =
         RefCell::new(FirstEditorPresentationLatch::default());
@@ -397,6 +399,12 @@ impl ApplicationHandler for BrowserFrontend {
                 let Some(presented) = presented.as_mut() else {
                     return;
                 };
+                let images = WORKER_IMAGES.with(|slot| std::mem::take(&mut *slot.borrow_mut()));
+                let retired = RETIRED_IMAGES.with(|slot| std::mem::take(&mut *slot.borrow_mut()));
+                if let Err(error) = presented.renderer.install_images(images, retired) {
+                    browser_console_error(error);
+                    return;
+                }
                 if let Some(frame) = WORKER_FRAME.with(|slot| slot.borrow_mut().take()) {
                     presented.frame = Some(BrowserPresentationFrame::Editor(Rc::new(frame)));
                 }
@@ -527,13 +535,22 @@ pub async fn wait_for_first_editor_presentation() -> Result<String, JsValue> {
 /// Worker. Its typed receipt keeps 64-bit identities lossless in JavaScript.
 #[wasm_bindgen]
 pub fn install_worker_presentation(bytes: &[u8]) -> Result<WorkerPresentationReceipt, JsValue> {
-    let state: FrameDisplayState = ciborium::de::from_reader(bytes)
+    let state: neomacs_wasm_protocol::BrowserPresentation = ciborium::de::from_reader(bytes)
         .map_err(|error| JsValue::from_str(&format!("invalid Worker presentation: {error}")))?;
-    let sealed = SealedFramePresentation::seal(state).map_err(|error| {
+    if state.images.iter().any(|image| !image.validate()) {
+        return Err(JsValue::from_str("invalid Worker image payload"));
+    }
+    let sealed = SealedFramePresentation::seal(state.frame).map_err(|error| {
         JsValue::from_str(&format!("unsealable Worker presentation: {error:?}"))
     })?;
     let presentation = sealed.presentation().get();
     let target = sealed.frame_placement.frame().get();
+    WORKER_IMAGES.with(|slot| {
+        let mut pending = slot.borrow_mut();
+        pending.retain(|image| !state.retired_images.contains(&image.load.image()));
+        pending.extend(state.images);
+    });
+    RETIRED_IMAGES.with(|slot| slot.borrow_mut().extend(state.retired_images));
     WORKER_FRAME.with(|slot| *slot.borrow_mut() = Some(sealed.materialize()));
     WORKER_WINDOW.with(|slot| {
         if let Some(window) = slot.borrow().as_ref() {

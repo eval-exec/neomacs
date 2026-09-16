@@ -1,6 +1,7 @@
 //! Runtime-image restoration and the evaluator-owned side of one browser session.
 
 use std::path::Path;
+use std::rc::Rc;
 use std::time::Duration;
 
 use neomacs_app::initial_surface::{
@@ -166,6 +167,8 @@ pub(crate) fn run() -> Result<EditorSessionExit, String> {
         .map_err(|error| format!("failed to configure browser startup: {error:?}"))?;
 
     browser_host::report_startup_phase(StartupPhase::Lisp);
+    let images = Rc::new(crate::images::BrowserImages::default());
+    evaluator.install_image_host(Box::new(crate::images::BrowserImageHost(images.clone())));
     crate::startup::configure_lisp(&mut evaluator)?;
 
     let (mut session, frontend) = EditorSession::attach(
@@ -174,7 +177,7 @@ pub(crate) fn run() -> Result<EditorSessionExit, String> {
         || {},
     );
     let (input, frames) = frontend.split();
-    session.install_host_input_wait_backend(BrowserWorkerTransport { input, frames });
+    session.install_host_input_wait_backend(BrowserWorkerTransport { input, frames, images });
     browser_host::report_startup_phase(StartupPhase::FirstFrame);
     Ok(session.run())
 }
@@ -191,6 +194,7 @@ fn decode_startup(bytes: Vec<u8>) -> Result<BrowserEditorStartup, String> {
 struct BrowserWorkerTransport {
     input: FrontendInputPort,
     frames: FrontendFrameInbox,
+    images: Rc<crate::images::BrowserImages>,
 }
 
 impl BrowserWorkerTransport {
@@ -205,11 +209,14 @@ impl BrowserWorkerTransport {
             FrontendFrameReceive::Frame(pending) => pending,
         };
         let mut bytes = Vec::new();
-        ciborium::ser::into_writer(pending.state(), &mut bytes).map_err(|error| {
+        let (images, retired_images) = self.images.take_updates();
+        let presentation = neomacs_wasm_protocol::BrowserPresentation {
+            frame: pending.hand_off_to_remote_frontend(), images, retired_images,
+        };
+        ciborium::ser::into_writer(&presentation, &mut bytes).map_err(|error| {
             HostInputWaitError::new(format!("failed to encode browser presentation: {error}"))
         })?;
         browser_host::send_frame(&bytes).map_err(HostInputWaitError::new)?;
-        let _state = pending.hand_off_to_remote_frontend();
         Ok(())
     }
 
@@ -248,7 +255,14 @@ impl BrowserWorkerTransport {
 
 impl HostInputWaitBackend for BrowserWorkerTransport {
     fn wait_for_input(&mut self, timeout: Duration) -> Result<(), HostInputWaitError> {
+        let completed = self.images.complete_pending();
+        let has_completed = !completed.is_empty();
+        for event in completed {
+            self.input.image_state_changed(event)
+                .map_err(|error| HostInputWaitError::new(error.to_string()))?;
+        }
         self.publish_latest_frame()?;
+        if has_completed { return Ok(()); }
         match browser_host::wait(timeout).map_err(HostInputWaitError::new)? {
             HostWake::Input => self.submit_input_batch(),
             HostWake::TimedOut | HostWake::Ready => Ok(()),

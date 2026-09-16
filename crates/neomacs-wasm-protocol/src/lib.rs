@@ -17,7 +17,17 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 ///
 /// Version 4 adds presentation-qualified pointer input, encoded with CBOR so
 /// JavaScript cannot round source or presentation identities.
-pub const WORKER_PROTOCOL_VERSION: u16 = 4;
+/// Version 5 carries decoded image uploads and retirements with presentations.
+pub const WORKER_PROTOCOL_VERSION: u16 = 5;
+
+/// Image resources travel once, ahead of the presentation that references them.
+#[derive(Serialize, Deserialize)]
+pub struct BrowserPresentation {
+    #[serde(flatten)]
+    pub frame: neomacs_display_protocol::FrameDisplayState,
+    pub images: Vec<neomacs_display_protocol::DecodedImage>,
+    pub retired_images: Vec<neomacs_display_protocol::ImageId>,
+}
 
 /// Browser color preference sampled for the initial editor frame.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

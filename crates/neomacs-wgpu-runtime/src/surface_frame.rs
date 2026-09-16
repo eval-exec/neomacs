@@ -72,6 +72,23 @@ pub struct SurfaceFrameRenderer {
 }
 
 impl SurfaceFrameRenderer {
+    /// Accept decoder output before displaying frames that reference it.
+    pub fn install_images(
+        &mut self,
+        images: Vec<neomacs_display_protocol::DecodedImage>,
+        retired: Vec<neomacs_display_protocol::ImageId>,
+    ) -> Result<(), &'static str> {
+        if images.iter().any(|image| !image.validate()) {
+            return Err("invalid decoded image payload");
+        }
+        for image in retired {
+            self.renderer.retire_image(image);
+        }
+        for image in images {
+            self.renderer.accept_decoded_image(image)?;
+        }
+        Ok(())
+    }
     /// Create a renderer on the exact device selected for `window`'s surface.
     pub async fn new(
         display: OwnedDisplayHandle,
@@ -167,6 +184,17 @@ impl SurfaceFrameRenderer {
 
         self.glyph_atlas
             .set_current_frame_fonts(frame.font_bindings());
+        self.renderer.synchronize_retained_images(
+            frame
+                .glyphs
+                .iter()
+                .filter_map(|glyph| match glyph {
+                    neomacs_display_protocol::FrameGlyph::Image { image_id, .. } => Some(*image_id),
+                    _ => None,
+                })
+                .collect(),
+        );
+        self.renderer.process_pending_images();
         // The portable adapter has no predicted presentation timestamp yet.
         // Date every visual in this frame to the same observed draw time.
         let at = neomacs_display_protocol::frame_time::observe_platform_now();
