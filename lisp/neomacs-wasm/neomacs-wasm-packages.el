@@ -30,7 +30,7 @@
                        "doom-themes" "doom-themes/themes" "compat" "cond-let" "keycast"
                        "nerd-icons" "nerd-icons/data" "nerd-icons-completion"
                        "treemacs-nerd-icons" "nerd-icons-dired"
-                       "org-modern" "doom-modeline" "shrink-path" "f" "consult"))
+                       "org-modern" "consult"))
     (add-to-list 'load-path (expand-file-name directory neomacs-wasm-packages--root)))
   (add-to-list 'custom-theme-load-path
                (expand-file-name "doom-themes/themes" neomacs-wasm-packages--root))
@@ -56,10 +56,6 @@
   (require 'doom-themes)
   ;; The landing page has a dark visual identity; personal init runs afterwards.
   (load-theme 'doom-one t)
-  ;; Browser sessions have no external language-version subprocesses.
-  (setq doom-modeline-env-version nil)
-  (require 'doom-modeline)
-  (doom-modeline-mode 1)
   ;; Personal init runs afterwards and may override this landing-page binding.
   (require 'consult)
   (global-set-key (kbd "C-x b") #'consult-buffer)
