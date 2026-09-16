@@ -15,24 +15,19 @@ mod gpu_frame_timing;
 mod image_bands;
 pub mod image_cache;
 pub mod image_probe;
-mod image_scale;
-mod image_sequence;
 pub mod media_budget;
 #[cfg(target_os = "linux")]
 pub mod native_presentation;
 pub mod renderer;
 pub mod shader_surface;
 pub mod shader_surface_cache;
-mod svg;
 #[cfg(test)]
 #[path = "tests/texture_discipline_test.rs"]
 mod texture_discipline_test;
 pub mod tooltip_layout;
-pub use image_bands::{BandPlacement, DecodedBand, RasterBand, RowRange, TextureRows};
-pub use svg::SvgResourceContext;
+pub use image_bands::{BandPlacement,DecodedBand,RasterBand,RowRange,TextureRows};
+pub use neomacs_image::{SvgResourceContext, xbm, xpm};
 pub mod vertex;
-pub mod xbm;
-pub mod xpm;
 
 #[cfg(test)]
 #[path = "shader_layout_test.rs"]
