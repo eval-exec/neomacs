@@ -104,6 +104,12 @@ choose other families. The portable font catalog supplies Hack, Ubuntu Light,
 and Noto Serif Regular from pinned font dependencies; it does not discover
 the browser host's installed fonts.
 
+The About sidebar also uses the proportional body face. Browser wheel input
+uses ordinary Emacs wheel commands, including `mouse-wheel-follow-mouse` and
+`mouse-wheel-scroll-amount`. Small pixel deltas accumulate into wheel gestures;
+this is discrete scrolling, not pixel-precision scrolling. Horizontal-only
+wheel gestures are not translated into vertical movement.
+
 `cargo xtask build-wasm` fetches exact Git objects from `packages.lock.toml`
 into ignored `target/wasm-package-sources/`. Treemacs uses the upstream 3.2
 release; dependencies and doom-themes are pinned too. Sources, icons, and

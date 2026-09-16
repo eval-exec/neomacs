@@ -87,6 +87,50 @@ function harness(options = {}) {
   return { root, textInput, batches, viewportCalls: () => viewportCalls };
 }
 
+test("wheel input preserves logical position, units and modifiers", () => {
+  const observations = [];
+  const { root, batches } = harness({ observeScroll: (...args) => {
+    observations.push(args);
+    return new Uint8Array([7]);
+  }});
+  const canvas = { getBoundingClientRect: () => ({ left: 10, top: 20, width: 800, height: 600 }) };
+  root.document = { querySelector: () => canvas };
+  const event = { target: canvas, clientX: 35, clientY: 45, deltaMode: 0,
+    deltaX: 1.5, deltaY: 24.5, shiftKey: true,
+    preventDefault() { this.prevented = true; } };
+  root.dispatch("wheel", event);
+  assert.deepEqual(observations, [[25, 25, -1.5, -24.5, 0, 1]]);
+  assert.deepEqual(batches, [[{ type: "pointer", payload: [7] }]]);
+  assert.equal(event.prevented, true);
+  assert.deepEqual(root.listenerOptions.get("wheel"), [{ passive: false }]);
+  root.dispatch("wheel", { ...event, deltaMode: 1, deltaY: 3 });
+  root.dispatch("wheel", { ...event, deltaMode: 2, deltaX: 0, deltaY: 1 });
+  assert.deepEqual(observations.slice(1), [[25, 25, -1.5, -3, 1, 1], [25, 25, -0, -600, 0, 1]]);
+  root.dispatch("wheel", { ...event, target: {} });
+  assert.equal(observations.length, 3, "page chrome is not editor input");
+});
+
+test("fractional wheel input stays in the editor; horizontal-only input is ignored", () => {
+  let observed = 0;
+  const { root, batches } = harness({ observeScroll: () => {
+    observed += 1;
+    return new Uint8Array();
+  }});
+  const canvas = { getBoundingClientRect: () => ({ left: 0, top: 0 }) };
+  root.document = { querySelector: () => canvas };
+  const event = { target: canvas, clientX: 10, clientY: 10,
+    deltaMode: 0, deltaX: 0, deltaY: 0.5,
+    preventDefault() { this.prevented = true; } };
+  root.dispatch("wheel", event);
+  assert.equal(event.prevented, true);
+  assert.equal(observed, 1);
+  assert.deepEqual(batches, []);
+  const horizontal = { ...event, deltaX: 10, deltaY: 0, prevented: false };
+  root.dispatch("wheel", horizontal);
+  assert.equal(horizontal.prevented, false);
+  assert.equal(observed, 1);
+});
+
 test("pointer buttons use canvas-local CSS coordinates, independent of device scale", () => {
   const observations = [];
   const { root, batches } = harness({ observePointer: (...args) => {
