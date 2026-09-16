@@ -1,0 +1,30 @@
+* An Emacs from the future — in progress
+[[file:index.org][← Home]]
+
+** Rust underneath; Lisp at your fingertips
+NEO Emacs is building a Rust implementation of the Emacs core.
+The ambition is familiar Emacs behavior with a modern implementation.
+Compatibility is ongoing work, not a claim that every package works today.
+
+** The browser is a real editor
+This preview runs the editor in WebAssembly. You can edit, evaluate Lisp,
+split windows, explore Org files, change themes, and save into browser storage.
+The frontend draws through the shared GPU renderer; the editor lives in
+its own worker. This page exercises those paths rather than simulating them.
+
+** A graphical playground
+Proportional prose, contrasting headings, inline images, cursor effects,
+and a live code pane can coexist. Try [[file:guides/themes.org][another theme]], then change
+a Lisp expression. The page is both the introduction and the demonstration.
+
+** Desktop and browser are different environments
+The native frontend also explores video and embedded web content.
+Do not assume those capabilities are available in this browser preview.
+Browser networking follows browser restrictions. Native subprocesses,
+arbitrary TCP connections, and unrestricted access to your computer's files
+are not available here. See [[file:guides/browser-storage.org][browser storage]] for what saving means.
+
+** Help turn ambition into evidence
+Performance and compatibility claims need reproducible tests.
+If an interaction feels slow or behaves differently from GNU Emacs,
+[[file:contribute.org][send a small reproduction]]. That is more useful than a slogan.

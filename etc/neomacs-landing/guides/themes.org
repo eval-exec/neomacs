@@ -1,0 +1,17 @@
+* Find your colors
+[[file:../index.org][← Home]]
+
+** Try a different mood
+[[neo:theme][Choose an installed theme]]. The landing preview includes doom-themes.
+You can also run =M-x neomacs-wasm-landing-theme=.
+Changing the theme does not replace your files or your window layout.
+
+** Prose and code need not look alike
+The landing documents use proportional body text and larger serif headings.
+The playground uses a monospace face for code. They are ordinary editor faces,
+not text painted by a separate web-page engine.
+
+** Make a preference last
+[[neo:init][Visit your init.el]] and add the Lisp configuration you want at startup.
+Save with =C-x C-s=. Try small changes so an error is easy to undo.
+Choosing a theme interactively alone does not save a startup preference.
