@@ -186,7 +186,7 @@ test("HiDPI startup leaves font-cell measurement to the editor Worker", () => {
     width: 1975,
     height: 1100,
     scale_factor: 1.75,
-    font_pixel_size: 16,
+    font_pixel_size: 14,
   });
 });
 
