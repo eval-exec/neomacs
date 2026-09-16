@@ -153,8 +153,7 @@ fn resolve_channel_value(
                 surface_error("neomacs-surface-create: invalid image spec in :channel0")
             })?;
             let catalog = eval
-                .display_host
-                .as_ref()
+                .media_host()
                 .and_then(|host| host.image_catalog())
                 .ok_or_else(|| {
                     surface_error("neomacs-surface-create: no image catalog for :channel0")
