@@ -227,7 +227,7 @@ Only image geometry changes; never rearrange the user's windows."
         (insert "\n@eval-exec\n\n")
         (insert neomacs-wasm-landing-personal-info "\n\n")
         (neomacs-wasm-landing--heading "THE PROJECT")
-        (insert "github.com/\neval-exec/neomacs\n\n"
+        (insert "https://github.com/eval-exec/neomacs\n\n"
                 "The project link in the title bar opens\n"
                 "GitHub in a new browser tab.\n\n")
         (neomacs-wasm-landing--heading "WORK IN PROGRESS")
