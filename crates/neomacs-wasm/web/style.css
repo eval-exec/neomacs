@@ -47,6 +47,21 @@ body {
   white-space: nowrap;
 }
 
+#browser-window-name { white-space: nowrap; flex-shrink: 0; }
+#browser-build-warning {
+  flex-shrink: 0;
+  padding: 3px 7px;
+  border: 1px solid #ffc36b;
+  border-radius: 4px;
+  background: #713f12;
+  color: #fff3cd;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  text-transform: uppercase;
+}
+
 #browser-window-title a { color: inherit; flex-shrink: 0; }
 #browser-window-icon { width: 18px; height: 18px; flex-shrink: 0; }
 #browser-window-controls { display: flex; height: 100%; flex-shrink: 0; }
