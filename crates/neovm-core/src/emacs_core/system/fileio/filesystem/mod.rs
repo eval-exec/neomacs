@@ -162,6 +162,11 @@ pub enum TemporaryEntry<'a> {
     Directory,
 }
 
+/// A seekable reader whose lifetime may borrow immutable filesystem resources.
+pub trait FileReader: std::io::Read + std::io::Seek {}
+
+impl<T: std::io::Read + std::io::Seek> FileReader for T {}
+
 /// Filesystem operations whose synchronous semantics are observable by Lisp.
 ///
 /// Browser implementations may suspend the Wasm stack while the Worker awaits
@@ -176,6 +181,12 @@ pub trait EditorFileSystem {
     fn metadata(&self, path: &Path, follow_links: bool) -> io::Result<FileMetadata>;
     fn access(&self, path: &Path, mode: AccessMode) -> bool;
     fn read(&self, path: &Path) -> io::Result<Vec<u8>>;
+
+    /// Open a seekable reader. Mutable stores default to an owned snapshot;
+    /// native files and immutable resource stores override this to avoid copies.
+    fn open_read(&self, path: &Path) -> io::Result<Box<dyn FileReader + '_>> {
+        Ok(Box::new(std::io::Cursor::new(self.read(path)?)))
+    }
     /// Entry names without dot entries. Wrappers preserve backend traversal
     /// order; the calling Lisp operation decides whether to sort the result.
     fn read_directory(&self, path: &Path) -> io::Result<Vec<OsString>>;
