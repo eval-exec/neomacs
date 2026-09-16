@@ -49,6 +49,7 @@ def main():
           (setq neo-test-scroll-down (window-start neo-test-scroll-window))
           (message (concat "SCROLL-DOWN-" "PASSED")))''',
           "SCROLL-DOWN-PASSED", "Wheel did not scroll only the hovered Org pane")
+        driver.save_screenshot(str(artifacts / "scroll-down.png"))
         for _ in range(6):
             ActionChains(driver).scroll_from_origin(origin, 0, -600).perform()
         editor.eval_expression('''(progn
