@@ -629,9 +629,9 @@ impl Hash for FontMemoryAsset {
 
 /// Exact byte source accepted by the shared fontdb/Swash adapter.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum FontOutlineAsset {
+pub enum FontOutlineAsset<Memory = FontMemoryAsset> {
     File(FontFileAsset),
-    Memory(FontMemoryAsset),
+    Memory(Memory),
 }
 
 impl FontOutlineAsset {
@@ -664,9 +664,9 @@ impl FontOutlineAsset {
 /// an outline replay without bytes, or a FreeType bitmap replay without a
 /// file, unrepresentable.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum FontReplay {
+pub enum FontReplay<Memory = FontMemoryAsset> {
     Swash {
-        asset: FontOutlineAsset,
+        asset: FontOutlineAsset<Memory>,
     },
     FreeTypeBitmap {
         asset: FontFileAsset,
@@ -788,10 +788,10 @@ impl ResolvedFontAdvance {
 
 /// The resolver's canonical answer for one concrete font instance.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ResolvedFont {
+pub struct ResolvedFont<Memory = FontMemoryAsset> {
     pub id: ResolvedFontId,
     pub identity: ResolvedFontIdentity,
-    pub replay: FontReplay,
+    pub replay: FontReplay<Memory>,
     /// Family name as realized (selector semantics, not file metadata).
     pub family: String,
     pub full_name: Option<String>,
@@ -812,6 +812,67 @@ pub struct ResolvedFont {
     /// canonical fixed-pitch cell.
     #[serde(default)]
     pub glyph_advance: ResolvedFontAdvance,
+}
+
+impl<Memory> ResolvedFont<Memory> {
+    /// Change only the ownership representation of an in-memory resource.
+    /// All font selection, metrics, and replay semantics remain unchanged.
+    pub fn try_map_memory<Other, Error>(
+        self,
+        map: impl FnOnce(Memory) -> Result<Other, Error>,
+    ) -> Result<ResolvedFont<Other>, Error> {
+        let Self {
+            id,
+            identity,
+            replay,
+            family,
+            full_name,
+            postscript_name,
+            weight,
+            slant,
+            width,
+            pixel_size,
+            ascent_px,
+            descent_px,
+            space_advance_px,
+            glyph_advance,
+        } = self;
+        let replay = match replay {
+            FontReplay::Swash { asset } => FontReplay::Swash {
+                asset: match asset {
+                    FontOutlineAsset::File(file) => FontOutlineAsset::File(file),
+                    FontOutlineAsset::Memory(memory) => FontOutlineAsset::Memory(map(memory)?),
+                },
+            },
+            FontReplay::FreeTypeBitmap {
+                asset,
+                strike,
+                sampling,
+                spacing,
+            } => FontReplay::FreeTypeBitmap {
+                asset,
+                strike,
+                sampling,
+                spacing,
+            },
+        };
+        Ok(ResolvedFont {
+            id,
+            identity,
+            replay,
+            family,
+            full_name,
+            postscript_name,
+            weight,
+            slant,
+            width,
+            pixel_size,
+            ascent_px,
+            descent_px,
+            space_advance_px,
+            glyph_advance,
+        })
+    }
 }
 
 /// Resolved font table carried by frame state, keyed by [`ResolvedFontId`].
