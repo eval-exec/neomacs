@@ -355,7 +355,11 @@ wait-timeout = "0.2"
 lto = true
 codegen-units = 1
 debug = false
-strip = "debuginfo"
+# macOS 27's linker emits malformed proc-macro dylibs when Cargo strips their
+# debuginfo, which surfaces later as E0463 while loading crates such as strum.
+# Keep release artifacts loadable; debug=false still avoids embedding debug info
+# in the first place.
+strip = "none"
 
 # This test-only crate is a 52 MiB corpus compiled into one test harness.
 # Keep production dependencies in release mode without optimizing test bodies.
@@ -378,6 +382,7 @@ split-debuginfo = "unpacked"
 [profile.dev.package."*"]
 opt-level = 3
 debug = false
+strip = "none"
 debug-assertions = false
 overflow-checks = false
 codegen-units = 16
@@ -389,6 +394,7 @@ incremental = false
 [profile.dev.build-override]
 opt-level = 3
 debug = false
+strip = "none"
 debug-assertions = false
 overflow-checks = false
 codegen-units = 16
