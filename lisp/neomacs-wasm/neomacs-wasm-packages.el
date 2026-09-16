@@ -38,6 +38,9 @@
         treemacs-persist-file nil
         treemacs-width 24)
   (require 'treemacs)
+  ;; The curated source bundle has no package-generated autoload file.
+  ;; treemacs-mode binds mouse commands without requiring their definitions.
+  (require 'treemacs-mouse-interface)
   (treemacs-git-mode -1)
   (treemacs-filewatch-mode -1)
   (setq treemacs-collapse-dirs 0)
