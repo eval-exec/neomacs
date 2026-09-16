@@ -59,7 +59,10 @@ def main():
             editor.install_frame_observer()
             editor.driver.get(url)
             title = editor.driver.find_element("id", "browser-window-title")
-            assert "Work in progress" in title.text, title.text
+            assert "NEO Emacs (WebAssembly build)" in title.text, title.text
+            warning = editor.driver.find_element("id", "browser-build-warning")
+            assert warning.is_displayed()
+            assert warning.text == "EXPERIMENTAL · INCOMPLETE · WORK IN PROGRESS", warning.text
             assert "landing page still needs substantial polish" in title.text, title.text
             link = title.find_element("tag name", "a")
             assert link.get_attribute("href") == "https://github.com/eval-exec/neomacs"
@@ -68,6 +71,25 @@ def main():
             editor.wait_for_frame_text("landing", contains="Welcome to the browser editor.")
             editor.wait_for_window_matrices("About", contains="@eval-exec", count=1)
             assert not editor.driver.find_element("id", "browser-startup").is_displayed()
+            assert warning.is_displayed(), "The warning disappeared with the startup overlay"
+            rotation = editor.driver.execute_script(r"""
+              const icon = document.querySelector('#browser-window-icon');
+              const animation = icon.getAnimations()[0];
+              if (!animation) return null;
+              animation.pause();
+              animation.currentTime = animation.effect.getTiming().duration / 4;
+              const matrix = new DOMMatrix(getComputedStyle(icon).transform);
+              animation.play();
+              return {b: matrix.b, c: matrix.c};
+            """)
+            assert rotation and rotation["b"] > 0.99 and rotation["c"] < -0.99, rotation
+            editor.driver.execute_cdp_cmd("Emulation.setEmulatedMedia", {
+                "features": [{"name": "prefers-reduced-motion", "value": "reduce"}],
+            })
+            assert editor.driver.execute_script(r"""
+              return document.querySelector('#browser-window-icon').getAnimations().length === 0;
+            """), "The icon ignores reduced-motion preferences"
+            editor.driver.execute_cdp_cmd("Emulation.setEmulatedMedia", {"features": []})
             loaded = editor.driver.execute_script(r"""
               return [...document.scripts].some(script => script.src.includes(arguments[0]))
                 || performance.getEntriesByType('resource').some(entry =>

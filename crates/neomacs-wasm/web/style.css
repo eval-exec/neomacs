@@ -63,7 +63,21 @@ body {
 }
 
 #browser-window-title a { color: inherit; flex-shrink: 0; }
-#browser-window-icon { width: 18px; height: 18px; flex-shrink: 0; }
+#browser-window-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  animation: browser-icon-spin 12s linear infinite;
+}
+
+@keyframes browser-icon-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #browser-window-icon { animation: none; }
+}
+
 #browser-window-controls { display: flex; height: 100%; flex-shrink: 0; }
 #browser-window-controls span {
   display: grid;
