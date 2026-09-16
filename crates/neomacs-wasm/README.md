@@ -34,6 +34,22 @@ These headers enable shared-memory worker waits in browsers without JSPI.
 Experimental browser flags are not required by the application. An available
 WebGL/WebGPU graphics backend is still necessary.
 
+## Landing content
+
+The landing site consists of ordinary Org files in `etc/neomacs-landing/`,
+included by the existing portable runtime packager. `index.org` is visited as
+a file; relative Org links and Treemacs open the other documents. The packaged
+site is read-only. Treemacs shows it as **NEO Emacs**, separately from **Your
+files**, the persistent browser home at `/neomacs-fake/`.
+
+On first use, `playground.el` is copied into browser home without overwriting
+an existing file. Its editable buffer shows line numbers; `C-x C-s` saves it.
+The `neo:copy` action copies a site document to a user-chosen destination and
+refuses to overwrite existing files. Named `neo:` actions are explicitly
+dispatched, not evaluated as arbitrary Lisp. Styling and layout remain in
+`lisp/neomacs-wasm/neomacs-wasm-landing.el`; content changes need no Rust edits.
+Fido vertical completion is enabled before personal init, which may override it.
+
 ## Font resources
 
 Browser presentation protocol v6 transfers immutable font bytes as binary

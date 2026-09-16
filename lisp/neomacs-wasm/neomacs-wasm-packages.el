@@ -52,6 +52,8 @@
   (remove-hook 'before-init-hook #'neomacs-wasm-packages-initialize)
   (require 'which-key)
   (which-key-mode 1)
+  (require 'icomplete)
+  (fido-vertical-mode 1)
   (require 'tab-bar)
   (require 'tab-line)
   (tab-bar-mode 1)
