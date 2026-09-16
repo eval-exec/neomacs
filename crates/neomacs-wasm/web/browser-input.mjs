@@ -29,7 +29,7 @@ export function observeBrowserViewport(browser) {
 export function observeBrowserEditorGeometry(browser) {
   return {
     ...observeBrowserViewport(browser),
-    font_pixel_size: 16,
+    font_pixel_size: 14,
   };
 }
 
