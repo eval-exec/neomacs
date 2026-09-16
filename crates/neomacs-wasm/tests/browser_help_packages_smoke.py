@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise compiled-file help and the curated browser completion/modeline packages."""
+"""Exercise compiled-file help, standard mode lines, and browser completion."""
 
 import argparse
 
@@ -35,7 +35,8 @@ def main():
             r'''(condition-case err
                     (progn
                       (unless (and (null neomacs-wasm-package-error)
-                                   doom-modeline-mode fido-mode
+                                   (not (bound-and-true-p doom-modeline-mode))
+                                   fido-mode
                                    (featurep 'consult))
                         (error "Package startup: %S" neomacs-wasm-package-error))
                       (message (concat "PACKAGES-" "PASS")))
@@ -55,7 +56,7 @@ def main():
             "CONSULT-PASS",
             failure_marker="CONSULT-FAIL",
         )
-        print("PASS: compiled-file help, Doom Modeline, Fido and Consult buffer selection")
+        print("PASS: compiled-file help, standard mode line, Fido and Consult buffer selection")
     except Exception:
         if args.artifacts_dir:
             editor.capture_failure_artifacts(args.artifacts_dir)

@@ -5,18 +5,6 @@ name = "consult"
 url = "https://github.com/minad/consult"
 revision = "9979fbb02e633267d0f6bc6cafa266fe87a0007f"
 [[package]]
-name = "doom-modeline"
-url = "https://github.com/seagle0128/doom-modeline"
-revision = "c07049eef28caa499625895f530a02acf66843f0"
-[[package]]
-name = "shrink-path"
-url = "https://github.com/zbelial/shrink-path.el"
-revision = "0bf09bf4d4a90ca183a8806271740239d3ae6703"
-[[package]]
-name = "f"
-url = "https://github.com/rejeep/f.el"
-revision = "931b6d0667fe03e7bf1c6c282d6d8d7006143c52"
-[[package]]
 name = "org-modern"
 url = "https://github.com/minad/org-modern"
 revision = "d106d02cf045cc968c09989e9c48e0f2b44c574c"

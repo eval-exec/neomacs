@@ -199,6 +199,7 @@ command feedback in the tab bar. It and its dependencies are pinned in the
 same optional package bundle. The welcome page's theme action selects from
 installed themes. Personal init runs after these defaults and can change the
 theme or disable any of these modes.
+The standard Emacs mode line is retained; Doom Modeline is not bundled or enabled.
 
 ## Basic acceptance checks
 
