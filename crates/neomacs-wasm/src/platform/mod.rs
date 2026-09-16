@@ -41,6 +41,7 @@ extern "C" {
 }
 
 thread_local! {
+    static WHEEL: RefCell<crate::wheel::WheelAccumulator> = RefCell::new(crate::wheel::WheelAccumulator::default());
     static PRESENTATION_CALLBACK: RefCell<Option<js_sys::Function>> = const { RefCell::new(None) };
     static ANIMATION_TIMER: RefCell<Option<i32>> = const { RefCell::new(None) };
     static ANIMATION_CALLBACK: Closure<dyn FnMut()> = Closure::new(|| {
@@ -169,12 +170,61 @@ pub fn browser_pointer_input(
     pressed: bool,
     modifiers: u32,
 ) -> Result<Vec<u8>, JsValue> {
+    use neomacs_display_protocol::PointerAction;
+    if button > 5 {
+        return Err(JsValue::from_str("invalid browser pointer button"));
+    }
+    let action = if button == 0 {
+        PointerAction::Move { modifiers }
+    } else {
+        PointerAction::Button {
+            button,
+            pressed,
+            modifiers,
+        }
+    };
+    browser_positioned_input(x, y, action)
+}
+
+/// Wheel coordinates and pixel deltas are CSS pixels, like pointer input.
+#[wasm_bindgen]
+pub fn browser_scroll_input(
+    x: f32,
+    y: f32,
+    delta_x: f32,
+    delta_y: f32,
+    unit: u32,
+    modifiers: u32,
+) -> Result<Vec<u8>, JsValue> {
+    use neomacs_display_protocol::{PointerAction, ScrollDelta};
+    if !delta_x.is_finite() || !delta_y.is_finite() {
+        return Err(JsValue::from_str("invalid browser scroll delta"));
+    }
+    let delta = match unit {
+        0 => ScrollDelta::Pixels {
+            x: delta_x,
+            y: delta_y,
+        },
+        1 => ScrollDelta::Lines {
+            x: delta_x,
+            y: delta_y,
+        },
+        _ => return Err(JsValue::from_str("invalid browser scroll unit")),
+    };
+    browser_positioned_input(x, y, PointerAction::Scroll { delta, modifiers })
+}
+
+fn browser_positioned_input(
+    x: f32,
+    y: f32,
+    action: neomacs_display_protocol::PointerAction,
+) -> Result<Vec<u8>, JsValue> {
     use neomacs_display_protocol::geometry::{GeometryPoint, LogicalPixels, RootSurfaceSpace};
     use neomacs_display_protocol::interaction_projection::InteractionProjection;
     use neomacs_display_protocol::{
-        PointerAction, PointerPosition, PointerTarget, PositionedPointerInput, PresentedHitQuery,
+        PointerPosition, PointerTarget, PositionedPointerInput, PresentedHitQuery,
     };
-    if !x.is_finite() || !y.is_finite() || button > 5 {
+    if !x.is_finite() || !y.is_finite() {
         return Err(JsValue::from_str("invalid browser pointer"));
     }
     POINTER_FRONTEND.with(|slot| {
@@ -198,6 +248,22 @@ pub fn browser_pointer_input(
             .resolve_presented_hit(PresentedHitQuery::new(point))
             .map_err(|error| JsValue::from_str(&format!("{error:?}")))?
             .and_then(|hit| hit.semantic());
+        let action =
+            if let neomacs_display_protocol::PointerAction::Scroll { delta, modifiers } = action {
+                let target = crate::wheel::WheelTarget {
+                    frame: frame.frame_placement.frame().get(),
+                    window: hit.and_then(|hit| hit.region().window()).map(|id| id.get()),
+                    modifiers,
+                };
+                let Some(delta) = WHEEL
+                    .with(|wheel| wheel.borrow_mut().observe(target, delta, frame.char_height))
+                else {
+                    return Ok(Vec::new());
+                };
+                neomacs_display_protocol::PointerAction::Scroll { delta, modifiers }
+            } else {
+                action
+            };
         let input = PositionedPointerInput {
             position: PointerPosition {
                 x,
@@ -208,15 +274,7 @@ pub fn browser_pointer_input(
                 presentation: frame.presentation_id.get(),
                 hit,
             },
-            action: if button == 0 {
-                PointerAction::Move { modifiers }
-            } else {
-                PointerAction::Button {
-                    button,
-                    pressed,
-                    modifiers,
-                }
-            },
+            action,
         };
         let mut bytes = Vec::new();
         ciborium::ser::into_writer(&input, &mut bytes)

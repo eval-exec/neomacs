@@ -27,5 +27,8 @@ js-sys = "0.3"
 wasm-bindgen-futures = "0.4"
 winit.workspace = true
 
+[dev-dependencies]
+neomacs-display-protocol.workspace = true
+
 [lints]
 workspace = true

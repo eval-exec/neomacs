@@ -42,6 +42,11 @@ function modifierSample(event) {
   };
 }
 
+function pointerModifiers(event) {
+  return (event.shiftKey ? 1 : 0) | (event.ctrlKey ? 2 : 0)
+    | (event.altKey ? 4 : 0) | (event.metaKey ? 8 : 0);
+}
+
 function keySymbol(event) {
   if (NAMED_KEY_SYMBOLS.has(event.key)) return NAMED_KEY_SYMBOLS.get(event.key);
   if (event.key.length === 1) return event.key.codePointAt(0);
@@ -103,6 +108,7 @@ export function installBrowserInput({
   targetFrame,
   sendViewport,
   observePointer,
+  observeScroll,
 }) {
   let composing = false;
   let closeRequested = false;
@@ -148,8 +154,7 @@ export function installBrowserInput({
     const bounds = canvas.getBoundingClientRect();
     const button = movement ? 0 : [1, 2, 3, 4, 5][event.button];
     if (button === undefined) return;
-    const modifiers = (event.shiftKey ? 1 : 0) | (event.ctrlKey ? 2 : 0)
-      | (event.altKey ? 4 : 0) | (event.metaKey ? 8 : 0);
+    const modifiers = pointerModifiers(event);
     const payload = observePointer(event.clientX - bounds.left, event.clientY - bounds.top,
       button, pressed, modifiers);
     if (payload.length) enqueue({ type: "pointer", payload: Array.from(payload) });
@@ -163,6 +168,31 @@ export function installBrowserInput({
   });
   root.addEventListener("pointerup", (event) => sendPointer(event, false));
   root.addEventListener("pointermove", (event) => sendPointer(event, false, true));
+  root.addEventListener("wheel", (event) => {
+    const canvas = root.document?.querySelector("canvas");
+    if (!canvas || event.target !== canvas || !observeScroll) return;
+    const bounds = canvas.getBoundingClientRect();
+    let x = -event.deltaX;
+    let y = -event.deltaY;
+    let unit = event.deltaMode;
+    // DOM pages have no counterpart in the shared protocol. Convert them to
+    // logical viewport pixels; pixel and line events retain their own units.
+    if (unit === 2) {
+      x *= bounds.width;
+      y *= bounds.height;
+      unit = 0;
+    }
+    if ((unit !== 0 && unit !== 1) || !Number.isFinite(x) || !Number.isFinite(y)) return;
+    if (y === 0) return;
+    // Recognized canvas gestures belong to the editor even while fractional
+    // motion is accumulating and no complete wheel command is ready yet.
+    event.preventDefault();
+    const payload = observeScroll(event.clientX - bounds.left, event.clientY - bounds.top,
+      x, y, unit, pointerModifiers(event));
+    if (payload.length) {
+      enqueue({ type: "pointer", payload: Array.from(payload) });
+    }
+  }, { passive: false });
   root.addEventListener("pagehide", requestClose);
   root.addEventListener("beforeunload", requestClose);
 
