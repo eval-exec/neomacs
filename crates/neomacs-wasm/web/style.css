@@ -36,12 +36,20 @@ body {
 
 #browser-window-title {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 8px;
 }
 
-#browser-window-icon { width: 18px; height: 18px; }
-#browser-window-controls { display: flex; height: 100%; }
+#browser-window-status {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#browser-window-title a { color: inherit; flex-shrink: 0; }
+#browser-window-icon { width: 18px; height: 18px; flex-shrink: 0; }
+#browser-window-controls { display: flex; height: 100%; flex-shrink: 0; }
 #browser-window-controls span {
   display: grid;
   place-items: center;
