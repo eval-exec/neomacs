@@ -37,7 +37,8 @@
         treemacs-collapse-dirs 0
         treemacs-read-string-input 'from-minibuffer
         treemacs-persist-file nil
-        treemacs-width 24)
+        treemacs-width 24
+        treemacs-text-scale -1.5)
   (require 'treemacs)
   ;; The curated source bundle has no package-generated autoload file.
   ;; treemacs-mode binds mouse commands without requiring their definitions.
