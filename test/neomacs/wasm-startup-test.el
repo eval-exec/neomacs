@@ -71,7 +71,9 @@
             (should-not (equal (face-attribute 'neomacs-wasm-landing-body :family)
                                (face-attribute 'neomacs-wasm-welcome-heading :family)))
             (should (string-match-p "C-x C-e" (buffer-string)))
-            (should (string-match-p "Unsaved buffers" (buffer-string)))))
+            (should (string-match-p "Unsaved buffers" (buffer-string))))
+          (with-current-buffer "*NEO Emacs About*"
+            (should (eq buffer-face-mode-face 'neomacs-wasm-landing-body))))
       (dolist (name '("*NEO Emacs*" "*NEO Emacs Playground*" "*NEO Emacs About*"))
         (when-let* ((buffer (get-buffer name)))
           (with-current-buffer buffer (set-buffer-modified-p nil))
