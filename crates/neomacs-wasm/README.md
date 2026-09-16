@@ -49,6 +49,9 @@ refuses to overwrite existing files. Named `neo:` actions are explicitly
 dispatched, not evaluated as arbitrary Lisp. Styling and layout remain in
 `lisp/neomacs-wasm/neomacs-wasm-landing.el`; content changes need no Rust edits.
 Fido vertical completion is enabled before personal init, which may override it.
+Org's in-memory parser cache remains enabled, but its persistent disk cache is
+disabled by default: Org's temporary-file rename crosses the browser's `/tmp`
+and persistent-home mounts. This does not disable saving Org documents.
 
 ## Font resources
 

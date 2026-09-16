@@ -41,6 +41,10 @@ a buffer or window layout."
   "Install browser defaults before personal initialization.
 The worker calls this once per editor session, before `normal-top-level'."
   (setq ls-lisp-use-insert-directory-program nil)
+  ;; Keep Org's in-memory parser cache, but not its cross-session disk cache:
+  ;; org-persist renames from /tmp into user-emacs-directory, which are
+  ;; separate browser mounts.  This default runs before personal init.
+  (setq org-element-cache-persistent nil)
   (require 'ls-lisp)
   (require 'url-neomacs-http)
   (url-neomacs-http-enable)
