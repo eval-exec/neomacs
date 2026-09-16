@@ -4,6 +4,7 @@
 //! `restore-buffer-modified-p` when a file-visiting buffer changes between
 //! modified and unmodified states.
 
+use super::fileio::{EditorFileSystem, NativeFileSystem};
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_args_range};
 use std::fs;
@@ -192,10 +193,13 @@ fn make_lock_file_name(
     }
 }
 
-fn read_lock_contents(lock_path: &Path) -> io::Result<String> {
-    match fs::read_link(lock_path) {
+fn read_lock_contents(storage: &dyn EditorFileSystem, lock_path: &Path) -> io::Result<String> {
+    match storage.read_link(lock_path) {
         Ok(target) => Ok(target.to_string_lossy().into_owned()),
-        Err(link_err) => match fs::read_to_string(lock_path) {
+        Err(link_err) => match storage.read(lock_path).and_then(|bytes| {
+            String::from_utf8(bytes)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+        }) {
             Ok(contents) => Ok(contents),
             Err(_) => Err(link_err),
         },
@@ -204,18 +208,22 @@ fn read_lock_contents(lock_path: &Path) -> io::Result<String> {
 
 /// HOST is the Lisp `(system-name)` with '@' mapped to '-', exactly as
 /// lock files are written; staleness is decidable only for locks on it.
-fn current_lock_owner(lock_path: &Path, host: &str) -> Result<LockOwner, io::Error> {
-    match fs::symlink_metadata(lock_path) {
+fn current_lock_owner(
+    storage: &dyn EditorFileSystem,
+    lock_path: &Path,
+    host: &str,
+) -> Result<LockOwner, io::Error> {
+    match storage.metadata(lock_path, false) {
         Ok(_) => {}
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(LockOwner::None),
         Err(err) => return Err(err),
     }
 
-    let contents = read_lock_contents(lock_path)?;
+    let contents = read_lock_contents(storage, lock_path)?;
     if contents.is_empty() {
         // GNU zaps an empty lock file (a buggy-filesystem leftover,
         // <https://bugs.gnu.org/72641>) and reports the file free.
-        return match fs::remove_file(lock_path) {
+        return match storage.remove_file(lock_path) {
             Ok(()) => Ok(LockOwner::None),
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(LockOwner::None),
             Err(err) => Err(err),
@@ -249,7 +257,7 @@ fn current_lock_owner(lock_path: &Path, host: &str) -> Result<LockOwner, io::Err
     if pid_alive && boot_matches {
         return Ok(LockOwner::Other(clasher));
     }
-    match fs::remove_file(lock_path) {
+    match storage.remove_file(lock_path) {
         Ok(()) => Ok(LockOwner::None),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(LockOwner::None),
         Err(err) => Err(err),
@@ -367,7 +375,7 @@ fn lock_if_free(lock_path: &Path, contents: &str, host: &str) -> LockAttempt {
         match create_lock_file(lock_path, contents, false) {
             Ok(()) => return LockAttempt::Acquired,
             Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
-                match current_lock_owner(lock_path, host) {
+                match current_lock_owner(&NativeFileSystem, lock_path, host) {
                     Ok(LockOwner::None) => continue,
                     Ok(LockOwner::Current) => return LockAttempt::Acquired,
                     Ok(LockOwner::Other(clasher)) => return LockAttempt::OtherOwner(clasher),
@@ -447,7 +455,10 @@ fn check_supersession_threat(
         return Ok(());
     }
     if let LockFileTarget::At(lock_path) = target
-        && matches!(current_lock_owner(lock_path, host), Ok(LockOwner::Current))
+        && matches!(
+            current_lock_owner(eval.editor_file_system(), lock_path, host),
+            Ok(LockOwner::Current)
+        )
     {
         return Ok(());
     }
@@ -508,11 +519,11 @@ fn unlock_file_resolved(
         return Ok(Value::NIL);
     };
 
-    match current_lock_owner(&lock_path, &lock_host_name(eval))
+    match current_lock_owner(eval.editor_file_system(), &lock_path, &lock_host_name(eval))
         .map_err(|err| file_lock_error("Unlocking file", filename, err))?
     {
         LockOwner::None | LockOwner::Other(_) => Ok(Value::NIL),
-        LockOwner::Current => match fs::remove_file(&lock_path) {
+        LockOwner::Current => match eval.editor_file_system().remove_file(&lock_path) {
             Ok(()) => Ok(Value::NIL),
             Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(Value::NIL),
             Err(err) => Err(file_lock_error("Unlocking file", filename, err)),
@@ -606,7 +617,7 @@ fn file_locked_p(eval: &mut super::eval::Context, filename: &LispString) -> Resu
         return Ok(Value::NIL);
     };
 
-    match current_lock_owner(&lock_path, &lock_host_name(eval))
+    match current_lock_owner(eval.editor_file_system(), &lock_path, &lock_host_name(eval))
         .map_err(|err| file_lock_error("Testing file lock", filename, err))?
     {
         LockOwner::None => Ok(Value::NIL),
