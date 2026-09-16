@@ -25,7 +25,8 @@
   (dolist (directory '("dash" "s" "ht" "pfuture" "avy" "ace-window"
                        "hydra" "posframe" "cfrs" "treemacs/src/elisp"
                        "doom-themes" "doom-themes/themes" "compat" "cond-let" "keycast"
-                       "nerd-icons" "nerd-icons/data" "treemacs-nerd-icons" "nerd-icons-dired"))
+                       "nerd-icons" "nerd-icons/data" "treemacs-nerd-icons" "nerd-icons-dired"
+                       "org-modern"))
     (add-to-list 'load-path (expand-file-name directory neomacs-wasm-packages--root)))
   (add-to-list 'custom-theme-load-path
                (expand-file-name "doom-themes/themes" neomacs-wasm-packages--root))
@@ -51,6 +52,11 @@
   (require 'doom-themes)
   ;; The landing page has a dark visual identity; personal init runs afterwards.
   (load-theme 'doom-one t)
+  (require 'org-modern)
+  ;; These folding markers are covered by the browser's packaged text fonts.
+  (setq org-modern-fold-stars '(("▶" . "▼") ("▷" . "▽")))
+  (add-hook 'org-mode-hook #'org-modern-mode)
+  (add-hook 'org-agenda-finalize-hook #'org-modern-agenda)
   (require 'keycast)
   (keycast-tab-bar-mode 1))
 

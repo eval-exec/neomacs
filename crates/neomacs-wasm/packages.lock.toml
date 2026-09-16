@@ -1,6 +1,10 @@
 # Product dependencies, not vendored sources. Update pins deliberately and test
 # the browser landing page. The builder archives these exact Git objects.
 [[package]]
+name = "org-modern"
+url = "https://github.com/minad/org-modern"
+revision = "d106d02cf045cc968c09989e9c48e0f2b44c574c"
+[[package]]
 name = "nerd-icons"
 url = "https://github.com/rainstormstudio/nerd-icons.el"
 revision = "17faac7977242b470732efd417d3bcc8eb5a830e"
