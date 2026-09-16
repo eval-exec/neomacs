@@ -24,6 +24,8 @@
   "Use the shared Nerd Icons font in the tree, tabs, and Dired."
   (if (not (member nerd-icons-font-family (font-family-list)))
       (message "Nerd Icons font unavailable; keeping ordinary labels")
+    ;; Configure before theme creation: tabs otherwise produce variable gaps.
+    (setq treemacs-nerd-icons-tab " ")
     (require 'treemacs-nerd-icons)
     (treemacs-load-theme "nerd-icons")
     (require 'nerd-icons-dired)
