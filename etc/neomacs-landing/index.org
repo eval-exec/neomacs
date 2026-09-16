@@ -1,0 +1,77 @@
+[[file:../images/neomacs-banner.svg]]
+
+* NEO Emacs
+/Not a screenshot. An editor you can change./
+
+Welcome to the browser editor.
+Rust underneath. Emacs Lisp at your fingertips.
+Running here, in your browser, through WebAssembly.
+
+This page is a real file: =index.org=. Explore the NEO Emacs
+project in Treemacs on the left, or follow the links below.
+
+** Your first little spark
+Select the playground on the right. If it is hidden,
+use the /Enter the playground/ action below.
+Then press =C-x C-e= to evaluate =(+ 1 2)=.
+The answer appears at the bottom of the editor.
+
+*** Make it your own
+Change a number. Evaluate again. That is the idea:
+a short conversation between you and your editor.
+
+[[neo:playground][Enter the playground →]]
+
+** An editor, not a tour behind glass
+You are reading an Org-mode file, not a web-page overlay.
+Put the cursor on a heading and press =TAB= to fold it.
+Follow a link with =C-c C-o= or a mouse click.
+The playground is an Emacs Lisp file. Use =C-x C-s= to save it.
+
+- [[file:features.org][What makes NEO Emacs different?]]
+- [[file:getting-started.org][A five-minute introduction]]
+- [[file:guides/themes.org][Find your colors]]
+- [[file:guides/browser-storage.org][Where your files live]]
+- [[file:about.org][Meet the project]]
+- [[file:contribute.org][Help shape what comes next]]
+
+** Follow your curiosity
+Start with arithmetic. Make a message. Generate a list.
+Then define a command and run it with =M-x neo-greet=.
+The examples are small on purpose: change one thing,
+see what happens, and build from there.
+
+[[neo:theme][Find a different mood / choose a theme →]]
+[[neo:files][Explore your browser files →]]
+[[neo:init][Make it personal / edit init.el →]]
+[[neo:copy][Copy this page to Your files →]]
+
+** A small map of the keyboard
+- =C-x C-e= :: Evaluate the expression before the cursor.
+- =C-x o= :: Move to another editor window.
+- =C-x b= :: Switch to another buffer.
+- =C-x 2= / =C-x 3= :: Split below / beside.
+- =M-x= :: Find and run a command (Alt+x).
+- =C-h f= :: Ask what a function does.
+- =C-g= :: Cancel. A good key to remember.
+
+Pause after a prefix: which-key offers the next keys.
+
+** Keep the good experiments
+The NEO Emacs project contains the read-only site originals.
+Your files contains your writable, persistent browser home.
+The playground is copied there once; updates never replace it.
+Save before reloading. Browser storage is not a backup:
+clearing site data can remove your files.
+
+** Built in the open. Still becoming.
+NEO Emacs explores a Rust implementation of Emacs
+with a graphical frontend and an Emacs Lisp heart.
+This browser edition is a working preview, not a promise
+that every desktop package already works here.
+
+Native subprocesses are unavailable; browser networking
+has browser restrictions. Expect unfinished edges.
+Found one? A small reproduction is a great contribution.
+
+/Read a little. Evaluate something. Make it yours./

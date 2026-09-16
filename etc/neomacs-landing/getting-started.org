@@ -1,0 +1,28 @@
+* Five minutes inside NEO Emacs
+[[file:index.org][← Home]]
+
+** 1. Move around
+=C-= means hold Control; =M-= usually means Alt.
+Use =C-x o= to move between windows. Click a file in Treemacs or follow
+an Org link with =C-c C-o=. =C-x b= switches between already open buffers.
+If you get stuck in a command, =C-g= cancels it.
+
+** 2. Run a little Lisp
+[[neo:playground][Open your playground]]. Put the cursor after =(+ 1 2)= and press
+=C-x C-e=. Change a number and try again. Lisp evaluation changes the
+running editor; saving the file preserves the text, not the live Lisp state.
+
+** 3. Make space
+=C-x 2= splits below. =C-x 3= splits beside. =C-x 1= keeps one window.
+=M-x neomacs-wasm-landing-open= restores the initial layout without
+discarding your playground edits.
+
+** 4. Explore the editor
+=M-x= finds commands. =C-h f= describes a function.
+Pause after a key prefix to see which-key's suggestions.
+In an Org heading, =TAB= folds and unfolds its content.
+
+** 5. Keep something
+=C-x C-s= saves your playground. [[neo:copy][Copy this guide to Your files]] to
+annotate it. [[neo:init][Open init.el]] for personal startup configuration.
+Read [[file:guides/browser-storage.org][the storage guide]] before trusting the browser with important work.

@@ -19,6 +19,12 @@
 
 (defvar-local neomacs-wasm-landing--banner-data nil)
 (defvar-local neomacs-wasm-landing--banner-image nil)
+(defvar-local neomacs-wasm-landing--playground-positioned nil)
+
+(defcustom neomacs-wasm-landing-playground-file "~/playground.el"
+  "Writable playground file.  Existing contents are never replaced."
+  :type 'file
+  :group 'neomacs-wasm)
 
 (defun neomacs-wasm-landing--resize-banner (&optional frame)
   "Fit the inline banner to the smallest visible landing pane on FRAME.
@@ -41,7 +47,11 @@ Only image geometry changes; never rearrange the user's windows."
                   (when neomacs-wasm-landing--banner-image
                     (image-flush neomacs-wasm-landing--banner-image))
                   (setq neomacs-wasm-landing--banner-image image)
-                  (put-text-property (point-min) (1+ (point-min)) 'display image)
+                  (save-excursion
+                    (goto-char (point-min))
+                    (when (looking-at "\\[\\[file:[^\n]+\\]\\]")
+                      (put-text-property (match-beginning 0) (match-end 0)
+                                         'display image)))
                   (set-buffer-modified-p nil))
               (error (message "Landing banner: %s" (error-message-string error-data))))))))))
 
@@ -88,65 +98,46 @@ Only image geometry changes; never rearrange the user's windows."
     (face-remap-add-relative face 'neomacs-wasm-landing-body))
   (setq buffer-read-only t))
 
-(defconst neomacs-wasm-landing--examples
-  ";; NEO Emacs / your live Lisp playground
-;;
-;; Ready? Press C-x C-e now: hold Ctrl, press x,
-;; then (still holding Ctrl) press e. Result: 3.
-;; For each next example, put the cursor AFTER
-;; its final closing parenthesis, then C-x C-e.
-
-(+ 1 2)
-
-;; 01 / Make the editor say hello
-(message \"Hello from Lisp, inside your browser!\")
-
-;; 02 / Change the words. Run it again.
-(concat \"An editor is \" \"a place to think.\")
-
-;; 03 / Little programs, immediate answers
-(mapcar (lambda (n) (* n n)) '(1 2 3 4 5))
-;; => (1 4 9 16 25)
-
-;; 04 / Ask the editor about itself
-(list :buffer (buffer-name)
-      :mode major-mode
-      :characters (buffer-size))
-
-;; 05 / Change this buffer's appearance
-(text-scale-set 1)
-;; Back to the original size:
-(text-scale-set 0)
-
-;; 06 / Turn an idea into an editor command
-;; Evaluate the WHOLE defun, then M-x neo-greet.
-(defun neo-greet ()
-  \"Say hello from the playground.\"
-  (interactive)
-  (message \"You just taught your editor a new command.\"))
-
-;; 07 / Generate something you can keep
-;; Creates another buffer; C-x b brings you back.
-(with-current-buffer (get-buffer-create \"*NEO Notes*\")
-  (goto-char (point-max))
-  (insert \"One small expression. One new possibility.\\n\")
-  (display-buffer (current-buffer)))
-
-;; Keep exploring:
-;; C-h f  describe a function     C-g  cancel
-;; C-/    undo an edit            M-x write-file  save as
-;; Saving preserves the text, not live Lisp state.
-;; Unsaved buffers disappear when you reload.
-"
-  "Starter forms inserted once into a newly created playground.")
-
 (defun neomacs-wasm-landing--heading (text)
   (insert (propertize text 'face 'neomacs-wasm-landing-heading) "\n\n"))
 
-(defun neomacs-wasm-landing--action (label command)
-  (insert-text-button label 'follow-link t
-                      'action (lambda (_) (call-interactively command)))
-  (insert "\n"))
+(defun neomacs-wasm-landing--root ()
+  "Return the packaged site's directory."
+  (expand-file-name "neomacs-landing/" data-directory))
+
+(defun neomacs-wasm-landing-copy ()
+  "Copy the current site document into browser home without overwriting files."
+  (interactive)
+  (unless (and buffer-file-name
+               (file-in-directory-p buffer-file-name (neomacs-wasm-landing--root)))
+    (user-error "This is not a packaged site document"))
+  (let ((destination (read-file-name "Copy to Your files: "
+                                    (expand-file-name "~/")
+                                    nil nil (file-name-nondirectory buffer-file-name))))
+    (copy-file buffer-file-name destination nil)
+    (find-file destination)))
+
+(defun neomacs-wasm-landing--follow (action _argument)
+  "Follow a named site ACTION, never arbitrary Lisp."
+  (pcase action
+    ("playground" (neomacs-wasm-landing-playground))
+    ("theme" (call-interactively #'neomacs-wasm-landing-theme))
+    ("files" (dired (expand-file-name "~/")))
+    ("init" (neomacs-wasm-landing-init))
+    ("copy" (call-interactively #'neomacs-wasm-landing-copy))
+    (_ (user-error "Unknown NEO Emacs action: %s" action))))
+
+(org-link-set-parameters "neo" :follow #'neomacs-wasm-landing--follow)
+
+(defun neomacs-wasm-landing--visit ()
+  "Style packaged Org documents regardless of how they were opened."
+  (when (and buffer-file-name
+             (file-in-directory-p buffer-file-name (neomacs-wasm-landing--root)))
+    (when (derived-mode-p 'org-mode)
+      (neomacs-wasm-welcome-mode))
+    (setq buffer-read-only t)))
+
+(add-hook 'find-file-hook #'neomacs-wasm-landing--visit)
 
 (defun neomacs-wasm-landing-playground ()
   "Select the playground without erasing existing work."
@@ -154,16 +145,20 @@ Only image geometry changes; never rearrange the user's windows."
   (pop-to-buffer (neomacs-wasm-landing--playground-buffer)))
 
 (defun neomacs-wasm-landing--playground-buffer ()
-  "Return the editable playground, initializing it only once."
-  (or (get-buffer "*NEO Emacs Playground*")
-      (with-current-buffer (get-buffer-create "*NEO Emacs Playground*")
-        (emacs-lisp-mode)
-        (setq-local header-line-format nil)
-        (insert neomacs-wasm-landing--examples)
+  "Visit the persistent playground, seeding its file only when absent."
+  (let ((file (expand-file-name neomacs-wasm-landing-playground-file)))
+    (unless (file-exists-p file)
+      (copy-file (expand-file-name "playground.el" (neomacs-wasm-landing--root))
+                 file nil))
+    (with-current-buffer (find-file-noselect file)
+      (rename-buffer "*NEO Emacs Playground*" t)
+      (setq-local header-line-format nil)
+      (display-line-numbers-mode 1)
+      (unless (bound-and-true-p neomacs-wasm-landing--playground-positioned)
+        (setq-local neomacs-wasm-landing--playground-positioned t)
         (goto-char (point-min))
-        (search-forward "(+ 1 2)")
-        (set-buffer-modified-p nil)
-        (current-buffer))))
+        (search-forward "(+ 1 2)" nil t))
+      (current-buffer))))
 
 (defun neomacs-wasm-landing-init ()
   "Visit personal configuration in the browser's persistent home."
@@ -179,77 +174,20 @@ Only image geometry changes; never rearrange the user's windows."
     (dolist (old previous) (unless (eq old theme) (disable-theme old)))))
 
 (defun neomacs-wasm-landing--welcome ()
-  (with-current-buffer (get-buffer-create "*NEO Emacs*")
-    (let ((inhibit-read-only t))
-      (erase-buffer)
-      (insert "* NEO Emacs\n"
-              "/Not a screenshot. An editor you can change./\n\n"
-              "Welcome to the browser editor.\n"
-              "Rust underneath. Emacs Lisp at your fingertips.\n"
-              "Running here, in your browser, through WebAssembly.\n\n"
-              "** Your first little spark\n"
-              "Select the playground on the right. If it is hidden,\n"
-              "use the /Enter the playground/ action below.\n"
-              "Then press =C-x C-e= to evaluate =(+ 1 2)=.\n"
-              "The answer appears at the bottom of the editor.\n\n"
-              "*** Make it your own\n"
-              "Change a number. Evaluate again. That is the idea:\n"
-              "a short conversation between you and your editor.\n\n")
-      (neomacs-wasm-landing--action "  Enter the playground  →" #'neomacs-wasm-landing-playground)
-      (insert "\n** This page is part of the editor\n"
-              "You are reading an Org-mode buffer, not a web-page overlay.\n"
-              "Put the cursor on a heading and press =TAB= to fold it.\n"
-              "The playground is an Emacs Lisp buffer. Both are yours\n"
-              "to explore with the same windows, commands, and keys.\n\n"
-              "** Follow your curiosity\n"
-              "Start with arithmetic. Make a message. Generate a list.\n"
-              "Then define a command and run it with =M-x neo-greet=.\n"
-              "The examples are small on purpose: change one thing,\n"
-              "see what happens, and build from there.\n\n")
-      (neomacs-wasm-landing--action "  Find a different mood / choose a theme  →" #'neomacs-wasm-landing-theme)
-      (neomacs-wasm-landing--action "  Explore your browser files  →" #'dired)
-      (neomacs-wasm-landing--action "  Make it personal / edit init.el  →" #'neomacs-wasm-landing-init)
-      (insert "\n** A small map of the keyboard\n"
-              "- =C-x C-e= :: Evaluate the expression before the cursor.\n"
-              "- =C-x o= :: Move to another editor window.\n"
-              "- =C-x b= :: Switch to another buffer.\n"
-              "- =C-x 2= / =C-x 3= :: Split below / beside.\n"
-              "- =M-x= :: Find and run a command (Alt+x).\n"
-              "- =C-h f= :: Ask what a function does.\n"
-              "- =C-g= :: Cancel. A good key to remember.\n\n"
-              "Pause after a prefix: which-key offers the next keys.\n\n"
-              "** Keep the good experiments\n"
-              "Use =M-x write-file= to save under =/neomacs-fake/=.\n"
-              "Saved files live in this site's browser storage.\n"
-              "They are not files in your computer's home directory.\n"
-              "Unsaved buffers and live Lisp definitions do not survive\n"
-              "a reload. Clearing site data can remove saved files, too.\n\n"
-              "** Built in the open. Still becoming.\n"
-              "NEO Emacs explores a Rust implementation of Emacs\n"
-              "with a graphical frontend and an Emacs Lisp heart.\n"
-              "This browser edition is a working preview, not a promise\n"
-              "that every desktop package already works here.\n\n"
-              "Native subprocesses are unavailable; browser networking\n"
-              "has browser restrictions. Expect unfinished edges.\n"
-              "Found one? A small reproduction is a great contribution.\n"
-              "Open the GitHub link in the title bar to join the project.\n\n"
-              "/Read a little. Evaluate something. Make it yours./\n")
-      (when (bound-and-true-p neomacs-wasm-package-error)
-        (insert "\nOptional packages unavailable:\n"
-                neomacs-wasm-package-error "\nReload the page to retry.\n")))
-    (goto-char (point-min))
-    (neomacs-wasm-welcome-mode)
-    (let ((banner (expand-file-name "images/neomacs-banner.svg" data-directory)))
-      (when (and (display-images-p) (file-readable-p banner))
-        (setq neomacs-wasm-landing--banner-data
-              (with-temp-buffer
-                (set-buffer-multibyte nil)
-                (insert-file-contents-literally banner)
-                (buffer-string)))
-        (let ((inhibit-read-only t))
-          (insert " \n\n"))))
+  "Visit the packaged home page without generating or replacing its text."
+  (with-current-buffer
+      (find-file-noselect (expand-file-name "index.org" (neomacs-wasm-landing--root)))
+    (rename-buffer "*NEO Emacs*" t)
+    (unless neomacs-wasm-landing--banner-data
+      (let ((banner (expand-file-name "../images/neomacs-banner.svg"
+                                      (neomacs-wasm-landing--root))))
+        (when (and (display-images-p) (file-readable-p banner))
+          (setq neomacs-wasm-landing--banner-data
+                (with-temp-buffer
+                  (set-buffer-multibyte nil)
+                  (insert-file-contents-literally banner)
+                  (buffer-string))))))
     (org-show-all)
-    (set-buffer-modified-p nil)
     (current-buffer)))
 
 (defun neomacs-wasm-landing--about ()
@@ -277,11 +215,16 @@ Only image geometry changes; never rearrange the user's windows."
   "Open a browser-home tree without making optional failure abort the page."
   (condition-case error-data
       (save-selected-window
-        (unless (treemacs-workspace->projects (treemacs-current-workspace))
-          (let ((result (treemacs-do-add-project-to-workspace
-                         (expand-file-name "~") "Your files")))
-            (unless (eq (car result) 'success)
-              (error "Cannot create browser workspace: %S" result))))
+        (dolist (entry (list (cons (neomacs-wasm-landing--root) "NEO Emacs")
+                            (cons (expand-file-name "~/") "Your files")))
+          (unless (seq-some
+                   (lambda (project)
+                     (equal (directory-file-name (treemacs-project->path project))
+                            (directory-file-name (car entry))))
+                   (treemacs-workspace->projects (treemacs-current-workspace)))
+            (let ((result (treemacs-do-add-project-to-workspace (car entry) (cdr entry))))
+              (unless (eq (car result) 'success)
+                (error "Cannot create browser workspace: %S" result)))))
         (unless (treemacs-get-local-window) (treemacs))
         (with-current-buffer (window-buffer (treemacs-get-local-window))
           (setq-local header-line-format nil)))
@@ -321,7 +264,10 @@ edits.  Only this command or initial startup arranges the windows."
           (set-window-buffer right (get-buffer "*NEO Emacs Playground*"))
           (select-window right)))))
   (add-hook 'window-size-change-functions #'neomacs-wasm-landing--resize-banner)
-  (neomacs-wasm-landing--resize-banner))
+  (neomacs-wasm-landing--resize-banner)
+  (when neomacs-wasm-package-error
+    (message "Optional landing packages unavailable: %s. Reload to retry."
+             neomacs-wasm-package-error)))
 
 (provide 'neomacs-wasm-landing)
 ;;; neomacs-wasm-landing.el ends here

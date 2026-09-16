@@ -1,0 +1,26 @@
+* Your files, inside this browser
+[[file:../index.org][← Home]]
+
+** Two places with different jobs
+- NEO Emacs :: Read-only packaged site files. Updates can replace these originals.
+- Your files :: Your writable home at =/neomacs-fake/= in this site's browser storage.
+
+The playground starts as a copy of the packaged example. An existing copy
+is never replaced on startup. Save edits with =C-x C-s= before reloading.
+[[neo:files][Browse Your files]] or [[neo:copy][copy this guide]] to annotate it.
+
+** Persistence is not a backup
+Saved files normally survive a reload in the same browser profile and origin.
+A different hostname, port, browser, or profile has different storage.
+Private browsing, clearing site data, or browser storage eviction can remove it.
+Do not keep the only copy of important work here.
+
+** What saving does not keep
+Unsaved edits, live Lisp definitions, and arbitrary editor state do not persist.
+Your browser home is not your computer's home directory. Browser code cannot
+silently read arbitrary local files or execute native programs.
+
+** Personal startup
+[[neo:init][Open init.el]] to save startup configuration. Site updates do not overwrite it.
+Set =neomacs-wasm-startup-profile= to =editor= if you prefer ordinary editor
+startup rather than this landing layout.

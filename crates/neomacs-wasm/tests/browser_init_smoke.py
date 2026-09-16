@@ -207,6 +207,8 @@ def main():
                 '''(progn
                   (select-window (get-buffer-window "*NEO Emacs*"))
                   (goto-char (point-min))
+                  (re-search-forward "^\\\\* NEO Emacs")
+                  (beginning-of-line)
                   (message (concat "ORG-" "READY")))''',
                 "ORG-READY",
             )
@@ -214,16 +216,17 @@ def main():
             editor.eval_expression(
                 '''(progn
                   (save-excursion
-                    (goto-char (point-min)) (forward-line 1)
+                    (goto-char (point-min))
+                    (re-search-forward "^\\\\* NEO Emacs") (forward-line 1)
                     (unless (invisible-p (point)) (error "Org TAB did not fold the introduction")))
                   (org-show-all)
                   (goto-char (point-min))
-                  (search-forward "  Enter the playground  →") (backward-char 1)
-                  (unless (button-at (point)) (error "Landing action is not a button"))
+                  (search-forward "Enter the playground") (backward-char 1)
                   (message (concat "ORG-ACTION-" "READY")))''',
                 "ORG-ACTION-READY",
             )
-            ActionChains(editor.driver).send_keys(Keys.ENTER).perform()
+            editor.type_native_control_key("c")
+            editor.type_native_control_key("o")
             editor.eval_expression(
                 '''(progn
                   (unless (and (equal (buffer-name) "*NEO Emacs Playground*")
