@@ -13,17 +13,18 @@ use neomacs_app::frontend_event::{
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+pub mod presentation;
+
 /// Wire contract understood by this browser frontend and editor Worker.
 ///
 /// Version 4 adds presentation-qualified pointer input, encoded with CBOR so
 /// JavaScript cannot round source or presentation identities.
 /// Version 5 carries decoded image uploads and retirements with presentations.
-pub const WORKER_PROTOCOL_VERSION: u16 = 5;
+/// Version 6 separates font resources from frames and removes flattened CBOR.
+pub const WORKER_PROTOCOL_VERSION: u16 = 6;
 
 /// Image resources travel once, ahead of the presentation that references them.
-#[derive(Serialize, Deserialize)]
 pub struct BrowserPresentation {
-    #[serde(flatten)]
     pub frame: neomacs_display_protocol::FrameDisplayState,
     pub images: Vec<neomacs_display_protocol::DecodedImage>,
     pub retired_images: Vec<neomacs_display_protocol::ImageId>,

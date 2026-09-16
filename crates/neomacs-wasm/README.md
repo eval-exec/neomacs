@@ -34,6 +34,16 @@ These headers enable shared-memory worker waits in browsers without JSPI.
 Experimental browser flags are not required by the application. An available
 WebGL/WebGPU graphics backend is still necessary.
 
+## Font resources
+
+Browser presentation protocol v6 transfers immutable font bytes as binary
+resources, then references them from frame-local font bindings. Resources are
+scoped by catalog generation and asset identity; changed bytes get fresh IDs.
+Every packet is decoded in order before render-frame coalescing. The transport
+cache keeps only the latest frame's resources, while older presentations retain
+their own shared font ownership. A transport or post-decode validation failure
+terminates the stream; it cannot silently skip a resource-bearing packet.
+
 ## Inline images
 
 Inline `:data` images use the shared native decoder in the editor worker and

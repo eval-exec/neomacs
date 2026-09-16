@@ -52,6 +52,8 @@ thread_local! {
     });
     static POINTER_FRONTEND: RefCell<std::rc::Weak<RefCell<Option<PresentedFrontend>>>> = RefCell::new(std::rc::Weak::new());
     static WORKER_FRAME: RefCell<Option<FrameGlyphBuffer>> = const { RefCell::new(None) };
+    static WORKER_PRESENTATIONS: RefCell<neomacs_wasm_protocol::presentation::PresentationDecoder> =
+        RefCell::new(neomacs_wasm_protocol::presentation::PresentationDecoder::default());
     static WORKER_IMAGES: RefCell<Vec<neomacs_display_protocol::DecodedImage>> = const { RefCell::new(Vec::new()) };
     static RETIRED_IMAGES: RefCell<Vec<neomacs_display_protocol::ImageId>> = const { RefCell::new(Vec::new()) };
     static WORKER_WINDOW: RefCell<Option<SurfaceWindow>> = const { RefCell::new(None) };
@@ -535,7 +537,7 @@ pub async fn wait_for_first_editor_presentation() -> Result<String, JsValue> {
 /// Worker. Its typed receipt keeps 64-bit identities lossless in JavaScript.
 #[wasm_bindgen]
 pub fn install_worker_presentation(bytes: &[u8]) -> Result<WorkerPresentationReceipt, JsValue> {
-    let state: neomacs_wasm_protocol::BrowserPresentation = ciborium::de::from_reader(bytes)
+    let state = WORKER_PRESENTATIONS.with(|decoder| decoder.borrow_mut().decode(bytes))
         .map_err(|error| JsValue::from_str(&format!("invalid Worker presentation: {error}")))?;
     if state.images.iter().any(|image| !image.validate()) {
         return Err(JsValue::from_str("invalid Worker image payload"));

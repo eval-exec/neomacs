@@ -119,10 +119,22 @@ class BrowserEditorHarness:
         raise RuntimeError("browser did not become ready")
 
     @staticmethod
+    def decode_presentation(values) -> dict[str, object]:
+        if not values:
+            return {}
+        wire = cbor2.loads(bytes(values))
+        if "frame" not in wire:
+            return wire
+        frame = wire["frame"]
+        # Observation needs font metadata, not native font-resource ownership.
+        frame["fonts"] = wire["fonts"]
+        return frame
+
+    @staticmethod
     def decode_frame_text(values: list[int]) -> str:
         if not values:
             return ""
-        frame = cbor2.loads(bytes(values))
+        frame = BrowserEditorHarness.decode_presentation(values)
         characters: list[str] = []
         for entry in frame.get("window_matrices", []):
             for row in entry["matrix"]["rows"]:
@@ -145,14 +157,14 @@ class BrowserEditorHarness:
             "return Array.from(new Uint8Array("
             "globalThis.__neomacsLastFrame || new ArrayBuffer()))"
         )
-        return cbor2.loads(bytes(values)) if values else {}
+        return self.decode_presentation(values)
 
     def startup_frame_payloads(self) -> list[dict[str, object]]:
         frames = self.driver.execute_script(
             "return (globalThis.__neomacsStartupFrames || []).map("
             "frame => Array.from(new Uint8Array(frame)))"
         )
-        return [cbor2.loads(bytes(values)) for values in frames]
+        return [self.decode_presentation(values) for values in frames]
 
     def assert_active_cursor(self, description: str) -> dict[str, object]:
         payload = self.frame_payload()
