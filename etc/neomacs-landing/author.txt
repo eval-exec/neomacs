@@ -1,0 +1,8 @@
+Author picture for the NEO Emacs landing page.
+
+Profile: https://github.com/eval-exec (Eval Exec)
+Source: https://avatars.githubusercontent.com/u/46400566?s=256&v=4
+Retrieved: 2026-09-16, at the profile owner's request.
+
+Bundled locally so the sidebar does not depend on a third-party request at
+startup. Update author.jpg from the profile when the author changes their avatar.

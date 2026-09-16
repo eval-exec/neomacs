@@ -16,6 +16,7 @@
 (require 'org)
 (require 'face-remap)
 (require 'image)
+(require 'browse-url)
 
 (defvar-local neomacs-wasm-landing--banner-data nil)
 (defvar-local neomacs-wasm-landing--banner-image nil)
@@ -67,7 +68,7 @@ Only image geometry changes; never rearrange the user's windows."
               (error (message "Landing banner: %s" (error-message-string error-data))))))))))
 
 (defcustom neomacs-wasm-landing-personal-info
-  "eval-exec\n\nBuilding NEO Emacs in the open.\n\nThis is a working preview. Feedback and contributions are welcome."
+  "Building NEO Emacs in the open.\n\nThis is a working preview. Feedback and contributions are welcome."
   "Introduction in the landing page's right sidebar; nil omits the sidebar."
   :type '(choice (const :tag "No personal sidebar" nil) string)
   :group 'neomacs-wasm)
@@ -208,6 +209,22 @@ Only image geometry changes; never rearrange the user's windows."
         (erase-buffer)
         (insert "\n")
         (neomacs-wasm-landing--heading "FROM THE AUTHOR")
+        (when (display-images-p)
+          (condition-case error-data
+              (let ((image (create-image
+                            (expand-file-name "neomacs-landing/author.jpg" data-directory)
+                            'jpeg nil :width 112 :scale 1 :ascent 'center)))
+                ;; Decode before redisplay, just as for the welcome banner.
+                (image-size image t)
+                (insert-image image "[Eval Exec's GitHub avatar]")
+                (insert "\n\n"))
+            (error (message "Author picture: %s" (error-message-string error-data)))))
+        (insert-text-button "Eval Exec"
+                            'follow-link t
+                            'help-echo "Open GitHub profile in a browser tab"
+                            'action (lambda (_button)
+                                      (browse-url "https://github.com/eval-exec")))
+        (insert "\n@eval-exec\n\n")
         (insert neomacs-wasm-landing-personal-info "\n\n")
         (neomacs-wasm-landing--heading "THE PROJECT")
         (insert "github.com/\neval-exec/neomacs\n\n"
