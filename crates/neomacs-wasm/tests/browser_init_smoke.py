@@ -122,7 +122,7 @@ def main():
                                tab-line-mode (not header-line-format)
                                (not neomacs-wasm-package-error)
                                (treemacs-get-local-window)
-                               (get-buffer-window "*NEO Emacs About*")
+                               (get-buffer-window "*About*")
                                (memq 'doom-one (custom-available-themes)))
                     (error "landing packages missing: %S" neomacs-wasm-package-error))
                   (message "DEFAULT-LANDING-READY"))''',
@@ -206,12 +206,12 @@ def main():
                 '''(progn
                   (unless (and which-key-mode
                                (get-buffer-window "*NEO Emacs*")
-                               (get-buffer-window "*NEO Emacs Playground*")
+                               (get-buffer-window "*Playgorund*")
                                (eq major-mode 'emacs-lisp-mode)
                                (equal (preceding-sexp) '(+ 1 2))
                                (with-current-buffer "*NEO Emacs*"
                                  (and (derived-mode-p 'org-mode) buffer-read-only))
-                               (get-buffer-window "*NEO Emacs About*"))
+                               (get-buffer-window "*About*"))
                     (error "landing windows not ready"))
                   (setq values nil eval-expression-debug-on-error nil)
                   (message (concat "LANDING-" "READY")))''',
@@ -243,7 +243,7 @@ def main():
             editor.type_native_control_key("o")
             editor.eval_expression(
                 '''(progn
-                  (unless (and (equal (buffer-name) "*NEO Emacs Playground*")
+                  (unless (and (equal (buffer-name) "*Playgorund*")
                                (equal (preceding-sexp) '(+ 1 2)))
                     (error "Org playground action did not preserve the first example"))
                   (message (concat "ORG-ACTION-" "PASSED")))''',
@@ -274,7 +274,7 @@ def main():
                   (unless (equal (buffer-string) "(setq neomacs-wasm-test-evaluation (+ 1 2))")
                     (error "playground edits were lost"))
                   (unless (and (treemacs-get-local-window)
-                               (get-buffer-window "*NEO Emacs About*"))
+                               (get-buffer-window "*About*"))
                     (error "reopening lost a landing sidebar"))
                   (message "PLAYGROUND-PRESERVED"))''',
                 "PLAYGROUND-PRESERVED",
@@ -288,7 +288,7 @@ def main():
                 '''(progn (neomacs-wasm-landing-open)
                   (unless (and (< (frame-width) 100) (one-window-p t)
                                (equal (buffer-name) "*NEO Emacs*")
-                               (with-current-buffer "*NEO Emacs Playground*"
+                               (with-current-buffer "*Playgorund*"
                                  (equal (buffer-string) "(setq neomacs-wasm-test-evaluation (+ 1 2))")))
                     (error "narrow layout lost content or retained sidebars"))
                   (message "NARROW-LANDING-READY"))''',

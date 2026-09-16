@@ -35,7 +35,7 @@ def main():
           (setq neo-test-scroll-start (window-start neo-test-scroll-window))
           (setq neo-test-scroll-selected (selected-window))
           (setq neo-test-playground-start (window-start neo-test-scroll-selected))
-          (unless (equal (buffer-name) "*NEO Emacs Playground*")
+          (unless (equal (buffer-name) "*Playgorund*")
             (error "Playground must be selected before hovering the Org pane"))
           (message (concat "SCROLL-" "READY")))''', "SCROLL-READY")
         origin = ScrollOrigin.from_viewport(500, 300)
