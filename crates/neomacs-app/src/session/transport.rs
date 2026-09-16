@@ -110,6 +110,14 @@ impl FrontendInputPort {
         self.submit_batch(EvaluatorInputBatch::from_positioned_pointer(event))
     }
 
+    /// Publish decoder completion before the next image-dependent redisplay.
+    pub fn image_state_changed(
+        &self,
+        event: neomacs_display_protocol::ImageStateEvent,
+    ) -> Result<FrontendInputSubmission, FrontendInputDisconnected> {
+        self.submit_batch(EvaluatorInputBatch::single(InputEvent::ImageStateChanged { event }))
+    }
+
     pub(super) fn submit_batch(
         &self,
         batch: EvaluatorInputBatch<'_>,
