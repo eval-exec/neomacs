@@ -186,6 +186,7 @@ Install `tests/requirements.txt` in a virtual environment under `tmp/`, then run
 python crates/neomacs-wasm/tests/browser_basic_smoke.py --browser chrome --headless --artifacts-dir tmp/chrome-basic
 python crates/neomacs-wasm/tests/browser_basic_smoke.py --browser firefox --headless --artifacts-dir tmp/firefox-basic
 python crates/neomacs-wasm/tests/browser_init_smoke.py --headless --artifacts-dir tmp/browser-init
+python crates/neomacs-wasm/tests/browser_treemacs_smoke.py --headless --artifacts-dir tmp/browser-treemacs
 python crates/neomacs-wasm/tests/browser_init_smoke.py --headless --block-packages tmp/wasm-dist --artifacts-dir tmp/browser-fallback
 node --test crates/neomacs-wasm/web/*.test.mjs
 cargo test -p xtask wasm
