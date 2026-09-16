@@ -220,7 +220,7 @@ def main():
                     (unless (invisible-p (point)) (error "Org TAB did not fold the introduction")))
                   (org-show-all)
                   (goto-char (point-min))
-                  (search-forward "Enter the playground") (backward-char 1)
+                  (search-forward "[[neo:playground][Enter the playground") (backward-char 1)
                   (message (concat "ORG-ACTION-" "READY")))''',
                 "ORG-ACTION-READY",
             )
