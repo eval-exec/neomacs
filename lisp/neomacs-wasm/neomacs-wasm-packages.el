@@ -52,7 +52,7 @@
   (setq treemacs-collapse-dirs 0)
   (require 'doom-themes)
   ;; The landing page has a dark visual identity; personal init runs afterwards.
-  (load-theme 'doom-solarized-dark t)
+  (load-theme 'doom-one t)
   ;; Browser sessions have no external language-version subprocesses.
   (setq doom-modeline-env-version nil)
   (require 'doom-modeline)
