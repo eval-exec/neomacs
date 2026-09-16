@@ -63,7 +63,7 @@ def wait_for_logical_geometry(
         if (
             observed.get("frame_pixel_width") == float(width)
             and observed.get("frame_pixel_height") == float(height)
-            and observed.get("font_pixel_size") == 16.0
+            and observed.get("font_pixel_size") == 14.0
             and (
                 after_presentation is None
                 or observed.get("presentation_id") != after_presentation
