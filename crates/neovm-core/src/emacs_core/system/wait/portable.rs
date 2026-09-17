@@ -146,7 +146,9 @@ impl Context {
         loop {
             let _ = self.stage_next_host_input_event_if_available()?;
             let special_activity = self.service_portable_input(true, false)?;
-            if self.stage_pending_command_input_for_wait_request()? {
+            if self.stage_pending_command_input_for_wait_request(
+                crate::frontend_events::FrontendInputQuery::Readable,
+            )? {
                 return Ok(CommandInputWaitOutcome::InputPending);
             }
             if self
