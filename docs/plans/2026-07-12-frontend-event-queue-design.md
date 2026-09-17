@@ -159,6 +159,12 @@ reader; it is not reclassified as internal or stripped of its Lisp hooks.
 The wait-policy match chooses the query exhaustively, so a new wait mode
 cannot silently inherit the wrong filtering operation.
 
+The Android/Wasm branch additionally has `ReadControl` for ordered IME
+snapshot/selection and persistence requests. The native and portable waits
+explicitly return to the reader for that queue-head category without marking
+it as command input. `PresentedRegion` remains internal on every frontend;
+both native and portable command waits use `FrontendInputQuery::Readable`.
+
 `PresentationRetired` is `Internal`.  Its policy is fixed:
 
 | Semantic property | Value |
