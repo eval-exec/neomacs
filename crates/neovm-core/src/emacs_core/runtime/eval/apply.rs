@@ -1915,10 +1915,7 @@ impl Context {
                 // depth calls the leaf directly: through the stack-growth
                 // closure, which LLVM kept out of line, every call from a
                 // mapping builtin paid its frame (elb map-closure: 5M calls).
-                Ok(())
-                    if self.depth < STACK_GROWTH_PROBE_START_DEPTH
-                        || !self.depth.is_multiple_of(STACK_GROWTH_PROBE_INTERVAL) =>
-                {
+                Ok(()) if !super::super::stack_growth::should_probe(self.depth) => {
                     // As `funcall_general_untraced`: fetched after the safe
                     // point (it may materialize a dump stub).
                     let bc_data = function.get_bytecode_data().unwrap();
