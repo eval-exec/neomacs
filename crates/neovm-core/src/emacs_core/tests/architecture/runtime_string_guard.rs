@@ -31,6 +31,7 @@ fn migrated_string_subsystems_do_not_call_generic_runtime_string_adapter_directl
         "display/fontset/mod.rs",
         "text/format/mod.rs",
         "runtime/eval/mod.rs",
+        "runtime/eval/tree_walk.rs",
         "commands/interactive/mod.rs",
         "commands/keyboard/pure.rs",
         "commands/kmacro/mod.rs",

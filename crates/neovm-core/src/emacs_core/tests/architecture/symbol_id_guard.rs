@@ -30,11 +30,12 @@ macro_rules! hot_dispatch_sources {
 /// A cold path may legitimately resolve a name (charset and coding-system
 /// setup do), which is why this is scoped rather than crate-wide -- a lint
 /// that fires on correct code gets switched off.
-fn hot_dispatch_files() -> [(&'static str, &'static str); 3] {
+fn hot_dispatch_files() -> [(&'static str, &'static str); 4] {
     hot_dispatch_sources![
         "runtime/bytecode/vm.rs",
         "runtime/eval/apply.rs",
         "runtime/jit/compile/dispatch.rs",
+        "runtime/eval/tree_walk.rs",
     ]
 }
 

@@ -199,7 +199,7 @@ fn the_gui_terminal_layer_does_not_load_easy_mmode() {
 /// `src/xterm.c` (`:32870`-`:32960`), so GNU binds them only under
 /// `HAVE_X_WINDOWS` -- the tty-only build answers `nil` for all ten -- and this
 /// port declares them on purpose, from the `syms_of_xterm` sweep at
-/// `crates/neovm-core/src/emacs_core/runtime/eval/mod.rs:5680-5699` and
+/// `crates/neovm-core/src/emacs_core/runtime/eval/construct.rs` (its `syms_of_xterm` section) and
 /// `defvar_bool.rs:269`.  They are pinned here BY NAME, not folded into the
 /// count, so that the count that must stay zero (the `x-dnd.el` one) stays
 /// readable and an eleventh cannot arrive unnoticed.  The tension they record
@@ -312,7 +312,7 @@ fn x_only_lisp_variables_are_absent_because_this_build_does_not_provide_x() {
 /// ```
 ///
 /// `x-input-coding-function` is `src/xterm.c:32993` `DEFVAR_LISP` -- declared
-/// here at `crates/neovm-core/src/emacs_core/runtime/eval/mod.rs:5755` -- and
+/// here in `crates/neovm-core/src/emacs_core/runtime/eval/construct.rs` (its `syms_of_xterm` section) -- and
 /// `lisp/term/neo-win.el` re-declared it with a docstring of its own
 /// ("Function used to determine the coding system for input method text.")
 /// over GNU's ("Function used to determine the coding system used by input
