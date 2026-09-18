@@ -444,7 +444,19 @@ impl TuiSession {
             // Prevent user config from interfering while also isolating
             // concurrent TUI tests from one another.
             .env("HOME", home.path())
-            .env("TMPDIR", tmp.path());
+            .env("TMPDIR", tmp.path())
+            // The mode line's mule-info segment exposes every coding
+            // default, and those follow the ambient locale: under the C
+            // locale GNU and Neomacs still diverge (GNU "--" vs Neomacs
+            // "U=="), so a runner that comes up without LANG fails every
+            // paired comparison at the mode line.  C.UTF-8 is built into
+            // glibc everywhere the suite runs, and both editors agree
+            // under it, so pin it for both sessions and drop the ambient
+            // spellings.
+            .env("LC_ALL", "C.UTF-8")
+            .env_remove("LANG")
+            .env_remove("LANGUAGE")
+            .env_remove("LC_CTYPE");
         for var in [
             "RUST_LOG",
             "NEOMACS_LOG_FILE",
