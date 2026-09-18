@@ -433,19 +433,29 @@ impl StringInterner {
         let Some(alias) = name.borrowed_alias() else {
             return self.intern_lisp_string(name);
         };
-        if let Some(idx) = self.lookup_name_parts(name.as_bytes(), name.is_multibyte()) {
-            return idx;
+        let bytes = name.as_bytes();
+        let multibyte = name.is_multibyte();
+        // One hash per name: the probe and the insert share it. The lookup
+        // followed by `map.insert` hashed every new dump name twice -- 18K
+        // names per load.
+        let hash = self.hash_name_parts(bytes, multibyte);
+        match self.map.raw_entry_mut().from_hash(hash, |candidate| {
+            candidate.is_multibyte() == multibyte && candidate.as_bytes() == bytes
+        }) {
+            hashbrown::hash_map::RawEntryMut::Occupied(entry) => *entry.get(),
+            hashbrown::hash_map::RawEntryMut::Vacant(entry) => {
+                let idx = NameId(self.strings.len() as u32);
+                debug_assert_ne!(
+                    idx,
+                    crate::emacs_core::symbol::SYMBOL_NAME_SENTINEL,
+                    "NameId space exhausted: a real symbol name collided with the \
+                     obarray empty-slot presence sentinel (u32::MAX)",
+                );
+                let interned = self.strings.push(alias);
+                entry.insert_hashed_nocheck(hash, interned, idx);
+                idx
+            }
         }
-        let idx = NameId(self.strings.len() as u32);
-        debug_assert_ne!(
-            idx,
-            crate::emacs_core::symbol::SYMBOL_NAME_SENTINEL,
-            "NameId space exhausted: a real symbol name collided with the \
-             obarray empty-slot presence sentinel (u32::MAX)",
-        );
-        let interned = self.strings.push(alias);
-        self.map.insert(interned, idx);
-        idx
     }
 
     /// Look up a symbol-name atom without interning it.
@@ -955,7 +965,18 @@ impl SymbolRegistry {
         self.canonical_by_name
             .reserve(canonical.iter().filter(|&&flag| flag).count());
 
-        let mut dump_canonical_slots: FxHashMap<NameId, usize> = FxHashMap::default();
+        // The dump slot already claiming each runtime name as canonical, as
+        // slot + 1 (0 = none), indexed by the runtime `NameId`: every name
+        // was interned above, and name ids are dense indices into the name
+        // table. A hash map here cost an insert per canonical symbol -- 18K
+        // per load.
+        let mut dump_canonical_slots: Vec<u32> = vec![0; self.names.strings.len()];
+        let mut claim_canonical = |name: NameId, slot: usize| -> Option<usize> {
+            let cell = &mut dump_canonical_slots[name.0 as usize];
+            let previous = (*cell != 0).then(|| *cell as usize - 1);
+            *cell = slot as u32 + 1;
+            previous
+        };
 
         // Seed-prefix position map. A fresh registry holds exactly the
         // constructor's seeds (nil, t, unbound); the dump table is the full
@@ -1006,7 +1027,7 @@ impl SymbolRegistry {
                     // nil/t must still hard-error, not last-wins clobber.
                     if is_canonical
                         && let Some(previous_slot) =
-                            dump_canonical_slots.insert(runtime_name, slot)
+                            claim_canonical(runtime_name, slot)
                     {
                         return Err(format!(
                             "pdump symbol metadata is inconsistent: canonical symbol slots {} and {} both name {}",
@@ -1018,7 +1039,7 @@ impl SymbolRegistry {
                     return Ok(seed_id);
                 }
                 if is_canonical {
-                    if let Some(previous_slot) = dump_canonical_slots.insert(runtime_name, slot) {
+                    if let Some(previous_slot) = claim_canonical(runtime_name, slot) {
                         return Err(format!(
                             "pdump symbol metadata is inconsistent: canonical symbol slots {} and {} both name {}",
                             previous_slot,

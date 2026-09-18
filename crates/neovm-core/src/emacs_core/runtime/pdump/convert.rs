@@ -523,7 +523,7 @@ impl<'a> LoadDecoder<'a> {
     ) -> Result<(), DumpError> {
         self.register_mapped_objects()?;
         for index in 0..self.state.objects.len() {
-            if self.object_is_fully_mapped_without_load_work(index) {
+            if !self.object_needs_placeholder(index) {
                 continue;
             }
             self.allocate_tagged_placeholder(TaggedHeapRef {
@@ -567,6 +567,25 @@ impl<'a> LoadDecoder<'a> {
         // enum destructors is pure startup overhead.
         unsafe {
             objects.discard_without_drop();
+        }
+    }
+
+    /// Whether the placeholder pass must visit `index`. Cons and float
+    /// cells are fully mapped. So, in effect, is a string row carrying its
+    /// byte span: it is self-contained (the object-extra reader rejects a
+    /// descriptor for one, `mapped_object_is_self_contained`), and its
+    /// placeholder only validates the span the registration pass just
+    /// validated and returns a value it does not cache (a later reference
+    /// derives it again). A release build skips that call -- 22K of the
+    /// image's 35K non-cons rows, each decoded twice more and probed for a
+    /// descriptor there. Debug builds still make it for the sidecar
+    /// verification it carries.
+    fn object_needs_placeholder(&self, index: usize) -> bool {
+        match self.state.spans.get(index) {
+            LoadedObjectSpan::Cons(_) | LoadedObjectSpan::Float(_) => false,
+            #[cfg(not(debug_assertions))]
+            LoadedObjectSpan::String { data: Some(_), .. } => false,
+            _ => true,
         }
     }
 
