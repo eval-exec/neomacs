@@ -7927,7 +7927,7 @@ fn vm_base64_json_ccl_and_runtime_clusters_use_direct_dispatch() {
     crate::test_utils::init_test_tracing();
     assert_eq!(
         vm_eval_str(
-            r#"(list
+            &r#"(list
                  (equal (base64-encode-string "Hi") "SGk=")
                  (equal (base64-decode-string "SGk=") "Hi")
                  (equal (base64url-encode-string "hi" t) "aGk")
@@ -7960,14 +7960,14 @@ fn vm_base64_json_ccl_and_runtime_clusters_use_direct_dispatch() {
                  (null (fboundp 'comp-native-compiler-options-effective-p))
                  (null (fboundp 'comp-native-driver-options-effective-p))
                  ;; ledger 192: GNU's six dbusbind.c subrs are inside
-                 ;; #ifdef HAVE_DBUS (src/dbusbind.c:21, :2178) and this build
-                 ;; links no libdbus, so it declares none of them.  The three
-                 ;; that used to stand here answered a hardcoded 2, a
-                 ;; fabricated ":1.1" and an invented dbus-event reply.
-                 (null (fboundp 'dbus--init-bus))
-                 (null (fboundp 'dbus-get-unique-name))
-                 (null (fboundp 'dbus-message-internal))
-                 (null (featurep 'dbusbind))
+                 ;; #ifdef HAVE_DBUS (src/dbusbind.c:21, :2178): a build that
+                 ;; links libdbus (`neomacs_have_dbus') declares them and
+                 ;; provides `dbusbind', one that does not declares none.
+                 ;; DBUS-BUILT is this build's answer.
+                 (eq (and (fboundp 'dbus--init-bus) t) DBUS-BUILT)
+                 (eq (and (fboundp 'dbus-get-unique-name) t) DBUS-BUILT)
+                 (eq (and (fboundp 'dbus-message-internal) t) DBUS-BUILT)
+                 (eq (and (featurep 'dbusbind) t) DBUS-BUILT)
                  (consp (get-load-suffixes))
                  ;; Valid args, and bound non-interactive so the reporter
                  ;; takes its message branch: the batch branch is GNU's
@@ -7998,6 +7998,10 @@ fn vm_base64_json_ccl_and_runtime_clusters_use_direct_dispatch() {
                  (null (dump-emacs-portable "x"))
                  (null (dump-emacs-portable--sort-predicate nil nil))
                  (null (dump-emacs-portable--sort-predicate-copied nil nil)))"#
+                .replace(
+                    "DBUS-BUILT",
+                    if cfg!(neomacs_have_dbus) { "t" } else { "nil" }
+                )
         ),
         r#"OK (t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t t)"#
     );

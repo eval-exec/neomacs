@@ -91,12 +91,12 @@
 //!
 //! Ledger 199.
 
+#[cfg(not(neomacs_have_dbus))]
+use CoupledFeature::DbusBind;
 use CoupledFeature::{
     Android, Cairo, DynamicSetting, Gtk, Haiku, Motif, MsDos, NativeCompile, Ns, Pgtk, W32, X,
     XwidgetInternal,
 };
-#[cfg(not(neomacs_have_dbus))]
-use CoupledFeature::DbusBind;
 
 /// The single question this build can answer that decides whether GNU's
 /// declaration site could have compiled.
@@ -258,7 +258,10 @@ const XSETTINGS_ORACLE_PIN: &str = "ledger 199: font-use-system-font is (car byt
 /// across `src/*.c` and `src/*.m`, each site's enclosing `#if`/`#ifdef` stack
 /// matched against the `Fprovide` calls in the same block, and the file-level
 /// guard taken from `src/emacs.c`'s own `syms_of_*` dispatch.  234 names
-/// survive that filter; this build binds 74 of them, each with a policy.
+/// survive that filter; this build binds 74 of them, each with a policy.  A
+/// build that links libdbus (`neomacs_have_dbus`) has `dbusbind`, so its nine
+/// `dbusbind.c` names are real variables there and their rows compile out:
+/// 225 rows, the same 74 bound.
 /// Kept one row per line, like `defvar_object::gnu_table` and
 /// `var_docs::gnu_table`: the rows are generated, and a row that reads as one
 /// line diffs as one line when the derivation is re-run.
@@ -519,9 +522,13 @@ mod tests {
     use super::*;
 
     /// The shape of the table, checked without booting a runtime.
+    /// The `dbusbind.c` rows, present only in a build without libdbus: with
+    /// it the feature exists and those nine names are real variables.
+    const DBUS_ROWS: usize = if cfg!(neomacs_have_dbus) { 0 } else { 9 };
+
     #[test]
     fn every_row_names_a_feature_and_cites_gnu() {
-        assert_eq!(PROVIDE_COUPLED_VARIABLES.len(), 234);
+        assert_eq!(PROVIDE_COUPLED_VARIABLES.len(), 225 + DBUS_ROWS);
         for var in PROVIDE_COUPLED_VARIABLES {
             assert!(!var.name.is_empty());
             assert!(
@@ -564,7 +571,7 @@ mod tests {
             .filter(|v| matches!(v.here, HereDecision::BoundByPolicy { .. }))
             .count();
         assert_eq!(bound, 74);
-        assert_eq!(PROVIDE_COUPLED_VARIABLES.len() - bound, 160);
+        assert_eq!(PROVIDE_COUPLED_VARIABLES.len() - bound, 151 + DBUS_ROWS);
     }
 
     /// The two names ledger 199 removed, and the two it deliberately did not.
