@@ -69,10 +69,7 @@ pub(super) fn reset() {
 }
 
 fn dbus_error(message: &str, extra: Value) -> Flow {
-    signal(
-        "dbus-error",
-        vec![Value::string(message.to_owned()), extra],
-    )
+    signal("dbus-error", vec![Value::string(message.to_owned()), extra])
 }
 
 fn open_and_register(expanded: &str) -> Result<Value, Flow> {

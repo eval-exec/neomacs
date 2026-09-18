@@ -5578,7 +5578,7 @@ impl crate::emacs_core::eval::Context {
             // every idle wake, so a request is handled within one iteration.
             self.drain_eval_tasks();
             crate::emacs_core::builtins::drain_file_notify_events(self)?;
-        crate::emacs_core::dbusbind::drain_events(self)?;
+            crate::emacs_core::dbusbind::drain_events(self)?;
             match self.pop_queued_read_char_event()? {
                 QueuedReadCharEvent::Event(event) => return Ok(Some(event)),
                 QueuedReadCharEvent::HandledInternally => continue,
