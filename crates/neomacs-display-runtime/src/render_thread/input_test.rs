@@ -2865,3 +2865,101 @@ fn translate_key_suppresses_modifiers() {
         );
     }
 }
+
+/// Every other `NamedKey` winit's xkb keymap can produce: the media, launch,
+/// browser, mail, power, IME, 3270 and ISO group families.  The values come
+/// from inverting that keymap, so each is the keysym an X11 or Wayland backend
+/// hands GNU, and the trailing comment is the symbol the key becomes (see
+/// `keyboard/keysym.rs`, docs/design/input-keysyms.md).  With these, nothing
+/// winit can name reaches the "no keysym mapping yet" log.
+#[test]
+fn translate_key_names_the_media_launch_and_ime_families() {
+    for (key, expected) in [
+        (NamedKey::AllCandidates, 0x00ff3d),         // MultipleCandidate
+        (NamedKey::Alphanumeric, 0x00ff2f),          // eisu-shift
+        (NamedKey::Attn, 0x00fd0e),                  // 3270_Attn
+        (NamedKey::AudioVolumeDown, 0x1008ff11),     // XF86AudioLowerVolume
+        (NamedKey::AudioVolumeMute, 0x1008ff12),     // XF86AudioMute
+        (NamedKey::AudioVolumeUp, 0x1008ff13),       // XF86AudioRaiseVolume
+        (NamedKey::BrightnessDown, 0x1008ff03),      // XF86MonBrightnessDown
+        (NamedKey::BrightnessUp, 0x1008ff02),        // XF86MonBrightnessUp
+        (NamedKey::BrowserFavorites, 0x1008ff30),    // XF86Favorites
+        (NamedKey::BrowserHome, 0x1008ff18),         // XF86HomePage
+        (NamedKey::BrowserRefresh, 0x1008ff29),      // XF86Refresh
+        (NamedKey::BrowserSearch, 0x1008ff1b),       // XF86Search
+        (NamedKey::Clear, 0x00ff0b),                 // clear
+        (NamedKey::Close, 0x1008ff56),               // XF86Close
+        (NamedKey::CodeInput, 0x00ff37),             // Codeinput
+        (NamedKey::Compose, 0x00ff20),               // Multi_key
+        (NamedKey::Convert, 0x00ff23),               // henkan
+        (NamedKey::CrSel, 0x00fd1c),                 // 3270_CursorSelect
+        (NamedKey::Eject, 0x1008ff2c),               // XF86Eject
+        (NamedKey::EraseEof, 0x00fd06),              // 3270_EraseEOF
+        (NamedKey::ExSel, 0x00fd1b),                 // 3270_ExSelect
+        (NamedKey::Execute, 0x00ff62),               // execute
+        (NamedKey::GroupFirst, 0x00fe0c),            // key-12
+        (NamedKey::GroupLast, 0x00fe0e),             // key-14
+        (NamedKey::GroupNext, 0x00fe08),             // key-8
+        (NamedKey::GroupPrevious, 0x00fe0a),         // key-10
+        (NamedKey::Hankaku, 0x00ff29),               // hankaku
+        (NamedKey::Help, 0x00ff6a),                  // help
+        (NamedKey::Hibernate, 0x1008ffa8),           // XF86Hibernate
+        (NamedKey::Hiragana, 0x00ff25),              // hiragana
+        (NamedKey::HiraganaKatakana, 0x00ff27),      // hiragana-katakana
+        (NamedKey::KanaMode, 0x00ff2d),              // kana-lock
+        (NamedKey::KanjiMode, 0x00ff21),             // kanji
+        (NamedKey::LaunchApplication1, 0x1008ff33),  // XF86MyComputer
+        (NamedKey::LaunchApplication2, 0x1008ff1d),  // XF86Calculator
+        (NamedKey::LaunchCalendar, 0x1008ff20),      // XF86Calendar
+        (NamedKey::LaunchMail, 0x1008ff19),          // XF86Mail
+        (NamedKey::LaunchMediaPlayer, 0x1008ff87),   // XF86Video
+        (NamedKey::LaunchMusicPlayer, 0x1008ff92),   // XF86Music
+        (NamedKey::LaunchPhone, 0x1008ff6e),         // XF86Phone
+        (NamedKey::LaunchScreenSaver, 0x1008ff2d),   // XF86ScreenSaver
+        (NamedKey::LaunchSpreadsheet, 0x1008ff5c),   // XF86Excel
+        (NamedKey::LaunchWebBrowser, 0x1008ff2e),    // XF86WWW
+        (NamedKey::LaunchWebCam, 0x1008ff8f),        // XF86WebCam
+        (NamedKey::LaunchWordProcessor, 0x1008ff89), // XF86Word
+        (NamedKey::LogOff, 0x1008ff61),              // XF86LogOff
+        (NamedKey::MailForward, 0x1008ff90),         // XF86MailForward
+        (NamedKey::MailReply, 0x1008ff72),           // XF86Reply
+        (NamedKey::MailSend, 0x1008ff7b),            // XF86Send
+        (NamedKey::MediaAudioTrack, 0x1008ff9b),     // XF86AudioCycleTrack
+        (NamedKey::MediaFastForward, 0x1008ff97),    // XF86AudioForward
+        (NamedKey::MediaPause, 0x1008ff31),          // XF86AudioPause
+        (NamedKey::MediaPlay, 0x1008ff14),           // XF86AudioPlay
+        (NamedKey::MediaRecord, 0x1008ff1c),         // XF86AudioRecord
+        (NamedKey::MediaRewind, 0x1008ff3e),         // XF86AudioRewind
+        (NamedKey::MediaStop, 0x1008ff15),           // XF86AudioStop
+        (NamedKey::MediaTrackNext, 0x1008ff17),      // XF86AudioNext
+        (NamedKey::MediaTrackPrevious, 0x1008ff16),  // XF86AudioPrev
+        (NamedKey::ModeChange, 0x00ff7e),            // Mode_switch
+        (NamedKey::New, 0x1008ff68),                 // XF86New
+        (NamedKey::NonConvert, 0x00ff22),            // muhenkan
+        (NamedKey::Open, 0x1008ff6b),                // XF86Open
+        (NamedKey::Play, 0x00fd16),                  // 3270_Play
+        (NamedKey::Power, 0x1008ff21),               // XF86PowerDown
+        (NamedKey::PreviousCandidate, 0x00ff3e),     // PreviousCandidate
+        (NamedKey::RandomToggle, 0x1008ff99),        // XF86AudioRandomPlay
+        (NamedKey::Romaji, 0x00ff24),                // romaji
+        (NamedKey::Save, 0x1008ff77),                // XF86Save
+        (NamedKey::Select, 0x00ff60),                // select
+        (NamedKey::SingleCandidate, 0x00ff3c),       // SingleCandidate
+        (NamedKey::SpellCheck, 0x1008ff7c),          // XF86Spell
+        (NamedKey::SplitScreenToggle, 0x1008ff7d),   // XF86SplitScreen
+        (NamedKey::Standby, 0x1008ff10),             // XF86Standby
+        (NamedKey::Subtitle, 0x1008ff9a),            // XF86Subtitle
+        (NamedKey::VideoModeNext, 0x1008fe22),       // XF86Next_VMode
+        (NamedKey::WakeUp, 0x1008ff2b),              // XF86WakeUp
+        (NamedKey::Zenkaku, 0x00ff28),               // zenkaku
+        (NamedKey::ZenkakuHankaku, 0x00ff2a),        // zenkaku-hankaku
+        (NamedKey::ZoomIn, 0x1008ff8b),              // XF86ZoomIn
+        (NamedKey::ZoomOut, 0x1008ff8c),             // XF86ZoomOut
+    ] {
+        assert_eq!(
+            RenderApp::translate_key(&Key::Named(key)),
+            expected,
+            "{key:?}"
+        );
+    }
+}

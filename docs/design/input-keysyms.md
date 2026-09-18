@@ -2,18 +2,20 @@
 
 A key that no table enumerated must still be bindable. GNU's model is not a
 list of supported keys: its backends hand `keyboard.c` whatever the toolkit
-reported, and `modify_event_symbol` (`src/keyboard.c:7749-7805`) names it from
-`system-key-alist`, then from the toolkit's keysym name (`XKeysymToString` on
-X11 `src/xterm.c:14365`, `gdk_keyval_name` on Wayland/GTK `src/pgtkterm.c:391`,
-per-platform on w32/NS), and finally from the key's own number as `key-N`.
-There is no unnamed-key case, so the worst outcome of an exotic key is a
-binding the user has to write, never silence.
+reported, and `make_lispy_event` (`src/keyboard.c:6358-6412`) plus
+`modify_event_symbol` (`src/keyboard.c:7742-7823`) name it — from GNU's own
+tables, then `system-key-alist`, then the toolkit's keysym name
+(`XKeysymToString` on X11 `src/xterm.c:14365`, `gdk_keyval_name` on
+Wayland/GTK `src/pgtkterm.c:391`, per-platform on w32/NS), and finally from the
+key's own number as `key-N`. There is no unnamed-key case, so the worst outcome
+of an exotic key is a binding the user has to write, never silence.
 
 A port that keeps a table of supported keys and drops what is missing turns
 each unnoticed key into a bug report — and a silent one, because a dropped key
 is indistinguishable from a key the program does not support. That is what
 `translate_key` did: F13 and above, the XF86 block, Undo/Redo/Menu, and every
-native key winit could not name all fell through one `_ => 0`.
+native key winit could not name all fell through one `_ => 0`. It now spells
+every `NamedKey` winit's xkb keymap can produce.
 
 ## Keysym is not character
 
@@ -27,6 +29,12 @@ garbage for those keys. GNU classifies by range first — `IsCursorKey`
 (0xffe1-0xffee), all in `src/pgtkterm.c:5218-5221` — and only then asks whether
 the keysym is a character. `keyboard/keysym.rs` ports those predicates, and
 `keysym_to_key_event` applies them in that order.
+
+The trap is not confined to the 0xff00 block. `0xfd0e` is `XK_3270_Attn`, and
+U+FD0E is an Arabic presentation form — so the 3270 keysyms (0xfd01-0xfd1e) sit
+inside the named block too, or the character arm would type a letter instead of
+producing the `3270_Attn` event GNU produces (verified against the pinned
+binary, which names it exactly that).
 
 The F block is worth stating plainly: it is exactly F1..F35, `0xffbe` to
 `0xffe0`, so the function-key number is arithmetic (`keysym - 0xffbe + 1`)
@@ -44,42 +52,74 @@ named after the platform and number they came from: `mac-36`, `win-93`,
 `Key::Unidentified(NativeKey::Xkb(keysym))`, and that keysym is already the
 identity this port uses.
 
-## Spelling
+## Spelling: GNU's tables first, then the toolkit, verbatim
 
-Names are the ones GNU configs already write, because GNU's `kbd` and
-`read-kbd-macro` are loaded from `lisp/subr.el` and `lisp/edmacro.el` rather
-than reimplemented:
+The names are the ones GNU configs already write, and they come from the same
+two sources GNU's do:
 
-- the standard block is lowercased the way GNU's own `lispy_function_keys`
-  spells it — `f13`, `undo`, `menu`, `find`, `cancel`;
-- the vendor block keeps its keysym spelling — `XF86Back`, `XF86Copy`,
-  `XF86Paste` — which is what `(kbd "<XF86Back>")` matches;
-- anything the registry does not name becomes `key-<number>`.
+- **GNU's own tables.** `lispy_function_keys` (`src/keyboard.c:5510-5591`,
+  indexed by `keysym - 0xff00`) and `iso_lispy_function_keys`
+  (`src/keyboard.c:5596-5613`, `keysym - 0xfe00`) are ported into
+  `keyboard/keysym.rs` row for row. This matters because those names are *not*
+  the X11 names lowercased: `XK_Henkan_Mode` is `henkan`, `XK_Kana_Lock` is
+  `kana-lock`, `XK_Hiragana_Katakana` is `hiragana-katakana`.
+- **The toolkit's name, verbatim.** Where GNU's table has no entry, GNU asks
+  `XKeysymToString` and takes what it says — so `Scroll_Lock` keeps its capital
+  and underscore, `Multi_key` its underscore, `3270_Attn` its spelling, and the
+  vendor block keeps its prefix (`XF86Back`, `XF86AudioRaiseVolume`).
+  `keyboard/keysym.rs` reads the same names out of the `keysymdefs` crate
+  (generated from `keysymdef.h` and `XF86keysym.h`), verbatim.
+- **`key-<number>`** when neither names it — GNU's last resort, which the
+  caller supplies.
+
+The ISO block is the one place where the index is not the keysym: GNU sends the
+whole `0xfe00-0xfeff` range to a 53-entry table and names anything the table
+lacks `key-<index>` — the *stripped* number, so `0xfe08` is `key-8`. Past the
+table's end (0xfe35 and up) GNU returns nil and the event is dropped. No key
+this port produces lands there (XKB consumes the group-switch keysyms
+server-side and winit names the rest), but the branch is written out for the
+record.
+
+### How the names were checked
+
+Two ways, both against the pinned GNU Emacs (SHA-256-verified against
+`parity-reference.toml`):
+
+- the tables are extracted from `src/keyboard.c` mechanically and anchored on
+  indices whose keysyms are not in dispute (`0xff23` is `henkan`, `0xffca` is
+  `f13`, `0xffff` is `delete`), so a shifted row fails loudly instead of
+  renaming every key after it;
+- the names were read off the running binary: a GUI frame evaluating
+  `(read-event)` while `xdotool` sent the keysym, which prints exactly the
+  symbol `modify_event_symbol` built. `Henkan_Mode` → `henkan`,
+  `Zenkaku_Hankaku` → `zenkaku-hankaku`, `KP_Enter` → `kp-enter`,
+  `Scroll_Lock` → `Scroll_Lock`, `3270_Attn` → `3270_Attn`, `XF86Back` →
+  `XF86Back`.
+
+The frontend's keysym values come from winit's own keymap
+(`winit-common/src/xkb/keymap.rs`) inverted, so each value is the keysym winit
+matched to produce that `NamedKey` — the same number an X11 or Wayland backend
+would have handed GNU.
 
 ## Where it lives
 
-`render_thread/input.rs` (frontend) gives every `Key` an identity and no
-longer relies on an unlisted key falling through to zero; modifiers are listed
+`render_thread/input.rs` (frontend) gives every `Key` an identity and no longer
+relies on an unlisted key falling through to zero; modifiers are listed
 explicitly so that "a modifier" and "not in the table" stay different answers.
-`keyboard/keysym.rs` holds the band predicates, the reserved-band helpers and
-the registry-backed name lookup; `keyboard.rs` turns a keysym into a `Key`
-and, for the keys no `NamedKey` variant enumerates, a `Key::Function` carrying
-the name GNU would give it — which `commands/keymap` interns as the event
-symbol, so `[undo]`, `[XF86Back]` and `[key-268963840]` are ordinary bindable
-events.
+`keyboard/keysym.rs` holds the band predicates, the reserved-band helpers, the
+ported GNU tables and the registry-backed name lookup; `keyboard.rs` turns a
+keysym into a `Key` and, for the keys no `NamedKey` variant enumerates, a
+`Key::Function` carrying the name GNU would give it — which `commands/keymap`
+interns as the event symbol, so `[undo]`, `[XF86Back]`, `[henkan]` and
+`[key-268963840]` are ordinary bindable events.
 
-The registry table comes from the `keysymdefs` crate (pure Rust, no runtime
-dependencies, generated from `keysymdef.h` and `XF86keysym.h`), so naming works
-on every platform and needs neither X11 nor xkbcommon at runtime. If it ever
-lags a newer keysym, that key falls through to `key-N` and stays bindable,
-which is the same place an unnamed keysym already lands.
+## Remaining gaps
 
-## Known gap
-
-A key winit *does* name but this table does not yet spell — the media, launch
-and volume families, whose keysyms live in the XF86 block — is logged
-(`key has no keysym mapping yet`) and still returns zero. Closing it properly
-means either carrying the name through the frontend transport, or generating
-the winit-name-to-keysym table from the two registries the way GDK and libX11
-generate theirs. Only 82 of winit's 307 named keys share a spelling with the
-keysym registry, so the mapping cannot simply be derived by name.
+- `system-key-alist`, which GNU consults before the toolkit name and which a
+  user can therefore use to rename any key, is not consulted here: naming runs
+  on the frontend-to-core path, before the evaluator is available.
+- A `NamedKey` that winit's *other* backends can produce but its xkb keymap
+  cannot — `MediaPlayPause`, say, which X11 splits into `XF86AudioPlay` and
+  `XF86AudioPause` — still reaches the `key has no keysym mapping yet` log and
+  returns zero. The X11/Wayland set is complete; the platform-native sets are
+  not.

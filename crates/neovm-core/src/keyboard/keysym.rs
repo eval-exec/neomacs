@@ -55,10 +55,16 @@ pub(crate) fn is_modifier_key(keysym: u32) -> bool {
     (0xffe1..=0xffee).contains(&keysym)
 }
 
-/// X's special block, 0xfe00-0xffff: the ISO/kbd specials, the cursor, misc
-/// and keypad bands, the F-key block, and `XK_VoidSymbol`.
+/// X's special block, 0xfd00-0xffff: the 3270 keysyms (0xfd01-0xfd1e, which
+/// GNU names `3270_Attn`, `3270_EraseEOF` and friends), the ISO/kbd specials,
+/// the cursor, misc and keypad bands, and the F-key block.
+///
+/// The 3270 keysyms have to be in here rather than left to the character arm:
+/// 0xfd0e is `XK_3270_Attn`, and reading it as a code point would type U+FD0E
+/// — the same trap as F13/U+FFCA, one block down.  GNU names every keysym it
+/// did not get a character for, and it gets no character here.
 pub(crate) fn is_named_block(keysym: u32) -> bool {
-    (0xfe00..=0xffff).contains(&keysym)
+    (0xfd00..=0xffff).contains(&keysym)
 }
 
 /// X11's vendor space: bit 28, which covers the `XF86keysym.h` block
@@ -128,32 +134,116 @@ fn native_key_name(keysym: u32) -> Option<String> {
     Some(format!("{platform}-{}", keysym & NATIVE_BAND_MASK))
 }
 
+/// GNU's own names for the X11 special block, ported from
+/// `lispy_function_keys` (`src/keyboard.c:5510-5591`) and
+/// `iso_lispy_function_keys` (`src/keyboard.c:5596-5613`) and indexed exactly
+/// as C indexes them: `keysym - 0xff00` and `keysym - 0xfe00`.  `""` is C's
+/// `0`, "this table has no name for it", which is what sends GNU on to the
+/// toolkit.  `#[rustfmt::skip]` keeps the C row layout so the port can be read
+/// against the source line by line.
+///
+/// The block cannot simply be lowercased: GNU spells `XK_Henkan_Mode` `henkan`
+/// and `XK_Kana_Lock` `kana-lock`, so lowercasing `XKeysymToString` would give
+/// `henkan_mode`, which no GNU config binds.  Verified against the pinned GNU
+/// Emacs by sending each keysym with xdotool and printing what `read-event`
+/// returned (`Henkan_Mode` → `henkan`, `Zenkaku_Hankaku` →
+/// `zenkaku-hankaku`, `KP_Enter` → `kp-enter`).
+#[rustfmt::skip]
+static LISPY_FUNCTION_KEYS: [&str; 256] = [
+    "", "", "", "", "", "", "", "", // 0x00
+    "backspace", "tab", "linefeed", "clear", "", "return", "", "", // 0x08
+    "", "", "", "pause", "", "", "", "", // 0x10
+    "", "", "", "escape", "", "", "", "", // 0x18
+    "", "kanji", "muhenkan", "henkan", "romaji", "hiragana", "katakana", "hiragana-katakana", // 0x20
+    "zenkaku", "hankaku", "zenkaku-hankaku", "touroku", "massyo", "kana-lock", "kana-shift", "eisu-shift", // 0x28
+    "eisu-toggle", "", "", "", "", "", "", "", // 0x30
+    "", "", "", "", "", "", "", "", // 0x38
+    "", "", "", "", "", "", "", "", // 0x40
+    "", "", "", "", "", "", "", "", // 0x48
+    "home", "left", "up", "right", "down", "prior", "next", "end", // 0x50
+    "begin", "", "", "", "", "", "", "", // 0x58
+    "select", "print", "execute", "insert", "", "undo", "redo", "menu", // 0x60
+    "find", "cancel", "help", "break", "", "", "", "", // 0x68
+    "", "", "", "", "backtab", "", "", "", // 0x70
+    "", "", "", "", "", "", "", "kp-numlock", // 0x78
+    "kp-space", "", "", "", "", "", "", "", // 0x80
+    "", "kp-tab", "", "", "", "kp-enter", "", "", // 0x88
+    "", "kp-f1", "kp-f2", "kp-f3", "kp-f4", "kp-home", "kp-left", "kp-up", // 0x90
+    "kp-right", "kp-down", "kp-prior", "kp-next", "kp-end", "kp-begin", "kp-insert", "kp-delete", // 0x98
+    "", "", "", "", "", "", "", "", // 0xa0
+    "", "", "kp-multiply", "kp-add", "kp-separator", "kp-subtract", "kp-decimal", "kp-divide", // 0xa8
+    "kp-0", "kp-1", "kp-2", "kp-3", "kp-4", "kp-5", "kp-6", "kp-7", // 0xb0
+    "kp-8", "kp-9", "", "", "", "kp-equal", "f1", "f2", // 0xb8
+    "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", // 0xc0
+    "f11", "f12", "f13", "f14", "f15", "f16", "f17", "f18", // 0xc8
+    "f19", "f20", "f21", "f22", "f23", "f24", "f25", "f26", // 0xd0
+    "f27", "f28", "f29", "f30", "f31", "f32", "f33", "f34", // 0xd8
+    "f35", "", "", "", "", "", "", "", // 0xe0
+    "", "", "", "", "", "", "", "", // 0xe8
+    "", "", "", "", "", "", "", "", // 0xf0
+    "", "", "", "", "", "", "", "delete", // 0xf8
+];
+
+/// The ISO 9995 block, same shape, indexed by `keysym - 0xfe00`.  Everything
+/// below `iso-lefttab` is empty in GNU's table; the block's other entries are
+/// the ISO margin/cursor/emphasis keys.
+#[rustfmt::skip]
+static ISO_LISPY_FUNCTION_KEYS: [&str; 53] = [
+    "", "", "", "", "", "", "", "", // 0x00
+    "", "", "", "", "", "", "", "", // 0x08
+    "", "", "", "", "", "", "", "", // 0x10
+    "", "", "", "", "", "", "", "", // 0x18
+    "iso-lefttab", "iso-move-line-up", "iso-move-line-down", "iso-partial-line-up", "iso-partial-line-down", "iso-partial-space-left", "iso-partial-space-right", "iso-set-margin-left", // 0x20
+    "iso-set-margin-right", "iso-release-margin-left", "iso-release-margin-right", "iso-release-both-margins", "iso-fast-cursor-left", "iso-fast-cursor-right", "iso-fast-cursor-up", "iso-fast-cursor-down", // 0x28
+    "iso-continuous-underline", "iso-discontinuous-underline", "iso-emphasize", "iso-center-object", "iso-enter", // 0x30
+];
+
+/// GNU's table name for a keysym in the 0xff00 block, when the table has one.
+/// Total on every input: a keysym below the block is simply not in it.
+fn lispy_function_key_name(keysym: u32) -> Option<&'static str> {
+    let offset = keysym.checked_sub(0xff00)?;
+    let name = *LISPY_FUNCTION_KEYS.get(offset as usize)?;
+    (!name.is_empty()).then_some(name)
+}
+
 /// The function-key symbol GNU would give this keysym, or `None` when even
 /// GNU's last resort is the caller's to synthesize (`key-N`).
 ///
-/// Two tiers, mirroring `modify_event_symbol` (`src/keyboard.c:7749-7805`):
-/// the toolkit's keysym name (here the X11 registry, the same table
-/// `XKeysymToString` searches) and the reserved bands for keys that never had
-/// a keysym.  Vendor keysyms keep their spelling — `XF86Back`, exactly what
-/// `(kbd "<XF86Back>")` matches — while the standard block is lowercased the
-/// way GNU's own `lispy_function_keys` spells those keys (`undo`, `menu`,
-/// `find`, `f13`).
+/// The tiers are `make_lispy_event`'s (`src/keyboard.c:6382-6412`) and
+/// `modify_event_symbol`'s (`src/keyboard.c:7742-7823`), in order: the ISO
+/// block, GNU's own table for the 0xff00 block, the reserved bands for keys
+/// that never had a keysym, and finally the toolkit's keysym name — here the
+/// X11 registry, the one `XKeysymToString` searches — taken **verbatim**,
+/// which is what keeps `XF86Back`, `Scroll_Lock` and `3270_Attn` spelled the
+/// way GNU spells them.  (`XF86AudioRaiseVolume` and `Scroll_Lock` were both
+/// confirmed against the pinned GNU Emacs.)
+///
+/// The ISO block is the odd one out: GNU sends the whole 0xfe00-0xfeff range to
+/// a 53-entry table and falls through to `key-<index>` — the *stripped* number,
+/// not the keysym — and returns nil past the table's end, dropping the event.
+/// No key this port can produce lands there (XKB consumes the group-switch
+/// keysyms server-side, and winit names the rest), so the past-the-end case is
+/// left to the caller's `key-N` rather than modelled.
 pub(crate) fn function_key_name(keysym: u32) -> Option<String> {
     if let Some(name) = native_key_name(keysym) {
         return Some(name);
+    }
+    if (0xfe00..0xff00).contains(&keysym) {
+        let index = (keysym - 0xfe00) as usize;
+        return match ISO_LISPY_FUNCTION_KEYS.get(index) {
+            Some(name) if !name.is_empty() => Some((*name).to_owned()),
+            Some(_) => Some(format!("key-{index}")),
+            None => None,
+        };
+    }
+    if let Some(name) = lispy_function_key_name(keysym) {
+        return Some(name.to_owned());
     }
     let item = keysymdefs::get_item_by_keysym(keysym)?;
     // `XK_F13` names the key `F13` and `XF86XK_Back` names it `XF86Back`:
     // X drops the `XK_` infix, keeping the vendor prefix intact.
     let name = item.name().replace("XK_", "");
-    if name.is_empty() {
-        return None;
-    }
-    Some(if is_vendor_keysym(keysym) {
-        name
-    } else {
-        name.to_lowercase()
-    })
+    (!name.is_empty()).then_some(name)
 }
 
 #[cfg(test)]
@@ -202,5 +292,51 @@ mod tests {
             function_key_name(native_key_windows(0x5d)).as_deref(),
             Some("win-93")
         );
+    }
+
+    /// GNU's table names are not lowercased X11 names: `XK_Henkan_Mode` is
+    /// `henkan` and `XK_Kana_Lock` is `kana-lock`.  Rows marked `oracle` were
+    /// read off the pinned GNU Emacs — xdotool sent that keysym to a GUI frame
+    /// running `(read-event)`, which prints the symbol `modify_event_symbol`
+    /// built; the rest follow from the same table (`src/keyboard.c:5510-5613`),
+    /// whose indices the port asserts against the source.
+    #[test]
+    fn names_are_gnus_table_names_not_lowercased_x11_names() {
+        for (keysym, expected) in [
+            (0xff23, "henkan"),            // oracle
+            (0xff27, "hiragana-katakana"), // oracle
+            (0xff2a, "zenkaku-hankaku"),   // oracle
+            (0xff8d, "kp-enter"),          // oracle
+            // Empty table entries fall through to XKeysymToString, verbatim.
+            (0xff14, "Scroll_Lock"),       // oracle
+            (0xfd0e, "3270_Attn"),         // oracle
+            (0x1008ff26, "XF86Back"),      // oracle
+            (0xff3d, "MultipleCandidate"), // oracle
+            // The rest of the 0xff00 block, from the ported table.
+            (0xff0b, "clear"),
+            (0xff21, "kanji"),
+            (0xff22, "muhenkan"),
+            (0xff24, "romaji"),
+            (0xff25, "hiragana"),
+            (0xff28, "zenkaku"),
+            (0xff29, "hankaku"),
+            (0xff2d, "kana-lock"),
+            (0xff2f, "eisu-shift"),
+            (0xff60, "select"),
+            (0xff62, "execute"),
+            (0xff6a, "help"),
+            // The ISO block is indexed with the offset stripped.
+            (0xfe20, "iso-lefttab"),
+            (0xfe08, "key-8"),
+            // Below the block the table lookup is total rather than an
+            // underflow, and the registry names a Latin-1 keysym as itself.
+            (0x61, "a"),
+        ] {
+            assert_eq!(
+                function_key_name(keysym).as_deref(),
+                Some(expected),
+                "keysym {keysym:#06x}"
+            );
+        }
     }
 }

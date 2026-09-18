@@ -2104,6 +2104,32 @@ fn keysym_to_key_event_names_the_xf86_block() {
     }
 }
 
+/// The standard block is named from GNU's own tables, not by lowercasing the
+/// X11 name — `XK_Henkan_Mode` is `henkan`, `XK_Kana_Lock` is `kana-lock` —
+/// which is what `(kbd "<henkan>")` binds.  The 3270 block is the other half of
+/// the same point: `0xfd0e` is `3270_Attn`, and the character arm must not see
+/// it at all.
+#[test]
+fn keysym_to_key_event_names_the_ime_and_3270_blocks() {
+    crate::test_utils::init_test_tracing();
+    for (keysym, name) in [
+        (0xff23_u32, "henkan"),
+        (0xff22, "muhenkan"),
+        (0xff2d, "kana-lock"),
+        (0xff2f, "eisu-shift"),
+        (0xff27, "hiragana-katakana"),
+        (0xff14, "Scroll_Lock"),
+        (0xfd0e, "3270_Attn"),
+        (0xfd06, "3270_EraseEOF"),
+    ] {
+        let event = keysym_to_key_event(keysym, 0).unwrap_or_else(|| panic!("{keysym:#x}"));
+        assert_eq!(event.key, Key::Function(name.to_string()), "{keysym:#x}");
+    }
+    // Read as a code point the same number is a printable Arabic scalar, which
+    // is exactly the confusion this test exists to keep out of the pipeline.
+    assert!(char::from_u32(0xfd0e).is_some_and(|ch| !ch.is_control()));
+}
+
 /// Modifier keysyms are state, not keystrokes: the frontend reports them
 /// through `ModifiersChanged`.
 #[test]
