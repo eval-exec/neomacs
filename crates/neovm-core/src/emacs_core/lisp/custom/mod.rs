@@ -224,7 +224,7 @@ pub(crate) fn builtin_make_local_variable(
             // GNU `Fmake_local_variable` calls `swap_in_global_binding`
             // before consing the new `(sym . val)` alist entry when the
             // BLV cache is currently loaded for this buffer.
-            blv.where_buf = Value::NIL;
+            blv.set_where(Value::NIL);
             blv.found = false;
             blv.valcell = blv.defcell;
         }
@@ -633,7 +633,7 @@ pub(crate) fn builtin_kill_local_variable_impl(
             // the global default. Equivalent to GNU's
             // `swap_in_global_binding`.
             if let Some(blv) = ctx.obarray.blv_mut(resolved) {
-                blv.where_buf = crate::emacs_core::value::Value::NIL;
+                blv.set_where(crate::emacs_core::value::Value::NIL);
                 blv.found = false;
                 blv.valcell = blv.defcell;
             }

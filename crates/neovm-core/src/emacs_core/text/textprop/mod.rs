@@ -275,21 +275,37 @@ fn current_textprop_variable_value(
     // ~3% of the layout profile. See `Obarray::is_localized`. The caller
     // passes a closed typed identity so the hot path cannot re-intern a name.
     let sym_id = variable.symbol_id();
-    // Localized-first: a global (non-Localized) symbol can never have a
-    // buffer-local binding, so skip the current-buffer probe (a map lookup +
-    // a call) entirely — these reads run several times per char-property
-    // lookup.
-    // A localized one is read through the BLV's where-buffer cache (GNU's
-    // swapped-in cell: an epoch compare and a cons cdr on a hit), which
-    // answers with the buffer's binding or the default -- the per-buffer
-    // binding map it went through before cost ~110 instructions a read,
-    // three reads per char-property lookup under font-lock.
-    if obarray.is_localized(sym_id)
-        && let Some(buf) = buffers.current_buffer()
-        && let Some(value) =
-            obarray.read_localized_for_buffer(sym_id, buf.id, buf.local_var_alist_value())
-    {
-        return (!value.is_unbound()).then_some(value);
+    // One obarray lookup, then the symbol's own redirect: a plain global
+    // answers from its cell; a localized one (font-lock makes
+    // `char-property-alias-alist` buffer-local) is read through the BLV's
+    // where-buffer cache (GNU's swapped-in cell: an epoch compare, an id
+    // compare and a cons cdr on a hit), which answers with the buffer's
+    // binding or the default. These reads run up to three times per
+    // char-property lookup; asking `is_localized` first and then reading
+    // looked the symbol up twice. Anything else (a forwarder, an alias)
+    // takes the general reader.
+    let Some(sym) = obarray.get_by_id(sym_id) else {
+        return None;
+    };
+    match sym.flags.redirect() {
+        crate::emacs_core::symbol::SymbolRedirect::Plainval => {
+            // SAFETY: redirect=Plainval selects the plain value arm.
+            let value = unsafe { sym.val.plain };
+            return (!value.is_unbound()).then_some(value);
+        }
+        crate::emacs_core::symbol::SymbolRedirect::Localized => {
+            if let Some(buf) = buffers.current_buffer()
+                && let Some(value) = obarray.read_localized_symbol_for_buffer(
+                    sym_id,
+                    sym,
+                    buf.id,
+                    buf.local_var_alist_value(),
+                )
+            {
+                return (!value.is_unbound()).then_some(value);
+            }
+        }
+        _ => {}
     }
     obarray.symbol_value_id_copied(sym_id)
 }

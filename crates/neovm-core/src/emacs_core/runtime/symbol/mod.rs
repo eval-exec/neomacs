@@ -450,7 +450,16 @@ pub struct LispBufferLocalValue {
     pub fwd: Option<&'static crate::emacs_core::forward::LispFwd>,
     /// Buffer for which `valcell` was loaded, or `Value::NIL` for the
     /// global default. GNU `where`.
+    ///
+    /// Written only through [`LispBufferLocalValue::set_where`], which keeps
+    /// [`Self::where_buf_id`] in step.
     pub where_buf: Value,
+    /// The raw [`BufferId`](crate::buffer::BufferId) of `where_buf`, or
+    /// [`NO_WHERE_BUF`] when it is not a buffer: the read fast path's
+    /// where-buffer test as one integer compare. Comparing the object meant
+    /// a tag test, a header load and a field load on every read of a
+    /// buffer-local variable -- a third of the read.
+    pub where_buf_id: u64,
     /// `(SYMBOL . DEFAULT-VALUE)` cons. GNU `defcell`.
     pub defcell: Value,
     /// `(SYMBOL . CURRENT-VALUE)` cons. Equal to `defcell` when no
@@ -464,6 +473,20 @@ pub struct LispBufferLocalValue {
     /// touching the BLV cache (they bump the epoch instead). Starts 0;
     /// the global epoch starts 1, so a fresh BLV always rescans first.
     pub alist_epoch: u64,
+}
+
+/// [`LispBufferLocalValue::where_buf_id`] when `where_buf` is not a buffer.
+pub(crate) const NO_WHERE_BUF: u64 = u64::MAX;
+
+impl LispBufferLocalValue {
+    /// Point the cache at `buf` (a buffer, or `Value::NIL` for the global
+    /// default): the object for the collector and for `eq` tests, its id
+    /// for the read fast path. The one writer of both.
+    #[inline]
+    pub(crate) fn set_where(&mut self, buf: Value) {
+        store_value_atomic(&mut self.where_buf, buf);
+        self.where_buf_id = buf.as_buffer_id().map_or(NO_WHERE_BUF, |id| id.0);
+    }
 }
 
 /// Global structural-mutation epoch for every buffer's `local_var_alist`:
@@ -597,7 +620,7 @@ fn swap_in_blv(
     // Find this symbol in the new buffer's alist.
     let key = Value::from_sym_id(sym_id);
     let found_cell = assq(key, local_var_alist);
-    store_value_atomic(&mut blv.where_buf, current_buffer);
+    blv.set_where(current_buffer);
     blv.found = !found_cell.is_nil();
     let new_valcell = if blv.found { found_cell } else { blv.defcell };
     store_value_atomic(&mut blv.valcell, new_valcell);
@@ -2443,6 +2466,7 @@ impl Obarray {
             found: false,
             fwd: forwarder,
             where_buf: Value::NIL,
+            where_buf_id: NO_WHERE_BUF,
             defcell,
             valcell: defcell,
             // 0 < the global epoch's initial 1: a fresh BLV never
@@ -2653,15 +2677,40 @@ impl Obarray {
         target_buf_id: crate::buffer::BufferId,
         target_alist: Value,
     ) -> Option<Value> {
-        let blv_ptr = self.blv_ptr(id)?;
+        let sym = self.slot(id)?;
+        self.read_localized_symbol_for_buffer(id, sym, target_buf_id, target_alist)
+    }
+
+    /// [`Self::read_localized_for_buffer`] for a caller that already holds
+    /// the symbol's slot (it dispatched on its redirect): the obarray lookup
+    /// is not repeated. `None` unless `sym` is LOCALIZED.
+    #[inline]
+    pub(crate) fn read_localized_symbol_for_buffer(
+        &self,
+        id: SymId,
+        sym: &LispSymbol,
+        target_buf_id: crate::buffer::BufferId,
+        target_alist: Value,
+    ) -> Option<Value> {
+        if sym.flags.redirect() != SymbolRedirect::Localized {
+            return None;
+        }
+        // SAFETY: redirect=Localized selects the BLV arm.
+        let blv_ptr = unsafe { sym.val.blv };
         let epoch = blv_alist_epoch();
         // SAFETY: identical to `read_localized` -- the BLV record is reached
         // only through the symbol's raw pointer and the evaluator thread is
         // its only writer; no reference is held across a write.
         unsafe {
-            if (*blv_ptr).alist_epoch == epoch
-                && (*blv_ptr).where_buf.as_buffer_id() == Some(target_buf_id)
-            {
+            if (*blv_ptr).alist_epoch == epoch && (*blv_ptr).where_buf_id == target_buf_id.0 {
+                debug_assert_eq!(
+                    (*blv_ptr)
+                        .where_buf
+                        .as_buffer_id()
+                        .map_or(NO_WHERE_BUF, |b| b.0),
+                    (*blv_ptr).where_buf_id,
+                    "a BLV writer bypassed set_where"
+                );
                 return Some((*blv_ptr).valcell.cons_cdr());
             }
         }
@@ -2710,7 +2759,7 @@ impl Obarray {
             } else {
                 (*blv_ptr).defcell
             };
-            store_value_atomic(&mut (*blv_ptr).where_buf, target_buf);
+            (*blv_ptr).set_where(target_buf);
             (*blv_ptr).found = found;
             store_value_atomic(&mut (*blv_ptr).valcell, valcell);
             (*blv_ptr).alist_epoch = epoch;
@@ -3377,7 +3426,7 @@ impl Obarray {
         } else {
             assq(key, new_alist)
         };
-        store_value_atomic(&mut blv.where_buf, target_buf);
+        blv.set_where(target_buf);
         blv.alist_epoch = epoch;
         blv.found = true;
 

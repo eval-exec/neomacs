@@ -6301,8 +6301,9 @@ impl Context {
                 // the common read one compare + one cdr.
                 crate::emacs_core::symbol::SymbolRedirect::Localized => {
                     if let Some(buf) = self.buffers.current_buffer()
-                        && let Some(value) = self.obarray.read_localized_for_buffer(
+                        && let Some(value) = self.obarray.read_localized_symbol_for_buffer(
                             sym_id,
+                            sym,
                             buf.id,
                             buf.local_var_alist_value(),
                         )

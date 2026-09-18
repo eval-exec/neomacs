@@ -11749,6 +11749,58 @@ fn text_property_writes_read_a_buffer_local_inhibit_modification_hooks() {
     );
 }
 
+/// A buffer-local text-property control variable is read through the BLV's
+/// where-buffer cache, which compares the cached buffer's id. Every writer
+/// of that cache must keep the id in step with the buffer object: after
+/// `make-local-variable`, `kill-local-variable`, a second `make-local-
+/// variable` while the cache is loaded for this buffer, and
+/// `kill-all-local-variables`, a char-property lookup (the alias list) and
+/// `symbol-value` must both see this buffer's binding or the default --
+/// never a stale cell (debug builds also assert the id on every hit).
+#[test]
+fn buffer_local_textprop_control_variables_track_every_where_buffer_writer() {
+    crate::test_utils::init_test_tracing();
+    let result = eval_one(
+        "(let ((log nil) (a (get-buffer-create \" blv-a\")) (b (get-buffer-create \" blv-b\")))
+           (set-buffer a)
+           (insert \"abc\")
+           (put-text-property 1 2 (quote my-face) (quote from-a))
+           (set-buffer b)
+           (insert \"abc\")
+           (put-text-property 1 2 (quote my-face) (quote from-b))
+           (set-default (quote char-property-alias-alist) nil)
+           (set-buffer a)
+           (make-local-variable (quote char-property-alias-alist))
+           (setq char-property-alias-alist (quote ((face my-face))))
+           (setq log (cons (get-char-property 1 (quote face)) log))
+           (setq log (cons (get-char-property 1 (quote face)) log))
+           (setq log (cons (length (symbol-value (quote char-property-alias-alist))) log))
+           (set-buffer b)
+           (setq log (cons (get-char-property 1 (quote face)) log))
+           (setq log (cons (symbol-value (quote char-property-alias-alist)) log))
+           (set-buffer a)
+           (setq log (cons (get-char-property 1 (quote face)) log))
+           (kill-local-variable (quote char-property-alias-alist))
+           (setq log (cons (get-char-property 1 (quote face)) log))
+           (setq log (cons (symbol-value (quote char-property-alias-alist)) log))
+           (make-local-variable (quote char-property-alias-alist))
+           (setq char-property-alias-alist (quote ((face my-face))))
+           (setq log (cons (get-char-property 1 (quote face)) log))
+           (make-local-variable (quote char-property-alias-alist))
+           (setq log (cons (get-char-property 1 (quote face)) log))
+           (kill-all-local-variables)
+           (setq log (cons (get-char-property 1 (quote face)) log))
+           (setq log (cons (symbol-value (quote char-property-alias-alist)) log))
+           (set-buffer b)
+           (setq log (cons (get-char-property 1 (quote face)) log))
+           (nreverse log))",
+    );
+    assert_eq!(
+        result,
+        "OK (from-a from-a 1 nil nil from-a nil nil from-a from-a nil nil nil)"
+    );
+}
+
 /// `inhibit-modification-hooks` is read straight off its `DEFVAR_BOOL`
 /// forwarder on every text-property write. A `let` stores through that cell
 /// (`store_symval_forwarding`), so the flag must track the binding both ways:

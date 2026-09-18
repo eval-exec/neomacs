@@ -4462,7 +4462,7 @@ impl Buffer {
             // `swap_in_global_binding' call at `buffer.c:1185'.
             let id = crate::emacs_core::intern::intern(name);
             if let Some(blv) = obarray.blv_mut(id) {
-                blv.where_buf = Value::NIL;
+                blv.set_where(Value::NIL);
                 blv.found = false;
                 blv.valcell = blv.defcell;
             }

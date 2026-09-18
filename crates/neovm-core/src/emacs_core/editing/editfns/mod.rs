@@ -259,8 +259,9 @@ pub(crate) fn inhibit_modification_hooks(ctx: &crate::emacs_core::eval::Context)
                 // hit this is an epoch compare and a cons cdr, where the
                 // per-buffer binding map cost ~120 instructions a read.
                 if let Some(buf) = ctx.buffers.current_buffer()
-                    && let Some(value) = ctx.obarray.read_localized_for_buffer(
+                    && let Some(value) = ctx.obarray.read_localized_symbol_for_buffer(
                         sym,
+                        s,
                         buf.id,
                         buf.local_var_alist_value(),
                     )
