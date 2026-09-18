@@ -2190,6 +2190,15 @@ impl Drop for TaggedHeap {
         if self.concurrent_mark_running {
             self.join_concurrent_mark();
         }
+        // Leave no dangling thread-local pointer behind: a heap installed with
+        // `set_tagged_heap` and dropped by anything but a `Context` (a failed
+        // pdump load drops the half-built one on its error path) used to stay
+        // installed, and the next allocation on this thread wrote into freed
+        // memory. The identity check makes this a no-op when another heap is
+        // installed -- and when a `Context` drop already uninstalled this one,
+        // which is also why the frees below run with no heap installed either
+        // way.
+        crate::tagged::gc::clear_tagged_heap_if_installed(self);
         // Free all non-cons objects via every intrusive list: young, tenured,
         // and any objects detached for an in-flight deferred sweep.
         for mut current in [

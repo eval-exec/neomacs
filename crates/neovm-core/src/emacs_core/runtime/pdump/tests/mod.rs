@@ -1100,6 +1100,34 @@ fn test_clone_active_evaluator_preserves_in_progress_require_and_load_state() {
     );
 }
 
+/// Handing the thread back to the live evaluator after a clone rebuilds the
+/// terminal thread-locals in the live heap. The clone's pdump restore had
+/// replaced them with a terminal whose handle lives in the CLONE's heap, so
+/// the live evaluator's `terminal-list` pointed into freed memory once the
+/// clone was dropped. The bootstrap cache's failed-reload fallback hands the
+/// thread back the same way.
+#[test]
+fn restoring_the_live_runtime_after_a_clone_rebuilds_the_terminal_in_the_live_heap() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    let live_runtime = snapshot_active_runtime(&mut eval);
+    let cloned = clone_active_evaluator(&mut eval).expect("clone should succeed");
+    restore_active_runtime(&mut eval, &live_runtime);
+    let handle = crate::emacs_core::terminal::pure::terminal_handle_value();
+    assert!(
+        crate::tagged::gc::with_tagged_heap(|heap| heap.owns_heap_value_for_test(handle)),
+        "the terminal handle must live in the reinstalled heap"
+    );
+    drop(cloned);
+    let name = eval
+        .eval_str("(progn (garbage-collect) (terminal-name (car (terminal-list))))")
+        .expect("terminal-list answers after the clone is gone");
+    assert_eq!(
+        name.as_utf8_str().map(str::to_owned),
+        Some("initial_terminal".to_owned())
+    );
+}
+
 #[test]
 fn test_restore_active_runtime_after_clone_reinstalls_live_charset_registry() {
     crate::test_utils::init_test_tracing();

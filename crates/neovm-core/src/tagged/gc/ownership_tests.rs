@@ -3326,3 +3326,30 @@ fn a_forced_collection_during_the_concurrent_first_cycle_keeps_image_held_object
     heap.complete_collection();
     assert!(!unsafe { (*h.xcons_ptr()).load_car() }.is_dead());
 }
+
+/// Dropping the heap installed on this thread uninstalls it, whoever owns
+/// it. Only a `Context` drop used to, so a half-built heap dropped on a
+/// failed pdump load's error path stayed installed and the next allocation
+/// on the thread wrote into freed memory. Dropping a heap that is NOT the
+/// installed one leaves the installed one alone.
+#[test]
+fn dropping_the_installed_heap_uninstalls_it() {
+    crate::test_utils::init_test_tracing();
+    let mut kept = Box::new(TaggedHeap::new());
+    let mut dropped = Box::new(TaggedHeap::new());
+    set_tagged_heap(&mut dropped);
+    assert!(tagged_heap_is_installed());
+    drop(dropped);
+    assert!(
+        !tagged_heap_is_installed(),
+        "a dropped heap must not stay installed on the thread"
+    );
+    set_tagged_heap(&mut kept);
+    let other = Box::new(TaggedHeap::new());
+    drop(other);
+    assert!(
+        tagged_heap_is_installed(),
+        "dropping a heap that is not installed must leave the installed one"
+    );
+    crate::tagged::gc::clear_tagged_heap_if_installed(&kept);
+}

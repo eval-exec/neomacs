@@ -620,6 +620,15 @@ pub fn snapshot_active_runtime(eval: &mut Context) -> ActiveRuntimeSnapshot {
 /// thread, restoring thread-local semantic registries alongside heap state.
 pub fn restore_active_runtime(eval: &mut Context, snapshot: &ActiveRuntimeSnapshot) {
     eval.setup_thread_locals();
+    // The other evaluator's pdump restore replaced the terminal thread-locals
+    // with a fresh terminal whose handle it allocated in ITS heap, so the
+    // live evaluator's `terminal-list` would point into that heap, and into
+    // freed memory once it is dropped. The terminal manager owns its host and
+    // cannot be snapshotted, so rebuild the fresh state in the live heap: the
+    // state every pdump restore leaves. (A load that failed before its restore
+    // step left the live terminal intact; it is reset all the same, to what a
+    // successful load would have produced.)
+    crate::emacs_core::terminal::pure::reset_terminal_thread_locals();
     restore_charset_registry(snapshot.charset_registry.clone());
     restore_fontset_registry(snapshot.fontset_registry.clone());
     eval.sync_thread_runtime_bindings();

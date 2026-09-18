@@ -6634,6 +6634,11 @@ pub(crate) fn create_bootstrap_evaluator_cached_at_path(
                 bootstrap_time,
             );
             let reload_start = std::time::Instant::now();
+            // A reload that fails after installing its own heap has dropped
+            // that heap and replaced the thread's charset/fontset registries
+            // and terminal, so the in-memory evaluator must be re-activated
+            // before it is used.
+            let live_runtime = pdump::snapshot_active_runtime(&mut eval);
             match pdump::load_from_dump(dump_path) {
                 Ok(mut loaded) => {
                     finalize_or_log(
@@ -6652,6 +6657,7 @@ pub(crate) fn create_bootstrap_evaluator_cached_at_path(
                     tracing::warn!(
                         "pdump: failed to reload freshly written bootstrap image ({e}), using in-memory bootstrap"
                     );
+                    pdump::restore_active_runtime(&mut eval, &live_runtime);
                 }
             }
         }
