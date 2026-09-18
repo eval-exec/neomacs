@@ -898,13 +898,6 @@ impl IntervalTree {
         id
     }
 
-    fn is_left_child(&self, id: IntervalId) -> bool {
-        self.nodes[id.0]
-            .parent
-            .and_then(|parent| self.nodes[parent.0].left)
-            == Some(id)
-    }
-
     fn leftmost_id(&self, mut id: IntervalId) -> IntervalId {
         while let Some(left) = self.nodes[id.0].left {
             id = left;
@@ -1006,75 +999,107 @@ impl IntervalTree {
         }
     }
 
+    /// Node `id`, reached through `root` or another node's link, without
+    /// the bounds check. Every id a tree holds was minted by `push_node` as
+    /// the index it pushed at, and `nodes` only grows -- `delete_node`
+    /// unlinks a node and leaves its slot in place, and a rebuilt tree comes
+    /// with its own `nodes` -- so a linked id is always in bounds. The
+    /// balancing code below is the one user: it reads and rewrites a handful
+    /// of neighbouring nodes per step, and the checks were over a quarter of
+    /// its instructions on org's put path.
+    #[inline(always)]
+    fn linked(&self, id: IntervalId) -> &IntervalNode {
+        debug_assert!(id.0 < self.nodes.len(), "unlinked interval id {}", id.0);
+        // SAFETY: a linked id is in bounds (see above).
+        unsafe { self.nodes.get_unchecked(id.0) }
+    }
+
+    /// [`Self::linked`], mutably.
+    #[inline(always)]
+    fn linked_mut(&mut self, id: IntervalId) -> &mut IntervalNode {
+        debug_assert!(id.0 < self.nodes.len(), "unlinked interval id {}", id.0);
+        // SAFETY: a linked id is in bounds (see `linked`).
+        unsafe { self.nodes.get_unchecked_mut(id.0) }
+    }
+
+    /// `subtree_len` of a linked child.
+    #[inline(always)]
+    fn linked_len(&self, id: Option<IntervalId>) -> usize {
+        match id {
+            Some(id) => self.linked(id).total_length.get(),
+            None => 0,
+        }
+    }
+
     fn rotate_right(&mut self, a: IntervalId) -> IntervalId {
-        let b = self.nodes[a.0]
+        let b = self
+            .linked(a)
             .left
             .expect("rotate_right requires a left child");
-        let c = self.nodes[b.0].right;
-        let a_parent = self.nodes[a.0].parent;
-        let a_was_left = self.is_left_child(a);
-        let old_total = self.nodes[a.0].total_length;
-        let b_old_total = self.nodes[b.0].total_length.get();
-        let c_total = self.subtree_len(c).get();
+        let c = self.linked(b).right;
+        let a_parent = self.linked(a).parent;
+        let a_was_left = a_parent.is_some_and(|parent| self.linked(parent).left == Some(a));
+        let old_total = self.linked(a).total_length;
+        let b_old_total = self.linked(b).total_length.get();
+        let c_total = self.linked_len(c);
 
         if let Some(parent) = a_parent {
             if a_was_left {
-                self.nodes[parent.0].left = Some(b);
+                self.linked_mut(parent).left = Some(b);
             } else {
-                self.nodes[parent.0].right = Some(b);
+                self.linked_mut(parent).right = Some(b);
             }
         } else {
             self.root = Some(b);
         }
-        self.nodes[b.0].parent = a_parent;
+        let b_node = self.linked_mut(b);
+        b_node.parent = a_parent;
+        b_node.right = Some(a);
+        b_node.total_length = old_total;
 
-        self.nodes[b.0].right = Some(a);
-        self.nodes[a.0].parent = Some(b);
-
-        self.nodes[a.0].left = c;
+        let a_node = self.linked_mut(a);
+        a_node.parent = Some(b);
+        a_node.left = c;
+        a_node.total_length = CharLen::new(old_total.get() - (b_old_total - c_total));
         if let Some(c) = c {
-            self.nodes[c.0].parent = Some(a);
+            self.linked_mut(c).parent = Some(a);
         }
-
-        self.nodes[a.0].total_length =
-            CharLen::new(self.nodes[a.0].total_length.get() - (b_old_total - c_total));
-        self.nodes[b.0].total_length = old_total;
         b
     }
 
     fn rotate_left(&mut self, a: IntervalId) -> IntervalId {
-        let b = self.nodes[a.0]
+        let b = self
+            .linked(a)
             .right
             .expect("rotate_left requires a right child");
-        let c = self.nodes[b.0].left;
-        let a_parent = self.nodes[a.0].parent;
-        let a_was_left = self.is_left_child(a);
-        let old_total = self.nodes[a.0].total_length;
-        let b_old_total = self.nodes[b.0].total_length.get();
-        let c_total = self.subtree_len(c).get();
+        let c = self.linked(b).left;
+        let a_parent = self.linked(a).parent;
+        let a_was_left = a_parent.is_some_and(|parent| self.linked(parent).left == Some(a));
+        let old_total = self.linked(a).total_length;
+        let b_old_total = self.linked(b).total_length.get();
+        let c_total = self.linked_len(c);
 
         if let Some(parent) = a_parent {
             if a_was_left {
-                self.nodes[parent.0].left = Some(b);
+                self.linked_mut(parent).left = Some(b);
             } else {
-                self.nodes[parent.0].right = Some(b);
+                self.linked_mut(parent).right = Some(b);
             }
         } else {
             self.root = Some(b);
         }
-        self.nodes[b.0].parent = a_parent;
+        let b_node = self.linked_mut(b);
+        b_node.parent = a_parent;
+        b_node.left = Some(a);
+        b_node.total_length = old_total;
 
-        self.nodes[b.0].left = Some(a);
-        self.nodes[a.0].parent = Some(b);
-
-        self.nodes[a.0].right = c;
+        let a_node = self.linked_mut(a);
+        a_node.parent = Some(b);
+        a_node.right = c;
+        a_node.total_length = CharLen::new(old_total.get() - (b_old_total - c_total));
         if let Some(c) = c {
-            self.nodes[c.0].parent = Some(a);
+            self.linked_mut(c).parent = Some(a);
         }
-
-        self.nodes[a.0].total_length =
-            CharLen::new(self.nodes[a.0].total_length.get() - (b_old_total - c_total));
-        self.nodes[b.0].total_length = old_total;
         b
     }
 
@@ -1082,37 +1107,33 @@ impl IntervalTree {
         #[cfg(test)]
         INTERVAL_BALANCE_CALLS.with(|calls| calls.set(calls.get() + 1));
         loop {
-            let left_len = self.subtree_len(self.nodes[id.0].left).get() as isize;
-            let right_len = self.subtree_len(self.nodes[id.0].right).get() as isize;
-            let old_diff = left_len - right_len;
+            let node = self.linked(id);
+            let (left, right, total) = (node.left, node.right, node.total_length.get() as isize);
+            let old_diff = self.linked_len(left) as isize - self.linked_len(right) as isize;
             if old_diff > 0 {
-                let left = self.nodes[id.0]
-                    .left
-                    .expect("positive left/right diff requires left child");
-                let new_diff = self.nodes[id.0].total_length.get() as isize
-                    - self.nodes[left.0].total_length.get() as isize
-                    + self.subtree_len(self.nodes[left.0].right).get() as isize
-                    - self.subtree_len(self.nodes[left.0].left).get() as isize;
+                let left = left.expect("positive left/right diff requires left child");
+                let left_node = self.linked(left);
+                let new_diff = total - left_node.total_length.get() as isize
+                    + self.linked_len(left_node.right) as isize
+                    - self.linked_len(left_node.left) as isize;
                 if new_diff.abs() >= old_diff {
                     break;
                 }
                 id = self.rotate_right(id);
-                if let Some(right) = self.nodes[id.0].right {
+                if let Some(right) = self.linked(id).right {
                     self.balance_an_interval(right);
                 }
             } else if old_diff < 0 {
-                let right = self.nodes[id.0]
-                    .right
-                    .expect("negative left/right diff requires right child");
-                let new_diff = self.nodes[id.0].total_length.get() as isize
-                    - self.nodes[right.0].total_length.get() as isize
-                    + self.subtree_len(self.nodes[right.0].left).get() as isize
-                    - self.subtree_len(self.nodes[right.0].right).get() as isize;
+                let right = right.expect("negative left/right diff requires right child");
+                let right_node = self.linked(right);
+                let new_diff = total - right_node.total_length.get() as isize
+                    + self.linked_len(right_node.left) as isize
+                    - self.linked_len(right_node.right) as isize;
                 if new_diff.abs() >= -old_diff {
                     break;
                 }
                 id = self.rotate_left(id);
-                if let Some(left) = self.nodes[id.0].left {
+                if let Some(left) = self.linked(id).left {
                     self.balance_an_interval(left);
                 }
             } else {
