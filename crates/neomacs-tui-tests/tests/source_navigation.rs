@@ -66,5 +66,40 @@ fn find_function_via_mx_opens_lisp_definition() {
             && grid.iter().any(|row| row.contains("(defun comment-dwim"))
     });
     wait_for_both_mx_suggestion(&mut gnu, &mut neo, "find-function", Duration::from_secs(8));
-    assert_pair_exact_display("find_function_via_mx_opens_lisp_definition", &gnu, &neo);
+
+    // The two executables necessarily open their own copy of the defining
+    // file, and a `make install` oracle keeps its Lisp compressed: GNU
+    // visits `newcomment.el.gz` while Neomacs visits the tree's
+    // `newcomment.el`, and the buffer name reaches the mode line.  Declare
+    // the two spellings as one logical resource; on a checkout-running GNU
+    // the names already agree and the pair is inert.
+    let buffer_name = |session: &mut neomacs_tui_tests::TuiSession| -> String {
+        eval_expression_one(session, "(message \"BNXX%sXX\" (buffer-name))");
+        session.read(Duration::from_millis(600));
+        let (rows, _) = session.screen_size();
+        let mut found = String::new();
+        for r in (0..rows).rev() {
+            let t = session.row_text(r);
+            if let Some(i) = t.find("BNXX") {
+                let tail: String = t[i + 4..].chars().take_while(|c| *c != 'X').collect();
+                if !tail.is_empty() {
+                    found = tail;
+                    break;
+                }
+            }
+        }
+        found
+    };
+    let gnu_name = buffer_name(&mut gnu);
+    let neo_name = buffer_name(&mut neo);
+    assert!(
+        !gnu_name.is_empty() && !neo_name.is_empty(),
+        "buffer-name probe failed"
+    );
+    assert_pair_exact_display_with_path_pairs(
+        "find_function_via_mx_opens_lisp_definition",
+        &gnu,
+        &neo,
+        &[(gnu_name, neo_name)],
+    );
 }
