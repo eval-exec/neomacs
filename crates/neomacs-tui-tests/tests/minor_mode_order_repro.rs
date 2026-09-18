@@ -189,9 +189,13 @@ fn doom_minor_mode_order_matches_gnu() {
     let gnu_probe = read_marker(&mut gnu, probe, "MMD");
     let neo_probe = read_marker(&mut neo, probe, "MMD");
 
-    let alist_probe = "(message \"ALIST%s\" (mapcar #'car minor-mode-alist))";
-    let gnu_alist = read_marker(&mut gnu, alist_probe, "ALIST");
-    let neo_alist = read_marker(&mut neo, alist_probe, "ALIST");
+    let alist_probe = "(with-temp-file (expand-file-name \"alist.txt\" (getenv \"DOOMLOCALDIR\")) \
+                        (insert (format \"%S\" (mapcar #'car minor-mode-alist))))";
+    support::eval_expression_one(&mut gnu, alist_probe);
+    support::eval_expression_one(&mut neo, alist_probe);
+    read_both(&mut gnu, &mut neo, Duration::from_secs(3));
+    let gnu_alist = read_state_file(&gnu_state, "alist.txt");
+    let neo_alist = read_state_file(&neo_state, "alist.txt");
 
     // The decisive read: the order the two files actually loaded in.
     let dump_loads = "(with-temp-file (expand-file-name \"loads.txt\" (getenv \"DOOMLOCALDIR\")) \
@@ -220,8 +224,8 @@ fn doom_minor_mode_order_matches_gnu() {
     eprintln!("probe(which-key,better-jumper,len): GNU={gnu_probe}  NEO={neo_probe}");
     eprintln!("GNU mode line: {gnu_row}");
     eprintln!("NEO mode line: {neo_row}");
-    eprintln!("GNU alist[:2]: {gnu_alist}");
-    eprintln!("NEO alist[:2]: {neo_alist}");
+    eprintln!("GNU alist: {gnu_alist}");
+    eprintln!("NEO alist: {neo_alist}");
     eprintln!(
         "GNU load position: which-key {} | better-jumper {}",
         position(&gnu_loads, "which-key"),
