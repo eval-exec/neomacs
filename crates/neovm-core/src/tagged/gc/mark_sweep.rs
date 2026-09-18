@@ -671,12 +671,26 @@ impl TaggedHeap {
     }
 
     /// Is `value` currently marked? Covers heap and mapped objects of every
-    /// category. Used only by the dump-partition verifier.
+    /// category. Read by the weak-table sweep (`mark_and_sweep_weak_tables`)
+    /// and by the dump-partition and tricolor verifiers.
+    ///
+    /// An object in the mapped image counts as marked throughout the
+    /// CONCURRENT first partition cycle. That cycle never side-marks in-span
+    /// objects -- the GC thread drops in-span children, and only termination
+    /// roots or deferred unported kinds reach the rest -- so their side bits
+    /// read "unmarked" at termination, and the weak sweep removed entries
+    /// whose weak side was live image data reachable only through, say, a
+    /// symbol's value cell (GNU keeps them). Image objects are never freed,
+    /// and `promote_and_blacken` marks every one of them at the end of this
+    /// same cycle, which is what every later cycle reads; this answers the
+    /// same way one cycle earlier. The stop-the-world first cycle traces the
+    /// image exactly and keeps reading the side bits.
     pub(super) fn is_value_marked(&self, value: TaggedValue) -> bool {
         if let crate::tagged::value::ValueKind::Symbol(id) = value.kind() {
             return crate::emacs_core::intern::is_canonical_id(id)
                 || self.marked_symbols.contains(id);
         }
+        let image_live = self.partition_dump && !self.dump_blackened && self.first_cycle_concurrent;
         if value.is_cons() {
             let ptr = value.xcons_ptr();
             if ConsBlock::ptr_is_cell_aligned(ptr) {
@@ -689,7 +703,7 @@ impl TaggedHeap {
                 .mapped_cons_ranges
                 .iter()
                 .find(|range| range.contains_ptr(ptr))
-                .map(|range| range.is_marked_ptr(ptr))
+                .map(|range| image_live || range.is_marked_ptr(ptr))
                 .unwrap_or(false);
         }
         let Some(addr) = Self::value_heap_addr(value) else {
@@ -719,7 +733,7 @@ impl TaggedHeap {
             return self
                 .mapped_string_index_by_addr
                 .get(&addr)
-                .map(|&i| self.mapped_string_objects[i].marked)
+                .map(|&i| image_live || self.mapped_string_objects[i].marked)
                 .unwrap_or(true);
         }
         if value.is_float() {
@@ -728,14 +742,14 @@ impl TaggedHeap {
                 .mapped_float_ranges
                 .iter()
                 .find(|range| range.contains_ptr(ptr))
-                .map(|range| range.is_marked_ptr(ptr))
+                .map(|range| image_live || range.is_marked_ptr(ptr))
                 .unwrap_or(true);
         }
         if value.is_veclike() {
             return self
                 .mapped_veclike_index_by_addr
                 .get(&addr)
-                .map(|&i| self.mapped_veclike_objects[i].marked)
+                .map(|&i| image_live || self.mapped_veclike_objects[i].marked)
                 .unwrap_or(true);
         }
         true

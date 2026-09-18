@@ -3164,3 +3164,85 @@ fn a_plain_variable_store_logs_its_pre_image_only_while_marking() {
         Some(TaggedValue::fixnum(3).bits())
     );
 }
+
+/// A key-weak table whose key is live image data must keep that entry
+/// through the CONCURRENT first partition cycle. That cycle never
+/// side-marks in-span objects (the GC thread drops in-span children), so at
+/// termination the image cons below read "unmarked" and the weak sweep
+/// removed its entry -- although the cons is live (the snapshot roots reach
+/// it, as a symbol's value cell would; production skips obarray cells at
+/// termination) and image objects are never freed. The stop-the-world first
+/// cycle is the control: it traces the image and keeps the entry.
+#[test]
+fn concurrent_first_cycle_keeps_weak_entries_keyed_by_live_image_objects() {
+    use crate::emacs_core::value::{HashTableTest, HashTableWeakness, LispHashTable};
+    crate::test_utils::init_test_tracing();
+    for concurrent in [true, false] {
+        let mut heap = TaggedHeap::new();
+        set_tagged_heap(&mut heap);
+        // Fake image cons, registered exactly as the pdump loader registers
+        // one (extends the dump span, turns the partition on).
+        let cell = Box::into_raw(Box::new([ConsCell {
+            car: TaggedValue::fixnum(1),
+            cdr_or_next: crate::tagged::header::ConsCdrOrNext {
+                cdr: TaggedValue::NIL,
+            },
+        }])) as *mut ConsCell;
+        unsafe { heap.register_mapped_cons_range(cell, 1) };
+        let key = unsafe { TaggedValue::from_cons_ptr(cell) };
+        let mut table = LispHashTable::new_with_options(
+            HashTableTest::Eq,
+            4,
+            Some(HashTableWeakness::Key),
+            1.5,
+            0.8,
+        );
+        table.data.insert(
+            key.to_hash_key(&HashTableTest::Eq),
+            key,
+            TaggedValue::fixnum(42),
+        );
+        let weak = heap.alloc_hash_table(table);
+        let entries = |weak: TaggedValue| unsafe {
+            (*(weak.as_veclike_ptr().unwrap() as *const crate::tagged::header::HashTableObj))
+                .table
+                .data
+                .len()
+        };
+        assert!(heap.is_partition_first_cycle());
+        if concurrent {
+            heap.arm_first_cycle_concurrent();
+            heap.concurrent_begin();
+            heap.seed_root(weak);
+            heap.seed_root(key);
+            heap.launch_concurrent_mark();
+            while !heap.concurrent_mark_done() {
+                std::thread::yield_now();
+            }
+            heap.join_concurrent_mark();
+            heap.reseed_runtime_and_remembered_roots();
+            // The key is not re-seeded: termination skips obarray cells.
+            heap.seed_root(weak);
+            let bytes_before = heap.live_bytes();
+            heap.incremental_drain_all();
+            heap.incremental_finish(bytes_before, std::time::Instant::now());
+            heap.finish_incremental_sweep_now();
+            heap.finish_first_partition_cycle();
+        } else {
+            heap.begin_collection();
+            heap.seed_root(weak);
+            heap.seed_root(key);
+            heap.complete_collection();
+        }
+        assert_eq!(
+            entries(weak),
+            1,
+            "the entry keyed by a live image cons must survive the {} first cycle",
+            if concurrent {
+                "concurrent"
+            } else {
+                "stop-the-world"
+            }
+        );
+    }
+}
