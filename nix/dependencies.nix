@@ -31,7 +31,7 @@ let
       tree-sitter
       gmp
     ]
-    ++ lib.optionals pkgs.stdenv.isLinux (
+    ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux (
       with pkgs;
       [
         # Rust dependencies may link C++ libraries even though Neomacs itself
@@ -81,14 +81,14 @@ let
 
   videoBuildInputs =
     videoPluginInputs
-    ++ lib.optionals pkgs.stdenv.isLinux (
+    ++ lib.optionals pkgs.stdenv.hostPlatform.isLinux (
       with pkgs;
       [
         libva
       ]
     );
 
-  webviewBuildInputs = lib.optionals pkgs.stdenv.isLinux (
+  webviewBuildInputs = lib.optionals pkgs.stdenv.hostPlatform.isLinux (
     assert lib.assertMsg (wpeWebkit != null) "Linux webview dependencies require a WPE package";
     [
       wpeWebkit

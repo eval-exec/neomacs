@@ -6,7 +6,7 @@
       devShells.default = import ../dev-shell.nix {
         inherit pkgs;
         rustToolchain = pkgs.rust-neomacs;
-        wpeWebkit = if pkgs.stdenv.isLinux then pkgs.neomacs-wpewebkit else null;
+        wpeWebkit = if pkgs.stdenv.hostPlatform.isLinux then pkgs.neomacs-wpewebkit else null;
       };
     };
 }
