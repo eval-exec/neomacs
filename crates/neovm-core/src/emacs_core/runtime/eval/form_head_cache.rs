@@ -23,6 +23,9 @@ pub(super) enum HeadClass {
     /// A byte-code object (`get_bytecode_data` still runs at dispatch: it is
     /// where a dump stub is materialized).
     ByteCode,
+    /// An interpreted closure: a `Lambda` veclike, never a macro and never a
+    /// cons (`setcar` can change a cons; a veclike's type cannot change).
+    Lambda,
 }
 
 /// The head's answers: whether it is an evaluator-internal literal head,
@@ -73,8 +76,11 @@ impl FormHead {
                     },
                     _ => HeadClass::Slow,
                 },
-                None if func.veclike_type() == Some(VecLikeType::ByteCode) => HeadClass::ByteCode,
-                None => HeadClass::Slow,
+                None => match func.veclike_type() {
+                    Some(VecLikeType::ByteCode) => HeadClass::ByteCode,
+                    Some(VecLikeType::Lambda) => HeadClass::Lambda,
+                    _ => HeadClass::Slow,
+                },
             },
         };
         Self {

@@ -5,27 +5,56 @@
 use super::*;
 
 impl Context {
+    // STACK PROBES.  `eval_sub` probes the native stack for every cons form
+    // (`maybe_grow_eval_stack`, at the depths it samples).  The call sites in
+    // `eval_sub_cons_dispatch` run at that same `self.depth` -- argument
+    // evaluation is balanced and special forms restore their depth -- so a
+    // second probe there would give the same answer and only cost its frame.
+    // What they give up is margin: a callee starts with the red zone less the
+    // `eval_sub` closure and dispatch frames (under 1 KiB in release, a few
+    // KiB unoptimized).  Interpreted bodies still probe here, and byte-code in
+    // `Vm::execute_from_stack_args`.
+
     pub(crate) fn eval_lambda_body_value(&mut self, body: Value) -> EvalResult {
-        self.maybe_grow_eval_stack(|ctx| {
-            let mut cursor = body;
-            let mut last = Value::NIL;
-            while cursor.is_cons() {
-                match ctx.eval_sub(cursor.cons_car()) {
-                    Ok(value) => last = value,
-                    Err(Flow::ThreadBlocked(blocked)) => {
-                        let remaining_forms = if blocked.remaining_forms.is_nil() {
-                            cursor.cons_cdr()
-                        } else {
-                            blocked.remaining_forms
-                        };
-                        return Err(Flow::thread_blocked(blocked.blocker, remaining_forms));
-                    }
-                    Err(flow) => return Err(flow),
-                }
-                cursor = cursor.cons_cdr();
-            }
-            Ok(last)
+        let depth = self.depth;
+        if depth < STACK_GROWTH_PROBE_START_DEPTH
+            || !depth.is_multiple_of(STACK_GROWTH_PROBE_INTERVAL)
+        {
+            return self.eval_lambda_body_forms(body);
+        }
+        self.eval_lambda_body_value_probing(body)
+    }
+
+    /// [`Self::eval_lambda_body_value`] at a depth that probes the native
+    /// stack, where it may grow.
+    #[cold]
+    #[inline(never)]
+    fn eval_lambda_body_value_probing(&mut self, body: Value) -> EvalResult {
+        stacker::maybe_grow(EVAL_STACK_RED_ZONE, EVAL_STACK_SEGMENT, || {
+            self.eval_lambda_body_forms(body)
         })
+    }
+
+    #[inline(always)]
+    fn eval_lambda_body_forms(&mut self, body: Value) -> EvalResult {
+        let mut cursor = body;
+        let mut last = Value::NIL;
+        while cursor.is_cons() {
+            match self.eval_sub(cursor.cons_car()) {
+                Ok(value) => last = value,
+                Err(Flow::ThreadBlocked(blocked)) => {
+                    let remaining_forms = if blocked.remaining_forms.is_nil() {
+                        cursor.cons_cdr()
+                    } else {
+                        blocked.remaining_forms
+                    };
+                    return Err(Flow::thread_blocked(blocked.blocker, remaining_forms));
+                }
+                Err(flow) => return Err(flow),
+            }
+            cursor = cursor.cons_cdr();
+        }
+        Ok(last)
     }
 
     /// Evaluate a runtime Value form, matching GNU Emacs's `eval_sub` in eval.c.
@@ -324,21 +353,31 @@ impl Context {
                     }
                     let (first_arg, nargs) = self.eval_call_args_onto_stack(func, original_args)?;
                     self.set_backtrace_args_evalled_bc_span(outer_bt_count, first_arg, nargs);
-                    return self.maybe_grow_eval_stack(|ctx| {
-                        ctx.dispatch_subr_fn_from_bc_stack(function, first_arg, nargs)
-                    });
+                    return self.dispatch_subr_fn_from_bc_stack(function, first_arg, nargs);
                 }
-                HeadClass::ByteCode => {
-                    if let Some(bc_data) = func.get_bytecode_data() {
+                HeadClass::ByteCode | HeadClass::Lambda => {
+                    // Byte-code keeps its order: the dump stub is
+                    // materialized before any argument is evaluated.
+                    let bc_data = match head.class {
+                        HeadClass::ByteCode => func.get_bytecode_data(),
+                        _ => None,
+                    };
+                    if bc_data.is_some() || matches!(head.class, HeadClass::Lambda) {
                         if list_length(&original_args).is_none() {
                             return Err(self.listp_error(original_args));
                         }
                         let (first_arg, nargs) =
                             self.eval_call_args_onto_stack(func, original_args)?;
                         self.set_backtrace_args_evalled_bc_span(outer_bt_count, first_arg, nargs);
-                        return self.maybe_grow_eval_stack(|ctx| {
-                            ctx.execute_bytecode_call_from_stack(bc_data, first_arg, nargs, func)
-                        });
+                        return match bc_data {
+                            Some(bc_data) => self
+                                .execute_bytecode_call_from_stack(bc_data, first_arg, nargs, func),
+                            // What the full resolution reaches for a
+                            // `Lambda` cell: `funcall_general_untraced`'s
+                            // Lambda arm is `apply_lambda`, with no frame of
+                            // its own and no debug-on-call.
+                            None => self.apply_closure_from_bc_stack(func, first_arg, nargs),
+                        };
                     }
                 }
                 HeadClass::Slow => {}
@@ -604,31 +643,29 @@ impl Context {
         if let Some((sym_id, entry)) = direct_subr_entry
             && Self::subr_entry_uses_fixed_value_call(entry)
         {
-            return self.maybe_grow_eval_stack(|ctx| {
-                ctx.dispatch_subr_entry_from_bc_stack(entry, first_arg, nargs)
-                    .unwrap_or_else(|| {
-                        Err(signal(
-                            LispCondition::VoidFunction,
-                            vec![Value::from_sym_id(sym_id)],
-                        ))
-                    })
-            });
+            return self
+                .dispatch_subr_entry_from_bc_stack(entry, first_arg, nargs)
+                .unwrap_or_else(|| {
+                    Err(signal(
+                        LispCondition::VoidFunction,
+                        vec![Value::from_sym_id(sym_id)],
+                    ))
+                });
         }
 
         if let Some((sym_id, entry)) = direct_subr_entry {
-            return self.maybe_grow_eval_stack(|ctx| {
-                let args = LispArgVec::from_slice(&ctx.bc_buf[first_arg..first_arg + nargs]);
-                if entry.dispatch_kind == SubrDispatchKind::ContextCallable {
-                    return ctx.apply_evaluator_callable_by_id(sym_id, args);
-                }
-                ctx.dispatch_subr_entry_unchecked(entry, args)
-                    .unwrap_or_else(|| {
-                        Err(signal(
-                            LispCondition::VoidFunction,
-                            vec![Value::from_sym_id(sym_id)],
-                        ))
-                    })
-            });
+            let args = LispArgVec::from_slice(&self.bc_buf[first_arg..first_arg + nargs]);
+            if entry.dispatch_kind == SubrDispatchKind::ContextCallable {
+                return self.apply_evaluator_callable_by_id(sym_id, args);
+            }
+            return self
+                .dispatch_subr_entry_unchecked(entry, args)
+                .unwrap_or_else(|| {
+                    Err(signal(
+                        LispCondition::VoidFunction,
+                        vec![Value::from_sym_id(sym_id)],
+                    ))
+                });
         }
 
         // A byte-code callee takes its arguments where they lie, through the
@@ -636,14 +673,10 @@ impl Context {
         // the frame recorded above is its backtrace frame, as GNU's
         // `apply_lambda` adds none of its own.
         if let Some(bc_data) = func.get_bytecode_data() {
-            return self.maybe_grow_eval_stack(|ctx| {
-                ctx.execute_bytecode_call_from_stack(bc_data, first_arg, nargs, func)
-            });
+            return self.execute_bytecode_call_from_stack(bc_data, first_arg, nargs, func);
         }
 
-        self.maybe_grow_eval_stack(|ctx| {
-            let args = LispArgVec::from_slice(&ctx.bc_buf[first_arg..first_arg + nargs]);
-            ctx.funcall_general_untraced(func, args)
-        })
+        let args = LispArgVec::from_slice(&self.bc_buf[first_arg..first_arg + nargs]);
+        self.funcall_general_untraced(func, args)
     }
 }

@@ -3116,6 +3116,48 @@ impl Context {
         self.unbind_to_with_result(root_count, result)
     }
 
+    /// [`Self::apply_lambda`] for the interpreter's own call of a closure cell:
+    /// FUNC sits at `bc_buf[first_arg - 1]` under its evaluated arguments,
+    /// inside the span the calling `eval_sub_cons` owns and truncates, so
+    /// that slot roots it for the whole call and no GC root is pushed.  Not
+    /// for VM or JIT callers, which truncate or overwrite the function slot.
+    pub(super) fn apply_closure_from_bc_stack(
+        &mut self,
+        func: Value,
+        first_arg: usize,
+        nargs: usize,
+    ) -> EvalResult {
+        debug_assert_eq!(self.bc_buf[first_arg - 1].bits(), func.bits());
+        // The same slot reads as `apply_lambda`, copied out before anything
+        // allocates (the slice must not be held across an allocation).
+        let (arglist, body, env) = match func.closure_slots() {
+            Some(slots) => (
+                slots.get(CLOSURE_ARGLIST).copied(),
+                slots.get(crate::tagged::header::CLOSURE_CODE).copied(),
+                slots
+                    .get(crate::tagged::header::CLOSURE_CONSTANTS)
+                    .copied()
+                    .filter(|env| !env.is_nil()),
+            ),
+            None => (None, None, None),
+        };
+        let (Some(arglist), Some(body)) = (arglist, body) else {
+            return Err(signal(LispCondition::InvalidFunction, vec![func]));
+        };
+        let Some(env) = env else {
+            // A dynamic closure: `apply_lambda`'s whole dynamic path.
+            let args = LispArgVec::from_slice(&self.bc_buf[first_arg..first_arg + nargs]);
+            return self.apply_lambda(func, args);
+        };
+        let new_env = bind_lexical_formals(
+            env,
+            func,
+            arglist,
+            &self.bc_buf[first_arg..first_arg + nargs],
+        )?;
+        self.run_lexical_closure_body(new_env, body)
+    }
+
     /// A lambda body that blocked a thread mid-way resumes as a closure over
     /// the forms it had left, in the current lexical environment.
     #[inline]

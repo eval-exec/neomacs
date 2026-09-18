@@ -26854,3 +26854,34 @@ fn interpreted_calls_of_rest_builtins_dispatch_like_gnu() {
         r#"(55 nil "abc" [1 2] (wrong-number-of-arguments max 0) (wrong-type-argument listp 2) 6 (1 2 3 4 5 6 7 8 9) 24)"#
     );
 }
+
+/// Deep interpreted recursion through a `&rest` builtin and through
+/// `mapcar` runs to GNU's nesting limit and reports it as GNU does, now that
+/// the dispatch sites leave the native-stack probe to `eval_sub`.  It pins
+/// the depth accounting only: test threads get 128 MiB stacks
+/// (`RUST_MIN_STACK`), so no probe fires here, and the probe margin rests on
+/// the argument in `tree_walk.rs`.  GNU Emacs 31.1 answers `(300 150
+/// (excessive-lisp-nesting 1601))`.
+#[test]
+fn deep_interpreted_recursion_through_builtins_reaches_gnus_nesting_limit() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    eval.set_lexical_binding(true);
+    let value = eval
+        .eval_str(
+            r#"(progn
+                 (fset 'deep-plus (lambda (n) (if (= n 0) 0 (+ 1 (deep-plus (1- n))))))
+                 (fset 'deep-map
+                       (lambda (n)
+                         (if (= n 0) 0
+                           (car (mapcar (lambda (x) (1+ (deep-map (1- n)))) (list 0))))))
+                 (list (deep-plus 300)
+                       (deep-map 150)
+                       (condition-case e (deep-plus 100000) (error e))))"#,
+        )
+        .expect("the recursion should evaluate");
+    assert_eq!(
+        crate::emacs_core::print::print_value(&value),
+        "(300 150 (excessive-lisp-nesting 1601))"
+    );
+}
