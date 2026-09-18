@@ -125,6 +125,13 @@ impl RenderApp {
                 // Modifier keys are handled via ModifiersChanged, not as key
                 // events.  They are listed explicitly so that "a modifier" and
                 // "a key this table does not know" stay different answers.
+                //
+                // `Hyper` is legacy in the W3C spec (Meta is the modern key
+                // value) but winit's xkb keymap still emits it for Hyper_L/R
+                // (winit-common/src/xkb/keymap.rs:664-666), so it stays in
+                // this arm rather than falling through to the "unmapped" log
+                // below, which would fire on every Hyper keypress.
+                #[allow(deprecated)]
                 NamedKey::Shift
                 | NamedKey::Control
                 | NamedKey::Alt

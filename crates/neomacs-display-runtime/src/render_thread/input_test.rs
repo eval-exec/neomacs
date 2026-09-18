@@ -2845,7 +2845,10 @@ fn translate_key_keeps_unmapped_native_keys() {
 
 /// Modifiers are not key events — they arrive through `ModifiersChanged` — and
 /// the mapping says so with an arm of its own instead of relying on an
-/// unlisted key falling through to zero.
+/// unlisted key falling through to zero.  `Hyper` is in the list because
+/// winit's xkb keymap still delivers it for Hyper_L/R even though the spec
+/// calls it legacy (see the arm's own note).
+#[allow(deprecated)]
 #[test]
 fn translate_key_suppresses_modifiers() {
     for modifier in [
@@ -2853,6 +2856,7 @@ fn translate_key_suppresses_modifiers() {
         NamedKey::Control,
         NamedKey::Alt,
         NamedKey::CapsLock,
+        NamedKey::Hyper,
     ] {
         assert_eq!(
             RenderApp::translate_key(&Key::Named(modifier)),
