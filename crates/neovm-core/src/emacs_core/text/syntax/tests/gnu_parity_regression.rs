@@ -176,6 +176,68 @@ fn regexp_syntax_class_search_prepares_syntax_properties_before_matching() {
     assert_eq!(result, "OK (3 5)");
 }
 
+/// GNU 31.1 answers `(6 (fontified t face bold syntax-table nil) 3 6 ...)`.
+/// A `syntax-table` property written into the middle of an interval (a split
+/// on both sides) reaches the scanner, a later `face`/`fontified` put over it
+/// -- names the cached interval flags never read -- leaves it visible, the
+/// live plist `text-properties-at` returned is the one the next put rewrites
+/// in place, and an uninterned symbol named `syntax-table` is an ordinary
+/// property the scanner never consults (GNU compares against
+/// `Qsyntax_table`).
+#[test]
+fn a_face_put_over_a_syntax_table_run_leaves_it_visible_to_the_scanner() {
+    crate::test_utils::init_test_tracing();
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"
+        (with-temp-buffer
+          (setq-local parse-sexp-lookup-properties t)
+          (insert "ab cd ef")
+          (put-text-property 3 4 'syntax-table (string-to-syntax "w"))
+          (put-text-property 1 9 'face 'bold)
+          (put-text-property 2 5 'fontified t)
+          (goto-char (point-min))
+          (forward-word 1)
+          (list (point)
+                (text-properties-at 3)
+                (progn (put-text-property 3 4 'syntax-table nil)
+                       (goto-char (point-min)) (forward-word 1) (point))
+                (progn (put-text-property 6 7 (make-symbol "syntax-table")
+                                          (string-to-syntax "w"))
+                       (goto-char 4) (forward-word 1) (point))
+                (text-properties-at 3)))
+        "#,
+    );
+    assert_eq!(
+        result,
+        "OK (6 (fontified t face bold syntax-table nil) 3 6 (fontified t face bold syntax-table nil))"
+    );
+}
+
+/// GNU 31.1 answers `(6 (face italic syntax-table (2)))`. `text-properties-at`
+/// hands Lisp the interval's live plist, and `plist-put` can add a
+/// `syntax-table` key to it behind the interval's cached syntax bit; the next
+/// put on that interval -- of any name, here font-lock's `face` -- re-derives
+/// the bit from the plist, so the scanner sees the property. (Skipping that
+/// re-derivation for names the cached bits do not read broke this.)
+#[test]
+fn a_put_on_an_interval_rereads_a_syntax_table_key_lisp_added_in_place() {
+    crate::test_utils::init_test_tracing();
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"
+        (with-temp-buffer
+          (setq-local parse-sexp-lookup-properties t)
+          (insert "ab cd ef")
+          (put-text-property 3 4 'face 'bold)
+          (plist-put (text-properties-at 3) 'syntax-table (string-to-syntax "w"))
+          (put-text-property 3 4 'face 'italic)
+          (goto-char 1)
+          (forward-word 1)
+          (list (point) (text-properties-at 3)))
+        "#,
+    );
+    assert_eq!(result, "OK (6 (face italic syntax-table (2)))");
+}
+
 #[test]
 fn regexp_syntax_class_search_reads_syntax_table_text_properties() {
     crate::test_utils::init_test_tracing();

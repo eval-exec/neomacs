@@ -236,7 +236,24 @@ fn copy_plist_value(plist: Value) -> Value {
     if plist.is_nil() {
         return Value::NIL;
     }
-    plist_value_from_pairs(&plist_pairs(plist))
+    // One cons walk into a stack buffer, then one list build: every raw
+    // split of a propertied interval lands here, and the pairs `Vec` plus
+    // the flattened `Vec` it used to build were two heap round trips per
+    // copy. Same shape as before -- a dangling odd key is dropped -- and no
+    // rooting is needed: the elements are held by `plist` itself, and cons
+    // allocation cannot collect (`Value::list_from_slice`).
+    let mut items: smallvec::SmallVec<[Value; 16]> = smallvec::SmallVec::new();
+    let mut tail = plist;
+    while tail.is_cons() {
+        let rest = tail.cons_cdr();
+        if !rest.is_cons() {
+            break;
+        }
+        items.push(tail.cons_car());
+        items.push(rest.cons_car());
+        tail = rest.cons_cdr();
+    }
+    Value::list_from_slice(&items)
 }
 
 /// The property symbols `IntervalNode::extract_cached` looks for, interned
@@ -1297,7 +1314,7 @@ impl IntervalTree {
                 extended.set_end(extended.end().add_len(len));
                 adjusted.push(extended);
             } else {
-                let right_plist = plist_value_from_pairs(&plist_pairs(run.plist));
+                let right_plist = copy_plist_value(run.plist);
                 let mut left = run.clone();
                 left.set_end(pos);
                 let inserted_run =
@@ -1334,7 +1351,7 @@ impl IntervalTree {
         let offset = pos.saturating_offset_from(start);
         let new_len = len.saturating_sub(offset);
         let old_right = self.nodes[id.0].right;
-        let plist = plist_value_from_pairs(&plist_pairs(self.nodes[id.0].plist));
+        let plist = copy_plist_value(self.nodes[id.0].plist);
         let mut new = IntervalNode::with_cached(
             new_len,
             pos,
@@ -2361,7 +2378,13 @@ impl ConservativePropertyNames {
                 *self = Self::Assigned(Arc::new(assigned));
             }
             Self::Assigned(assigned) => {
-                Arc::make_mut(assigned).insert(identity);
+                // A put of a name already on record is the common case
+                // (font-lock writes the same few names over and over): a
+                // read probe answers it without `make_mut`'s reference-count
+                // check and the insert's write path.
+                if !assigned.contains(&identity) {
+                    Arc::make_mut(assigned).insert(identity);
+                }
             }
         }
     }
@@ -2516,8 +2539,15 @@ impl TextPropertyTable {
     }
 
     /// Whether a property NAME can influence syntax resolution.
+    /// Whether `name` is `syntax-table` or `category`, the two properties
+    /// the syntax scanner reads. Compared by symbol id, as GNU compares
+    /// against `Qsyntax_table`/`Qcategory`: the scanner never reads an
+    /// uninterned symbol of the same name, and comparing names resolved the
+    /// symbol's string twice on every put.
     fn name_is_syntax_relevant(name: Value) -> bool {
-        name.is_symbol_named("syntax-table") || name.is_symbol_named("category")
+        let ids = cached_plist_flag_symbols();
+        name.as_symbol_id()
+            .is_some_and(|id| id == ids.syntax_table || id == ids.category)
     }
 
     /// Return the conservative presence state for `name` without descending the
@@ -2532,7 +2562,7 @@ impl TextPropertyTable {
     pub fn copy_interval_plist_spines(&self) -> Self {
         let mut runs = self.intervals.runs();
         for run in &mut runs {
-            run.plist = plist_value_from_pairs(&plist_pairs(run.plist));
+            run.plist = copy_plist_value(run.plist);
             run.refresh_cache();
         }
         Self::from_interval_runs_preserving_shape(runs)
@@ -2754,7 +2784,7 @@ impl TextPropertyTable {
             return;
         };
 
-        let right_plist = plist_value_from_pairs(&plist_pairs(runs[index].plist));
+        let right_plist = copy_plist_value(runs[index].plist);
         let mut right = runs[index].clone();
         right.set_start(pos);
         right.plist = right_plist;
