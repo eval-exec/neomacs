@@ -931,6 +931,65 @@ fn file_pdump_loads_marker_object_from_mmap_image() {
     );
 }
 
+/// A marker that lives in the mapped image and that Lisp later points into
+/// a buffer (as `view-lossage` does with `help-window-point-marker`) must
+/// stay in the buffer's marker chain across collections. Its header mark bit
+/// keeps the value the loader wrote -- the image's mark is the side table --
+/// so a chain walk that read the header spliced it out at the first GC, and
+/// from then on it no longer moved with insertions (GNU: it does). Checked
+/// over three cycles, both parities.
+#[test]
+fn a_mapped_marker_set_into_a_buffer_keeps_tracking_edits_across_gcs() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    eval.obarray.set_symbol_value(
+        "test-pdump-chained-marker",
+        Value::make_marker(LispMarker {
+            buffer: None,
+            insertion_type: false,
+            marker_id: Some(43),
+            bytepos: 1,
+            charpos: 1,
+            last_position_valid: true,
+            next_marker: std::ptr::null_mut(),
+            chained: false,
+        }),
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let dump_path = dir.path().join("chained-marker.pdump");
+    dump_to_file(&eval, &dump_path).expect("dump should succeed");
+    let mut loaded = load_from_dump(&dump_path).expect("load should succeed");
+    let value = *loaded
+        .obarray
+        .symbol_value("test-pdump-chained-marker")
+        .expect("restored marker symbol");
+    assert!(
+        loaded.pdump_image_contains_ptr(value.as_veclike_ptr().unwrap().cast::<u8>()),
+        "the marker must live in the mapped image for this test to mean anything"
+    );
+    loaded
+        .eval_str(
+            "(progn (set-buffer (get-buffer-create \" p3-markers\"))
+                    (insert \"0123456789\")
+                    (set-marker test-pdump-chained-marker 6))",
+        )
+        .expect("point the image marker into a buffer");
+    for round in 0..3i64 {
+        loaded.gc_collect_exact();
+        let position = loaded
+            .eval_str(
+                "(progn (goto-char 1) (insert \"B\") (marker-position test-pdump-chained-marker))",
+            )
+            .expect("insert before the marker");
+        assert_eq!(
+            position.as_fixnum(),
+            Some(7 + round),
+            "after GC {} the image marker must have moved with the insertion",
+            round + 1
+        );
+    }
+}
+
 #[test]
 fn file_pdump_loads_overlay_object_from_mmap_image() {
     crate::test_utils::init_test_tracing();

@@ -635,7 +635,9 @@ pub struct TaggedHeap {
     // tenured objects freeze their bit at promotion, and every reader that can
     // see a tenured object short-circuits on `tenured` BEFORE interpreting the
     // bit (mark_value owned arms, is_value_marked, unchain_dead_markers,
-    // doomed-finalizer scan).
+    // doomed-finalizer scan). Mapped (image) objects never read their header
+    // bit at all: their mark is the side table's, and `unchain_dead_markers`,
+    // which walks header bits, tests the dump span first.
     /// Current cycle's mark parity. INIT `false` so the FIRST
     /// `begin_collection` flip yields `true` — opposite the zeroed/`false`
     /// bits of freshly created and pdump-loaded headers (`GcHeader::new`) —
@@ -2080,6 +2082,7 @@ impl TaggedHeap {
         // Take the slot list out so we don't alias self while iterating.
         let slots = std::mem::take(&mut self.marker_chain_head_slots);
         let parity = self.mark_parity;
+        let (dump_lo, dump_hi) = (self.dump_addr_lo, self.dump_addr_hi);
         for slot in slots {
             unsafe {
                 let mut prev_slot: *mut *mut MarkerObj = slot;
@@ -2089,7 +2092,23 @@ impl TaggedHeap {
                     // at the first partition cycle): their bit froze at
                     // promotion and must not be interpreted against the
                     // current parity — tenured ≡ permanently live.
-                    if (*curr).header.gc.tenured || (*curr).header.gc.is_marked_at(parity) {
+                    //
+                    // A marker in the mapped image (a dumped marker Lisp
+                    // later pointed into a buffer, e.g. `view-lossage`'s
+                    // `help-window-point-marker`) is permanently live too:
+                    // image objects are never freed, and their header bit
+                    // keeps the value the loader wrote, which reads as dead
+                    // at every other parity. Its mark lives in the side
+                    // table, not the header -- reading the header spliced it
+                    // out of the chain at the first GC, after which it no
+                    // longer moved with insertions and deletions. Keeping an
+                    // unreachable image marker chained costs one node and
+                    // cannot dangle.
+                    let addr = curr as usize;
+                    if (addr >= dump_lo && addr < dump_hi)
+                        || (*curr).header.gc.tenured
+                        || (*curr).header.gc.is_marked_at(parity)
+                    {
                         // Live — advance prev
                         prev_slot = &mut (*curr).data.next_marker;
                     } else {
