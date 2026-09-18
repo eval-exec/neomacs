@@ -37,35 +37,9 @@ impl Context {
     ) -> Option<EvalResult> {
         let saved_depth = self.depth;
         let result = match evaluator_handler(target_id) {
-            Some(EvaluatorHandler::SpecialForm(handler)) => Some(match handler {
-                // Forms that report the surface name in their signals.
-                SpecialFormHandler::Quote => self.sf_quote_value_named(surface_id, tail),
-                SpecialFormHandler::Function => self.sf_function_value_named(surface_id, tail),
-                SpecialFormHandler::Let => self.sf_let_value_named(surface_id, tail),
-                SpecialFormHandler::LetStar => self.sf_let_star_value_named(surface_id, tail),
-                SpecialFormHandler::Setq => self.sf_setq_value_named(surface_id, tail),
-                SpecialFormHandler::If => self.sf_if_value_named(surface_id, tail),
-                SpecialFormHandler::While => self.sf_while_value_named(surface_id, tail),
-                SpecialFormHandler::Prog1 => self.sf_prog1_value_named(surface_id, tail),
-                SpecialFormHandler::Defvar => self.sf_defvar_value_named(surface_id, tail),
-                SpecialFormHandler::Defconst => self.sf_defconst_value_named(surface_id, tail),
-                SpecialFormHandler::Catch => self.sf_catch_value_named(surface_id, tail),
-                SpecialFormHandler::UnwindProtect => {
-                    self.sf_unwind_protect_value_named(surface_id, tail)
-                }
-                SpecialFormHandler::ConditionCase => {
-                    self.sf_condition_case_value_named(surface_id, tail)
-                }
-                // Forms whose signals never carry a call name.
-                SpecialFormHandler::And => self.sf_and_value(tail),
-                SpecialFormHandler::Or => self.sf_or_value(tail),
-                SpecialFormHandler::Cond => self.sf_cond_value(tail),
-                SpecialFormHandler::Progn => self.sf_progn_value(tail),
-                SpecialFormHandler::SaveExcursion => self.sf_save_excursion_value(tail),
-                SpecialFormHandler::SaveCurrentBuffer => self.sf_save_current_buffer_value(tail),
-                SpecialFormHandler::SaveRestriction => self.sf_save_restriction_value(tail),
-                SpecialFormHandler::Interactive => Ok(Value::NIL),
-            }),
+            Some(EvaluatorHandler::SpecialForm(handler)) => {
+                Some(self.run_special_form(handler, surface_id, tail))
+            }
             Some(EvaluatorHandler::Callable(_)) => None,
             None => match target_id {
                 // These evaluator-internal forms have no public subr
@@ -81,6 +55,52 @@ impl Context {
                 }
                 _ => None,
             },
+        };
+        self.depth = saved_depth;
+        result
+    }
+
+    /// Run the special form HANDLER on TAIL, reporting SURFACE_ID as the
+    /// call name where GNU's does.  Out of line, so the forms LLVM would
+    /// inline here stay out of the dispatcher that calls it; the evaluation
+    /// depth is restored afterwards, as every special form's own frame
+    /// unwinds in GNU.
+    #[inline(never)]
+    pub(super) fn run_special_form(
+        &mut self,
+        handler: SpecialFormHandler,
+        surface_id: SymId,
+        tail: Value,
+    ) -> EvalResult {
+        let saved_depth = self.depth;
+        let result = match handler {
+            // Forms that report the surface name in their signals.
+            SpecialFormHandler::Quote => self.sf_quote_value_named(surface_id, tail),
+            SpecialFormHandler::Function => self.sf_function_value_named(surface_id, tail),
+            SpecialFormHandler::Let => self.sf_let_value_named(surface_id, tail),
+            SpecialFormHandler::LetStar => self.sf_let_star_value_named(surface_id, tail),
+            SpecialFormHandler::Setq => self.sf_setq_value_named(surface_id, tail),
+            SpecialFormHandler::If => self.sf_if_value_named(surface_id, tail),
+            SpecialFormHandler::While => self.sf_while_value_named(surface_id, tail),
+            SpecialFormHandler::Prog1 => self.sf_prog1_value_named(surface_id, tail),
+            SpecialFormHandler::Defvar => self.sf_defvar_value_named(surface_id, tail),
+            SpecialFormHandler::Defconst => self.sf_defconst_value_named(surface_id, tail),
+            SpecialFormHandler::Catch => self.sf_catch_value_named(surface_id, tail),
+            SpecialFormHandler::UnwindProtect => {
+                self.sf_unwind_protect_value_named(surface_id, tail)
+            }
+            SpecialFormHandler::ConditionCase => {
+                self.sf_condition_case_value_named(surface_id, tail)
+            }
+            // Forms whose signals never carry a call name.
+            SpecialFormHandler::And => self.sf_and_value(tail),
+            SpecialFormHandler::Or => self.sf_or_value(tail),
+            SpecialFormHandler::Cond => self.sf_cond_value(tail),
+            SpecialFormHandler::Progn => self.sf_progn_value(tail),
+            SpecialFormHandler::SaveExcursion => self.sf_save_excursion_value(tail),
+            SpecialFormHandler::SaveCurrentBuffer => self.sf_save_current_buffer_value(tail),
+            SpecialFormHandler::SaveRestriction => self.sf_save_restriction_value(tail),
+            SpecialFormHandler::Interactive => Ok(Value::NIL),
         };
         self.depth = saved_depth;
         result

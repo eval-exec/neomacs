@@ -26824,3 +26824,33 @@ fn a_let_init_value_survives_a_collection_in_a_later_init_form() {
         r#"("xxx" "zzz")"#
     );
 }
+
+/// Interpreted calls of `&rest` builtins take the form-head cache's builtin
+/// arm: more arguments than the local array holds, none at all, a string
+/// and a vector result, a `&rest` builtin below its minimum arity (signalled
+/// with the surface symbol before any argument runs), an improper argument
+/// list, and the same builtins through `apply`/`funcall`.  GNU Emacs 31.1
+/// answers `(55 nil "abc" [1 2] (wrong-number-of-arguments max 0)
+/// (wrong-type-argument listp 2) 6 (1 2 3 4 5 6 7 8 9) 24)`.
+#[test]
+fn interpreted_calls_of_rest_builtins_dispatch_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    let value = eval
+        .eval_str(
+            r#"(list (+ 1 2 3 4 5 6 7 8 9 10)
+                     (list)
+                     (concat "a" "b" "c")
+                     (vector 1 2)
+                     (condition-case e (max) (error e))
+                     (condition-case e (eval '(+ 1 . 2)) (error e))
+                     (apply '+ 1 2 '(3))
+                     (funcall 'list 1 2 3 4 5 6 7 8 9)
+                     (* 2 3 4))"#,
+        )
+        .expect("the calls should evaluate");
+    assert_eq!(
+        crate::emacs_core::print::print_value(&value),
+        r#"(55 nil "abc" [1 2] (wrong-number-of-arguments max 0) (wrong-type-argument listp 2) 6 (1 2 3 4 5 6 7 8 9) 24)"#
+    );
+}

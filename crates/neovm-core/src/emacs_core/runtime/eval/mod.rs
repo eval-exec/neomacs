@@ -7212,7 +7212,8 @@ mod signal_dispatch;
 mod construct;
 mod form_head_cache;
 mod tree_walk;
-pub(crate) use form_head_cache::{FormHeadCache, FormHeadCacheEntry};
+pub(crate) use form_head_cache::FormHeadCache;
+use form_head_cache::{FormHead, HeadClass};
 
 #[cfg(test)]
 #[path = "tests/mod.rs"]

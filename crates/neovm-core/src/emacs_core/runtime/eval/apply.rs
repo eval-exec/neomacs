@@ -2427,6 +2427,68 @@ impl Context {
             )
     }
 
+    /// Call a builtin's native FUNCTION for a frame whose arguments lie on
+    /// the VM operand stack at `args_start`: a fixed-arity function reads
+    /// them there, missing optionals as nil (GNU `eval_sub` fills `argvals`
+    /// with `Qnil` up to `maxargs`); a `&rest` one gets them as a slice or a
+    /// vector.  Out of line: the interpreter's dispatcher calls it for every
+    /// builtin shape.
+    #[inline(never)]
+    pub(crate) fn dispatch_subr_fn_from_bc_stack(
+        &mut self,
+        function: crate::tagged::header::SubrFn,
+        args_start: usize,
+        nargs: usize,
+    ) -> EvalResult {
+        match function {
+            SubrFn::ManySlice(func) => self.call_many_slice_from_bc_stack(func, args_start, nargs),
+            SubrFn::Many(func) => {
+                let args = self.bc_buf[args_start..args_start + nargs].to_vec();
+                func(self, args)
+            }
+            SubrFn::ManyNoContext(func) => {
+                func(self.bc_buf[args_start..args_start + nargs].to_vec())
+            }
+            fixed => self
+                .dispatch_fixed_subr_fn_from_bc_stack(fixed, args_start, nargs)
+                .expect("a fixed-arity subr function"),
+        }
+    }
+
+    /// A `&rest` builtin's slice from the operand stack.  The callee takes
+    /// `&mut Context` too, so the arguments are copied out first: into a
+    /// local array for the common counts, a `LispArgVec` above them.  A
+    /// private copy of the VM's `call_many_slice_subr_from_stack_args`, so
+    /// the VM's Bcall path keeps its own inlining.
+    fn call_many_slice_from_bc_stack(
+        &mut self,
+        func: crate::tagged::header::SubrFnManySlice,
+        args_start: usize,
+        nargs: usize,
+    ) -> EvalResult {
+        macro_rules! fixed {
+            ($($i:literal),*) => {{
+                let args = [$(self.bc_buf[args_start + $i]),*];
+                func(self, &args)
+            }};
+        }
+        match nargs {
+            0 => func(self, &[]),
+            1 => fixed!(0),
+            2 => fixed!(0, 1),
+            3 => fixed!(0, 1, 2),
+            4 => fixed!(0, 1, 2, 3),
+            5 => fixed!(0, 1, 2, 3, 4),
+            6 => fixed!(0, 1, 2, 3, 4, 5),
+            7 => fixed!(0, 1, 2, 3, 4, 5, 6),
+            8 => fixed!(0, 1, 2, 3, 4, 5, 6, 7),
+            _ => {
+                let args = LispArgVec::from_slice(&self.bc_buf[args_start..args_start + nargs]);
+                func(self, &args)
+            }
+        }
+    }
+
     #[inline]
     /// Dispatch a fixed-arity subr entry for a frame whose arguments lie on
     /// the VM operand stack at `args_start`: the call reads them there, and
@@ -2438,6 +2500,18 @@ impl Context {
         args_start: usize,
         nargs: usize,
     ) -> Option<EvalResult> {
+        self.dispatch_fixed_subr_fn_from_bc_stack(entry.function?, args_start, nargs)
+    }
+
+    /// The fixed-arity half of [`Self::dispatch_subr_fn_from_bc_stack`];
+    /// `None` for a `&rest` function.
+    #[inline]
+    fn dispatch_fixed_subr_fn_from_bc_stack(
+        &mut self,
+        function: crate::tagged::header::SubrFn,
+        args_start: usize,
+        nargs: usize,
+    ) -> Option<EvalResult> {
         let arg = |ctx: &Self, i: usize| {
             if i < nargs {
                 ctx.bc_buf[args_start + i]
@@ -2445,7 +2519,7 @@ impl Context {
                 Value::NIL
             }
         };
-        match entry.function? {
+        match function {
             SubrFn::A0(func) => Some(func(self)),
             SubrFn::A1(func) => {
                 let a0 = arg(self, 0);

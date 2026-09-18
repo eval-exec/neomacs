@@ -235,24 +235,16 @@ impl Context {
         // The cache is bypassed entirely while compiler function overrides are
         // active, exactly as the direct resolution below was.
         let overrides_active = self.compiler_function_overrides_active();
-        let head = match sym_id {
+        let head: Option<FormHead> = match sym_id {
             Some(sym_id) if !overrides_active => {
                 let epoch = self.obarray.function_epoch();
                 Some(match self.form_head_cache.find(sym_id, epoch) {
-                    Some(entry) => entry,
+                    Some(head) => head,
                     None => {
                         let func = self.obarray.symbol_function_id(sym_id);
-                        let entry = FormHeadCacheEntry {
-                            epoch,
-                            sym: sym_id,
-                            literal_head: sym_id == lambda_symbol()
-                                || sym_id == byte_code_literal_symbol()
-                                || sym_id == byte_code_symbol(),
-                            func,
-                            subr: func.and_then(subr_call_entry_from_value),
-                        };
-                        self.form_head_cache.push(entry);
-                        entry
+                        let head = FormHead::classify(sym_id, func);
+                        self.form_head_cache.push(sym_id, epoch, head);
+                        head
                     }
                 })
             }
@@ -288,64 +280,68 @@ impl Context {
         // arity builtin or a byte-code object -- so those probes stay on the
         // full resolution below, which every other cell shape still takes.
         let prefetched_cell = head.and_then(|head| head.func);
+        // The cached class decides the common cells.  FUNC and the class's
+        // payload are copied out before any argument is evaluated: a nested
+        // `eval_sub` can refill this slot, and GNU reads `fun` first too.
         if let Some(sym_id) = sym_id
-            && let Some(func) = prefetched_cell
+            && let Some(head) = head
+            && let Some(func) = head.func
         {
-            let subr = head.and_then(|head| head.subr);
-            if let Some((target_sym_id, entry)) = subr
-                && entry.dispatch_kind == SubrDispatchKind::SpecialForm
-                && target_sym_id == sym_id
-            {
-                // GNU eval.c:2624: `list_length (args_left)` runs for every
-                // SUBRP, UNEVALLED ones included, before the dispatch.  The
-                // frame stays UNEVALLED (eval.c:2618-2619).
-                if list_length(&original_args).is_none() {
-                    return Err(self.listp_error(original_args));
+            match head.class {
+                HeadClass::SpecialForm(handler) => {
+                    // GNU eval.c:2624: `list_length (args_left)` runs for
+                    // every SUBRP, UNEVALLED ones included, before the
+                    // dispatch.  The frame stays UNEVALLED (eval.c:2618-2619).
+                    if list_length(&original_args).is_none() {
+                        return Err(self.listp_error(original_args));
+                    }
+                    return self.run_special_form(handler, sym_id, original_args);
                 }
-                if let Some(result) = self.try_special_form_value_id(sym_id, original_args) {
-                    return result;
+                HeadClass::Subr {
+                    function,
+                    min_args,
+                    max_args,
+                } => {
+                    // GNU eval.c:2606-2614: the arity check against the raw
+                    // argument count, signalling with the surface symbol,
+                    // before any argument is evaluated.
+                    let numargs = match list_length(&original_args) {
+                        Some(n) => n,
+                        None => return Err(self.listp_error(original_args)),
+                    };
+                    if numargs < min_args as usize || max_args.is_some_and(|m| numargs > m as usize)
+                    {
+                        return Err(signal(
+                            LispCondition::WrongNumberOfArguments,
+                            vec![original_fun, Value::fixnum(numargs as i64)],
+                        ));
+                    }
+                    // The builtin histogram counted each interpreted call
+                    // of a `&rest` builtin when the slow path resolved it.
+                    #[cfg(feature = "vm-profile")]
+                    if let Some(id) = func.as_subr_id() {
+                        crate::emacs_core::bytecode::vm::vm_profile::bump_subr(id);
+                    }
+                    let (first_arg, nargs) = self.eval_call_args_onto_stack(func, original_args)?;
+                    self.set_backtrace_args_evalled_bc_span(outer_bt_count, first_arg, nargs);
+                    return self.maybe_grow_eval_stack(|ctx| {
+                        ctx.dispatch_subr_fn_from_bc_stack(function, first_arg, nargs)
+                    });
                 }
-            }
-            if let Some((target_sym_id, entry)) = subr
-                && entry.dispatch_kind == SubrDispatchKind::Builtin
-                && Self::subr_entry_uses_fixed_value_call(entry)
-            {
-                let numargs = match list_length(&original_args) {
-                    Some(n) => n,
-                    None => return Err(self.listp_error(original_args)),
-                };
-                let min = entry.min_args as usize;
-                let max_ok = match entry.max_args {
-                    Some(m) => numargs <= m as usize,
-                    None => true,
-                };
-                if numargs < min || !max_ok {
-                    return Err(signal(
-                        LispCondition::WrongNumberOfArguments,
-                        vec![original_fun, Value::fixnum(numargs as i64)],
-                    ));
+                HeadClass::ByteCode => {
+                    if let Some(bc_data) = func.get_bytecode_data() {
+                        if list_length(&original_args).is_none() {
+                            return Err(self.listp_error(original_args));
+                        }
+                        let (first_arg, nargs) =
+                            self.eval_call_args_onto_stack(func, original_args)?;
+                        self.set_backtrace_args_evalled_bc_span(outer_bt_count, first_arg, nargs);
+                        return self.maybe_grow_eval_stack(|ctx| {
+                            ctx.execute_bytecode_call_from_stack(bc_data, first_arg, nargs, func)
+                        });
+                    }
                 }
-                let (first_arg, nargs) = self.eval_call_args_onto_stack(func, original_args)?;
-                self.set_backtrace_args_evalled_bc_span(outer_bt_count, first_arg, nargs);
-                return self.maybe_grow_eval_stack(|ctx| {
-                    ctx.dispatch_subr_entry_from_bc_stack(entry, first_arg, nargs)
-                        .unwrap_or_else(|| {
-                            Err(signal(
-                                LispCondition::VoidFunction,
-                                vec![Value::from_sym_id(target_sym_id)],
-                            ))
-                        })
-                });
-            }
-            if let Some(bc_data) = func.get_bytecode_data() {
-                if list_length(&original_args).is_none() {
-                    return Err(self.listp_error(original_args));
-                }
-                let (first_arg, nargs) = self.eval_call_args_onto_stack(func, original_args)?;
-                self.set_backtrace_args_evalled_bc_span(outer_bt_count, first_arg, nargs);
-                return self.maybe_grow_eval_stack(|ctx| {
-                    ctx.execute_bytecode_call_from_stack(bc_data, first_arg, nargs, func)
-                });
+                HeadClass::Slow => {}
             }
         }
 
