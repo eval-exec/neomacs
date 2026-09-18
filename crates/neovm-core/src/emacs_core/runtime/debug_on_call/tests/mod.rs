@@ -671,3 +671,31 @@ fn a_byte_compiled_frame_flagged_by_backtrace_debug_still_calls_the_exit_debugge
         "(outer-done ((exit inner-done)) nil)"
     );
 }
+
+/// A `debug-on-exit` flag set on a frame WHILE its own arguments are being
+/// evaluated survives that frame's switch to EVALD: GNU's
+/// `set_backtrace_args` stores the argument word alone (eval.c:147-148).
+/// Measured under GNU Emacs 31.1 with `lexical-binding` t (`push` there,
+/// `setq` here, where the bare context has no `subr.el`):
+///
+/// ```elisp
+/// (defalias 'ma-id (lambda (x) x))
+/// (let* ((log nil) (debugger (lambda (&rest args) (push args log) 99)))
+///   (list (ma-id (progn (backtrace-debug 0 t 'ma-id) 7)) log))
+/// ;; => (99 ((exit 7)))
+/// ```
+#[test]
+fn a_debug_on_exit_set_while_the_arguments_evaluate_survives_the_evald_store() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    let value = eval
+        .eval_str(
+            r#"(progn
+                 (defalias 'ma-id (lambda (x) x))
+                 (let* ((log nil)
+                        (debugger (lambda (&rest args) (setq log (cons args log)) 99)))
+                   (list (ma-id (progn (backtrace-debug 0 t 'ma-id) 7)) log)))"#,
+        )
+        .expect("the case should evaluate");
+    assert_eq!(print_value(&value), "(99 ((exit 7)))");
+}

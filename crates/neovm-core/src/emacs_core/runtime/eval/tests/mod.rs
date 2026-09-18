@@ -26668,3 +26668,29 @@ fn jit_apply_enters_a_compiled_callee_natively() {
     assert_eq!(run(&mut ev, fixed, "'(2 3)"), "redefined");
     assert_eq!(APPLY_NATIVE_CALLS.with(|c| c.get()), before);
 }
+
+/// An interpreted call whose evaluated arguments are too many for the
+/// compact backtrace span (over 65535) takes the out-of-line copy, gives
+/// GNU's answers, and releases the copy when the frame is gone.  GNU Emacs
+/// 31.1 answers `(70000 70000)`.
+#[test]
+fn an_interpreted_call_with_an_oversized_argument_span_evaluates_and_releases_it() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    let before = eval.backtrace_args_stack_len_for_test();
+    let value = eval
+        .eval_str(
+            "(list (eval (cons '+ (make-list 70000 1)))
+                   (length (eval (cons 'list (make-list 70000 1)))))",
+        )
+        .expect("an oversized call should evaluate");
+    assert_eq!(
+        crate::emacs_core::print::print_value(&value),
+        "(70000 70000)"
+    );
+    assert_eq!(
+        eval.backtrace_args_stack_len_for_test(),
+        before,
+        "the oversized argument copy must not outlive its frame"
+    );
+}

@@ -309,10 +309,23 @@ impl Context {
     /// in GNU eval.c:2585). `original_args` is the cons list of un-evaluated
     /// argument forms — XCDR of the original form. The walker emits
     /// `(nil FUNC FORMS FLAGS)` for these frames.
+    #[cfg(test)]
     pub(crate) fn push_unevalled_backtrace_frame(&mut self, function: Value, original_args: Value) {
         self.specpdl.push(SpecBinding::Backtrace {
             function,
             args: BacktraceArgs::unevalled(original_args),
+            debug_on_exit: false,
+        });
+    }
+
+    /// [`Self::push_unevalled_backtrace_frame`] for the cons form `eval_sub`
+    /// is evaluating (GNU `record_in_backtrace`): its argument forms are a
+    /// cons's cdr, so the reserved-tag check is debug-only.
+    #[inline(always)]
+    pub(super) fn push_unevalled_form_frame(&mut self, function: Value, original_args: Value) {
+        self.specpdl.push(SpecBinding::Backtrace {
+            function,
+            args: BacktraceArgs::unevalled_form_args(original_args),
             debug_on_exit: false,
         });
     }
@@ -679,32 +692,60 @@ impl Context {
     /// interpreter evaluated onto the VM operand stack: the UNEVALLED frame
     /// at COUNT becomes EVALD over that span.  Only a span too large to
     /// encode is copied out, as for a bytecode caller.
+    /// GNU `set_backtrace_args` (eval.c:147-148): the args word of the
+    /// UNEVALLED frame at COUNT, stored in place.  `function` and
+    /// `debug_on_exit` are never rewritten, so a `debug_on_exit` that
+    /// `do_debug_on_call` or `backtrace-debug` set while the arguments were
+    /// evaluated survives.  The whole-entry rewrite this replaced re-read both,
+    /// rebuilt the entry and ran drop glue on the old one, out of line, on
+    /// every evaluated call.
+    #[inline(always)]
     pub(crate) fn set_backtrace_args_evalled_bc_span(
         &mut self,
         count: usize,
         args_start: usize,
         nargs: usize,
     ) {
-        let (function, debug_on_exit) = match self.specpdl.get(count) {
-            Some(SpecBinding::Backtrace {
-                function,
-                args,
-                debug_on_exit,
-            }) if args.is_unevalled() => (*function, *debug_on_exit),
-            other => panic!(
-                "set_backtrace_args_evalled_bc_span: expected UNEVALLED Backtrace at specpdl[{count}], got {other:?}"
-            ),
-        };
         debug_assert!(args_start + nargs <= self.bc_buf.len());
-        let args = match BytecodeBacktraceSpan::try_new(args_start, nargs) {
+        if let Some(span) = BytecodeBacktraceSpan::try_new(args_start, nargs)
+            && let Some(SpecBinding::Backtrace { args, .. }) = self.specpdl.get_mut(count)
+            && args.is_unevalled()
+        {
+            *args = BacktraceArgs::evaluated_bc_stack(span);
+            return;
+        }
+        self.set_backtrace_args_evalled_bc_span_slow(count, args_start, nargs);
+    }
+
+    /// The oversized span, or a broken invariant.  The frame is checked
+    /// before the oversized arguments are copied, so the panic leaves no
+    /// orphan `backtrace_args_stack` entry behind.
+    #[cold]
+    #[inline(never)]
+    fn set_backtrace_args_evalled_bc_span_slow(
+        &mut self,
+        count: usize,
+        args_start: usize,
+        nargs: usize,
+    ) {
+        if !matches!(
+            self.specpdl.get(count),
+            Some(SpecBinding::Backtrace { args, .. }) if args.is_unevalled()
+        ) {
+            let other = self.specpdl.get(count);
+            panic!(
+                "set_backtrace_args_evalled_bc_span: expected UNEVALLED Backtrace at specpdl[{count}], got {other:?}"
+            );
+        }
+        let new_args = match BytecodeBacktraceSpan::try_new(args_start, nargs) {
             Some(span) => BacktraceArgs::evaluated_bc_stack(span),
             None => self.backtrace_args_from_oversized_bc_stack(args_start, nargs),
         };
-        self.specpdl[count] = SpecBinding::Backtrace {
-            function,
-            args,
-            debug_on_exit,
+        // The oversized copy touches only `backtrace_args_stack` and `bc_buf`.
+        let Some(SpecBinding::Backtrace { args, .. }) = self.specpdl.get_mut(count) else {
+            unreachable!("the frame was checked above and nothing popped it");
         };
+        *args = new_args;
     }
 
     pub(crate) fn save_specpdl_roots(&self) -> SpecpdlRootScopeState {

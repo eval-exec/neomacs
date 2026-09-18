@@ -169,7 +169,7 @@ impl Context {
         // the frame UNEVALLED throughout.
         let outer_bt_count = self.specpdl.len();
         let stack_base = self.bc_buf.len();
-        self.push_unevalled_backtrace_frame(original_fun, original_args);
+        self.push_unevalled_form_frame(original_fun, original_args);
         // GNU eval.c:2601-2602, immediately after `record_in_backtrace` and
         // before any dispatch: `if (debug_on_next_call) do_debug_on_call (Qt,
         // count)`.  Taking the arm IS the disarm (see `debug_on_call`), and

@@ -1177,6 +1177,9 @@ impl BacktraceArgs {
     const EVALUATED_KIND: usize = 1;
     const BYTECODE_STACK_KIND: usize = 2;
 
+    /// Tests push arbitrary values as a frame's argument forms, so this
+    /// constructor keeps the reserved-tag check in every build.
+    #[cfg(test)]
     #[inline]
     fn unevalled(value: Value) -> Self {
         assert_ne!(
@@ -1185,6 +1188,20 @@ impl BacktraceArgs {
             "real Lisp values cannot use GNU's reserved tag 001"
         );
         Self(value.bits())
+    }
+
+    /// [`Self::unevalled`] for the argument forms of a cons form `eval_sub`
+    /// is evaluating: the cdr of a live cons, a real Lisp value, which can
+    /// never carry the reserved tag, so the check is debug-only on this, the
+    /// per-form path.  Other callers keep the release check.
+    #[inline]
+    fn unevalled_form_args(args: Value) -> Self {
+        debug_assert_ne!(
+            args.tag(),
+            Self::DESCRIPTOR_TAG,
+            "real Lisp values cannot use GNU's reserved tag 001"
+        );
+        Self(args.bits())
     }
 
     #[inline]
@@ -1239,7 +1256,8 @@ impl BacktraceArgs {
 
     #[inline]
     pub(crate) fn is_unevalled(self) -> bool {
-        matches!(self.view(), BacktraceArgsView::Unevalled(_))
+        // `view()`'s first test, and its only Unevalled arm.
+        self.0 & Self::TAG_MASK != Self::DESCRIPTOR_TAG
     }
 
     #[inline]
