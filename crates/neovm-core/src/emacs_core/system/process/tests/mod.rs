@@ -12408,6 +12408,8 @@ fn a_process_decoder_carries_its_state_and_its_carryover_across_a_read() {
     let sh = find_bin("sh");
     let result = eval_one(&format!(
         r#"(progn
+             (defun pw166b-once (bytes)
+               (format "f=$(mktemp) && printf %s > \"$f\" && cat \"$f\"; rm -f \"$f\"" bytes))
              (defun pw166b-run (coding cmd)
                (let* ((acc nil)
                       (p (make-process :name "pw166b" :buffer nil :sentinel #'ignore
@@ -12434,8 +12436,16 @@ fn a_process_decoder_carries_its_state_and_its_carryover_across_a_read() {
               (pw166b-run 'chinese-big5 "printf 'a\\244'; read x; printf '\\100\\n'")
               (pw166b-run 'japanese-iso-8bit "printf 'a\\244'; read x; printf '\\242\\n'")
               (pw166b-run 'emacs-mule "printf 'a\\222'; read x; printf '\\260\\241\\n'")
-              (pw166b-run 'utf-16le "printf 'a\\000\\102'; read x; printf '\\000\\n\\000'")
-              (pw166b-run 'utf-16le-with-signature "printf '\\377\\376a\\000'; read x; printf '\\n\\000'")
+              ;; bash's printf splits its output at NUL bytes (`\r\0\n\0'
+              ;; is two writes), so a chunk holding one goes out through
+              ;; `cat', in one write: a read landing inside a printf would add
+              ;; a chunk and make the count a race
+              (pw166b-run 'utf-16le
+                          (concat (pw166b-once "'a\\000\\102'") "; read x; "
+                                  (pw166b-once "'\\000\\n\\000'")))
+              (pw166b-run 'utf-16le-with-signature
+                          (concat (pw166b-once "'\\377\\376a\\000'") "; read x; "
+                                  (pw166b-once "'\\n\\000'")))
               ;; the control: every byte of iso-latin-1 is a character, so
               ;; nothing is ever held back and both chunks decode whole
               (pw166b-run 'iso-latin-1 "printf 'a\\351'; read x; printf '\\350\\n'")))"#
