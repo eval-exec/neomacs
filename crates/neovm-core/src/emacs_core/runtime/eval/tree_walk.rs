@@ -210,11 +210,67 @@ impl Context {
             None => self.eval_sub_cons_dispatch(original_fun, original_args, outer_bt_count),
         };
         let result = self.dispatch_signal_result_if_needed(dispatch_result);
-        self.record_sequence_call_roots(outer_bt_count);
-        let result = self.unbind_to_with_result(outer_bt_count, result);
-        // The evaluated call parked its function and arguments on the VM
-        // operand stack (see `eval_sub_cons_dispatch`); the frame that
-        // referenced them is gone, so is their span.
+        self.retire_cons_frame(outer_bt_count, stack_base, result)
+    }
+
+    /// Retire the cons form's frame: record the call's arguments as the
+    /// sequence's temporary roots (`record_sequence_call_roots`), pop the
+    /// frame (`unbind_to`), and drop the function and arguments the call
+    /// parked on the operand stack (`eval_sub_cons_dispatch`) -- reading the
+    /// frame once.  The common shape, the form's own `Backtrace` alone above
+    /// COUNT with no debug-on-exit and arguments that are either unevaluated
+    /// or an operand-stack span (neither owns an out-of-line copy), is
+    /// exactly those three steps' trivial arms; every other shape takes them
+    /// as they are.
+    #[inline(always)]
+    fn retire_cons_frame(
+        &mut self,
+        count: usize,
+        stack_base: usize,
+        result: EvalResult,
+    ) -> EvalResult {
+        if self.specpdl.len() == count + 1
+            && let Some(SpecBinding::Backtrace {
+                args,
+                debug_on_exit: false,
+                ..
+            }) = self.specpdl.last()
+        {
+            let args = *args;
+            let span = args.as_bc_stack_span();
+            if span.is_some() || args.is_unevalled() {
+                if let Some(span) = span
+                    && let Some(&frame) = self.sequence_temp_root_frames.last()
+                {
+                    let start = span.start();
+                    let end = start.saturating_add(span.len());
+                    self.eval_call_roots.truncate(frame.call_base);
+                    if end <= self.bc_buf.len() {
+                        let (bc_buf, roots) = (&self.bc_buf, &mut self.eval_call_roots);
+                        roots.extend_from_slice(&bc_buf[start..end]);
+                    }
+                }
+                // SAFETY: the top entry is a `Backtrace` without
+                // debug-on-exit whose arguments own no
+                // `backtrace_args_stack` slot -- `unbind_to`'s trivial pop,
+                // whose release step has nothing to release here.
+                unsafe { self.specpdl.set_len(count) };
+                self.bc_buf.truncate(stack_base);
+                return result;
+            }
+        }
+        self.retire_cons_frame_slow(count, stack_base, result)
+    }
+
+    #[inline(never)]
+    fn retire_cons_frame_slow(
+        &mut self,
+        count: usize,
+        stack_base: usize,
+        result: EvalResult,
+    ) -> EvalResult {
+        self.record_sequence_call_roots(count);
+        let result = self.unbind_to_with_result(count, result);
         self.bc_buf.truncate(stack_base);
         result
     }

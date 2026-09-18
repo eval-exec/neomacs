@@ -1254,6 +1254,15 @@ impl BacktraceArgs {
         (is_descriptor && kind == Self::EVALUATED_KIND).then_some(self.0 >> Self::PAYLOAD_SHIFT)
     }
 
+    /// The operand-stack span of an EVALD frame whose arguments lie there.
+    #[inline]
+    fn as_bc_stack_span(self) -> Option<BytecodeBacktraceSpan> {
+        let is_descriptor = self.0 & Self::TAG_MASK == Self::DESCRIPTOR_TAG;
+        let kind = (self.0 >> Self::KIND_SHIFT) & Self::KIND_MASK;
+        (is_descriptor && kind == Self::BYTECODE_STACK_KIND)
+            .then_some(BytecodeBacktraceSpan(self.0 >> Self::PAYLOAD_SHIFT))
+    }
+
     #[inline]
     pub(crate) fn is_unevalled(self) -> bool {
         // `view()`'s first test, and its only Unevalled arm.
