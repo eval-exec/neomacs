@@ -6830,15 +6830,29 @@ impl<'a> Vm<'a> {
             let ctx_ptr = core::ptr::from_mut(&mut *ctx);
             ptr = crate::emacs_core::jit::cache::resolve_compiled_leaf_ptr(ctx_ptr, bc)?;
             // Arm the shim's fast-path key with the leaf: this site's
-            // argument count is fixed, so whether the leaf takes the call's
-            // arguments as they are is decided here, once.
+            // argument count is fixed, so how the leaf takes the call is
+            // decided here, once -- as laid out, or with its missing
+            // `&optional` slots nil-filled into a frame buffer of the leaf's
+            // arity. A `&rest` callee conses its tail and keeps this half.
             // SAFETY: `ptr` names a cache-held leaf (see below).
-            let direct = if unsafe { (*ptr).is_pure_passthrough(nargs) } {
+            let leaf = unsafe { &*ptr };
+            // The arity bound is the nil-fill buffer's: an exact-arity call
+            // passes its slot through at any width.
+            let direct = if !leaf.has_rest
+                && leaf.accepts(nargs)
+                && (nargs == leaf.arity
+                    || leaf.arity <= crate::emacs_core::jit::compile::FAST_PATH_MAX_ARITY)
+            {
                 bc.constants.as_ptr()
             } else {
                 core::ptr::null()
             };
-            slot.arm_leaf(ptr, direct);
+            slot.arm_leaf(
+                ptr,
+                direct,
+                nargs != leaf.arity,
+                !leaf.direct_call_eligible(),
+            );
             bc
         } else {
             // A cached leaf is the proof that `get_bytecode_data` once ran

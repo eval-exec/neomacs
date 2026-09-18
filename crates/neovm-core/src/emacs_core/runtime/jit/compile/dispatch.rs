@@ -736,14 +736,16 @@ pub extern "C" fn neovm_jit_builtin_slice(
     jit_shim_contain!(no_ctx, STATUS_SIGNAL, {
         let nargs = nargs as usize;
         let saved = save_scratch_gc_roots();
-        let mut args: SmallVec<[Value; 8]> = SmallVec::with_capacity(nargs);
-        for i in 0..nargs {
-            // SAFETY: see neovm_jit_list — the same spill-slot contract.
-            let v = Value::from_bits(unsafe { *args_ptr.add(i) } as usize);
-            push_scratch_gc_root(v);
-            args.push(v);
-        }
-        let status = match JIT_BUILTIN_SLICE[idx as usize](&args) {
+        // The builtin reads the call-args slot in place (`Value` is the
+        // word the generated code stored) and the slot is rooted in ONE
+        // batch: building a SmallVec and rooting each word on its own was
+        // ~120 of this shim's ~165 instructions per `concat`.
+        // SAFETY: see neovm_jit_list — the same spill-slot contract; the
+        // slot outlives the call (the generated code is suspended in it).
+        let args: &[Value] =
+            unsafe { core::slice::from_raw_parts(args_ptr as *const Value, nargs) };
+        crate::emacs_core::eval::push_scratch_gc_roots(args);
+        let status = match JIT_BUILTIN_SLICE[idx as usize](args) {
             Ok(value) => {
                 // SAFETY: `out` is the generated code's result stack slot.
                 unsafe { *out = value.bits() as i64 };
@@ -1017,7 +1019,7 @@ pub extern "C" fn neovm_jit_call_spec(
         // the constant base of the object the slot was armed for, which the
         // epoch proof keeps alive (the slot is cleared on every re-arm).
         let leaf = unsafe { &*slot_ref.leaf_ptr() };
-        let consts = direct_consts as usize as *const Value;
+        let consts = (direct_consts & !SpecSlot::KEY_FLAGS) as usize as *const Value;
         let callee = Value::from_bits(expected as usize);
         let nargs = nargs as usize;
         let bt_count = ctx_ref.specpdl.len();
@@ -1025,11 +1027,33 @@ pub extern "C" fn neovm_jit_call_spec(
         // call-args slot). The push roots `callee` for the whole native run.
         unsafe { ctx_ref.push_backtrace_frame_from_native_args(callee, args_ptr, nargs) };
         ctx_ref.depth += 1;
-        let run = if leaf.direct_call_eligible() {
+        // The callee's frame: the call as laid out when the count is the
+        // leaf's arity, otherwise the given words followed by nil for each
+        // missing `&optional` slot, in a buffer of this frame (the arming
+        // condition bounds the arity; the backtrace entry above still
+        // records the call's own arguments). The nils need no rooting.
+        let mut padded = core::mem::MaybeUninit::<[i64; FAST_PATH_MAX_ARITY]>::uninit();
+        let frame_args: *const i64 = if direct_consts & SpecSlot::KEY_SHORT_CALL == 0 {
+            args_ptr
+        } else {
+            let arity = leaf.arity;
+            let buf = padded.as_mut_ptr() as *mut i64;
+            // SAFETY: nargs < arity <= FAST_PATH_MAX_ARITY (the arming
+            // condition), and args_ptr addresses `nargs` words.
+            unsafe {
+                core::ptr::copy_nonoverlapping(args_ptr, buf, nargs);
+                for i in nargs..arity {
+                    *buf.add(i) = Value::NIL.bits() as i64;
+                }
+            }
+            buf as *const i64
+        };
+        let run = if direct_consts & SpecSlot::KEY_FRAMED == 0 {
             let mut bits: i64 = 0;
-            // SAFETY: a pure pass-through of a direct-eligible leaf (the
-            // slot's arming condition); `ctx` is the dormant seam Context.
-            let status = unsafe { leaf.entry_call_raw_consts(ctx, consts, args_ptr, &mut bits) };
+            // SAFETY: `frame_args` addresses `arity` live words for the
+            // call (the slot or this frame's buffer) of a direct-eligible
+            // leaf; `ctx` is the dormant seam Context.
+            let status = unsafe { leaf.entry_call_raw_consts(ctx, consts, frame_args, &mut bits) };
             if status == STATUS_OK {
                 #[cfg(any(test, debug_assertions))]
                 crate::emacs_core::jit::cache::NATIVE_OK_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -1044,7 +1068,7 @@ pub extern "C" fn neovm_jit_call_spec(
                 FastRun::Raw(status)
             }
         } else {
-            match call_spec_framed_run(ctx, leaf, consts, args_ptr) {
+            match call_spec_framed_run(ctx, leaf, consts, frame_args) {
                 NativeRun::Ok(bits) => {
                     #[cfg(any(test, debug_assertions))]
                     crate::emacs_core::jit::cache::NATIVE_OK_COUNT.fetch_add(1, Ordering::Relaxed);

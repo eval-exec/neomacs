@@ -18516,6 +18516,110 @@ fn spec_call_fast_path_keeps_the_reference_protocol_on_its_exits() {
     );
 }
 
+/// A speculated call to a callee with `&optional` parameters takes the
+/// shim's fast path too: the missing slots are nil-filled into a frame
+/// buffer of the callee's arity, so a one-argument call and the full call
+/// both enter the leaf without the slow half's marshaling. `concat` inside
+/// the callee is a slice builtin, whose arguments are now rooted in one
+/// batch.
+#[cfg(feature = "jit")]
+#[test]
+fn optional_arity_callees_take_the_spec_fast_path() {
+    crate::test_utils::init_test_tracing();
+    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+    use crate::emacs_core::bytecode::ByteCodeFunction;
+    use crate::emacs_core::bytecode::opcode::Op;
+    use crate::emacs_core::value::LambdaParams;
+    use std::sync::atomic::Ordering;
+
+    let mut ev = Context::new();
+    let make = |params: LambdaParams, hot: bool, ops: Vec<Op>, constants: Vec<Value>| -> Value {
+        let mut f = ByteCodeFunction::new(params);
+        f.lexical = true;
+        f.ops = ops;
+        f.constants = constants.into();
+        f.max_stack = 16;
+        if hot {
+            f.jit_runtime().set_hot_for_test();
+        }
+        let v = Value::make_bytecode(f);
+        crate::emacs_core::eval::push_scratch_gc_root(v);
+        v
+    };
+    // (lambda (a &optional b) (if a (concat a b) (concat a b)))
+    let callee = make(
+        LambdaParams {
+            required: vec![crate::emacs_core::intern::SymId(1)],
+            optional: vec![crate::emacs_core::intern::SymId(2)],
+            rest: None,
+        },
+        false,
+        vec![
+            Op::StackRef(1),
+            Op::GotoIfNil(6),
+            Op::StackRef(1),
+            Op::StackRef(1),
+            Op::Concat(2),
+            Op::Return,
+            Op::StackRef(1),
+            Op::StackRef(1),
+            Op::Concat(2),
+            Op::Return,
+        ],
+        vec![],
+    );
+    ev.obarray
+        .set_symbol_function_id(crate::emacs_core::intern::intern("jit-opt-callee"), callee);
+    let one = |name: &str| -> LambdaParams {
+        let _ = name;
+        LambdaParams {
+            required: vec![crate::emacs_core::intern::SymId(1)],
+            optional: Vec::new(),
+            rest: None,
+        }
+    };
+    // (lambda (x) (jit-opt-callee x)) -- one argument, the optional is nil.
+    let call_short = make(
+        one("short"),
+        true,
+        vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return],
+        vec![Value::symbol("jit-opt-callee")],
+    );
+    // (lambda (x) (jit-opt-callee x "y")) -- the full arity.
+    let call_full = make(
+        one("full"),
+        true,
+        vec![
+            Op::Constant(0),
+            Op::StackRef(1),
+            Op::Constant(1),
+            Op::Call(2),
+            Op::Return,
+        ],
+        vec![Value::symbol("jit-opt-callee"), Value::string("y")],
+    );
+    let a = Value::string("a");
+    crate::emacs_core::eval::push_scratch_gc_root(a);
+    let fast = || crate::emacs_core::jit::compile::SPEC_SHIM_FAST_COUNT.load(Ordering::Relaxed);
+    let text = |r: Result<Value, crate::emacs_core::error::Flow>| -> String {
+        crate::emacs_core::print::print_value(&r.expect("call succeeds"))
+    };
+    for (caller, want) in [(call_short, "\"a\""), (call_full, "\"ay\"")] {
+        assert_eq!(
+            text(ev.funcall_general_untraced(caller, vec![a])),
+            want,
+            "arming call"
+        );
+        let before = fast();
+        assert_eq!(
+            text(ev.funcall_general_untraced(caller, vec![a])),
+            want,
+            "second call"
+        );
+        assert!(fast() > before, "the {want} site takes the fast path");
+    }
+}
+
 /// Build the canonical recursive-fib benchmark shape (self-recursive through
 /// `sym_name`, guards after the recursive calls — only compilable since
 /// precise-PC deopt). `tier`: Hot forces native, Cold pins the interpreter.

@@ -588,11 +588,11 @@ fn neovm_jit_call_general(
                 return native_call_status(outcome, out);
             }
             let args_start = ctx_ref.bc_buf.len();
-            for i in 0..nargs {
-                // SAFETY: generated code stored `nargs` words at args_ptr.
-                let v = Value::from_bits(unsafe { *args_ptr.add(i) } as usize);
-                ctx_ref.bc_buf.push(v);
-            }
+            // SAFETY: generated code stored `nargs` words at args_ptr, and
+            // `Value` is that word.
+            ctx_ref.bc_buf.extend_from_slice(unsafe {
+                core::slice::from_raw_parts(args_ptr as *const Value, nargs)
+            });
             if func_val.is_symbol()
                 && let Some(res) =
                     Vm::call_builtin_symbol_for_jit(ctx_ref, func_val, args_start, nargs)
@@ -634,13 +634,12 @@ fn neovm_jit_call_general(
             // so the args are rooted across the call); the fast subr path reads
             // them in place. Truncate back afterwards.
             let args_start = ctx.bc_buf.len();
-            for i in 0..nargs {
-                // SAFETY: the generated code stored exactly `nargs` argument
-                // words at `args_ptr` (its call-args slot) immediately before
-                // this call.
-                let v = Value::from_bits(unsafe { *args_ptr.add(i) } as usize);
-                ctx.bc_buf.push(v);
-            }
+            // SAFETY: the generated code stored exactly `nargs` argument
+            // words at `args_ptr` (its call-args slot) immediately before
+            // this call, and `Value` is that word.
+            ctx.bc_buf.extend_from_slice(unsafe {
+                core::slice::from_raw_parts(args_ptr as *const Value, nargs)
+            });
             let mut vm = Vm::from_context(ctx);
             let res = vm.call_for_jit_stack(func_val, args_start, nargs);
             vm.bc_buf_truncate(args_start);
