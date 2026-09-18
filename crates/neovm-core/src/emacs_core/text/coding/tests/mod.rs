@@ -1177,7 +1177,7 @@ fn keyboard_coding_system_default() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
     let result = builtin_keyboard_coding_system(&m, vec![]).unwrap();
-    assert!(result.is_symbol_named("utf-8-unix"));
+    assert!(result.is_symbol_named("no-conversion"));
 }
 
 #[test]
@@ -1185,7 +1185,7 @@ fn terminal_coding_system_default() {
     crate::test_utils::init_test_tracing();
     let m = mgr();
     let result = builtin_terminal_coding_system(&m, vec![]).unwrap();
-    assert!(result.is_symbol_named("utf-8-unix"));
+    assert!(result.is_symbol_named("undecided"));
 }
 
 #[test]

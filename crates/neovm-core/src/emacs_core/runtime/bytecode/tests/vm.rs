@@ -8510,7 +8510,13 @@ fn vm_format_mode_line_coding_and_remote_specs_match_gnu() {
                  (set (make-local-variable 'buffer-file-coding-system) 'utf-8-unix)
                  (format-mode-line "%z|%Z|%@"))"#
         ),
-        r#"OK "UUU|UUU:|-""#
+        // kbd/term prefix is "=–": the bare VM harness runs no
+        // set-locale-environment, so the per-terminal codings keep their
+        // create_terminal defaults (terminal.c:309-318) — keyboard
+        // no-conversion (`=`), terminal undecided (`-`) — while the
+        // buffer's utf-8-unix supplies the trailing U.  GNU answers the
+        // same triple under a C-locale TTY with this buffer.
+        r#"OK "=-U|=-U:|-""#
     );
 }
 

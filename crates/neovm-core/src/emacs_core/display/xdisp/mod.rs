@@ -2020,9 +2020,9 @@ fn coding_system_mnemonic_char(
         | "utf-16le"
         | "utf-16be-with-signature"
         | "utf-16le-with-signature" => 'U',
-        "undecided" | "prefer-utf-8" => '-',
+        "undecided" | "prefer-utf-8" | "nil" => '-',
         "raw-text" => '=',
-        "no-conversion" | "binary" => '0',
+        "no-conversion" | "binary" => '=',
         "us-ascii" | "ascii" => '.',
         "iso-8859-1" | "iso-latin-1" | "latin-1" => '1',
         "iso-8859-2" | "iso-latin-2" | "latin-2" => '2',

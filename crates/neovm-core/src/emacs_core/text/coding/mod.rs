@@ -846,8 +846,18 @@ impl CodingSystemManager {
             aliases: HashMap::new(),
             alias_order: HashMap::new(),
             priority: Vec::new(),
-            keyboard_coding: intern("utf-8-unix"),
-            terminal_coding: intern("utf-8-unix"),
+            // GNU `create_terminal` (terminal.c:309-318) defaults each
+            // terminal's keyboard coding to `no-conversion` and its
+            // terminal coding to `undecided`, consulting
+            // `default-keyboard-coding-system` /
+            // `default-terminal-coding-system` only when already bound to
+            // a valid coding system (the daemon case).  This manager is
+            // constructed before those variables exist, so the
+            // unconditional defaults apply; mule.el's
+            // `set-locale-environment` overrides them afterwards under
+            // UTF-8 locales, exactly as GNU's does.
+            keyboard_coding: intern("no-conversion"),
+            terminal_coding: intern("undecided"),
             lookup_cache: Default::default(),
         };
 
@@ -1429,6 +1439,14 @@ impl CodingSystemManager {
     /// `undecided` and deliberately declares `-`, even though its name contains
     /// `utf-8`.
     pub(crate) fn mode_line_mnemonic(&self, coding_system: SymId) -> Option<char> {
+        // GNU's mode line renders a nil coding system as undecided: xdisp.c
+        // `decode_mode_spec_coding` emits `-` for any spec that is not a
+        // vector, and nil is the furthest from a vector.  "nil" must not
+        // reach the registry lookup, which normalizes it to
+        // no-conversion for coding operations and would render `=`.
+        if resolve_sym(coding_system) == "nil" {
+            return None;
+        }
         let resolved_name = resolve_runtime_name(self, resolve_sym(coding_system))?;
         let bucket = runtime_bucket_name(self, &resolved_name)?;
         let info = self.get(&bucket)?;
