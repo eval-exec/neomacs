@@ -3823,35 +3823,6 @@ fn bind_lexical_value_rooted_in_specpdl(
     }
 }
 
-fn prepend_lexical_binding_in_specpdl_rooted_env(
-    lexenv: &mut Value,
-    specpdl: &mut Vec<SpecBinding>,
-    env_root_index: usize,
-    sym: SymId,
-    value: Value,
-) {
-    specpdl.push(SpecBinding::GcRoot { value });
-    let current_env = match specpdl.get(env_root_index) {
-        Some(SpecBinding::GcRoot { value }) => *value,
-        other => panic!("expected specpdl gc root entry for lexical env, got {other:?}"),
-    };
-    let binding = Value::make_cons(lexenv_binding_symbol_value(sym), value);
-    match specpdl.last_mut() {
-        Some(SpecBinding::GcRoot { value }) => *value = binding,
-        other => panic!("expected temporary specpdl gc root entry, got {other:?}"),
-    }
-    let new_env = Value::make_cons(binding, current_env);
-    match specpdl.get_mut(env_root_index) {
-        Some(SpecBinding::GcRoot { value }) => *value = new_env,
-        other => panic!("expected mutable specpdl gc root entry for lexical env, got {other:?}"),
-    }
-    *lexenv = new_env;
-    match specpdl.pop() {
-        Some(SpecBinding::GcRoot { .. }) => {}
-        other => panic!("expected temporary specpdl gc root entry, got {other:?}"),
-    }
-}
-
 fn bare_lambda_arg_symbol_id(value: Value) -> Option<SymId> {
     let value = if value.is_symbol_with_pos() {
         value.as_symbol_with_pos_sym().unwrap()
@@ -3863,12 +3834,6 @@ fn bare_lambda_arg_symbol_id(value: Value) -> Option<SymId> {
     } else {
         value.as_symbol_id()
     }
-}
-
-#[derive(Clone, Copy, Debug)]
-enum LambdaArgumentBinding {
-    Dynamic,
-    Lexical { env_root_index: usize },
 }
 
 /// Panic-safe scope for [`Context::gc_inhibit_depth`]: construction increments
@@ -4577,28 +4542,19 @@ impl Context {
         args: &[Value],
     ) -> Result<ActiveLambdaCallState, Flow> {
         let specpdl_count = self.specpdl.len();
-        let argument_binding = if let Some(env) = env {
-            let old_lexenv = std::mem::replace(&mut self.lexenv, env);
-            // Mirrors GNU funcall_lambda:
-            //   specbind (Qinternal_interpreter_environment, lexenv);
+        // A lexical closure never gets here: `apply_lambda` binds it in GNU's
+        // shape itself.
+        debug_assert!(env.is_none(), "begin_lambda_call is the dynamic arm");
+        let _ = env;
+        if !self.lexenv.is_nil() {
+            let old_lexenv = std::mem::replace(&mut self.lexenv, Value::NIL);
+            // GNU funcall_lambda computes a nil local `lexenv` for a
+            // dynamically scoped lambda and saves the caller's lexical
+            // environment before evaluating its body.
             self.specpdl.push(SpecBinding::LexicalEnv { old_lexenv });
+        }
 
-            let env_root_index = self.specpdl.len();
-            self.specpdl.push(SpecBinding::GcRoot { value: env });
-            LambdaArgumentBinding::Lexical { env_root_index }
-        } else {
-            if !self.lexenv.is_nil() {
-                let old_lexenv = std::mem::replace(&mut self.lexenv, Value::NIL);
-                // GNU funcall_lambda computes a nil local `lexenv` for a
-                // dynamically scoped lambda and saves the caller's lexical
-                // environment before evaluating its body.
-                self.specpdl.push(SpecBinding::LexicalEnv { old_lexenv });
-            }
-            LambdaArgumentBinding::Dynamic
-        };
-
-        if let Err(flow) = self.bind_lambda_args_from_arglist(argument_binding, fun, arglist, args)
-        {
+        if let Err(flow) = self.bind_lambda_args_from_arglist(fun, arglist, args) {
             return match self.unbind_to_with_result(specpdl_count, Err(flow)) {
                 Err(flow) => Err(flow),
                 Ok(_) => unreachable!("unwinding an error cannot produce a value"),

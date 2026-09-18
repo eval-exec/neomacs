@@ -1094,6 +1094,25 @@ impl Context {
         }
     }
 
+    /// `unbind_to` for exactly one `LexicalEnv` entry above COUNT: GNU's
+    /// `specpdl_ptr--` and one store. No backtrace frame means no
+    /// debug-on-exit, and no Lisp runs, so the quit-flag bracket has nothing
+    /// to do. Anything else takes the general unwinder.
+    #[inline(always)]
+    pub(super) fn unbind_lexenv_frame(&mut self, count: usize, result: EvalResult) -> EvalResult {
+        if self.specpdl.len() == count + 1
+            && let Some(SpecBinding::LexicalEnv { old_lexenv }) = self.specpdl.last()
+        {
+            self.lexenv = *old_lexenv;
+            // SAFETY: a `LexicalEnv` entry owns nothing (see
+            // `pop_simple_specpdl_suffix`'s LexicalEnv arm, which retires it
+            // the same way).
+            unsafe { self.specpdl.set_len(count) };
+            return result;
+        }
+        self.unbind_to_with_result(count, result)
+    }
+
     /// GNU `unbind_to` (`src/eval.c:3907`) carrying RESULT.
     ///
     /// The two shapes every Lisp call pops -- nothing above COUNT, or one
@@ -2958,91 +2977,18 @@ impl Context {
         }
     }
 
-    /// Bind one interpreted lambda's formals, GNU `funcall_lambda`'s arglist
-    /// walk. Lives beside lambda application rather than in the evaluator
-    /// facade, whose line ceiling exists to keep domain work in its own module.
+    /// Bind one DYNAMIC interpreted lambda's formals, GNU `funcall_lambda`'s
+    /// arglist walk with `specbind` per formal. A lexical closure's formals
+    /// are consed onto its environment instead ([`bind_lexical_formals`]).
+    /// Lives beside lambda application rather than in the evaluator facade,
+    /// whose line ceiling exists to keep domain work in its own module.
     pub(super) fn bind_lambda_args_from_arglist(
         &mut self,
-        binding: LambdaArgumentBinding,
         fun: Value,
         arglist: Value,
         args: &[Value],
     ) -> Result<(), Flow> {
-        // Two string interns per interpreted lambda application: 423,456 of
-        // them on one rust-lsp-typing capture, for two symbols whose ids are
-        // fixed for the process. `cached_symbol_id!` is what the other hundred
-        // well-known names on this path already use.
-        let optional_sym = optional_arg_symbol();
-        let rest_sym = rest_arg_symbol();
-        let mut syms_left = arglist;
-        let mut arg_index = 0;
-        let mut optional = false;
-        let mut rest = false;
-        let mut previous_rest = false;
-
-        while syms_left.is_cons() {
-            let next = syms_left.cons_car();
-            syms_left = syms_left.cons_cdr();
-            let Some(next_id) = bare_lambda_arg_symbol_id(next) else {
-                return Err(signal(LispCondition::InvalidFunction, vec![fun]));
-            };
-
-            if next_id == rest_sym {
-                if rest || previous_rest {
-                    return Err(signal(LispCondition::InvalidFunction, vec![fun]));
-                }
-                rest = true;
-                previous_rest = true;
-            } else if next_id == optional_sym {
-                if optional || rest || previous_rest {
-                    return Err(signal(LispCondition::InvalidFunction, vec![fun]));
-                }
-                optional = true;
-            } else {
-                let arg = if rest {
-                    let rest_value = Value::list_from_slice(&args[arg_index..]);
-                    arg_index = args.len();
-                    rest_value
-                } else if arg_index < args.len() {
-                    let arg = args[arg_index];
-                    arg_index += 1;
-                    arg
-                } else if !optional {
-                    return Err(signal(
-                        LispCondition::WrongNumberOfArguments,
-                        vec![fun, Value::fixnum(args.len() as i64)],
-                    ));
-                } else {
-                    Value::NIL
-                };
-
-                match binding {
-                    LambdaArgumentBinding::Dynamic => self.try_specbind(next_id, arg)?,
-                    LambdaArgumentBinding::Lexical { env_root_index } => {
-                        prepend_lexical_binding_in_specpdl_rooted_env(
-                            &mut self.lexenv,
-                            &mut self.specpdl,
-                            env_root_index,
-                            next_id,
-                            arg,
-                        );
-                    }
-                }
-                previous_rest = false;
-            }
-        }
-
-        if !syms_left.is_nil() || previous_rest {
-            return Err(signal(LispCondition::InvalidFunction, vec![fun]));
-        }
-        if arg_index < args.len() {
-            return Err(signal(
-                LispCondition::WrongNumberOfArguments,
-                vec![fun, Value::fixnum(args.len() as i64)],
-            ));
-        }
-
-        Ok(())
+        walk_lambda_formals(fun, arglist, args, |sym, arg| self.try_specbind(sym, arg))
     }
 
     pub(super) fn apply_lambda(&mut self, func_value: Value, args: LispArgVec) -> EvalResult {
@@ -3067,6 +3013,18 @@ impl Context {
         // (keeping body, env, and params alive through the call).
         let root_count = self.specpdl.len();
         self.specpdl.push(SpecBinding::GcRoot { value: func_value });
+        // A lexical closure, in GNU `funcall_lambda`'s shape: the formals
+        // are consed onto the captured environment in a local, which is then
+        // installed with one `LexicalEnv` entry (GNU's one `specbind` of
+        // `internal-interpreter-environment`) and retired inline.
+        if !raw_cons_lambda && let Some(env) = env {
+            let new_env = match bind_lexical_formals(env, func_value, arglist, &args) {
+                Ok(new_env) => new_env,
+                Err(flow) => return self.unbind_to_with_result(root_count, Err(flow)),
+            };
+            let result = self.run_lexical_closure_body(new_env, body);
+            return self.unbind_to_with_result(root_count, result);
+        }
         if raw_cons_lambda {
             let old_lexenv = std::mem::replace(&mut self.lexenv, Value::NIL);
             self.specpdl.push(SpecBinding::LexicalEnv { old_lexenv });
@@ -3078,7 +3036,17 @@ impl Context {
                 return self.unbind_to_with_result(root_count, Err(err));
             }
         };
-        let result = match self.eval_lambda_body_value(body) {
+        let result = self.eval_lambda_body_value(body);
+        let result = self.rewrap_thread_blocked_in_lexenv(result);
+        let result = self.finish_lambda_call(call_state, result);
+        self.unbind_to_with_result(root_count, result)
+    }
+
+    /// A lambda body that blocked a thread mid-way resumes as a closure over
+    /// the forms it had left, in the current lexical environment.
+    #[inline]
+    fn rewrap_thread_blocked_in_lexenv(&mut self, result: EvalResult) -> EvalResult {
+        match result {
             Err(Flow::ThreadBlocked(blocked))
                 if !blocked.remaining_forms.is_nil()
                     && crate::emacs_core::threads::thread_condition_case_continuation_parts(
@@ -3100,9 +3068,19 @@ impl Context {
                 }
             }
             other => other,
-        };
-        let result = self.finish_lambda_call(call_state, result);
-        self.unbind_to_with_result(root_count, result)
+        }
+    }
+
+    /// Run a lexical closure's BODY in NEW_ENV (GNU `funcall_lambda`:
+    /// `specbind (Qinternal_interpreter_environment, lexenv)`, then the body).
+    #[inline]
+    pub(super) fn run_lexical_closure_body(&mut self, new_env: Value, body: Value) -> EvalResult {
+        let count = self.specpdl.len();
+        let old_lexenv = std::mem::replace(&mut self.lexenv, new_env);
+        self.specpdl.push(SpecBinding::LexicalEnv { old_lexenv });
+        let result = self.eval_lambda_body_value(body);
+        let result = self.rewrap_thread_blocked_in_lexenv(result);
+        self.unbind_lexenv_frame(count, result)
     }
 
     #[inline]
@@ -3110,4 +3088,104 @@ impl Context {
     pub(super) fn bind_lexical_value_rooted(&mut self, sym: SymId, value: Value) {
         bind_lexical_value_rooted_in_specpdl(&mut self.lexenv, &mut self.specpdl, sym, value);
     }
+}
+
+/// GNU `funcall_lambda`'s arglist walk: validate FUN's ARGLIST against ARGS
+/// and hand each formal its value -- the next argument, nil for a missing
+/// `&optional` one, the list of the rest for `&rest`. `invalid-function`
+/// and `wrong-number-of-arguments` carry FUN, as GNU's do.
+#[inline(always)]
+fn walk_lambda_formals(
+    fun: Value,
+    arglist: Value,
+    args: &[Value],
+    mut bind: impl FnMut(SymId, Value) -> Result<(), Flow>,
+) -> Result<(), Flow> {
+    // Two string interns per interpreted lambda application: 423,456 of
+    // them on one rust-lsp-typing capture, for two symbols whose ids are
+    // fixed for the process. `cached_symbol_id!` is what the other hundred
+    // well-known names on this path already use.
+    let optional_sym = optional_arg_symbol();
+    let rest_sym = rest_arg_symbol();
+    let mut syms_left = arglist;
+    let mut arg_index = 0;
+    let mut optional = false;
+    let mut rest = false;
+    let mut previous_rest = false;
+
+    while syms_left.is_cons() {
+        let next = syms_left.cons_car();
+        syms_left = syms_left.cons_cdr();
+        let Some(next_id) = bare_lambda_arg_symbol_id(next) else {
+            return Err(signal(LispCondition::InvalidFunction, vec![fun]));
+        };
+
+        if next_id == rest_sym {
+            if rest || previous_rest {
+                return Err(signal(LispCondition::InvalidFunction, vec![fun]));
+            }
+            rest = true;
+            previous_rest = true;
+        } else if next_id == optional_sym {
+            if optional || rest || previous_rest {
+                return Err(signal(LispCondition::InvalidFunction, vec![fun]));
+            }
+            optional = true;
+        } else {
+            let arg = if rest {
+                let rest_value = Value::list_from_slice(&args[arg_index..]);
+                arg_index = args.len();
+                rest_value
+            } else if arg_index < args.len() {
+                let arg = args[arg_index];
+                arg_index += 1;
+                arg
+            } else if !optional {
+                return Err(signal(
+                    LispCondition::WrongNumberOfArguments,
+                    vec![fun, Value::fixnum(args.len() as i64)],
+                ));
+            } else {
+                Value::NIL
+            };
+            bind(next_id, arg)?;
+            previous_rest = false;
+        }
+    }
+
+    if !syms_left.is_nil() || previous_rest {
+        return Err(signal(LispCondition::InvalidFunction, vec![fun]));
+    }
+    if arg_index < args.len() {
+        return Err(signal(
+            LispCondition::WrongNumberOfArguments,
+            vec![fun, Value::fixnum(args.len() as i64)],
+        ));
+    }
+    Ok(())
+}
+
+/// A lexical closure's formals consed onto its environment ENV, GNU
+/// `funcall_lambda`'s `lexenv = Fcons (Fcons (next, arg), lexenv)`, into a
+/// Rust local like GNU's C local. That is sound only because nothing here can
+/// collect or run Lisp: `alloc_cons` and `list_from_slice` never collect
+/// (`tagged/gc/allocation.rs`) and `signal` only builds data. Do not add
+/// `maybe_quit` or anything else that can run Lisp without rooting the
+/// environment first.
+#[inline(always)]
+fn bind_lexical_formals(
+    env: Value,
+    fun: Value,
+    arglist: Value,
+    args: &[Value],
+) -> Result<Value, Flow> {
+    let mut lexenv = env;
+    walk_lambda_formals(fun, arglist, args, |sym, arg| {
+        lexenv = Value::make_cons(
+            Value::make_cons(lexenv_binding_symbol_value(sym), arg),
+            lexenv,
+        );
+        Ok(())
+    })?;
+    Ok(lexenv)
 }

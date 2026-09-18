@@ -26694,3 +26694,41 @@ fn an_interpreted_call_with_an_oversized_argument_span_evaluates_and_releases_it
         "the oversized argument copy must not outlive its frame"
     );
 }
+
+/// A lexical closure call binds its formals onto the captured environment in
+/// GNU `funcall_lambda`'s shape: `&optional`/`&rest`, arity errors carrying
+/// the closure, the caller's environment restored after an argument error
+/// and after the body, arguments that survive a collection inside the body,
+/// and a captured environment reused across calls.  GNU Emacs 31.1 with
+/// `lexical-binding` t answers
+/// `((1 2 (3 4)) (1 nil nil) (wrong-number-of-arguments t 1)
+///   (wrong-number-of-arguments t 2) 1 (5 1) (1 "xx") (5 6))`.
+#[test]
+fn a_lexical_closure_call_binds_its_formals_like_gnu_funcall_lambda() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    eval.set_lexical_binding(true);
+    let value = eval
+        .eval_str(
+            r#"(list
+                (funcall (lambda (a &optional b &rest c) (list a b c)) 1 2 3 4)
+                (funcall (lambda (a &optional b &rest c) (list a b c)) 1)
+                (condition-case err (funcall (lambda (a b) a) 1)
+                  (wrong-number-of-arguments
+                   (list (car err) (functionp (nth 1 err)) (nth 2 err))))
+                (condition-case err (funcall (lambda (a) a) 1 2)
+                  (wrong-number-of-arguments
+                   (list (car err) (functionp (nth 1 err)) (nth 2 err))))
+                (let ((x 1)) (condition-case nil (funcall (lambda (a) a)) (error nil)) x)
+                (let ((x 1)) (list (funcall (let ((x 5)) (lambda () x))) x))
+                (funcall (lambda (a b) (garbage-collect) (list (car a) b))
+                         (list 1) (make-string 2 ?x))
+                (let ((f (let ((y 2)) (lambda (z) (+ y z)))))
+                  (list (funcall f 3) (funcall f 4))))"#,
+        )
+        .expect("the closure calls should evaluate");
+    assert_eq!(
+        crate::emacs_core::print::print_value(&value),
+        r#"((1 2 (3 4)) (1 nil nil) (wrong-number-of-arguments t 1) (wrong-number-of-arguments t 2) 1 (5 1) (1 "xx") (5 6))"#
+    );
+}
