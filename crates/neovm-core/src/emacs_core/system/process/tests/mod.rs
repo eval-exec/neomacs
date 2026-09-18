@@ -14604,10 +14604,13 @@ fn the_child_status_record_is_the_waits_work_and_maybe_quit_never_does_it() {
     );
 
     // HALF ONE: the spin.  Nothing here waits, and `maybe_quit` is reached
-    // over and over -- which is exactly where ledger 193 put the drain.
+    // over and over -- which is exactly where ledger 193 put the drain.  It
+    // runs for 300 ms AND at least 2000 visits: a loaded machine can hand
+    // each `yield_now` a whole timeslice, and one gate reached the safe
+    // point only 103 times in the window alone.
     let spin_deadline = std::time::Instant::now() + Duration::from_millis(300);
     let mut safe_points: u64 = 0;
-    while std::time::Instant::now() < spin_deadline {
+    while std::time::Instant::now() < spin_deadline || safe_points < 2000 {
         eval.maybe_quit().expect("maybe_quit must not unwind here");
         safe_points += 1;
         std::thread::yield_now();
