@@ -39,34 +39,32 @@ std::cfg_select! {
             ),
         }
 
-        pub(super) fn install_lisp_state(ctx: &mut Context) {
+        /// The `DEFVAR`s and the `dbus-error` symbol of GNU's
+        /// `syms_of_dbusbind`.  Called with the other subsystems'
+        /// `register_bootstrap_vars` while the evaluator is being built, so
+        /// `defvar_object::adopt` gives the nine names GNU's forwarded storage
+        /// like every other C variable; a pdump-restored evaluator carries
+        /// them in its image, as GNU's does.
+        pub(super) fn register_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::Obarray) {
             use crate::emacs_core::value::{HashTableTest, Value};
 
             let compiled = option_env!("NEOMACS_DBUS_COMPILED_VERSION")
                 .map(Value::string)
                 .unwrap_or(Value::NIL);
-            ctx.obarray
-                .define_special_variable("dbus-compiled-version", compiled);
-            ctx.obarray
-                .define_special_variable("dbus-runtime-version", compiled);
-            ctx.obarray
-                .define_special_variable("dbus-message-type-invalid", Value::fixnum(0));
-            ctx.obarray
-                .define_special_variable("dbus-message-type-method-call", Value::fixnum(1));
-            ctx.obarray
-                .define_special_variable("dbus-message-type-method-return", Value::fixnum(2));
-            ctx.obarray
-                .define_special_variable("dbus-message-type-error", Value::fixnum(3));
-            ctx.obarray
-                .define_special_variable("dbus-message-type-signal", Value::fixnum(4));
-            ctx.obarray.define_special_variable(
+            obarray.define_special_variable("dbus-compiled-version", compiled);
+            obarray.define_special_variable("dbus-runtime-version", compiled);
+            obarray.define_special_variable("dbus-message-type-invalid", Value::fixnum(0));
+            obarray.define_special_variable("dbus-message-type-method-call", Value::fixnum(1));
+            obarray.define_special_variable("dbus-message-type-method-return", Value::fixnum(2));
+            obarray.define_special_variable("dbus-message-type-error", Value::fixnum(3));
+            obarray.define_special_variable("dbus-message-type-signal", Value::fixnum(4));
+            obarray.define_special_variable(
                 "dbus-registered-objects-table",
                 Value::hash_table(HashTableTest::Equal),
             );
-            ctx.obarray
-                .define_special_variable("dbus-debug", Value::NIL);
+            obarray.define_special_variable("dbus-debug", Value::NIL);
 
-            crate::emacs_core::errors::register_dbus_error(&mut ctx.obarray);
+            crate::emacs_core::errors::register_dbus_error(obarray);
         }
     }
     _ => {

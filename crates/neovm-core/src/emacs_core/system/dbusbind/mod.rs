@@ -35,9 +35,16 @@ std::cfg_select! {
 
 pub(crate) fn register_subrs(ctx: &mut Context) {
     subrs::register_subrs(ctx);
+}
+
+/// GNU `syms_of_dbusbind`'s variables (see `subrs::register_bootstrap_vars`);
+/// nothing in a build without libdbus.
+pub(crate) fn register_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::Obarray) {
     std::cfg_select! {
-        neomacs_have_dbus => subrs::install_lisp_state(ctx),
-        _ => {}
+        neomacs_have_dbus => subrs::register_bootstrap_vars(obarray),
+        _ => {
+            let _ = obarray;
+        }
     }
 }
 

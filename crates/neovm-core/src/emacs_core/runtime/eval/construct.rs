@@ -1287,6 +1287,7 @@ impl Context {
         super::super::buffer_vars::register_bootstrap_vars(obarray);
         super::super::image::register_bootstrap_vars(obarray);
         super::super::fontset::register_bootstrap_vars(obarray);
+        super::super::dbusbind::register_bootstrap_vars(obarray);
 
         // ---- end C-level bootstrap variables ----
 
