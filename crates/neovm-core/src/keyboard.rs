@@ -23,7 +23,10 @@ use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 mod input_method;
+mod keysym;
 mod unread;
+
+pub use keysym::{native_key_android, native_key_macos, native_key_ohos, native_key_windows};
 pub(crate) use unread::UnreadCommandEvent;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -398,6 +401,15 @@ pub enum Key {
     Char(char),
     /// A named function key.
     Named(NamedKey),
+    /// A function key carried by name, for the keys no [`NamedKey`] variant
+    /// enumerates: Undo, Redo, Menu, the XF86 block, and the reserved
+    /// identities the frontend gives a native key with no keysym.
+    ///
+    /// GNU models every function key this way — the event *is* a symbol,
+    /// named by `modify_event_symbol` from `system-key-alist`, the toolkit's
+    /// keysym name, or the key's number — so a key nothing enumerated is
+    /// still bindable instead of being dropped.
+    Function(String),
 }
 
 /// Named (non-character) keys.
@@ -1125,19 +1137,45 @@ pub fn keysym_to_key_event(keysym: u32, modifiers: u32) -> Option<KeyEvent> {
         XK_PAGE_UP => Key::Named(NamedKey::PageUp),
         XK_PAGE_DOWN => Key::Named(NamedKey::PageDown),
         XK_INSERT => Key::Named(NamedKey::Insert),
-        // Function keys F1-F24
-        k if (XK_F1..=XK_F24).contains(&k) => Key::Named(NamedKey::F((k - XK_F1 + 1) as u8)),
-        // Printable Unicode scalar values from TTY or GUI backends.
-        k if char::from_u32(k).is_some_and(|ch| !ch.is_control()) => {
-            Key::Char(char::from_u32(k).unwrap())
+        // Modifier keys are state, reported through `ModifiersChanged`.
+        k if keysym::is_modifier_key(k) => return None,
+        // Function keys.  XK_F1 is 0xffbe and the block is contiguous through
+        // XK_F35, so the number is arithmetic rather than a table — which is
+        // why F13-F35 are ordinary keys here and not "unsupported".
+        k if keysym::is_function_key(k) => {
+            Key::Named(NamedKey::F((k - keysym::FUNCTION_KEY_BASE + 1) as u8))
         }
-        // Ignore modifier-only keys and unknown keysyms
+        // X's Unicode keysym block: 0x01000000 + a code point.
+        k if (0x0100_0000..=0x0110_ffff).contains(&k) => {
+            Key::Char(char::from_u32(k & 0x00ff_ffff).expect("unicode keysym block"))
+        }
+        // `XK_VoidSymbol` is "no key at all".
+        k if k == 0x00ff_ffff => return None,
+        // From the special block up, every keysym is a named function key:
+        // the cursor, misc, keypad and F blocks, the XF86/vendor space, and
+        // the reserved bands for native keys with no keysym.  GNU names each
+        // of them (keyboard.c `modify_event_symbol`) and, when even the
+        // toolkit's table has no entry, names it after its number — so
+        // nothing is dropped merely for being unlisted.
+        k if keysym::is_named_keysym(k) => {
+            Key::Function(keysym::function_key_name(k).unwrap_or_else(|| format!("key-{k}")))
+        }
+        // Below the special block, the keysym ranges are character ranges.
+        k if char::from_u32(k).is_some_and(|ch| !ch.is_control()) => {
+            Key::Char(char::from_u32(k).expect("printed scalar"))
+        }
+        // What is left is a scalar the arms above did not claim: the
+        // remaining non-keys, ignored as GNU ignores them.
         _ => return None,
     };
 
     Some(match key {
         Key::Char(character) => FrontendCharacterInput::classify(character, mods).into_key_event(),
         Key::Named(named) => KeyEvent::named_with_mods(named, mods),
+        Key::Function(name) => KeyEvent {
+            key: Key::Function(name),
+            modifiers: mods,
+        },
     })
 }
 

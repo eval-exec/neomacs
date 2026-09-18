@@ -2032,3 +2032,114 @@ fn geometry_only_echo_area_hit_cannot_publish_live_minibuffer_help_echo() {
         "geometry-only positions must never become live-buffer help evidence"
     );
 }
+
+// ---------------------------------------------------------------------------
+// keysym_to_key_event — the keysym bands
+//
+// A keysym is not a character: XK_F13 is 0xffca and U+FFCA is a halfwidth
+// hangul letter, the same number in two different domains.  GNU classifies by
+// range first (IsFunctionKey, IsMiscFunctionKey, …) and names what is left
+// (keyboard.c modify_event_symbol), and at no point is a key dropped for being
+// unlisted.
+// ---------------------------------------------------------------------------
+
+/// The F block is contiguous — XK_F1 is 0xffbe, XK_F35 is 0xffe0 — so F13 and
+/// above are ordinary function keys, not an allow-list edge.
+#[test]
+fn keysym_to_key_event_covers_the_f_key_block() {
+    crate::test_utils::init_test_tracing();
+    for (keysym, name) in [
+        (0xffbe_u32, "f1"),
+        (0xffc9, "f12"),
+        (0xffca, "f13"),
+        (0xffd5, "f24"),
+        (0xffd6, "f25"),
+        (0xffe0, "f35"),
+    ] {
+        let event = keysym_to_key_event(keysym, 0).unwrap_or_else(|| panic!("{keysym:#x}"));
+        match event.key {
+            Key::Named(NamedKey::F(n)) => assert_eq!(format!("f{n}"), name),
+            other => panic!("{keysym:#x} became {other:?}"),
+        }
+    }
+}
+
+/// The misc-function block is a named-key block, not text: 0xff65-0xff69 are
+/// Undo, Redo, Menu, Find and Cancel, spelled the way GNU spells them.
+#[test]
+fn keysym_to_key_event_names_the_misc_function_block() {
+    crate::test_utils::init_test_tracing();
+    for (keysym, name) in [
+        (0xff65_u32, "undo"),
+        (0xff66, "redo"),
+        (0xff67, "menu"),
+        (0xff68, "find"),
+        (0xff69, "cancel"),
+    ] {
+        let event = keysym_to_key_event(keysym, 0).unwrap_or_else(|| panic!("{keysym:#x}"));
+        assert_eq!(
+            event.key,
+            Key::Function(name.to_string()),
+            "{keysym:#x} must not become the character U+{:04X}",
+            keysym
+        );
+    }
+}
+
+/// The XF86 block keeps its keysym spelling, which is what `(kbd "<XF86Back>")`
+/// matches in GNU.
+#[test]
+fn keysym_to_key_event_names_the_xf86_block() {
+    crate::test_utils::init_test_tracing();
+    for (keysym, name) in [
+        (0x1008ff26_u32, "XF86Back"),
+        (0x1008ff27, "XF86Forward"),
+        (0x1008ff57, "XF86Copy"),
+        (0x1008ff58, "XF86Cut"),
+        (0x1008ff6d, "XF86Paste"),
+        (0x1008ff14, "XF86AudioPlay"),
+    ] {
+        let event = keysym_to_key_event(keysym, 0).unwrap_or_else(|| panic!("{keysym:#x}"));
+        assert_eq!(event.key, Key::Function(name.to_string()));
+    }
+}
+
+/// Modifier keysyms are state, not keystrokes: the frontend reports them
+/// through `ModifiersChanged`.
+#[test]
+fn keysym_to_key_event_suppresses_modifier_keysyms() {
+    crate::test_utils::init_test_tracing();
+    for keysym in [0xffe1_u32, 0xffe3, 0xffe4, 0xffe7, 0xffee] {
+        assert!(
+            keysym_to_key_event(keysym, 0).is_none(),
+            "{keysym:#x} is a modifier"
+        );
+    }
+}
+
+/// A native key winit could not name keeps a platform-scoped identity rather
+/// than becoming nothing at all.
+#[test]
+fn keysym_to_key_event_names_reserved_native_bands() {
+    crate::test_utils::init_test_tracing();
+    for (keysym, name) in [
+        (native_key_macos(0x24), "mac-36"),
+        (native_key_windows(0x5d), "win-93"),
+        (native_key_android(4), "android-4"),
+    ] {
+        let event = keysym_to_key_event(keysym, 0).unwrap_or_else(|| panic!("{keysym:#x}"));
+        assert_eq!(event.key, Key::Function(name.to_string()));
+    }
+}
+
+/// A keysym the registry never named is still named after its number, the way
+/// GNU's last resort spells `key-N`, so nothing is silently unsupported.
+#[test]
+fn keysym_to_key_event_synthesizes_a_name_for_an_unnamed_keysym() {
+    crate::test_utils::init_test_tracing();
+    // 0x10081000 sits in X11's vendor space (bit 28) but names nothing in the
+    // registry, so the last resort names it after its number.
+    let event = keysym_to_key_event(0x10081000, 0).expect("vendor keysym");
+    assert_eq!(event.key, Key::Function("key-268963840".to_string()));
+    assert!(keysymdefs::get_item_by_keysym(0x10081000).is_none());
+}

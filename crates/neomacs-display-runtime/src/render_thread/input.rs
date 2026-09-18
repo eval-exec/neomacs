@@ -1,7 +1,7 @@
 //! Input translation and window chrome hit-testing.
 
 use crate::backend::wgpu::{NEOMACS_CTRL_MASK, NEOMACS_META_MASK, NEOMACS_SUPER_MASK};
-use winit::keyboard::{Key, NamedKey};
+use winit::keyboard::{Key, NamedKey, NativeKey};
 
 use super::RenderApp;
 use super::frame_windows::GuiFrameWindowState;
@@ -40,11 +40,20 @@ pub(super) struct MenuBarHit {
 }
 
 impl RenderApp {
-    /// Translate winit key to X11 keysym
+    /// Translate winit key to X11 keysym.
+    ///
+    /// Every key gets an identity here, the way GNU's backends hand
+    /// `keyboard.c` whatever the toolkit reported and let `modify_event_symbol`
+    /// name it.  Only a modifier is not a keystroke at all — those arrive
+    /// through `ModifiersChanged` — and a key this table does not spell yet is
+    /// logged rather than dropped in silence, so the gap is visible instead of
+    /// looking like "unsupported".
     pub(super) fn translate_key(key: &Key) -> u32 {
         match key {
             Key::Named(named) => match named {
-                // Function keys
+                // Function keys.  The X11 block is contiguous from XK_F1
+                // (0xffbe) to XK_F35 (0xffe0), so all of them are ordinary
+                // keys and not an allow-list.
                 NamedKey::F1 => 0xffbe,
                 NamedKey::F2 => 0xffbf,
                 NamedKey::F3 => 0xffc0,
@@ -57,6 +66,29 @@ impl RenderApp {
                 NamedKey::F10 => 0xffc7,
                 NamedKey::F11 => 0xffc8,
                 NamedKey::F12 => 0xffc9,
+                NamedKey::F13 => 0xffca,
+                NamedKey::F14 => 0xffcb,
+                NamedKey::F15 => 0xffcc,
+                NamedKey::F16 => 0xffcd,
+                NamedKey::F17 => 0xffce,
+                NamedKey::F18 => 0xffcf,
+                NamedKey::F19 => 0xffd0,
+                NamedKey::F20 => 0xffd1,
+                NamedKey::F21 => 0xffd2,
+                NamedKey::F22 => 0xffd3,
+                NamedKey::F23 => 0xffd4,
+                NamedKey::F24 => 0xffd5,
+                NamedKey::F25 => 0xffd6,
+                NamedKey::F26 => 0xffd7,
+                NamedKey::F27 => 0xffd8,
+                NamedKey::F28 => 0xffd9,
+                NamedKey::F29 => 0xffda,
+                NamedKey::F30 => 0xffdb,
+                NamedKey::F31 => 0xffdc,
+                NamedKey::F32 => 0xffdd,
+                NamedKey::F33 => 0xffde,
+                NamedKey::F34 => 0xffdf,
+                NamedKey::F35 => 0xffe0,
                 // Navigation
                 NamedKey::Escape => 0xff1b,
                 NamedKey::Enter => 0xff0d,
@@ -72,16 +104,74 @@ impl RenderApp {
                 NamedKey::ArrowUp => 0xff52,
                 NamedKey::ArrowRight => 0xff53,
                 NamedKey::ArrowDown => 0xff54,
-                // Modifier keys are handled via ModifiersChanged, not as key events.
-                // They fall through to the default `_ => 0` which suppresses them.
-                // Other
+                // Other keys that already have a place in the X11 block.
                 NamedKey::PrintScreen => 0xff61,
                 NamedKey::ScrollLock => 0xff14,
                 NamedKey::Pause => 0xff13,
-                _ => 0,
+                // The 0xff65-0xff69 misc-function block, which GNU spells
+                // `undo`, `redo`, `menu`, `find` and `cancel`.
+                NamedKey::Undo => 0xff65,
+                NamedKey::Redo => 0xff66,
+                NamedKey::ContextMenu => 0xff67,
+                NamedKey::Find => 0xff68,
+                NamedKey::Cancel => 0xff69,
+                // The XF86 block: what the XF86Back/XF86Forward/XF86Copy keys
+                // are on X11 and Wayland, and what GNU binds as <XF86Back>.
+                NamedKey::BrowserBack => 0x1008ff26,
+                NamedKey::BrowserForward => 0x1008ff27,
+                NamedKey::Copy => 0x1008ff57,
+                NamedKey::Cut => 0x1008ff58,
+                NamedKey::Paste => 0x1008ff6d,
+                // Modifier keys are handled via ModifiersChanged, not as key
+                // events.  They are listed explicitly so that "a modifier" and
+                // "a key this table does not know" stay different answers.
+                NamedKey::Shift
+                | NamedKey::Control
+                | NamedKey::Alt
+                | NamedKey::AltGraph
+                | NamedKey::CapsLock
+                | NamedKey::Meta
+                | NamedKey::Hyper
+                | NamedKey::NumLock
+                | NamedKey::Symbol
+                | NamedKey::SymbolLock
+                | NamedKey::Fn
+                | NamedKey::FnLock => 0,
+                // A key winit names and this block does not spell yet — the
+                // media, launch and volume families, whose keysyms live in
+                // the XF86 block.  Logged rather than silently zeroed: GNU
+                // sees these as keysyms (XF86AudioPlay) and binds them, so
+                // one landing here is a gap to close, not "unsupported".
+                other => {
+                    tracing::debug!("key has no keysym mapping yet: {:?}", other);
+                    0
+                }
             },
             Key::Character(c) => c.chars().next().map(|ch| ch as u32).unwrap_or(0),
-            _ => 0,
+            // A key winit could not name at all.  X11 and Wayland hand over
+            // the raw keysym, which is already this port's identity; the
+            // platforms whose native key is a scancode or a virtual-key code
+            // get a reserved band, so the key keeps an identity and stays
+            // bindable instead of being dropped.
+            Key::Unidentified(native) => match native {
+                NativeKey::Xkb(keysym) => *keysym,
+                NativeKey::MacOS(scancode) => neovm_core::keyboard::native_key_macos(*scancode),
+                NativeKey::Windows(virtual_key) => {
+                    neovm_core::keyboard::native_key_windows(*virtual_key)
+                }
+                NativeKey::Android(keycode) => neovm_core::keyboard::native_key_android(*keycode),
+                NativeKey::Unidentified => {
+                    tracing::debug!("unidentified native key carries no identity");
+                    0
+                }
+                other => {
+                    tracing::debug!("native key kind has no identity yet: {:?}", other);
+                    0
+                }
+            },
+            // A dead key is compose state; its text arrives through the
+            // committed-text path.
+            Key::Dead(_) => 0,
         }
     }
 

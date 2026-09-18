@@ -140,6 +140,10 @@ signal-hook = "0.4"
 # FFI / system
 libc = "0.2"
 errno = "0.3"
+# The X11 keysym registry as data: naming a function key is GNU's
+# `XKeysymToString` tier of `modify_event_symbol`, and this is that table
+# without an X11 or xkbcommon dependency, so it works on every platform.
+keysymdefs = "0.2"
 rustix = { version = "1", features = ["fs"] }
 inotify = "0.11"
 fs4 = { version = "1", features = ["sync"] }

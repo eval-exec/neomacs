@@ -323,6 +323,20 @@ impl From<crate::keyboard::KeyEvent> for KeyEvent {
                     alt: false,
                 }
             }
+            // A function key that already carries its symbol — the misc and
+            // XF86 blocks, and the reserved identities for native keys with no
+            // keysym.  GNU interns the same symbol (`modify_event_symbol`), so
+            // `[undo]`, `[XF86Back]` and `[key-16777215]` are ordinary
+            // bindable events.
+            Key::Function(name) => KeyEvent::Function {
+                name: intern(&name),
+                ctrl: ke.modifiers.ctrl,
+                meta: ke.modifiers.meta,
+                shift: ke.modifiers.shift,
+                super_: ke.modifiers.super_,
+                hyper: ke.modifiers.hyper,
+                alt: false,
+            },
         }
     }
 }

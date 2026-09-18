@@ -16,7 +16,7 @@ use neomacs_display_protocol::{
     PresentedHitRegion, PresentedPaintSpan, PresentedPointerAppearance, PresentedPointerRegion,
     PresentedPrimitiveKind, PresentedRegionId, PresentedRegionKind,
 };
-use winit::keyboard::{Key, NamedKey, SmolStr};
+use winit::keyboard::{Key, NamedKey, NativeKey, SmolStr};
 use winit::window::ResizeDirection;
 
 #[test]
@@ -2731,4 +2731,133 @@ fn titlebar_custom_height() {
 #[test]
 fn titlebar_button_width_constant() {
     assert_eq!(RenderApp::TITLEBAR_BUTTON_WIDTH, 46.0);
+}
+
+// ===================================================================
+// translate_key — keys outside the old F1-F12 / navigation table
+//
+// GNU names whatever the backend reports (keyboard.c `modify_event_symbol`:
+// system-key-alist -> the toolkit's keysym name -> a synthesized `key-N`), so
+// a key no table listed is still a bindable event rather than a silent gap.
+// ===================================================================
+
+/// F13-F35: winit's `NamedKey` carries them and the X11 keysym block is
+/// contiguous from XK_F13 (0xffca) to XK_F35 (0xffe0).
+#[test]
+fn translate_key_f13_through_f35() {
+    let expected: Vec<(NamedKey, u32)> = vec![
+        (NamedKey::F13, 0xffca),
+        (NamedKey::F14, 0xffcb),
+        (NamedKey::F15, 0xffcc),
+        (NamedKey::F16, 0xffcd),
+        (NamedKey::F17, 0xffce),
+        (NamedKey::F18, 0xffcf),
+        (NamedKey::F19, 0xffd0),
+        (NamedKey::F20, 0xffd1),
+        (NamedKey::F21, 0xffd2),
+        (NamedKey::F22, 0xffd3),
+        (NamedKey::F23, 0xffd4),
+        (NamedKey::F24, 0xffd5),
+        (NamedKey::F25, 0xffd6),
+        (NamedKey::F26, 0xffd7),
+        (NamedKey::F27, 0xffd8),
+        (NamedKey::F28, 0xffd9),
+        (NamedKey::F29, 0xffda),
+        (NamedKey::F30, 0xffdb),
+        (NamedKey::F31, 0xffdc),
+        (NamedKey::F32, 0xffdd),
+        (NamedKey::F33, 0xffde),
+        (NamedKey::F34, 0xffdf),
+        (NamedKey::F35, 0xffe0),
+    ];
+    for (named, keysym) in expected {
+        assert_eq!(
+            RenderApp::translate_key(&Key::Named(named)),
+            keysym,
+            "{named:?}"
+        );
+    }
+}
+
+/// The 0xff65-0xff69 misc-function band, which GNU spells `undo`, `redo`,
+/// `menu`, `find` and `cancel`.
+#[test]
+fn translate_key_misc_function_band() {
+    let expected: Vec<(NamedKey, u32)> = vec![
+        (NamedKey::Undo, 0xff65),
+        (NamedKey::Redo, 0xff66),
+        (NamedKey::ContextMenu, 0xff67),
+        (NamedKey::Find, 0xff68),
+        (NamedKey::Cancel, 0xff69),
+    ];
+    for (named, keysym) in expected {
+        assert_eq!(
+            RenderApp::translate_key(&Key::Named(named)),
+            keysym,
+            "{named:?}"
+        );
+    }
+}
+
+/// The XF86 band: what the XF86Back/XF86Forward/XF86Copy keys arrive as on
+/// X11/Wayland, and what GNU binds as `<XF86Back>`.
+#[test]
+fn translate_key_xf86_band() {
+    let expected: Vec<(NamedKey, u32)> = vec![
+        (NamedKey::BrowserBack, 0x1008ff26),
+        (NamedKey::BrowserForward, 0x1008ff27),
+        (NamedKey::Copy, 0x1008ff57),
+        (NamedKey::Cut, 0x1008ff58),
+        (NamedKey::Paste, 0x1008ff6d),
+    ];
+    for (named, keysym) in expected {
+        assert_eq!(
+            RenderApp::translate_key(&Key::Named(named)),
+            keysym,
+            "{named:?}"
+        );
+    }
+}
+
+/// A key no table names still carries an identity, so it stays bindable:
+/// X11/Wayland hand over the raw keysym, and the platforms that have no
+/// keysym get a reserved band of their own instead of a zero.
+#[test]
+fn translate_key_keeps_unmapped_native_keys() {
+    assert_eq!(
+        RenderApp::translate_key(&Key::Unidentified(NativeKey::Xkb(0x1008ff50))),
+        0x1008ff50,
+        "the raw keysym is the identity"
+    );
+    assert_eq!(
+        RenderApp::translate_key(&Key::Unidentified(NativeKey::MacOS(0x24))),
+        neovm_core::keyboard::native_key_macos(0x24),
+    );
+    assert_eq!(
+        RenderApp::translate_key(&Key::Unidentified(NativeKey::Windows(0x5d))),
+        neovm_core::keyboard::native_key_windows(0x5d),
+    );
+    assert_eq!(
+        RenderApp::translate_key(&Key::Unidentified(NativeKey::Android(4))),
+        neovm_core::keyboard::native_key_android(4),
+    );
+}
+
+/// Modifiers are not key events — they arrive through `ModifiersChanged` — and
+/// the mapping says so with an arm of its own instead of relying on an
+/// unlisted key falling through to zero.
+#[test]
+fn translate_key_suppresses_modifiers() {
+    for modifier in [
+        NamedKey::Shift,
+        NamedKey::Control,
+        NamedKey::Alt,
+        NamedKey::CapsLock,
+    ] {
+        assert_eq!(
+            RenderApp::translate_key(&Key::Named(modifier)),
+            0,
+            "{modifier:?}"
+        );
+    }
 }

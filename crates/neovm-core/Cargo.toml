@@ -18,6 +18,7 @@ enumflags2.workspace = true
 crossbeam-channel.workspace = true
 libc.workspace = true
 errno.workspace = true
+keysymdefs.workspace = true
 rustix = { workspace = true, features = ["event", "pipe"] }
 fs4.workspace = true
 sysinfo.workspace = true
