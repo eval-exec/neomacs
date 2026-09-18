@@ -375,11 +375,7 @@ impl TaggedHeap {
             .map(|o| o.header)
             .collect();
         for ptr in veclike {
-            if self
-                .collect_veclike_children(ptr)
-                .iter()
-                .any(|c| self.is_heap_young(*c))
-            {
+            if self.veclike_has_young_child(ptr) {
                 let value = unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) };
                 self.mapped_remembered.insert(value.bits());
             }
@@ -455,7 +451,8 @@ impl TaggedHeap {
     pub(super) fn remember_tenured_owner_if_young_children(&mut self, header: *mut GcHeader) {
         let kind = unsafe { (*header).kind };
         let has_young = match kind {
-            HeapObjectKind::VecLike | HeapObjectKind::String => self
+            HeapObjectKind::VecLike => self.veclike_has_young_child(header as *mut VecLikeHeader),
+            HeapObjectKind::String => self
                 .heap_object_children(header)
                 .iter()
                 .any(|c| self.is_heap_young(*c)),
@@ -473,6 +470,23 @@ impl TaggedHeap {
             };
             self.mapped_remembered.insert(value.bits());
         }
+    }
+
+    /// Whether a direct child of the veclike at `ptr` is YOUNG
+    /// ([`Self::is_heap_young`]). Visits the children in place: collecting
+    /// them into a vector per owner cost an allocation and a push per child
+    /// for each of the ~12K image veclikes the first cycle's promotion scans.
+    fn veclike_has_young_child(&self, ptr: *mut VecLikeHeader) -> bool {
+        let mut young = false;
+        Self::for_each_veclike_child(
+            ptr,
+            &mut VisitChild(|child| {
+                if !young && self.is_heap_young(child) {
+                    young = true;
+                }
+            }),
+        );
+        young
     }
 
     /// True if `value` is a YOUNG heap object: a real heap allocation that is
