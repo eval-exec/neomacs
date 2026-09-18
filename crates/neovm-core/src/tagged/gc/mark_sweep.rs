@@ -44,7 +44,7 @@ impl TaggedHeap {
 
     /// Run a full mark-sweep collection using only the explicit roots provided.
     pub fn collect_exact(&mut self, roots: impl Iterator<Item = TaggedValue>) {
-        self.begin_collection();
+        self.begin_stw_collection();
         for root in roots {
             self.seed_root(root);
         }

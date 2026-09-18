@@ -52,8 +52,13 @@ impl TaggedHeap {
     /// termination's accounting undercounted (mapped objects are never marked
     /// during the concurrent first cycle; blackening makes the marked-based
     /// sums whole). No-op on every later cycle and on dump-less heaps.
+    ///
+    /// Acts only on an ARMED concurrent first cycle: with nothing armed there
+    /// is no trace and sweep behind the call, and promoting then would tenure
+    /// every load transient (the stop-the-world first cycle promotes inside
+    /// `complete_collection`).
     pub fn finish_first_partition_cycle(&mut self) {
-        if !self.partition_dump || self.dump_blackened {
+        if !self.partition_dump || self.dump_blackened || !self.first_cycle_concurrent {
             self.first_cycle_concurrent = false;
             return;
         }
@@ -69,6 +74,35 @@ impl TaggedHeap {
             .live_bytes
             .saturating_add(self.mapped_non_cons_live_bytes())
             .saturating_add(mapped_cons_bytes);
+    }
+
+    /// Stop-the-world cycle entry: `collect_exact`, and the driver's forced
+    /// (`garbage-collect`) and dump-less paths.
+    ///
+    /// An armed concurrent FIRST partition cycle that has fully traced and
+    /// swept by now (the forced path terminates the mark and drains the sweep
+    /// first) is disarmed: this cycle becomes the stop-the-world first cycle,
+    /// which seeds every image child (`seed_all_mapped_children`) and promotes
+    /// in `complete_collection` after its own exact trace. Left armed, this
+    /// cycle's `begin_collection` took the concurrent STAGING branch, whose
+    /// staged image lists only the GC thread consumes: the stop-the-world mark
+    /// never seeded the heap children of image objects the roots do not
+    /// reach, swept them, and then blackened the image around the dangling
+    /// pointers, which every later cycle traced again through the remembered
+    /// set. Finishing the armed cycle here instead (promote, then trace) would
+    /// tenure the objects it allocated black during its mark, dead or not, so
+    /// the explicit collection could never free them.
+    pub(crate) fn begin_stw_collection(&mut self) {
+        if self.first_cycle_concurrent {
+            debug_assert!(
+                !self.concurrent_mark_running && !self.sweep_in_progress,
+                "a stop-the-world cycle may only follow a finished concurrent cycle"
+            );
+            self.first_cycle_concurrent = false;
+            self.staged_mapped_cons_scan = None;
+            self.staged_mapped_veclikes = None;
+        }
+        self.begin_collection();
     }
 
     /// True while the background GC thread is marking (between the start and

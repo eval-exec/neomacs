@@ -3246,3 +3246,83 @@ fn concurrent_first_cycle_keeps_weak_entries_keyed_by_live_image_objects() {
         );
     }
 }
+
+/// An explicit (stop-the-world) collection that arrives while the session's
+/// armed CONCURRENT first partition cycle is still open must not free a heap
+/// object held only by an image object the roots do not reach. The forced
+/// path terminates the mark and drains the sweep (the concurrent cycle kept
+/// the object: its staged image scan covers every image object); the forced
+/// cycle then saw the first cycle still armed, re-staged the image for a GC
+/// thread that never runs in a stop-the-world mark, swept the object, and
+/// blackened the image around the dangling pointer. The forced cycle must
+/// still free what the concurrent cycle allocated black and then dropped:
+/// promoting before its own trace would tenure that garbage for good.
+#[test]
+fn a_forced_collection_during_the_concurrent_first_cycle_keeps_image_held_objects() {
+    use crate::emacs_core::value::{HashTableTest, LispHashTable};
+    crate::test_utils::init_test_tracing();
+    let mut heap = TaggedHeap::new();
+    set_tagged_heap(&mut heap);
+    // Fake image cons X, registered exactly as the pdump loader registers
+    // one; the roots never reach it.
+    let x = Box::into_raw(Box::new([ConsCell {
+        car: TaggedValue::NIL,
+        cdr_or_next: crate::tagged::header::ConsCdrOrNext {
+            cdr: TaggedValue::NIL,
+        },
+    }])) as *mut ConsCell;
+    unsafe { heap.register_mapped_cons_range(x, 1) };
+    // `keeper` is rooted and keeps H's cons block from being released, so a
+    // freed H reads as a dead cell rather than unmapped memory.
+    let keeper = heap.alloc_cons(TaggedValue::fixnum(0), TaggedValue::NIL);
+    let h = heap.alloc_cons(TaggedValue::fixnum(1), TaggedValue::fixnum(2));
+    unsafe { (*x).car = h };
+    assert!(heap.is_partition_first_cycle());
+
+    // The safe-point path arms and starts the concurrent first cycle.
+    heap.arm_first_cycle_concurrent();
+    heap.concurrent_begin();
+    heap.seed_root(keeper);
+    heap.launch_concurrent_mark();
+    // Floating garbage: allocated (black) during the mark, never rooted.
+    let floating = heap.alloc_hash_table(LispHashTable::new(HashTableTest::Eq));
+    let floating_addr = TaggedHeap::value_heap_addr(floating).unwrap();
+    assert!(heap.non_cons_object_addrs.contains(&floating_addr));
+    while !heap.concurrent_mark_done() {
+        std::thread::yield_now();
+    }
+    // `(garbage-collect)` arrives: the forced path terminates the mark and
+    // drains the sweep ...
+    heap.join_concurrent_mark();
+    heap.reseed_runtime_and_remembered_roots();
+    heap.seed_root(keeper);
+    let bytes_before = heap.live_bytes();
+    heap.incremental_drain_all();
+    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now();
+    assert!(
+        !unsafe { (*h.xcons_ptr()).load_car() }.is_dead(),
+        "the concurrent cycle keeps the image-held object"
+    );
+    assert!(
+        heap.non_cons_object_addrs.contains(&floating_addr),
+        "the concurrent cycle keeps what it allocated during its mark"
+    );
+    // ... then runs its stop-the-world cycle.
+    heap.begin_stw_collection();
+    heap.seed_root(keeper);
+    heap.complete_collection();
+    assert!(
+        !unsafe { (*h.xcons_ptr()).load_car() }.is_dead(),
+        "the forced cycle must not free an object an image cons still holds"
+    );
+    assert!(
+        !heap.non_cons_object_addrs.contains(&floating_addr),
+        "the forced cycle must free the concurrent cycle's floating garbage"
+    );
+    // And the image is blackened, with H safely live, for every later cycle.
+    heap.begin_stw_collection();
+    heap.seed_root(keeper);
+    heap.complete_collection();
+    assert!(!unsafe { (*h.xcons_ptr()).load_car() }.is_dead());
+}

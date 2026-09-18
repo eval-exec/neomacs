@@ -1863,7 +1863,10 @@ impl Context {
                 if (*heap_ptr).sweep_in_progress() {
                     (*heap_ptr).finish_incremental_sweep_now();
                 }
-                (*heap_ptr).begin_collection();
+                // Disarms a concurrent first cycle drained above, so this
+                // cycle traces the whole image before it promotes (see
+                // `begin_stw_collection`).
+                (*heap_ptr).begin_stw_collection();
                 self.seed_all_context_roots(heap_ptr);
                 (*heap_ptr).complete_collection();
                 cycle_completed = true;
@@ -1934,7 +1937,7 @@ impl Context {
                 // Stop-the-world full collection (dump-less bootstrap): the
                 // only remaining non-concurrent threshold path, sized by the
                 // young heap alone.
-                (*heap_ptr).begin_collection();
+                (*heap_ptr).begin_stw_collection();
                 self.seed_all_context_roots(heap_ptr);
                 (*heap_ptr).complete_collection();
                 cycle_completed = true;

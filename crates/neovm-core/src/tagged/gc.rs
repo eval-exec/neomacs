@@ -590,8 +590,9 @@ pub struct TaggedHeap {
     /// before the first partition cycle's `concurrent_begin`; makes
     /// `begin_collection` stage the mapped cons ranges instead of enumerating
     /// them in the handshake and makes the claim job DROP span-inside children.
-    /// Cleared when the cycle completes (`finish_first_partition_cycle`) or by
-    /// an STW `complete_collection` finishing the bootstrap first.
+    /// Cleared when the cycle completes (`finish_first_partition_cycle`), or by
+    /// a stop-the-world cycle that disarms it (`begin_stw_collection`) and then
+    /// finishes the bootstrap itself in `complete_collection`.
     first_cycle_concurrent: bool,
     /// Mapped cons ranges staged by `begin_collection` for the concurrent
     /// first cycle; `launch_concurrent_mark` moves them into the job.

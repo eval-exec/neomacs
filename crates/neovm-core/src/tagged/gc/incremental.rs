@@ -1740,6 +1740,13 @@ impl TaggedHeap {
         self.bytecode_arena.owns(ptr)
     }
 
+    /// TEST-ONLY ownership probe for a non-cons heap value: true when this
+    /// heap allocated the value's object (arena page or boxed object).
+    #[cfg(test)]
+    pub(crate) fn owns_heap_value_for_test(&self, value: TaggedValue) -> bool {
+        Self::value_heap_addr(value).is_some_and(|addr| self.owns_heap_value_object(value, addr))
+    }
+
     /// TEST-ONLY mapped-image ownership probe: true when the value's storage
     /// lives inside the loaded dump image span (image-resident objects).
     #[cfg(test)]
