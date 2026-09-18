@@ -45,7 +45,7 @@ let
       pkgs.llvmPackages.clang
       pkgs.makeWrapper
     ]
-    ++ lib.optionals pkgs.stdenv.isDarwin [
+    ++ lib.optionals pkgs.stdenv.hostPlatform.isDarwin [
       # xtask's fresh-build pipeline re-signs role binaries after patching
       # the pdump fingerprint. sigtool supplies codesign in the sandbox.
       pkgs.darwin.sigtool
@@ -64,12 +64,12 @@ let
   hostEmulator = pkgs.stdenv.hostPlatform.emulator pkgs.buildPackages;
   fingerprintRunner = lib.optionalString (hostEmulator != null) "${hostEmulator} ";
   linuxWrapArgs =
-    lib.optionals pkgs.stdenv.isLinux [
+    lib.optionals pkgs.stdenv.hostPlatform.isLinux [
       "--set-default"
       "VK_DRIVER_FILES"
       "$(echo ${pkgs.mesa}/share/vulkan/icd.d/*.json | tr ' ' ':')"
     ]
-    ++ lib.optionals (pkgs.stdenv.isLinux && videoEnabled) [
+    ++ lib.optionals (pkgs.stdenv.hostPlatform.isLinux && videoEnabled) [
       "--set-default"
       "GST_PLUGIN_SYSTEM_PATH_1_0"
       gstreamerRuntime.pluginSystemPath
@@ -78,7 +78,7 @@ let
       gstreamerRuntime.pluginScanner
     ]
     ++
-      lib.optionals (pkgs.stdenv.isLinux && builtins.elem "webview" productionCapabilities.cargoFeatures)
+      lib.optionals (pkgs.stdenv.hostPlatform.isLinux && builtins.elem "webview" productionCapabilities.cargoFeatures)
         [
           "--set-default"
           "WPE_BACKEND_LIBRARY"
@@ -137,7 +137,7 @@ craneLib.buildPackage (
         "$out/share/icons" \
         "$out/share/info" \
         "$out/share/man"
-      ${lib.optionalString pkgs.stdenv.isLinux ''
+      ${lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
         bash scripts/install-linux-desktop-assets.sh "$out"
       ''}
 

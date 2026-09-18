@@ -11,9 +11,9 @@ let
     "webview"
   ];
   platform =
-    if pkgs.stdenv.isLinux then
+    if pkgs.stdenv.hostPlatform.isLinux then
       "linux"
-    else if pkgs.stdenv.isDarwin then
+    else if pkgs.stdenv.hostPlatform.isDarwin then
       "darwin"
     else
       throw "Neomacs has no production capability profile for ${pkgs.stdenv.hostPlatform.system}";

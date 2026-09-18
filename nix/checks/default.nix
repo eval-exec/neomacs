@@ -16,7 +16,7 @@ let
       pkgs.neomacs == package
     ) "packages.${system}.default must be built through overlays.default";
     assert lib.assertMsg (
-      !pkgs.stdenv.isLinux || pkgs ? neomacs-wpewebkit
+      !pkgs.stdenv.hostPlatform.isLinux || pkgs ? neomacs-wpewebkit
     ) "overlays.default must expose its pinned WPE package under a Neomacs-specific name";
     assert lib.assertMsg (
       package.type or null == "derivation"
@@ -60,7 +60,7 @@ let
         test -d ${checkedPackage}/share/icons
         test -d ${checkedPackage}/share/info
         test -d ${checkedPackage}/share/man
-        ${lib.optionalString pkgs.stdenv.isLinux ''
+        ${lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
           test -f ${checkedPackage}/share/applications/neomacs.desktop
           test -f ${checkedPackage}/share/icons/hicolor/scalable/apps/neomacs.svg
         ''}
@@ -77,7 +77,7 @@ let
         fi
         test -f "${checkedPackage}/bin/neomacs-$fingerprint.pdump"
 
-        ${lib.optionalString pkgs.stdenv.isLinux ''
+        ${lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
           export GST_REGISTRY="$PWD/gstreamer-registry.bin"
           export GST_PLUGIN_SYSTEM_PATH_1_0="${checkedPackage.gstreamerRuntime.pluginSystemPath}"
           export GST_PLUGIN_SCANNER_1_0="${checkedPackage.gstreamerRuntime.pluginScanner}"
