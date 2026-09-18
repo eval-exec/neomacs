@@ -579,8 +579,8 @@ impl TaggedHeap {
                 let cell = unsafe { start.add(i) };
                 let car = unsafe { (*cell).load_car() };
                 let cdr = unsafe { (*cell).load_cdr() };
-                self.mark_or_push_child(car, "first-cycle-mapped-cons-car");
-                self.mark_or_push_child(cdr, "first-cycle-mapped-cons-cdr");
+                self.seed_image_child(car, "first-cycle-mapped-cons-car");
+                self.seed_image_child(cdr, "first-cycle-mapped-cons-cdr");
             }
         }
     }
@@ -598,9 +598,46 @@ impl TaggedHeap {
             {
                 self.mapped_veclike_traces += 1;
             }
+            let pushed_from = self.gray_queue.len();
             unsafe { self.trace_veclike(ptr) };
+            if self.image_premarked {
+                self.drop_image_values_from_gray_queue(pushed_from);
+            }
         }
         self.seed_mapped_string_children();
+    }
+
+    /// [`Self::mark_or_push_child`] for a child of an image object in the
+    /// flat seed. While the image is pre-marked (`premark_mapped_image`), a
+    /// child inside the image needs no push: it is already marked, so popping
+    /// it would do nothing, and this same walk seeds its own heap children.
+    /// The first cycle's mark used to pop ~145K such conses from the image's
+    /// list spines alone.
+    #[inline]
+    fn seed_image_child(&mut self, val: TaggedValue, origin: &str) {
+        if self.image_premarked && val.is_heap_object() && self.owner_is_mapped(val) {
+            return;
+        }
+        self.mark_or_push_child(val, origin);
+    }
+
+    /// Drop the values inside the image from `gray_queue[from..]`, keeping
+    /// the order of the rest: what `trace_veclike` pushed for one image
+    /// object, filtered as [`Self::seed_image_child`] filters. Only while the
+    /// image is pre-marked.
+    fn drop_image_values_from_gray_queue(&mut self, from: usize) {
+        debug_assert!(self.image_premarked);
+        let (lo, hi) = (self.dump_addr_lo, self.dump_addr_hi);
+        let mut kept = from;
+        for read in from..self.gray_queue.len() {
+            let value = self.gray_queue[read];
+            let in_image = Self::value_heap_addr(value).is_some_and(|addr| addr >= lo && addr < hi);
+            if !in_image {
+                self.gray_queue[kept] = value;
+                kept += 1;
+            }
+        }
+        self.gray_queue.truncate(kept);
     }
 
     /// String-interval children only: interval trees carry no concurrent-read
@@ -617,7 +654,7 @@ impl TaggedHeap {
                 intervals.for_each_root(|root| roots.push(root));
             }
             for root in roots {
-                self.mark_or_push_child(root, "first-cycle-mapped-string-interval");
+                self.seed_image_child(root, "first-cycle-mapped-string-interval");
             }
         }
     }
