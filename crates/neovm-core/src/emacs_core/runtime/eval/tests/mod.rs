@@ -26767,3 +26767,60 @@ fn a_lexical_closure_call_binds_its_formals_like_gnu_funcall_lambda() {
         r#"((1 2 (3 4)) (1 nil nil) (wrong-number-of-arguments t 1) (wrong-number-of-arguments t 2) 1 (5 1) (1 "xx") (5 6))"#
     );
 }
+
+/// `let` evaluates its init forms with their values rooted on the operand
+/// stack, as GNU's `temps[]`, and leaves the stack as it found it on every
+/// exit: a throw and an error out of an init form, mixed dynamic and lexical
+/// bindings, parallel binding, the environment a nested closure captures,
+/// and an empty let.  GNU Emacs 31.1 with `lexical-binding` t answers
+/// `(2 ok ((1 2) 0) (1 2) (2 1) 5)`.
+#[test]
+fn let_roots_its_init_values_on_the_operand_stack_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    eval.set_lexical_binding(true);
+    eval.eval_str("(defvar me-d 0)").expect("defvar");
+    let before = eval.bc_buf.len();
+    let value = eval
+        .eval_str(
+            r#"(list (catch 'k (let ((a (list 1)) (b (throw 'k 2))) a))
+                     (condition-case nil (let ((a (list 1)) (b (car 1))) a) (error 'ok))
+                     (list (let ((me-d 1) (x 2)) (list me-d x)) me-d)
+                     (funcall (let ((x 1)) (let ((y 2)) (lambda () (list x y)))))
+                     (let ((a 1) (b 2)) (let ((a b) (b a)) (list a b)))
+                     (let () 5))"#,
+        )
+        .expect("the lets should evaluate");
+    assert_eq!(
+        crate::emacs_core::print::print_value(&value),
+        "(2 ok ((1 2) 0) (1 2) (2 1) 5)"
+    );
+    assert_eq!(
+        eval.bc_buf.len(),
+        before,
+        "every let exit must leave the operand stack as it found it"
+    );
+}
+
+/// A `let` init value stays rooted while later init forms run, even when
+/// one of them collects: the first string must survive the second form's
+/// `garbage-collect` and not be overwritten by the next allocation.
+#[test]
+fn a_let_init_value_survives_a_collection_in_a_later_init_form() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    eval.set_lexical_binding(true);
+    let value = eval
+        .eval_str(
+            r#"(let ((a (make-string 3 ?x))
+                     (b (progn (garbage-collect)
+                               (make-string 3 ?y)
+                               (make-string 3 ?z))))
+                 (list a b))"#,
+        )
+        .expect("the let should evaluate");
+    assert_eq!(
+        crate::emacs_core::print::print_value(&value),
+        r#"("xxx" "zzz")"#
+    );
+}

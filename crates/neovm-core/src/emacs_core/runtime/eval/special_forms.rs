@@ -184,7 +184,10 @@ impl Context {
         let mut dynamic_sym_ids = LetBindingVec::new();
         let use_lexical = self.lexical_binding();
         let mut constant_binding_error: Option<String> = None;
-        let specpdl_root_scope = self.save_specpdl_roots();
+        // The evaluated init values, rooted on the operand stack like GNU's
+        // `temps[]` until every init form has run; every exit truncates it
+        // back.
+        let temps_base = self.bc_buf.len();
         let mut bindings = varlist;
 
         while bindings.is_cons() {
@@ -209,7 +212,7 @@ impl Context {
                 continue;
             }
             if !binding.is_cons() {
-                self.restore_specpdl_roots(specpdl_root_scope);
+                self.bc_buf.truncate(temps_base);
                 // GNU takes `(car elt)` of a non-symbol binding, so a non-list
                 // element signals `(wrong-type-argument listp ELT)`.
                 return Err(signal(
@@ -219,7 +222,7 @@ impl Context {
             }
             let head = self.unwrap_symbol(binding.cons_car());
             let Some(id) = head.as_symbol_id() else {
-                self.restore_specpdl_roots(specpdl_root_scope);
+                self.bc_buf.truncate(temps_base);
                 return Err(signal(
                     LispCondition::WrongTypeArgument,
                     vec![Value::symbol("symbolp"), head],
@@ -232,7 +235,7 @@ impl Context {
                 let init_form = value_tail.cons_car();
                 value_tail = value_tail.cons_cdr();
                 if !value_tail.is_nil() {
-                    self.restore_specpdl_roots(specpdl_root_scope);
+                    self.bc_buf.truncate(temps_base);
                     return Err(signal(
                         "error",
                         vec![
@@ -244,15 +247,15 @@ impl Context {
                 match self.eval_sub(init_form) {
                     Ok(value) => value,
                     Err(err) => {
-                        self.restore_specpdl_roots(specpdl_root_scope);
+                        self.bc_buf.truncate(temps_base);
                         return Err(err);
                     }
                 }
             } else {
-                self.restore_specpdl_roots(specpdl_root_scope);
+                self.bc_buf.truncate(temps_base);
                 return Err(self.listp_error(binding));
             };
-            self.push_specpdl_root(value);
+            self.bc_buf.push(value);
             if let Some(name) = let_constant_error_name(&self.obarray, id, value) {
                 if constant_binding_error.is_none() {
                     constant_binding_error = Some(name);
@@ -269,25 +272,22 @@ impl Context {
             }
         }
         if !bindings.is_nil() {
-            self.restore_specpdl_roots(specpdl_root_scope);
+            self.bc_buf.truncate(temps_base);
             return Err(self.listp_error(varlist));
         }
         if let Some(name) = constant_binding_error {
-            self.restore_specpdl_roots(specpdl_root_scope);
+            self.bc_buf.truncate(temps_base);
             return Err(signal(
                 LispCondition::SettingConstant,
                 vec![Value::symbol(name)],
             ));
         }
 
-        // CRITICAL: Restore specpdl roots (drop init-form GcRoot entries) BEFORE
-        // pushing LexicalEnv/Let entries. Otherwise `restore_specpdl_roots`
-        // drains from `saved_len` and re-extends with non-GcRoot entries,
-        // MOVING our LexicalEnv to a lower index. Then `unbind_to(specpdl_count)`
-        // becomes a no-op because specpdl.len() already matches, and the stale
-        // LexicalEnv leaks below. This caused lexical binding leaks — closures
-        // created in the body captured oversized environments.
-        self.restore_specpdl_roots(specpdl_root_scope);
+        // The init values leave the operand stack here, before anything is
+        // pushed on the specpdl.  From here to the install and the temp-root
+        // pushes below nothing can collect: only conses are allocated, and
+        // `alloc_cons` never collects (`tagged/gc/allocation.rs`).
+        self.bc_buf.truncate(temps_base);
 
         // Save lexenv AFTER init forms run (matches GNU eval.c:1167:
         //   `lexenv = Vinternal_interpreter_environment;`).
@@ -308,20 +308,15 @@ impl Context {
         // Build new lexenv locally by consing bindings onto the ENTRY-POINT
         // lexenv (not self.lexenv which may have been modified by init forms).
         // Matches GNU eval.c:1167-1186.
+        // In a local, like GNU's `lexenv`: nothing here can collect (see
+        // above), and `self.lexenv` roots it from the install on.
         let mut new_lexenv = lexenv_at_entry;
         for (sym_id, val) in &lexical_bindings {
             let binding_pair = Value::make_cons(
                 crate::emacs_core::eval::lexenv_binding_symbol_value(*sym_id),
                 *val,
             );
-            self.specpdl.push(SpecBinding::GcRoot {
-                value: binding_pair,
-            });
             new_lexenv = Value::make_cons(binding_pair, new_lexenv);
-            match self.specpdl.last_mut() {
-                Some(SpecBinding::GcRoot { value }) => *value = new_lexenv,
-                _ => unreachable!(),
-            }
         }
         // Install the new lexenv atomically.
         self.lexenv = new_lexenv;
@@ -339,7 +334,9 @@ impl Context {
         }
 
         let result = self.sf_progn_value(body);
-        let result = self.unbind_to_with_result(specpdl_count, result);
+        // A let with only lexical bindings leaves exactly its `LexicalEnv`
+        // entry, retired inline; dynamic bindings take the general unwinder.
+        let result = self.unbind_lexenv_frame(specpdl_count, result);
         self.restore_eval_temp_roots_to_sequence(temp_scope);
         result
     }
