@@ -113,7 +113,13 @@ impl RowMeasurer {
                 .ok_or_else(|| failure("Scroll row producer disappeared"))?;
             let rows = snapshot_text_rows(&snapshot);
             let accessible = self.accessible(eval)?;
-            if let Some(index) = snapshot_row_index_for_pos(&rows, origin) {
+            // A point past the right margin of a truncated line is on that
+            // line's row, the same rule screen-line motion resolves by
+            // (src/indent.c:2393-2400); without it the origin looks like a
+            // position the rows never covered and the scroll gives up.
+            if let Some(index) =
+                snapshot_row_index_for_pos_or_truncated_line(&rows, origin, accessible.end_lisp())
+            {
                 let goal = rows[index].y.saturating_add(delta);
                 if delta < 0 && goal < rows[0].y && start > accessible.start_lisp() {
                     start = self.backtrack(eval, start, count)?;
@@ -293,7 +299,8 @@ fn plan_scroll(
         return Ok(None);
     };
     let rows = snapshot_text_rows(&snapshot);
-    let point_index = snapshot_row_index_for_pos(&rows, point);
+    let point_index =
+        snapshot_row_index_for_pos_or_truncated_line(&rows, point, accessible.end_lisp());
     let point_geometry = point_index.map(|index| {
         let row = rows[index];
         let top = row.y - rows[0].y - hidden_top;
@@ -410,10 +417,13 @@ fn plan_scroll(
     });
     let first = *visible.next().unwrap_or(&candidate_rows[0]);
     let last = visible.next_back().copied().unwrap_or(first);
+    // The same rule again: a point past the right margin sits on the truncated
+    // row, which is visible, so the new viewport can keep it.
     let point_stays_visible =
-        snapshot_row_index_for_pos(&candidate_rows, point).is_some_and(|index| {
-            candidate_rows[index].row >= first.row && candidate_rows[index].row <= last.row
-        });
+        snapshot_row_index_for_pos_or_truncated_line(&candidate_rows, point, accessible.end_lisp())
+            .is_some_and(|index| {
+                candidate_rows[index].row >= first.row && candidate_rows[index].row <= last.row
+            });
     let next_point = if point_stays_visible && policy.preserve != PreservePoint::Always {
         point
     } else if let Some(goal) = goal {

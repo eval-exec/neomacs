@@ -71,7 +71,13 @@ answer is the row whose line the origin is still on, bounded by the next row's
 start. Without that widening no row contains the origin, the measured rows are
 judged to exhaust their coverage at end of buffer, and the resolver refuses the
 motion -- which is what left `C-e` unable to reach the end of a truncated line,
-and `window-hscroll` unable to follow point to it.
+and `window-hscroll` unable to follow point to it. The graphical scrolling
+planner asks the same question of the same rows and answers it with the same
+rule, at the three lookups that take a point: the pixel origin, the point's row
+in the measured viewport, and the point-visible test on a candidate viewport. A
+point it cannot place reads as one that has left the window, so the plan either
+recenters around a point already on a visible row or fails with "Scroll origin is
+outside measured source coverage".
 
 Mutable string prefixes are captured by value, not just Lisp object identity.
 The shared `LayoutPrefixInputs` projection records effective buffer-local

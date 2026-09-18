@@ -765,6 +765,63 @@ fn vertical_motion_preserves_a_labeled_accessible_region_during_measurement() {
     );
 }
 
+/// A point past the right margin of a truncated line is on that line's row for
+/// the scrolling planner too.
+///
+/// The planner asks the same "which row holds this position" question motion
+/// does.  A position it cannot place reads as a point that has left the window:
+/// the plan recenters the viewport around it, or -- when the measured rows reach
+/// the end of the buffer -- fails with "Scroll origin is outside measured source
+/// coverage".  GNU walks the display iterator from the start of the origin's
+/// line and backtracks when the walk overshoots a line truncated on the right
+/// (src/indent.c:2393-2400, the same walk `window_scroll_pixel_based` uses),
+/// which puts such a point on the truncated row.
+#[test]
+fn scrolling_places_a_point_past_the_right_margin_on_the_truncated_row() {
+    let mut eval = Context::new();
+    let buffer = eval.buffer_manager().current_buffer().expect("buffer").id();
+    // A long truncated line early, and enough lines after it that the window can
+    // start well below point: the buffer's own end is then inside the rows the
+    // measurement reaches, which is what turns the unplaced origin into a
+    // failure rather than one more measurement.
+    eval.buffer_manager_mut()
+        .get_mut(buffer)
+        .expect("buffer")
+        .insert(&format!(
+            "line\n{}\n{}",
+            "x".repeat(3000),
+            "line\n".repeat(60)
+        ));
+    let frame = eval
+        .frame_manager_mut()
+        .create_frame("scroll-truncated-line", 400, 240, buffer);
+    eval.frame_manager_mut()
+        .get_mut(frame)
+        .expect("frame")
+        .window_system = Some(Value::symbol("neomacs"));
+    let mut query = WindowLayoutQueryEngine::new_without_font_metrics();
+    eval.install_window_layout_query(move |eval, frame, window, scope| {
+        match query.query_window_layout(eval, frame, window, scope) {
+            Ok(query) => WindowLayoutQueryOutcome::Ready(query),
+            Err(error) => WindowLayoutQueryOutcome::Failed(error),
+        }
+    });
+    let result = eval
+        .eval_str(
+            r#"(let ((noninteractive nil) (truncate-lines t))
+                 (set-window-hscroll nil 50)
+                 (goto-char 2500)
+                 (set-window-start nil 307 t)
+                 (scroll-down 1)
+                 (list (window-start) (point)))"#,
+        )
+        .expect("scroll with a point past the right margin of a truncated line");
+    assert_eq!(
+        neovm_core::emacs_core::print::print_value(&result),
+        "(1 2500)"
+    );
+}
+
 /// A position past the right margin of a truncated line belongs to that line's
 /// row.
 ///
