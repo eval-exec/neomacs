@@ -15,6 +15,18 @@ fn interactive_context() -> Context {
     eval
 }
 
+/// Give the terminal UTF-8 keyboard and terminal codings, as mule.el's
+/// `set-locale-environment` does under a UTF-8 locale.  A bare context has
+/// GNU `create_terminal`'s defaults (`no-conversion` and `undecided`), since
+/// no startup Lisp has run.
+fn utf8_locale_terminal(eval: &mut Context) {
+    eval.eval_str(
+        "(progn (set-keyboard-coding-system-internal 'utf-8-unix)
+                (set-terminal-coding-system-internal 'utf-8-unix))",
+    )
+    .expect("setting the terminal codings should evaluate");
+}
+
 fn implemented_text_backends() -> impl Iterator<Item = BufferTextBackendKind> {
     BufferTextBackendKind::implemented_variants()
 }
@@ -1355,6 +1367,7 @@ fn test_format_mode_line_big_z_preserves_raw_unibyte_eol_indicator() {
 fn test_format_mode_line_tty_z_uses_live_coding_manager_state() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
+    utf8_locale_terminal(&mut eval);
     let buffer_id = eval.buffers.create_buffer("tty-coding-test");
     eval.buffers.set_current(buffer_id);
     eval.frames
@@ -1381,6 +1394,7 @@ fn test_format_mode_line_tty_z_uses_live_coding_manager_state() {
 fn test_format_mode_line_tty_z_uses_prefer_utf8_declared_mnemonic() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
+    utf8_locale_terminal(&mut eval);
     let buffer_id = eval.buffers.create_buffer("tty-prefer-utf8-coding-test");
     eval.buffers.set_current(buffer_id);
     eval.frames
@@ -1435,6 +1449,7 @@ fn test_format_mode_line_tty_z_orders_keyboard_before_terminal() {
 fn test_format_mode_line_tty_z_reads_visible_buffer_file_coding_value_without_local_flag() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
+    utf8_locale_terminal(&mut eval);
     let buffer_id = eval.buffers.create_buffer("tty-coding-visible-slot-test");
     eval.buffers.set_current(buffer_id);
     eval.frames
@@ -1465,6 +1480,7 @@ fn test_format_mode_line_tty_z_reads_visible_buffer_file_coding_value_without_lo
 fn test_format_mode_line_tty_big_z_uses_live_coding_manager_state_and_eol_indicator() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
+    utf8_locale_terminal(&mut eval);
     let buffer_id = eval.buffers.create_buffer("tty-coding-big-z-test");
     eval.buffers.set_current(buffer_id);
     eval.frames

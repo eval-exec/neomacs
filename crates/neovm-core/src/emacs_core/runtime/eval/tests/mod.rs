@@ -1537,6 +1537,10 @@ fn read_char_exposes_raw_tty_escape_without_a_native_timeout() {
 fn read_char_decodes_utf8_tty_input_split_across_host_reads() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
+    // A UTF-8 locale's keyboard coding (`set-locale-environment`); a bare
+    // context has GNU `create_terminal`'s `no-conversion`.
+    ev.eval_str("(set-keyboard-coding-system-internal 'utf-8-unix)")
+        .expect("set the keyboard coding");
     let (tx, rx) = crossbeam_channel::unbounded();
     ev.input_rx = Some(rx);
 
