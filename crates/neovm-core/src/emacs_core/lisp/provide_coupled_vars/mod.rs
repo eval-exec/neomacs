@@ -92,9 +92,11 @@
 //! Ledger 199.
 
 use CoupledFeature::{
-    Android, Cairo, DbusBind, DynamicSetting, Gtk, Haiku, Motif, MsDos, NativeCompile, Ns, Pgtk,
-    W32, X, XwidgetInternal,
+    Android, Cairo, DynamicSetting, Gtk, Haiku, Motif, MsDos, NativeCompile, Ns, Pgtk, W32, X,
+    XwidgetInternal,
 };
+#[cfg(not(neomacs_have_dbus))]
+use CoupledFeature::DbusBind;
 
 /// The single question this build can answer that decides whether GNU's
 /// declaration site could have compiled.
@@ -286,14 +288,23 @@ pub static PROVIDE_COUPLED_VARIABLES: &[ProvideCoupledVariable] = &[
     absent("comp-sanitizer-active", &[NativeCompile], "comp.c:5813"),
     absent("comp-subr-arities-h", &[NativeCompile], "comp.c:5805"),
     absent("comp-subr-list", &[NativeCompile], "comp.c:5724"),
+    #[cfg(not(neomacs_have_dbus))]
     absent("dbus-compiled-version", &[DbusBind], "dbusbind.c:2069"),
+    #[cfg(not(neomacs_have_dbus))]
     absent("dbus-debug", &[DbusBind], "dbusbind.c:2159"),
+    #[cfg(not(neomacs_have_dbus))]
     absent("dbus-message-type-error", &[DbusBind], "dbusbind.c:2108"),
+    #[cfg(not(neomacs_have_dbus))]
     absent("dbus-message-type-invalid", &[DbusBind], "dbusbind.c:2092"),
+    #[cfg(not(neomacs_have_dbus))]
     absent("dbus-message-type-method-call", &[DbusBind], "dbusbind.c:2097"),
+    #[cfg(not(neomacs_have_dbus))]
     absent("dbus-message-type-method-return", &[DbusBind], "dbusbind.c:2102"),
+    #[cfg(not(neomacs_have_dbus))]
     absent("dbus-message-type-signal", &[DbusBind], "dbusbind.c:2113"),
+    #[cfg(not(neomacs_have_dbus))]
     absent("dbus-registered-objects-table", &[DbusBind], "dbusbind.c:2118"),
+    #[cfg(not(neomacs_have_dbus))]
     absent("dbus-runtime-version", &[DbusBind], "dbusbind.c:2078"),
     absent("dos-codepage", &[MsDos], "dosfns.c:719"),
     absent("dos-country-code", &[MsDos], "dosfns.c:715"),

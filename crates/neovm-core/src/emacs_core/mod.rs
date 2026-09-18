@@ -303,6 +303,8 @@ pub mod process;
 pub(crate) mod profiler;
 #[path = "system/shell_file_name/mod.rs"]
 pub(crate) mod shell_file_name;
+#[path = "system/dbusbind/mod.rs"]
+pub(crate) mod dbusbind;
 #[path = "system/sqlite/mod.rs"]
 pub(crate) mod sqlite;
 #[path = "system/timefns/mod.rs"]

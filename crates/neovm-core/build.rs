@@ -40,6 +40,7 @@ fn main() {
     );
 
     detect_lcms2();
+    detect_dbus();
     detect_wkwebview();
     ensure_generated_unicode_lisp(&project_root);
     generate_x11_color_table(&project_root, &manifest_dir);
@@ -140,6 +141,42 @@ fn detect_wkwebview() {
         && std::env::var_os("CARGO_FEATURE_WEBVIEW").is_some()
     {
         println!("cargo:rustc-cfg=neomacs_have_wkwebview");
+    }
+}
+
+/// Whether this build has a libdbus transport for `dbusbind`.
+///
+/// GNU's `configure.ac:3921-3942` sets `HAVE_DBUS` when `dbus-1 >= 1.0`
+/// links. The `dbus` crate is a Unix dependency (Linux + macOS); Windows
+/// stays the `--without-dbus` configuration until a socket watch arm exists.
+/// `c_features` reads this cfg so `(featurep 'dbusbind)` cannot go true
+/// without the library.
+fn detect_dbus() {
+    println!("cargo:rustc-check-cfg=cfg(neomacs_have_dbus)");
+    println!("cargo:rerun-if-env-changed=PKG_CONFIG");
+    println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
+    println!("cargo:rerun-if-env-changed=NEOMACS_DISABLE_DBUS");
+
+    // Target, not host: Cargo sets `CARGO_CFG_UNIX` for the crate being built.
+    if std::env::var_os("CARGO_CFG_UNIX").is_none() {
+        return;
+    }
+    if std::env::var_os("NEOMACS_DISABLE_DBUS").is_some() {
+        return;
+    }
+
+    println!("cargo:rustc-cfg=neomacs_have_dbus");
+    if let Ok(library) = pkg_config::Config::new()
+        .atleast_version("1.0")
+        .cargo_metadata(false)
+        .probe("dbus-1")
+    {
+        if !library.version.is_empty() {
+            println!(
+                "cargo:rustc-env=NEOMACS_DBUS_COMPILED_VERSION={}",
+                library.version
+            );
+        }
     }
 }
 

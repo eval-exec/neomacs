@@ -93,8 +93,6 @@ const DECLARED_HERE_ONLY: &str = "
 /// the reason recorded there.  All twelve are pinned so the declines stay
 /// visible.
 const DECLARED_BY_GNU_ONLY: &str = "
-  dbus--fd-close dbus--fd-open dbus--init-bus
-  dbus--registered-fds dbus-get-unique-name dbus-message-internal
   x-file-dialog x-get-page-setup x-gtk-debug
   x-page-setup-dialog x-print-frames-dialog x-select-font
 ";

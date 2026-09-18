@@ -1148,31 +1148,40 @@ impl Context {
             // list minus exactly `dbus-event'.  `sleep-event' and
             // `toolkit-theme-changed' were missing from the base list here and
             // are guarded by nothing in GNU; both restored, ledger 192.
-            Value::list(vec![
-                Value::symbol("sleep-event"),
-                Value::symbol("thread-event"),
-                Value::symbol("file-notify"),
-                Value::symbol("select-window"),
-                Value::symbol("help-echo"),
-                Value::symbol("move-frame"),
-                Value::symbol("iconify-frame"),
-                Value::symbol("make-frame-visible"),
-                Value::symbol("focus-in"),
-                Value::symbol("focus-out"),
-                Value::symbol("config-changed-event"),
-                Value::symbol("selection-request"),
-                Value::symbol("monitors-changed"),
-                Value::symbol("toolkit-theme-changed"),
-            ]),
+            Value::list({
+                let mut events = vec![
+                    Value::symbol("sleep-event"),
+                    Value::symbol("thread-event"),
+                    Value::symbol("file-notify"),
+                ];
+                // GNU conses `dbus-event` under `#ifdef HAVE_DBUS` after the
+                // base list and before file-notify. Newest-first with both:
+                // sleep, thread, file-notify, dbus-event, <base>.
+                std::cfg_select! {
+                    neomacs_have_dbus => {
+                        events.insert(3, Value::symbol("dbus-event"));
+                    }
+                    _ => {}
+                }
+                events.extend([
+                    Value::symbol("select-window"),
+                    Value::symbol("help-echo"),
+                    Value::symbol("move-frame"),
+                    Value::symbol("iconify-frame"),
+                    Value::symbol("make-frame-visible"),
+                    Value::symbol("focus-in"),
+                    Value::symbol("focus-out"),
+                    Value::symbol("config-changed-event"),
+                    Value::symbol("selection-request"),
+                    Value::symbol("monitors-changed"),
+                    Value::symbol("toolkit-theme-changed"),
+                ]);
+                events
+            }),
         );
         obarray.make_special("while-no-input-ignore-events");
-        // GNU's nine `dbusbind.c' DEFVARs -- `dbus-message-type-*',
-        // `dbus-debug', `dbus-compiled-version', `dbus-runtime-version',
-        // `dbus-registered-objects-table' (src/dbusbind.c:2069-2159) -- are
-        // inside `#ifdef HAVE_DBUS' with the rest of the file, and this build
-        // has no D-Bus transport, so it declares none of them (ledger 192).
-        // `lisp/net/dbus.el:40-46' declares them bare for exactly this build,
-        // and `:53' supplies `dbus-debug'.
+        // GNU's nine `dbusbind.c' DEFVARs are installed from
+        // `system/dbusbind` when `cfg(neomacs_have_dbus)`.
         obarray.set_symbol_value("deactivate-mark", Value::NIL);
         obarray.make_special("deactivate-mark");
         obarray.make_buffer_local("deactivate-mark", true);
@@ -2026,11 +2035,18 @@ impl Context {
             Value::symbol("focus-out"),
             Value::symbol("handle-focus-out"),
         );
-        // GNU's `dbus-event' entry (src/keyboard.c:14572-14576) is inside
-        // `#ifdef HAVE_DBUS', as are its three neighbours -- the DEFSYM
-        // (`:13477'), the `while-no-input-ignore-events' cons (`:13325') and
-        // the `DBUS_EVENT' ignore-event case (`:13370').  This build has no
-        // D-Bus transport, so it installs none of them (ledger 192).
+        // GNU's `dbus-event' entry (src/keyboard.c:14576-14579) is inside
+        // `#ifdef HAVE_DBUS'.
+        std::cfg_select! {
+            neomacs_have_dbus => {
+                list_keymap_define(
+                    special_event_map,
+                    Value::symbol("dbus-event"),
+                    Value::symbol("dbus-handle-event"),
+                );
+            }
+            _ => {}
+        }
         // GNU keyboard.c installs file notification events in
         // `special-event-map` when file notification support is present.
         list_keymap_define(

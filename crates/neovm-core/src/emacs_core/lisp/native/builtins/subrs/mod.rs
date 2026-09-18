@@ -30,6 +30,8 @@ const LOCALIZED_SUBR_CATALOG: &[SubrBatch] = &[
     crate::emacs_core::indent::SUBRS,
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     file_notify::SUBRS,
+    #[cfg(neomacs_have_dbus)]
+    crate::emacs_core::dbusbind::SUBRS,
     crate::emacs_core::sqlite::SUBRS,
     crate::emacs_core::font::SUBRS,
     crate::emacs_core::neo::effects::SUBRS,
@@ -5263,6 +5265,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         }
         _ => {}
     }
+    crate::emacs_core::dbusbind::register_subrs(ctx);
     ctx.register_subr(SubrSpec::new(
         "lock-buffer",
         NativeFn::ContextVec(crate::emacs_core::filelock::builtin_lock_buffer),
@@ -8260,11 +8263,9 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
 
     // -- DBus --
     //
-    // None.  GNU's six `dbusbind.c' subrs are inside `#ifdef HAVE_DBUS'
-    // (src/dbusbind.c:21, syms_of_dbusbind at :2003-2010) and this build links
-    // no libdbus.  Ledger 192 deleted the three that stood here: they held no
-    // D-Bus code, and answered a hardcoded `2', a fabricated `":1.0"' unique
-    // name and an invented `dbus-event' reply from "org.freedesktop.DBus".
+    // Registered from `emacs_core::dbusbind` (GNU `syms_of_dbusbind`). The six
+    // primitives exist only under `cfg(neomacs_have_dbus)`, matching
+    // `#ifdef HAVE_DBUS`.
 
     // -- Documentation/help --
     ctx.register_subr(SubrSpec::new(

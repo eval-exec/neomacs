@@ -174,12 +174,11 @@ pub(crate) fn gnu_c_features() -> [GnuCFeature; 30] {
             name: "dbusbind",
             gnu_site: "src/dbusbind.c:2175",
             gnu_guard: BuildOption("HAVE_DBUS"),
-            here: NotBuilt {
-                because: "there is no D-Bus transport here at all -- no libdbus, no \
-                          connection, no serial numbers.  GNU's `configure.ac:3921-3942' \
-                          sets HAVE_DBUS only when `dbus-1 >= 1.0' links, and the whole \
-                          of `src/dbusbind.c' is inside that `#ifdef'.  Ledger 192 \
-                          deleted the three fabricating subrs that stood here",
+            here: DetectedAtBuildTime {
+                cfg: "neomacs_have_dbus -- neovm-core/build.rs probes dbus-1 >= 1.0 \
+                      exactly as `configure.ac:3921-3942' does, and \
+                      system/dbusbind implements the six subrs over libdbus",
+                present: cfg!(neomacs_have_dbus),
             },
         },
         GnuCFeature {

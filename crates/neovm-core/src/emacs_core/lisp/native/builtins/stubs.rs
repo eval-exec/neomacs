@@ -324,6 +324,7 @@ pub(super) fn reset_stubs_thread_locals() {
     NEOMACS_PRIMARY_SELECTION_TEXT.with(|slot| *slot.borrow_mut() = None);
     NEOMACS_MONITORS.with(|slot| slot.borrow_mut().clear());
     super::file_notify::reset_file_notify_thread_locals();
+    crate::emacs_core::dbusbind::reset_thread_locals();
 }
 
 thread_local! {

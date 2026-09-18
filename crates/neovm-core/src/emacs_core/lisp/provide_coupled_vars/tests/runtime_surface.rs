@@ -33,13 +33,21 @@ fn the_features_the_table_is_conditioned_on_match_the_linked_adapters() {
     // become GNU-consistent -- the variables are bound because the feature is
     // present, which is exactly what GNU does.
     let mut expected = ["nil"; 14];
-    if cfg!(neomacs_have_wkwebview) {
-        expected[10] = "t";
+    std::cfg_select! {
+        neomacs_have_wkwebview => expected[10] = "t",
+        _ => {}
+    }
+    std::cfg_select! {
+        neomacs_have_dbus => expected[11] = "t",
+        _ => {}
     }
     // Linux's owned GSettings adapter supplies dynamic-setting even though
     // this build does not link GNU's GTK/X window-system implementation.
-    if cfg!(all(target_os = "linux", feature = "desktop-font-settings")) {
-        expected[13] = "t";
+    std::cfg_select! {
+        all(target_os = "linux", feature = "desktop-font-settings") => {
+            expected[13] = "t";
+        }
+        _ => {}
     }
     let expected = format!("OK ({})", expected.join(" "));
     assert_eq!(result, expected);

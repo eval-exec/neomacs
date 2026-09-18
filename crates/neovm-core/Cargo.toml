@@ -97,6 +97,9 @@ windows-sys.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 inotify.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+dbus = { version = "0.9", default-features = false, features = ["vendored"] }
+
 [features]
 default = ["jit", "sqlite"]
 sqlite = ["dep:rusqlite"]

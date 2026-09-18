@@ -213,18 +213,26 @@ fn the_nsterm_objective_c_rows_are_in_the_table() {
 /// The regression pin for ledger 192: putting the name back requires editing
 /// this row, and the only variants that provide it demand a citation.
 #[test]
-fn dbusbind_is_absent_and_its_row_names_the_missing_transport() {
+fn dbusbind_row_follows_the_libdbus_probe() {
     crate::test_utils::init_test_tracing();
     let row = gnu_c_features()
         .into_iter()
         .find(|f| f.name == "dbusbind")
         .expect("the table has a dbusbind row");
     assert_eq!(row.gnu_guard, GnuGuard::BuildOption("HAVE_DBUS"));
-    assert!(!row.here.provided());
-    let HereDecision::NotBuilt { because } = row.here else {
-        panic!("dbusbind is provided again: {:?}", row.here);
+    let present = std::cfg_select! {
+        neomacs_have_dbus => true,
+        _ => false,
     };
-    assert!(because.contains("no D-Bus transport"), "{because:?}");
+    assert_eq!(row.here.provided(), present);
+    match row.here {
+        HereDecision::DetectedAtBuildTime {
+            present: detected, ..
+        } => {
+            assert_eq!(detected, present);
+        }
+        other => panic!("dbusbind must be DetectedAtBuildTime, got {other:?}"),
+    }
 }
 
 /// The derived list includes this build's implemented capabilities in GNU's
@@ -238,27 +246,40 @@ fn the_derived_list_keeps_gnus_relative_order() {
     crate::test_utils::init_test_tracing();
     let names = crate::emacs_core::c_features::initial_feature_names();
     let mut expected = vec!["threads"];
-    if cfg!(neomacs_have_wkwebview) {
-        // macOS has the native WKWebView backend; GNU's table puts
-        // xwidget-internal immediately after threads.
-        expected.push("xwidget-internal");
+    std::cfg_select! {
+        neomacs_have_wkwebview => {
+            // macOS has the native WKWebView backend; GNU's table puts
+            // xwidget-internal immediately after threads.
+            expected.push("xwidget-internal");
+        }
+        _ => {}
+    }
+    // GNU: dbusbind then gfilenotify then kqueue then inotify (emacs.c:2478-2465),
+    // features newest-first so dbusbind sits immediately after xwidget/threads
+    // and before inotify/kqueue.
+    std::cfg_select! {
+        neomacs_have_dbus => expected.push("dbusbind"),
+        _ => {}
     }
     // GNU calls `syms_of_inotify` then `syms_of_kqueue` (src/emacs.c:2465,
     // :2469), and `features` reads newest-provided first, so kqueue's slot is
     // immediately before inotify's; a build provides at most one of the two.
-    if cfg!(target_os = "macos") {
-        expected.push("kqueue");
+    std::cfg_select! {
+        target_os = "macos" => expected.push("kqueue"),
+        target_os = "linux" => expected.push("inotify"),
+        _ => {}
     }
-    if cfg!(target_os = "linux") {
-        expected.push("inotify");
+    std::cfg_select! {
+        neomacs_have_lcms2 => expected.push("lcms2"),
+        _ => {}
     }
-    if cfg!(neomacs_have_lcms2) {
-        expected.push("lcms2");
-    }
-    if cfg!(all(target_os = "linux", feature = "desktop-font-settings")) {
-        // GNU syms_of_xsettings provides system-font-setting before
-        // dynamic-setting (xsettings.c:1409,1417); features is newest first.
-        expected.extend(["dynamic-setting", "system-font-setting"]);
+    std::cfg_select! {
+        all(target_os = "linux", feature = "desktop-font-settings") => {
+            // GNU syms_of_xsettings provides system-font-setting before
+            // dynamic-setting (xsettings.c:1409,1417); features is newest first.
+            expected.extend(["dynamic-setting", "system-font-setting"]);
+        }
+        _ => {}
     }
     expected.extend([
         "multi-tty",
@@ -287,7 +308,7 @@ fn the_derived_list_keeps_gnus_relative_order() {
 /// missing from that base list here unmeasured, which is how this pin found
 /// them.
 #[test]
-fn without_a_dbus_transport_the_whole_dbusbind_surface_is_absent() {
+fn dbusbind_lisp_surface_matches_the_probe() {
     crate::test_utils::init_test_tracing();
     let result = runtime_startup_eval_one(
         "(list
@@ -307,17 +328,33 @@ fn without_a_dbus_transport_the_whole_dbusbind_surface_is_absent() {
            (lookup-key special-event-map [dbus-event])
            while-no-input-ignore-events)",
     );
-    assert_eq!(
-        result,
-        "OK (nil (nil nil nil nil nil nil) \
+    std::cfg_select! {
+        neomacs_have_dbus => {
+            assert!(
+                result.starts_with(
+                    "OK (t (t t t t t t) (t t t t t t t t t) (dbus-error error)"
+                ),
+                "{result}"
+            );
+            assert!(
+                result.contains("dbus-event"),
+                "while-no-input-ignore-events should include dbus-event: {result}"
+            );
+        }
+        _ => {
+            assert_eq!(
+                result,
+                "OK (nil (nil nil nil nil nil nil) \
          (nil nil nil nil nil nil nil nil nil) nil nil \
          (sleep-event thread-event file-notify select-window help-echo \
          move-frame iconify-frame make-frame-visible focus-in focus-out \
          config-changed-event selection-request monitors-changed \
          toolkit-theme-changed))",
-        "GNU without HAVE_DBUS declares none of this; a value invented here is \
+                "GNU without HAVE_DBUS declares none of this; a value invented here is \
          believed by every `(featurep 'dbusbind)' caller in GNU's own Lisp"
-    );
+            );
+        }
+    }
 }
 
 /// The anti-vacuity half: the same probe run against features this build

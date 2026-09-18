@@ -351,12 +351,23 @@ fn obarray_file_missing_conditions() {
 /// arrives when `dbus.el` does, as it does in GNU without the option.
 /// Ledger 192.
 #[test]
-fn obarray_has_no_dbus_error_condition_without_a_dbus_transport() {
+fn obarray_dbus_error_condition_follows_the_transport() {
     crate::test_utils::init_test_tracing();
     let mut ob = Obarray::new();
     init_standard_errors(&mut ob);
-    assert_eq!(ob.get_property("dbus-error", "error-conditions"), None);
-    assert_eq!(ob.get_property("dbus-error", "error-message"), None);
+    std::cfg_select! {
+        neomacs_have_dbus => {
+            let conds = ob
+                .get_property("dbus-error", "error-conditions")
+                .expect("dbus-error is registered with the transport");
+            assert!(iter_symbol_list(&conds).contains(&"dbus-error".to_string()));
+            assert!(iter_symbol_list(&conds).contains(&"error".to_string()));
+        }
+        _ => {
+            assert_eq!(ob.get_property("dbus-error", "error-conditions"), None);
+            assert_eq!(ob.get_property("dbus-error", "error-message"), None);
+        }
+    }
     // Anti-vacuity: a neighbour registered by the same function is still
     // there, so the two `None`s above are about `dbus-error` and not about a
     // table that never got built.
