@@ -26885,3 +26885,28 @@ fn deep_interpreted_recursion_through_builtins_reaches_gnus_nesting_limit() {
         "(300 150 (excessive-lisp-nesting 1601))"
     );
 }
+
+/// A signal that crosses interpreted frames with dynamic bindings enters the
+/// debugger once, at signal time, while the innermost binding is live, and
+/// every binding is unwound afterwards.  GNU Emacs 31.1 answers `((2) 0)`.
+#[test]
+fn a_signal_enters_the_debugger_once_with_the_innermost_binding_live() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    eval.set_lexical_binding(true);
+    eval.eval_str("(defvar mb-v 0)").expect("defvar");
+    let value = eval
+        .eval_str(
+            r#"(let* ((seen nil)
+                      (debug-on-error t)
+                      (debugger (lambda (&rest _)
+                                  (setq seen (cons mb-v seen))
+                                  (throw 'mb-out seen))))
+                 (list (catch 'mb-out
+                         (let ((mb-v 1))
+                           (funcall (lambda () (let ((mb-v 2)) (car 1))))))
+                       mb-v))"#,
+        )
+        .expect("the case should evaluate");
+    assert_eq!(crate::emacs_core::print::print_value(&value), "((2) 0)");
+}

@@ -111,12 +111,22 @@ impl Context {
         self.dispatch_signal(*sig).map(Box::new)
     }
 
-    /// `#[inline]`: this runs on every call return; the Ok arm is a pure
-    /// pass-through that should vanish into the caller instead of paying an
-    /// out-of-line 24-byte Result round trip per call (measured ~2.3% flat
-    /// of a call-heavy interpreter benchmark as a standalone function).
-    #[inline]
+    /// Every call return passes here.  The answer for anything but a signal
+    /// -- a value, a throw, a thread block -- is decided inline by one tag
+    /// test; the dispatch itself stays out of line.  Marked `#[inline]` alone,
+    /// the whole match stayed out of line at the interpreter's cons-form site:
+    /// a 16-byte `EvalResult` round trip per form.
+    #[inline(always)]
     pub(crate) fn dispatch_signal_result_if_needed(&mut self, result: EvalResult) -> EvalResult {
+        if !matches!(result, Err(Flow::Signal(_))) {
+            return result;
+        }
+        self.dispatch_signal_result_cold(result)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn dispatch_signal_result_cold(&mut self, result: EvalResult) -> EvalResult {
         match result {
             Err(Flow::Signal(sig)) => match self.dispatch_signal_if_needed(sig) {
                 Ok(dispatched) => Err(Flow::Signal(dispatched)),
