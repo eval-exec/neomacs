@@ -1,12 +1,28 @@
 #![cfg(unix)]
 //! Reproduction: the Doom mode line orders `which-key` and `better-jumper`
-//! oppositely in Neomacs and GNU.
+//! oppositely in Neomacs and GNU — when the first input follows startup too
+//! closely.
 //!
-//! REPRODUCED (see the dump this test prints): with both modes enabled in both
-//! editors and identical alist membership (41 entries), the ORDER differs --
+//! ROOT CAUSE (found; see the idle-probe this test arms).  Doom enables the
+//! two modes through DIFFERENT deferred paths that race:
 //!
-//!   GNU: (better-jumper-local-mode which-key-mode ...)   mode line "... better-jumper WK ..."
-//!   NEO: (which-key-mode better-jumper-local-mode ...)   mode line "... WK better-jumper ..."
+//!   * `which-key` — a 1s REPEATING idle timer (doom-emacs.el's which-key
+//!     `letrec` hack) that enables `which-key-mode` during idle, before any
+//!     input;
+//!   * `better-jumper` — `doom-first-input-hook` (chained onto
+//!     `pre-command-hook` at depth -101 by `doom-run-hook-on`).
+//!
+//! So which file loads first is decided by whether at least
+//! `which-key-idle-delay' (1s) of idle separates startup from the first
+//! keypress.  A test that sends input on the heels of startup lets the two
+//! editors straddle that boundary differently (one's timer has fired, the
+//! other's has not), and their `minor-mode-alist` orders — hence mode lines
+//! — diverge.  It is a Doom-internal race, not an editor ordering bug:
+//! settled idle before the first input, both editors take the timer path
+//! and agree; the armed call log shows
+//! `(idle-probe …) (call which-key-mode) (call better-jumper-mode . doom/escape)`
+//! identically on both sides.  The face-color comparison now settles past
+//! the delay before its first keypress for exactly this reason.
 //!
 //! WHY THE MODE LINE ANSWERS A LOAD-ORDER QUESTION.  The mode line's
 //! minor-mode segment is `minor-mode-alist` order verbatim: `bindings.el`
@@ -16,19 +32,18 @@
 //! order is reverse LOAD order, and reading it answers "which file loaded
 //! first" with no grid diff.
 //!
-//! WHAT IS ALREADY RULED OUT (each checked against GNU, all identical):
+//! WHAT WAS RULED OUT ALONG THE WAY (each checked against GNU, identical):
 //!   * `add-hook` default/append/depth, `add-to-list` default/append
 //!   * `define-minor-mode :lighter` -> `minor-mode-alist` ordering
 //!   * `mode-line--minor-modes` on all four `mode-line-collapse-minor-modes` branches
-//! so the divergence is neither the list primitives nor the mode-line
-//! construction -- it is WHICH FILE LOADS FIRST.
+//!   * `doom-first-input-hook` contents at startup (byte-identical lists)
 //!
-//! WHY THIS NEEDS A PTY AND NOT `--batch`: Doom defers both modes to
-//! `doom-first-input-hook`, which fires on the first *input*; batch has no
-//! command loop.  Forcing the hook by hand in batch makes both editors agree
-//! vacuously (verified: both report `which-key=nil better-jumper=nil` and
-//! byte-identical alists), and reading the hook afterwards is too late --
-//! it reports nil in both editors once the first input has been consumed.
+//! WHY THIS NEEDS A PTY AND NOT `--batch`: the race is between an idle
+//! timer and the first *input*; batch has no command loop.  Forcing the
+//! hook by hand in batch makes both editors agree vacuously (verified: both
+//! report `which-key=nil better-jumper=nil` and byte-identical alists), and
+//! reading the hook afterwards is too late — it reports nil in both editors
+//! once the first input has been consumed.
 
 use crate::support;
 use neomacs_tui_tests::{TuiLaunch, TuiSession, TuiTempDirectory};
@@ -80,17 +95,18 @@ fn read_state_file(state: &TuiTempDirectory, name: &str) -> String {
         .unwrap_or_else(|_| "<unreadable>".to_owned())
 }
 
-// Ignored on purpose: this FAILS while the Doom ordering bug is live, and a
-// permanently-red test in the default run would hide real regressions behind
-// it.  Run it explicitly to get the reproduction:
+// Ignored on purpose: the root cause is recorded above and the face-color
+// comparison now settles past `which-key-idle-delay' before its first
+// keypress, so this diagnostic (which arms call/load traces and an idle
+// probe, then drives a first input itself) is not part of the default run.
+// Run it explicitly when re-investigating:
 //
-//   cargo nextest run -p neomacs-tui-tests --run-ignored \
+//   cargo nextest run -p neomacs-tui-tests --run-ignored=only \
 //     -E 'test(doom_minor_mode_order_matches_gnu)' --success-output immediate
 //
-// Note it is timing-sensitive: adding any work before the first input (an
-// extra `M-:` eval, say) can make both editors agree, because that eval is
-// itself a first input and fires the load path early.  If it passes, do not
-// conclude the bug is fixed -- remove the perturbation and run again.
+// It settles past the delay before its own first input, so a PASS says both
+// editors took the same deferred path; a FAIL with diverging calls says the
+// race moved again — read the dump before concluding anything.
 #[test]
 #[ignore = "reproduction aid for a live Doom mode-line ordering bug; see the module docs"]
 fn doom_minor_mode_order_matches_gnu() {
@@ -105,11 +121,41 @@ fn doom_minor_mode_order_matches_gnu() {
     let docs_library = doom.tree().join("lisp/lib/docs.el");
     assert!(index.is_file(), "fixture has no docs/index.org");
 
+    // ARM THE LOAD TRACE WITHOUT CREATING A FIRST INPUT.  The modes are
+    // defined when their files load, and that happens during first input;
+    // arming via M-: would itself be a first input and perturb the very
+    // order under test (see the module docs).  A command-line --eval runs
+    // after init but before any keypress, so the hook is installed before
+    // the first input and the capture is honest.
+    let arm = r#"(progn
+      (setq mmo-loads nil mmo-calls nil)
+      (add-hook 'after-load-functions
+                (lambda (f) (push (file-name-nondirectory f) mmo-loads)))
+      (run-with-idle-timer 1.0 nil
+        (lambda ()
+          (push (cons 'idle-probe
+                      (list (cons 'this-command this-command)
+                            (cons 'single-command-keys
+                                  (and (vectorp (this-single-command-keys))
+                                       (length (this-single-command-keys))))))
+                mmo-calls)))
+      (dolist (fn '(better-jumper-mode which-key-mode savehist-mode global-hl-line-mode))
+        (let ((orig (symbol-function fn)) (name fn))
+          (fset name
+                (lambda (&rest args)
+                  (push (cons 'call (cons name this-command)) mmo-calls)
+                  (apply orig args)))))
+      (with-temp-file (expand-file-name "hook-at-startup.txt" (getenv "DOOMLOCALDIR"))
+        (insert (format "%S" (and (boundp 'doom-first-input-hook)
+                                  doom-first-input-hook))))
+      "armed")"#;
     let document_args = [
         OsString::from("--load"),
         docs_library.into_os_string(),
         index.into_os_string(),
         OsString::from("--eval=(goto-char(point-min))"),
+        OsString::from("--eval"),
+        OsString::from(arm),
     ];
 
     let gnu_state = TuiTempDirectory::new("mmo-gnu-");
@@ -168,15 +214,11 @@ fn doom_minor_mode_order_matches_gnu() {
         }
     }
 
-    // ARM THE LOAD TRACE BEFORE THE FIRST INPUT.  The modes are defined when
-    // their files load, and that happens during first input, so the trace must
-    // already be installed -- reading `doom-first-input-hook` afterwards is
-    // too late (it reports nil in both editors).
-    let arm = "(progn (setq mmo-loads nil) \
-               (add-hook 'after-load-functions (lambda (f) (push (file-name-nondirectory f) mmo-loads))) 'armed)";
-    support::eval_expression_one(&mut gnu, arm);
-    support::eval_expression_one(&mut neo, arm);
-    read_both(&mut gnu, &mut neo, Duration::from_secs(2));
+    // The load trace was armed by the command-line --eval above; nothing to
+    // do here except settle before the first input.
+
+    // Give the 1s idle probe time to fire (or not) before any input.
+    read_both(&mut gnu, &mut neo, Duration::from_secs(4));
 
     // THE STEP BATCH CANNOT DO: a real first input.
     send_both(&mut gnu, &mut neo, "C-g");
@@ -199,7 +241,7 @@ fn doom_minor_mode_order_matches_gnu() {
 
     // The decisive read: the order the two files actually loaded in.
     let dump_loads = "(with-temp-file (expand-file-name \"loads.txt\" (getenv \"DOOMLOCALDIR\")) \
-         (insert (format \"%S\" (reverse mmo-loads))))";
+         (insert (format \"loads:%S\\ncalls:%S\" (reverse mmo-loads) (reverse mmo-calls))))";
     support::eval_expression_one(&mut gnu, dump_loads);
     support::eval_expression_one(&mut neo, dump_loads);
     read_both(&mut gnu, &mut neo, Duration::from_secs(3));
@@ -221,6 +263,11 @@ fn doom_minor_mode_order_matches_gnu() {
     };
 
     eprintln!("\n=== REPRODUCTION ===");
+    eprintln!(
+        "hook-at-startup: GNU={} NEO={}",
+        read_state_file(&gnu_state, "hook-at-startup.txt"),
+        read_state_file(&neo_state, "hook-at-startup.txt")
+    );
     eprintln!("probe(which-key,better-jumper,len): GNU={gnu_probe}  NEO={neo_probe}");
     eprintln!("GNU mode line: {gnu_row}");
     eprintln!("NEO mode line: {neo_row}");

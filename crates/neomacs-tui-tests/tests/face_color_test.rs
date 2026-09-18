@@ -214,6 +214,16 @@ fn index_org_has_face_colours() {
 
     // Clear any startup warning window or message after the file action has
     // completed.  The command-line eval has already moved both buffers to top.
+    //
+    // First, settle idle past `which-key-idle-delay' (1s) BEFORE any input:
+    // Doom enables which-key through a 1s idle timer (doom-emacs.el's
+    // which-key letrec) and better-jumper through `doom-first-input-hook',
+    // so which of the two loads first is decided by whether a second of
+    // idle separates startup from the first keypress.  Sending C-g on the
+    // heels of startup lets the editors straddle that boundary differently
+    // and their minor-mode-alist orders diverge; letting both idle first
+    // makes both take the timer path and the compared state deterministic.
+    read_both(&mut gnu, &mut neo, Duration::from_secs(3));
     send_both(&mut gnu, &mut neo, "C-g");
     read_both(&mut gnu, &mut neo, Duration::from_secs(1));
     let has_help_title = |grid: &[String]| {
