@@ -12067,6 +12067,12 @@ fn a_utf_16_signature_survives_its_own_null_bytes_in_a_process_read() {
     let sh = find_bin("sh");
     let result = eval_one(&format!(
         r#"(progn
+             ;; Each chunk reaches the pipe in ONE write: bash's printf
+             ;; writes "\r\0\n\0" as "\r\0\n" and "\0", and a read that
+             ;; lands between them sees a CR before half an LF, which GNU
+             ;; too decodes as a Mac line end.
+             (defun pw156p-once (bytes)
+               (format "f=$(mktemp) && printf %s > \"$f\" && cat \"$f\"; rm -f \"$f\"" bytes))
              (defun pw156p-run (script)
                (let ((buf (generate-new-buffer " *pw156p*")))
                  (unwind-protect
@@ -12082,12 +12088,14 @@ fn a_utf_16_signature_survives_its_own_null_bytes_in_a_process_read() {
              (let ((default-process-coding-system '(undecided . utf-8-unix))
                    (coding-system-for-read 'undecided))
                (list
-                (pw156p-run "printf '\\377\\376a\\0\\r\\0\\n\\0'")
-                (pw156p-run "printf '\\376\\377\\0a\\0\\r\\0\\n'")
-                (pw156p-run "printf 'a\\0b\\0c\\0d\\0'")
-                (pw156p-run "printf 'a\\0b\\r\\n'")
-                (pw156p-run "printf '\\377\\376a\\0\\r'")
-                (pw156p-run "printf '\\377\\376a\\0'; sleep 0.7; printf '\\r\\0\\n\\0'"))))"#
+                (pw156p-run (pw156p-once "'\\377\\376a\\0\\r\\0\\n\\0'"))
+                (pw156p-run (pw156p-once "'\\376\\377\\0a\\0\\r\\0\\n'"))
+                (pw156p-run (pw156p-once "'a\\0b\\0c\\0d\\0'"))
+                (pw156p-run (pw156p-once "'a\\0b\\r\\n'"))
+                (pw156p-run (pw156p-once "'\\377\\376a\\0\\r'"))
+                (pw156p-run (concat (pw156p-once "'\\377\\376a\\0'")
+                                    "; sleep 0.7; "
+                                    (pw156p-once "'\\r\\0\\n\\0'"))))))"#
     ));
 
     assert_eq!(
