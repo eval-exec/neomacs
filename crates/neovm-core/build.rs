@@ -165,12 +165,16 @@ fn detect_dbus() {
         return;
     }
 
-    println!("cargo:rustc-cfg=neomacs_have_dbus");
-    if let Ok(library) = pkg_config::Config::new()
+    let vendored = std::env::var_os("CARGO_FEATURE_DBUS_VENDORED").is_some();
+    let probed = pkg_config::Config::new()
         .atleast_version("1.0")
         .cargo_metadata(false)
-        .probe("dbus-1")
-    {
+        .probe("dbus-1");
+
+    if vendored || probed.is_ok() {
+        println!("cargo:rustc-cfg=neomacs_have_dbus");
+    }
+    if let Ok(library) = probed {
         if !library.version.is_empty() {
             println!(
                 "cargo:rustc-env=NEOMACS_DBUS_COMPILED_VERSION={}",

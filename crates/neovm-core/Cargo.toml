@@ -98,11 +98,14 @@ windows-sys.workspace = true
 inotify.workspace = true
 
 [target.'cfg(unix)'.dependencies]
-dbus = { version = "0.9", default-features = false, features = ["vendored"] }
+dbus = { version = "0.9", default-features = false }
 
 [features]
 default = ["jit", "sqlite"]
 sqlite = ["dep:rusqlite"]
+# Static-link the crate's bundled libdbus instead of pkg-config `dbus-1`.
+# Production/Nix builds leave this off and use the system library.
+dbus-vendored = ["dbus/vendored"]
 sound = ["rodio"]
 # Set by `neomacs`'s `webview` feature.  `build.rs` turns it into
 # `cfg(neomacs_have_wkwebview)` on macOS, which is what decides whether

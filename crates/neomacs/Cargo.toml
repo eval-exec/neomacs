@@ -41,6 +41,9 @@ jit = ["neovm-core/jit"]
 # GNU-compatible native SQLite support. Default-on for distributed Neomacs
 # builds, while remaining a compile-time capability for minimal builds.
 sqlite = ["neovm-core/sqlite"]
+# Static-link libdbus (cross-compile / hosts without dbus-1.pc). Nix and
+# desktop Linux leave this off and pkg-config the system library.
+dbus-vendored = ["neovm-core/dbus-vendored"]
 # Diagnostics-only: thread neovm-core's `vm-profile` feature (execution-weighted
 # OP-MIX + per-builtin SUBR-MIX with the Op::Call-vs-CallBuiltinSym entry split)
 # into the binary, and expose the `neovm--vm-profile-reset` / `-dump` debug

@@ -98,6 +98,7 @@ pkgs.mkShell {
     echo "Rust: $(rustc --version)"
     echo "Cargo: $(cargo --version)"
     echo "GStreamer: $(pkg-config --modversion gstreamer-1.0 2>/dev/null || echo 'not found')"
+    echo "D-Bus: $(pkg-config --modversion dbus-1 2>/dev/null || echo 'not found')"
   ''
   + lib.optionalString isLinux ''
     echo "xkbcommon: $(pkg-config --modversion xkbcommon 2>/dev/null || echo 'not found')"

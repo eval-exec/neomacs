@@ -176,8 +176,9 @@ pub(crate) fn gnu_c_features() -> [GnuCFeature; 30] {
             gnu_guard: BuildOption("HAVE_DBUS"),
             here: DetectedAtBuildTime {
                 cfg: "neomacs_have_dbus -- neovm-core/build.rs probes dbus-1 >= 1.0 \
-                      exactly as `configure.ac:3921-3942' does, and \
-                      system/dbusbind implements the six subrs over libdbus",
+                      exactly as `configure.ac:3921-3942' does (or the \
+                      dbus-vendored cargo feature static-links libdbus), and \
+                      system/dbusbind implements the six subrs over that library",
                 present: cfg!(neomacs_have_dbus),
             },
         },
