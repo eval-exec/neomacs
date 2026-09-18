@@ -92,9 +92,15 @@ pub(crate) fn make_registered_buffer_marker(
         // position that marker-position would mistake for a live attachment.
         None => return make_marker_value(None, None, insertion_type),
     };
-    let marker = make_marker_value(Some(buffer_id), Some(position), insertion_type);
+    // The id goes in at construction: stamping it on afterwards was a
+    // barriered heap write to an object nothing else has seen yet.
     let marker_id = buffers.allocate_marker_id();
-    set_marker_id(&marker, marker_id);
+    let marker = make_marker_value_with_id(
+        Some(buffer_id),
+        Some(position),
+        insertion_type,
+        Some(marker_id),
+    );
     // Reuse the just-allocated MarkerObj as the chain node for this
     // buffer; calling `create_marker` here would allocate a *second*
     // MarkerObj with the same marker_id, wasting an allocation and
@@ -117,6 +123,33 @@ pub(crate) fn make_registered_buffer_marker(
     }
 
     marker
+}
+
+/// `save-excursion`'s point marker (GNU `save_excursion_save` ->
+/// `Fpoint_marker`), returned with its id. The buffer holds point as a
+/// char/byte pair already, so the marker is seated on that anchor directly:
+/// [`make_registered_buffer_marker`] would turn point into a Lisp position,
+/// that back into a byte, and the byte back into a char. `None` when
+/// `buffer_id` names no live buffer.
+pub(crate) fn make_registered_point_marker(
+    buffers: &mut BufferManager,
+    buffer_id: BufferId,
+) -> Option<(Value, u64)> {
+    let (position, anchor) = {
+        let buffer = buffers.get(buffer_id)?;
+        (buffer.point_lisp_char_pos(), buffer.point_anchor())
+    };
+    let marker_id = buffers.allocate_marker_id();
+    let marker = make_marker_value_with_id(Some(buffer_id), Some(position), false, Some(marker_id));
+    let marker_ptr = marker.as_veclike_ptr()? as *mut crate::tagged::header::MarkerObj;
+    buffers.register_marker_id_at_anchor(
+        marker_ptr,
+        buffer_id,
+        marker_id,
+        anchor,
+        InsertionType::Before,
+    )?;
+    Some((marker, marker_id))
 }
 
 pub(crate) fn marker_logical_fields(
