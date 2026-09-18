@@ -26695,6 +26695,37 @@ fn an_interpreted_call_with_an_oversized_argument_span_evaluates_and_releases_it
     );
 }
 
+/// A pattern anchored with `\`` (GNU `begbuf`) can match only at the start
+/// of the string or of the accessible region, and the search tries only
+/// there -- including after a START offset, from point inside a buffer, in
+/// a narrowed buffer (where the start is BEGV) and searching backward.  GNU
+/// Emacs 31.1 answers `(0 nil nil 0 8 nil 2 5 1)`.
+#[test]
+fn a_begbuf_anchored_search_matches_only_at_the_start_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+    let value = eval
+        .eval_str(
+            r#"(let ((buf (get-buffer-create " *begbuf*")))
+                 (list (string-match "\\`foo" "foofoo")
+                       (string-match "\\`foo" "xfoo")
+                       (string-match "\\`foo" "xfoo" 1)
+                       (string-match "\\`\\(.+\\.\\(?:tar\\|zip\\)\\)" "/a/b.tar/c")
+                       (match-end 1)
+                       (progn (set-buffer buf) (erase-buffer) (insert "xfoo")
+                              (goto-char 2) (re-search-forward "\\`foo" nil t))
+                       (progn (goto-char 1) (re-search-forward "\\`x" nil t))
+                       (progn (narrow-to-region 2 5) (goto-char (point-min))
+                              (prog1 (re-search-forward "\\`foo" nil t) (widen)))
+                       (progn (goto-char (point-max)) (re-search-backward "\\`x" nil t))))"#,
+        )
+        .expect("the searches should evaluate");
+    assert_eq!(
+        crate::emacs_core::print::print_value(&value),
+        "(0 nil nil 0 8 nil 2 5 1)"
+    );
+}
+
 /// A lexical closure call binds its formals onto the captured environment in
 /// GNU `funcall_lambda`'s shape: `&optional`/`&rest`, arity errors carrying
 /// the closure, the caller's environment restored after an argument error

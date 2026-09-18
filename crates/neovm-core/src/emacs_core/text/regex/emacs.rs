@@ -7940,13 +7940,21 @@ pub(crate) fn re_search(
     // instead of a full matcher entry (scratch borrow, register reset,
     // dispatch) per fastmap hit. GNU enters the matcher and fails at
     // `begline`; the candidate set is identical either way.
-    let bol_anchored = {
+    let first_op = {
         let mut pc = 0;
         while pc < pattern.buffer.len() && pattern.buffer[pc] == RegexOp::NoOp as u8 {
             pc += 1;
         }
-        pc < pattern.buffer.len() && pattern.buffer[pc] == RegexOp::BegLine as u8
+        pattern.buffer.get(pc).copied()
     };
+    let bol_anchored = first_op == Some(RegexOp::BegLine as u8);
+    // `\``-anchored pattern (GNU `begbuf`, which succeeds only where
+    // `AT_STRINGS_BEG`, `d == 0` here): position 0 is the one candidate.
+    // Every other entry would pay the matcher's setup only to fail on the
+    // first opcode -- 61 such entries for each 62-byte file name that
+    // `find-file-name-handler` tests against TRAMP's archive handler
+    // (`\`\(.+\.\(?:7z\|...`), which made a match 1.5 times GNU's.
+    let buf_anchored = first_op == Some(RegexOp::BegBuf as u8);
 
     // A fresh search starts with a clean overflow flag; a candidate match
     // that hits the fail-stack limit sets it, aborting the whole scan
@@ -7976,6 +7984,12 @@ pub(crate) fn re_search(
         // Forward search
         let end = (start + range as usize).min(text_len);
         let mut pos = start;
+        if buf_anchored {
+            if start != 0 {
+                return None;
+            }
+            return try_candidate!(0, end).map(|result| (0, result.1));
+        }
         if bol_anchored {
             // `^`-anchored: candidates are position 0 and each byte after a
             // newline — drive the scan with memchr('\n') (SIMD) instead of
