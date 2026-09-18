@@ -1,7 +1,5 @@
 //! Native Lisp declarations owned by GNU `src/dbusbind.c`'s `syms_of_dbusbind`.
 
-use crate::emacs_core::eval::Context;
-
 std::cfg_select! {
     neomacs_have_dbus => {
         use crate::emacs_core::subr::{NativeFn, SubrArity, SubrSpec};
@@ -68,7 +66,7 @@ std::cfg_select! {
         }
     }
     _ => {
-        pub(super) fn register_subrs(ctx: &mut Context) {
+        pub(super) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
             let _ = ctx;
         }
     }
