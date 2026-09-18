@@ -1297,6 +1297,46 @@ impl BytecodeBacktraceFrame {
         self.0 & Self::BASE_MASK
     }
 
+    /// Surrender this token to the iterative interpreter frame its `Bcall`
+    /// opened, returning the one bit that frame does not already record.
+    ///
+    /// The callee frame stores the specpdl length taken right after this
+    /// push as its `specpdl_base`, which is `base + 1`, so the base needs no
+    /// storage of its own; what is left is whether the argument span owns a
+    /// cold `backtrace_args_stack` slot. The frame keeps that bit beside its
+    /// caller's resume slot, like GNU's `bc_frame` keeps `saved_top`, and
+    /// [`Self::reclaim_from_frame`] rebuilds the token when the frame
+    /// returns. Carrying the whole token as well would put a second word in
+    /// every frame for a value the frame already knows.
+    #[inline(always)]
+    #[must_use = "the owns-args bit is the only trace of the parked backtrace token"]
+    pub(crate) fn park_in_frame(self, frame_specpdl_base: usize) -> bool {
+        debug_assert_eq!(
+            self.base() + 1,
+            frame_specpdl_base,
+            "an iterative callee frame must record its specpdl base immediately \
+             above the backtrace entry its Bcall pushed"
+        );
+        self.0 & Self::OWNED_ARGS_FLAG != 0
+    }
+
+    /// Rebuild a token surrendered by [`Self::park_in_frame`].
+    ///
+    /// # Safety
+    ///
+    /// `frame_specpdl_base` and `owns_args` must be the specpdl base and the
+    /// returned bit of exactly one parked token, and that token must be
+    /// reclaimed at most once: the result authorizes popping the backtrace
+    /// entry at `frame_specpdl_base - 1`.
+    #[inline(always)]
+    pub(crate) unsafe fn reclaim_from_frame(frame_specpdl_base: usize, owns_args: bool) -> Self {
+        debug_assert!(
+            frame_specpdl_base > 0,
+            "a parked bytecode backtrace entry sits below its frame's specpdl base"
+        );
+        Self::new(frame_specpdl_base - 1, owns_args)
+    }
+
     #[cfg(test)]
     pub(crate) fn base_for_test(&self) -> usize {
         self.base()

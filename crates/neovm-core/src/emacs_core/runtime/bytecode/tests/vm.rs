@@ -2355,22 +2355,64 @@ fn interpreter_driver_frame_layout_stays_compact() {
         std::mem::size_of::<Value>(),
         "the non-null function code handle must fit in one tagged value"
     );
-    assert!(
-        std::mem::size_of::<InterpreterFrame>() <= 64,
-        "an active interpreter frame must stay register-snapshot sized; carrying \
-         the callee's instruction stream replaced its derived stack ceiling"
+    // A callee frame carries its caller's continuation (GNU `bc_frame`'s
+    // `saved_top`), so a call is one frame push and a return one pop; the
+    // continuation costs the frame exactly one word, because the backtrace
+    // token's base is the frame's own specpdl base minus one.
+    assert_eq!(
+        std::mem::size_of::<InterpreterCallerReturn>(),
+        std::mem::size_of::<usize>(),
+        "the caller continuation is one word: the value slot plus the \
+         backtrace-ownership bit"
     );
-    // A suspended caller is a frame in one stack plus a continuation in a
-    // parallel one. Neither is COPIED on a call any more -- entering writes the
-    // callee's frame once from registers and returning is a pop -- so this
-    // bounds footprint rather than per-call traffic. The old assertion bounded
-    // a `SuspendedInterpreterFrame` that no longer exists, and its stated
-    // reason ("must not copy ... on every Bcall") is exactly what the frame
-    // stack retired.
     assert!(
-        std::mem::size_of::<BytecodeCallContinuation>() <= 16,
-        "a continuation is pushed per call and must stay two words"
+        std::mem::size_of::<InterpreterFrame>() <= 64 + INTERPRETER_FRAME_DEBUG_BYTES,
+        "an interpreter frame, caller continuation included, must stay one cache \
+         line in release; carrying the callee's instruction stream replaced its \
+         derived stack ceiling"
     );
+}
+
+/// The parked backtrace token round-trips: the frame's specpdl base plus the
+/// ownership bit rebuild exactly the word the Bcall's push produced, and the
+/// caller-return word keeps the value slot and the bit apart.
+#[test]
+fn interpreter_caller_return_parks_the_backtrace_token_exactly() {
+    let mut eval = Context::new_minimal_vm_harness();
+    let base = eval.specpdl.len();
+    let token = eval.push_backtrace_frame_from_bc_stack(Value::NIL, 0, 0);
+    let pushed_word = token.word_for_test();
+    assert_eq!(token.base_for_test(), base);
+    let frame_specpdl_base = eval.specpdl.len();
+    let owns = token.park_in_frame(frame_specpdl_base);
+    assert!(!owns, "a compact span owns no out-of-line argument slot");
+
+    let caller_return =
+        InterpreterCallerReturn::new(ConsumedCallOperandRootSlot::from_args_start(1), owns);
+    assert_eq!(caller_return.stack_after_call(), 0);
+    assert!(!caller_return.owns_backtrace_args());
+    let owned = InterpreterCallerReturn::new(ConsumedCallOperandRootSlot::from_args_start(7), true);
+    assert_eq!(owned.stack_after_call(), 6);
+    assert!(owned.owns_backtrace_args());
+
+    // SAFETY: nothing is popped with this token; it only checks the encoding
+    // of an owned-argument token against the push-side representation.
+    let owned_token = unsafe { BytecodeBacktraceFrame::reclaim_from_frame(5, true) };
+    assert_eq!(
+        owned_token.word_for_test(),
+        4 | (1usize << (usize::BITS - 1))
+    );
+
+    // SAFETY: rebuilds the one token parked above, once.
+    let token = unsafe {
+        BytecodeBacktraceFrame::reclaim_from_frame(
+            frame_specpdl_base,
+            caller_return.owns_backtrace_args(),
+        )
+    };
+    assert_eq!(token.word_for_test(), pushed_word);
+    eval.pop_fast_bytecode_backtrace_frame_unchecked(token);
+    assert_eq!(eval.specpdl.len(), base);
 }
 
 /// The frame's view addresses the same instruction stream and constant pool

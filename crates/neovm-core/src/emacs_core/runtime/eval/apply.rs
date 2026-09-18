@@ -249,26 +249,45 @@ impl Context {
         args_start: usize,
         nargs: usize,
     ) -> BytecodeBacktraceFrame {
-        let base = self.specpdl.len();
         debug_assert!(
             args_start
                 .checked_add(nargs)
                 .is_some_and(|end| end <= self.bc_buf.len()),
             "bytecode backtrace arguments must be a live caller-stack span"
         );
-        let (args, owns_args) = match BytecodeBacktraceSpan::try_new(args_start, nargs) {
-            Some(span) => (BacktraceArgs::evaluated_bc_stack(span), false),
-            None => (
-                self.backtrace_args_from_oversized_bc_stack(args_start, nargs),
-                true,
-            ),
+        // The oversized span takes its own cold push, so this arm's token is
+        // the bare base: no ownership flag is merged in on every `Bcall`.
+        let Some(span) = BytecodeBacktraceSpan::try_new(args_start, nargs) else {
+            return self.push_oversized_backtrace_frame_from_bc_stack(function, args_start, nargs);
         };
+        let base = self.specpdl.len();
+        self.specpdl.push(SpecBinding::Backtrace {
+            function,
+            args: BacktraceArgs::evaluated_bc_stack(span),
+            debug_on_exit: false,
+        });
+        BytecodeBacktraceFrame::new(base, false)
+    }
+
+    /// [`Self::push_backtrace_frame_from_bc_stack`] for a span too large for
+    /// the compact descriptor: the arguments are copied out, and the token
+    /// records that the frame owns that copy.
+    #[cold]
+    #[inline(never)]
+    fn push_oversized_backtrace_frame_from_bc_stack(
+        &mut self,
+        function: Value,
+        args_start: usize,
+        nargs: usize,
+    ) -> BytecodeBacktraceFrame {
+        let base = self.specpdl.len();
+        let args = self.backtrace_args_from_oversized_bc_stack(args_start, nargs);
         self.specpdl.push(SpecBinding::Backtrace {
             function,
             args,
             debug_on_exit: false,
         });
-        BytecodeBacktraceFrame::new(base, owns_args)
+        BytecodeBacktraceFrame::new(base, true)
     }
 
     /// Semantic fallback for a bytecode stack span too large for the compact
@@ -1409,10 +1428,13 @@ impl Context {
             self.release_oversized_bytecode_backtrace_frame(frame_word)
         };
 
-        // SAFETY: `BytecodeBacktraceFrame` is private, non-Copy, and only
-        // constructed immediately after pushing this Backtrace variant. The
-        // interpreter driver consumes it only after the nested call restored
-        // the exact specpdl depth; debug builds verify that protocol above.
+        // SAFETY: `BytecodeBacktraceFrame` is private and non-Copy. It is
+        // constructed immediately after pushing this Backtrace variant, or
+        // rebuilt by `reclaim_from_frame` from a callee frame whose
+        // `specpdl_base` was checked at install (`park_in_frame`) to be that
+        // push's base + 1 -- the same entry. The interpreter driver consumes
+        // it only after the nested call restored the exact specpdl depth;
+        // debug builds verify that protocol above.
         // Backtrace's fields (`Value`,
         // `BacktraceArgs`, bool) need no drop, so reducing the length is GNU's
         // `specpdl_ptr--` without leaking an owned Rust payload. Any path that

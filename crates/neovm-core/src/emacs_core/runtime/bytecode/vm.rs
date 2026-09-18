@@ -972,8 +972,65 @@ struct InterpreterFrame {
     #[cfg(not(feature = "jit"))]
     pc: usize,
     cleanup: InterpreterFrameCleanup,
+    /// Where this frame's caller resumes when it returns (GNU `bc_frame`'s
+    /// `saved_top`). A placeholder in the entry frame, which has no caller
+    /// inside the driver and is never popped.
+    caller_return: InterpreterCallerReturn,
     #[cfg(debug_assertions)]
     entry_lexenv: Value,
+}
+
+/// The caller continuation an iterative callee frame carries for the frame
+/// below it: the caller-stack slot that receives the return value, plus the
+/// one bit of the callee's [`BytecodeBacktraceFrame`] token that the frame
+/// does not already record.
+///
+/// GNU's `Breturn` finds the caller's `saved_top` in the returning
+/// `bc_frame` itself. This driver used to keep continuations in a `Vec`
+/// parallel to the frames, which put a second capacity check, length update
+/// and base-pointer load on every Bcall and every Breturn. Folding the
+/// continuation into the frame makes a call one push and a return one pop.
+///
+/// The value slot is the consumed function operand, `args_start - 1`: GNU's
+/// `Breturn` stores the result exactly where `Bcall` found the function. The
+/// token's base needs no storage because a callee frame's
+/// `cleanup.specpdl_base` is the specpdl length right after its backtrace
+/// push, i.e. `base + 1` ([`BytecodeBacktraceFrame::park_in_frame`] checks
+/// that at every call in debug builds). Only the out-of-line-arguments bit is
+/// left, and a `bc_buf` index never uses usize's high bit (`Vec` allocations
+/// are bounded by `isize::MAX` bytes), so it lives there.
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+struct InterpreterCallerReturn(usize);
+
+impl InterpreterCallerReturn {
+    const OWNED_BACKTRACE_ARGS_FLAG: usize = 1usize << (usize::BITS - 1);
+    const VALUE_SLOT_MASK: usize = !Self::OWNED_BACKTRACE_ARGS_FLAG;
+
+    /// The entry frame's word. Nothing reads it: `leave_callee` refuses to
+    /// pop the entry frame, and popping is the only way a frame's word
+    /// becomes a continuation.
+    const ENTRY: Self = Self(0);
+
+    #[inline(always)]
+    fn new(value_slot: ConsumedCallOperandRootSlot, owns_backtrace_args: bool) -> Self {
+        debug_assert_eq!(
+            value_slot.0 & Self::OWNED_BACKTRACE_ARGS_FLAG,
+            0,
+            "a bc_buf index cannot occupy the backtrace-ownership bit"
+        );
+        Self(value_slot.0 | (usize::from(owns_backtrace_args) * Self::OWNED_BACKTRACE_ARGS_FLAG))
+    }
+
+    #[inline(always)]
+    fn stack_after_call(self) -> usize {
+        self.0 & Self::VALUE_SLOT_MASK
+    }
+
+    #[inline(always)]
+    fn owns_backtrace_args(self) -> bool {
+        self.0 & Self::OWNED_BACKTRACE_ARGS_FLAG != 0
+    }
 }
 
 impl InterpreterFrame {
@@ -1022,6 +1079,13 @@ impl InterpreterFrame {
         }
     }
 }
+
+/// A callee frame built by `install_iterative_interpreter_frame`: the only
+/// kind `InterpreterCallerStack::enter_callee` accepts, so every frame above
+/// the entry carries a real [`InterpreterCallerReturn`] and a parked
+/// backtrace token.
+#[repr(transparent)]
+struct InstalledCalleeFrame(InterpreterFrame);
 
 /// Variable-sized state for the active frame at the matching driver depth.
 ///
@@ -1255,27 +1319,37 @@ impl ConsumedCallOperandRootSlot {
     }
 }
 
-// These values are copied on every iterative Bcall/Breturn. Keep accidental
-// enum/Option padding from silently turning frame transitions into bulk memory
-// traffic again. The bounds include the debug-only lexenv invariant field.
+/// Bytes the debug-only `entry_lexenv` invariant field adds to every frame.
+const INTERPRETER_FRAME_DEBUG_BYTES: usize = if cfg!(debug_assertions) {
+    std::mem::size_of::<Value>()
+} else {
+    0
+};
+
+// These values are written on every iterative Bcall and read back on every
+// Breturn. Keep accidental enum/Option padding from silently turning frame
+// transitions into bulk memory traffic again. A release frame, caller
+// continuation included, is exactly one 64-byte cache line; the debug-only
+// lexenv invariant field comes on top of that.
 const _: () = {
     assert!(std::mem::size_of::<InterpreterFunction>() == std::mem::size_of::<Value>());
     assert!(std::mem::size_of::<PreparedInterpreterCallee>() == 4 * std::mem::size_of::<Value>());
-    assert!(std::mem::size_of::<InterpreterFrame>() <= 64);
-    // A suspended caller costs a frame plus its continuation, in two parallel
-    // stacks. Neither is ever COPIED any more -- a call writes the callee's
-    // frame once and a return pops -- so these bound footprint, not per-call
-    // traffic, which is the whole point of the split.
-    assert!(std::mem::size_of::<BytecodeCallContinuation>() <= 16);
+    assert!(std::mem::size_of::<InterpreterCallerReturn>() == std::mem::size_of::<usize>());
+    assert!(std::mem::size_of::<InterpreterFrame>() <= 64 + INTERPRETER_FRAME_DEBUG_BYTES);
 };
 
+/// What a completed callee frame hands its caller: the stack slot its value
+/// lands in, and the backtrace token its `Bcall` opened. Built only by
+/// [`InterpreterCallerStack::leave_callee`] from the popped frame, and
+/// consumed on the spot; nothing stores one.
 struct BytecodeCallContinuation {
     stack_after_call: usize,
     backtrace: BytecodeBacktraceFrame,
 }
 
 /// The interpreter's frame stack. **The ACTIVE frame is the last element** of
-/// `frames`; everything below it is a suspended caller.
+/// `frames`; everything below it is a suspended caller, and `frames[0]` is the
+/// entry frame.
 ///
 /// The active frame used to be a local in `run_loop`, with ONE slot reused for
 /// every callee. That is why entering a call had to copy the caller out (48
@@ -1290,26 +1364,29 @@ struct BytecodeCallContinuation {
 /// on deep Lisp recursion, which is exactly what this iterative driver exists
 /// to prevent. This keeps the safety and drops the copies.
 ///
-/// `continuations` is parallel and one shorter: a continuation exists for
-/// exactly the SUSPENDED frames, so the active frame cannot carry a stale one
-/// and nothing has to invent a placeholder for it. That matters because
-/// `BytecodeBacktraceFrame` is `#[must_use]` and must be consumed by a matching
-/// pop; a sentinel would be a lie the type is specifically built to prevent.
+/// Every frame above the entry is an [`InstalledCalleeFrame`] and carries its
+/// caller's continuation ([`InterpreterCallerReturn`]), the way GNU's returning
+/// `bc_frame` carries `saved_top`, so a call is exactly one push and a return
+/// one pop. The continuations used to sit in a parallel `Vec`, one shorter, so
+/// that no frame had to hold a placeholder `BytecodeBacktraceFrame`; the frame
+/// now holds no token at all, only the bit its `specpdl_base` does not already
+/// say, and `leave_callee` -- which never pops the entry frame -- is the only
+/// place that bit becomes a token again.
 ///
-/// No `&mut` into either vector may be held across a push -- a reallocation
-/// moves every slot. The driver re-derives the active frame at the head of each
+/// No `&mut` into `frames` may be held across a push -- a reallocation moves
+/// every slot. The driver re-derives the active frame at the head of each
 /// `'frame` iteration, which is exactly where a push has just happened.
 struct InterpreterCallerStack {
     frames: Vec<InterpreterFrame>,
-    continuations: Vec<BytecodeCallContinuation>,
 }
 
 /// Reusable backing stores for the interpreter's per-entry stacks: the
-/// caller frames, the call continuations and the suspended aux frames.
-/// `run_loop` used to allocate the first two fresh on EVERY nested
-/// interpreter entry (`Vec::with_capacity(8)` twice ≈ 9,100 malloc/free
-/// pairs per org font-lock op) and grow the third from empty (≈2,500
-/// reallocations); a pooled trio is taken on entry and handed back emptied.
+/// caller frames (each carrying its caller continuation) and the suspended
+/// aux frames. `run_loop` used to allocate the frame stack fresh on EVERY
+/// nested interpreter entry (`Vec::with_capacity(8)` ≈ 9,100 malloc/free
+/// pairs per org font-lock op, together with the continuation stack that
+/// has since been folded into it) and grow the aux stack from empty (≈2,500
+/// reallocations); a pooled pair is taken on entry and handed back emptied.
 #[derive(Default)]
 pub(crate) struct InterpreterStackPool {
     free: Vec<InterpreterStacks>,
@@ -1318,7 +1395,6 @@ pub(crate) struct InterpreterStackPool {
 #[derive(Default)]
 struct InterpreterStacks {
     frames: Vec<InterpreterFrame>,
-    continuations: Vec<BytecodeCallContinuation>,
     suspended: Vec<SuspendedInterpreterFrameAux>,
 }
 
@@ -1337,7 +1413,6 @@ impl InterpreterStackPool {
 
     fn give_back(&mut self, mut stacks: InterpreterStacks) {
         stacks.frames.clear();
-        stacks.continuations.clear();
         stacks.suspended.clear();
         if self.free.len() < Self::MAX_FREE {
             self.free.push(stacks);
@@ -1347,21 +1422,13 @@ impl InterpreterStackPool {
 
 impl InterpreterCallerStack {
     /// Build a caller stack holding only `entry`, on pooled (emptied) storage.
-    fn with_storage(
-        mut frames: Vec<InterpreterFrame>,
-        mut continuations: Vec<BytecodeCallContinuation>,
-        entry: InterpreterFrame,
-    ) -> Self {
+    fn with_storage(mut frames: Vec<InterpreterFrame>, entry: InterpreterFrame) -> Self {
         frames.clear();
-        continuations.clear();
         frames.push(entry);
-        Self {
-            frames,
-            continuations,
-        }
+        Self { frames }
     }
-    fn into_storage(self) -> (Vec<InterpreterFrame>, Vec<BytecodeCallContinuation>) {
-        (self.frames, self.continuations)
+    fn into_storage(self) -> Vec<InterpreterFrame> {
+        self.frames
     }
 
     /// The frame currently executing.
@@ -1383,33 +1450,52 @@ impl InterpreterCallerStack {
     /// How many callers are suspended beneath the active frame.
     #[inline(always)]
     fn suspended_len(&self) -> usize {
-        self.continuations.len()
+        self.frames.len() - 1
     }
 
     /// Whether the active frame is the outermost one.
     #[inline(always)]
     fn has_no_suspended_callers(&self) -> bool {
-        self.continuations.is_empty()
+        self.frames.len() <= 1
     }
 
-    /// Suspend the active frame with `continuation` and make `callee` active.
+    /// Suspend the active frame and make `callee` active.
     ///
-    /// `callee` arrives BY VALUE, built from registers, so this is one write of
-    /// a frame rather than a copy of one already in memory.
+    /// `callee` arrives BY VALUE, built from registers, and already carries
+    /// the suspended frame's continuation, so this is one write of a frame
+    /// rather than a copy of one already in memory -- and the only push a
+    /// call makes here.
     #[inline(always)]
-    fn enter_callee(&mut self, continuation: BytecodeCallContinuation, callee: InterpreterFrame) {
-        self.continuations.push(continuation);
-        self.frames.push(callee);
+    fn enter_callee(&mut self, callee: InstalledCalleeFrame) {
+        self.frames.push(callee.0);
     }
 
     /// Discard the active frame and resume its caller, returning the
-    /// continuation recorded when that caller suspended. `None` when the active
-    /// frame is the outermost one, which is the driver's exit condition.
+    /// continuation the discarded frame carried. `None` when the active frame
+    /// is the outermost one, which is the driver's exit condition.
     #[inline(always)]
     fn leave_callee(&mut self) -> Option<BytecodeCallContinuation> {
-        let continuation = self.continuations.pop()?;
-        self.frames.pop();
-        Some(continuation)
+        if self.has_no_suspended_callers() {
+            return None;
+        }
+        // SAFETY: at least two frames are live, so `pop` yields the active one.
+        let callee = unsafe { self.frames.pop().unwrap_unchecked() };
+        // Every frame above the entry arrived through `enter_callee`, so it is
+        // an `InstalledCalleeFrame`: its `specpdl_base` sits one above the
+        // backtrace entry its Bcall pushed, and its caller-return word holds
+        // the bit that token's `park_in_frame` returned.
+        let caller_return = callee.caller_return;
+        Some(BytecodeCallContinuation {
+            stack_after_call: caller_return.stack_after_call(),
+            // SAFETY: as above, and the frame was just popped, so this is the
+            // one reclaim of its parked token.
+            backtrace: unsafe {
+                BytecodeBacktraceFrame::reclaim_from_frame(
+                    callee.cleanup.specpdl_base,
+                    caller_return.owns_backtrace_args(),
+                )
+            },
+        })
     }
 }
 
@@ -2891,13 +2977,19 @@ impl<'a> Vm<'a> {
     #[inline(always)]
     /// Set up the callee's operand frame and RETURN its interpreter frame; the
     /// caller pushes it onto the frame stack.
+    ///
+    /// `backtrace` is the token the caller's Bcall opened for this call. It is
+    /// parked in the returned frame together with the caller's resume slot
+    /// (the consumed operand `root_slot`), which is the whole continuation
+    /// `Breturn` needs.
     fn install_iterative_interpreter_frame(
         &mut self,
         cursor: &mut StackCursor,
         callee: PreparedInterpreterCallee,
         root_slot: ConsumedCallOperandRootSlot,
         nargs: usize,
-    ) -> InterpreterFrame {
+        backtrace: BytecodeBacktraceFrame,
+    ) -> InstalledCalleeFrame {
         // Every stack mutation below goes through the LIVE cursor (GNU's
         // setup_frame works on its register `top` the same way); the context
         // is only consulted for capacity and, on the cold growth branch,
@@ -2970,12 +3062,18 @@ impl<'a> Vm<'a> {
             }
         }
 
+        // The Bcall's backtrace entry is the last specpdl push before
+        // `specpdl_base` was read above, so the frame's base already says
+        // where that entry sits; the token leaves behind only its
+        // out-of-line-arguments bit.
+        let owns_backtrace_args = backtrace.park_in_frame(specpdl_base);
+
         // Built and RETURNED rather than written through a `&mut` into the
         // frame stack: every value here was just computed and is already in a
         // register, and handing the frame back by value lets the caller move it
         // into its own fresh slot. The old shape wrote into the caller's slot,
         // which is why entering a call first had to copy the caller out of it.
-        InterpreterFrame {
+        InstalledCalleeFrame(InterpreterFrame {
             function: callee.function,
             code: callee.code,
             frame_base,
@@ -2987,9 +3085,10 @@ impl<'a> Vm<'a> {
                 condition_stack_base,
                 specpdl_base,
             },
+            caller_return: InterpreterCallerReturn::new(root_slot, owns_backtrace_args),
             #[cfg(debug_assertions)]
             entry_lexenv: self.ctx.lexenv,
-        }
+        })
     }
 
     fn finish_interpreter_frame(
@@ -3143,10 +3242,15 @@ impl<'a> Vm<'a> {
         // ineligibility test rather than something the pop discovers: the
         // frame this return pops is the one immediately below the callee's
         // base, which the line above just proved is the specpdl top.
-        let returning_frame = cleanup.specpdl_base.checked_sub(1);
+        // Only a callee frame reaches this point (the entry frame returned
+        // `Exit` above), and a callee frame's base sits exactly one above the
+        // backtrace entry its Bcall pushed -- the invariant its parked token
+        // already relies on -- so the subtraction cannot underflow.
+        let returning_frame = cleanup.specpdl_base - 1;
         if self.ctx.specpdl.len() != cleanup.specpdl_base
-            || returning_frame
-                .is_some_and(|index| self.ctx.backtrace_frame_wants_debug_on_exit(index))
+            || self
+                .ctx
+                .backtrace_frame_wants_debug_on_exit(returning_frame)
         {
             return InterpreterValueCompletion::NeedsSlowCleanup(value);
         }
@@ -3333,6 +3437,7 @@ impl<'a> Vm<'a> {
                 condition_stack_base: 0,
                 specpdl_base: 0,
             },
+            caller_return: InterpreterCallerReturn::ENTRY,
             #[cfg(debug_assertions)]
             entry_lexenv: Value::NIL,
         };
@@ -3341,8 +3446,7 @@ impl<'a> Vm<'a> {
         // gets Vec's single-representation push/pop path; SmallVec's repeated
         // inline-vs-spilled branch was measurable on every Bcall/Breturn.
         let stacks = self.ctx.interpreter_stacks.take();
-        let mut callers =
-            InterpreterCallerStack::with_storage(stacks.frames, stacks.continuations, entry_frame);
+        let mut callers = InterpreterCallerStack::with_storage(stacks.frames, entry_frame);
         // GNU bytecode.c keeps one unsigned quit counter for the whole
         // exec_byte_code driver. setup_frame/Breturn do not save or reset it.
         let mut quitcounter = 1;
@@ -3365,10 +3469,8 @@ impl<'a> Vm<'a> {
         let (entry_handlers, entry_bind_stack) = aux_stack.take_entry();
         *handlers = entry_handlers;
         *bind_stack = entry_bind_stack;
-        let (frames, continuations) = callers.into_storage();
         self.ctx.interpreter_stacks.give_back(InterpreterStacks {
-            frames,
-            continuations,
+            frames: callers.into_storage(),
             suspended: aux_stack.into_suspended(),
         });
         result
@@ -3509,13 +3611,17 @@ impl<'a> Vm<'a> {
             macro_rules! complete_value {
                 ($value:expr) => {{
                     let value = $value;
-                    callers
-                        .active_mut()
-                        .save_execution_state(pc_local, osr_tried);
                     *driver_quitcounter = quitcounter;
                     // The fast Breturn keeps the cursor live; only leaving the
                     // driver (Exit) or entering the generic unwind machinery
                     // (chain) publishes, and a chain Resume reacquires.
+                    //
+                    // The returning frame's resume point is saved only on the
+                    // two outcomes that can still read it, and both leave it
+                    // the active frame (`complete_interpreter_frame_value`
+                    // decides them before `leave_callee`).  `Resume` pops the
+                    // frame at once, so a store there was dead: GNU's
+                    // `Breturn` never writes the returning `bc_frame`'s pc.
                     match self.complete_interpreter_frame_value(
                         &mut cursor,
                         callers,
@@ -3524,10 +3630,17 @@ impl<'a> Vm<'a> {
                     ) {
                         InterpreterValueCompletion::Resume => continue 'frame,
                         InterpreterValueCompletion::Exit(value) => {
+                            // The entry frame: `run_loop` hands its pc back.
+                            callers
+                                .active_mut()
+                                .save_execution_state(pc_local, osr_tried);
                             cursor.publish(self.ctx);
                             return Ok(value);
                         }
                         InterpreterValueCompletion::NeedsSlowCleanup(value) => {
+                            callers
+                                .active_mut()
+                                .save_execution_state(pc_local, osr_tried);
                             cursor.publish(self.ctx);
                             match self.complete_interpreter_frame_chain(
                                 callers,
@@ -4146,6 +4259,13 @@ impl<'a> Vm<'a> {
                                 callers.suspended_len(),
                             );
                             aux_stack.suspend_current(caller_depth);
+                            // The callee frame carries this call's whole
+                            // continuation: the consumed function operand,
+                            // which is `stack_after_call`, and the backtrace
+                            // token. One push, like GNU's `bc_frame`.
+                            let root_slot =
+                                ConsumedCallOperandRootSlot::from_args_start(args_start);
+                            debug_assert_eq!(root_slot.0, stack_after_call);
                             let callee_frame = self.install_iterative_interpreter_frame(
                                 &mut cursor,
                                 PreparedInterpreterCallee::new(
@@ -4153,16 +4273,11 @@ impl<'a> Vm<'a> {
                                     callee_code,
                                     callee_view,
                                 ),
-                                ConsumedCallOperandRootSlot::from_args_start(args_start),
+                                root_slot,
                                 n,
+                                backtrace,
                             );
-                            callers.enter_callee(
-                                BytecodeCallContinuation {
-                                    stack_after_call,
-                                    backtrace,
-                                },
-                                callee_frame,
-                            );
+                            callers.enter_callee(callee_frame);
                             continue 'frame;
                         }
                         let writeback_names = if matches!(
@@ -4219,19 +4334,15 @@ impl<'a> Vm<'a> {
                                             callers.suspended_len(),
                                         );
                                     aux_stack.suspend_current(caller_depth);
+                                    debug_assert_eq!(root_slot.0, stack_after_call);
                                     let callee_frame = self.install_iterative_interpreter_frame(
                                         &mut cursor,
                                         callee,
                                         root_slot,
                                         nargs,
+                                        backtrace,
                                     );
-                                    callers.enter_callee(
-                                        BytecodeCallContinuation {
-                                            stack_after_call,
-                                            backtrace,
-                                        },
-                                        callee_frame,
-                                    );
+                                    callers.enter_callee(callee_frame);
                                     continue 'frame;
                                 }
                                 InterpreterStackCall::Complete(result) => {
@@ -8021,16 +8132,22 @@ impl<'a> Vm<'a> {
         func_val: Value,
         nargs: usize,
     ) -> ResolvedStackCallTarget {
-        let compiler_overrides_active = self.ctx.compiler_function_overrides_active();
         let function_epoch = self.ctx.obarray.function_epoch();
-        if !compiler_overrides_active
-            && let Some(call) = self
-                .recent_interpreter_call
-                .get(func_val, nargs, function_epoch)
+        // No `compiler-function-overrides` test in front of the probe: an
+        // entry is written only while the overrides are inactive, and every
+        // change of that flag bumps the function epoch
+        // (`sync_cached_runtime_binding_by_id`), so an entry whose epoch still
+        // matches was proven under the current, inactive state.  The symbol
+        // cache's hit path in `resolve_stack_call_target` rests on the same
+        // argument.
+        if let Some(call) = self
+            .recent_interpreter_call
+            .get(func_val, nargs, function_epoch)
         {
             return ResolvedStackCallTarget::Interpreter { call };
         }
 
+        let compiler_overrides_active = self.ctx.compiler_function_overrides_active();
         let target = self.resolve_stack_call_target(func_val);
         let ResolvedStackCallTarget::ByteCode { callee } = target else {
             return target;
