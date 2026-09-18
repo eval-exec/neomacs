@@ -599,6 +599,15 @@ pub struct TaggedHeap {
     staged_mapped_cons_scan: Option<Vec<(usize, usize)>>,
     /// Mapped veclike header addresses staged alongside (see the job field).
     staged_mapped_veclikes: Option<Vec<usize>>,
+    /// Set while a stop-the-world FIRST partition cycle runs with the image
+    /// pre-marked (`premark_mapped_image`): every mapped object is marked in
+    /// the side tables and the flat seed pushes all their heap children, so
+    /// a root inside the image needs no push. Cleared when the cycle ends.
+    image_premarked: bool,
+    /// TEST-ONLY: mapped veclike traces this heap ran (the first-cycle seed
+    /// and the mark's mapped arm).
+    #[cfg(test)]
+    mapped_veclike_traces: usize,
     dirty_owner_bits: FxHashSet<usize>,
     dirty_writes: Vec<HeapWriteRecord>,
 
@@ -949,6 +958,9 @@ impl TaggedHeap {
             first_cycle_concurrent: false,
             staged_mapped_cons_scan: None,
             staged_mapped_veclikes: None,
+            image_premarked: false,
+            #[cfg(test)]
+            mapped_veclike_traces: 0,
             dirty_owner_bits: FxHashSet::default(),
             dirty_writes: Vec::new(),
             gc_collections: 0,

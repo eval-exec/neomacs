@@ -723,6 +723,10 @@ impl TaggedHeap {
                 || !self.owns_veclike_object(ptr as *const u8)
             {
                 if self.mark_mapped_veclike(ptr) {
+                    #[cfg(test)]
+                    {
+                        self.mapped_veclike_traces += 1;
+                    }
                     unsafe {
                         self.trace_veclike(ptr);
                     }
@@ -1745,6 +1749,15 @@ impl TaggedHeap {
     #[cfg(test)]
     pub(crate) fn owns_heap_value_for_test(&self, value: TaggedValue) -> bool {
         Self::value_heap_addr(value).is_some_and(|addr| self.owns_heap_value_object(value, addr))
+    }
+
+    /// TEST-ONLY: mapped veclike traces so far, and the mapped veclike count.
+    #[cfg(test)]
+    pub(crate) fn mapped_veclike_traces_for_test(&self) -> (usize, usize) {
+        (
+            self.mapped_veclike_traces,
+            self.mapped_veclike_objects.len(),
+        )
     }
 
     /// TEST-ONLY mapped-image ownership probe: true when the value's storage

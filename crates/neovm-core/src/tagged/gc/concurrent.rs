@@ -82,8 +82,9 @@ impl TaggedHeap {
     /// An armed concurrent FIRST partition cycle that has fully traced and
     /// swept by now (the forced path terminates the mark and drains the sweep
     /// first) is disarmed: this cycle becomes the stop-the-world first cycle,
-    /// which seeds every image child (`seed_all_mapped_children`) and promotes
-    /// in `complete_collection` after its own exact trace. Left armed, this
+    /// which pre-marks the image, seeds every image child
+    /// (`seed_all_mapped_children`) and promotes in `complete_collection`
+    /// after its own mark. Left armed, this
     /// cycle's `begin_collection` took the concurrent STAGING branch, whose
     /// staged image lists only the GC thread consumes: the stop-the-world mark
     /// never seeded the heap children of image objects the roots do not
@@ -102,7 +103,9 @@ impl TaggedHeap {
             self.staged_mapped_cons_scan = None;
             self.staged_mapped_veclikes = None;
         }
-        self.begin_collection();
+        // A stop-the-world first partition cycle pre-marks the image before
+        // its flat seed (`premark_mapped_image`).
+        self.begin_collection_with(true);
     }
 
     /// True while the background GC thread is marking (between the start and

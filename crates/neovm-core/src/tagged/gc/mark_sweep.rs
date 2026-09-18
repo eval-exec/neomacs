@@ -52,6 +52,13 @@ impl TaggedHeap {
     }
 
     pub(crate) fn begin_collection(&mut self) {
+        self.begin_collection_with(false);
+    }
+
+    /// [`Self::begin_collection`], told whether the stop-the-world entry
+    /// (`begin_stw_collection`) called it: only that entry pre-marks the
+    /// image for a first partition cycle (`premark_mapped_image`).
+    pub(super) fn begin_collection_with(&mut self, stw_entry: bool) {
         // (Pre-mark verification removed — unmarked objects may have stale data
         //  that will be swept. Only post-mark verification is meaningful.)
 
@@ -76,6 +83,7 @@ impl TaggedHeap {
         // `begin_collection` ONLY (`concurrent_begin` delegates here; no other
         // entry point may flip).
         self.mark_parity = !self.mark_parity;
+        self.image_premarked = false;
 
         let clear_t0 = std::time::Instant::now();
         // The first partition cycle runs a NORMAL full collection (so it traces
@@ -191,6 +199,9 @@ impl TaggedHeap {
                 // dump-less bootstrap): keep every dump-referenced heap
                 // object alive so none is swept and left dangling when the
                 // image is blackened at the end of this cycle.
+                if stw_entry {
+                    self.premark_mapped_image();
+                }
                 self.seed_all_mapped_children();
             }
         }
@@ -271,18 +282,7 @@ impl TaggedHeap {
         //     population this one-shot promotion ever tenures).
         self.promote_arena_pages_and_retire_full();
         // 2. Blacken the mapped image.
-        for range in &mut self.mapped_cons_ranges {
-            range.mark_all();
-        }
-        for range in &mut self.mapped_float_ranges {
-            range.mark_all();
-        }
-        for object in &mut self.mapped_veclike_objects {
-            object.marked = true;
-        }
-        for object in &mut self.mapped_string_objects {
-            object.marked = true;
-        }
+        self.mark_mapped_image_side_tables();
         // Mapped (pdump) weak hash tables become permanent-black here too (the
         // preloaded image ships several, e.g. `print-number-table` helpers and
         // internal caches). Like tenured weak tables, they would never be
@@ -528,6 +528,40 @@ impl TaggedHeap {
         tenured
     }
 
+    /// Mark every mapped (image) object in the side tables before the
+    /// stop-the-world first partition cycle's flat seed
+    /// ([`Self::seed_all_mapped_children`]), which pushes the heap children
+    /// of every mapped object whether or not the roots reach it. The mark
+    /// then finds an image object already marked when a root or a child
+    /// reaches it, instead of tracing it again: the first cycle traced each
+    /// reached image veclike twice and walked the image's cons spines twice.
+    ///
+    /// Only for the stop-the-world entry. In the armed CONCURRENT first
+    /// cycle the GC thread defers the veclike kinds it cannot trace
+    /// (byte-code, lambdas, hash tables, ...) and the termination traces
+    /// their children only while the side bit is clear, so a pre-mark there
+    /// would sweep those children.
+    fn premark_mapped_image(&mut self) {
+        self.mark_mapped_image_side_tables();
+        self.image_premarked = true;
+    }
+
+    /// Set the side-table mark of every mapped object.
+    fn mark_mapped_image_side_tables(&mut self) {
+        for range in &mut self.mapped_cons_ranges {
+            range.mark_all();
+        }
+        for range in &mut self.mapped_float_ranges {
+            range.mark_all();
+        }
+        for object in &mut self.mapped_veclike_objects {
+            object.marked = true;
+        }
+        for object in &mut self.mapped_string_objects {
+            object.marked = true;
+        }
+    }
+
     /// First-cycle only: seed the heap children of EVERY mapped object so they
     /// survive the cycle's sweep. Dumped objects are never freed, so a heap
     /// object referenced only by an (otherwise unreachable) dumped object must
@@ -560,6 +594,10 @@ impl TaggedHeap {
             .map(|o| o.header)
             .collect();
         for ptr in veclike {
+            #[cfg(test)]
+            {
+                self.mapped_veclike_traces += 1;
+            }
             unsafe { self.trace_veclike(ptr) };
         }
         self.seed_mapped_string_children();
@@ -683,8 +721,9 @@ impl TaggedHeap {
     /// symbol's value cell (GNU keeps them). Image objects are never freed,
     /// and `promote_and_blacken` marks every one of them at the end of this
     /// same cycle, which is what every later cycle reads; this answers the
-    /// same way one cycle earlier. The stop-the-world first cycle traces the
-    /// image exactly and keeps reading the side bits.
+    /// same way one cycle earlier. The stop-the-world first cycle reads the
+    /// side bits, which its pre-mark (`premark_mapped_image`) has set for
+    /// the whole image: the same answer again.
     pub(super) fn is_value_marked(&self, value: TaggedValue) -> bool {
         if let crate::tagged::value::ValueKind::Symbol(id) = value.kind() {
             return crate::emacs_core::intern::is_canonical_id(id)
@@ -1279,8 +1318,10 @@ impl TaggedHeap {
         // by the dump remembered set (`seed_mapped_remembered`). Skipping these
         // avoids pushing+draining the ~450k interned-symbol value/function/plist
         // cells that still point at dumped objects on every root handshake — the
-        // dominant cost of the start + termination pauses.
-        if self.dump_blackened && self.owner_is_mapped(root) {
+        // dominant cost of the start + termination pauses. The same holds in a
+        // stop-the-world first cycle that pre-marked the image: the flat seed
+        // has pushed the heap children of every image object.
+        if (self.dump_blackened || self.image_premarked) && self.owner_is_mapped(root) {
             return;
         }
         self.push_gray(root, origin);
@@ -1624,6 +1665,7 @@ impl TaggedHeap {
         self.first_cycle_concurrent = false;
         self.staged_mapped_cons_scan = None;
         self.staged_mapped_veclikes = None;
+        self.image_premarked = false;
 
         let sweep_us = sweep_t0.elapsed().as_micros() as u64;
         // Eager STW sweep cost feeds the same lifetime total as the deferred

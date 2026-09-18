@@ -3213,6 +3213,11 @@ fn concurrent_first_cycle_keeps_weak_entries_keyed_by_live_image_objects() {
         if concurrent {
             heap.arm_first_cycle_concurrent();
             heap.concurrent_begin();
+            // Only the stop-the-world first cycle may pre-mark the image: the
+            // GC thread traces deferred image kinds' children only while
+            // their side bit is clear.
+            assert!(!heap.image_premarked);
+            assert!(!heap.mapped_cons_ranges[0].is_marked_ptr(cell));
             heap.seed_root(weak);
             heap.seed_root(key);
             heap.launch_concurrent_mark();
