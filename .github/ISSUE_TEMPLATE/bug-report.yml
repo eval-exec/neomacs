@@ -3,6 +3,11 @@ description: Report a bug in neomacs
 title: "[Bug]: "
 labels:
   - bug
+  # Every new report starts unread; a maintainer replaces this with the
+  # `status:` that matches what triage found.
+  # Quoted: a bare `status: needs-triage` in a sequence is a YAML mapping, not
+  # the label name.
+  - 'status: needs-triage'
 body:
   - type: markdown
     attributes:
@@ -60,6 +65,37 @@ body:
       description: Paste every line printed by the exact Neomacs executable that showed the bug.
       placeholder: Paste the complete output of `neomacs --version` here.
       render: shell
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      description: Where the bug happens. A maintainer applies the matching `platform:` label.
+      options:
+        - Linux (X11)
+        - Linux (Wayland)
+        - Linux (terminal only, no window system)
+        - macOS
+        - Windows
+        - Android
+        - WebAssembly
+        - Other (not listed above)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install_source
+    attributes:
+      label: Install source
+      description: Where the executable you ran came from. Which build it is decides whether a fix is already in it.
+      options:
+        - Prebuilt release asset (downloaded from Releases)
+        - Built from source (`cargo xtask fresh-build --release`)
+        - Built from source, some other way
+        - Distribution / package manager
+        - Not sure
     validations:
       required: true
 

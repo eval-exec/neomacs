@@ -3,6 +3,10 @@ description: Suggest a new feature or improvement for neomacs
 title: "[Feature]: "
 labels:
   - enhancement
+  # Same starting point as a bug report: unread until triaged.
+  # Quoted: a bare `status: needs-triage` in a sequence is a YAML mapping, not
+  # the label name.
+  - 'status: needs-triage'
 body:
   - type: markdown
     attributes:
@@ -43,6 +47,24 @@ body:
       label: Impact
       description: How important is this? Who benefits?
       placeholder: Scope, priority, and any compatibility concerns.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      description: If this only matters on some platforms, say which. A maintainer applies the matching `platform:` label.
+      options:
+        - Applies everywhere
+        - Linux (X11)
+        - Linux (Wayland)
+        - Linux (terminal only, no window system)
+        - macOS
+        - Windows
+        - Android
+        - WebAssembly
+        - Other (not listed above)
     validations:
       required: false
 
