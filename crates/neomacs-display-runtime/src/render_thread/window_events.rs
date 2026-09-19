@@ -115,7 +115,7 @@ impl RenderApp {
         if self.frame_windows.get_by_winit(window_id).is_none() {
             return;
         }
-        if self.lifecycle_flags.shutdown_requested {
+        if self.lifecycle_flags.is_shutting_down() {
             tracing::debug!(
                 "Dropping window event after shutdown requested: {:?}",
                 event
@@ -126,18 +126,13 @@ impl RenderApp {
         match event {
             WindowEvent::CloseRequested => {
                 tracing::info!("Window close requested");
-                let is_primary = self.frame_windows.is_primary_winit(window_id);
                 let emacs_fid = self.emacs_frame_for_window_event(window_id);
+                // Like GNU's DELETE_WINDOW_EVENT, this asks Lisp to decide.
+                // Saving, confirmation dialogs, and delete-frame hooks still
+                // need this window and the live render command receiver.
                 self.comms.send_input(InputEvent::WindowClose {
                     emacs_frame_id: emacs_fid,
                 });
-                if is_primary {
-                    self.lifecycle_flags.shutdown_requested = true;
-                    self.handle_exiting();
-                    event_loop.exit();
-                } else {
-                    self.frame_windows.request_destroy(emacs_fid);
-                }
             }
 
             WindowEvent::Destroyed => {
@@ -150,7 +145,9 @@ impl RenderApp {
                     is_primary
                 );
                 if is_primary {
-                    self.lifecycle_flags.shutdown_requested = true;
+                    self.lifecycle_flags.request_shutdown(
+                        super::state::RenderShutdownReason::NativeWindowDestroyed,
+                    );
                     self.handle_exiting();
                     event_loop.exit();
                 } else {

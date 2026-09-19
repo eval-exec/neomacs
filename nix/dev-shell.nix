@@ -33,7 +33,9 @@ pkgs.mkShell {
   ++ lib.optionals isLinux [
     # Linux-only reverse debugger for the JIT wild-store hunt.
     pkgs.rr
-    # Owned headless compositor for native precise-scroll GUI regressions.
+    # Owned compositor, keyboard input, and screenshots for native GUI regressions.
+    pkgs.wtype
+    pkgs.grim
     pkgs.sway
   ];
 

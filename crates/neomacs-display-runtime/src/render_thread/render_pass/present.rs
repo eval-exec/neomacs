@@ -38,7 +38,7 @@ impl RenderApp {
         emacs_frame_id: u64,
         compositor_only_hint: bool,
     ) -> SubmissionResult {
-        if self.lifecycle_flags.shutdown_requested {
+        if self.lifecycle_flags.is_shutting_down() {
             return SubmissionResult::Skipped;
         }
         self.prepare_frame_state_for_render();

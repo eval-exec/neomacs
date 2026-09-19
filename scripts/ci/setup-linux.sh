@@ -85,11 +85,13 @@ case "$profile" in
             imagemagick
             weston
             sway
+            wtype
+            grim
             fonts-noto-core
             fonts-dejavu-core
             fonts-ubuntu
         )
-        required_commands=(gpg Xvfb xauth xdpyinfo xdotool import weston sway)
+        required_commands=(gpg Xvfb xauth xdpyinfo xdotool import weston sway wtype grim)
         requires_libfaketime=true
         ;;
     release)

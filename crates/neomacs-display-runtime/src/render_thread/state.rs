@@ -891,20 +891,37 @@ pub(super) struct RenderApp {
     pub(super) frame_coordinator: super::frame_sched::FrameCoordinator,
 }
 
+/// Only terminal causes may authorize display teardown. A native close
+/// request is intentionally absent: live-frame close decisions belong to Lisp.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum RenderShutdownReason {
+    EvaluatorShutdown,
+    NativeWindowDestroyed,
+    StartupCancelled,
+}
+
 pub(super) struct RenderLifecycle {
     pub resumed_seen: bool,
     pub about_to_wait_seen: bool,
     pub poll_when_idle: bool,
-    pub shutdown_requested: bool,
+    shutdown_reason: Option<RenderShutdownReason>,
 }
 
 impl RenderLifecycle {
+    pub fn request_shutdown(&mut self, reason: RenderShutdownReason) {
+        self.shutdown_reason.get_or_insert(reason);
+    }
+
+    pub fn is_shutting_down(&self) -> bool {
+        self.shutdown_reason.is_some()
+    }
+
     pub fn new(poll_when_idle: bool) -> Self {
         Self {
             resumed_seen: false,
             about_to_wait_seen: false,
             poll_when_idle,
-            shutdown_requested: false,
+            shutdown_reason: None,
         }
     }
 }

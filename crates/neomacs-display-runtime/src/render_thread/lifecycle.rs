@@ -265,7 +265,7 @@ impl RenderApp {
             );
             self.lifecycle_flags.about_to_wait_seen = true;
         }
-        if self.lifecycle_flags.shutdown_requested {
+        if self.lifecycle_flags.is_shutting_down() {
             self.handle_exiting();
             event_loop.exit();
             return;
@@ -299,7 +299,8 @@ impl RenderApp {
                         crate::thread_comm::LifecycleCommand::Shutdown
                     )
                 ) {
-                    self.lifecycle_flags.shutdown_requested = true;
+                    self.lifecycle_flags
+                        .request_shutdown(super::state::RenderShutdownReason::EvaluatorShutdown);
                     event_loop.exit();
                     return;
                 }

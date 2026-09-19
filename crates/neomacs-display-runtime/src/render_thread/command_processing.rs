@@ -15,7 +15,9 @@ impl RenderApp {
                 RenderCommand::Lifecycle(c) => {
                     if let LifecycleCommand::Shutdown = c {
                         tracing::info!("Render thread received shutdown command");
-                        self.lifecycle_flags.shutdown_requested = true;
+                        self.lifecycle_flags.request_shutdown(
+                            super::state::RenderShutdownReason::EvaluatorShutdown,
+                        );
                         should_exit = true;
                         continue;
                     }
