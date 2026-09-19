@@ -375,6 +375,36 @@ fn eval_capitalize_word_updates_buffer_text() {
     assert_eq!(buffer.buffer_string(), "Hello world");
 }
 
+/// GNU 31.1: the region and word case commands leave text properties where
+/// they were -- `casify_region` overwrites a same-size character in place, so
+/// every interval still spans the same characters. They used to be stripped
+/// from the whole region (and from the word, through a generic replace).
+#[test]
+fn case_commands_keep_text_properties_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"
+        (with-temp-buffer
+          (insert "hello Wörld foo éclair")
+          (put-text-property 1 6 'face 'bold)
+          (put-text-property 7 12 'mouse-face 'highlight)
+          (put-text-property 3 9 'help-echo "x")
+          (put-text-property 17 23 'face 'italic)
+          (upcase-region 1 6)
+          (capitalize-region 7 16)
+          (downcase-region 1 3)
+          (upcase-initials-region 13 16)
+          (goto-char 17)
+          (capitalize-word 1)
+          (list (buffer-string) (point) (point-max)))
+        "#,
+    );
+    assert_eq!(
+        result,
+        "OK (#(\"heLLO Wörld Foo Éclair\" 0 2 (face bold) 2 5 (help-echo \"x\" face bold) 5 6 (help-echo \"x\") 6 8 (help-echo \"x\" mouse-face highlight) 8 11 (mouse-face highlight) 16 22 (face italic)) 23 23)"
+    );
+}
+
 /// GNU 31.1: `capitalize-word` & co. are `casify_region (PT, farend)` -- a
 /// read-only buffer signals even when nothing would change, the undo record
 /// is `((START . END) (ORIGINAL . START) ...)`, a read-only character

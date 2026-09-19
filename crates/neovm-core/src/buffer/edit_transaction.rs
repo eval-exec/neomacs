@@ -430,7 +430,15 @@ impl Buffer {
                 ReplaceSideEffectPolicy::current_buffer(),
             );
         }
-        if let Some(text_properties) = plan.text_properties() {
+        if replacement.old_char_len() == replacement.new_char_len() {
+            // Every character kept its count, so each interval still spans
+            // the same characters: GNU `casify_region` overwrites a
+            // same-size character in place (`memcpy`) and replaces any other
+            // through `replace_range_2`, whose `offset_intervals` shift is
+            // zero here -- either way the text properties stay exactly as
+            // they were. Re-seating them from the (property-less) cased
+            // string stripped every property in the region.
+        } else if let Some(text_properties) = plan.text_properties() {
             self.text.text_props_append_shifted_at_emacs_byte_pos(
                 text_properties,
                 replacement.byte_start(),
