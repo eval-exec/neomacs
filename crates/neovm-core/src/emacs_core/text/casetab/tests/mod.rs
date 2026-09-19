@@ -418,19 +418,30 @@ fn standard_case_table_is_char_table() {
 #[test]
 fn standard_case_table_has_extra_slots() {
     crate::test_utils::init_test_tracing();
+    // GNU `init_casetab_once': four real `case-table' char-tables, each with
+    // the purpose's three extra slots; canon's third slot is eqv.
+    use super::super::chartable::is_char_table;
     let ct = make_standard_case_table_value();
-    if ct.is_vector() {
-        let vec = ct.as_vector_data().unwrap().clone();
-        // extra count should be 3
-        assert!(vec[CT_EXTRA_COUNT].is_fixnum());
-        // extra slots 0,1,2 should be char-tables (subsidiary tables)
-        use super::super::chartable::is_char_table;
-        assert!(is_char_table(&vec[CT_EXTRA_START])); // upcase
-        assert!(is_char_table(&vec[CT_EXTRA_START + 1])); // canonicalize
-        assert!(is_char_table(&vec[CT_EXTRA_START + 2])); // equivalences
-    } else {
-        panic!("expected vector");
+    assert!(
+        ct.is_char_table(),
+        "the standard table is a real char-table"
+    );
+    assert!(is_case_table(&ct));
+    let up = case_table_extra(ct, 0);
+    let canon = case_table_extra(ct, 1);
+    let eqv = case_table_extra(ct, 2);
+    for sub in [up, canon, eqv] {
+        assert!(sub.is_char_table() && is_char_table(&sub));
+        assert_eq!(sub.as_char_table_obj().unwrap().extras.len(), 3);
     }
+    assert_eq!(case_table_extra(canon, 2).bits(), eqv.bits());
+    let at = |table: Value, ch: i64| super::super::chartable::ct_ref(&table, ch);
+    assert_eq!(at(ct, 'A' as i64), Value::fixnum('a' as i64));
+    assert_eq!(at(up, 'a' as i64), Value::fixnum('A' as i64));
+    assert_eq!(at(canon, 'Q' as i64), Value::fixnum('q' as i64));
+    assert_eq!(at(eqv, 'q' as i64), Value::fixnum('Q' as i64));
+    assert_eq!(at(eqv, 'Q' as i64), Value::fixnum('q' as i64));
+    assert_eq!(at(up, '1' as i64), Value::fixnum('1' as i64));
 }
 
 // -----------------------------------------------------------------------
@@ -556,4 +567,36 @@ fn standard_case_table_path_is_byte_identical() {
     )
     .unwrap();
     assert!(r.is_t());
+}
+
+#[test]
+fn the_standard_case_tables_and_replace_match_case_answer_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // GNU 31.1: every subsidiary carries the three extra slots, canon's
+    // third is eqv, and `replace-match' carries the match's case over.
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"
+        (let* ((st (standard-case-table))
+               (up (char-table-extra-slot st 0))
+               (canon (char-table-extra-slot st 1))
+               (eqv (char-table-extra-slot st 2)))
+          (list (aref st ?A) (aref st ?a) (aref up ?a) (aref up ?1) (aref canon ?Q)
+                (aref eqv ?q) (aref eqv ?Q) (aref st ?É) (aref up ?é) (aref canon ?Ω)
+                (aref st 1)
+                (eq (char-table-extra-slot canon 2) eqv)
+                (length (list (char-table-extra-slot up 0) (char-table-extra-slot up 2)))
+                (with-temp-buffer
+                  (insert "Hello World and HELLO WORLD and hello world and Émile")
+                  (let ((case-fold-search t))
+                    (goto-char 1)
+                    (while (re-search-forward "hello world\\|émile" nil t)
+                      (replace-match
+                       (if (string-match-p "mile" (match-string 0)) "zoé" "bye there"))))
+                  (buffer-string))))
+        "#,
+    );
+    assert_eq!(
+        result,
+        "OK (97 97 65 49 113 81 113 233 201 969 1 t 2 \"Bye There and BYE THERE and bye there and Zoé\")"
+    );
 }

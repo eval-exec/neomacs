@@ -278,54 +278,37 @@ fn case_table_sym_id() -> SymId {
 }
 
 fn make_standard_case_table_value() -> Value {
-    let mut downcase_pairs = Vec::with_capacity(128);
-    let mut upcase_pairs = Vec::with_capacity(128);
-    let mut canon_pairs = Vec::with_capacity(128);
-    let mut eqv_pairs = Vec::with_capacity(128);
-
+    // GNU `init_casetab_once' (casetab.c): four `case-table' char-tables,
+    // each carrying the purpose's three extra slots, filled for ASCII.
+    // `set_case_table' later points canon's third slot at eqv.  These are
+    // real char-tables, so a lookup indexes instead of scanning the pairs
+    // `characters.el' adds for every cased character.
+    let down = make_empty_case_table();
+    let up = make_empty_case_table();
+    let canon = make_empty_case_table();
+    let eqv = make_empty_case_table();
     for i in 0i64..128 {
-        // Downcase: A-Z -> a-z, others -> themselves
-        let down = if (b'A' as i64..=b'Z' as i64).contains(&i) {
+        let lower = if (b'A' as i64..=b'Z' as i64).contains(&i) {
             i + (b'a' as i64 - b'A' as i64)
         } else {
             i
         };
-        downcase_pairs.push((i, Value::fixnum(down)));
-
-        // Upcase: a-z -> A-Z, others -> themselves
-        let up = if (b'a' as i64..=b'z' as i64).contains(&i) {
+        let upper = if (b'a' as i64..=b'z' as i64).contains(&i) {
             i + (b'A' as i64 - b'a' as i64)
         } else {
             i
         };
-        upcase_pairs.push((i, Value::fixnum(up)));
-
-        // Canonicalize: same as downcase
-        canon_pairs.push((i, Value::fixnum(down)));
-
-        // Equivalences: A -> a, a -> A, others -> themselves
-        let eqv = if (b'A' as i64..=b'Z' as i64).contains(&i) {
-            i + (b'a' as i64 - b'A' as i64)
-        } else if (b'a' as i64..=b'z' as i64).contains(&i) {
-            i + (b'A' as i64 - b'a' as i64)
-        } else {
-            i
-        };
-        eqv_pairs.push((i, Value::fixnum(eqv)));
+        let other = if lower != i { lower } else { upper };
+        super::chartable::ct_set_single(&down, i, Value::fixnum(lower));
+        super::chartable::ct_set_single(&up, i, Value::fixnum(upper));
+        super::chartable::ct_set_single(&canon, i, Value::fixnum(lower));
+        super::chartable::ct_set_single(&eqv, i, Value::fixnum(other));
     }
-
-    // Build subsidiary char-tables (no extra slots)
-    let upcase_ct = build_char_table("case-table", &[], Value::NIL, &upcase_pairs);
-    let canon_ct = build_char_table("case-table", &[], Value::NIL, &canon_pairs);
-    let eqv_ct = build_char_table("case-table", &[], Value::NIL, &eqv_pairs);
-
-    // Build the main downcase char-table with 3 extra slots
-    build_char_table(
-        "case-table",
-        &[upcase_ct, canon_ct, eqv_ct],
-        Value::NIL,
-        &downcase_pairs,
-    )
+    set_case_table_extra(down, 0, up);
+    set_case_table_extra(down, 1, canon);
+    set_case_table_extra(down, 2, eqv);
+    set_case_table_extra(canon, 2, eqv);
+    down
 }
 
 /// Build a custom case table equal to the standard ASCII table but with one
