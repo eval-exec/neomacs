@@ -4936,6 +4936,57 @@ fn featurep_sees_emacs_from_core_startup_features() {
     );
 }
 
+/// GNU 31.1: `featurep' is `(memq FEATURE features)' on the variable's
+/// current value. A dynamic `let' of `features' is seen, and an improper
+/// list signals as `memq' does. `features' is not special, so a lexical
+/// `let' of it is invisible.
+#[test]
+fn featurep_is_memq_on_the_features_value_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"
+        (list
+         (eval '(let ((features (cons 'fp-local features))) (featurep 'fp-local)) nil)
+         (eval '(let ((features '(x y . z))) (condition-case e (featurep 'q) (error e))) nil)
+         (eval '(let ((features '(x y . z))) (condition-case e (featurep 'y) (error e))) nil)
+         (eval '(let ((features nil)) (featurep 'emacs)) nil)
+         (eval '(let ((features 'notalist)) (condition-case e (featurep 'emacs) (error e))) nil)
+         (eval '(let ((features (cons 'fp-lex features))) (featurep 'fp-lex)) t)
+         (featurep 'emacs)
+         (featurep 'no-such-feature-xyz))
+        "#,
+    );
+    assert_eq!(
+        result,
+        "OK (t (wrong-type-argument listp (x y . z)) t nil (wrong-type-argument listp notalist) nil t nil)"
+    );
+}
+
+#[test]
+fn byte_code_edits_to_features_stick_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // GNU's Fbyte_code runs the vector with no bracket around `features':
+    // a push, a delq and a dynamic let inside it behave as they would in
+    // any other Lisp code.
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"
+        (let ((bc (lambda (s v d) (funcall 'byte-code s v d))))
+          (list
+           (progn (funcall bc "\301\010\102\020\302\301\041\207" [features bc-a featurep] 2)
+                  (and (memq 'bc-a features) t))
+           (progn (funcall bc "\301\010\102\020\302\207" [features bc-b nil] 2)
+                  (and (memq 'bc-b features) t))
+           (progn (push 'bc-c features)
+                  (funcall bc "\301\302\010\042\020\303\302\041\207" [features delq bc-c featurep] 3)
+                  (and (memq 'bc-c features) t))
+           (list (funcall bc "\301\030\302\303\041\051\207" [features (bc-d) featurep bc-d] 2)
+                 (featurep 'emacs)
+                 (and (memq 'bc-d features) t))))
+        "#,
+    );
+    assert_eq!(result, "OK (t t nil (t t nil))");
+}
+
 #[test]
 fn featurep_accepts_optional_subfeature_arg() {
     crate::test_utils::init_test_tracing();

@@ -1978,6 +1978,12 @@ pub(crate) fn builtin_run_window_scroll_functions(
     result
 }
 
+/// The symbol `features', interned once.
+fn features_symbol_id() -> crate::emacs_core::intern::SymId {
+    static ID: std::sync::OnceLock<crate::emacs_core::intern::SymId> = std::sync::OnceLock::new();
+    *ID.get_or_init(|| crate::emacs_core::intern::intern("features"))
+}
+
 pub(crate) fn builtin_featurep(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_min_args("featurep", &args, 1)?;
     expect_max_args("featurep", &args, 2)?;
@@ -1988,11 +1994,20 @@ pub(crate) fn builtin_featurep(eval: &mut super::eval::Context, args: Vec<Value>
             vec![Value::symbol("symbolp"), args[0]],
         )
     })?;
-    crate::emacs_core::eval::refresh_features_from_variable_in_state(
-        &eval.obarray,
-        &mut eval.features,
-    );
-    if !eval.features.contains(&sym_id) {
+    // GNU `Ffeaturep`: `Fmemq (feature, Vfeatures)` on the variable's
+    // current value. Rebuilding the feature cache from a copy of the whole
+    // list on every call cost ~21K instructions, 4K times per org-journal
+    // file open; the walk also signals on an improper `features' as GNU's
+    // does. (`features' is not special in GNU, so a lexical `let' of it
+    // never reaches here.)
+    let features = eval
+        .obarray
+        .symbol_value_id(features_symbol_id())
+        .copied()
+        .unwrap_or(Value::NIL);
+    if super::cons_list::builtin_memq_values(feature, features, eval.symbols_with_pos_enabled)?
+        .is_nil()
+    {
         return Ok(Value::NIL);
     }
 

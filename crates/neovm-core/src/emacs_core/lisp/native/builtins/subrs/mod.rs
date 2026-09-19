@@ -4588,11 +4588,8 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
                 lazy_gnu_code: None,
             };
 
-            ctx.refresh_features_from_variable();
             let mut vm = crate::emacs_core::bytecode::Vm::from_context(ctx);
-            let result = vm.execute(&bc, vec![]);
-            ctx.sync_features_variable();
-            result
+            vm.execute(&bc, vec![])
         }),
         SubrArity::new(3, Some(3)),
     ));
