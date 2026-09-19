@@ -9,6 +9,8 @@ description = "Standalone Rust binary for Neomacs (no C dependency)"
 build = "build.rs"
 
 [features]
+# Windows distribution helpers; enabled by xtask on Windows only.
+windows-tools = []
 # Linux production builds enable `video` through `cargo xtask fresh-build`.
 # Keep it out of Cargo defaults so this Linux packaging concern does not change
 # the established macOS/Windows feature surface.
@@ -73,6 +75,17 @@ test = false
 [[bin]]
 name = "cmdproxy"
 path = "src/bin/cmdproxy/main.rs"
+required-features = ["windows-tools"]
+
+[[bin]]
+name = "runneomacs"
+path = "src/bin/runneomacs/main.rs"
+required-features = ["windows-tools"]
+
+[[test]]
+name = "windows_launcher"
+path = "tests/windows_launcher.rs"
+required-features = ["windows-tools"]
 
 
 [dependencies]
@@ -106,7 +119,7 @@ tikv-jemalloc-sys = { version = "0.7", optional = true, default-features = false
 [target.'cfg(windows)'.dependencies]
 crossterm_winapi = "0.9.1"
 windows-version = "0.1.7"
-windows-sys.workspace = true
+windows-sys = { workspace = true, features = ["Win32_System_Environment", "Win32_UI_WindowsAndMessaging"] }
 
 [dev-dependencies]
 neomacs-infra.workspace = true

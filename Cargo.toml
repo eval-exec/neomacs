@@ -52,7 +52,7 @@ cargo-features = ["webview"]
 video-backend = "none"
 
 [workspace.metadata.neomacs-production-capabilities.windows]
-cargo-features = []
+cargo-features = ["windows-tools"]
 video-backend = "none"
 
 # Configuration for cross-rs (`cross`), folded in from a root-level

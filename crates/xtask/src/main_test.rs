@@ -502,7 +502,7 @@ fn windows_installer_owns_current_user_start_menu_shortcuts() {
     ));
 
     assert!(installer.contains(
-        r#"CreateShortcut "$SMPROGRAMS\${PRODUCT_NAME}\${PRODUCT_NAME}.lnk" "$INSTDIR\bin\neomacs.exe""#
+        r#"CreateShortcut "$SMPROGRAMS\${PRODUCT_NAME}\${PRODUCT_NAME}.lnk" "$INSTDIR\bin\runneomacs.exe""#
     ));
     assert!(installer.contains(
         r#"CreateShortcut "$SMPROGRAMS\${PRODUCT_NAME}\Uninstall ${PRODUCT_NAME}.lnk" "$INSTDIR\uninstall.exe""#
@@ -866,7 +866,7 @@ fn initial_cargo_build_passes_webview_on_darwin() {
 
 #[test]
 #[cfg(target_os = "windows")]
-fn initial_cargo_build_passes_no_features_on_windows() {
+fn initial_cargo_build_enables_windows_helpers_on_windows() {
     let options = parse_options(&["--release"]);
     let args = initial_cargo_build_args(&options);
 
@@ -877,6 +877,8 @@ fn initial_cargo_build_passes_no_features_on_windows() {
             OsString::from("--verbose"),
             OsString::from("-p"),
             OsString::from("neomacs"),
+            OsString::from("--features"),
+            OsString::from("windows-tools"),
             OsString::from("--profile"),
             OsString::from("release"),
         ]

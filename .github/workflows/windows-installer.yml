@@ -14,6 +14,11 @@ on:
       - scripts/test-windows-installer.ps1
       - scripts/test-windows-installer-upgrade.ps1
       - crates/xtask/**
+      - Cargo.toml
+      - crates/neomacs/Cargo.toml
+      - crates/neomacs/src/bin/runneomacs/**
+      - crates/neomacs/src/bin/cmdproxy/**
+      - crates/neomacs/tests/windows_launcher.rs
   pull_request:
     paths:
       - .github/workflows/windows-installer.yml
@@ -27,6 +32,11 @@ on:
       - scripts/test-windows-installer.ps1
       - scripts/test-windows-installer-upgrade.ps1
       - crates/xtask/**
+      - Cargo.toml
+      - crates/neomacs/Cargo.toml
+      - crates/neomacs/src/bin/runneomacs/**
+      - crates/neomacs/src/bin/cmdproxy/**
+      - crates/neomacs/tests/windows_launcher.rs
   workflow_dispatch:
 
 permissions:
@@ -63,6 +73,7 @@ jobs:
         uses: ./.github/actions/setup-rust
         with:
           cache-key: windows-msvc-x86_64
+          install-nextest: true
 
       - name: Install NSIS
         run: choco install nsis -y
@@ -76,6 +87,12 @@ jobs:
         timeout-minutes: 150
         run: |
           cargo xtask fresh-build --release
+
+      - name: Test Windows launcher
+        shell: bash
+        env:
+          NEOMACS_BUILD_PROFILE: release
+        run: cargo nextest run -p neomacs --cargo-profile release --features windows-tools --test windows_launcher
 
       - name: GUI smoke (launch, frame snapshot, PNG readback)
         shell: bash

@@ -121,7 +121,7 @@ required_artifacts=(
   "$release_dir/neomacs.pdump"
 )
 if [[ "$target_triple" == *-windows-* ]]; then
-  required_artifacts+=("$release_dir/cmdproxy$binary_ext")
+  required_artifacts+=("$release_dir/cmdproxy$binary_ext" "$release_dir/runneomacs$binary_ext")
 fi
 for required in "${required_artifacts[@]}"; do
   if [[ ! -f "$required" ]]; then
@@ -162,6 +162,7 @@ for binary in neomacs-temacs bootstrap-neomacs mock-display; do
   install_binary_if_present "$binary" "$binary_ext" "$archlib_dir"
 done
 if [[ "$target_triple" == *-windows-* ]]; then
+  install_binary_if_present "runneomacs" "$binary_ext" "$package_dir/bin"
   install_binary_if_present "cmdproxy" "$binary_ext" "$archlib_dir"
 fi
 

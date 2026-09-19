@@ -150,6 +150,10 @@ Prefer system packages? Download them from
 | **macOS** *(experimental)* | `.dmg` · `.zip` · `.tar.gz` (Apple Silicon) |
 | **Windows** *(experimental)* | installer `.exe` · portable `.zip` (x86_64, aarch64) |
 
+On Windows, launch `runneomacs.exe` for the GUI without a console window.
+Installer shortcuts use this launcher. Use `neomacs.exe` from a terminal for
+`-nw`, `--batch`, redirected output, and shell exit status.
+
 For terminal, batch, and Linux container deployments, the complete application
 is also published for amd64 and arm64 on
 [`evalexec/neomacs`](https://hub.docker.com/r/evalexec/neomacs) and

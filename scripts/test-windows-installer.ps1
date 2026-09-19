@@ -217,6 +217,13 @@ try {
     }
   }
 
+  $shell = New-Object -ComObject WScript.Shell
+  $editorShortcut = $shell.CreateShortcut((Join-Path $startMenuDir "$productName.lnk"))
+  Assert-Equal $editorShortcut.TargetPath (Join-Path $binDir "runneomacs.exe") "GUI shortcut must target the Windows launcher"
+  if (-not (Test-Path $editorShortcut.TargetPath -PathType Leaf)) {
+    throw "installed GUI launcher is missing"
+  }
+
   # If another program takes ownership of an App Paths key after install, the
   # Neomacs uninstaller must leave that changed key intact.
   $replacementExecutable = "C:\replacement-owner\neomacs.exe"

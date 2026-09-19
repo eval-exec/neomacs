@@ -8,6 +8,7 @@ const SUPPORTED_SCHEMA_VERSION: u32 = 1;
 pub(crate) enum CargoCapability {
     Video,
     Webview,
+    WindowsTools,
 }
 
 impl CargoCapability {
@@ -15,6 +16,7 @@ impl CargoCapability {
         match self {
             Self::Video => "video",
             Self::Webview => "webview",
+            Self::WindowsTools => "windows-tools",
         }
     }
 }
@@ -137,6 +139,14 @@ fn validate_capabilities(
     host: HostPlatform,
     capabilities: &PlatformCapabilities,
 ) -> Result<(), String> {
+    let has_windows_tools = capabilities
+        .cargo_features
+        .contains(&CargoCapability::WindowsTools);
+    if has_windows_tools != matches!(host, HostPlatform::Windows) {
+        return Err(format!(
+            "Windows helpers must be enabled only for the Windows product, got {host:?}"
+        ));
+    }
     let has_video = capabilities
         .cargo_features
         .contains(&CargoCapability::Video);
@@ -175,6 +185,29 @@ mod tests {
         CargoCapability, HostPlatform, PlatformCapabilities, ProductionVideoBackend,
         validate_capabilities,
     };
+
+    #[test]
+    fn windows_helpers_belong_only_to_the_windows_product() {
+        let windows_without_helpers = PlatformCapabilities {
+            cargo_features: vec![],
+            video_backend: ProductionVideoBackend::None,
+        };
+        assert!(validate_capabilities(HostPlatform::Windows, &windows_without_helpers).is_err());
+        let windows = PlatformCapabilities {
+            cargo_features: vec![CargoCapability::WindowsTools],
+            video_backend: ProductionVideoBackend::None,
+        };
+        assert_eq!(
+            validate_capabilities(HostPlatform::Windows, &windows),
+            Ok(())
+        );
+        assert!(validate_capabilities(HostPlatform::Darwin, &windows).is_err());
+        let linux_with_helpers = PlatformCapabilities {
+            cargo_features: vec![CargoCapability::Video, CargoCapability::WindowsTools],
+            video_backend: ProductionVideoBackend::LinkedGstreamer,
+        };
+        assert!(validate_capabilities(HostPlatform::Linux, &linux_with_helpers).is_err());
+    }
 
     #[test]
     fn platform_and_video_backend_must_describe_one_real_product() {
