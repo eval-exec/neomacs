@@ -305,7 +305,16 @@ fn current_textprop_variable_value(
                 return (!value.is_unbound()).then_some(value);
             }
         }
-        _ => {}
+        // `default-text-properties` is a C-defined global: its forwarder is
+        // the value, read exactly as `symbol_value_id_copied` reads it,
+        // without looking the symbol up a second time.
+        crate::emacs_core::symbol::SymbolRedirect::Forwarded => {
+            // SAFETY: redirect=Forwarded selects the forwarder arm, and every
+            // forwarder is leaked at registration.
+            let fwd: &'static crate::emacs_core::forward::LispFwd = unsafe { &*sym.val.fwd };
+            return fwd.load();
+        }
+        crate::emacs_core::symbol::SymbolRedirect::Varalias => {}
     }
     obarray.symbol_value_id_copied(sym_id)
 }
