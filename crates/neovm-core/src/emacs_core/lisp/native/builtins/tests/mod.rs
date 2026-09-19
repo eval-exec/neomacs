@@ -18226,3 +18226,72 @@ fn mapcar_sees_the_debugger_redefine_the_mapped_builtin_like_gnu() {
     );
     assert_eq!(result, "OK ((1 replaced replaced) (exit lambda))");
 }
+
+#[test]
+fn case_folded_search_translates_whole_characters_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // GNU `re_search_2' tests the leading code of each TRANSLATED character
+    // against the fastmap.  Cyrillic, Greek and CJK under case folding, the
+    // characters GNU's tables do NOT fold (Kelvin sign, dotted I, long s),
+    // backward searches, strings, literal searches, and a custom table
+    // folding `é' to ASCII `e' -- which a byte-indexed fastmap skipped.
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"
+        (progn
+         (require 'cl-lib)
+         (let ((case-fold-search t))
+            (cl-flet ((fwd (text re) (with-temp-buffer (insert text) (goto-char 1) (re-search-forward re nil t)))
+                      (bwd (text re) (with-temp-buffer (insert text) (re-search-backward re nil t))))
+              (list
+               (fwd "xK" "k") (fwd "xK" "ka*") (fwd "xk" "K")
+               (fwd "xТ" "т") (fwd "xт" "Т") (fwd "abcТЕСТ" "тест") (fwd "abcтест" "ТЕСТ")
+               (fwd "xǅ" "ǆ") (fwd "xǄ" "ǅ") (fwd "xẞ" "ß") (fwd "xΣ" "ς") (fwd "xİ" "i")
+               (fwd "xſ" "s") (fwd "xs" "ſ") (fwd "xµ" "μ") (fwd "xΜ" "µ")
+               (fwd "日本語テキスト" "テキ") (fwd "ﾃｷｽﾄ" "ﾄ")
+               (bwd "ТЕСТabc" "тест") (bwd "тестabc" "ТЕСТ") (bwd "xΣy" "σ") (bwd "zzzz" "ж")
+               (fwd (make-string 50 ?ж) "Жq") (fwd (concat (make-string 50 ?ж) "Q") "жq")
+               (string-match "тест" "abcТЕСТ") (string-match "Жq" "жжжжQ")
+               (with-temp-buffer (insert "abcТЕСТ") (goto-char 1) (search-forward "тест" nil t))
+               (with-temp-buffer (insert "ТЕСТabc") (search-backward "тест" nil t))
+               (let ((tbl (copy-case-table (standard-case-table))))
+                 (set-case-syntax-pair ?é ?e tbl)
+                 (with-temp-buffer
+                   (set-case-table tbl)
+                   (insert "xyé")
+                   (list (progn (goto-char 1) (re-search-forward "e" nil t))
+                         (progn (goto-char 1) (re-search-forward "[e]" nil t))
+                         (progn (goto-char (point-max)) (re-search-backward "e" nil t))
+                         (progn (goto-char 1) (re-search-forward "é" nil t)))))))))
+        "#,
+    );
+    assert_eq!(
+        result,
+        "OK (nil nil nil 3 3 8 8 3 3 3 3 nil nil nil 3 3 6 5 1 1 2 nil nil 52 3 3 8 1 (4 4 3 4))"
+    );
+}
+
+#[test]
+fn raw_byte_patterns_find_eight_bit_chars_in_multibyte_text_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // GNU `analyze_first' adds the leading code of each raw byte a charset
+    // (or a unibyte literal) holds, so a folded or plain search over
+    // multibyte text still stops at the eight-bit character.
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"
+        (let ((s (string-to-multibyte (concat "ab" (unibyte-string #xe1) "c" (unibyte-string #xc0) "d"))))
+   (list
+    (let ((case-fold-search t))
+      (list (string-match "[\341]" s) (string-match "[\340-\377]" s) (string-match "[\302-\377]" s)
+            (with-temp-buffer (insert s) (goto-char 1) (re-search-forward "[\341]" nil t))
+            (with-temp-buffer (insert s) (re-search-backward "[\341]" nil t))
+            (with-temp-buffer (insert s) (goto-char 3) (looking-at "[\341]"))
+            (string-match "[\301]" s) (string-match "\341" s) (string-match "\300d" s)
+            (with-temp-buffer (insert s) (goto-char 1) (re-search-forward "\341" nil t))))
+    (let ((case-fold-search nil))
+      (list (string-match "[\341]" s) (string-match "\341" s) (string-match "[\300]" s)
+            (with-temp-buffer (insert s) (goto-char 1) (re-search-forward "[\300-\377]" nil t))
+            (with-temp-buffer (insert s) (re-search-backward "\341" nil t))))))
+        "#,
+    );
+    assert_eq!(result, "OK ((2 2 2 4 3 t nil 2 4 4) (2 2 4 4 3))");
+}

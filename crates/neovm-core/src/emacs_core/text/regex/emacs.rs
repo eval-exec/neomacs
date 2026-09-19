@@ -242,6 +242,14 @@ pub(crate) struct CompiledPattern {
     /// with byte c.  Used by `re_search` to skip non-matching positions.
     pub fastmap: [bool; 256],
 
+    /// The fastmap a case-folded search over MULTIBYTE text consults, indexed
+    /// by the leading code of the TRANSLATED character (GNU `re_search_2`).
+    /// It differs from `fastmap` only for a leading multibyte literal: its
+    /// characters are stored translated, so the one leading code of the
+    /// stored character is the only candidate, where `fastmap` -- indexed by
+    /// a translated BYTE -- has to admit every non-ASCII leading byte.
+    pub fastmap_translated: [bool; 256],
+
     /// Whether the fastmap is valid (needs recomputation after compile).
     pub fastmap_accurate: bool,
 
@@ -410,6 +418,54 @@ pub struct CaseTranslation {
     /// [`CASE_TRANSLATION_UNFILLED`] marks a slot not yet computed.
     byte: [std::cell::Cell<u32>; 256],
     table: Option<crate::emacs_core::value::Value>,
+    /// Memo for codes from 256 up when backed by a char-table, allocated on
+    /// the first such code (see [`WideTranslationMemo`]).
+    wide: std::cell::OnceCell<Box<WideTranslationMemo>>,
+}
+
+/// Direct-mapped memo of a char-table translation for codes from 256 up.
+///
+/// A case-folded search over Cyrillic, Greek or CJK text translates every
+/// character it examines; each miss is a `translate_char` char-table walk.
+/// A compiled pattern keeps its `CaseTranslation`, so the memo also carries
+/// across searches.  The table can be edited in place meanwhile, which the
+/// char-table write tick records: a changed tick empties the memo.
+#[derive(Clone, Debug)]
+struct WideTranslationMemo {
+    tick: std::cell::Cell<u64>,
+    /// `(code << 32) | translation`, or [`WIDE_TRANSLATION_EMPTY`].
+    slots: [std::cell::Cell<u64>; WIDE_TRANSLATION_SLOTS],
+}
+
+const WIDE_TRANSLATION_SLOTS: usize = 256;
+/// No character code is `u32::MAX`, so no filled slot equals this.
+const WIDE_TRANSLATION_EMPTY: u64 = u64::MAX;
+
+impl WideTranslationMemo {
+    fn new() -> Self {
+        Self {
+            tick: std::cell::Cell::new(crate::emacs_core::chartable::char_table_write_tick()),
+            slots: std::array::from_fn(|_| std::cell::Cell::new(WIDE_TRANSLATION_EMPTY)),
+        }
+    }
+
+    fn translate(&self, table: &crate::emacs_core::value::Value, c: u32) -> u32 {
+        let tick = crate::emacs_core::chartable::char_table_write_tick();
+        if self.tick.get() != tick {
+            for slot in &self.slots {
+                slot.set(WIDE_TRANSLATION_EMPTY);
+            }
+            self.tick.set(tick);
+        }
+        let slot = &self.slots[c as usize % WIDE_TRANSLATION_SLOTS];
+        let packed = slot.get();
+        if packed != WIDE_TRANSLATION_EMPTY && (packed >> 32) as u32 == c {
+            return packed as u32;
+        }
+        let translated = crate::emacs_core::chartable::translate_char(table, c as i64) as u32;
+        slot.set(((c as u64) << 32) | translated as u64);
+        translated
+    }
 }
 
 /// Sentinel for a `CaseTranslation::byte` slot that has not been computed.
@@ -438,7 +494,11 @@ impl CaseTranslation {
             };
         }
         let byte = STANDARD_BYTE.with(|b| std::array::from_fn(|i| std::cell::Cell::new(b[i])));
-        Self { byte, table: None }
+        Self {
+            byte,
+            table: None,
+            wide: std::cell::OnceCell::new(),
+        }
     }
 
     /// A translation backed by a buffer's case-canon char-table.
@@ -461,6 +521,7 @@ impl CaseTranslation {
         Self {
             byte: std::array::from_fn(|_| std::cell::Cell::new(CASE_TRANSLATION_UNFILLED)),
             table: Some(table),
+            wide: std::cell::OnceCell::new(),
         }
     }
 
@@ -485,7 +546,10 @@ impl CaseTranslation {
             return translated;
         }
         if let Some(table) = self.table {
-            return crate::emacs_core::chartable::translate_char(&table, c as i64) as u32;
+            return self
+                .wide
+                .get_or_init(|| Box::new(WideTranslationMemo::new()))
+                .translate(&table, c);
         }
         Self::canonicalize_char(c)
     }
@@ -523,6 +587,7 @@ impl CompiledPattern {
             buffer: Vec::with_capacity(256),
             re_nsub: 0,
             fastmap: [false; 256],
+            fastmap_translated: [false; 256],
             fastmap_accurate: false,
             posix: false,
             multibyte: true,
@@ -4068,6 +4133,22 @@ fn re_tr(translate: &Option<CaseTranslation>, c: u32) -> u32 {
     }
 }
 
+/// The leading code of the translation of the multibyte-text character at
+/// `pos`, a character boundary, and that character's length in bytes.
+#[inline]
+fn translated_leading_code(table: &CaseTranslation, text: &[u8], pos: usize) -> (u8, usize) {
+    let byte = text[pos];
+    let (c, len) = if byte < 0x80 {
+        (byte as u32, 1)
+    } else {
+        emacs_char::string_char(&text[pos..])
+    };
+    (
+        emacs_char::char_leading_code(table.translate(c)),
+        len.max(1),
+    )
+}
+
 /// Decode the Emacs character at `pos` (mirrors the `text_char` closure).
 #[inline]
 fn re_text_char(text: &[u8], pos: usize, target_multibyte: bool) -> Option<(u32, usize)> {
@@ -7352,6 +7433,24 @@ pub(crate) fn recompute_fastmap(pattern: &mut CompiledPattern, syntax: &dyn Synt
 /// Patterns whose fastmap took that path are flagged `used_syntax` at
 /// compile and must be cache-keyed by syntax table.
 fn compile_fastmap(pattern: &mut CompiledPattern, syntax: &dyn SyntaxLookup) {
+    let mut folded_multibyte_literal = false;
+    compile_fastmap_walk(pattern, syntax, &mut folded_multibyte_literal);
+    // `fastmap_translated` is the walk's own map; the byte-indexed `fastmap`
+    // additionally admits every non-ASCII leading byte when a leading
+    // multibyte literal is case-folded (see the `Exactn` arm).
+    pattern.fastmap_translated = pattern.fastmap;
+    if folded_multibyte_literal {
+        for c in 128..256usize {
+            pattern.fastmap[c] = true;
+        }
+    }
+}
+
+fn compile_fastmap_walk(
+    pattern: &mut CompiledPattern,
+    syntax: &dyn SyntaxLookup,
+    folded_multibyte_literal: &mut bool,
+) {
     pattern.fastmap = [false; 256];
     pattern.can_be_null = false;
 
@@ -7406,16 +7505,32 @@ fn compile_fastmap(pattern: &mut CompiledPattern, syntax: &dyn SyntaxLookup) {
                     }
                     let first = bytecode[pc];
                     pattern.fastmap[first as usize] = true;
+                    if !pattern.multibyte && first >= 0x80 {
+                        // GNU `analyze_first': a unibyte pattern's byte
+                        // matches multibyte text as its eight-bit character,
+                        // so its leading code is a candidate too.
+                        let byte8 = emacs_char::byte8_to_char(first);
+                        pattern.fastmap[emacs_char::char_leading_code(byte8) as usize] = true;
+                    }
                     if case_fold {
                         if first >= 0x80 {
                             // Multibyte character: the case-folded form may have
                             // a different leading byte (e.g. Cyrillic
                             // т = D1 82 vs Т = D0 A2), so byte-level case-folding
                             // of `first` is meaningless and would wrongly exclude
-                            // the other case's lead byte. Conservatively allow all
-                            // multibyte leading bytes, matching the Charset path.
-                            for c in 128..256usize {
-                                pattern.fastmap[c] = true;
+                            // the other case's lead byte. The byte-indexed
+                            // fastmap conservatively allows all multibyte leading
+                            // bytes, matching the Charset path; the translated
+                            // map keeps just `first` -- the stored character is
+                            // already translated -- and `compile_fastmap` widens
+                            // the byte map afterwards.  A unibyte pattern's
+                            // byte is no leading code, so both maps widen.
+                            if pattern.multibyte {
+                                *folded_multibyte_literal = true;
+                            } else {
+                                for c in 128..256usize {
+                                    pattern.fastmap[c] = true;
+                                }
                             }
                         } else {
                             let upper = (first as char)
@@ -7458,6 +7573,14 @@ fn compile_fastmap(pattern: &mut CompiledPattern, syntax: &dyn SyntaxLookup) {
                             && (bytecode[pc + c / 8] >> (c % 8)) & 1 != 0
                         {
                             pattern.fastmap[c] = true;
+                            // GNU `analyze_first': "To match raw bytes (in
+                            // the 80..ff range) against multibyte strings,
+                            // add their leading bytes to the fastmap."
+                            if c >= 0x80 {
+                                let byte8 = emacs_char::byte8_to_char(c as u8);
+                                pattern.fastmap[emacs_char::char_leading_code(byte8) as usize] =
+                                    true;
+                            }
                         }
                     }
                     // If this charset has multibyte ranges, conservatively
@@ -8124,16 +8247,36 @@ pub(crate) fn re_search(
                         return Some((cand, result.1));
                     }
                 }
-            } else if let Some(table) = translate {
+            } else if let Some(table) = translate
+                && pattern.target_multibyte
+            {
+                // GNU `re_search_2` (regex-emacs.c) on multibyte text:
+                // translate the WHOLE character and test the leading code of
+                // the result, stepping a character at a time.
                 while pos <= end {
                     if pos > text_len {
                         break;
                     }
-                    // Skip UTF-8 continuation bytes — only try match at character
-                    // boundaries to avoid matching in the middle of a multibyte char.
-                    if pattern.target_multibyte && pos < text_len && (text[pos] & 0xC0) == 0x80 {
-                        pos += 1;
-                        continue;
+                    if pos < text_len {
+                        if (text[pos] & 0xC0) == 0x80 {
+                            pos += 1;
+                            continue;
+                        }
+                        let (lead, len) = translated_leading_code(table, text, pos);
+                        if !pattern.fastmap_translated[lead as usize] {
+                            pos += len;
+                            continue;
+                        }
+                    }
+                    if let Some(result) = try_candidate!(pos, end) {
+                        return Some((pos, result.1));
+                    }
+                    pos += 1;
+                }
+            } else if let Some(table) = translate {
+                while pos <= end {
+                    if pos > text_len {
+                        break;
                     }
                     // GNU disables fastmap skipping for nullable patterns so zero-width
                     // matches like `\\(?:...\\)\\=` are still considered at every point.
@@ -8228,7 +8371,27 @@ pub(crate) fn re_search(
         // Backward search
         let end = start.saturating_sub((-range) as usize);
         if use_fastmap {
-            if let Some(table) = translate {
+            if let Some(table) = translate
+                && pattern.target_multibyte
+            {
+                for pos in (end..=start).rev() {
+                    if pos < text_len {
+                        if (text[pos] & 0xC0) == 0x80 {
+                            continue;
+                        }
+                        // As forward: the leading code of the translated
+                        // character (GNU `re_search_2`).
+                        let (lead, _) = translated_leading_code(table, text, pos);
+                        if !pattern.fastmap_translated[lead as usize] {
+                            continue;
+                        }
+                    }
+                    // Backward candidates end at `start` (see below).
+                    if let Some(result) = try_candidate!(pos, start) {
+                        return Some((pos, result.1));
+                    }
+                }
+            } else if let Some(table) = translate {
                 for pos in (end..=start).rev() {
                     // Skip UTF-8 continuation bytes — only try at character boundaries.
                     if pattern.target_multibyte && pos < text_len && (text[pos] & 0xC0) == 0x80 {
