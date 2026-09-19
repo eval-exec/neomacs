@@ -6617,12 +6617,36 @@ fn select_write_region_coding_system(
     filename: Value,
 ) -> Result<crate::encoding::RuntimeCodingSystem, Flow> {
     let fallback = resolve_write_coding_system_symbol(eval, buffer_id, WriteCodingFallback::Utf8);
+    // GNU `choose_write_coding_system': a bound `coding-system-for-write' is
+    // used as is, and only confirmed with the selector -- restricted to it,
+    // `(t CODING)' -- when `coding-system-require-warning' asks for that.
+    // Asking the selector anyway scanned every character of the text for
+    // every candidate coding system on each write.
+    let for_write =
+        coding_system_value_to_name(&eval.visible_variable_value_or_nil("coding-system-for-write"));
+    let require_warning = eval
+        .visible_variable_value_or_nil("coding-system-require-warning")
+        .is_truthy();
+    // Every choice ends in GNU's `coding_inherit_eol_type (val, Qnil)': an
+    // alias resolves to its coding system and an undecided end-of-line type
+    // becomes the system's, which `last-coding-system-used' then reports
+    // (`utf-8' -> `utf-8-unix', `latin-1' -> `iso-latin-1-unix').
+    let finish = |eval: &super::eval::Context, symbol: super::intern::SymId| {
+        let resolved = crate::emacs_core::coding::coding_inherit_eol_type_unix(
+            &eval.coding_systems,
+            Value::from_sym_id(symbol),
+        );
+        crate::encoding::RuntimeCodingSystem::from_symbol(resolved.as_symbol_id().unwrap_or(symbol))
+    };
+    if for_write.is_some() && !require_warning {
+        return Ok(finish(eval, fallback));
+    }
     let selector = eval.visible_variable_value_or_nil("select-safe-coding-system-function");
     let Some(selector_id) = selector.as_symbol_id() else {
-        return Ok(crate::encoding::RuntimeCodingSystem::from_symbol(fallback));
+        return Ok(finish(eval, fallback));
     };
     if !eval.obarray().fboundp_id(selector_id) {
-        return Ok(crate::encoding::RuntimeCodingSystem::from_symbol(fallback));
+        return Ok(finish(eval, fallback));
     }
 
     // GNU `choose_write_coding_system` delegates the final choice to
@@ -6630,9 +6654,14 @@ fn select_write_region_coding_system(
     // Lisp selector calls `find-auto-coding` on the exact region, so a
     // `coding:` declaration in generated Lisp takes precedence over the
     // inherited platform default.
+    let default_coding = if for_write.is_some() {
+        Value::list(vec![Value::T, Value::symbol(fallback)])
+    } else {
+        Value::symbol(fallback)
+    };
     let selected = eval.funcall_general(
         selector,
-        vec![from, to, Value::symbol(fallback), Value::NIL, filename],
+        vec![from, to, default_coding, Value::NIL, filename],
     )?;
     let selected_id = selected
         .as_symbol_id()
@@ -6641,9 +6670,7 @@ fn select_write_region_coding_system(
     if !eval.coding_systems.is_known_or_derived(selected_name) {
         return Err(signal(LispCondition::CodingSystemError, vec![selected]));
     }
-    Ok(crate::encoding::RuntimeCodingSystem::from_symbol(
-        selected_id,
-    ))
+    Ok(finish(eval, selected_id))
 }
 
 /// Extract a coding system name from a `Value` (symbol or string).

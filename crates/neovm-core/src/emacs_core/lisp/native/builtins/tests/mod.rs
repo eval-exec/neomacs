@@ -18451,3 +18451,70 @@ fn compiled_setq_of_a_local_writes_the_buffer_a_watcher_switched_to_like_gnu() {
         "OK (:start-local nil dflt :other-local t u1 :default dflt)"
     );
 }
+
+#[test]
+fn write_region_encodes_like_gnu_with_and_without_a_bound_coding() {
+    crate::test_utils::init_test_tracing();
+    // A bound `coding-system-for-write' is used without asking
+    // `select-safe-coding-system-function' (GNU `choose_write_coding_system'),
+    // and the safe-coding scan checks each distinct character once: the
+    // bytes written and the coding answers are GNU 31.1's.
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"
+        (let* ((dir (make-temp-file "neo-save" t))
+       (f1 (expand-file-name "a.txt" dir)) (f2 (expand-file-name "b.txt" dir)) (f3 (expand-file-name "c.txt" dir))
+       (bytes (lambda (f) (with-temp-buffer (set-buffer-multibyte nil) (insert-file-contents-literally f) (buffer-string)))))
+  (with-temp-buffer (insert "café naïve\n")
+    (let ((coding-system-for-write 'latin-1)) (write-region nil nil f1 nil 'silent)))
+  (with-temp-buffer (insert "Привет мир\n")
+    (let ((coding-system-for-write 'utf-8)) (write-region nil nil f2 nil 'silent)))
+  (with-temp-file f3 (insert "plain ascii and ñ\n"))
+  (prog1 (list (string-to-list (funcall bytes f1)) (string-to-list (funcall bytes f2)) (string-to-list (funcall bytes f3))
+               (find-coding-systems-string "abc")
+               (car (find-coding-systems-string "Привет"))
+               (and (memq 'iso-latin-1 (find-coding-systems-string "ñé")) t)
+               (memq 'iso-latin-1 (find-coding-systems-string "ñé Ж")))
+    (delete-directory dir t)))
+        "#,
+    );
+    assert_eq!(
+        result,
+        "OK ((99 97 102 233 32 110 97 239 118 101 10) (208 159 209 128 208 184 208 178 208 181 209 130 32 208 188 208 184 209 128 10) (112 108 97 105 110 32 97 115 99 105 105 32 97 110 100 32 195 177 10) (undecided) utf-8 t nil)"
+    );
+}
+
+#[test]
+fn a_bound_write_coding_is_reported_and_passes_raw_bytes_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // GNU `choose_write_coding_system' ends in `coding_inherit_eol_type': a
+    // bound `coding-system-for-write' is reported (and saved) resolved, with
+    // the system end-of-line type; and charset encoders write a raw 8-bit
+    // byte as itself (`encode_coding_charset').
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"
+        (let* ((dir (make-temp-file "neo-lcsu" t))
+        (f (expand-file-name "x.txt" dir))
+        (bytes (lambda () (with-temp-buffer (set-buffer-multibyte nil) (insert-file-contents-literally f) (string-to-list (buffer-string)))))
+        (out nil))
+   (dolist (cs '(utf-8 latin-1 koi8-r utf-8-dos raw-text))
+     (with-temp-buffer (insert "x\n")
+       (let ((coding-system-for-write cs)) (write-region nil nil f nil 'silent))
+       (push (list cs last-coding-system-used) out)))
+   (dolist (cs '(windows-1252 koi8-r euc-jp us-ascii))
+     (with-temp-buffer (insert (concat "x" (string (unibyte-char-to-multibyte #xe9)) "y\n"))
+       (let ((coding-system-for-write cs)) (write-region nil nil f nil 'silent))
+       (push (list cs (funcall bytes)) out)))
+   (with-current-buffer (find-file-noselect f)
+     (erase-buffer) (insert "hello\n")
+     (let ((coding-system-for-write 'utf-8)) (save-buffer))
+     (push (list 'saved buffer-file-coding-system) out)
+     (kill-buffer))
+   (delete-directory dir t)
+   (nreverse out))
+        "#,
+    );
+    assert_eq!(
+        result,
+        "OK ((utf-8 utf-8-unix) (latin-1 iso-latin-1-unix) (koi8-r cyrillic-koi8-unix) (utf-8-dos utf-8-dos) (raw-text raw-text-unix) (windows-1252 (120 233 121 10)) (koi8-r (120 233 121 10)) (euc-jp (120 233 121 10)) (us-ascii (120 233 121 10)) (saved utf-8-unix))"
+    );
+}

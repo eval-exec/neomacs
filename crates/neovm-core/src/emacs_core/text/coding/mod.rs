@@ -5521,16 +5521,18 @@ fn safe_coding_systems_for_text(
 
     if !text.is_ascii() {
         let exclude = coding_exclude_list(exclude)?;
+        // Each distinct character once, as GNU's `work_table' skips
+        // characters already checked: asking every coding system about every
+        // character made saving a 31KB Cyrillic file cost ~1.1G instructions.
+        let mut chars: Vec<char> = text.chars().filter(|ch| !ch.is_ascii()).collect();
+        chars.sort_unstable();
+        chars.dedup();
         let mut safe_codings = Vec::new();
         for coding in raw_coding_candidates(mgr, exclude.as_deref()) {
             let Some(repertoire) = CodingRepertoire::for_coding_system(mgr, &coding) else {
                 continue;
             };
-            if text
-                .chars()
-                .filter(|ch| !ch.is_ascii())
-                .all(|ch| repertoire.encodes(ch as i64))
-            {
+            if chars.iter().all(|&ch| repertoire.encodes(ch as i64)) {
                 safe_codings.push(Value::symbol(coding));
             }
         }

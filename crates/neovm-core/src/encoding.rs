@@ -1520,6 +1520,9 @@ fn encode_lisp_string_eol_spent(
             "ascii" | "us-ascii" => {
                 if code <= 0x7F {
                     out.push(code as u8);
+                } else if crate::emacs_core::emacs_char::char_byte8_p(code) {
+                    // GNU `encode_coding_charset': a raw byte goes out as itself.
+                    out.push(crate::emacs_core::emacs_char::char_to_byte8(code));
                 } else {
                     out.push(b'?');
                 }
@@ -2197,6 +2200,11 @@ fn general_charset_coding_list(
 fn encode_via_charset_list(s: &crate::heap_types::LispString, charset_list: &[SymId]) -> Vec<u8> {
     let mut out = Vec::with_capacity(s.sbytes());
     let emit = |code: u32, out: &mut Vec<u8>| {
+        // GNU `encode_coding_charset': a raw 8-bit byte goes out as itself.
+        if crate::emacs_core::emacs_char::char_byte8_p(code) {
+            out.push(crate::emacs_core::emacs_char::char_to_byte8(code));
+            return;
+        }
         for &charset in charset_list {
             if let Some(bytes) =
                 crate::emacs_core::charset::charset_encode_char_bytes(charset, i64::from(code))
@@ -3096,6 +3104,11 @@ fn encode_via_euc(
     let emit = |code: u32, out: &mut Vec<u8>| {
         if code < 0x80 {
             out.push(code as u8);
+            return;
+        }
+        // GNU `encode_coding_iso_2022': a raw 8-bit byte goes out as itself.
+        if crate::emacs_core::emacs_char::char_byte8_p(code) {
+            out.push(crate::emacs_core::emacs_char::char_to_byte8(code));
             return;
         }
         for &charset in charset_list {
