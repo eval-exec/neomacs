@@ -12,6 +12,33 @@ pub mod display;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+/// The workspace root baked in at compile time.
+///
+/// This is the **build** machine's path — for binaries shipped through
+/// `cargo nextest archive`, wrong on every other runner.  Only
+/// [`workspace_root`] should read it; call sites never choose it directly.
+pub fn cargo_workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_WORKSPACE_DIR"))
+}
+
+/// The workspace root nextest exports at runtime: the live workspace on
+/// the machine *running* the test, already adjusted by
+/// `--workspace-remap`.  `None` outside nextest (`cargo test`, plain
+/// `cargo run`).
+pub fn nextest_workspace_root() -> Option<PathBuf> {
+    std::env::var_os("NEXTEST_WORKSPACE_ROOT").map(PathBuf::from)
+}
+
+/// The workspace root of the machine *running* the test: nextest's
+/// runtime value when present, the compile-time constant otherwise.
+///
+/// One archive job landing on a runner pool with a different home
+/// (`/home/ubuntu` vs `/home/runner`) turned every downstream artifact
+/// write into EACCES and wiped out a whole CI run — which is why this
+/// fallback order lives here, once, instead of at each call site.
+pub fn workspace_root() -> PathBuf {
+    nextest_workspace_root().unwrap_or_else(cargo_workspace_root)
+}
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
