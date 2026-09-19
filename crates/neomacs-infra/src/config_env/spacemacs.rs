@@ -218,7 +218,9 @@ impl ConfigEnvironment for SpacemacsEnvironment {
     fn session_env(&self, session_state: &Path) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
         // Spacemacs mounts through HOME alone: the distribution IS
         // ~/.emacs.d, and the session state directory is the session HOME.
-        vec![("HOME".into(), session_state.as_os_str().to_owned())]
+        let mut env = vec![("HOME".into(), session_state.as_os_str().to_owned())];
+        env.extend(super::session_xdg_env(session_state));
+        env
     }
 
     fn session_args(&self) -> Vec<String> {

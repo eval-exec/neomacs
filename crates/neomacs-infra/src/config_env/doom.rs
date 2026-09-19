@@ -197,13 +197,15 @@ impl ConfigEnvironment for DoomEnvironment {
     }
 
     fn session_env(&self, session_state: &Path) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
-        vec![
+        let mut env = vec![
             ("HOME".into(), self.home().as_os_str().to_owned()),
             (
                 "DOOMLOCALDIR".into(),
                 session_state.join(".doom-local").into_os_string(),
             ),
-        ]
+        ];
+        env.extend(super::session_xdg_env(session_state));
+        env
     }
 
     fn session_args(&self) -> Vec<String> {

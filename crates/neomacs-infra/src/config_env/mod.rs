@@ -43,6 +43,29 @@ pub trait ConfigEnvironment {
     fn prepare_session_state(&self, session_state: &Path) -> Result<(), String>;
 }
 
+/// XDG directories pinned inside the session state, so GTK3, fontconfig,
+/// and GLib never read the operator's real `~/.config` — both a pollution
+/// guard and a reproducibility requirement: ambient XDG content differs
+/// between machines and silently diverges paired GUI comparisons.
+pub fn session_xdg_env(session_state: &Path) -> Vec<(OsString, OsString)> {
+    [
+        ("XDG_CONFIG_HOME", "config"),
+        ("XDG_CACHE_HOME", "cache"),
+        ("XDG_DATA_HOME", "share"),
+    ]
+    .into_iter()
+    .map(|(key, dir)| (key.into(), session_state.join(dir).into_os_string()))
+    .chain([
+        // GTK's accessibility bridge spawns a session bus under the
+        // redirected XDG and blocks the whole GUI startup in do_wait --
+        // an editor comparison never exercises it, so turn it off at the
+        // bridge instead of shipping a private D-Bus.
+        ("NO_AT_BRIDGE".into(), "1".into()),
+        ("GTK_MODULES".into(), "".into()),
+    ])
+    .collect()
+}
+
 /// Every environment the CLI and generic harness know about.
 pub const NAMES: &[&str] = &["doom", "spacemacs"];
 
