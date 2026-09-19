@@ -18666,3 +18666,60 @@ fn a_raw_byte_literal_in_a_multibyte_regexp_matches_unibyte_text_like_gnu() {
     );
     assert_eq!(result, "OK (1 1 4 2 1 1 2)");
 }
+
+#[test]
+fn backward_sexp_scans_honor_backslash_quoting_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // GNU `scan_lists' (backward): a quoted character is a word constituent,
+    // and a quoted delimiter never ends a string -- so `(f "a\"b")',
+    // `(f ?\" x)' and `(g (f ?\)) z)' each scan back to their opening paren.
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r##"
+        (mapcar
+  (lambda (text)
+    (with-temp-buffer
+      (emacs-lisp-mode)
+      (insert text)
+      (list text
+            (condition-case e (scan-sexps (point-max) -1) (error (car e)))
+            (condition-case e (scan-lists (point-max) -1 0) (error (car e)))
+            (condition-case e (progn (goto-char (point-max)) (backward-sexp) (point)) (error (car e))))))
+  '("(f \"a\\\"b\")" "(f ?\\\" x)" "(g (f ?\\)) z)" "(x \"\\\\\" y)" "(a ?\\( b)" "(s \"(\" t)" "(q ?\\\\ r)"))
+        "##,
+    );
+    assert_eq!(
+        result,
+        concat!(
+            "OK ",
+            r##"(("(f \"a\\\"b\")" 1 1 1) ("(f ?\\\" x)" 1 1 1) ("(g (f ?\\)) z)" 1 1 1) ("(x \"\\\\\" y)" 1 1 1) ("(a ?\\( b)" 1 1 1) ("(s \"(\" t)" 1 1 1) ("(q ?\\\\ r)" 1 1 1))"##
+        )
+    );
+}
+
+#[test]
+fn forward_sexp_scans_treat_char_quote_inside_a_string_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // GNU `scan_lists' runs its Scharquote case into Sescape inside a string,
+    // so a char-quoted string delimiter does not close the string -- exactly
+    // as a backslash escape does not.  Both syntax classes must behave the
+    // same here (the backward scans already do).
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r##"
+        (mapcar
+  (lambda (spec)
+    (with-temp-buffer
+      (let ((tbl (make-syntax-table)))
+        (modify-syntax-entry (car spec) (nth 1 spec) tbl)
+        (set-syntax-table tbl))
+      (insert (nth 2 spec))
+      (list (condition-case e (scan-sexps 9 1) (error (car e)))
+            (condition-case e (scan-lists 1 1 0) (error (car e)))
+            (condition-case e (progn (goto-char 9) (forward-sexp) (point)) (error (car e)))
+            (condition-case e (nth 3 (parse-partial-sexp 1 13)) (error (car e))))))
+  (list (list ?$ "/" "(a $( b \"c$\"d\" )")
+        (list ?$ "\\" "(a $( b \"c$\"d\" )")
+        (list ?% "/" "(a %( b \"c%\"d\" )")))
+        "##,
+    );
+    assert_eq!(result, "OK ((15 17 15 34) (15 17 15 34) (15 17 15 34))");
+}

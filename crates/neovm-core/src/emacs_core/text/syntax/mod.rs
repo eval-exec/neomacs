@@ -2025,6 +2025,11 @@ fn skip_string_backward(
 ) -> Result<usize, String> {
     while idx > stop {
         idx -= 1;
+        // GNU `scan_lists' (Sstring, backward): a quoted character never
+        // closes the string, however it is classed.
+        if char_quoted_at(buf, chars, idx, stop, table, prop_cache) {
+            continue;
+        }
         let c = chars.char_at(idx);
         let class = effective_syntax_entry_for_abs_char(buf, table, c, idx, prop_cache).class;
         if class == delimiter_class
@@ -2158,6 +2163,16 @@ fn scan_lists_with_options(
                     idx = next;
                     continue;
                 }
+                // GNU `scan_lists' (backward): quoting turns anything but a
+                // comment-ender into a word character, escape included.
+                let class = if class != SyntaxClass::EndComment
+                    && char_quoted_at(buf, &mut chars, idx, start, table, prop_cache)
+                {
+                    idx -= 1;
+                    SyntaxClass::Word
+                } else {
+                    class
+                };
 
                 match class {
                     SyntaxClass::Close => {
@@ -2332,7 +2347,7 @@ fn scan_sexp_forward(
                             {
                                 break;
                             }
-                            if matches!(sc, SyntaxClass::Escape) {
+                            if matches!(sc, SyntaxClass::Escape | SyntaxClass::CharQuote) {
                                 idx += 1; // skip escaped char
                             }
                             idx += 1;
@@ -2363,7 +2378,7 @@ fn scan_sexp_forward(
                 if s == delim_class && (syn == SyntaxClass::StringFence || c == ch) {
                     break;
                 }
-                if matches!(s, SyntaxClass::Escape) {
+                if matches!(s, SyntaxClass::Escape | SyntaxClass::CharQuote) {
                     idx += 1; // skip escaped char
                 }
                 idx += 1;
@@ -2481,6 +2496,14 @@ fn scan_sexp_backward(
                     idx = next;
                     continue;
                 }
+                // Quoting turns anything but a comment-ender into a word
+                // character: step over the escape, leave the depth alone.
+                if s != SyntaxClass::EndComment
+                    && char_quoted_at(buf, chars, idx, start_bound, table, prop_cache)
+                {
+                    idx -= 1;
+                    continue;
+                }
                 match s {
                     SyntaxClass::Close => {
                         depth += 1;
@@ -2504,6 +2527,14 @@ fn scan_sexp_backward(
                                 .class;
                                 if sc == delim_class
                                     && (s == SyntaxClass::StringFence || chars.char_at(idx) == c)
+                                    && !char_quoted_at(
+                                        buf,
+                                        chars,
+                                        idx,
+                                        start_bound,
+                                        table,
+                                        prop_cache,
+                                    )
                                 {
                                     break;
                                 }
@@ -2531,7 +2562,10 @@ fn scan_sexp_backward(
             while idx > start_bound {
                 let c = chars.char_at(idx);
                 let s = effective_syntax_entry_for_abs_char(buf, table, c, idx, prop_cache).class;
-                if s == delim_class && (syn == SyntaxClass::StringFence || c == ch) {
+                if s == delim_class
+                    && (syn == SyntaxClass::StringFence || c == ch)
+                    && !char_quoted_at(buf, chars, idx, start_bound, table, prop_cache)
+                {
                     break;
                 }
                 idx -= 1;
