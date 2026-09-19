@@ -1,0 +1,32 @@
+name: labels
+
+# Issue labels are defined in .github/labels.yml, not clicked into the UI, so a
+# change to the taxonomy is a reviewable diff.  Editing that file and merging is
+# what applies it; manual label edits in the UI show up here as drift the next
+# time this runs.
+#
+# `delete-other-labels` is off on purpose: this syncs what the file says into
+# existence and updates it, but never deletes a label the file has not caught up
+# with yet.  Add a label to the file, merge, then delete the old one by hand.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/labels.yml
+      - .github/workflows/labels.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: EndBug/label-sync@52074158190acb45f3077f9099fea818aa43f97a # v2
+        with:
+          config-file: .github/labels.yml
+          delete-other-labels: false
