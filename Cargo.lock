@@ -3838,7 +3838,6 @@ dependencies = [
  "libc",
  "neomacs-infra",
  "pollster",
- "raw-window-handle",
  "rustix 1.1.4",
  "serde_json",
  "strum",
