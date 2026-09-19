@@ -694,12 +694,37 @@ fn casify_word_in_state(
     };
 
     let replacement = transform(&text);
-    let changed = replacement != text;
-    if changed {
+    if replacement.schars() != text.schars() {
+        // A mapping that changes the character count (`ß` -> `SS`): the
+        // casify path's same-byte-length overwrite does not yet move point
+        // and ZV for it, so keep the generic replacement here.
+        if replacement != text {
+            if read_only {
+                return Err(signal(LispCondition::BufferReadOnly, vec![buffer_name]));
+            }
+            replace_current_buffer_region_in_buffers(eval, byte_range, &replacement, false)?;
+        }
+    } else if !byte_range.is_empty() {
+        // GNU `casify_word` is `casify_region (PT, farend)`: the same
+        // read-only checks, `modify_text` and undo record even when no
+        // character changes, and a same-size overwrite that leaves text
+        // properties alone -- so take the region command's path rather than a
+        // generic replace.
         if read_only {
             return Err(signal(LispCondition::BufferReadOnly, vec![buffer_name]));
         }
-        replace_current_buffer_region_in_buffers(eval, byte_range, &replacement, false)?;
+        let buffer_id = eval
+            .buffers
+            .current_buffer_id()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        crate::emacs_core::textprop::verify_text_read_only_emacs_byte_range_in_state(
+            &eval.obarray,
+            &eval.buffers,
+            buffer_id,
+            byte_range,
+        )?;
+        let changed = replacement.as_bytes() != text.as_bytes();
+        casify_replace_current_buffer_region(eval, byte_range, &replacement, changed)?;
     }
     // GNU `casify_word` sets point to `casify_region(PT, farend)`, i.e. the
     // greater of point and the forward-word destination (the end of the cased

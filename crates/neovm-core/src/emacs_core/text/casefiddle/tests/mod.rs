@@ -374,3 +374,33 @@ fn eval_capitalize_word_updates_buffer_text() {
     let buffer = ev.buffers.get(buffer_id).expect("buffer");
     assert_eq!(buffer.buffer_string(), "Hello world");
 }
+
+/// GNU 31.1: `capitalize-word` & co. are `casify_region (PT, farend)` -- a
+/// read-only buffer signals even when nothing would change, the undo record
+/// is `((START . END) (ORIGINAL . START) ...)`, a read-only character
+/// signals `text-read-only`, and a negative ARG cases the words before point
+/// without moving it.
+#[test]
+fn case_words_follow_casify_region_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"
+        (list
+         (with-temp-buffer (insert "Abc def") (goto-char 1) (setq buffer-read-only t)
+           (condition-case e (progn (capitalize-word 1) (point)) (error (car e))))
+         (with-temp-buffer (buffer-enable-undo) (insert "abc def") (undo-boundary)
+           (set-buffer-modified-p nil) (goto-char 2)
+           (capitalize-word 1) (list (point) (buffer-modified-p) (seq-take buffer-undo-list 2)))
+         (with-temp-buffer (insert "abc déf ghi") (goto-char 9) (upcase-word -2)
+           (list (buffer-string) (point)))
+         (with-temp-buffer (insert "abc") (put-text-property 1 3 'read-only t) (goto-char 1)
+           (condition-case e (progn (upcase-word 1) (buffer-string)) (error (car e))))
+         (with-temp-buffer (insert "straße x") (goto-char 1) (upcase-word 1)
+           (list (buffer-string) (point) (point-max))))
+        "#,
+    );
+    assert_eq!(
+        result,
+        "OK (buffer-read-only (4 t ((2 . 4) (\"bc\" . 2))) (\"ABC DÉF ghi\" 9) text-read-only (\"STRASSE x\" 8 10))"
+    );
+}
