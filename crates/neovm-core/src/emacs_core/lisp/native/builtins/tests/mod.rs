@@ -18794,3 +18794,40 @@ fn forward_sexp_scans_treat_char_quote_inside_a_string_like_gnu() {
     );
     assert_eq!(result, "OK ((15 17 15 34) (15 17 15 34) (15 17 15 34))");
 }
+
+#[test]
+fn value_lt_orders_strings_exactly_as_string_lessp_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // GNU's `value_cmp' and `Fstring_lessp' both end in `string_cmp', so the
+    // two answer alike on every pair: ASCII, unibyte against multibyte, a
+    // raw eight-bit byte against the character of the same code, and the
+    // eight-bit character `string-to-multibyte' makes of that byte (which
+    // sorts above every real character).
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r##"
+        (let ((pairs (list
+   (cons "abc" "abd") (cons "abc" "abc") (cons "abc" "ab") (cons "ab" "abc") (cons "" "a") (cons "" "")
+   (cons (string-to-multibyte "abc") "abd")
+   (cons (unibyte-string 254) (string 254))
+   (cons (string 254) (unibyte-string 254))
+   (cons (unibyte-string 97 254) (string-to-multibyte (unibyte-string 97 254)))
+   (cons "λ" "μ") (cons "λx" "λy") (cons "a" "λ")
+   (cons (string 955) (unibyte-string 200))
+   (cons (string-to-multibyte (unibyte-string 200)) (string 200)))))
+ (mapcar (lambda (p)
+   (list (value< (car p) (cdr p))
+         (string-lessp (car p) (cdr p))
+         (value< (cdr p) (car p))
+         (string-lessp (cdr p) (car p))))
+  pairs))
+        "##,
+    );
+    assert_eq!(
+        result,
+        concat!(
+            "OK ((t t nil nil) (nil nil nil nil) (nil nil t t) (t t nil nil) (t t nil nil) ",
+            "(nil nil nil nil) (t t nil nil) (nil nil nil nil) (nil nil nil nil) ",
+            "(t t nil nil) (t t nil nil) (t t nil nil) (t t nil nil) (nil nil t t) (nil nil t t))"
+        )
+    );
+}

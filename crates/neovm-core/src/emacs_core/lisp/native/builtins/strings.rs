@@ -82,7 +82,8 @@ impl Iterator for EmacsMultibyteChars<'_> {
     }
 }
 
-fn string_ordering(
+/// GNU `string_cmp`: the order `string-lessp' and `value<' both read.
+pub(crate) fn string_ordering(
     left: &crate::heap_types::LispString,
     right: &crate::heap_types::LispString,
 ) -> std::cmp::Ordering {

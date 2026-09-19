@@ -3730,42 +3730,12 @@ fn compare_lisp_strings(
     lhs: &crate::heap_types::LispString,
     rhs: &crate::heap_types::LispString,
 ) -> std::cmp::Ordering {
-    use std::cmp::Ordering;
-
-    let mut left_pos = 0;
-    let mut right_pos = 0;
-    loop {
-        match (
-            next_lisp_string_char_for_value_lt(lhs, &mut left_pos),
-            next_lisp_string_char_for_value_lt(rhs, &mut right_pos),
-        ) {
-            (Some(left), Some(right)) if left != right => return left.cmp(&right),
-            (Some(_), Some(_)) => {}
-            (None, Some(_)) => return Ordering::Less,
-            (Some(_), None) => return Ordering::Greater,
-            (None, None) => return Ordering::Equal,
-        }
-    }
-}
-
-fn next_lisp_string_char_for_value_lt(
-    string: &crate::heap_types::LispString,
-    pos: &mut usize,
-) -> Option<u32> {
-    let bytes = string.as_bytes();
-    if *pos >= bytes.len() {
-        return None;
-    }
-
-    if string.is_multibyte() {
-        let (cp, len) = crate::emacs_core::emacs_char::string_char(&bytes[*pos..]);
-        *pos += len;
-        Some(cp)
-    } else {
-        let byte = bytes[*pos] as u32;
-        *pos += 1;
-        Some(byte)
-    }
+    // GNU's `value_cmp' and `Fstring_lessp' both end in `string_cmp', so
+    // `value<' reads the same order as `string-lessp' -- including its
+    // byte-slice compare for the two one-byte-per-character cases, which
+    // decoding a character at a time here gave up: `value<' on two 20,000
+    // character strings took 28.7us against GNU's 0.3us.
+    super::strings::string_ordering(lhs, rhs)
 }
 
 fn compare_number_values_for_value_lt(lhs: &Value, rhs: &Value) -> Option<std::cmp::Ordering> {
