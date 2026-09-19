@@ -232,6 +232,7 @@ impl RenderApp {
                 content_insets: Default::default(),
                 window,
                 surface,
+                surface_backend: adapter_info.backend,
                 surface_config: config,
                 width: pending_width,
                 height: pending_height,

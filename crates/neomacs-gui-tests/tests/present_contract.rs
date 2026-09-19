@@ -42,9 +42,12 @@ enum Phase {
 struct ContractFrame {
     window: Arc<dyn Window>,
     surface: wgpu::Surface<'static>,
+    instance: wgpu::Instance,
+    backend: wgpu::Backend,
     device: wgpu::Device,
     queue: wgpu::Queue,
     clear: wgpu::Color,
+    last_size: (u32, u32),
 }
 
 struct ContractApp {
@@ -58,20 +61,31 @@ struct ContractApp {
 
 fn configure_and_present(frame: &mut ContractFrame) {
     let size = frame.window.surface_size();
-    frame.surface.configure(
-        &frame.device,
-        &wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: wgpu::TextureFormat::Bgra8UnormSrgb,
-            color_space: wgpu::SurfaceColorSpace::Auto,
-            width: size.width.max(1),
-            height: size.height.max(1),
-            present_mode: wgpu::PresentMode::Fifo,
-            alpha_mode: wgpu::CompositeAlphaMode::Auto,
-            view_formats: vec![],
-            desired_maximum_frame_latency: 2,
-        },
-    );
+    let config = wgpu::SurfaceConfiguration {
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        format: wgpu::TextureFormat::Bgra8UnormSrgb,
+        color_space: wgpu::SurfaceColorSpace::Auto,
+        width: size.width.max(1),
+        height: size.height.max(1),
+        present_mode: wgpu::PresentMode::Fifo,
+        alpha_mode: wgpu::CompositeAlphaMode::Auto,
+        view_formats: vec![],
+        desired_maximum_frame_latency: 2,
+    };
+    // The resize policy the engine encodes: GL's emulated swapchain needs a
+    // rebuilt window surface after a size change (raw wgpu presents a
+    // stale-geometry buffer otherwise -- 0.67 blue, the stale-height
+    // fraction); every other backend reconfigures in place.  The contract
+    // asserts the policy that ships, on each backend.
+    let resized = frame.last_size != (size.width, size.height);
+    if resized && frame.backend == wgpu::Backend::Gl {
+        frame.surface = frame
+            .instance
+            .create_surface(frame.window.clone())
+            .expect("rebuild GL surface after resize");
+    }
+    frame.last_size = (size.width, size.height);
+    frame.surface.configure(&frame.device, &config);
     let output = match frame.surface.get_current_texture() {
         wgpu::CurrentSurfaceTexture::Success(output)
         | wgpu::CurrentSurfaceTexture::Suboptimal(output) => output,
@@ -215,9 +229,12 @@ impl ContractApp {
         .expect("present contract found an adapter");
         let (device, queue) = pollster::block_on(adapter.request_device(&Default::default()))
             .expect("present contract created a device");
+        let backend = adapter.get_info().backend;
         self.frame = Some(ContractFrame {
             window,
             surface,
+            instance,
+            backend,
             device,
             queue,
             clear: wgpu::Color {
@@ -226,6 +243,7 @@ impl ContractApp {
                 b: 0.0,
                 a: 1.0,
             },
+            last_size: INITIAL,
         });
     }
 }
