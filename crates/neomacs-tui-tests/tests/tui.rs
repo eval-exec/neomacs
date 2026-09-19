@@ -74,6 +74,7 @@ mod search;
 mod shell_compile;
 #[path = "source_navigation.rs"]
 mod source_navigation;
+mod spacemacs_boot;
 #[path = "startup_terminal_initialization.rs"]
 mod startup_terminal_initialization;
 #[path = "strict_grid.rs"]
