@@ -205,6 +205,7 @@ impl RenderApp {
             }
 
             WindowEvent::Occluded(occluded) => {
+                tracing::info!("WindowEvent::Occluded: {occluded}");
                 // Occlusion is scheduling input: an occluded window presents
                 // nothing; exposure issues exactly one recovery frame. On
                 // Wayland this event also stands in for hidden/minimized,

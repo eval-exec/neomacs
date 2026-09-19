@@ -846,6 +846,12 @@ impl FrameCoordinator {
         now: EventTime,
     ) -> PacingAction {
         let ws = self.window(id);
+        tracing::info!(
+            "finish_frame: id={id:?} work={:?} result={result:?} visible={} occluded={}",
+            plan.work,
+            ws.presentation.visible,
+            ws.presentation.occluded
+        );
         match result {
             SubmissionResult::Submitted => {}
             SubmissionResult::AwaitingContent => {
