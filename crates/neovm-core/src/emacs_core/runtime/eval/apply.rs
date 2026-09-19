@@ -1901,6 +1901,79 @@ impl Context {
         self.apply(function, args)
     }
 
+    /// For a mapping builtin's callback: when FUNCTION is a canonical symbol
+    /// naming its own builtin subr -- the `#'car` shape, nearly every
+    /// `mapcar` callback -- that subr, plus the function epoch it stays valid
+    /// for. `None` for everything else, which keeps the generic funcall path
+    /// (autoloads, special forms, evaluator callables, lambdas, bytecode,
+    /// compiler overrides).
+    pub(crate) fn resolve_mapped_subr_callee(&mut self, function: Value) -> Option<(Value, u64)> {
+        let sym_id = function.as_symbol_id()?;
+        if self.compiler_function_overrides_active()
+            || !super::builtins::is_canonical_symbol_id(sym_id)
+        {
+            return None;
+        }
+        let NamedCallTarget::Subr(subr) = self.resolve_named_call_target_by_id(sym_id) else {
+            return None;
+        };
+        let (_, entry) = subr_entry_from_value(subr)?;
+        (entry.dispatch_kind == SubrDispatchKind::Builtin)
+            .then(|| (subr, self.obarray.function_epoch()))
+    }
+
+    /// `apply1` of DESIGNATOR, a symbol [`Self::resolve_mapped_subr_callee`]
+    /// resolved to SUBR at function epoch EPOCH: GNU `Ffuncall`'s protocol
+    /// exactly as [`Self::apply_internal`] runs it -- quit check, depth, a
+    /// backtrace frame naming the symbol, the GC safe point, debug-on-call,
+    /// the stack probe -- around a direct call of the subr, without
+    /// re-resolving the name on every element (canonical check, call-cache
+    /// probe, target match). The resolution is tested after that prologue,
+    /// where GNU reads the function cell: `post-gc-hook` and the debugger
+    /// run inside it and may redefine DESIGNATOR.
+    pub(crate) fn apply1_resolved_subr(
+        &mut self,
+        designator: Value,
+        subr: Value,
+        epoch: u64,
+        arg0: Value,
+    ) -> EvalResult {
+        self.maybe_quit_before_gc()?;
+        self.enter_interpreted_eval_depth()?;
+        let bt_count = self.specpdl.len();
+        self.push_backtrace_frame(designator, std::slice::from_ref(&arg0));
+        let result = {
+            if self.gc_safe_point_exact_should_collect() {
+                self.gc_collect_from_current_roots();
+            }
+            let entered = match self.take_debug_on_call_arm(DebugOnCallCode::Funcall) {
+                Some(arm) => self.do_debug_on_call(arm),
+                None => Ok(()),
+            };
+            match entered {
+                Err(flow) => Err(flow),
+                Ok(()) => self.maybe_grow_eval_stack(|ctx| {
+                    let mut args = LispArgVec::new();
+                    args.push(arg0);
+                    if ctx.obarray.function_epoch() != epoch
+                        || ctx.compiler_function_overrides_active()
+                    {
+                        return ctx.funcall_general_untraced(designator, args);
+                    }
+                    // Re-read per call: registration may rewrite a subr's
+                    // entry in place.
+                    let Some((subr_sym, entry)) = subr_entry_from_value(subr) else {
+                        return Err(signal(LispCondition::InvalidFunction, vec![designator]));
+                    };
+                    ctx.apply_subr_object_with_entry(subr_sym, subr, args, entry)
+                }),
+            }
+        };
+        self.depth -= 1;
+        let result = self.dispatch_signal_result_if_needed(result);
+        self.unbind_to_with_result(bt_count, result)
+    }
+
     #[cfg(feature = "jit")]
     fn apply1_bytecode(&mut self, function: Value, arg0: Value) -> EvalResult {
         self.maybe_quit_before_gc()?;

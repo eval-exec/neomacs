@@ -102,6 +102,47 @@ pub(crate) fn map_sequence_element(sequence: Value, index: usize) -> Result<Valu
     }
 }
 
+/// A mapping builtin's callback. A symbol naming its own builtin (`#'car`,
+/// `#'symbol-name`: nearly every `mapcar` callback) is resolved once for the
+/// whole map and re-validated per element by the function epoch, which any
+/// `fset`, `defalias`, advice or `debug-on-entry` moves -- so a redefinition
+/// made by a callback takes effect at the next element, and one made by the
+/// debugger or `post-gc-hook` inside an element's funcall prologue takes
+/// effect for that element, as in GNU.
+enum MapCallee {
+    Generic(Value),
+    Subr {
+        designator: Value,
+        subr: Value,
+        epoch: u64,
+    },
+}
+
+impl MapCallee {
+    fn resolve(eval: &mut super::eval::Context, func: Value) -> Self {
+        match eval.resolve_mapped_subr_callee(func) {
+            Some((subr, epoch)) => MapCallee::Subr {
+                designator: func,
+                subr,
+                epoch,
+            },
+            None => MapCallee::Generic(func),
+        }
+    }
+
+    #[inline]
+    fn call(&self, eval: &mut super::eval::Context, item: Value) -> EvalResult {
+        match *self {
+            MapCallee::Generic(func) => apply1(eval, func, item),
+            MapCallee::Subr {
+                designator,
+                subr,
+                epoch,
+            } => eval.apply1_resolved_subr(designator, subr, epoch, item),
+        }
+    }
+}
+
 /// Where [`mapcar1_eval`] puts each callback's result.
 enum MapSink<'a> {
     /// `mapc`: nowhere.
@@ -304,8 +345,9 @@ pub(crate) fn builtin_mapcar_2(
     // the list is built straight from the slots (cons allocation cannot
     // collect, so the slice needs no further rooting).
     let base = eval.reserve_vm_frame_root_slots(len);
+    let callee = MapCallee::resolve(eval, func);
     let map_result = mapcar1_eval(eval, len, MapSink::RootSlots(base), seq, |eval, item| {
-        apply1(eval, func, item)
+        callee.call(eval, item)
     });
     let result_list =
         map_result.map(|mapped| Value::list_from_slice(eval.vm_frame_root_slots(base, mapped)));
@@ -328,8 +370,9 @@ pub(crate) fn builtin_mapc_2(
             return Err(flow);
         }
     };
+    let callee = MapCallee::resolve(eval, func);
     let result = mapcar1_eval(eval, len, MapSink::Discard, seq, |eval, item| {
-        apply1(eval, func, item)
+        callee.call(eval, item)
     });
     eval.restore_vm_roots(roots);
     result.map(|_| ())?;

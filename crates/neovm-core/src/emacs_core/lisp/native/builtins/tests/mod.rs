@@ -18083,3 +18083,92 @@ fn mapcar_results_survive_callbacks_like_gnu() {
         "OK ((10 20 30 40 50) (2 3 4) (97 98 99) (t t t) ((11 12) (21 22) (31 32)) thrown ((1 \"aaa\") (2 \"aaa\") (3 \"aaa\") (4 \"aaa\") (5 \"aaa\") (6 \"aaa\") (7 \"aaa\") (8 \"aaa\") (9 \"aaa\") (10 \"aaa\") (11 \"aaa\") (12 \"aaa\") (13 \"aaa\") (14 \"aaa\") (15 \"aaa\") (16 \"aaa\") (17 \"aaa\") (18 \"aaa\") (19 \"aaa\") (20 \"aaa\")) 1000 (a b nil) (wrong-type-argument listp b))"
     );
 }
+
+/// GNU 31.1: a `mapcar` callback named by a builtin symbol behaves exactly
+/// as `funcall` of that symbol -- the error data, advice, the backtrace frame
+/// naming the symbol, and the debugger entry on an error inside it.
+#[test]
+fn mapcar_of_a_builtin_symbol_funcalls_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"
+        (progn (defvar mc-log nil)
+        (list
+         (mapcar #'car '((a . 1) (b . 2)))
+         (condition-case e (mapcar #'cons '(1 2)) (error e))
+         (let ((n 0))
+           (prog1 (mapcar (lambda (x) (setq n (1+ n)) (when (= n 2) (advice-add 'symbol-name :filter-return (lambda (r) (concat r "!")) '((name . mc-adv)))) x) '(1 2 3))
+             (advice-remove 'symbol-name 'mc-adv)))
+         (let ((r (list)))
+           (advice-add 'symbol-name :filter-return (lambda (s) (concat s "?")) '((name . mc-adv2)))
+           (prog1 (mapcar #'symbol-name '(a b)) (advice-remove 'symbol-name 'mc-adv2)))
+         (let ((calls 0) (orig (symbol-function 'mc-f)))
+           nil)
+         (condition-case e (mapcar #'car '(1)) (error e))
+         (catch 'bt (mapcar (lambda (_) (throw 'bt (let ((f nil)) (mapbacktrace (lambda (_evald fun _args _flags) (unless f (when (memq fun '(car mapcar)) (setq f fun))))) f))) '(1)))
+         (let ((seen nil))
+           (condition-case nil
+               (let ((debugger (lambda (&rest a) (push (car a) seen) (throw 'x nil)))
+                     (debug-on-error t))
+                 (catch 'x (mapcar #'car '(1))))
+             (error nil))
+           seen)
+         (mapc #'identity '(1 2 3))
+         (mapcar #'1+ '(1 2 3))))
+        "#,
+    );
+    assert_eq!(
+        result,
+        "OK ((a b) (wrong-number-of-arguments #<subr cons> 1) (1 2 3) (\"a?\" \"b?\") nil (wrong-type-argument listp 1) mapcar nil (1 2 3) (2 3 4))"
+    );
+}
+
+/// GNU 31.1: `mapcar` calls its function anew for each element, so advice a
+/// callback puts on (or takes off) the mapped builtin applies from the next
+/// element on.
+#[test]
+fn mapcar_sees_a_callback_redefine_the_mapped_builtin_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"
+        (list
+         (prog1 (mapcar #'funcall (list (lambda () (advice-add 'funcall :around (lambda (f &rest a) (list 'adv (apply f a))) '((name . mcf))) 1)
+                                        (lambda () 2)
+                                        (lambda () (advice-remove 'funcall 'mcf) 3)
+                                        (lambda () 4)))
+           (advice-remove 'funcall 'mcf))
+         (let ((debug-on-error nil)) (condition-case e (mapcar #'funcall (list (lambda () (fset 'mc-x #'car) 1) (lambda () (error "boom")))) (error e)))
+         (mapcar #'funcall (list (lambda () (fmakunbound 'mc-never) 1))))
+        "#,
+    );
+    assert_eq!(result, "OK ((1 (adv 2) (adv 3) 4) (error \"boom\") (1))");
+}
+
+#[test]
+fn mapcar_sees_the_debugger_redefine_the_mapped_builtin_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // `debug-on-next-call' runs the debugger inside the next element's
+    // funcall prologue; GNU reads the function cell after it, so that
+    // element already calls the new definition. Values from GNU 31.1.
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"
+        (eval '(let ((log nil)
+                     (saved (symbol-function 'funcall)))
+                 (unwind-protect
+                     (let ((debugger (lambda (&rest args)
+                                       (push (car args) log)
+                                       (if (eq (car args) 'exit)
+                                           (cadr args)
+                                         (fset 'funcall (lambda (&rest _) 'replaced))
+                                         nil))))
+                       (list (mapcar #'funcall
+                                     (list (lambda () (setq debug-on-next-call t) 1)
+                                           (lambda () 2)
+                                           (lambda () 3)))
+                             log))
+                   (fset 'funcall saved)))
+              t)
+        "#,
+    );
+    assert_eq!(result, "OK ((1 replaced replaced) (exit lambda))");
+}
