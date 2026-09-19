@@ -21,7 +21,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use neomacs_gui_tests::DisplayHarness;
-use neomacs_infra::display::DisplaySession;
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
 use winit::event::WindowEvent;
@@ -51,7 +50,7 @@ struct ContractFrame {
 }
 
 struct ContractApp {
-    session: std::mem::ManuallyDrop<DisplaySession>,
+    display_env: Vec<(String, String)>,
     artifacts: PathBuf,
     frame: Option<ContractFrame>,
     phase: Phase,
@@ -113,10 +112,10 @@ fn configure_and_present(frame: &mut ContractFrame) {
     frame.queue.present(output);
 }
 
-fn capture(session: &DisplaySession, xid: &str, path: &PathBuf) {
+fn capture(display_env: &[(String, String)], xid: &str, path: &PathBuf) {
     let mut command = Command::new("import");
     command.arg("-window").arg(xid);
-    for (key, value) in session.env() {
+    for (key, value) in display_env {
         command.env(key, value);
     }
     let status = command.arg(path).status().expect("run import");
@@ -174,7 +173,7 @@ impl ApplicationHandler for ContractApp {
         match self.phase {
             Phase::PresentingRed if self.start.elapsed() > Duration::from_millis(500) => {
                 let xid = x_window_id(&frame.window);
-                capture(&self.session, &xid, &self.artifacts.join("red.png"));
+                capture(&self.display_env, &xid, &self.artifacts.join("red.png"));
                 let image = image::open(self.artifacts.join("red.png")).unwrap();
                 if near_color_ratio(&image, [255, 0, 0]) > 0.90 {
                     self.red_confirmed.store(true, Ordering::SeqCst);
@@ -194,7 +193,7 @@ impl ApplicationHandler for ContractApp {
             }
             Phase::PresentingBlue if self.start.elapsed() > Duration::from_millis(1000) => {
                 let xid = x_window_id(&frame.window);
-                capture(&self.session, &xid, &self.artifacts.join("blue.png"));
+                capture(&self.display_env, &xid, &self.artifacts.join("blue.png"));
                 let image = image::open(self.artifacts.join("blue.png")).unwrap();
                 if near_color_ratio(&image, [0, 0, 255]) > 0.90 {
                     event_loop.exit();
@@ -283,7 +282,7 @@ fn resize_then_present_shows_the_new_frame_on_the_current_backend() {
     let red_confirmed = Arc::new(AtomicBool::new(false));
     let artifacts_out = artifacts.clone();
     let app = ContractApp {
-        session: std::mem::ManuallyDrop::new(session),
+        display_env: session.env().to_vec(),
         artifacts,
         frame: None,
         phase: Phase::PresentingRed,

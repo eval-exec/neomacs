@@ -14,13 +14,12 @@ publish = false
 getrandom.workspace = true
 neomacs-infra.workspace = true
 image.workspace = true
-winit.workspace = true
-wgpu.workspace = true
-raw-window-handle.workspace = true
-pollster.workspace = true
 serde_json = "1"
 
 [dev-dependencies]
+winit.workspace = true
+wgpu.workspace = true
+pollster.workspace = true
 strum.workspace = true
 
 [target.'cfg(unix)'.dev-dependencies]
