@@ -3836,6 +3836,7 @@ dependencies = [
  "getrandom 0.4.3",
  "image",
  "libc",
+ "neomacs-infra",
  "rustix 1.1.4",
  "serde_json",
  "strum",
@@ -3846,6 +3847,9 @@ dependencies = [
 [[package]]
 name = "neomacs-infra"
 version = "0.0.18"
+dependencies = [
+ "getrandom 0.4.3",
+]
 
 [[package]]
 name = "neomacs-layout-engine"

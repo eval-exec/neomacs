@@ -18,3 +18,4 @@ publish = false
 # instead of silently dirtying the fixture for every other test.
 
 [dependencies]
+getrandom.workspace = true

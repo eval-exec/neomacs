@@ -3,8 +3,12 @@
 //! See the crate comment in `Cargo.toml` for the model.  The short version:
 //! [`DoomEnvironment`] is a GNU-bootstrapped, sealed, read-only Doom Emacs
 //! fixture that any suite (TUI today, GUI next) mounts per session with
+//! [`display`] supplying the deterministic, isolated display sessions
+//! (loopback-TCP Xvfb, weston-headless) those suites run their scenarios on.
 //! [`DoomEnvironment::session_env`] and [`DoomEnvironment::session_args`],
 //! never writing into it.
+
+pub mod display;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
