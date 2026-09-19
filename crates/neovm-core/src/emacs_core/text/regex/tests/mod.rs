@@ -4290,3 +4290,30 @@ fn buffer_search_replaces_match_data_like_gnu() {
         r#"OK ((3 6 3 4) ((m 5 "md-a") (m 8 "md-a") (m 5 "md-a") (m 6 "md-a") (m 6 "md-a") (m 7 "md-a")) ((m 10 "md-b") (m 13 "md-b")) 13 ((m 10 "md-b") (m 13 "md-b")) ((m 19 "md-a") (m 22 "md-a") (m 19 "md-a") (m 20 "md-a")) 14 ((m 19 "md-a") (m 22 "md-a") (m 19 "md-a") (m 20 "md-a")) ((m 10 "md-b") (m 13 "md-b")) ((m 5 "md-a") (m 8 "md-a") (m 5 "md-a") (m 8 "md-a")) search-failed ((m 5 "md-a") (m 8 "md-a") (m 5 "md-a") (m 8 "md-a")))"#
     );
 }
+
+/// GNU 31.1: a search made zero times (`COUNT` 0) does not move point and
+/// makes the match data an empty match at point -- `search_buffer`'s
+/// `set_search_regs (pos_byte, 0)` -- whatever it held before, unless
+/// `inhibit-changing-match-data' is set.
+#[test]
+fn a_zero_count_search_matches_the_empty_string_at_point_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"
+        (let ((md (lambda () (mapcar (lambda (x) (if (bufferp x) 'buf x)) (match-data t)))))
+          (with-temp-buffer
+            (insert "one two three αβ two")
+            (list
+             (progn (goto-char 5) (string-match "\\(x\\)" "zzx") (list (re-search-forward "t\\(w\\)o" nil nil 0) (point) (funcall md)))
+             (progn (goto-char 5) (re-search-forward "\\(o\\)" nil t) (list (search-forward "two" nil nil 0) (point) (funcall md)))
+             (progn (goto-char 18) (list (search-backward "one" nil nil 0) (point) (funcall md)))
+             (progn (goto-char 18) (string-match "\\(x\\)" "zzx") (list (posix-search-backward "o+" nil nil 0) (point) (funcall md)))
+             (progn (goto-char 7) (string-match "\\(x\\)" "zzx")
+                    (let ((inhibit-changing-match-data t)) (list (re-search-forward "x" nil nil 0) (point) (funcall md)))))))
+        "#,
+    );
+    assert_eq!(
+        result,
+        "OK ((5 5 (5 5 buf)) (8 8 (8 8 buf)) (18 18 (18 18 buf)) (18 18 (18 18 buf)) (7 7 (2 3 2 3)))"
+    );
+}

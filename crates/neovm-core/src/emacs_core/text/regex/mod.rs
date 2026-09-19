@@ -588,6 +588,14 @@ struct EngineMatchData {
 pub(crate) struct SearchRegisters(EngineMatchData);
 
 impl SearchRegisters {
+    /// An empty match at POS and no other register: GNU `search_buffer`'s
+    /// `set_search_regs (pos_byte, 0)` for a search made zero times.
+    pub(crate) fn empty_match_at(pos: EmacsBytePos) -> Self {
+        Self(EngineMatchData::new(gnu_single_group_vec(Some(
+            MatchGroup::new(pos.get(), pos.get()),
+        ))))
+    }
+
     /// Publish these registers, in Lisp character positions of BUF, as the
     /// match data in TARGET, reusing TARGET's register storage when it
     /// already holds buffer match data.

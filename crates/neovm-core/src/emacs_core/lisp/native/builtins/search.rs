@@ -284,6 +284,22 @@ fn buffer_byte_to_char_pos(buf: &crate::buffer::Buffer, byte_pos: EmacsBytePos) 
     buf.emacs_byte_pos_to_char_pos_clamped(byte_pos)
 }
 
+/// GNU `search_buffer`'s `n == 0` case: searching zero times does not move
+/// point, and (unless the caller inhibits it) makes the match data an empty
+/// match at point, `set_search_regs (pos_byte, 0)`.
+fn commit_zero_count_search(
+    buffers: &crate::buffer::BufferManager,
+    buffer_id: crate::buffer::BufferId,
+    point: EmacsBytePos,
+    match_data: Option<&mut Option<super::regex::MatchData>>,
+) {
+    if let Some(match_data) = match_data
+        && let Some(buf) = buffers.get(buffer_id)
+    {
+        super::regex::SearchRegisters::empty_match_at(point).publish_buffer_into(buf, match_data);
+    }
+}
+
 /// Move point in BUFFER_ID to POINT and, unless the caller inhibits it,
 /// publish the search's REGS as the match data -- in place, GNU's
 /// `search_regs`. The buffer text is unchanged since the search, so the
@@ -345,6 +361,7 @@ pub(crate) fn builtin_search_forward_with_state(
     let (current_id, opts, start_pt, start_char) =
         current_search_context_in_manager(buffers, args, SearchKind::ForwardLiteral)?;
     if opts.steps == 0 {
+        commit_zero_count_search(buffers, current_id, start_pt, match_data);
         return Ok(Value::fixnum(start_char));
     }
 
@@ -1083,6 +1100,7 @@ pub(crate) fn builtin_search_backward_with_state(
     let (current_id, opts, start_pt, start_char) =
         current_search_context_in_manager(buffers, args, SearchKind::BackwardLiteral)?;
     if opts.steps == 0 {
+        commit_zero_count_search(buffers, current_id, start_pt, match_data);
         return Ok(Value::fixnum(start_char));
     }
 
@@ -1237,6 +1255,7 @@ fn re_search_forward_with_state_posix_and_syntax_properties(
     let (current_id, opts, start_pt, start_char) =
         current_search_context_in_manager(buffers, args, SearchKind::ForwardRegexp)?;
     if opts.steps == 0 {
+        commit_zero_count_search(buffers, current_id, start_pt, match_data);
         return Ok(Value::fixnum(start_char));
     }
 
@@ -1368,6 +1387,7 @@ fn re_search_backward_with_state_posix_and_syntax_properties(
     let (current_id, opts, start_pt, start_char) =
         current_search_context_in_manager(buffers, args, SearchKind::BackwardRegexp)?;
     if opts.steps == 0 {
+        commit_zero_count_search(buffers, current_id, start_pt, match_data);
         return Ok(Value::fixnum(start_char));
     }
 
