@@ -12,6 +12,61 @@ use crate::support;
 use std::time::Duration;
 use support::*;
 
+/// Issue #379: cosmetic marker updates from post-command-hook must not
+/// deactivate the selection made by the command that just ran.
+#[test]
+fn org_region_survives_silent_emphasis_visibility_updates() {
+    let (mut gnu, mut neo) = boot_pair("");
+    eval_expression(
+        &mut gnu,
+        &mut neo,
+        r#"(progn
+          (switch-to-buffer (get-buffer-create "region.org"))
+          (org-mode)
+          (insert "Plain first\n*bold* and /italic/\nPlain last\n")
+          (setq-local org-hide-emphasis-markers t)
+          (font-lock-ensure)
+          (goto-char (point-min))
+          (set-face-background 'region "red")
+          (add-hook 'post-command-hook
+            (lambda ()
+              (with-silent-modifications
+                (let ((pos (point-min))
+                      (beg (line-beginning-position))
+                      (end (line-end-position)))
+                  (while (< pos (point-max))
+                    (when (and (eq (get-char-property pos 'org-emphasis) t)
+                               (null (get-char-property pos 'face)))
+                      (put-text-property pos (1+ pos) 'invisible
+                        (unless (and (<= beg pos) (< pos end)) t)))
+                    (setq pos (1+ pos)))))) nil t)
+          nil)"#,
+    );
+    wait_for_both(&mut gnu, &mut neo, Duration::from_secs(10), |grid| {
+        grid.iter().any(|row| row.contains("bold and italic"))
+    });
+    send_both(&mut gnu, &mut neo, "C-SPC C-n C-n");
+    read_both(&mut gnu, &mut neo, Duration::from_secs(1));
+    for session in [&gnu, &neo] {
+        let grid = session.text_grid();
+        let row = grid
+            .iter()
+            .position(|row| row.contains("bold and italic"))
+            .expect("emphasis markers hidden after leaving their line");
+        let col = grid[row].find("bold").unwrap();
+        let selected = session.screen().cell(row as u16, col as u16).unwrap();
+        let unselected = session.screen().cell((row + 1) as u16, 0).unwrap();
+        assert_ne!(
+            selected.bgcolor(),
+            unselected.bgcolor(),
+            "{} lost region highlighting after silent marker updates\n{}",
+            session.name,
+            grid.join("\n")
+        );
+    }
+    assert_pair_exact_display("Org silent marker selection", &gnu, &neo);
+}
+
 fn grid_contains(session: &neomacs_tui_tests::TuiSession, needle: &str) -> bool {
     session.text_grid().iter().any(|row| row.contains(needle))
 }

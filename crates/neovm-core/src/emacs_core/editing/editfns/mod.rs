@@ -327,11 +327,11 @@ enum BufferChangeKind {
     PropertiesOnly,
 }
 
-/// GNU `signal_before_change(beg, end)` plus an explicit distinction between
+/// GNU buffer-modification preparation, with an explicit distinction between
 /// character input consumed by Tree-sitter and property-only modifications.
 /// `byte_range` is 0-based Emacs bytes and is converted to 1-based character
 /// positions for Lisp hooks.
-fn signal_before_change_with_kind(
+fn prepare_buffer_change(
     ctx: &mut crate::emacs_core::eval::Context,
     byte_range: EmacsByteRange,
     kind: BufferChangeKind,
@@ -415,6 +415,19 @@ fn signal_before_change_with_kind(
         ctx, current_id, beg, end,
     )?;
 
+    signal_before_change_hooks(ctx, current_id, byte_range)?;
+    deactivate_mark_after_preparing_change(ctx);
+    Ok(())
+}
+
+/// Run callbacks only. Preparation owns mark deactivation so the inhibited
+/// path and the callback-free fast path cannot accidentally have the same
+/// selection side effects (GNU insdel.c: prepare_to_modify_buffer_1).
+fn signal_before_change_hooks(
+    ctx: &mut crate::emacs_core::eval::Context,
+    current_id: crate::buffer::BufferId,
+    byte_range: EmacsByteRange,
+) -> Result<(), Flow> {
     // Quiet fast path: when nothing can run under the bind — no
     // first-change hook due, `before-change-functions` nil, no overlays —
     // the `inhibit-modification-hooks` binding is unobservable. GNU binds
@@ -480,13 +493,11 @@ pub(crate) fn signal_before_text_change(
     ctx: &mut crate::emacs_core::eval::Context,
     change: TextChange,
 ) -> Result<(), Flow> {
-    signal_before_change_with_kind(
+    prepare_buffer_change(
         ctx,
         change.before_byte_range(),
         BufferChangeKind::Characters,
-    )?;
-    deactivate_mark_after_preparing_change(ctx);
-    Ok(())
+    )
 }
 
 /// The before-change signal for an insertion, which needs a POSITION and not a
@@ -508,13 +519,11 @@ pub(crate) fn signal_before_insertion_at_emacs_byte_pos(
     ctx: &mut crate::emacs_core::eval::Context,
     byte_pos: EmacsBytePos,
 ) -> Result<(), Flow> {
-    signal_before_change_with_kind(
+    prepare_buffer_change(
         ctx,
         EmacsByteRange::from_start_len(byte_pos, EmacsByteLen::ZERO),
         BufferChangeKind::Characters,
-    )?;
-    deactivate_mark_after_preparing_change(ctx);
-    Ok(())
+    )
 }
 
 /// Run GNU's modification-hook protocol for a text-property-only change.
@@ -524,17 +533,15 @@ pub(crate) fn signal_before_property_change(
     ctx: &mut crate::emacs_core::eval::Context,
     change: TextChange,
 ) -> Result<(), Flow> {
-    signal_before_change_with_kind(
+    prepare_buffer_change(
         ctx,
         change.before_byte_range(),
         BufferChangeKind::PropertiesOnly,
-    )?;
-    deactivate_mark_after_preparing_change(ctx);
-    Ok(())
+    )
 }
 
 fn deactivate_mark_after_preparing_change(ctx: &mut crate::emacs_core::eval::Context) {
-    // GNU `prepare_to_modify_buffer_1` (insdel.c) unconditionally runs
+    // GNU `prepare_to_modify_buffer_1` (insdel.c), with hooks enabled, runs
     // `Fset (Qdeactivate_mark, Qt)` after signaling before-change. Because
     // `deactivate-mark` is buffer-local-when-set, this creates a buffer-local
     // binding on the modified buffer (so it appears in buffer-local-variables).
@@ -673,7 +680,7 @@ fn signal_after_change_with_kind(
         execute_combined_after_change(ctx)?;
     }
 
-    // Quiet fast path (twin of the one in `signal_before_change_with_kind`):
+    // Quiet fast path (twin of the one in `signal_before_change_hooks`):
     // with `after-change-functions` nil, no recorded or live overlay hooks,
     // no interval insert hooks, and no text-property intervals to report,
     // nothing can run under the bind.

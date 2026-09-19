@@ -7,6 +7,46 @@ fn install_test_runtime() {
 }
 
 #[test]
+fn inhibited_buffer_changes_preserve_pending_mark_deactivation() {
+    let mut ev = crate::emacs_core::Context::new();
+    ev.eval_str("(progn (set-buffer (get-buffer-create \"silent-selection\")) (insert \"abc\"))")
+        .unwrap();
+    // GNU insdel.c returns before setting deactivate-mark for every kind of
+    // inhibited modification, including actual character changes.
+    for change in [
+        "(put-text-property 1 2 'invisible t)",
+        "(insert \"x\")",
+        "(delete-region 1 2)",
+    ] {
+        for pending in ["nil", "t"] {
+            let expression = format!(
+                "(let ((inhibit-modification-hooks t) (deactivate-mark {pending}))
+                   {change} deactivate-mark)"
+            );
+            let actual = ev.eval_str(&expression).unwrap();
+            assert_eq!(
+                actual,
+                if pending == "nil" {
+                    Value::NIL
+                } else {
+                    Value::T
+                },
+                "{expression}"
+            );
+        }
+    }
+    // The callback-free ordinary path must still request deactivation.
+    assert_eq!(
+        ev.eval_str(
+            "(let ((inhibit-modification-hooks nil) (deactivate-mark nil))
+           (put-text-property 1 2 'face 'bold) deactivate-mark)"
+        )
+        .unwrap(),
+        Value::T
+    );
+}
+
+#[test]
 fn file_user_uid_matches_user_uid() {
     crate::test_utils::init_test_tracing();
     let user_uid = builtin_user_uid(vec![]).expect("user-uid should succeed");
