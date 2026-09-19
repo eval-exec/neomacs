@@ -1,6 +1,9 @@
 //! Menu hierarchy and navigation, owned by the display runtime.
 
-use neomacs_display_protocol::{PopupMenuItem, menu::MenuPanel};
+use neomacs_display_protocol::{
+    PopupMenuItem,
+    menu::{MenuPanel, MenuTextLayout},
+};
 
 /// Revision ordering and immutable results, independent of native surfaces.
 #[derive(Default)]
@@ -77,7 +80,7 @@ pub struct MenuSession {
     /// Font metrics
     font_size: f32,
     line_height: f32,
-    char_width: f32,
+    pub text: MenuTextLayout,
 }
 
 impl MenuSession {
@@ -88,7 +91,7 @@ impl MenuSession {
         title: Option<String>,
         font_size: f32,
         line_height: f32,
-        char_width: f32,
+        text: MenuTextLayout,
     ) -> Self {
         // Collect top-level item indices (depth == 0)
         let root_indices: Vec<usize> = items
@@ -106,7 +109,7 @@ impl MenuSession {
             title.as_deref(),
             font_size,
             line_height,
-            char_width,
+            &text,
         );
 
         MenuSession {
@@ -118,7 +121,7 @@ impl MenuSession {
             face_bg: None,
             font_size,
             line_height,
-            char_width,
+            text,
         }
     }
 
@@ -257,7 +260,7 @@ impl MenuSession {
             None,
             self.font_size,
             self.line_height,
-            self.char_width,
+            &self.text,
         );
 
         let child_panel_index = depth;

@@ -1,7 +1,9 @@
 //! Plain menu presentation data shared by the runtime and painter.
 
 mod item;
+mod text;
 pub use item::{MenuAvailability, MenuItemKind};
+pub use text::{MenuItemText, MenuTextLayout, MenuTextRun};
 
 /// Correlates a native heading intent with the evaluator's menu response.
 /// Distinct from MenuToken: one intent can produce multiple menu revisions.
@@ -139,6 +141,7 @@ impl MenuPanel {
 /// One measured panel. Coordinates are local to its drawing target.
 pub struct MenuPanelPaint<'a> {
     pub panel: &'a MenuPanel,
+    pub text: &'a MenuTextLayout,
     pub all_items: &'a [PopupMenuItem],
     pub title: Option<&'a str>,
     pub face_fg: Option<(f32, f32, f32)>,

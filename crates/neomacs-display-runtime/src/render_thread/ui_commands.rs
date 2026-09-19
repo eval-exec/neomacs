@@ -54,10 +54,6 @@ impl RenderApp {
                             placement.constraint(),
                         );
                         let (fs, lh, cw) = owner.render.font_metrics();
-                        let mut session =
-                            crate::menus::MenuSession::new(0.0, 0.0, items, title, fs, lh, cw);
-                        session.face_fg = fg;
-                        session.face_bg = bg;
                         let mut fonts =
                             neomacs_display_protocol::frame_glyphs::FrameGlyphBuffer::with_size(
                                 0.0, 0.0,
@@ -65,6 +61,32 @@ impl RenderApp {
                         if let Some(frame) = owner.render.compositor.current_frame.as_ref() {
                             fonts.clone_font_bindings_from(frame);
                         }
+                        let Some(gpu) = self.gpu.as_ref() else {
+                            self.comms
+                                .send_input(crate::thread_comm::InputEvent::MenuSelection {
+                                    index: -1,
+                                    token: Some(token),
+                                });
+                            return;
+                        };
+                        let mut atlas = neomacs_renderer_wgpu::WgpuGlyphAtlas::new_with_scale(
+                            &gpu.device,
+                            parent.scale_factor() as f32,
+                        );
+                        atlas.set_metrics(fs, lh);
+                        atlas.set_current_frame_fonts(fonts.font_bindings());
+                        let text = atlas.measure_menu_text(
+                            &items,
+                            title.as_deref(),
+                            cw,
+                            fonts.faces.get(&neomacs_display_protocol::FaceId::new(0)),
+                            &gpu.device,
+                            &gpu.queue,
+                        );
+                        let mut session =
+                            crate::menus::MenuSession::new(0.0, 0.0, items, title, fs, lh, text);
+                        session.face_fg = fg;
+                        session.face_bg = bg;
                         let accepted = self.menus.open(crate::menus::MenuRequest {
                             tooltips,
                             request_id,

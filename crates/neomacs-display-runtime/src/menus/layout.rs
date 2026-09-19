@@ -1,6 +1,9 @@
 //! Menu panel measurement, independent of native window placement.
 
-use neomacs_display_protocol::{PopupMenuItem, menu::MenuPanel};
+use neomacs_display_protocol::{
+    PopupMenuItem,
+    menu::{MenuPanel, MenuTextLayout},
+};
 
 pub(super) fn measure_panel(
     x: f32,
@@ -10,7 +13,7 @@ pub(super) fn measure_panel(
     title: Option<&str>,
     font_size: f32,
     line_height: f32,
-    char_width: f32,
+    text: &MenuTextLayout,
 ) -> MenuPanel {
     let padding = 4.0_f32;
     let item_height = line_height + 3.0;
@@ -41,23 +44,33 @@ pub(super) fn measure_panel(
             .map(|&idx| &all_items[idx])
             .filter(|item| !item.separator())
     };
-    let label_width = rows()
-        .map(|item| item.label.chars().count())
-        .max()
-        .unwrap_or(10);
-    let shortcut_width = rows()
-        .map(|item| item.shortcut.chars().count())
-        .max()
-        .unwrap_or(0);
-    let shortcut_gap = if shortcut_width > 0 { 4 } else { 0 };
-    let arrow_width = if rows().any(|item| item.submenu()) {
-        3
+    let label_width = indices
+        .iter()
+        .filter(|&&i| !all_items[i].separator())
+        .map(|&i| text.item(i).label.width())
+        .fold(0.0_f32, f32::max);
+    let shortcut_width = indices
+        .iter()
+        .filter(|&&i| !all_items[i].separator())
+        .map(|&i| text.item(i).shortcut.width())
+        .fold(0.0_f32, f32::max);
+    let shortcut_gap = if shortcut_width > 0.0 {
+        4.0 * text.space_advance()
     } else {
-        0
+        0.0
     };
-    let columns = label_width + shortcut_gap + shortcut_width + arrow_width;
-    let title_width = title.map(|text| text.chars().count()).unwrap_or(0);
-    let content_width = columns.max(title_width) as f32 * char_width;
+    let arrow_width = if rows().any(|item| item.submenu()) {
+        3.0 * text.space_advance()
+    } else {
+        0.0
+    };
+    let title_width = if title.is_some() {
+        text.title().map_or(0.0, |run| run.width())
+    } else {
+        0.0
+    };
+    let content_width =
+        (label_width + shortcut_gap + shortcut_width + arrow_width).max(title_width);
     let total_w = (content_width + padding * 4.0).max(min_width);
 
     let mut panel = MenuPanel {

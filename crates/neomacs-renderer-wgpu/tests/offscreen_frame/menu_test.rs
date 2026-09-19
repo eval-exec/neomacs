@@ -38,6 +38,12 @@ fn popup_menu_disabled_submenu_dims_its_arrow() {
             .paint_menu(
                 &MenuPanelPaint {
                     panel: &panel,
+                    text: &neomacs_display_protocol::menu::MenuTextLayout::measure(
+                        std::slice::from_ref(&item),
+                        None,
+                        8.0,
+                        |_| 8.0,
+                    ),
                     all_items: std::slice::from_ref(&item),
                     title: None,
                     face_fg: None,
@@ -99,6 +105,12 @@ fn popup_menu_toggle_and_radio_states_have_distinct_indicator_pixels() {
             .paint_menu(
                 &MenuPanelPaint {
                     panel: &panel,
+                    text: &neomacs_display_protocol::menu::MenuTextLayout::measure(
+                        std::slice::from_ref(&item),
+                        None,
+                        8.0,
+                        |_| 8.0,
+                    ),
                     all_items: std::slice::from_ref(&item),
                     title: None,
                     face_fg: None,

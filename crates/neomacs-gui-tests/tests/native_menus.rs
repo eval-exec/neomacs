@@ -1,5 +1,7 @@
+//! #381: translated popup geometry must survive modifier-triggered redraw.
 //! #387: real submenu input must preserve the native display connection.
-//! Requires Weston (X11 backend/kiosk shell), Xvfb, xdotool and a fresh-built
+//! Requires Weston (X11 backend/kiosk shell), Xvfb, xdotool, ImageMagick import,
+//! and a fresh-built
 //! release runtime. Executables may be overridden with NEOMACS_GUI_WESTON and
 //! NEOMACS_GUI_TEST_BINARY. All pointer input goes to an isolated X server.
 //! Weston 15 aborts in weston_coord_global_to_surface on this sequence;
@@ -31,9 +33,133 @@ struct Ready {
 
 #[test]
 fn native_submenu_hover_keeps_editor_and_compositor_alive() {
+    with_native_menu(
+        "native-menus.el",
+        |env, window, ready, artifacts, editor, compositor| {
+            let x = (ready.char_width * 3).to_string();
+            let menu_y = (ready.char_height / 2).to_string();
+            let row_y = (ready.char_height * 2).to_string();
+            for cycle in 0..10 {
+                let before = popup_requests(artifacts);
+                input(
+                    env,
+                    &["mousemove", "--window", window, &x, &menu_y, "click", "1"],
+                );
+                wait_for("root popup", artifacts, || {
+                    alive(compositor, "compositor", artifacts);
+                    alive(editor, "editor", artifacts);
+                    (popup_requests(artifacts) > before).then_some(())
+                });
+                input(env, &["mousemove", "--window", window, &x, &row_y]);
+                wait_for("submenu request", artifacts, || {
+                    alive(compositor, "compositor", artifacts);
+                    alive(editor, "editor", artifacts);
+                    (popup_requests(artifacts) >= before + 2).then_some(())
+                });
+                // get_popup is asynchronous; allow processing before dismissing.
+                thread::sleep(Duration::from_millis(150));
+                alive(compositor, "compositor after submenu", artifacts);
+                alive(editor, "editor after submenu", artifacts);
+                input(
+                    env,
+                    &["mousemove", "--window", window, "950", "650", "click", "1"],
+                );
+                thread::sleep(Duration::from_millis(100));
+                alive(compositor, "compositor after dismissal", artifacts);
+                alive(editor, "editor after dismissal", artifacts);
+                fs::write(artifacts.join("completed-cycles"), (cycle + 1).to_string()).unwrap();
+            }
+        },
+    );
+}
+
+#[test]
+fn translated_menu_geometry_survives_control_key_redraw() {
+    with_native_menu(
+        "issue-381-translated-menu.el",
+        |env, window, ready, artifacts, editor, compositor| {
+            let x = (ready.char_width * 3).to_string();
+            let y = (ready.char_height / 2).to_string();
+            input(
+                env,
+                &["mousemove", "--window", window, &x, &y, "click", "1"],
+            );
+            wait_for("translated popup", artifacts, || {
+                alive(editor, "editor opening translated popup", artifacts);
+                (popup_requests(artifacts) > 0).then_some(())
+            });
+            let before = stable_menu_pixels(env, ready, artifacts, "before-control");
+            input(env, &["keydown", "Control_L"]);
+            let held = stable_menu_pixels(env, ready, artifacts, "control-held");
+            input(env, &["keyup", "Control_L"]);
+            let released = stable_menu_pixels(env, ready, artifacts, "control-released");
+            alive(editor, "editor after Control", artifacts);
+            alive(compositor, "compositor after Control", artifacts);
+            let changed = |after: &image::RgbImage| {
+                before
+                    .pixels()
+                    .zip(after.pixels())
+                    .filter(|(a, b)| a != b)
+                    .count()
+            };
+            assert_eq!(
+                changed(&held),
+                0,
+                "Control must not change Chinese/Latin menu glyph spacing or shortcut alignment; artifacts: {}",
+                artifacts.display()
+            );
+            assert_eq!(
+                changed(&released),
+                0,
+                "releasing Control must preserve menu geometry; artifacts: {}",
+                artifacts.display()
+            );
+        },
+    );
+}
+
+fn stable_menu_pixels(
+    env: &[(String, String)],
+    ready: &Ready,
+    artifacts: &Path,
+    name: &str,
+) -> image::RgbImage {
+    // Input delivery and native popup presentation are asynchronous.
+    thread::sleep(Duration::from_millis(150));
+    let path = artifacts.join(format!("{name}.png"));
+    let mut previous = None;
+    wait_for("stable menu screenshot", artifacts, || {
+        let output = Command::new("import")
+            .args(["-window", "root"])
+            .arg(&path)
+            .envs(env.iter().map(|(k, v)| (k, v)))
+            .output()
+            .expect("install ImageMagick import for native popup screenshots");
+        assert!(
+            output.status.success(),
+            "screenshot: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        // The native popup belongs to a separate Wayland surface, so capture
+        // the compositor output, not the editor's main-surface readback.
+        // Exclude the menu bar and the minibuffer, which can echo modifiers.
+        let pixels = image::open(&path)
+            .unwrap()
+            .crop_imm(0, ready.char_height, 600, ready.char_height * 6)
+            .to_rgb8();
+        let stable = previous.as_ref() == Some(&pixels);
+        previous = Some(pixels.clone());
+        stable.then_some(pixels)
+    })
+}
+
+fn with_native_menu(
+    fixture: &str,
+    exercise: impl FnOnce(&[(String, String)], &str, &Ready, &Path, &mut OwnedChild, &mut OwnedChild),
+) {
     let root = neomacs_infra::workspace_root();
     let artifacts = root.join(format!(
-        "target/neomacs-gui-tests/native-submenu-{}-{}",
+        "tmp/neomacs-gui-tests/native-menu-{}-{}",
         std::process::id(),
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -84,7 +210,7 @@ fn native_submenu_hover_keeps_editor_and_compositor_alive() {
     let mut editor = OwnedChild(
         Command::new(binary)
             .args(["-Q", "-l"])
-            .arg(root.join("crates/neomacs-gui-tests/fixtures/native-menus.el"))
+            .arg(root.join("crates/neomacs-gui-tests/fixtures").join(fixture))
             .env("XDG_RUNTIME_DIR", &runtime)
             .env("WAYLAND_DISPLAY", "menu-test")
             .env_remove("DISPLAY")
@@ -112,42 +238,14 @@ fn native_submenu_hover_keeps_editor_and_compositor_alive() {
         })
     });
     input(display.env(), &["windowfocus", &window]);
-    let x = (ready.char_width * 3).to_string();
-    let menu_y = (ready.char_height / 2).to_string();
-    let row_y = (ready.char_height * 2).to_string();
-    for cycle in 0..10 {
-        let before = popup_requests(&artifacts);
-        input(
-            display.env(),
-            &["mousemove", "--window", &window, &x, &menu_y, "click", "1"],
-        );
-        wait_for("root popup", &artifacts, || {
-            alive(&mut compositor, "compositor", &artifacts);
-            alive(&mut editor, "editor", &artifacts);
-            (popup_requests(&artifacts) > before).then_some(())
-        });
-        input(
-            display.env(),
-            &["mousemove", "--window", &window, &x, &row_y],
-        );
-        wait_for("submenu request", &artifacts, || {
-            alive(&mut compositor, "compositor", &artifacts);
-            alive(&mut editor, "editor", &artifacts);
-            (popup_requests(&artifacts) >= before + 2).then_some(())
-        });
-        // get_popup is asynchronous; allow processing before dismissing.
-        thread::sleep(Duration::from_millis(150));
-        alive(&mut compositor, "compositor after submenu", &artifacts);
-        alive(&mut editor, "editor after submenu", &artifacts);
-        input(
-            display.env(),
-            &["mousemove", "--window", &window, "950", "650", "click", "1"],
-        );
-        thread::sleep(Duration::from_millis(100));
-        alive(&mut compositor, "compositor after dismissal", &artifacts);
-        alive(&mut editor, "editor after dismissal", &artifacts);
-        fs::write(artifacts.join("completed-cycles"), (cycle + 1).to_string()).unwrap();
-    }
+    exercise(
+        display.env(),
+        &window,
+        &ready,
+        &artifacts,
+        &mut editor,
+        &mut compositor,
+    );
     fs::write(artifacts.join("stop"), "stop").unwrap();
     let status = wait_for("editor shutdown", &artifacts, || {
         editor.0.try_wait().unwrap()

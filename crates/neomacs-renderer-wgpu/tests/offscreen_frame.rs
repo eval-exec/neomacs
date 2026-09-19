@@ -1562,8 +1562,10 @@ fn popup_redraw_preserves_unchanged_main_frame_pixels() {
         shortcut: String::new(),
         depth: 0,
     }];
+    let text = neomacs_display_protocol::menu::MenuTextLayout::measure(&items, None, 8.0, |_| 8.0);
     let paint = MenuPanelPaint {
         panel: &panel,
+        text: &text,
         all_items: &items,
         title: None,
         face_fg: None,

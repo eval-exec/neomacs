@@ -86,8 +86,7 @@ impl WgpuRenderer {
         };
 
         let padding = 4.0_f32;
-        let _font_size = glyph_atlas.default_font_size();
-        let char_width = glyph_atlas.default_char_width();
+        let char_width = menu.text.space_advance();
         let font_size_bits = 0.0_f32.to_bits();
 
         // Render each panel (root + open submenus)
@@ -234,9 +233,9 @@ impl WgpuRenderer {
             let mut overlay_glyphs: Vec<(GlyphAtlasHandle, f32, f32, [f32; 4])> = Vec::new();
 
             // Title (root panel only)
-            if let Some(title) = menu.title {
+            if let Some(title) = menu.title.and(menu.text.title()) {
                 let tx = mx + padding * 2.0;
-                for (ci, ch) in title.chars().enumerate() {
+                for &(ch, x) in title.characters() {
                     let key = GlyphKey {
                         charcode: ch as u32,
                         face_id: FaceId::new(0),
@@ -252,12 +251,7 @@ impl WgpuRenderer {
                         menu.font_face,
                         SubpixelRequest::Disabled,
                     ) {
-                        overlay_glyphs.push((
-                            handle,
-                            tx + (ci as f32) * char_width,
-                            my + padding,
-                            title_color,
-                        ));
+                        overlay_glyphs.push((handle, tx + x, my + padding, title_color));
                     }
                 }
             }
@@ -276,7 +270,7 @@ impl WgpuRenderer {
                 };
 
                 let label_x = mx + padding * 2.0 + indicator_width;
-                for (ci, ch) in item.label.chars().enumerate() {
+                for &(ch, x) in menu.text.item(item_idx).label.characters() {
                     let key = GlyphKey {
                         charcode: ch as u32,
                         face_id: FaceId::new(0),
@@ -292,19 +286,13 @@ impl WgpuRenderer {
                         menu.font_face,
                         SubpixelRequest::Disabled,
                     ) {
-                        overlay_glyphs.push((
-                            handle,
-                            label_x + (ci as f32) * char_width,
-                            iy + 2.0,
-                            color,
-                        ));
+                        overlay_glyphs.push((handle, label_x + x, iy + 2.0, color));
                     }
                 }
 
                 if !item.shortcut.is_empty() {
-                    let shortcut_x =
-                        shortcut_right - item.shortcut.chars().count() as f32 * char_width;
-                    for (ci, ch) in item.shortcut.chars().enumerate() {
+                    let shortcut_x = shortcut_right - menu.text.item(item_idx).shortcut.width();
+                    for &(ch, x) in menu.text.item(item_idx).shortcut.characters() {
                         let key = GlyphKey {
                             charcode: ch as u32,
                             face_id: FaceId::new(0),
@@ -320,12 +308,7 @@ impl WgpuRenderer {
                             menu.font_face,
                             SubpixelRequest::Disabled,
                         ) {
-                            overlay_glyphs.push((
-                                handle,
-                                shortcut_x + (ci as f32) * char_width,
-                                iy + 2.0,
-                                shortcut_color,
-                            ));
+                            overlay_glyphs.push((handle, shortcut_x + x, iy + 2.0, shortcut_color));
                         }
                     }
                 }

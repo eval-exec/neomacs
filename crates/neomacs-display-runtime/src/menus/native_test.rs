@@ -324,6 +324,12 @@ impl ApplicationHandler for Smoke {
                 root.label = format!("Native submenu item {i}");
                 items.push(root.clone());
             }
+            let text = neomacs_display_protocol::menu::MenuTextLayout::measure(
+                &items,
+                Some("Native menus"),
+                8.4,
+                |_| 8.4,
+            );
             let mut session = MenuSession::new(
                 0.0,
                 0.0,
@@ -331,7 +337,7 @@ impl ApplicationHandler for Smoke {
                 Some("Native menus".into()),
                 14.0,
                 18.0,
-                8.4,
+                text,
             );
             session.move_hover(1);
             assert!(session.open_submenu());

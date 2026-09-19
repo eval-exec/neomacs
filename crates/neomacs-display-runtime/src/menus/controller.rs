@@ -124,7 +124,7 @@ impl MenuPresentation {
                                 panel.bounds.2,
                                 panel.item_height,
                             ),
-                            metrics: (fs, lh, self.panels[depth].atlas.default_char_width()),
+                            metrics: (fs, lh, request.session.text.space_advance()),
                             fonts,
                         },
                         appearance,
@@ -581,6 +581,7 @@ impl MenuPresentation {
             renderer.begin_draw(target).paint_menu(
                 &MenuPanelPaint {
                     panel: &local,
+                    text: &request.session.text,
                     all_items: &request.session.all_items,
                     title: if depth == 0 {
                         request.session.title.as_deref()
