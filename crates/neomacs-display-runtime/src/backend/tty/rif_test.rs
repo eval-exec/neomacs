@@ -1265,8 +1265,8 @@ fn rasterize_prefers_phys_cursor_over_matrix_cursor_columns() {
 #[test]
 fn tty_frame_chrome_rasterizes_menu_and_tab_bands_in_order() {
     use neomacs_display_protocol::frame_chrome::{
-        BandRect, ChromeAction, ChromeBandRequest, ChromeDisplayRow, FrameChrome,
-        FrameChromeContent, FrameChromeKind, FrameSize, MenuBarContent, PositionedChromeItem,
+        ChromeBandRequest, ChromeDisplayRow, FrameChrome, FrameChromeContent, FrameChromeKind,
+        FrameSize, MenuBarContent,
     };
     use neomacs_display_protocol::ui_types::MenuBarItem;
 
@@ -1283,18 +1283,19 @@ fn tty_frame_chrome_rasterizes_menu_and_tab_bands_in_order() {
     row.glyphs[GlyphArea::Text as usize].push(Glyph::char('B', FaceId::new(0), 1));
 
     let menu = MenuBarContent::new(
-        vec![PositionedChromeItem::new(
-            BandRect::new(0.0, 0.0, 5.0, 1.0).expect("menu item bounds"),
-            MenuBarItem {
-                index: 0,
-                label: "File".into(),
-                key: "file".into(),
-            },
-            ChromeAction::OpenMenu {
-                index: 0,
-                key: "file".into(),
-            },
-        )],
+        vec![
+            neomacs_display_protocol::frame_chrome::PositionedMenuHeading::measure(
+                MenuBarItem {
+                    index: 0,
+                    label: "File".into(),
+                    key: "file".into(),
+                },
+                0.0,
+                1.0,
+                0.0,
+                |_| neomacs_display_protocol::frame_chrome::MenuHeadingText::Cells { width: 5.0 },
+            ),
+        ],
         Color::WHITE,
         Color::BLACK,
     );

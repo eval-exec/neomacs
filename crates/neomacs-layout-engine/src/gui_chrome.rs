@@ -8,7 +8,8 @@ use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 
 use neomacs_display_protocol::frame_chrome::{
-    BandRect, ChromeAction, CompactBarContent, MenuBarContent, PositionedChromeItem, ToolBarContent,
+    BandRect, ChromeAction, CompactBarContent, MenuBarContent, MenuHeadingText,
+    PositionedChromeItem, PositionedMenuHeading, ResolvedMenuLabel, ToolBarContent,
 };
 use neomacs_display_protocol::types::Color;
 use neomacs_display_protocol::{MenuBarItem, ToolBarImageSource, ToolBarItem, ToolBarItemType};
@@ -203,26 +204,61 @@ fn fitted_local_bounds(x: f32, width: f32, band_width: f32, band_height: f32) ->
     })
 }
 
+/// The display backend chooses the measurement domain explicitly.
+pub(crate) enum MenuHeadingMetrics<'a> {
+    Pixels {
+        service: &'a mut crate::font::metrics::FontMetricsService,
+        face: &'a crate::neovm_bridge::ResolvedFace,
+    },
+    Cells(f32),
+}
+
+impl MenuHeadingMetrics<'_> {
+    fn measure(&mut self, text: &str) -> MenuHeadingText {
+        match self {
+            Self::Cells(width) => MenuHeadingText::Cells {
+                width: text.chars().count() as f32 * *width,
+            },
+            Self::Pixels { service, face } => {
+                use crate::font::metrics::{
+                    FontsetBaseFamily, PrimaryFontFamily, RealizedFaceFontSelection,
+                };
+                let selection = RealizedFaceFontSelection::new(
+                    PrimaryFontFamily::new(&face.font_family),
+                    FontsetBaseFamily::new(&face.fontset_base_family),
+                    face.font_weight,
+                    face.italic,
+                    face.font_size,
+                );
+                let (glyphs, fonts) = service
+                    .resolved_glyphs_for_realized_face_cluster(text, selection)
+                    .unwrap_or_default();
+                MenuHeadingText::Pixels(ResolvedMenuLabel::new(glyphs, fonts, face.font_size))
+            }
+        }
+    }
+}
+
 fn position_menu_items(
     items: Vec<MenuBarItem>,
     band_width: f32,
     band_height: f32,
-    char_width: f32,
+    metrics: &mut MenuHeadingMetrics<'_>,
     start_x: f32,
     horizontal_padding: f32,
-) -> (Vec<PositionedChromeItem<MenuBarItem>>, f32) {
+) -> (Vec<PositionedMenuHeading>, f32) {
     let mut positioned = Vec::new();
     let mut x = start_x;
     for item in items {
-        let width = item.label.chars().count() as f32 * char_width + horizontal_padding * 2.0;
-        let Some(bounds) = fitted_local_bounds(x, width, band_width, band_height) else {
+        let heading =
+            PositionedMenuHeading::measure(item, x, band_height, horizontal_padding, |label| {
+                metrics.measure(label)
+            });
+        let Some(heading) = heading.fit(band_width - x) else {
             break;
         };
-        let action = ChromeAction::OpenMenu {
-            index: item.index,
-            key: item.key.clone(),
-        };
-        positioned.push(PositionedChromeItem::new(bounds, item, action));
+        let width = heading.local_bounds().raw().width;
+        positioned.push(heading);
         x += width;
     }
     (positioned, x)
@@ -273,7 +309,7 @@ pub(crate) fn layout_gui_menu_bar_content(
     items: Vec<MenuBarItem>,
     band_width: f32,
     band_height: f32,
-    char_width: f32,
+    metrics: &mut MenuHeadingMetrics<'_>,
     horizontal_padding: f32,
     foreground: Color,
     background: Color,
@@ -282,7 +318,7 @@ pub(crate) fn layout_gui_menu_bar_content(
         items,
         band_width,
         band_height,
-        char_width,
+        metrics,
         horizontal_padding,
         horizontal_padding,
     );
@@ -314,7 +350,7 @@ pub(crate) fn layout_gui_compact_bar_content(
     tool_items: Vec<ToolBarItem>,
     band_width: f32,
     band_height: f32,
-    char_width: f32,
+    metrics: &mut MenuHeadingMetrics<'_>,
     menu_foreground: Color,
     menu_background: Color,
     tool_foreground: Color,
@@ -325,7 +361,7 @@ pub(crate) fn layout_gui_compact_bar_content(
         menu_items,
         band_width,
         band_height,
-        char_width,
+        metrics,
         GUI_CHROME_HORIZONTAL_PADDING,
         GUI_CHROME_HORIZONTAL_PADDING,
     );

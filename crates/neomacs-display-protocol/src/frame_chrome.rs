@@ -4,11 +4,14 @@
 //! the band is band-local and can be translated to frame coordinates only via
 //! [`FrameRect::place`].
 
+mod menu_heading;
+pub use menu_heading::{MenuHeadingText, PositionedMenuHeading, ResolvedMenuLabel};
+
 use crate::frame_glyphs::GlyphRowRole;
 use crate::geometry::{BandSpace, FrameSpace, LayoutRect, SpaceTranslation};
 use crate::glyph_matrix::GlyphRow;
 use crate::types::{Color, Rect};
-use crate::ui_types::{MenuBarItem, ToolBarItem};
+use crate::ui_types::ToolBarItem;
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FrameSize {
@@ -243,7 +246,7 @@ impl<T> PositionedChromeItem<T> {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct MenuBarContent {
-    items: Vec<PositionedChromeItem<MenuBarItem>>,
+    items: Vec<PositionedMenuHeading>,
     foreground: Color,
     background: Color,
     terminal_style: Option<TerminalMenuBarStyle>,
@@ -266,11 +269,7 @@ pub struct TerminalMenuBarStyle {
 }
 
 impl MenuBarContent {
-    pub fn new(
-        items: Vec<PositionedChromeItem<MenuBarItem>>,
-        foreground: Color,
-        background: Color,
-    ) -> Self {
+    pub fn new(items: Vec<PositionedMenuHeading>, foreground: Color, background: Color) -> Self {
         Self {
             items,
             foreground,
@@ -288,7 +287,7 @@ impl MenuBarContent {
         Self::new(Vec::new(), Color::WHITE, Color::BLACK)
     }
 
-    pub fn items(&self) -> &[PositionedChromeItem<MenuBarItem>] {
+    pub fn items(&self) -> &[PositionedMenuHeading] {
         &self.items
     }
 
@@ -362,7 +361,7 @@ impl ToolBarContent {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CompactBarContent {
-    menu_items: Vec<PositionedChromeItem<MenuBarItem>>,
+    menu_items: Vec<PositionedMenuHeading>,
     tool_items: Vec<PositionedChromeItem<ToolBarItem>>,
     menu_foreground: Color,
     menu_background: Color,
@@ -382,7 +381,7 @@ impl CompactBarContent {
     }
 
     pub fn new(
-        menu_items: Vec<PositionedChromeItem<MenuBarItem>>,
+        menu_items: Vec<PositionedMenuHeading>,
         tool_items: Vec<PositionedChromeItem<ToolBarItem>>,
         menu_foreground: Color,
         menu_background: Color,
@@ -416,7 +415,7 @@ impl CompactBarContent {
         )
     }
 
-    pub fn menu_items(&self) -> &[PositionedChromeItem<MenuBarItem>] {
+    pub fn menu_items(&self) -> &[PositionedMenuHeading] {
         &self.menu_items
     }
 

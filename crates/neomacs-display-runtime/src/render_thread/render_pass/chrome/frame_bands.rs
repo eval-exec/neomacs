@@ -20,9 +20,8 @@
 
 use crate::render_thread::frame_windows::{GuiFrameNativeWindowState, GuiFrameRenderState};
 use crate::render_thread::state::{ToolbarResources, WindowChrome};
-use crate::thread_comm::MenuBarItem;
 use neomacs_display_protocol::frame_chrome::{
-    CompactBarContent, FrameChromeContent, FrameRect, PositionedChromeItem, ToolBarContent,
+    CompactBarContent, FrameChromeContent, FrameRect, ToolBarContent,
 };
 use neomacs_renderer_wgpu::WgpuRenderer;
 
@@ -46,7 +45,7 @@ pub(in crate::render_thread) fn frame_chrome_toolbar_bounds(
 }
 
 struct GuiFrameMenuBarOverlay<'a> {
-    items: &'a [PositionedChromeItem<MenuBarItem>],
+    items: &'a [neomacs_display_protocol::frame_chrome::PositionedMenuHeading],
     bounds: FrameRect,
     fg: (f32, f32, f32),
     bg: (f32, f32, f32),

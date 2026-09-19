@@ -1740,18 +1740,19 @@ fn chrome_hit_uses_absolute_semantic_hit_regions() {
     use neomacs_display_protocol::{MenuBarItem, ToolBarItem, ToolBarItemType};
 
     let menu = MenuBarContent::new(
-        vec![PositionedChromeItem::new(
-            BandRect::new(8.0, 0.0, 48.0, 18.0).expect("menu bounds"),
-            MenuBarItem {
-                index: 0,
-                label: "File".into(),
-                key: "file".into(),
-            },
-            ChromeAction::OpenMenu {
-                index: 0,
-                key: "file".into(),
-            },
-        )],
+        vec![
+            neomacs_display_protocol::frame_chrome::PositionedMenuHeading::measure(
+                MenuBarItem {
+                    index: 0,
+                    label: "File".into(),
+                    key: "file".into(),
+                },
+                8.0,
+                18.0,
+                0.0,
+                |_| neomacs_display_protocol::frame_chrome::MenuHeadingText::Cells { width: 48.0 },
+            ),
+        ],
         Color::WHITE,
         Color::BLACK,
     );

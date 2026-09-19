@@ -118,6 +118,39 @@ fn translated_menu_geometry_survives_control_key_redraw() {
     );
 }
 
+#[test]
+fn cjk_menu_bar_last_character_opens_its_own_menu() {
+    with_native_menu(
+        "issue-381-menu-bar.el",
+        |env, window, ready, artifacts, editor, compositor| {
+            // Within the fourth CJK glyph, beyond the old four-scalar hit box.
+            let x = (16 + ready.char_width * 6).to_string();
+            let y = (ready.char_height / 2).to_string();
+            input(
+                env,
+                &["mousemove", "--window", window, &x, &y, "click", "1"],
+            );
+            wait_for("wide heading popup", artifacts, || {
+                alive(editor, "opening wide heading", artifacts);
+                (popup_requests(artifacts) > 0).then_some(())
+            });
+            let _ = stable_menu_pixels(env, ready, artifacts, "wide-heading-open");
+            input(env, &["key", "Down", "Return"]);
+            let selected = wait_for("heading command", artifacts, || {
+                alive(editor, "selecting heading command", artifacts);
+                alive(compositor, "selecting heading command", artifacts);
+                fs::read_to_string(artifacts.join("selected-heading")).ok()
+            });
+            assert_eq!(
+                selected,
+                "first",
+                "right side of CJK heading must open its own menu; artifacts: {}",
+                artifacts.display()
+            );
+        },
+    );
+}
+
 fn stable_menu_pixels(
     env: &[(String, String)],
     ready: &Ready,

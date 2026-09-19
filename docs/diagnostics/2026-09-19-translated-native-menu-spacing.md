@@ -96,3 +96,42 @@ while Control is held and after 20 presses. The initial-spacing regression was
 checked against two deliberate mutations: one-cell measurement and one-cell
 painting both fail; restoring measured geometry passes. Logs are under
 `./tmp/neomacs-381/review-*` and `initial-*-red.log`.
+
+## Follow-up: top-level menu-bar headings
+
+The original verification missed overlap in the top-level menu bar. Dropdowns
+and headings used separate render paths. `position_menu_items` still allocated
+`scalar_count * frame_char_width`, while both the ordinary and compact bar
+painters placed scalars at `index * atlas.default_char_width`. This under-sized
+Chinese heading hit rectangles as well as overlapping the glyphs. The prior
+claim of a complete #381 fix was too broad.
+
+GNU's GTK path (`gtkutil.c:make_menu_item`) uses
+`gtk_menu_item_new_with_label(utf8_label)` when there is no shortcut. GTK owns
+font-based text measurement. Its non-toolkit terminal field-width convention is
+not a model for GUI glyph advances.
+
+`PositionedMenuHeading` now consumes a semantic item and measures its label
+before deriving its bounds and action. Its private fields retain the same
+geometry for painting, hover/click regions, and popup anchors. `MenuHeadingText`
+distinguishes resolved pixel glyphs from terminal cell fields. Pixel labels carry
+the exact layout-resolved font identities and glyph positions; the atlas replays
+those glyphs and caches raster data without reselecting fonts or measuring text.
+Both menu-bar variants share this representation. Existing terminal field and
+clipping behavior is retained.
+
+Regression coverage includes repeated real-font CJK ink masks for ordinary and
+compact bars, measured heading bounds and popup anchors, and a real GUI click
+on the right side of a four-CJK-character heading. The initial pixel test fails
+on the original painter. The GUI click test fails on the old executable because
+it invokes the next heading's command (`second` instead of `first`). Artifacts
+and logs are under `./tmp/neomacs-381/heading-*`.
+
+Verification of the heading fix: all 110 focused layout/runtime/renderer tests
+pass, including terminal compatibility and resolved-font cache invalidation.
+`cargo xtask fresh-build --release` completes the full pipeline. All three native
+GUI tests pass against that build. The full translated configuration now shows
+separated top-level Chinese headings; both the menu bar and dropdown retain
+identical pixels while Control is held and after 20 presses. The before/after
+screenshots are `heading-unfixed.png` and `heading-fixed.png` under the same
+artifact directory. Formatting and diff checks pass.

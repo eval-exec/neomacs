@@ -9,11 +9,13 @@ use super::TitleFadeEntry;
 use super::WgpuRenderer;
 use cosmic_text::SubpixelBin;
 use neomacs_display_protocol::font::GlyphSampling;
-use neomacs_display_protocol::frame_chrome::{BandRect, FrameRect, PositionedChromeItem};
+use neomacs_display_protocol::frame_chrome::{
+    BandRect, FrameRect, MenuHeadingText, PositionedMenuHeading,
+};
 use neomacs_display_protocol::frame_glyphs::FrameGlyphBuffer;
 use neomacs_display_protocol::types::{Color, FaceId, ImageId};
 use neomacs_display_protocol::{
-    CompactBarContent, DeviceScale, MenuBarItem, ToolBarContent, ToolBarIconKey, ToolBarIconStyle,
+    CompactBarContent, DeviceScale, ToolBarContent, ToolBarIconKey, ToolBarIconStyle,
     ToolBarImageSource,
 };
 use std::collections::HashMap;
@@ -1659,7 +1661,7 @@ impl WgpuRenderer {
     pub fn render_menu_bar(
         &mut self,
         view: &wgpu::TextureView,
-        items: &[PositionedChromeItem<MenuBarItem>],
+        items: &[PositionedMenuHeading],
         band: FrameRect,
         fg: (f32, f32, f32),
         bg: (f32, f32, f32),
@@ -1679,10 +1681,6 @@ impl WgpuRenderer {
         let draw = self.parameters(uniforms.screen_size, uniforms.time);
 
         let bg_color = Color::new(bg.0, bg.1, bg.2, 1.0).srgb_to_linear();
-        let padding_x = 8.0_f32;
-        let font_size = glyph_atlas.default_font_size();
-        let char_width = glyph_atlas.default_char_width();
-        let font_size_bits = 0.0_f32.to_bits();
 
         // --- Pass 1: Background bar + item highlights ---
         let mut rect_verts: Vec<RectVertex> = Vec::new();
@@ -1781,43 +1779,22 @@ impl WgpuRenderer {
         };
 
         let mut overlay_glyphs: Vec<(GlyphAtlasHandle, f32, f32, [f32; 4])> = Vec::new();
-        let text_y = band.y() + (band.height() - font_size) / 2.0;
 
         for positioned in items {
-            let item = positioned.item();
+            let MenuHeadingText::Pixels(label) = positioned.text() else {
+                continue;
+            };
             let bounds = placed_chrome_item_bounds(band, positioned.local_bounds());
-            let label_x = bounds.x + padding_x;
-            for (ci, ch) in item.label.chars().enumerate() {
-                let key = GlyphKey {
-                    charcode: ch as u32,
-                    face_id: FaceId::new(0),
-                    font_size_bits,
-                    font_identity: glyph_font_identity(None),
-                    x_bin: SubpixelBin::Zero,
-                    y_bin: SubpixelBin::Zero,
-                };
-                if let Some(handle) = glyph_atlas.get_or_create_atlas(
-                    &self.device,
-                    &self.queue,
-                    &key,
-                    None,
-                    SubpixelRequest::Disabled,
-                ) {
-                    overlay_glyphs.push((
-                        handle,
-                        label_x + (ci as f32) * char_width,
-                        text_y,
-                        text_color,
-                    ));
+            let text_y = band.y() + (band.height() - label.font_size()) / 2.0;
+            match glyph_atlas.menu_label_atlas(label, &self.device, &self.queue) {
+                Ok(handles) => {
+                    overlay_glyphs.extend(handles.into_iter().map(|handle| {
+                        (handle, bounds.x + positioned.padding(), text_y, text_color)
+                    }))
                 }
+                Err(error) => tracing::warn!(?error, "menu heading rasterization failed"),
             }
         }
-
-        tracing::trace!(
-            "render_menu_bar: {} overlay_glyphs, text_y={}",
-            overlay_glyphs.len(),
-            text_y
-        );
         self.render_overlay_glyphs(view, &mut overlay_glyphs, glyph_atlas, &draw);
     }
 
@@ -1861,10 +1838,6 @@ impl WgpuRenderer {
         let draw = self.parameters(uniforms.screen_size, uniforms.time);
 
         let bg_color = Color::new(menu_bg.0, menu_bg.1, menu_bg.2, 1.0).srgb_to_linear();
-        let padding_x = 8.0_f32;
-        let font_size = glyph_atlas.default_font_size();
-        let char_width = glyph_atlas.default_char_width();
-        let font_size_bits = 0.0_f32.to_bits();
         let icon_sz = icon_size as f32;
         let pad = padding as f32;
 
@@ -2006,35 +1979,20 @@ impl WgpuRenderer {
             let c = Color::new(menu_fg.0, menu_fg.1, menu_fg.2, 1.0).srgb_to_linear();
             [c.r, c.g, c.b, c.a]
         };
-        let text_y = band.y() + (band.height() - font_size) / 2.0;
         let mut overlay_glyphs: Vec<(GlyphAtlasHandle, f32, f32, [f32; 4])> = Vec::new();
         for positioned in menu_items {
-            let item = positioned.item();
+            let MenuHeadingText::Pixels(label) = positioned.text() else {
+                continue;
+            };
             let bounds = placed_chrome_item_bounds(band, positioned.local_bounds());
-            let label_x = bounds.x + padding_x;
-            for (ci, ch) in item.label.chars().enumerate() {
-                let key = GlyphKey {
-                    charcode: ch as u32,
-                    face_id: FaceId::new(0),
-                    font_size_bits,
-                    font_identity: glyph_font_identity(None),
-                    x_bin: SubpixelBin::Zero,
-                    y_bin: SubpixelBin::Zero,
-                };
-                if let Some(handle) = glyph_atlas.get_or_create_atlas(
-                    &self.device,
-                    &self.queue,
-                    &key,
-                    None,
-                    SubpixelRequest::Disabled,
-                ) {
-                    overlay_glyphs.push((
-                        handle,
-                        label_x + (ci as f32) * char_width,
-                        text_y,
-                        text_color,
-                    ));
+            let text_y = band.y() + (band.height() - label.font_size()) / 2.0;
+            match glyph_atlas.menu_label_atlas(label, &self.device, &self.queue) {
+                Ok(handles) => {
+                    overlay_glyphs.extend(handles.into_iter().map(|handle| {
+                        (handle, bounds.x + positioned.padding(), text_y, text_color)
+                    }))
                 }
+                Err(error) => tracing::warn!(?error, "menu heading rasterization failed"),
             }
         }
         self.render_overlay_glyphs(view, &mut overlay_glyphs, glyph_atlas, &draw);

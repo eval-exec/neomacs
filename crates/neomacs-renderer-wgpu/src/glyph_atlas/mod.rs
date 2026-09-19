@@ -1349,27 +1349,7 @@ impl WgpuGlyphAtlas {
         char_fonts: &CharFontTable,
         shaped_clusters: &ShapedClusterTable,
     ) {
-        if let Some((id, incoming)) = fonts.iter().find(|(id, incoming)| {
-            self.frame_fonts
-                .get(id)
-                .is_some_and(|existing| existing != *incoming)
-        }) {
-            // ResolvedFontId is stable within one layout resolver. If a
-            // resolver restart reuses an id, every cache that hashed or mapped
-            // that id belongs to the old identity and must be invalidated
-            // before the replacement becomes visible.
-            tracing::warn!(
-                target: "font_boundary",
-                id = id.0,
-                ?incoming,
-                existing = ?self.frame_fonts[id],
-                "resolved font id was reused for a different realized instance; clearing renderer font caches"
-            );
-            self.clear();
-        }
-        for (id, font) in fonts {
-            self.frame_fonts.insert(*id, font.clone());
-        }
+        self.install_resolved_fonts(fonts.values());
         for (face_id, by_char) in char_fonts {
             let entry = self.frame_char_fonts.entry(*face_id).or_default();
             for (ch, glyph) in by_char {
@@ -1384,6 +1364,24 @@ impl WgpuGlyphAtlas {
         }
         self.frame_font_bindings_identity =
             frame_font_bindings_identity(faces, fonts, char_fonts, shaped_clusters);
+    }
+
+    fn install_resolved_fonts<'a>(
+        &mut self,
+        fonts: impl Iterator<Item = &'a ResolvedFont> + Clone,
+    ) {
+        if fonts.clone().any(|font| {
+            self.frame_fonts
+                .get(&font.id)
+                .is_some_and(|old| old != font)
+        }) {
+            // A restarted resolver may reuse an id for a different font.
+            tracing::warn!(target: "font_boundary", "resolved font id reused; clearing renderer font caches");
+            self.clear();
+        }
+        for font in fonts {
+            self.frame_fonts.insert(font.id, font.clone());
+        }
     }
 
     /// Replace face-id-keyed font bindings with the frame currently being

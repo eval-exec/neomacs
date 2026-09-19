@@ -1,8 +1,8 @@
 use super::*;
 use crate::render_thread::frame_windows::{FrameLifecycle, GuiFrameRenderState};
 use neomacs_display_protocol::{
-    BandRect, ChromeBandRequest, Color, ContentInsets, DeviceScale, FrameChrome,
-    FrameChromeContent, FrameSize, MenuBarContent, MenuBarItem, PositionedChromeItem, SurfaceState,
+    ChromeBandRequest, Color, ContentInsets, DeviceScale, FrameChrome, FrameChromeContent,
+    FrameSize, MenuBarContent, MenuBarItem, SurfaceState,
 };
 
 #[test]
@@ -14,18 +14,21 @@ fn native_titlebar_is_not_a_menu_hit_and_popup_anchor_stays_frame_local() {
             FrameChromeKind::MenuBar,
             18.0,
             FrameChromeContent::MenuBar(MenuBarContent::new(
-                vec![PositionedChromeItem::new(
-                    BandRect::new(8.0, 0.0, 48.0, 18.0).unwrap(),
-                    MenuBarItem {
-                        index: 0,
-                        label: "Help".into(),
-                        key: "help".into(),
-                    },
-                    ChromeAction::OpenMenu {
-                        index: 0,
-                        key: "help".into(),
-                    },
-                )],
+                vec![
+                    neomacs_display_protocol::frame_chrome::PositionedMenuHeading::measure(
+                        MenuBarItem {
+                            index: 0,
+                            label: "Help".into(),
+                            key: "help".into(),
+                        },
+                        8.0,
+                        18.0,
+                        0.0,
+                        |_| neomacs_display_protocol::frame_chrome::MenuHeadingText::Cells {
+                            width: 48.0,
+                        },
+                    ),
+                ],
                 Color::WHITE,
                 Color::BLACK,
             )),

@@ -1020,17 +1020,16 @@ fn keyboard_heading_switch_uses_controller_identity_and_wraps() {
         .iter()
         .enumerate()
         .map(|(index, key)| {
-            PositionedChromeItem::new(
-                BandRect::new(index as f32 * 100.0, 0.0, 100.0, 18.0).unwrap(),
+            neomacs_display_protocol::frame_chrome::PositionedMenuHeading::measure(
                 neomacs_display_protocol::MenuBarItem {
                     index: index as u32,
                     key: (*key).into(),
                     label: (*key).into(),
                 },
-                ChromeAction::OpenMenu {
-                    index: index as u32,
-                    key: (*key).into(),
-                },
+                index as f32 * 100.0,
+                18.0,
+                0.0,
+                |_| neomacs_display_protocol::frame_chrome::MenuHeadingText::Cells { width: 100.0 },
             )
         })
         .collect();

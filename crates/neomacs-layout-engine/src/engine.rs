@@ -2592,12 +2592,19 @@ impl LayoutEngine {
             if frame_params.compact_bar_height > 0.0 {
                 let menu_face = face_resolver.resolve_named_face_without_inverse_video("menu");
                 let tool_face = face_resolver.resolve_named_face("tool-bar");
+                let mut metrics = match self.font_metrics.as_mut() {
+                    Some(service) => crate::gui_chrome::MenuHeadingMetrics::Pixels {
+                        service,
+                        face: &menu_face,
+                    },
+                    None => crate::gui_chrome::MenuHeadingMetrics::Cells(frame_params.char_width),
+                };
                 let content = layout_gui_compact_bar_content(
                     menu_items,
                     tool_items,
                     frame_params.width,
                     frame_params.compact_bar_height,
-                    frame_params.char_width,
+                    &mut metrics,
                     pixel_to_color(menu_face.fg),
                     pixel_to_color(menu_face.bg),
                     pixel_to_color(tool_face.fg),
@@ -2613,24 +2620,27 @@ impl LayoutEngine {
                 if frame_params.menu_bar_height > 0.0 {
                     let face = face_resolver.resolve_named_face_without_inverse_video("menu");
                     let terminal_face = face_resolver.resolve_named_face("menu");
-                    // GNU `display_menu_bar` lays each item out with a field width
-                    // of SCHARS + 1 measured in the frame's character metric:
-                    // pixels on a window-system frame, cells on a terminal frame.
-                    // A fixed pixel gutter is ~1 char in the GUI but many cells in
-                    // the TTY (char_width == 1), which over-inflates items and
-                    // drops the trailing menus. Use the pixel gutter only for
-                    // window-system frames; on a terminal frame use half a cell per
-                    // side, giving GNU's one-character (SCHARS + 1) separation.
+                    // GNU's non-toolkit `display_menu_bar` uses a SCHARS + 1
+                    // field. Preserve that terminal cell policy. GUI headings
+                    // follow GTK's font-measured labels instead; an ASCII cell
+                    // width cannot determine either their text or hit rectangles.
                     let menu_h_padding = if window_system.is_some() {
                         crate::gui_chrome::GUI_CHROME_HORIZONTAL_PADDING
                     } else {
                         frame_params.char_width * 0.5
                     };
+                    let mut metrics = match (window_system.is_some(), self.font_metrics.as_mut()) {
+                        (true, Some(service)) => crate::gui_chrome::MenuHeadingMetrics::Pixels {
+                            service,
+                            face: &face,
+                        },
+                        _ => crate::gui_chrome::MenuHeadingMetrics::Cells(frame_params.char_width),
+                    };
                     let content = layout_gui_menu_bar_content(
                         menu_items,
                         frame_params.width,
                         frame_params.menu_bar_height,
-                        frame_params.char_width,
+                        &mut metrics,
                         menu_h_padding,
                         pixel_to_color(face.fg),
                         pixel_to_color(face.bg),

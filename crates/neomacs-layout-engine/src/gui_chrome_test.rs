@@ -274,7 +274,7 @@ fn layout_gui_menu_bar_content_assigns_local_bounds_and_actions() {
         ],
         200.0,
         18.0,
-        8.0,
+        &mut MenuHeadingMetrics::Cells(8.0),
         8.0,
         Color::WHITE,
         Color::BLACK,
@@ -328,8 +328,15 @@ fn tty_menu_bar_keeps_all_items_with_gnu_one_cell_gutter() {
 
     // Terminal metrics: 1x1 cells, 160-column frame, half-cell padding per side
     // (== one cell of separation, GNU's SCHARS + 1).
-    let content =
-        layout_gui_menu_bar_content(items, 160.0, 1.0, 1.0, 0.5, Color::WHITE, Color::BLACK);
+    let content = layout_gui_menu_bar_content(
+        items,
+        160.0,
+        1.0,
+        &mut MenuHeadingMetrics::Cells(1.0),
+        0.5,
+        Color::WHITE,
+        Color::BLACK,
+    );
 
     let kept: Vec<&str> = content
         .items()
@@ -350,7 +357,7 @@ fn toolbar_layout_publishes_face_and_font_derived_icon_geometry() {
         vec![],
         200.0,
         34.0,
-        8.0,
+        &mut MenuHeadingMetrics::Cells(8.0),
         Color::BLACK,
         Color::WHITE,
         fg,
@@ -452,7 +459,7 @@ fn layout_gui_compact_bar_content_places_tools_after_menu_items() {
         tool_items,
         240.0,
         34.0,
-        8.0,
+        &mut MenuHeadingMetrics::Cells(8.0),
         Color::WHITE,
         Color::BLACK,
         Color::WHITE,
@@ -606,4 +613,65 @@ fn collect_gui_tool_bar_items_for_frame_retains_items_until_gnu_rebuild_predicat
     eval.note_chrome_generated(selected_window);
     collect_gui_tool_bar_items_for_frame(&mut eval, frame);
     assert_eq!(enable_evals(&eval), Value::fixnum(5));
+}
+
+#[test]
+fn cjk_heading_bounds_and_popup_anchor_follow_real_font_advances() {
+    use neomacs_display_protocol::frame_chrome::{
+        ChromeBandRequest, FrameChrome, FrameChromeContent, FrameChromeKind, FramePoint, FrameSize,
+    };
+    let mut fonts = crate::font::metrics::FontMetricsService::new();
+    let mut face = crate::neovm_bridge::ResolvedFace::default();
+    face.font_size = 16.0;
+    face.font_family = "monospace".into();
+    face.fontset_base_family = "monospace".into();
+    let cjk = fonts.char_width('中', &face.font_family, 400, false, 16.0);
+    let ascii = fonts.char_width('A', &face.font_family, 400, false, 16.0);
+    assert!(cjk > ascii + 2.0, "test needs a real wide CJK font");
+    let content = layout_gui_menu_bar_content(
+        vec![
+            MenuBarItem {
+                index: 0,
+                label: "中中中中".into(),
+                key: "first".into(),
+            },
+            MenuBarItem {
+                index: 1,
+                label: "Edit".into(),
+                key: "second".into(),
+            },
+        ],
+        300.0,
+        24.0,
+        &mut MenuHeadingMetrics::Pixels {
+            service: &mut fonts,
+            face: &face,
+        },
+        8.0,
+        Color::WHITE,
+        Color::BLACK,
+    );
+    let bounds = content.items()[0].local_bounds().raw();
+    assert!((bounds.width - (4.0 * cjk + 16.0)).abs() < 0.01);
+    assert!((content.items()[1].local_bounds().raw().x - (bounds.x + bounds.width)).abs() < 0.01);
+    let chrome = FrameChrome::layout(
+        FrameSize::new(300.0, 100.0).unwrap(),
+        vec![ChromeBandRequest::new(
+            FrameChromeKind::MenuBar,
+            24.0,
+            FrameChromeContent::MenuBar(content),
+        )],
+    )
+    .unwrap();
+    let (action, anchor) = chrome
+        .hit_test(FramePoint::new(bounds.x + bounds.width - 1.0, 12.0))
+        .unwrap();
+    assert_eq!(
+        action,
+        &ChromeAction::OpenMenu {
+            index: 0,
+            key: "first".into()
+        }
+    );
+    assert!((anchor.width() - bounds.width).abs() < 0.01);
 }
