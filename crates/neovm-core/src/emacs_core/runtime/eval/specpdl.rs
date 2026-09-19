@@ -368,46 +368,6 @@ impl Context {
         }
     }
 
-    /// Check if a `let` is currently shadowing a buffer-local
-    /// variable's binding. Matches GNU
-    /// `eval.c:3559-3577 (let_shadows_buffer_binding_p)`.
-    ///
-    /// When true, `setq` inside the let should modify the existing
-    /// binding (whichever specpdl record is on top) rather than
-    /// auto-creating a brand-new per-buffer binding.
-    ///
-    /// GNU walks the specpdl looking for SPECPDL_LET_DEFAULT records
-    /// keyed to the symbol in the current buffer. SPECPDL_LET_LOCAL is
-    /// explicitly excluded (GNU bug#62419), because a let over an
-    /// existing buffer-local binding must keep writes in that local
-    /// binding instead of treating the default as shadowed.
-    pub(crate) fn let_shadows_buffer_binding_p(&self, sym_id: SymId) -> bool {
-        let current = self.buffers.current_buffer_id();
-        self.specpdl.iter().rev().any(|entry| match entry {
-            SpecBinding::LetDefault {
-                sym_id: s,
-                buffer_id,
-                ..
-            } => *s == sym_id && buffer_id.get() == current,
-            SpecBinding::LetLocal { .. } => false,
-            SpecBinding::Let { .. }
-            | SpecBinding::LexicalEnv { .. }
-            | SpecBinding::GcRoot { .. }
-            | SpecBinding::Backtrace { .. }
-            | SpecBinding::Backtrace1 { .. }
-            | SpecBinding::Backtrace2 { .. }
-            | SpecBinding::BacktraceNative { .. }
-            | SpecBinding::Nop
-            | SpecBinding::UnwindProtect { .. }
-            | SpecBinding::SaveExcursion { .. }
-            | SpecBinding::SaveCurrentBuffer { .. }
-            | SpecBinding::SaveRestriction { .. }
-            | SpecBinding::LoadsInProgress { .. }
-            | SpecBinding::NativeUnwind { .. }
-            | SpecBinding::RequireStack { .. } => false,
-        })
-    }
-
     pub(super) fn restore_default_binding_by_id(
         &mut self,
         sym_id: SymId,

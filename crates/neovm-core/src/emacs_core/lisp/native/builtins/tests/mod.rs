@@ -18271,6 +18271,115 @@ fn case_folded_search_translates_whole_characters_like_gnu() {
 }
 
 #[test]
+fn string_and_property_primitives_answer_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // GNU 31.1 answers for the primitives whose cost no longer grows with
+    // the whole string or buffer: string-to-char, get-byte, compare-strings
+    // ranges, string-width ranges, string-search with START, mapconcat's
+    // `identity' shortcut (no call, even to a redefined `identity'),
+    // next-property-change bounded by LIMIT, add-face-text-property, and a
+    // buffer-local setq under a let.
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"
+        (progn
+         (require 'cl-lib)
+         (list
+  ;; string-to-char / get-byte
+  (string-to-char "") (string-to-char "жx") (string-to-char "abc") (string-to-char (string-to-unibyte "\377a"))
+  (get-byte 0 "abc") (get-byte 2 (string-to-multibyte "ab\377")) (condition-case e (get-byte 1 "aж") (error (car e)))
+  ;; compare-strings ranges
+  (compare-strings "abcdef" 1 3 "xbcz" 1 3) (compare-strings "жзий" 1 nil "ЗИЙ" 0 nil t)
+  (compare-strings "abc" nil nil "abd" nil nil) (compare-strings "ab" 0 10 "abc" 0 10)
+  (compare-strings "é" nil nil (string-to-unibyte "\351") nil nil)
+  (condition-case e (compare-strings "abc" 2 1 "x" 0 1) (error e))
+  (compare-strings "abcж" -2 nil "cж" nil nil)
+  (string-prefix-p "жз" "жзий") (string-suffix-p "ий" "жзий") (string-prefix-p "AB" "abc" t)
+  ;; string-width ranges
+  (string-width "日本語abc" 1 4) (string-width "a\tb" 0 2) (string-width "жзий" -2)
+  (condition-case e (string-width "abc" 2 1) (error (car e)))
+  ;; string-search
+  (string-search "ж" "аббжвж") (string-search "ж" "аббжвж" 4) (string-search "b" "ab\377b" 2)
+  (string-search "" "abc" 3) (string-search "abc" "ab") (string-search "в" "жзвий" 1)
+  ;; mapconcat identity
+  (mapconcat #'identity '("a" "b" "c") "-") (mapconcat #'identity '("a" "b")) (mapconcat (quote identity) ["a" "b"] "")
+  (condition-case e (mapconcat #'identity '("a" . "b") ",") (error (car e)))
+  (let ((calls 0)) (cl-letf (((symbol-function 'identity) (lambda (x) (setq calls (1+ calls)) x)))
+                     (list (mapconcat #'identity '("x" "y") "+") calls)))
+  ;; next-property-change with limits
+  (with-temp-buffer
+    (insert (make-string 30 ?a))
+    (put-text-property 5 8 'face 'bold)
+    (list (next-property-change 1) (next-property-change 1 nil 3) (next-property-change 1 nil 5)
+          (next-property-change 1 nil 6) (next-property-change 8) (next-property-change 8 nil 20)
+          (next-property-change 9) (next-property-change 9 nil 1) (next-property-change 1 nil 100)
+          (save-restriction (narrow-to-region 1 6) (next-property-change 1))
+          (save-restriction (narrow-to-region 1 6) (next-property-change 5))))
+  (let ((s (concat "ab" (propertize "cd" 'face 'bold) "ef")))
+    (list (next-property-change 0 s) (next-property-change 0 s 1) (next-property-change 2 s) (next-property-change 4 s) (next-property-change 4 s 5)))
+  ;; add-face-text-property
+  (let ((s (concat (propertize "ab" 'face 'bold) "cd")))
+    (add-face-text-property 0 4 'italic nil s) (list (get-text-property 0 'face s) (get-text-property 3 'face s) (next-property-change 0 s)))
+  ;; buffer-local setq with let shadowing
+  (with-temp-buffer
+    (defvar-local neo-pin-local 'default)
+    (setq-default neo-pin-local 'default)
+    (let ((neo-pin-local 'let-bound))
+      (setq neo-pin-local 'set-inside)
+      (list neo-pin-local (local-variable-p 'neo-pin-local) (default-value 'neo-pin-local))))
+  (with-temp-buffer
+    (setq neo-pin-local 'after)
+    (list neo-pin-local (local-variable-p 'neo-pin-local) (default-value 'neo-pin-local)))))
+        "#,
+    );
+    assert_eq!(
+        result,
+        format!(
+            "OK {}",
+            r#"(0 1078 97 255 97 255 error t t -3 -3 -1 (args-out-of-range "abc" 2 1) t t t t 5 9 2 args-out-of-range 3 5 3 3 nil 2 "a-b-c" "ab" "ab" wrong-type-argument ("x+y" 0) (5 3 5 5 nil 20 nil 1 5 5 nil) (2 1 4 nil 5) ((italic bold) italic 2) (set-inside nil set-inside) (after t default))"#
+        )
+    );
+}
+
+#[test]
+fn buffer_position_steps_answer_like_gnu_across_multibyte_text() {
+    crate::test_utils::init_test_tracing();
+    // One-character steps backward and forward, byte<->char conversions and
+    // marker steps over ASCII, Cyrillic, an emoji, a raw byte and a long
+    // ASCII run: GNU 31.1's answers.
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"
+        (with-temp-buffer
+   (insert "aж😀b" (string-to-multibyte "\377") "zй\n" (make-string 5000 ?q) "Ω" (make-string 3 ?x))
+   (let (back fwd bytes)
+     (goto-char (point-max))
+     (while (not (bobp))
+       (backward-char)
+       (when (or (< (point) 12) (> (point) 5000)) (push (cons (point) (char-after)) back)))
+     (goto-char (point-min))
+     (while (not (eobp))
+       (forward-char)
+       (when (or (< (point) 12) (> (point) 5000)) (push (cons (point) (char-before)) fwd)))
+     (dolist (b (list 1 2 3 4 5 6 7 8 9 10 11 12 13 5010 5015 5016 5017 5018 5019))
+       (push (cons b (byte-to-position b)) bytes))
+     (list (nreverse back) (nreverse fwd) (nreverse bytes)
+           (mapcar #'position-bytes (list 1 2 3 4 5 6 7 8 5008 5009 5010 5011 5012))
+           (let ((m (copy-marker 1)) out)
+             (dotimes (_ 9) (set-marker m (1+ m)) (push (cons (marker-position m) (char-before m)) out))
+             (nreverse out))
+           (progn (goto-char 5010) (skip-chars-backward "^\n") (point))
+           (progn (goto-char (point-max)) (buffer-substring (- (point) 5) (point))))))
+        "#,
+    );
+    assert_eq!(
+        result,
+        format!(
+            "OK {}",
+            r#"(((5012 . 120) (5011 . 120) (5010 . 120) (5009 . 937) (5008 . 113) (5007 . 113) (5006 . 113) (5005 . 113) (5004 . 113) (5003 . 113) (5002 . 113) (5001 . 113) (11 . 113) (10 . 113) (9 . 113) (8 . 10) (7 . 1081) (6 . 122) (5 . 4194303) (4 . 98) (3 . 128512) (2 . 1078) (1 . 97)) ((2 . 97) (3 . 1078) (4 . 128512) (5 . 98) (6 . 4194303) (7 . 122) (8 . 1081) (9 . 10) (10 . 113) (11 . 113) (5001 . 113) (5002 . 113) (5003 . 113) (5004 . 113) (5005 . 113) (5006 . 113) (5007 . 113) (5008 . 113) (5009 . 113) (5010 . 937) (5011 . 120) (5012 . 120) (5013 . 120)) ((1 . 1) (2 . 2) (3 . 2) (4 . 3) (5 . 3) (6 . 3) (7 . 3) (8 . 4) (9 . 5) (10 . 5) (11 . 6) (12 . 7) (13 . 7) (5010 . 5004) (5015 . 5009) (5016 . 5009) (5017 . 5010) (5018 . 5011) (5019 . 5012)) (1 2 4 8 9 11 12 14 5014 5015 5017 5018 5019) ((2 . 97) (3 . 1078) (4 . 128512) (5 . 98) (6 . 4194303) (7 . 122) (8 . 1081) (9 . 10) (10 . 113)) 9 "qΩxxx")"#
+        )
+    );
+}
+
+#[test]
 fn raw_byte_patterns_find_eight_bit_chars_in_multibyte_text_like_gnu() {
     crate::test_utils::init_test_tracing();
     // GNU `analyze_first' adds the leading code of each raw byte a charset
@@ -18294,4 +18403,51 @@ fn raw_byte_patterns_find_eight_bit_chars_in_multibyte_text_like_gnu() {
         "#,
     );
     assert_eq!(result, "OK ((2 2 2 4 3 t nil 2 4 4) (2 2 4 4 3))");
+}
+
+#[test]
+fn add_face_after_a_no_op_remove_keeps_one_face_run_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // A no-op `remove-text-properties' may leave an interval boundary GNU
+    // does not have; `add-face-text-property' must still give the run one
+    // face value, as in GNU.
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"
+        (let ((s (copy-sequence "abcdefgh")))
+          (put-text-property 0 8 'face 'italic s)
+          (remove-text-properties 3 5 '(x nil) s)
+          (add-face-text-property 0 8 'bold nil s)
+          (list (next-single-property-change 0 'face s)
+                (eq (get-text-property 2 'face s) (get-text-property 3 'face s))))
+        "#,
+    );
+    assert_eq!(result, "OK (nil t)");
+}
+
+#[test]
+fn compiled_setq_of_a_local_writes_the_buffer_a_watcher_switched_to_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // GNU `set_internal' notifies the watchers first, then reads the current
+    // buffer: a watcher that switches buffers redirects the write.
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"
+        (progn
+          (defvar-local my-dl 'dflt)
+          (defvar other-buf (get-buffer-create "*other*"))
+          (add-variable-watcher
+           'my-dl (lambda (_s _n op _w) (when (eq op 'set) (set-buffer other-buf))))
+          (with-current-buffer (get-buffer-create "*start*")
+            (save-current-buffer
+              (funcall (byte-compile (lambda () (let ((my-dl 1)) (setq my-dl 'u1))))))
+            (list :start-local (local-variable-p 'my-dl)
+                  (buffer-local-value 'my-dl (current-buffer))
+                  :other-local (local-variable-p 'my-dl other-buf)
+                  (buffer-local-value 'my-dl other-buf)
+                  :default (default-value 'my-dl))))
+        "#,
+    );
+    assert_eq!(
+        result,
+        "OK (:start-local nil dflt :other-local t u1 :default dflt)"
+    );
 }

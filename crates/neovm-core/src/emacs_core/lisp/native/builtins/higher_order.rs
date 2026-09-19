@@ -379,6 +379,12 @@ pub(crate) fn builtin_mapc_2(
     Ok(seq)
 }
 
+/// The symbol `identity', interned once.
+fn identity_symbol_id() -> crate::emacs_core::intern::SymId {
+    static ID: std::sync::OnceLock<crate::emacs_core::intern::SymId> = std::sync::OnceLock::new();
+    *ID.get_or_init(|| crate::emacs_core::intern::intern("identity"))
+}
+
 pub(crate) fn builtin_mapconcat(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_args_range("mapconcat", &args, 2, 3)?;
     let func = args[0];
@@ -402,13 +408,26 @@ pub(crate) fn builtin_mapconcat(eval: &mut super::eval::Context, args: Vec<Value
         return Ok(Value::string(""));
     }
     let mut parts = MapResultVec::with_capacity(len);
-    let mapconcat_result = mapcar1_eval(
-        eval,
-        len,
-        MapSink::Collect(&mut parts),
-        sequence,
-        |eval, item| apply1(eval, func, item),
-    );
+    // GNU `Fmapconcat' (fns.c): when FUNCTION is the symbol `identity' and
+    // SEQUENCE a list, the elements are concatenated without calling
+    // anything -- `string-join' is exactly this call.
+    let mapconcat_result =
+        if func.as_symbol_id() == Some(identity_symbol_id()) && sequence.is_cons() {
+            let mut tail = sequence;
+            while tail.is_cons() {
+                parts.push(tail.cons_car());
+                tail = tail.cons_cdr();
+            }
+            Ok(parts.len())
+        } else {
+            mapcar1_eval(
+                eval,
+                len,
+                MapSink::Collect(&mut parts),
+                sequence,
+                |eval, item| apply1(eval, func, item),
+            )
+        };
     let mapped = match mapconcat_result {
         Ok(mapped) => mapped,
         Err(flow) => {

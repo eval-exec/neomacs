@@ -994,8 +994,9 @@ pub(crate) fn builtin_string_to_char(args: Vec<Value>) -> EvalResult {
             vec![Value::symbol("stringp"), args[0]],
         )
     })?;
-    let codes = super::lisp_string_char_codes(string);
-    let first = codes.into_iter().next().unwrap_or(0);
+    // The first character only (GNU `Fstring_to_char': `STRING_CHAR' of the
+    // data); decoding the whole string made this O(length).
+    let first = super::lisp_string_char_at(string, 0).unwrap_or(0);
     Ok(Value::fixnum(first as i64))
 }
 

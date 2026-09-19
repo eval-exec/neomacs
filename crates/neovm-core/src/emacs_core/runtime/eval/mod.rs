@@ -6316,7 +6316,7 @@ pub(crate) fn set_runtime_binding_in_state(
     Ok(locus)
 }
 
-fn let_shadows_buffer_binding_p_in_state(
+pub(crate) fn let_shadows_buffer_binding_p_in_state(
     specpdl: &[SpecBinding],
     buffers: &BufferManager,
     sym_id: SymId,
@@ -6381,14 +6381,13 @@ fn store_runtime_binding(
             Some(buf) => (Value::make_buffer(buf.id), buf.local_var_alist_value()),
             None => (Value::NIL, Value::NIL),
         };
-        let let_shadows = let_shadows_buffer_binding_p_in_state(specpdl, buffers, sym_id);
-        let new_alist = obarray.set_internal_localized(
+        let new_alist = obarray.set_internal_localized_with(
             sym_id,
             value,
             cur_val,
             alist,
             SetInternalBind::Set,
-            let_shadows,
+            || let_shadows_buffer_binding_p_in_state(specpdl, buffers, sym_id),
         );
         if let Some(buf) = buffers.get_mut(buf_id) {
             buf.replace_local_var_alist(new_alist);

@@ -3107,7 +3107,7 @@ impl TextPropertyTable {
             }
             None => {
                 let end = self
-                    .next_property_change_raw(pos)
+                    .next_property_change_raw(pos, None)
                     .unwrap_or_else(|| CharPos0::new(total));
                 (None, pos, end)
             }
@@ -3137,7 +3137,7 @@ impl TextPropertyTable {
             }
             None => {
                 let end = self
-                    .next_property_change_raw(pos)
+                    .next_property_change_raw(pos, None)
                     .unwrap_or_else(|| CharPos0::new(total));
                 (None, pos, end)
             }
@@ -3820,7 +3820,18 @@ impl TextPropertyTable {
     }
 
     pub fn next_property_change_after_char_pos(&self, pos: CharPos0) -> Option<CharPos0> {
-        self.next_property_change_raw(pos)
+        self.next_property_change_raw(pos, None)
+    }
+
+    /// [`Self::next_property_change_after_char_pos`] that gives up at the
+    /// first interval boundary at or past `bound`: GNU `Fnext_property_change`
+    /// stops its interval walk at LIMIT, so a change beyond it costs nothing.
+    pub fn next_property_change_after_char_pos_before(
+        &self,
+        pos: CharPos0,
+        bound: CharPos0,
+    ) -> Option<CharPos0> {
+        self.next_property_change_raw(pos, Some(bound))
     }
 
     /// Like `next_property_change_after_char_pos`, but only reports a change of
@@ -3898,10 +3909,13 @@ impl TextPropertyTable {
         None
     }
 
-    fn next_property_change_raw(&self, pos: CharPos0) -> Option<CharPos0> {
+    fn next_property_change_raw(&self, pos: CharPos0, bound: Option<CharPos0>) -> Option<CharPos0> {
         let current = self.plist_at(pos).unwrap_or_default();
         let mut cursor = pos;
         while let Some(next) = self.next_interval_boundary_raw(cursor) {
+            if bound.is_some_and(|bound| next >= bound) {
+                return None;
+            }
             let next_plist = self.plist_at(next).unwrap_or_default();
             if !plists_equal_eq(&current, &next_plist) {
                 return Some(next);

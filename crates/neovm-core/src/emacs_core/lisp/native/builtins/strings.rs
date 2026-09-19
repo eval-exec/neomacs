@@ -2823,9 +2823,10 @@ pub(crate) fn builtin_string_width(ctx: &mut super::eval::Context, args: Vec<Val
             .sum::<usize>();
         return Ok(Value::fixnum(width as i64));
     }
-    // Substring range specified — decode units and sum width for [from, to)
-    let units = super::super::string_escape::decode_units_emacs(data, is_multibyte);
-    let len = units.len() as i64;
+    // Substring range specified: sum the widths of [from, to) only.  GNU
+    // `Fstring_width' measures just that range; decoding the whole string
+    // made a narrow range of a long string cost the whole length.
+    let len = ls.schars() as i64;
     let normalize_index = |value: &Value, default: i64| -> Result<usize, Flow> {
         let raw = if value.is_nil() {
             default
@@ -2853,7 +2854,7 @@ pub(crate) fn builtin_string_width(ctx: &mut super::eval::Context, args: Vec<Val
     let to = if args.len() > 2 && args[2] != Value::NIL {
         normalize_index(&args[2], len)?
     } else {
-        units.len()
+        len as usize
     };
     if from > to {
         return Err(signal(
@@ -2865,10 +2866,10 @@ pub(crate) fn builtin_string_width(ctx: &mut super::eval::Context, args: Vec<Val
             ],
         ));
     }
+    let range = &data[ls.char_to_byte_pos(from)..ls.char_to_byte_pos(to)];
+    let units = super::super::string_escape::decode_units_emacs(range, is_multibyte);
     let width: usize = units
         .iter()
-        .skip(from)
-        .take(to - from)
         .map(|(code, width)| unit_width(*code, *width))
         .sum();
     Ok(Value::fixnum(width as i64))

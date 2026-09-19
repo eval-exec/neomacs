@@ -77,7 +77,9 @@ pub(crate) fn lisp_string_char_at(
     if idx >= string.schars() {
         return None;
     }
-    let byte_pos = crate::emacs_core::emacs_char::char_to_byte_pos(bytes, idx);
+    // `LispString::char_to_byte_pos' answers an all-ASCII multibyte string
+    // -- what `buffer-substring' returns for ASCII text -- in O(1).
+    let byte_pos = string.char_to_byte_pos(idx);
     let (cp, _) = crate::emacs_core::emacs_char::string_char_unchecked(&bytes[byte_pos..]);
     Some(cp)
 }

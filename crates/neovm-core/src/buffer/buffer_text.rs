@@ -1805,6 +1805,26 @@ impl BufferText {
         next.map(|next| self.char_pos_to_emacs_byte_pos(next))
     }
 
+    /// [`Self::text_props_next_change_after_emacs_byte_pos`] bounded by the
+    /// character position `bound` (see
+    /// `TextPropertyTable::next_property_change_after_char_pos_before`).
+    pub fn text_props_next_change_after_emacs_byte_pos_before(
+        &self,
+        pos: EmacsBytePos,
+        bound: CharPos0,
+    ) -> Option<EmacsBytePos> {
+        let char_pos = self
+            .byte_range_to_char_range(EmacsByteRange::new(pos, pos))
+            .start();
+        let next = {
+            self.storage
+                .borrow()
+                .text_props
+                .next_property_change_after_char_pos_before(char_pos, bound)
+        };
+        next.map(|next| self.char_pos_to_emacs_byte_pos(next))
+    }
+
     /// Like `text_props_next_change_after_emacs_byte_pos`, but reports only a
     /// change of the single text property `name` (compared by `eq`), matching
     /// the text-property half of GNU `next_single_char_property_change`.
@@ -3097,55 +3117,6 @@ impl ForwardMultibytePositionScan {
         }
         None
     }
-
-    fn consume_chunk_until_byte(&mut self, chunk: &[u8], target: EmacsBytePos) -> Option<CharPos0> {
-        let mut offset = 0;
-        if !self.finish_pending_char(chunk, &mut offset) {
-            return None;
-        }
-        if self.byte_pos >= target {
-            return Some(self.char_pos);
-        }
-
-        while offset < chunk.len() {
-            // ASCII fast path: cross a run of ASCII bytes (one char per byte) in
-            // bulk, bounded by the bytes still needed. See consume_chunk_until_char.
-            if chunk[offset] < 0x80 {
-                // Bound the scan by the bytes still needed (see
-                // consume_chunk_until_char); each ASCII byte is one char.
-                let window = (target.get() - self.byte_pos.get()).min(chunk.len() - offset);
-                let ascii_run = chunk[offset..offset + window]
-                    .iter()
-                    .position(|&b| b >= 0x80)
-                    .unwrap_or(window);
-                offset += ascii_run;
-                self.byte_pos = self.byte_pos.add_len(EmacsByteLen::new(ascii_run));
-                self.char_pos = self.char_pos.add_len(CharLen::new(ascii_run));
-                if self.byte_pos >= target {
-                    return Some(self.char_pos);
-                }
-                continue;
-            }
-            let expected = emacs_multibyte_candidate_len(chunk[offset]);
-            let available = chunk.len() - offset;
-            if available < expected {
-                self.pending[..available].copy_from_slice(&chunk[offset..]);
-                self.pending_len = available;
-                self.byte_pos = self.byte_pos.add_len(EmacsByteLen::new(available));
-                return None;
-            }
-
-            let (_, len) =
-                crate::emacs_core::emacs_char::string_char(&chunk[offset..offset + expected]);
-            offset += len;
-            self.byte_pos = self.byte_pos.add_len(EmacsByteLen::new(len));
-            self.char_pos = self.char_pos.add_len(CharLen::new(1));
-            if self.byte_pos >= target {
-                return Some(self.char_pos);
-            }
-        }
-        None
-    }
 }
 
 /// Walk forward from `anchor` to reach `target` chars.
@@ -3190,13 +3161,19 @@ fn scan_backward(
     if !backend.is_multibyte() {
         return bp.saturating_sub_len(EmacsByteLen::new(cp.saturating_offset_from(target).get()));
     }
-    // Walk back `remaining` characters in fixed windows (chunk-counted, no
-    // per-byte lookups); the window that contains the answer is resolved by
-    // listing its character starts.
+    // Walk back `remaining` characters in windows (chunk-counted, no per-byte
+    // lookups); the window that contains the answer is resolved by listing
+    // its character starts.  `remaining` characters span at most
+    // MAX_MULTIBYTE_LENGTH bytes each, so a window that size holds the answer:
+    // a one-character step reads a few bytes, not a whole fixed window twice
+    // (GNU `buf_charpos_to_bytepos` likewise walks only the distance).
     const WINDOW: usize = 4096;
     let mut remaining = cp.saturating_offset_from(target).get();
     while remaining > 0 {
-        let win_start = EmacsBytePos::new(bp.get().saturating_sub(WINDOW));
+        let span = remaining
+            .saturating_mul(crate::emacs_core::emacs_char::MAX_MULTIBYTE_LENGTH)
+            .min(WINDOW);
+        let win_start = EmacsBytePos::new(bp.get().saturating_sub(span));
         let range = EmacsByteRange::new(win_start, bp);
         let mut count = 0usize;
         let _ = backend.for_each_emacs_byte_range_chunk(range, |chunk| {
@@ -3248,15 +3225,18 @@ fn scan_forward_bytes(
         return cp.add_len(CharLen::new(target.saturating_offset_from(bp).get()));
     }
 
-    let range = EmacsByteRange::new(bp, backend.metrics().emacs_byte_end());
-    let mut scan = ForwardMultibytePositionScan::new(anchor);
-    match backend.for_each_emacs_byte_range_chunk(range, |chunk| {
-        scan.consume_chunk_until_byte(chunk, target)
-            .map_or(Ok(()), Err)
-    }) {
-        Ok(()) => scan.char_pos,
-        Err(result) => result,
-    }
+    // The characters crossed are the character starts in [anchor, target):
+    // a character holding `target` starts before it and is counted, exactly
+    // as the per-character walk this replaces stepped past it.  Counting
+    // lead bytes is chunk-wise and vectorizes; decoding each character did
+    // not (the backward twin below already counts).
+    let end = target.min(backend.metrics().emacs_byte_end());
+    let mut starts = 0usize;
+    let _ = backend.for_each_emacs_byte_range_chunk(EmacsByteRange::new(bp, end), |chunk| {
+        starts += chunk.iter().filter(|&&b| (b & 0xC0) != 0x80).count();
+        Ok::<(), ()>(())
+    });
+    cp.add_len(CharLen::new(starts))
 }
 
 /// Walk backward from `anchor` to reach `target` bytepos.

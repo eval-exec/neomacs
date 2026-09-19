@@ -2552,14 +2552,18 @@ pub(crate) fn builtin_add_face_text_property_in_buffers(
         let char_end = char_range.end().get();
         let mut table = get_string_text_properties_table_for_value(str_val).unwrap_or_default();
         // GNU iterates intervals in [beg, end); per interval, fetch its existing
-        // face value and merge. Walk the range segment-by-segment.
+        // face value and merge. Walk the range segment-by-segment, each walk
+        // bounded by END: unbounded, it ran on to the next real change past
+        // END (O(string) per segment on a uniform tail).
         let mut seg_start = char_beg;
         while seg_start < char_end {
-            let seg_end =
-                match table.next_property_change_after_char_pos(string_char_pos(seg_start)) {
-                    Some(p) if p.get() < char_end => p.get(),
-                    _ => char_end,
-                };
+            let seg_end = match table.next_property_change_after_char_pos_before(
+                string_char_pos(seg_start),
+                CharPos0::new(char_end),
+            ) {
+                Some(p) if p.get() > seg_start && p.get() < char_end => p.get(),
+                _ => char_end,
+            };
             let existing =
                 table.get_property_at_char_pos(string_char_pos(seg_start), Value::symbol("face"));
             let merged = merge_face_property(existing, new_face, append)?;
@@ -2600,16 +2604,19 @@ pub(crate) fn builtin_add_face_text_property_in_buffers(
         return Ok(Value::NIL);
     };
     // GNU iterates intervals in [beg, end); per interval, fetch its existing
-    // face value and merge. Walk the range segment-by-segment to preserve any
+    // face value and merge. Walk the range segment-by-segment, each walk
+    // bounded by END (see the string path above), to preserve any
     // heterogeneous face properties already present.
     let mut segments: Vec<(EmacsByteRange, Value)> = Vec::new();
     let byte_end_pos = byte_range.end();
+    let end_char = buf.emacs_byte_pos_to_char_pos_clamped(byte_end_pos);
     let mut seg_start = byte_range.start();
     while seg_start < byte_end_pos {
-        let seg_end = match buf.text_props_next_change_after_emacs_byte_pos(seg_start) {
-            Some(p) if p < byte_end_pos => p,
-            _ => byte_end_pos,
-        };
+        let seg_end =
+            match buf.text_props_next_change_after_emacs_byte_pos_before(seg_start, end_char) {
+                Some(p) if p > seg_start && p < byte_end_pos => p,
+                _ => byte_end_pos,
+            };
         let existing =
             buf.text_props_get_property_at_emacs_byte_pos(seg_start, Value::symbol("face"));
         let merged = merge_face_property(existing, new_face, append)?;
@@ -3316,7 +3323,12 @@ pub(crate) fn builtin_next_property_change_in_buffers(
             _ => (None, None),
         };
         let str_char_len = s.schars();
-        return match table.next_property_change_after_char_pos(char_pos) {
+        // GNU walks intervals only up to LIMIT (or the end): a change there
+        // or beyond answers LIMIT, so the walk stops at the bound.
+        let bound = limit_pos.map_or(str_char_len, |lim| (lim.max(0) as usize).min(str_char_len));
+        return match table
+            .next_property_change_after_char_pos_before(char_pos, CharPos0::new(bound))
+        {
             Some(next) => {
                 let next = next.get();
                 if let Some(lim) = limit_pos
@@ -3359,8 +3371,12 @@ pub(crate) fn builtin_next_property_change_in_buffers(
         _ => (None, None),
     };
     let buf_end = buf.accessible_emacs_byte_region().end();
+    // GNU `Fnext_property_change' stops its interval walk at LIMIT (or ZV);
+    // an unbounded walk made a limited call on a long uniform run O(buffer).
+    let zv_char = buf.point_max_char_pos().get();
+    let bound = limit_pos.map_or(zv_char, |lim| ((lim - 1).max(0) as usize).min(zv_char));
 
-    match buf.text_props_next_change_after_emacs_byte_pos(byte_pos) {
+    match buf.text_props_next_change_after_emacs_byte_pos_before(byte_pos, CharPos0::new(bound)) {
         Some(next) => {
             if let Some(lim) = limit_pos
                 && byte_to_elisp_pos(buf, next) >= lim

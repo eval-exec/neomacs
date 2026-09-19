@@ -4932,9 +4932,10 @@ pub(crate) fn builtin_get_byte(eval: &mut super::eval::Context, args: Vec<Value>
             // Unibyte: direct byte access
             return Ok(Value::fixnum(string.as_bytes()[pos] as i64));
         }
-        // Use lisp_string_char_codes which handles sentinel translation
-        let codes = super::builtins::lisp_string_char_codes(string);
-        let code = codes[pos];
+        // One character, not the whole string decoded (GNU `Fget_byte':
+        // `string_char_to_byte' then `STRING_CHAR').
+        let code = super::builtins::lisp_string_char_at(string, pos)
+            .expect("POSITION was range-checked against SCHARS");
         return get_byte_from_multibyte_char_code(code);
     }
 

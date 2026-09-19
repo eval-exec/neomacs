@@ -281,11 +281,7 @@ pub(crate) fn builtin_string_search(args: Vec<Value>) -> EvalResult {
     }
 
     let haystack_bytes = haystack_ls.as_bytes();
-    let start_byte = if haystack_ls.is_multibyte() {
-        crate::emacs_core::emacs_char::char_to_byte_pos(haystack_bytes, start_char)
-    } else {
-        start_char
-    };
+    let start_byte = haystack_ls.char_to_byte_pos(start_char);
     let search_in = &haystack_bytes[start_byte..];
     let needle_bytes_storage;
     let needle_bytes = if string_search_direct_bytes(haystack_ls, needle_ls) {
@@ -310,11 +306,13 @@ pub(crate) fn builtin_string_search(args: Vec<Value>) -> EvalResult {
     };
 
     if let Some(byte_pos) = find_subsequence(search_in, needle_bytes) {
-        let abs_byte = start_byte + byte_pos;
-        let char_pos = if haystack_ls.is_multibyte() {
-            crate::emacs_core::emacs_char::byte_to_char_pos(haystack_bytes, abs_byte)
+        // START is a character boundary, so the hit's character index is
+        // START plus the characters between them -- not a recount from 0.
+        let char_pos = if haystack_ls.is_multibyte() && haystack_ls.schars() != haystack_ls.sbytes()
+        {
+            start_char + crate::emacs_core::emacs_char::byte_to_char_pos(search_in, byte_pos)
         } else {
-            abs_byte
+            start_char + byte_pos
         };
         Ok(Value::fixnum(char_pos as i64))
     } else {
@@ -353,7 +351,9 @@ fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() {
         return Some(0);
     }
-    haystack.windows(needle.len()).position(|w| w == needle)
+    // GNU `Fstring_search' uses `memmem'; the naive window scan was ~19 Ir a
+    // byte against its ~0.2.
+    memchr::memmem::find(haystack, needle)
 }
 
 // ---------------------------------------------------------------------------

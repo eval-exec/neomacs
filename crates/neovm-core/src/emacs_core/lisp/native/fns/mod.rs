@@ -1320,33 +1320,36 @@ pub(crate) fn builtin_string_make_unibyte(args: Vec<Value>) -> EvalResult {
 pub(crate) fn builtin_compare_strings(args: Vec<Value>) -> EvalResult {
     expect_args_range("compare-strings", &args, 6, 7)?;
 
-    let s1 = require_lisp_string(&args[0])?;
-    let s2 = require_lisp_string(&args[3])?;
+    let s1 = borrow_lisp_string(&args[0])?;
+    let s2 = borrow_lisp_string(&args[3])?;
 
-    let chars1: Vec<u32> = compare_strings_codes(&s1);
-    let chars2: Vec<u32> = compare_strings_codes(&s2);
-
-    let end1_arg = compare_strings_clamp_too_large_end(args[2], chars1.len());
-    let end2_arg = compare_strings_clamp_too_large_end(args[5], chars2.len());
-    let range1 = validate_compare_strings_subarray(args[0], args[1], end1_arg, chars1.len())?;
-    let range2 = validate_compare_strings_subarray(args[3], args[4], end2_arg, chars2.len())?;
+    // GNU `Fcompare_strings' validates against SCHARS and walks only the two
+    // ranges; decoding both whole strings made `string-prefix-p' on a long
+    // string O(length) instead of O(prefix).
+    let size1 = s1.schars();
+    let size2 = s2.schars();
+    let end1_arg = compare_strings_clamp_too_large_end(args[2], size1);
+    let end2_arg = compare_strings_clamp_too_large_end(args[5], size2);
+    let range1 = validate_compare_strings_subarray(args[0], args[1], end1_arg, size1)?;
+    let range2 = validate_compare_strings_subarray(args[3], args[4], end2_arg, size2)?;
 
     let ignore_case = args.get(6).is_some_and(|v| v.is_truthy());
 
-    let sub1 = &chars1[range1.start().get()..range1.end().get()];
-    let sub2 = &chars2[range2.start().get()..range2.end().get()];
+    let len1 = range1.end().get() - range1.start().get();
+    let len2 = range2.end().get() - range2.start().get();
+    let mut chars1 = CompareStringsChars::new(s1, range1.start().get());
+    let mut chars2 = CompareStringsChars::new(s2, range2.start().get());
 
-    let len = sub1.len().min(sub2.len());
+    let len = len1.min(len2);
     for i in 0..len {
-        let c1 = if ignore_case {
-            compare_strings_upcase_code(sub1[i])
+        let (c1, c2) = (chars1.next_code(), chars2.next_code());
+        let (c1, c2) = if ignore_case {
+            (
+                compare_strings_upcase_code(c1),
+                compare_strings_upcase_code(c2),
+            )
         } else {
-            sub1[i]
-        };
-        let c2 = if ignore_case {
-            compare_strings_upcase_code(sub2[i])
-        } else {
-            sub2[i]
+            (c1, c2)
         };
         if c1 != c2 {
             let pos = (i + 1) as i64; // 1-based
@@ -1358,12 +1361,58 @@ pub(crate) fn builtin_compare_strings(args: Vec<Value>) -> EvalResult {
         }
     }
 
-    if sub1.len() == sub2.len() {
+    if len1 == len2 {
         Ok(Value::T)
-    } else if sub1.len() < sub2.len() {
+    } else if len1 < len2 {
         Ok(Value::fixnum(-((len + 1) as i64)))
     } else {
         Ok(Value::fixnum((len + 1) as i64))
+    }
+}
+
+fn borrow_lisp_string(value: &Value) -> Result<&crate::heap_types::LispString, Flow> {
+    value.as_lisp_string().ok_or_else(|| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("stringp"), *value],
+        )
+    })
+}
+
+/// The character codes of a `compare-strings' operand from a character
+/// index on.  Multibyte strings decode Emacs chars; a unibyte string's bytes
+/// >= 0x80 are eight-bit chars (matching GNU compare-strings, which unifies a
+/// unibyte raw byte with the corresponding multibyte eight-bit char).
+struct CompareStringsChars<'a> {
+    bytes: &'a [u8],
+    pos: usize,
+    multibyte: bool,
+}
+
+impl<'a> CompareStringsChars<'a> {
+    fn new(string: &'a crate::heap_types::LispString, char_start: usize) -> Self {
+        Self {
+            bytes: string.as_bytes(),
+            pos: string.char_to_byte_pos(char_start),
+            multibyte: string.is_multibyte(),
+        }
+    }
+
+    /// The next code; the caller never reads past the validated range.
+    fn next_code(&mut self) -> u32 {
+        if self.multibyte {
+            let (code, len) = crate::emacs_core::emacs_char::string_char(&self.bytes[self.pos..]);
+            self.pos += len.max(1);
+            code
+        } else {
+            let b = self.bytes[self.pos];
+            self.pos += 1;
+            if b < 0x80 {
+                b as u32
+            } else {
+                crate::emacs_core::emacs_char::byte8_to_char(b)
+            }
+        }
     }
 }
 
@@ -1427,35 +1476,6 @@ fn validate_compare_strings_subarray(
 fn compare_strings_upcase_code(code: u32) -> u32 {
     let mapped = super::builtins::upcase_char_code_emacs_compat(code as i64);
     u32::try_from(mapped).unwrap_or(code)
-}
-
-/// Decode a `compare-strings` operand to character codes. Multibyte strings
-/// decode Emacs chars; a unibyte string's bytes >= 0x80 are eight-bit chars
-/// (matching GNU compare-strings, which unifies a unibyte raw byte with the
-/// corresponding multibyte eight-bit char).
-fn compare_strings_codes(value: &crate::heap_types::LispString) -> Vec<u32> {
-    let bytes = value.as_bytes();
-    if value.is_multibyte() {
-        let mut codes = Vec::new();
-        let mut pos = 0;
-        while pos < bytes.len() {
-            let (code, len) = crate::emacs_core::emacs_char::string_char(&bytes[pos..]);
-            codes.push(code);
-            pos += len.max(1);
-        }
-        codes
-    } else {
-        bytes
-            .iter()
-            .map(|&b| {
-                if b < 0x80 {
-                    b as u32
-                } else {
-                    crate::emacs_core::emacs_char::byte8_to_char(b)
-                }
-            })
-            .collect()
-    }
 }
 
 fn require_lisp_string(value: &Value) -> Result<crate::heap_types::LispString, Flow> {

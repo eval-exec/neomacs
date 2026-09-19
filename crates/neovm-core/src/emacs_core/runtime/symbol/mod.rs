@@ -3419,6 +3419,26 @@ impl Obarray {
         bindflag: SetInternalBind,
         let_shadows: bool,
     ) -> SetInternalAlist {
+        self.set_internal_localized_with(sym_id, value, target_buf, target_alist, bindflag, || {
+            let_shadows
+        })
+    }
+
+    /// [`Self::set_internal_localized`] asking `let_shadows` only when it
+    /// decides something: a `Set` of a `local_if_set` variable the target
+    /// buffer has no binding for.  GNU `set_internal` calls
+    /// `let_shadows_buffer_binding_p` -- a walk of the whole specpdl -- only
+    /// there too; asking on every write made a `setq` of a buffer-local
+    /// variable O(stack depth).
+    pub(crate) fn set_internal_localized_with(
+        &mut self,
+        sym_id: SymId,
+        value: Value,
+        target_buf: Value,
+        target_alist: Value,
+        bindflag: SetInternalBind,
+        let_shadows: impl FnOnce() -> bool,
+    ) -> SetInternalAlist {
         let mut new_alist = target_alist;
         let blv = match self.blv_mut(sym_id) {
             Some(blv) => blv,
@@ -3452,7 +3472,8 @@ impl Obarray {
 
         if cell.is_nil() {
             // No existing binding for this buffer.
-            let auto_create = bindflag == SetInternalBind::Set && blv.local_if_set && !let_shadows;
+            let auto_create =
+                bindflag == SetInternalBind::Set && blv.local_if_set && !let_shadows();
             if !auto_create {
                 // Fall through to writing the default.
                 blv.found = false;

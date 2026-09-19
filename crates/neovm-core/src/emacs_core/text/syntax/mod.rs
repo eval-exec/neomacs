@@ -1318,13 +1318,12 @@ fn word_boundary_table_active(table: &Value) -> bool {
     }
     // Probe a few representative word constituents; subword/superword install
     // the boundary function across word characters.
+    // A point lookup, as GNU `scan_words' does with `CHAR_TABLE_REF': the
+    // range variant widened the answer across the whole (usually empty)
+    // table, ~6K instructions a probe on every word motion.
     [b'a' as i64, b'A' as i64, b'0' as i64, b'_' as i64]
         .into_iter()
-        .any(|ch| {
-            super::chartable::char_table_ref_and_range(table, ch)
-                .map(|(v, _, _)| !v.is_nil())
-                .unwrap_or(false)
-        })
+        .any(|ch| !super::chartable::ct_ref(table, ch).is_nil())
 }
 
 /// Move over `count` words honoring `find-word-boundary-function-table`

@@ -6330,9 +6330,22 @@ impl<'a> Vm<'a> {
         }
 
         if matches!(redirect, Some(SymbolRedirect::Localized))
-            && let Some(buf_id) = self.ctx.buffers.current_buffer_id()
+            && let Some(first_buf_id) = self.ctx.buffers.current_buffer_id()
         {
-            // Extract buffer state before obarray borrow.
+            if self.ctx.watchers.has_watchers(resolved) {
+                let where_value = self.ctx.variable_watcher_where_for_set_by_id(resolved);
+                self.run_variable_watchers_by_id_with_where(
+                    resolved,
+                    &value,
+                    &Value::NIL,
+                    "set",
+                    &where_value,
+                )?;
+            }
+            // GNU `set_internal' reads the current buffer AFTER notifying the
+            // watchers, which may have switched it.  Extract buffer state
+            // before the obarray borrow.
+            let buf_id = self.ctx.buffers.current_buffer_id().unwrap_or(first_buf_id);
             let (cur_val, alist) = match self.ctx.buffers.get(buf_id) {
                 Some(buf) => (Value::make_buffer(buf.id), buf.local_var_alist_value()),
                 None => (Value::NIL, Value::NIL),
@@ -6340,23 +6353,20 @@ impl<'a> Vm<'a> {
             // GNU `eval.c:3559-3577 (let_shadows_buffer_binding_p)`
             // only treats SPECPDL_LET_DEFAULT for the current buffer
             // as shadowing. SPECPDL_LET_LOCAL is explicitly excluded
-            // by bug#62419.
-            let let_shadows = self.ctx.let_shadows_buffer_binding_p(resolved);
-            let where_value = self.ctx.variable_watcher_where_for_set_by_id(resolved);
-            self.run_variable_watchers_by_id_with_where(
-                resolved,
-                &value,
-                &Value::NIL,
-                "set",
-                &where_value,
-            )?;
-            let new_alist = self.ctx.obarray.set_internal_localized(
+            // by bug#62419.  Asked lazily, after the watchers, as GNU
+            // `set_internal' does.
+            let (specpdl, buffers) = (&self.ctx.specpdl, &self.ctx.buffers);
+            let new_alist = self.ctx.obarray.set_internal_localized_with(
                 resolved,
                 value,
                 cur_val,
                 alist,
                 SetInternalBind::Set,
-                let_shadows,
+                || {
+                    crate::emacs_core::eval::let_shadows_buffer_binding_p_in_state(
+                        specpdl, buffers, resolved,
+                    )
+                },
             );
             // Store back the (possibly extended) alist.
             if let Some(buf) = self.ctx.buffers.get_mut(buf_id) {
