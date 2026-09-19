@@ -102,17 +102,40 @@ pub(crate) fn map_sequence_element(sequence: Value, index: usize) -> Result<Valu
     }
 }
 
+/// Where [`mapcar1_eval`] puts each callback's result.
+enum MapSink<'a> {
+    /// `mapc`: nowhere.
+    Discard,
+    /// Pushed onto a vector (and the root stack, to keep it alive).
+    Collect(&'a mut MapResultVec),
+    /// Written into root slot `base + index`, reserved by the caller.
+    RootSlots(usize),
+}
+
+impl MapSink<'_> {
+    #[inline]
+    fn store(&mut self, eval: &mut super::eval::Context, index: usize, value: Value) {
+        match self {
+            MapSink::Discard => {}
+            MapSink::Collect(results) => {
+                eval.push_vm_frame_root(value);
+                results.push(value);
+            }
+            MapSink::RootSlots(base) => eval.set_vm_frame_root_slot(*base + index, value),
+        }
+    }
+}
+
 fn mapcar1_eval<F>(
     eval: &mut super::eval::Context,
     len: usize,
-    values: Option<&mut MapResultVec>,
+    mut values: MapSink<'_>,
     sequence: Value,
     mut call: F,
 ) -> Result<usize, Flow>
 where
     F: FnMut(&mut super::eval::Context, Value) -> Result<Value, Flow>,
 {
-    let mut values = values;
     match sequence.kind() {
         ValueKind::Nil => Ok(0),
         ValueKind::Cons => {
@@ -134,10 +157,7 @@ where
                 eval.set_vm_frame_root_slot(cursor_root, cursor);
                 let item = cursor.cons_car();
                 let value = call(eval, item)?;
-                if let Some(results) = values.as_deref_mut() {
-                    eval.push_vm_frame_root(value);
-                    results.push(value);
-                }
+                values.store(eval, mapped, value);
                 mapped += 1;
                 cursor = cursor.cons_cdr();
             }
@@ -147,24 +167,11 @@ where
             for index in 0..len {
                 let item = map_sequence_element(sequence, index)?;
                 let value = call(eval, item)?;
-                if let Some(results) = values.as_deref_mut() {
-                    eval.push_vm_frame_root(value);
-                    results.push(value);
-                }
+                values.store(eval, index, value);
             }
             Ok(len)
         }
     }
-}
-
-fn list_from_map_results(eval: &mut super::eval::Context, results: &[Value]) -> Value {
-    let mut acc = Value::NIL;
-    let acc_root = eval.push_vm_frame_root_slot(acc);
-    for value in results.iter().rev().copied() {
-        acc = Value::cons(value, acc);
-        eval.set_vm_frame_root_slot(acc_root, acc);
-    }
-    acc
 }
 
 #[inline]
@@ -290,17 +297,20 @@ pub(crate) fn builtin_mapcar_2(
             return Err(flow);
         }
     };
-    let mut results = MapResultVec::with_capacity(len);
-    let map_result = mapcar1_eval(eval, len, Some(&mut results), seq, |eval, item| {
+    // GNU `Fmapcar` sizes one result array up front and `mapcar1` stores
+    // each result into it. Here that array is `len` reserved root slots:
+    // every result is rooted across the later callbacks by a slot write,
+    // not a push onto the root stack and another onto a result vector, and
+    // the list is built straight from the slots (cons allocation cannot
+    // collect, so the slice needs no further rooting).
+    let base = eval.reserve_vm_frame_root_slots(len);
+    let map_result = mapcar1_eval(eval, len, MapSink::RootSlots(base), seq, |eval, item| {
         apply1(eval, func, item)
     });
-    if let Err(flow) = map_result {
-        eval.restore_vm_roots(roots);
-        return Err(flow);
-    }
-    let result_list = list_from_map_results(eval, &results);
+    let result_list =
+        map_result.map(|mapped| Value::list_from_slice(eval.vm_frame_root_slots(base, mapped)));
     eval.restore_vm_roots(roots);
-    Ok(result_list)
+    result_list
 }
 
 pub(crate) fn builtin_mapc_2(
@@ -318,7 +328,9 @@ pub(crate) fn builtin_mapc_2(
             return Err(flow);
         }
     };
-    let result = mapcar1_eval(eval, len, None, seq, |eval, item| apply1(eval, func, item));
+    let result = mapcar1_eval(eval, len, MapSink::Discard, seq, |eval, item| {
+        apply1(eval, func, item)
+    });
     eval.restore_vm_roots(roots);
     result.map(|_| ())?;
     Ok(seq)
@@ -347,9 +359,13 @@ pub(crate) fn builtin_mapconcat(eval: &mut super::eval::Context, args: Vec<Value
         return Ok(Value::string(""));
     }
     let mut parts = MapResultVec::with_capacity(len);
-    let mapconcat_result = mapcar1_eval(eval, len, Some(&mut parts), sequence, |eval, item| {
-        apply1(eval, func, item)
-    });
+    let mapconcat_result = mapcar1_eval(
+        eval,
+        len,
+        MapSink::Collect(&mut parts),
+        sequence,
+        |eval, item| apply1(eval, func, item),
+    );
     let mapped = match mapconcat_result {
         Ok(mapped) => mapped,
         Err(flow) => {
@@ -395,9 +411,13 @@ pub(crate) fn builtin_mapcan(eval: &mut super::eval::Context, args: Vec<Value>) 
         }
     };
     let mut mapped = MapResultVec::with_capacity(len);
-    let mapcan_result = mapcar1_eval(eval, len, Some(&mut mapped), sequence, |eval, item| {
-        apply1(eval, func, item)
-    });
+    let mapcan_result = mapcar1_eval(
+        eval,
+        len,
+        MapSink::Collect(&mut mapped),
+        sequence,
+        |eval, item| apply1(eval, func, item),
+    );
     if let Err(flow) = mapcan_result {
         eval.restore_vm_roots(roots);
         return Err(flow);

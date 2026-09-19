@@ -1018,6 +1018,31 @@ impl Context {
         slot
     }
 
+    /// Reserve `count` nil root slots in one step, returning the first.
+    /// For a builtin that fills a known number of results in place (GNU
+    /// `Fmapcar`'s `SAFE_ALLOCA` array): each result is a slot write, rooted
+    /// across every callback, with no push per element.
+    pub(crate) fn reserve_vm_frame_root_slots(&mut self, count: usize) -> usize {
+        let roots = &mut self
+            .vm_root_frames
+            .last_mut()
+            .expect("VM root frame missing")
+            .roots;
+        let base = roots.len();
+        roots.resize(base + count, Value::NIL);
+        base
+    }
+
+    /// The root slots `base..base + count` reserved by
+    /// [`Self::reserve_vm_frame_root_slots`].
+    pub(crate) fn vm_frame_root_slots(&self, base: usize, count: usize) -> &[Value] {
+        &self
+            .vm_root_frames
+            .last()
+            .expect("VM root frame missing")
+            .roots[base..base + count]
+    }
+
     pub(crate) fn set_vm_frame_root_slot(&mut self, slot: usize, value: Value) {
         self.vm_root_frames
             .last_mut()

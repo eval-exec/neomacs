@@ -18053,3 +18053,33 @@ fn single_key_description_renders_a_fixnum_cons_as_a_range() {
     .expect("at least one form");
     assert_eq!(result, r#"OK ("a..z" "C-a..x" "a..z" 10 "M-S-<up>")"#);
 }
+
+/// GNU 31.1: `mapcar` stores each result in place and conses the ones it
+/// mapped -- fewer when a callback shortens the list -- over lists, vectors,
+/// strings and bool-vectors, keeps the results alive across a collection in
+/// a later callback, and a non-local exit or a type error mid-map leaves
+/// nothing behind.
+#[test]
+fn mapcar_results_survive_callbacks_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"
+        (list
+         (let ((l (list 1 2 3 4 5 6 7 8 9 10 11 12)))
+           (mapcar (lambda (x) (when (= x 3) (setcdr (nthcdr 4 l) nil)) (* x 10)) l))
+         (mapcar #'1+ [1 2 3])
+         (mapcar #'identity "abc")
+         (mapcar #'identity (make-bool-vector 3 t))
+         (mapcar (lambda (x) (mapcar (lambda (y) (+ x y)) '(1 2))) '(10 20 30))
+         (catch 'done (mapcar (lambda (x) (when (= x 2) (throw 'done 'thrown)) x) '(1 2 3)))
+         (mapcar (lambda (x) (garbage-collect) (list x (make-string 3 ?a))) (number-sequence 1 20))
+         (length (mapcar #'number-to-string (number-sequence 1 1000)))
+         (mapcar #'car '((a . 1) (b . 2) nil))
+         (condition-case e (mapcar #'car '((a . 1) b)) (error e)))
+        "#,
+    );
+    assert_eq!(
+        result,
+        "OK ((10 20 30 40 50) (2 3 4) (97 98 99) (t t t) ((11 12) (21 22) (31 32)) thrown ((1 \"aaa\") (2 \"aaa\") (3 \"aaa\") (4 \"aaa\") (5 \"aaa\") (6 \"aaa\") (7 \"aaa\") (8 \"aaa\") (9 \"aaa\") (10 \"aaa\") (11 \"aaa\") (12 \"aaa\") (13 \"aaa\") (14 \"aaa\") (15 \"aaa\") (16 \"aaa\") (17 \"aaa\") (18 \"aaa\") (19 \"aaa\") (20 \"aaa\")) 1000 (a b nil) (wrong-type-argument listp b))"
+    );
+}
