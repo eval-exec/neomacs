@@ -1979,6 +1979,53 @@ impl Context {
         self.unbind_to_with_result(bt_count, result)
     }
 
+    /// [`Self::apply1_resolved_subr`] for a two-argument call: `sort`'s
+    /// predicate, which a sort asks for O(n log n) times under one symbol.
+    pub(crate) fn apply2_resolved_subr(
+        &mut self,
+        designator: Value,
+        subr: Value,
+        epoch: u64,
+        arg0: Value,
+        arg1: Value,
+    ) -> EvalResult {
+        self.maybe_quit_before_gc()?;
+        self.enter_interpreted_eval_depth()?;
+        let bt_count = self.specpdl.len();
+        self.push_backtrace_frame(designator, &[arg0, arg1]);
+        let result = {
+            if self.gc_safe_point_exact_should_collect() {
+                self.gc_collect_from_current_roots();
+            }
+            let entered = match self.take_debug_on_call_arm(DebugOnCallCode::Funcall) {
+                Some(arm) => self.do_debug_on_call(arm),
+                None => Ok(()),
+            };
+            match entered {
+                Err(flow) => Err(flow),
+                Ok(()) => self.maybe_grow_eval_stack(|ctx| {
+                    let mut args = LispArgVec::new();
+                    args.push(arg0);
+                    args.push(arg1);
+                    if ctx.obarray.function_epoch() != epoch
+                        || ctx.compiler_function_overrides_active()
+                    {
+                        return ctx.funcall_general_untraced(designator, args);
+                    }
+                    // Re-read per call: registration may rewrite a subr's
+                    // entry in place.
+                    let Some((subr_sym, entry)) = subr_entry_from_value(subr) else {
+                        return Err(signal(LispCondition::InvalidFunction, vec![designator]));
+                    };
+                    ctx.apply_subr_object_with_entry(subr_sym, subr, args, entry)
+                }),
+            }
+        };
+        self.depth -= 1;
+        let result = self.dispatch_signal_result_if_needed(result);
+        self.unbind_to_with_result(bt_count, result)
+    }
+
     #[cfg(feature = "jit")]
     fn apply1_bytecode(&mut self, function: Value, arg0: Value) -> EvalResult {
         self.maybe_quit_before_gc()?;

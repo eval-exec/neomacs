@@ -18831,3 +18831,37 @@ fn value_lt_orders_strings_exactly_as_string_lessp_like_gnu() {
         )
     );
 }
+
+#[test]
+fn sort_answers_like_gnu_for_every_predicate_shape() {
+    crate::test_utils::init_test_tracing();
+    // The predicate is resolved once per sort when it names a subr, so this
+    // pins every shape the resolution has to keep working: a subr, a lambda,
+    // no predicate at all (`value<'), `:key' with `:lessp', `:reverse', a
+    // vector, an undefined predicate, a predicate that signals a wrong type,
+    // one that signals its own error, and the comparison COUNT, which is
+    // GNU's for the same input.
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r##"
+        (list
+  (sort (list "b" "a" "c") #'string<)
+  (sort (list 3 1 2) (lambda (a b) (< a b)))
+  (sort (list 3 1 2))
+  (sort (list "bb" "a" "ccc") :key #'length :lessp #'<)
+  (sort (list 3 1 2) :lessp #'>)
+  (sort (vector 3 1 2) #'<)
+  (sort (list "b" "a") :lessp #'string< :reverse t)
+  (condition-case e (sort (list 1 2) #'not-a-function-at-all) (error (car e)))
+  (condition-case e (sort (list 1 "a") #'string<) (error (car e)))
+  (condition-case e (sort (list 1 2 3) (lambda (_a _b) (error "boom"))) (error (cadr e)))
+  (let ((n 0)) (list (sort (list 9 8 7 6 5 4 3 2 1) (lambda (a b) (setq n (1+ n)) (< a b))) n)))
+        "##,
+    );
+    assert_eq!(
+        result,
+        concat!(
+            r##"OK (("a" "b" "c") (1 2 3) (1 2 3) ("a" "bb" "ccc") (3 2 1) [1 2 3] ("b" "a") "##,
+            r##"void-function wrong-type-argument "boom" ((1 2 3 4 5 6 7 8 9) 8))"##
+        )
+    );
+}

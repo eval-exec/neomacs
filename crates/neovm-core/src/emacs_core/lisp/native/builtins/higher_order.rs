@@ -493,6 +493,25 @@ pub(crate) struct SortOptions {
     pub(crate) in_place: bool,
 }
 
+/// A sort's `lessp' predicate, resolved once for the whole sort.
+///
+/// GNU calls the predicate with `call2', which reads the function cell and
+/// runs it; ours went through the generic apply, which re-resolved the
+/// symbol -- canonicality check, call-cache probe, callable test -- on every
+/// one of the O(n log n) comparisons: 1061 instructions per comparison, of
+/// which `string<' itself was 187.
+#[derive(Clone, Copy)]
+pub(crate) enum SortPredicate {
+    /// No predicate: order by `value<'.
+    ValueLt,
+    Generic(Value),
+    Subr {
+        designator: Value,
+        subr: Value,
+        epoch: u64,
+    },
+}
+
 pub(crate) trait SortRuntime {
     fn call_sort_function1(&mut self, function: Value, arg: Value) -> Result<Value, Flow>;
     fn call_sort_function2(
@@ -502,6 +521,28 @@ pub(crate) trait SortRuntime {
         arg1: Value,
     ) -> Result<Value, Flow>;
     fn root_sort_value(&mut self, value: Value);
+    /// Resolve the predicate once, before the first comparison.
+    fn resolve_sort_predicate(&mut self, predicate: Value) -> SortPredicate {
+        if predicate.is_nil() {
+            SortPredicate::ValueLt
+        } else {
+            SortPredicate::Generic(predicate)
+        }
+    }
+    fn call_sort_predicate(
+        &mut self,
+        predicate: SortPredicate,
+        arg0: Value,
+        arg1: Value,
+    ) -> Result<Value, Flow> {
+        match predicate {
+            SortPredicate::ValueLt => unreachable!("`value<' ordering never calls a predicate"),
+            SortPredicate::Generic(function) => self.call_sort_function2(function, arg0, arg1),
+            SortPredicate::Subr { designator, .. } => {
+                self.call_sort_function2(designator, arg0, arg1)
+            }
+        }
+    }
     fn compare_sort_keys(
         &mut self,
         left: &Value,
@@ -530,6 +571,39 @@ impl SortRuntime for super::eval::Context {
 
     fn root_sort_value(&mut self, value: Value) {
         self.push_specpdl_root(value);
+    }
+
+    fn resolve_sort_predicate(&mut self, predicate: Value) -> SortPredicate {
+        if predicate.is_nil() {
+            return SortPredicate::ValueLt;
+        }
+        match self.resolve_mapped_subr_callee(predicate) {
+            Some((subr, epoch)) => SortPredicate::Subr {
+                designator: predicate,
+                subr,
+                epoch,
+            },
+            None => SortPredicate::Generic(predicate),
+        }
+    }
+
+    fn call_sort_predicate(
+        &mut self,
+        predicate: SortPredicate,
+        arg0: Value,
+        arg1: Value,
+    ) -> Result<Value, Flow> {
+        match predicate {
+            SortPredicate::ValueLt => unreachable!("`value<' ordering never calls a predicate"),
+            SortPredicate::Generic(function) => self.call_sort_function2(function, arg0, arg1),
+            // Re-checks the function epoch per call, so a predicate that
+            // redefines the symbol still reaches the new definition.
+            SortPredicate::Subr {
+                designator,
+                subr,
+                epoch,
+            } => self.apply2_resolved_subr(designator, subr, epoch, arg0, arg1),
+        }
     }
 
     fn compare_sort_keys(
@@ -717,6 +791,7 @@ pub(crate) fn stable_sort_values_with(
         items.reverse();
     }
 
+    let lessp_fn = runtime.resolve_sort_predicate(lessp_fn);
     gnu_style_sort_items(runtime, &mut items, lessp_fn)?;
 
     if reverse {
@@ -738,7 +813,7 @@ const GALLOP_WIN_MIN: usize = 7;
 fn gnu_style_sort_items(
     runtime: &mut impl SortRuntime,
     items: &mut [SortItem],
-    lessp_fn: Value,
+    lessp_fn: SortPredicate,
 ) -> Result<(), Flow> {
     let len = items.len();
     if len < 2 {
@@ -788,9 +863,9 @@ fn sort_item_less(
     runtime: &mut impl SortRuntime,
     left: SortItem,
     right: SortItem,
-    lessp_fn: Value,
+    lessp_fn: SortPredicate,
 ) -> Result<bool, Flow> {
-    if lessp_fn.is_nil() {
+    if matches!(lessp_fn, SortPredicate::ValueLt) {
         return Ok(matches!(
             runtime.compare_sort_keys(&left.key, &right.key)?,
             std::cmp::Ordering::Less
@@ -798,7 +873,7 @@ fn sort_item_less(
     }
 
     Ok(runtime
-        .call_sort_function2(lessp_fn, left.key, right.key)?
+        .call_sort_predicate(lessp_fn, left.key, right.key)?
         .is_truthy())
 }
 
@@ -808,7 +883,7 @@ fn binarysort(
     lo: usize,
     hi: usize,
     mut start: usize,
-    lessp_fn: Value,
+    lessp_fn: SortPredicate,
 ) -> Result<(), Flow> {
     if lo == start {
         start += 1;
@@ -837,7 +912,7 @@ fn count_run(
     items: &[SortItem],
     lo: usize,
     hi: usize,
-    lessp_fn: Value,
+    lessp_fn: SortPredicate,
 ) -> Result<(usize, bool), Flow> {
     debug_assert!(lo < hi);
     if lo + 1 == hi {
@@ -908,7 +983,7 @@ fn found_new_run(
     pending: &mut Vec<PendingRun>,
     new_len: usize,
     total_len: usize,
-    lessp_fn: Value,
+    lessp_fn: SortPredicate,
     min_gallop: &mut usize,
 ) -> Result<(), Flow> {
     if pending.is_empty() {
@@ -930,7 +1005,7 @@ fn merge_force_collapse(
     runtime: &mut impl SortRuntime,
     items: &mut [SortItem],
     pending: &mut Vec<PendingRun>,
-    lessp_fn: Value,
+    lessp_fn: SortPredicate,
     min_gallop: &mut usize,
 ) -> Result<(), Flow> {
     while pending.len() > 1 {
@@ -948,7 +1023,7 @@ fn merge_at(
     items: &mut [SortItem],
     pending: &mut Vec<PendingRun>,
     index: usize,
-    lessp_fn: Value,
+    lessp_fn: SortPredicate,
     min_gallop: &mut usize,
 ) -> Result<(), Flow> {
     let left = pending[index];
@@ -968,7 +1043,7 @@ fn gallop_left(
     key: SortItem,
     items: &[SortItem],
     hint: usize,
-    lessp_fn: Value,
+    lessp_fn: SortPredicate,
 ) -> Result<usize, Flow> {
     debug_assert!(!items.is_empty());
     debug_assert!(hint < items.len());
@@ -1027,7 +1102,7 @@ fn gallop_right(
     key: SortItem,
     items: &[SortItem],
     hint: usize,
-    lessp_fn: Value,
+    lessp_fn: SortPredicate,
 ) -> Result<usize, Flow> {
     debug_assert!(!items.is_empty());
     debug_assert!(hint < items.len());
@@ -1087,7 +1162,7 @@ fn merge_runs(
     base: usize,
     left_len: usize,
     right_len: usize,
-    lessp_fn: Value,
+    lessp_fn: SortPredicate,
     min_gallop: &mut usize,
 ) -> Result<(), Flow> {
     let mut left_base = base;
@@ -1138,7 +1213,7 @@ fn merge_lo(
     mut left_len: usize,
     right_base: usize,
     mut right_len: usize,
-    lessp_fn: Value,
+    lessp_fn: SortPredicate,
     min_gallop: &mut usize,
 ) -> Result<(), Flow> {
     let left = items[left_base..left_base + left_len].to_vec();
@@ -1305,7 +1380,7 @@ fn merge_hi(
     mut left_len: usize,
     right_base: usize,
     mut right_len: usize,
-    lessp_fn: Value,
+    lessp_fn: SortPredicate,
     min_gallop: &mut usize,
 ) -> Result<(), Flow> {
     let right = items[right_base..right_base + right_len].to_vec();
