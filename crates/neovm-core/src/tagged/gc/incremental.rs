@@ -749,7 +749,31 @@ impl TaggedHeap {
     }
 
     /// Mark a cons cell. Returns true if newly marked (not previously marked).
+    ///
+    /// Inlined for the common case -- a heap cons in the block the previous
+    /// mark hit: the marker's cons-spine loop calls this ~30M times on a
+    /// language-server load, and the call alone was a quarter of its cost.
+    /// A cached heap block's base can match neither a dump-image address (a
+    /// separate mapping) nor null, so everything else -- other blocks, the
+    /// dump image, malformed pointers -- takes [`Self::mark_cons_slow`], the
+    /// full classification, unchanged.
+    #[inline(always)]
     pub(super) fn mark_cons(&mut self, ptr: *const ConsCell) -> bool {
+        let addr = ptr as usize;
+        let block_base = addr & !(CONS_BLOCK_ALIGN - 1);
+        if let Some(cache) = self.mark_cons_block_cache
+            && cache.block_base == block_base
+        {
+            let offset = addr - block_base;
+            if offset < CONS_CELLS_BYTES && offset.is_multiple_of(size_of::<ConsCell>()) {
+                return self.cons_blocks[cache.block_index].mark_cell_offset(offset);
+            }
+        }
+        self.mark_cons_slow(ptr)
+    }
+
+    #[inline(never)]
+    fn mark_cons_slow(&mut self, ptr: *const ConsCell) -> bool {
         // Mapped-world fast classification: in a fresh session MOST marked
         // conses are dump objects, and the old order made each of them miss
         // the block cache and probe `cons_block_index_by_base` before being
