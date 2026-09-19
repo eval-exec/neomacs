@@ -2804,6 +2804,17 @@ impl BufferText {
         result
     }
 
+    /// GNU `Z == Z_BYTE`: when every character of the text is one byte, the
+    /// text's end, below which a byte position IS its character position
+    /// (and at or past which it is the end); `None` once any character is
+    /// multibyte. One borrow, for a caller converting many positions at once.
+    #[inline]
+    pub fn single_byte_chars_end(&self) -> Option<EmacsBytePos> {
+        let metrics = self.storage.borrow().metrics;
+        (metrics.char_len().get() == metrics.emacs_byte_len().get())
+            .then(|| metrics.emacs_byte_end())
+    }
+
     /// Convert a logical Emacs byte position to a character position. Symmetric
     /// to `buf_charpos_to_bytepos` — shares the same anchor + cache machinery.
     ///

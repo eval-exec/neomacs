@@ -4216,3 +4216,40 @@ fn match_publish_read_stats_probe() {
         s(&super::match_stats::FIRST_SOME_SUB),
     );
 }
+
+/// GNU 31.1: a buffer search publishes its registers as character positions
+/// (`search_buffer_re`'s `BYTE_TO_CHAR` per register) -- in a buffer whose
+/// characters are all one byte and in one with multibyte characters, with
+/// unmatched groups, a match at the end of the text, a narrowing and a
+/// backward search.
+#[test]
+fn buffer_search_match_data_is_in_characters_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"
+        (let ((md (lambda () (mapcar (lambda (x) (if (bufferp x) 'buf x)) (match-data t)))))
+          (list
+           (with-temp-buffer
+             (insert "alpha beta* gamma\nzeta: end")
+             (list
+              (progn (goto-char (point-min)) (re-search-forward "\\(b\\(e\\)\\)\\|\\(x\\)ta\\(\\*\\)?" nil t) (funcall md))
+              (progn (goto-char (point-min)) (re-search-forward "\\(en\\)\\(d\\)\\'" nil t) (funcall md))
+              (progn (goto-char (point-min)) (looking-at "\\(al\\)\\(ph\\)?\\(q\\)?") (funcall md))
+              (save-restriction (narrow-to-region 7 12) (goto-char (point-min)) (re-search-forward "\\(ta\\)\\(\\*\\)" nil t) (funcall md))
+              (progn (goto-char (point-max)) (re-search-backward "\\(z\\)\\(e\\)" nil t) (funcall md))
+              (progn (goto-char (point-min)) (search-forward "gamma" nil t) (funcall md))))
+           (with-temp-buffer
+             (insert "αλφα beta* γάμμα\nζήτα: end")
+             (list
+              (progn (goto-char (point-min)) (re-search-forward "\\(b\\(e\\)\\)\\|\\(x\\)ta\\(\\*\\)?" nil t) (funcall md))
+              (progn (goto-char (point-min)) (re-search-forward "\\(γά\\)\\(μ+\\)" nil t) (funcall md))
+              (progn (goto-char (point-min)) (re-search-forward "\\(en\\)\\(d\\)\\'" nil t) (funcall md))
+              (progn (goto-char (point-min)) (looking-at "\\(αλ\\)\\(φ\\)?\\(q\\)?") (funcall md))
+              (save-restriction (narrow-to-region 7 12) (goto-char (point-min)) (re-search-forward "\\(ta\\)\\(\\*\\)" nil t) (funcall md))))))
+        "#,
+    );
+    assert_eq!(
+        result,
+        "OK (((7 9 7 9 8 9 buf) (25 28 25 27 27 28 buf) (1 5 1 3 3 5 buf) (9 12 9 11 11 12 buf) (19 21 19 20 20 21 buf) (13 18 buf)) ((6 8 6 8 7 8 buf) (12 16 12 14 14 16 buf) (24 27 24 26 26 27 buf) (1 4 1 3 3 4 buf) (8 11 8 10 10 11 buf)))"
+    );
+}

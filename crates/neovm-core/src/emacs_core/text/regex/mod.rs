@@ -943,23 +943,35 @@ impl EngineMatchData {
         )
     }
 
-    fn publish_buffer(self, buf: &Buffer) -> MatchData {
+    fn publish_buffer(&self, buf: &Buffer) -> MatchData {
         #[cfg(debug_assertions)]
         match_stats::count_publish(&self.groups);
-        let groups = self
-            .groups
-            .into_iter()
-            .map(|range| {
-                range.map(|range| LispCharMatchRange {
-                    start: LispMatchPosition::from_buffer_position(
-                        buf.emacs_byte_pos_to_lisp_char_pos(range.start()),
-                    ),
-                    end: LispMatchPosition::from_buffer_position(
-                        buf.emacs_byte_pos_to_lisp_char_pos(range.end()),
-                    ),
-                })
-            })
-            .collect();
+        // GNU `search_buffer_re` converts each register with `BYTE_TO_CHAR`,
+        // whose first test is `Z == Z_BYTE`. That test is made once for the
+        // whole set here: where every character is one byte, a register's
+        // Lisp position is its clamped byte position plus one.
+        let mut groups = smallvec::SmallVec::<
+            [Option<LispCharMatchRange>; GNU_SEARCH_REGS_BASE_CAPACITY],
+        >::with_capacity(self.groups.len());
+        if let Some(end) = buf.text_single_byte_chars_end() {
+            let lisp = |pos: EmacsBytePos| LispMatchPosition::new(pos.min(end).get() + 1);
+            for range in &self.groups {
+                groups.push(range.map(|range| LispCharMatchRange {
+                    start: lisp(range.start()),
+                    end: lisp(range.end()),
+                }));
+            }
+        } else {
+            let lisp = |pos: EmacsBytePos| {
+                LispMatchPosition::from_buffer_position(buf.emacs_byte_pos_to_lisp_char_pos(pos))
+            };
+            for range in &self.groups {
+                groups.push(range.map(|range| LispCharMatchRange {
+                    start: lisp(range.start()),
+                    end: lisp(range.end()),
+                }));
+            }
+        }
         MatchData {
             kind: MatchDataKind::Buffer { id: buf.id, groups },
             #[cfg(debug_assertions)]

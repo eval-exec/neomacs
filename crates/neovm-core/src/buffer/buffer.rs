@@ -3020,6 +3020,13 @@ impl Buffer {
         self.emacs_byte_pos_to_char_pos_clamped(byte_pos).to_lisp()
     }
 
+    /// See [`BufferText::single_byte_chars_end`]: where it is `Some(end)`,
+    /// [`Self::emacs_byte_pos_to_lisp_char_pos`] of `p` is `min(p, end) + 1`.
+    #[inline]
+    pub fn text_single_byte_chars_end(&self) -> Option<EmacsBytePos> {
+        self.text.single_byte_chars_end()
+    }
+
     /// Convert a 1-based Lisp character position to a byte position, clamping
     /// to the full buffer.
     pub fn lisp_pos_to_emacs_byte_pos(&self, lisp_pos: LispCharPos1) -> EmacsBytePos {
