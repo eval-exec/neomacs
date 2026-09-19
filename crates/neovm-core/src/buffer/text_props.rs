@@ -3783,6 +3783,42 @@ impl TextPropertyTable {
         }
     }
 
+    /// GNU `Ftext_property_not_all`'s walk (src/textprop.c): ONE descent
+    /// seats it at the interval holding `range.start`, then each interval
+    /// overlapping `range` is asked `differs(plist)` in order. Returns the
+    /// first position (clamped to `range.start`) whose interval's plist
+    /// differs. Text past the last interval has no properties and is asked
+    /// about with a nil plist; zero-length intervals hold no text and are
+    /// stepped over.
+    pub fn first_char_pos_where(
+        &self,
+        range: CharRange,
+        mut differs: impl FnMut(Value) -> bool,
+    ) -> Option<CharPos0> {
+        if range.is_empty() {
+            return None;
+        }
+        let Some((mut start, mut id)) = self.intervals.find_id(range.start()) else {
+            return differs(Value::NIL).then_some(range.start());
+        };
+        loop {
+            let end = self.intervals.interval_end(start, id);
+            if end > start && differs(self.intervals.nodes[id.0].plist) {
+                return Some(start.max(range.start()));
+            }
+            if end >= range.end() {
+                return None;
+            }
+            match self.intervals.next_id(id) {
+                Some(next) => {
+                    start = end;
+                    id = next;
+                }
+                None => return differs(Value::NIL).then_some(end),
+            }
+        }
+    }
+
     pub fn next_property_change_after_char_pos(&self, pos: CharPos0) -> Option<CharPos0> {
         self.next_property_change_raw(pos)
     }

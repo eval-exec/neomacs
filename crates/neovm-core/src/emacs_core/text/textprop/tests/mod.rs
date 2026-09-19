@@ -1777,6 +1777,70 @@ fn text_property_any_uses_live_marker_end_after_insertions() {
     assert_eq!(result, Value::fixnum(4));
 }
 
+/// GNU 31.1 answers `(nil 7 3 nil 13 nil nil (nil 9) (nil 3))`: the walk
+/// starts inside an interval, crosses split boundaries, resolves `category`,
+/// `char-property-alias-alist` and `default-text-properties` the way `textget`
+/// does, treats text past the last interval as property-less, and answers nil
+/// for reversed-and-matching or empty ranges.
+#[test]
+fn text_property_not_all_walks_intervals_like_gnu_textget() {
+    crate::test_utils::init_test_tracing();
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"
+        (with-temp-buffer
+          (insert "abcdefghijklmnop")
+          (put-text-property 3 7 'face 'bold)
+          (put-text-property 5 9 'fontified t)
+          (put 'tpna-cat 'face 'bold)
+          (put-text-property 11 13 'category 'tpna-cat)
+          (list
+           (text-property-not-all 3 7 'face 'bold)
+           (text-property-not-all 4 10 'face 'bold)
+           (text-property-not-all 1 17 'face nil)
+           (text-property-not-all 11 13 'face 'bold)
+           (text-property-not-all 11 14 'face 'bold)
+           (text-property-not-all 7 3 'face 'bold)
+           (text-property-not-all 5 5 'face 'italic)
+           (progn (setq-local char-property-alias-alist '((face fontified)))
+                  (list (text-property-not-all 7 9 'face t)
+                        (text-property-not-all 7 10 'face t)))
+           (progn (setq-local char-property-alias-alist nil)
+                  (setq-local default-text-properties '(face italic))
+                  (list (text-property-not-all 13 17 'face 'italic)
+                        (text-property-not-all 1 4 'face 'italic)))))
+        "#,
+    );
+    assert_eq!(result, "OK (nil 7 3 nil 13 nil nil (nil 9) (nil 3))");
+}
+
+/// A not-all/any scan (find where PROP stops being nil, then where it is nil
+/// again) must advance. `text-properties-at` hands out the live plist, and a
+/// name `plist-put` adds to it is invisible to the table's presence set; the
+/// two primitives have to agree about it (GNU 31.1 finds the run and answers
+/// `(t t)` here too) or the loop spins on one position.
+#[test]
+fn a_not_all_any_scan_advances_over_a_plist_put_name() {
+    crate::test_utils::init_test_tracing();
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"
+        (with-temp-buffer
+          (insert "abcdefghij")
+          (put-text-property 3 5 'q 1)
+          (plist-put (text-properties-at 3) 'newp 7)
+          (let ((pos 1) (n 0))
+            (while (and (< n 100)
+                        (setq pos (text-property-not-all pos (point-max) 'newp nil)))
+              (setq n (1+ n))
+              (setq pos (or (text-property-any pos (point-max) 'newp nil) (point-max))))
+            (list (< n 100)
+                  (eq (text-property-not-all 1 11 'newp nil)
+                      (let ((p (text-property-not-all 1 11 'newp nil)))
+                        (and p (text-property-not-all p 11 'newp nil)))))))
+        "#,
+    );
+    assert_eq!(result, "OK (t t)");
+}
+
 #[test]
 fn text_property_not_all_reports_first_mismatch() {
     crate::test_utils::init_test_tracing();

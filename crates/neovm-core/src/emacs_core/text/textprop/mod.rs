@@ -3604,23 +3604,34 @@ pub(crate) fn builtin_text_property_not_all_in_state(
         });
     }
 
-    let mut cursor = byte_beg;
-
-    while cursor < byte_end {
-        let found =
-            lookup_buffer_text_property_at_emacs_byte_pos(obarray, buffers, buf, cursor, prop);
-        let matches = eq_value(&found, val);
-        if !matches {
-            return Ok(Value::fixnum(byte_to_elisp_pos(buf, cursor)));
-        }
-
-        match buf.text_props_next_change_after_emacs_byte_pos(cursor) {
-            Some(next) if next > cursor && next < byte_end => cursor = next,
-            _ => break,
-        }
-    }
-
-    Ok(Value::NIL)
+    // GNU's walk: one descent, then each interval's plist resolved as
+    // `textget` resolves it (aliases, `category`, `default-text-properties`).
+    // Asking the table for the value at each property change instead cost a
+    // byte->char conversion, a descent and a change search per interval.
+    let first = buf.text_props_first_char_pos_where_in_emacs_byte_range(byte_range, |plist| {
+        let found = lookup_char_property_from_direct(
+            obarray,
+            buffers,
+            // The reads `get-text-property` and `text-property-any` make: a
+            // name the table's presence set has never seen answers nil there
+            // (`lookup_buffer_text_property_at_emacs_byte_pos`), so it must
+            // here too, or the not-all/any pair could disagree about one
+            // interval and a scan loop over them never advance.
+            |name| {
+                if buf.text_props_property_name_presence(name)
+                    == crate::buffer::text_props::PropertyNamePresence::DefinitelyAbsent
+                {
+                    None
+                } else {
+                    plist_get_value(plist, name)
+                }
+            },
+            prop,
+            true,
+        );
+        !eq_value(&found, val)
+    });
+    Ok(first.map_or(Value::NIL, |pos| Value::fixnum(pos.to_lisp().as_i64())))
 }
 
 /// (get-char-property-and-overlay POS PROP &optional OBJECT)

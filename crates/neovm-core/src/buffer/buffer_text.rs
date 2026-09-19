@@ -1777,6 +1777,18 @@ impl BufferText {
             .set_properties_for_object_char_len(range, object_len, plist);
     }
 
+    /// [`TextPropertyTable::first_char_pos_where`] over `range`.
+    pub fn text_props_first_char_pos_where(
+        &self,
+        range: CharRange,
+        differs: impl FnMut(Value) -> bool,
+    ) -> Option<CharPos0> {
+        self.storage
+            .borrow()
+            .text_props
+            .first_char_pos_where(range, differs)
+    }
+
     pub fn text_props_next_change_after_emacs_byte_pos(
         &self,
         pos: EmacsBytePos,

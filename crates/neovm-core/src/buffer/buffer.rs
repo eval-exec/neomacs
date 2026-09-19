@@ -3310,6 +3310,21 @@ impl Buffer {
             .text_props_remove_all_in_emacs_byte_range(self.clamped_emacs_byte_range(range));
     }
 
+    /// The first position in `range` whose text-property interval
+    /// `differs` (see [`TextPropertyTable::first_char_pos_where`]).
+    pub fn text_props_first_char_pos_where_in_emacs_byte_range(
+        &self,
+        range: EmacsByteRange,
+        differs: impl FnMut(Value) -> bool,
+    ) -> Option<CharPos0> {
+        let range = self.clamped_emacs_byte_range(range);
+        let chars = CharRange::new(
+            self.text.emacs_byte_pos_to_char_pos(range.start()),
+            self.text.emacs_byte_pos_to_char_pos(range.end()),
+        );
+        self.text.text_props_first_char_pos_where(chars, differs)
+    }
+
     pub fn text_props_next_change_after_emacs_byte_pos(
         &self,
         pos: EmacsBytePos,
