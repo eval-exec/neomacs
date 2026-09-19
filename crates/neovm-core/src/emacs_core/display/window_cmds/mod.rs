@@ -7320,7 +7320,12 @@ pub fn register_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::Obarray)
         obarray.define_special_variable(name, Value::NIL);
     }
     obarray.set_symbol_value("window-sides-vertical", Value::NIL);
-    obarray.set_symbol_value("window-sides-slots", Value::NIL);
+    // `window-sides-slots` and `fit-frame-to-buffer-sizes` are deliberately NOT
+    // seeded.  GNU defines both in Lisp (`window.el`, `frame.el`) with a
+    // four-element default -- `(nil nil nil nil)` -- and `defvar` only assigns
+    // to a *void* symbol, so a nil seed here wins permanently and leaves the
+    // list-shaped value GNU's own code indexes into.  Letting the `.el` define
+    // them, as the port must, keeps the value's source identical to GNU's.
     obarray.set_symbol_value("fit-window-to-buffer-horizontally", Value::NIL);
     obarray.set_symbol_value("fit-frame-to-buffer", Value::NIL);
     obarray.set_symbol_value(
@@ -7332,7 +7337,6 @@ pub fn register_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::Obarray)
             Value::fixnum(0),
         ]),
     );
-    obarray.set_symbol_value("fit-frame-to-buffer-sizes", Value::NIL);
     obarray.set_symbol_value("window-min-height", Value::fixnum(4));
     obarray.set_symbol_value("window-min-width", Value::fixnum(10));
     obarray.set_symbol_value("window-safe-min-height", Value::fixnum(1));

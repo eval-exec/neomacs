@@ -229,9 +229,12 @@ impl Context {
         // charset.c:2426 DEFVAR_LISP, init nil.
         obarray.define_special_variable("charset-map-path", Value::NIL);
         obarray.set_symbol_value("doc-directory", Value::NIL);
-        // warnings.el defcustom — needed before warnings.el loads
-        obarray.set_symbol_value("warning-minimum-log-level", Value::keyword(":warning"));
-        obarray.set_symbol_value("warning-minimum-level", Value::keyword(":warning"));
+        // `warning-minimum-level` and `warning-minimum-log-level` are
+        // `defcustom`s in `warnings.el` and are deliberately NOT seeded.  GNU
+        // leaves both unbound until that file loads, and `defcustom` only
+        // assigns to a *void* symbol, so seeding `:warning` here would pin the
+        // level before `warnings.el` -- and any user `customize` -- has had a
+        // say, while making `boundp` disagree with GNU at the same moment.
         // GNU callproc.c defines these with DEFVAR_LISP, so lexical-binding
         // Lisp must treat them as dynamically scoped special variables.
         obarray.set_symbol_value("process-environment", Value::NIL);
@@ -283,9 +286,20 @@ impl Context {
         // Lisp must treat it as dynamically scoped.
         obarray.set_symbol_value("delayed-warnings-list", Value::NIL);
         obarray.make_special("delayed-warnings-list");
-        // GNU `subr.el` defines this with `defvar`; seed it for early warning
-        // paths while preserving the same special-variable semantics.
-        obarray.set_symbol_value("delayed-warnings-hook", Value::NIL);
+        // `delayed-warnings-hook` is marked special but deliberately NOT given
+        // a value.  GNU's `subr.el` defines it as
+        // `(collapse-delayed-warnings display-delayed-warnings)`, and `defvar`
+        // only assigns to a *void* symbol -- so seeding nil would make that
+        // definition a silent no-op and leave the hook that displays queued
+        // startup warnings empty: `display-warning` would queue "An error
+        // occurred while loading ..." and nothing would ever show it.
+        //
+        // The flag stays because it is what a *booted* GNU reports for this
+        // symbol (`subr.el` ran during loadup); only the pre-loadup window of a
+        // bare context would see it non-special there, and no user code runs
+        // then.  The value arrives from `subr.el`, as in GNU; the one Rust
+        // reader, `command_loop.rs`'s `safe_run_hook_if_bound`, is
+        // bound-guarded either way.
         obarray.make_special("delayed-warnings-hook");
         obarray.set_symbol_value(
             "command-line-ns-option-alist",

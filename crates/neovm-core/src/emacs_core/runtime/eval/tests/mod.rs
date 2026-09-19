@@ -13766,9 +13766,23 @@ fn post_self_insert_hook_is_special_and_dynamically_bound_like_gnu_cmds() {
 #[test]
 fn delayed_warning_defvars_are_special_and_dynamically_bound_like_gnu() {
     crate::test_utils::init_test_tracing();
+    // `delayed-warnings-list` is C (`keyboard.c`, DEFVAR_LISP, nil).
+    // `delayed-warnings-hook` is Lisp: `lisp/subr.el:6485` defines it as
+    // `(collapse-delayed-warnings display-delayed-warnings)`.  The Rust startup
+    // deliberately does NOT seed it, because `defvar` only assigns to a *void*
+    // symbol and a seed would therefore win forever -- so this harness, which
+    // runs before any Lisp, performs the same definition `subr.el` performs at
+    // loadup before asking what a booted session looks like.
+    //
+    // The expectations are the pinned GNU Emacs's, taken from the same three
+    // forms under `--batch -q`; the third one in particular is *not* `(nil nil)`,
+    // which is what the seed used to report.
     let results = eval_all(
-        "(list (special-variable-p 'delayed-warnings-list)
-               (special-variable-p 'delayed-warnings-hook))
+        "(progn
+           (defvar delayed-warnings-hook
+             '(collapse-delayed-warnings display-delayed-warnings))
+           (list (special-variable-p 'delayed-warnings-list)
+                 (special-variable-p 'delayed-warnings-hook)))
          (let ((delayed-warnings-list 'local)
                (delayed-warnings-hook 'hook-local))
            (list delayed-warnings-list delayed-warnings-hook))
@@ -13776,7 +13790,10 @@ fn delayed_warning_defvars_are_special_and_dynamically_bound_like_gnu() {
     );
     assert_eq!(results[0], "OK (t t)");
     assert_eq!(results[1], "OK (local hook-local)");
-    assert_eq!(results[2], "OK (nil nil)");
+    assert_eq!(
+        results[2],
+        "OK (nil (collapse-delayed-warnings display-delayed-warnings))"
+    );
 }
 
 #[test]

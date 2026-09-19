@@ -135,8 +135,12 @@ pub fn register_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::Obarray)
     );
     // frame.c:7475 DEFVAR_LISP, zero-init nil; assigned at terminal init.
     obarray.define_special_variable("terminal-frame", Value::NIL);
-    obarray.set_symbol_value("frameset-filter-alist", Value::NIL);
-    obarray.set_symbol_value("frameset-session-filter-alist", Value::NIL);
+    // `frameset-filter-alist` and `frameset-session-filter-alist` are
+    // deliberately NOT seeded: GNU defines both in `frameset.el` with the
+    // filter alists that file's own save/restore walks, and `defvar` only
+    // assigns to a *void* symbol -- a nil seed would permanently reduce them to
+    // whatever `add-hook`-style entries arrived later, which is not what
+    // GNU's `frameset` sees.
 }
 
 #[cfg(test)]
