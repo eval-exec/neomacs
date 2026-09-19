@@ -2569,7 +2569,7 @@ fn primary_image_catalog_lookup_returns_pending_without_waiting_for_render_threa
         #[cfg(feature = "neo-term")]
         terminal_state: super::TerminalHostState::new(new_shared_terminals()),
     };
-    let repo_root = Path::new(env!("CARGO_WORKSPACE_DIR"));
+    let repo_root = neomacs_infra::workspace_root();
     let image_path = repo_root.join("test/data/image/blank-100x200.png");
     let request = ImageResolveRequest {
         spec: test_image_spec_identity(image_path.to_str().expect("utf8 path")),
@@ -5754,7 +5754,7 @@ fn gnu_startup_processes_load_option_from_forwarded_args() {
     let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"])
         .expect("cached bootstrap evaluator");
     let frame_id = bootstrap_runtime_gui_frame(&mut eval);
-    let repo_root = Path::new(env!("CARGO_WORKSPACE_DIR"));
+    let repo_root = neomacs_infra::workspace_root();
     let face_test = repo_root.join("test/neomacs/neomacs-face-test.el");
     let startup = gui_startup_with_args(&[
         "-Q",
@@ -5789,7 +5789,7 @@ fn recursive_edit_processes_load_option_from_forwarded_args_before_first_input()
     let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"])
         .expect("cached bootstrap evaluator");
     let frame_id = bootstrap_runtime_gui_frame(&mut eval);
-    let repo_root = Path::new(env!("CARGO_WORKSPACE_DIR"));
+    let repo_root = neomacs_infra::workspace_root();
     let face_test = repo_root.join("test/neomacs/neomacs-face-test.el");
     let startup = gui_startup_with_args(&[
         "-Q",

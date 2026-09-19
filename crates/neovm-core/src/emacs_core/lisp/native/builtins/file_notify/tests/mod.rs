@@ -3,7 +3,8 @@ use super::*;
 use crate::emacs_core::intern::intern;
 
 fn workspace_temp_dir() -> tempfile::TempDir {
-    let parent = std::path::Path::new(env!("CARGO_WORKSPACE_DIR"))
+    let parent = crate::test_utils::workspace_root()
+        .as_path()
         .join("target")
         .join("neovm-core-file-notify-tests");
     std::fs::create_dir_all(&parent).expect("create workspace test directory");

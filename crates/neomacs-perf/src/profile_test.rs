@@ -61,7 +61,7 @@ fn captured_profile_artifact_links_raw_data_report_and_scenario_run_without_timi
 fn edit_loop_gate_forwards_only_acknowledged_enable_disable_sequence() {
     let scratch = tempfile::Builder::new()
         .prefix("neomacs-perf-gate-sequence-")
-        .tempdir_in(PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("tmp"))
+        .tempdir_in(crate::workspace_root().join("tmp"))
         .expect("create workspace-local profile gate directory");
     let mut gate =
         ProfileGate::start(scratch.path(), Duration::from_secs(2)).expect("start profile gate");
@@ -119,7 +119,7 @@ fn edit_loop_gate_forwards_only_acknowledged_enable_disable_sequence() {
 fn edit_loop_gate_rejects_a_command_after_disable() {
     let scratch = tempfile::Builder::new()
         .prefix("neomacs-perf-gate-after-disable-")
-        .tempdir_in(PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("tmp"))
+        .tempdir_in(crate::workspace_root().join("tmp"))
         .expect("create workspace-local profile gate directory");
     let mut gate =
         ProfileGate::start(scratch.path(), Duration::from_secs(2)).expect("start profile gate");
@@ -177,7 +177,7 @@ fn edit_loop_gate_rejects_a_command_after_disable() {
 fn edit_loop_gate_rejects_disable_before_enable() {
     let scratch = tempfile::Builder::new()
         .prefix("neomacs-perf-gate-order-")
-        .tempdir_in(PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("tmp"))
+        .tempdir_in(crate::workspace_root().join("tmp"))
         .expect("create workspace-local profile gate directory");
     let mut gate =
         ProfileGate::start(scratch.path(), Duration::from_secs(2)).expect("start profile gate");
@@ -207,7 +207,7 @@ fn edit_loop_gate_rejects_malformed_and_incomplete_commands() {
     ] {
         let scratch = tempfile::Builder::new()
             .prefix("neomacs-perf-gate-malformed-")
-            .tempdir_in(PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("tmp"))
+            .tempdir_in(crate::workspace_root().join("tmp"))
             .expect("create workspace-local profile gate directory");
         let mut gate =
             ProfileGate::start(scratch.path(), Duration::from_secs(2)).expect("start profile gate");
@@ -234,7 +234,7 @@ fn edit_loop_gate_rejects_malformed_and_incomplete_commands() {
 fn edit_loop_gate_rejects_missing_perf_acknowledgement() {
     let scratch = tempfile::Builder::new()
         .prefix("neomacs-perf-gate-missing-ack-")
-        .tempdir_in(PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("tmp"))
+        .tempdir_in(crate::workspace_root().join("tmp"))
         .expect("create workspace-local profile gate directory");
     let mut gate =
         ProfileGate::start(scratch.path(), Duration::from_millis(150)).expect("start profile gate");
@@ -258,7 +258,7 @@ fn edit_loop_gate_rejects_missing_perf_acknowledgement() {
 fn edit_loop_gate_rejects_disconnect_before_disable() {
     let scratch = tempfile::Builder::new()
         .prefix("neomacs-perf-gate-incomplete-sequence-")
-        .tempdir_in(PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("tmp"))
+        .tempdir_in(crate::workspace_root().join("tmp"))
         .expect("create workspace-local profile gate directory");
     let mut gate =
         ProfileGate::start(scratch.path(), Duration::from_secs(2)).expect("start profile gate");
@@ -301,7 +301,7 @@ fn edit_loop_gate_rejects_disconnect_before_disable() {
 fn malformed_perf_data_is_rejected_by_the_binary_parser() {
     let scratch = tempfile::Builder::new()
         .prefix("neomacs-perf-malformed-data-")
-        .tempdir_in(PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("tmp"))
+        .tempdir_in(crate::workspace_root().join("tmp"))
         .expect("create workspace-local profile scratch directory");
     let perf_data = scratch.path().join("perf.data");
     fs::write(&perf_data, b"not perf data").expect("write malformed profile");
@@ -312,7 +312,7 @@ fn malformed_perf_data_is_rejected_by_the_binary_parser() {
 
 #[test]
 fn unavailable_profile_target_persists_a_rejected_diagnostic_artifact() {
-    let workspace_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let workspace_root = crate::workspace_root();
     let scratch = tempfile::Builder::new()
         .prefix("neomacs-perf-profile-rejection-")
         .tempdir_in(workspace_root.join("tmp"))
@@ -414,7 +414,7 @@ fn native_perf_support_is_compile_time_gated_to_linux() {
 fn batch_capture_distinguishes_edit_loop_from_whole_process_scope() {
     let scratch = tempfile::Builder::new()
         .prefix("neomacs-perf-batch-profile-command-")
-        .tempdir_in(PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("tmp"))
+        .tempdir_in(crate::workspace_root().join("tmp"))
         .expect("create workspace-local profile command directory");
     let mut edit_loop = PerfCapture::new(
         scratch.path(),
@@ -481,7 +481,7 @@ fn batch_capture_distinguishes_edit_loop_from_whole_process_scope() {
 fn gui_capture_profiles_only_the_app_via_the_frontend_hook() {
     let scratch = tempfile::Builder::new()
         .prefix("neomacs-perf-gui-profile-command-")
-        .tempdir_in(PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("tmp"))
+        .tempdir_in(crate::workspace_root().join("tmp"))
         .expect("create workspace-local profile scratch directory");
     let mut capture = PerfCapture::new(
         scratch.path(),
@@ -524,7 +524,7 @@ fn gui_capture_profiles_only_the_app_via_the_frontend_hook() {
 fn tui_capture_profiles_only_the_app_inside_the_private_pty() {
     let scratch = tempfile::Builder::new()
         .prefix("neomacs-perf-tui-profile-command-")
-        .tempdir_in(PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("tmp"))
+        .tempdir_in(crate::workspace_root().join("tmp"))
         .expect("create workspace-local profile scratch directory");
     let mut capture = PerfCapture::new(
         scratch.path(),

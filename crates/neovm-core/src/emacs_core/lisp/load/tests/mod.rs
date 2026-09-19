@@ -129,7 +129,7 @@ fn isolated_runtime_bootstrap_eval() -> Context {
 }
 
 fn bootstrap_lisp_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("lisp")
+    crate::test_utils::workspace_root().join("lisp")
 }
 
 fn source_bootstrap_path(rel: &str) -> PathBuf {
@@ -1046,7 +1046,7 @@ fn gnu_subr_x_string_chop_newline_loads_without_rust_builtin() {
     //   `subr-x.el`, not from a Rust builtin.
     let mut eval = Context::new();
     crate::test_utils::load_minimal_gnu_help_runtime(&mut eval);
-    let project_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = crate::test_utils::workspace_root();
     let lisp_dir = project_root.join("lisp");
     eval.set_variable(
         "load-path",
@@ -1116,7 +1116,7 @@ fn load_bindings_source_survives_gc_stress_after_custom_runtime() {
     let mut eval = Context::new();
     crate::test_utils::load_minimal_gnu_help_runtime(&mut eval);
 
-    let project_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = crate::test_utils::workspace_root();
     let lisp_dir = project_root.join("lisp");
     eval.set_variable(
         "load-path",
@@ -1258,7 +1258,7 @@ fn gnu_subr_el_defines_wholenump_without_rust_shim() {
 #[test]
 fn load_subr_survives_exact_post_form_gc_after_byte_run() {
     crate::test_utils::init_test_tracing();
-    let project_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = crate::test_utils::workspace_root();
     let lisp_dir = project_root.join("lisp");
     let mut eval = Context::new();
 
@@ -2010,7 +2010,7 @@ fn format_eval_error(eval: &Context, err: &EvalError) -> String {
 fn partial_bootstrap_eval_until(stop_before: &str, prefer_compiled: bool) -> Context {
     crate::test_utils::init_test_tracing();
 
-    let project_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = crate::test_utils::workspace_root();
     let lisp_dir = project_root.join("lisp");
     assert!(
         lisp_dir.is_dir(),
@@ -2109,7 +2109,7 @@ fn partial_bootstrap_eval_until(stop_before: &str, prefer_compiled: bool) -> Con
 fn build_pre_macroexp_reload_eval() -> Context {
     crate::test_utils::init_test_tracing();
 
-    let project_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = crate::test_utils::workspace_root();
     let lisp_dir = project_root.join("lisp");
     assert!(
         lisp_dir.is_dir(),
@@ -4719,7 +4719,7 @@ fn bootstrap_runtime_find_file_handles_multibyte_markdown_like_gnu() {
     let mut eval = create_bootstrap_evaluator_cached().expect("bootstrap");
     apply_runtime_startup_state(&mut eval).expect("runtime startup state");
 
-    let project_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = crate::test_utils::workspace_root();
     let target = project_root.join("docs/rust-display-engine.md");
     let target_str = target.to_string_lossy();
 
@@ -7406,7 +7406,7 @@ fn bootstrap_neomacs_cursor_blink_setup_keeps_lisp_timers_stopped() {
 #[test]
 fn loadup_source_preloads_mouse_help_fixup_runtime_surface() {
     crate::test_utils::init_test_tracing();
-    let project_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = crate::test_utils::workspace_root();
     let loadup = project_root.join("lisp/loadup.el");
     let source = fs::read_to_string(&loadup).expect("read loadup.el");
 
@@ -7437,7 +7437,7 @@ fn neo_win_source_requires_easy_mmode_before_minor_mode_definitions() {
 #[test]
 fn bootstrap_help_fns_loads_and_preserves_hook_depth_metadata() {
     crate::test_utils::init_test_tracing();
-    let project_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = crate::test_utils::workspace_root();
     let help_fns = project_root.join("lisp/help-fns.el");
 
     let rendered = fresh_bootstrap_eval_with_loaded_file(
@@ -7460,7 +7460,7 @@ fn bootstrap_help_fns_loads_and_preserves_hook_depth_metadata() {
 #[test]
 fn bootstrap_help_fns_describe_function_writes_help_buffer() {
     crate::test_utils::init_test_tracing();
-    let project_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = crate::test_utils::workspace_root();
     let help_fns = project_root.join("lisp/help-fns.el");
 
     let rendered = fresh_bootstrap_eval_with_loaded_file(
@@ -7481,7 +7481,7 @@ fn bootstrap_help_fns_describe_function_writes_help_buffer() {
 #[test]
 fn bootstrap_help_fns_describe_variable_writes_help_buffer() {
     crate::test_utils::init_test_tracing();
-    let project_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = crate::test_utils::workspace_root();
     let help_fns = project_root.join("lisp/help-fns.el");
 
     let rendered = fresh_bootstrap_eval_with_loaded_file(
@@ -8483,7 +8483,7 @@ fn runtime_startup_state_preserves_gui_frame_metrics() {
 #[test]
 fn bootstrap_misc_upcase_char_preserves_point_and_uppercases_region() {
     crate::test_utils::init_test_tracing();
-    let project_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = crate::test_utils::workspace_root();
     let misc = project_root.join("lisp/misc.el");
 
     let rendered = fresh_bootstrap_eval_with_loaded_file(
@@ -8649,7 +8649,7 @@ fn profile_single_bootstrap_file_load() {
     let prefer_compiled =
         std::env::var("NEOVM_PROFILE_BOOTSTRAP_PREFER_COMPILED").as_deref() == Ok("1");
 
-    let project_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = crate::test_utils::workspace_root();
     let lisp_dir = project_root.join("lisp");
 
     let mut eval = partial_bootstrap_eval_until(&stop_before, prefer_compiled);
@@ -9990,7 +9990,7 @@ fn ensure_startup_compat_variables_backfills_xfaces_bootstrap_state() {
         eval.obarray_mut().makunbound(name);
     }
 
-    let project_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = crate::test_utils::workspace_root();
     ensure_startup_compat_variables(&mut eval, &project_root);
 
     assert_eq!(
@@ -10831,8 +10831,12 @@ fn reader_accepts_utf8_emacs_extended_char_literals_from_ethiopic_source() {
 #[test]
 fn reader_accepts_utf8_emacs_extended_char_literals_in_full_ethiopic_source() {
     crate::test_utils::init_test_tracing();
-    let bytes = fs::read(Path::new(env!("CARGO_WORKSPACE_DIR")).join("lisp/language/ethiopic.el"))
-        .expect("read ethiopic source fixture");
+    let bytes = fs::read(
+        crate::test_utils::workspace_root()
+            .as_path()
+            .join("lisp/language/ethiopic.el"),
+    )
+    .expect("read ethiopic source fixture");
     let source =
         decode_emacs_utf8_source_lisp(&bytes, crate::emacs_core::coding::EolConversion::Enabled);
 
@@ -10848,8 +10852,12 @@ fn reader_accepts_utf8_emacs_extended_char_literals_in_full_ethiopic_source() {
 #[test]
 fn lisp_source_reader_accepts_utf8_emacs_extended_char_literals_in_full_ethiopic_source() {
     crate::test_utils::init_test_tracing();
-    let bytes = fs::read(Path::new(env!("CARGO_WORKSPACE_DIR")).join("lisp/language/ethiopic.el"))
-        .expect("read ethiopic source fixture");
+    let bytes = fs::read(
+        crate::test_utils::workspace_root()
+            .as_path()
+            .join("lisp/language/ethiopic.el"),
+    )
+    .expect("read ethiopic source fixture");
     let text =
         decode_emacs_utf8_source_lisp(&bytes, crate::emacs_core::coding::EolConversion::Enabled);
     let source = crate::emacs_core::value_reader::LispReadSource::new(&text);
@@ -13142,7 +13150,7 @@ fn direct_setq_funcall_updates_variable_place() {
 #[test]
 fn pdump_roundtrip_preserves_advice_remove_member_lifecycle() {
     crate::test_utils::init_test_tracing();
-    let project_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = crate::test_utils::workspace_root();
 
     let mut eval = create_bootstrap_evaluator().expect("bootstrap evaluator");
     ensure_startup_compat_variables(&mut eval, &project_root);
@@ -13238,7 +13246,7 @@ fn pdump_roundtrip_preserves_advice_remove_member_lifecycle() {
 #[test]
 fn pdump_roundtrip_evaluates_full_advice_remove_member_form() {
     crate::test_utils::init_test_tracing();
-    let project_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = crate::test_utils::workspace_root();
 
     let mut eval = create_bootstrap_evaluator().expect("bootstrap evaluator");
     ensure_startup_compat_variables(&mut eval, &project_root);
@@ -13943,7 +13951,7 @@ fn runtime_add_function_on_process_sentinel_place() {
 #[test]
 fn bootstrap_cl_extra_source_vs_compiled_cl_subseq_setf() {
     crate::test_utils::init_test_tracing();
-    let project_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = crate::test_utils::workspace_root();
     let cl_extra_base = project_root.join("lisp/emacs-lisp/cl-extra");
     let source_path = source_suffixed_path(&cl_extra_base);
     let compiled_path = compiled_suffixed_path(&cl_extra_base);
@@ -13967,7 +13975,7 @@ fn bootstrap_cl_extra_source_vs_compiled_cl_subseq_setf() {
 #[test]
 fn bootstrap_cl_extra_gv_expander_matches_gnu_source_and_compiled_surfaces() {
     crate::test_utils::init_test_tracing();
-    let project_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = crate::test_utils::workspace_root();
     let cl_extra_base = project_root.join("lisp/emacs-lisp/cl-extra");
     let source_path = source_suffixed_path(&cl_extra_base);
     let compiled_path = compiled_suffixed_path(&cl_extra_base);
@@ -14094,7 +14102,7 @@ fn macroexpand_all_pcase_terminates() {
         return;
     }
     crate::test_utils::init_test_tracing();
-    let project_root = std::path::PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = crate::test_utils::workspace_root();
     let lisp_dir = project_root.join("lisp");
     assert!(lisp_dir.is_dir());
     let mut eval = crate::emacs_core::eval::Context::new();
@@ -14184,7 +14192,7 @@ fn macroexpand_all_pcase_terminates() {
 #[test]
 fn macroexp_eager_reload_preserves_symbol_identity() {
     crate::test_utils::init_test_tracing();
-    let project_root = std::path::PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = crate::test_utils::workspace_root();
     let lisp_dir = project_root.join("lisp");
     assert!(lisp_dir.is_dir());
 
@@ -14330,7 +14338,7 @@ fn eager_expand_toplevel_forms_keeps_recursive_progn_forms_alive_under_exact_gc(
 #[test]
 fn function_get_only_exposes_cxxr_compiler_macro_on_cxxr_symbols() {
     crate::test_utils::init_test_tracing();
-    let project_root = std::path::PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = crate::test_utils::workspace_root();
     let lisp_dir = project_root.join("lisp");
     assert!(lisp_dir.is_dir());
 
@@ -14377,7 +14385,7 @@ fn function_get_only_exposes_cxxr_compiler_macro_on_cxxr_symbols() {
 #[test]
 fn pcase_integer_literal_pattern() {
     crate::test_utils::init_test_tracing();
-    let project_root = std::path::PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = crate::test_utils::workspace_root();
     let lisp_dir = project_root.join("lisp");
     assert!(lisp_dir.is_dir());
     let mut eval = crate::emacs_core::eval::Context::new();
@@ -14519,7 +14527,7 @@ fn pcase_integer_literal_pattern() {
 fn key_parse_modifier_bits() {
     crate::test_utils::init_test_tracing();
 
-    let project_root = std::path::PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = crate::test_utils::workspace_root();
     let lisp_dir = project_root.join("lisp");
     if !lisp_dir.is_dir() {
         tracing::info!("skipping key_parse_modifier_bits: no lisp/ directory");

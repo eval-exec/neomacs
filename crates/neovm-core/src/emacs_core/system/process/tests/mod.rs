@@ -330,7 +330,7 @@ fn tmp_file(label: &str) -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("time should be monotonic")
         .as_nanos();
-    let root = Path::new(env!("CARGO_WORKSPACE_DIR")).join("tmp");
+    let root = crate::test_utils::workspace_root().as_path().join("tmp");
     std::fs::create_dir_all(&root).expect("create workspace temp root");
     root.join(format!("neovm-{label}-{}-{nonce}.txt", std::process::id()))
         .to_string_lossy()
@@ -342,7 +342,8 @@ fn tmp_dir(label: &str) -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("time should be monotonic")
         .as_nanos();
-    let dir = Path::new(env!("CARGO_WORKSPACE_DIR"))
+    let dir = crate::test_utils::workspace_root()
+        .as_path()
         .join("tmp")
         .join(format!("neovm-{label}-{}-{nonce}", std::process::id()))
         .to_string_lossy()
@@ -13815,7 +13816,9 @@ fn a_child_that_exited_with_nobody_waiting_is_still_run_here_and_exit_in_gnu() {
     let sh = find_bin("sh");
     // Under the repo's own `target/`, never /tmp (this project's
     // standing rule), and named per pin so two tests cannot collide.
-    let marker_dir = std::path::Path::new(env!("CARGO_WORKSPACE_DIR")).join("target/pw193");
+    let marker_dir = crate::test_utils::workspace_root()
+        .as_path()
+        .join("target/pw193");
     std::fs::create_dir_all(&marker_dir).expect("marker dir");
     let marker = marker_dir
         .join("pw193dead.marker")
@@ -13915,7 +13918,9 @@ fn an_exited_child_is_a_zombie_here_and_reaped_in_gnu() {
     let sh = find_bin("sh");
     // Under the repo's own `target/`, never /tmp (this project's
     // standing rule), and named per pin so two tests cannot collide.
-    let marker_dir = std::path::Path::new(env!("CARGO_WORKSPACE_DIR")).join("target/pw193");
+    let marker_dir = crate::test_utils::workspace_root()
+        .as_path()
+        .join("target/pw193");
     std::fs::create_dir_all(&marker_dir).expect("marker dir");
     let marker = marker_dir
         .join("pw193reap.marker")
@@ -14706,7 +14711,9 @@ fn the_child_status_record_is_the_waits_work_and_maybe_quit_never_does_it() {
 fn delete_process_discards_a_status_recorded_before_it_like_gnu() {
     crate::test_utils::init_test_tracing();
     let sh = find_bin("sh");
-    let marker_dir = std::path::Path::new(env!("CARGO_WORKSPACE_DIR")).join("target/pw193");
+    let marker_dir = crate::test_utils::workspace_root()
+        .as_path()
+        .join("target/pw193");
     std::fs::create_dir_all(&marker_dir).expect("marker dir");
     let marker = marker_dir
         .join("pw193delete.marker")
@@ -15288,7 +15295,9 @@ fn the_pinned_rows_hold_on_a_build_with_no_sigchld_handler_at_all() {
     crate::emacs_core::os_signal::install();
 
     let sh = find_bin("sh");
-    let marker_dir = std::path::Path::new(env!("CARGO_WORKSPACE_DIR")).join("target/pw200");
+    let marker_dir = crate::test_utils::workspace_root()
+        .as_path()
+        .join("target/pw200");
     std::fs::create_dir_all(&marker_dir).expect("marker dir");
 
     let probe = |tag: &str| {

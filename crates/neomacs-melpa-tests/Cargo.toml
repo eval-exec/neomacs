@@ -25,6 +25,7 @@ libc.workspace = true
 windows-sys = { workspace = true, features = ["Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects"] }
 
 [dev-dependencies]
+neomacs-infra.workspace = true
 expect-test.workspace = true
 neomacs-melpa-test-support = { workspace = true, features = ["tui"] }
 

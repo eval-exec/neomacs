@@ -56,7 +56,7 @@ use generated_lisp::{AWK_GENERATED_UNICODE_LISP, AwkGeneratedLisp, GeneratedLisp
 use std::path::{Path, PathBuf};
 
 fn project_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_WORKSPACE_DIR"))
+    crate::test_utils::workspace_root()
 }
 
 /// This checkout, read and written by the same recipes the build scripts run.

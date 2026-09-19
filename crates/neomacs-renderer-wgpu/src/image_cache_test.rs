@@ -433,7 +433,9 @@ fn explicit_lisp_background_paints_the_svg_wrapper_background() {
 
 #[test]
 fn symbolic_widget_svg_uses_the_resolved_face_foreground() {
-    let path = std::path::Path::new(env!("CARGO_WORKSPACE_DIR")).join("etc/images/down.svg");
+    let path = neomacs_infra::workspace_root()
+        .as_path()
+        .join("etc/images/down.svg");
     let data = std::fs::read(&path)
         .unwrap_or_else(|error| panic!("read symbolic widget SVG at {}: {error}", path.display()));
 
@@ -931,7 +933,7 @@ fn svg_does_not_load_images_relative_to_the_process_working_directory() {
 
 #[test]
 fn svg_explicit_base_uri_resolves_a_relative_raster() {
-    let repository_root = Path::new(env!("CARGO_WORKSPACE_DIR"));
+    let repository_root = neomacs_infra::workspace_root();
     let base_uri = repository_root.join("telega-avatar.svg");
     let data = br#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4">
         <image href="assets/logo-128.png" width="4" height="4"/>
@@ -955,7 +957,7 @@ fn svg_explicit_base_uri_resolves_a_relative_raster() {
 
 #[test]
 fn svg_base_uri_cannot_authorize_parent_directory_escape() {
-    let repository_root = Path::new(env!("CARGO_WORKSPACE_DIR"));
+    let repository_root = neomacs_infra::workspace_root();
     let base_uri = repository_root
         .join("crates")
         .join("neomacs-renderer-wgpu")
@@ -1235,7 +1237,9 @@ fn hidpi_svg_decode_metadata_stays_logical_while_texture_pixels_are_physical() {
 /// Real `etc/images/splash.svg` is 333×233 — the asset behind HiDPI #243.
 #[test]
 fn splash_svg_native_extent_is_333_by_233() {
-    let path = std::path::Path::new(env!("CARGO_WORKSPACE_DIR")).join("etc/images/splash.svg");
+    let path = neomacs_infra::workspace_root()
+        .as_path()
+        .join("etc/images/splash.svg");
     let data = std::fs::read(&path).unwrap_or_else(|err| {
         panic!("read splash.svg at {}: {err}", path.display());
     });
@@ -1262,7 +1266,9 @@ fn splash_svg_native_extent_is_333_by_233() {
 /// recovers GNU Fimage_size (333×233) via report_scale.
 #[test]
 fn splash_svg_scale_default_hidpi_preserves_gnu_image_pixel_extent() {
-    let path = std::path::Path::new(env!("CARGO_WORKSPACE_DIR")).join("etc/images/splash.svg");
+    let path = neomacs_infra::workspace_root()
+        .as_path()
+        .join("etc/images/splash.svg");
     let data = std::fs::read(&path).expect("splash.svg");
     // layout_scale = 1/1.25, report_scale = 1.25 (ImageScalePolicy::Default).
     let realization = ImageRealization::new(1.0 / 1.25, 1.25, 1.25);

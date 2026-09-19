@@ -6,7 +6,8 @@ use std::path::Path;
 use std::path::PathBuf;
 
 fn workspace_temp_dir() -> tempfile::TempDir {
-    let parent = Path::new(env!("CARGO_WORKSPACE_DIR"))
+    let parent = crate::test_utils::workspace_root()
+        .as_path()
         .join("target")
         .join("neovm-core-file-notify-tests");
     std::fs::create_dir_all(&parent).expect("create workspace test directory");

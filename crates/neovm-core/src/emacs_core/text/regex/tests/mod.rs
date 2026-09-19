@@ -2967,7 +2967,10 @@ const REGEX_BENCH_FONTLOCK_PATTERNS: &[(&str, &str)] = &[
 
 /// First ~256 KiB of `lisp/subr.el`, cut at a char boundary.
 fn regex_bench_haystack() -> String {
-    let path = concat!(env!("CARGO_WORKSPACE_DIR"), "/lisp/subr.el");
+    let path = crate::test_utils::workspace_root()
+        .join("lisp/subr.el")
+        .to_string_lossy()
+        .into_owned();
     let text = std::fs::read_to_string(path).expect("read lisp/subr.el haystack");
     let mut end = text.len().min(256 * 1024);
     while !text.is_char_boundary(end) {

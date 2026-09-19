@@ -50,7 +50,7 @@ pub fn oracle_emacs_path() -> String {
     if let Ok(path) = std::env::var("NEOVM_FORCE_ORACLE_PATH") {
         return path;
     }
-    let mut dir = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let mut dir = neomacs_infra::workspace_root();
     for _ in 0..4 {
         let candidate = dir.join("emacs-mirror/emacs/src/emacs");
         if candidate.exists() {

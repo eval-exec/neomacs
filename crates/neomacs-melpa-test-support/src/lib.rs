@@ -56,7 +56,7 @@ pub fn workspace_root() -> PathBuf {
     if let Some(root) = std::env::var_os("NEXTEST_WORKSPACE_ROOT") {
         return PathBuf::from(root);
     }
-    Path::new(env!("CARGO_WORKSPACE_DIR")).to_path_buf()
+    PathBuf::from(env!("CARGO_WORKSPACE_DIR"))
 }
 
 /// Per-scenario filesystem and subprocess isolation.

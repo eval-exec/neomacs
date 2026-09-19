@@ -65,6 +65,7 @@ parking_lot = { workspace = true, optional = true }
 portable-pty = { workspace = true, optional = true }
 
 [dev-dependencies]
+neomacs-infra.workspace = true
 tempfile.workspace = true
 
 [features]

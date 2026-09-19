@@ -60,6 +60,15 @@ pub use suite::{
     SuiteScenario, SuiteScenarioResult, SuiteVerdict,
 };
 
+/// The workspace root of the machine running this code: nextest's runtime
+/// `NEXTEST_WORKSPACE_ROOT` when present, the baked compile-time constant
+/// otherwise (see neomacs-infra::workspace_root).
+pub fn workspace_root() -> std::path::PathBuf {
+    std::env::var_os("NEXTEST_WORKSPACE_ROOT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(env!("CARGO_WORKSPACE_DIR")))
+}
+
 #[cfg(test)]
 mod architecture_test;
 #[cfg(test)]

@@ -39,6 +39,7 @@ neomacs-layout-engine.workspace = true
 neomacs-video = { workspace = true, optional = true }
 
 [dev-dependencies]
+neomacs-infra.workspace = true
 neomacs-test-fonts.workspace = true
 tracing-test.workspace = true
 

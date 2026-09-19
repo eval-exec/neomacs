@@ -514,9 +514,8 @@ fn raw_context_does_not_prebind_replace_rectangle_alias() {
 #[test]
 fn gnu_ldefs_boot_defines_replace_rectangle_alias() {
     crate::test_utils::init_test_tracing();
-    let source =
-        fs::read_to_string(PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("lisp/ldefs-boot.el"))
-            .expect("read ldefs-boot");
+    let source = fs::read_to_string(crate::test_utils::workspace_root().join("lisp/ldefs-boot.el"))
+        .expect("read ldefs-boot");
     assert!(
         source.contains(
             "(define-obsolete-function-alias 'replace-rectangle #'string-rectangle \"29.1\")",

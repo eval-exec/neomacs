@@ -4,6 +4,14 @@
 //! the verified files below the workspace's `./tmp` directory so no binary
 //! fixtures need to be committed.
 
+/// Runtime workspace root: nextest's NEXTEST_WORKSPACE_ROOT when present,
+/// the compile-time constant otherwise (see neomacs-infra).
+pub fn workspace_root() -> std::path::PathBuf {
+    std::env::var_os("NEXTEST_WORKSPACE_ROOT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(env!("CARGO_WORKSPACE_DIR")))
+}
+
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
@@ -228,10 +236,6 @@ fn prepare_spleen_fixtures_locked(cache_root: &Path) -> Result<SpleenFixtures, F
     ensure_gzipped_pcf(&fixture_root)?;
 
     Ok(SpleenFixtures { root: fixture_root })
-}
-
-fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_WORKSPACE_DIR")).to_path_buf()
 }
 
 fn open_lock(path: &Path) -> Result<File, FixtureError> {

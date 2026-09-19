@@ -83,7 +83,7 @@ fn install_bare_elisp_shims(ev: &mut Context) {
 fn load_minimal_autoload_runtime(ev: &mut Context) {
     install_bare_elisp_shims(ev);
 
-    let project_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = crate::test_utils::workspace_root();
 
     let subr_source =
         fs::read_to_string(project_root.join("lisp/subr.el")).expect("read GNU subr.el");

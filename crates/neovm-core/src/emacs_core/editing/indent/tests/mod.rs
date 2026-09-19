@@ -65,7 +65,7 @@ fn install_bare_elisp_shims(ev: &mut Context) {
 }
 
 fn gnu_simple_indent_eval() -> Context {
-    let project_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = crate::test_utils::workspace_root();
     let simple_path = project_root.join("lisp/simple.el");
     let simple_source = fs::read_to_string(&simple_path).expect("read GNU simple.el");
 
@@ -77,7 +77,7 @@ fn gnu_simple_indent_eval() -> Context {
 }
 
 fn gnu_indent_el_eval() -> Context {
-    let project_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = crate::test_utils::workspace_root();
     let indent_path = project_root.join("lisp/indent.el");
     let indent_source = fs::read_to_string(&indent_path).expect("read GNU indent.el");
     let simple_path = project_root.join("lisp/simple.el");

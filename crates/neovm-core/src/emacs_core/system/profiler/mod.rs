@@ -852,7 +852,8 @@ mod tests {
     #[test]
     fn profiler_el_public_memory_workflow_builds_and_renders_a_report() {
         let mut ctx = crate::emacs_core::load::create_bootstrap_evaluator_cached().unwrap();
-        let lisp_root = std::path::Path::new(env!("CARGO_WORKSPACE_DIR"))
+        let lisp_root = crate::test_utils::workspace_root()
+            .as_path()
             .join("lisp")
             .canonicalize()
             .unwrap();

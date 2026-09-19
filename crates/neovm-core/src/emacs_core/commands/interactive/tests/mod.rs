@@ -168,7 +168,7 @@ fn install_bare_elisp_shims(ev: &mut Context) {
 }
 
 fn gnu_subr_keymap_eval_all(src: &str) -> Vec<String> {
-    let project_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = crate::test_utils::workspace_root();
     let subr_path = project_root.join("lisp/subr.el");
     let subr_source = fs::read_to_string(&subr_path).expect("read GNU subr.el");
 
@@ -195,7 +195,7 @@ fn gnu_subr_keymap_eval_all(src: &str) -> Vec<String> {
 }
 
 fn gnu_simple_command_execute_eval() -> Context {
-    let project_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = crate::test_utils::workspace_root();
     let simple_path = project_root.join("lisp/simple.el");
     let simple_source = fs::read_to_string(&simple_path).expect("read GNU simple.el");
     let subr_path = project_root.join("lisp/subr.el");
@@ -276,7 +276,7 @@ fn gnu_simple_command_execute_eval_all(src: &str) -> Vec<String> {
 }
 
 fn gnu_simple_execute_extended_command_eval() -> Context {
-    let project_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = crate::test_utils::workspace_root();
     let simple_path = project_root.join("lisp/simple.el");
     let simple_source = fs::read_to_string(&simple_path).expect("read GNU simple.el");
 
@@ -302,7 +302,7 @@ fn gnu_simple_execute_extended_command_eval() -> Context {
 }
 
 fn gnu_files_command_eval() -> Context {
-    let project_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = crate::test_utils::workspace_root();
     let files_path = project_root.join("lisp/files.el");
     let files_source = fs::read_to_string(&files_path).expect("read GNU files.el");
 
@@ -328,7 +328,7 @@ fn gnu_simple_execute_extended_command_eval_all(src: &str) -> Vec<String> {
 }
 
 fn load_gnu_eval_expression_into(ev: &mut Context) {
-    let project_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = crate::test_utils::workspace_root();
     let simple_path = project_root.join("lisp/simple.el");
     let simple_source = fs::read_to_string(&simple_path).expect("read GNU simple.el");
 
@@ -370,7 +370,7 @@ fn gnu_simple_command_execute_with_eval_expression_eval() -> Context {
 }
 
 fn gnu_simple_universal_argument_eval_all(src: &str) -> Vec<String> {
-    let project_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = crate::test_utils::workspace_root();
     let simple_path = project_root.join("lisp/simple.el");
     let simple_source = fs::read_to_string(&simple_path).expect("read GNU simple.el");
 
@@ -387,7 +387,7 @@ fn gnu_simple_universal_argument_eval_all(src: &str) -> Vec<String> {
 }
 
 fn gnu_simple_quoted_insert_eval_all(src: &str) -> Vec<String> {
-    let project_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = crate::test_utils::workspace_root();
     let simple_path = project_root.join("lisp/simple.el");
     let simple_source = fs::read_to_string(&simple_path).expect("read GNU simple.el");
 
@@ -1329,7 +1329,7 @@ fn ldefs_boot_aliases_name_last_kbd_macro_to_kmacro_name_last_macro() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();
     let ldefs_source =
-        fs::read_to_string(PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("lisp/ldefs-boot.el"))
+        fs::read_to_string(crate::test_utils::workspace_root().join("lisp/ldefs-boot.el"))
             .expect("read ldefs-boot.el");
     eval_first_form_after_marker(
         &mut ev,

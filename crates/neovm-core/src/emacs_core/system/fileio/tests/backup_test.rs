@@ -1,7 +1,8 @@
 use super::*;
 
 fn workspace_temp_dir() -> tempfile::TempDir {
-    let parent = std::path::Path::new(env!("CARGO_WORKSPACE_DIR"))
+    let parent = crate::test_utils::workspace_root()
+        .as_path()
         .join("target")
         .join("neovm-core-fileio-tests");
     std::fs::create_dir_all(&parent).expect("create workspace test directory");
@@ -13,7 +14,7 @@ fn workspace_temp_dir() -> tempfile::TempDir {
 
 fn context_with_gnu_files() -> Context {
     let mut eval = Context::new();
-    let lisp = std::path::Path::new(env!("CARGO_WORKSPACE_DIR")).join("lisp");
+    let lisp = crate::test_utils::workspace_root().as_path().join("lisp");
     eval.set_lexical_binding(true);
     eval.set_variable(
         "load-path",

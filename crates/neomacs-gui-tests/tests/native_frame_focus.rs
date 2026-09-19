@@ -29,7 +29,7 @@ fn native_x11_focus_routes_typing_to_the_focused_frame() {
         }
         Some(other) => panic!("unsupported NEOMACS_GUI_TEST_BACKEND={other:?}"),
     }
-    let root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let root = neomacs_infra::workspace_root();
     let artifacts = root.join(format!(
         "target/neomacs-gui-tests/native-frame-focus-{}",
         std::process::id()

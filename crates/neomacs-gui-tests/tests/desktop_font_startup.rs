@@ -199,7 +199,7 @@ fn check_fixture_with_font(
     desktop: WestonDesktop,
     font: Option<&str>,
 ) -> GuiRunResult {
-    let root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let root = neomacs_infra::workspace_root();
     let artifacts = root.join("target/neomacs-gui-tests").join(scenario);
     let receipt = artifacts.join("presentation.sexp");
     match fs::remove_file(&receipt) {

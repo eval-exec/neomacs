@@ -1263,7 +1263,8 @@ fn test_builtin_copy_file_optional_arg_semantics() {
 #[test]
 fn copy_file_keep_time_preserves_source_modification_time() {
     crate::test_utils::init_test_tracing();
-    let parent = std::path::Path::new(env!("CARGO_WORKSPACE_DIR"))
+    let parent = crate::test_utils::workspace_root()
+        .as_path()
         .join("target")
         .join("neovm-core-fileio-tests");
     fs::create_dir_all(&parent).expect("create workspace test directory");

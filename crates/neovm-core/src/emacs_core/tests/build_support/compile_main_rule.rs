@@ -54,7 +54,7 @@ use compile_main_rule::{BytecodeCoverage, LispBytecodeCoverage};
 use std::path::PathBuf;
 
 fn project_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_WORKSPACE_DIR"))
+    crate::test_utils::workspace_root()
 }
 
 /// **The postcondition of GNU's `compile-main`, asserted over the real tree.**

@@ -46,7 +46,7 @@ pub fn oracle_enabled() -> bool {
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
 pub fn repo_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_WORKSPACE_DIR"))
+    workspace_root()
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
@@ -179,6 +179,15 @@ pub fn run_oracle_eval(form: &str) -> Result<String, String> {
 }
 
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+
+/// Runtime workspace root: nextest's NEXTEST_WORKSPACE_ROOT when present,
+/// the compile-time constant otherwise (see neovm-core test_utils).
+pub fn workspace_root() -> std::path::PathBuf {
+    std::env::var_os("NEXTEST_WORKSPACE_ROOT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(env!("CARGO_WORKSPACE_DIR")))
+}
+
 pub fn run_neovm_eval(form: &str) -> Result<String, String> {
     let mut eval = RUNTIME_TEMPLATE.with(|slot| {
         if slot.borrow().is_none() {

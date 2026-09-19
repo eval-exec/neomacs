@@ -45,7 +45,7 @@ fn suite_thresholds_distinguish_improvements_regressions_and_rejections() {
 
 #[test]
 fn history_rejects_an_unknown_suite_artifact_schema() {
-    let workspace_tmp = PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("tmp");
+    let workspace_tmp = crate::workspace_root().join("tmp");
     fs::create_dir_all(&workspace_tmp).expect("create workspace scratch root");
     let directory = tempfile::Builder::new()
         .prefix("neomacs-perf-suite-history-")

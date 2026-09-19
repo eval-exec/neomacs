@@ -357,8 +357,8 @@ fn gnutls_boot_parameters_reject_non_string_trust_file_entries() {
 
 #[test]
 fn rustls_root_store_adds_certificates_from_explicit_trust_files() {
-    let certificate = PathBuf::from(env!("CARGO_WORKSPACE_DIR"))
-        .join("test/lisp/net/network-stream-resources/cert.pem");
+    let certificate =
+        crate::test_utils::workspace_root().join("test/lisp/net/network-stream-resources/cert.pem");
     let default_roots = rustls_root_store(&TlsTrustRoots::Default).expect("default roots");
     let augmented_roots = rustls_root_store(&TlsTrustRoots::DefaultPlusFiles(vec![certificate]))
         .expect("explicit PEM root");

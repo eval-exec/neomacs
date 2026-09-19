@@ -1243,7 +1243,8 @@ fn run_key_from_map_key(key: Value) -> (i64, i64) {
 #[test]
 fn unicode_property_table_read_from_generated_uni_category_decodes_ascii() {
     crate::test_utils::init_test_tracing();
-    let path = std::path::Path::new(env!("CARGO_WORKSPACE_DIR"))
+    let path = crate::test_utils::workspace_root()
+        .as_path()
         .join("lisp/international/uni-category.el");
     let bytes = std::fs::read(&path).expect("read generated Unicode category table");
     let decoded = crate::emacs_core::load::decode_emacs_utf8(&bytes);
@@ -1271,8 +1272,9 @@ fn unicode_property_table_read_from_generated_uni_category_decodes_ascii() {
 #[test]
 fn unicode_property_table_read_from_generated_uni_bidi_maps_decoded_symbols() {
     crate::test_utils::init_test_tracing();
-    let path =
-        std::path::Path::new(env!("CARGO_WORKSPACE_DIR")).join("lisp/international/uni-bidi.el");
+    let path = crate::test_utils::workspace_root()
+        .as_path()
+        .join("lisp/international/uni-bidi.el");
     let bytes = std::fs::read(&path).expect("read generated Unicode bidi table");
     let decoded = crate::emacs_core::load::decode_emacs_utf8(&bytes);
     let forms = crate::emacs_core::value_reader::read_all_with_source_multibyte(

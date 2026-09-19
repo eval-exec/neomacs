@@ -23,7 +23,7 @@ fn neomacsclient_sends_gnu_server_request_over_local_socket() {
     use std::path::PathBuf;
     use std::thread;
 
-    let repo_tmp = PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("tmp");
+    let repo_tmp = neomacs_infra::workspace_root().join("tmp");
     fs::create_dir_all(&repo_tmp).expect("repo-local tmp dir");
     let dir = tempfile::Builder::new()
         .prefix("neomacsclient-cli-")
@@ -80,7 +80,7 @@ fn neomacsclient_parent_id_implies_a_new_graphical_frame() {
     use std::path::PathBuf;
     use std::thread;
 
-    let repo_tmp = PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("tmp");
+    let repo_tmp = neomacs_infra::workspace_root().join("tmp");
     fs::create_dir_all(&repo_tmp).expect("repo-local tmp dir");
     let dir = tempfile::Builder::new()
         .prefix("neomacsclient-parent-frame-")
@@ -129,7 +129,7 @@ fn neomacsclient_create_frame_requests_window_system_without_display_arg() {
     use std::path::PathBuf;
     use std::thread;
 
-    let repo_tmp = PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("tmp");
+    let repo_tmp = neomacs_infra::workspace_root().join("tmp");
     fs::create_dir_all(&repo_tmp).expect("repo-local tmp dir");
     let dir = tempfile::Builder::new()
         .prefix("neomacsclient-create-frame-")
@@ -192,7 +192,7 @@ fn neomacsclient_tty_identifies_its_terminal_to_the_server() {
     use std::process::Stdio;
     use std::thread;
 
-    let repo_tmp = PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("tmp");
+    let repo_tmp = neomacs_infra::workspace_root().join("tmp");
     fs::create_dir_all(&repo_tmp).expect("repo-local tmp dir");
     let dir = tempfile::Builder::new()
         .prefix("neomacsclient-tty-")
@@ -265,7 +265,7 @@ fn neomacsclient_tty_forwards_resize_to_the_server_process() {
     use std::thread;
     use std::time::{Duration, Instant};
 
-    let repo_tmp = PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("tmp");
+    let repo_tmp = neomacs_infra::workspace_root().join("tmp");
     fs::create_dir_all(&repo_tmp).expect("repo-local tmp dir");
     let dir = tempfile::Builder::new()
         .prefix("neomacsclient-resize-")
@@ -345,7 +345,7 @@ fn neomacsclient_sends_gnu_auth_for_tcp_server_file() {
     use std::path::PathBuf;
     use std::thread;
 
-    let repo_tmp = PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("tmp");
+    let repo_tmp = neomacs_infra::workspace_root().join("tmp");
     fs::create_dir_all(&repo_tmp).expect("repo-local tmp dir");
     let dir = tempfile::Builder::new()
         .prefix("neomacsclient-tcp-")
