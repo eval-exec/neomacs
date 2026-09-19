@@ -183,6 +183,95 @@ fn list_from_slice_builds_a_proper_list_in_order() {
     assert_eq!(heap.cons_live_count, before + elements.len());
 }
 
+/// `list_from_slice` charges the consing counters once for the whole list:
+/// the totals must equal one `alloc_cons` per element, across a block
+/// rollover and a free-list reuse alike.
+#[test]
+fn list_from_slice_charges_every_counter_per_cons() {
+    let mut heap = TaggedHeap::new();
+    // Reclaim a few cells first, so the list takes some from the free list
+    // and the rest from bumped and fresh blocks.
+    let kept: Vec<TaggedValue> = (0..8)
+        .map(|_| heap.alloc_cons(TaggedValue::T, TaggedValue::NIL))
+        .collect();
+    for _ in 0..8 {
+        heap.alloc_cons(TaggedValue::NIL, TaggedValue::NIL);
+    }
+    heap.collect_exact(kept.iter().copied());
+    assert!(!heap.cons_free_list.is_null());
+
+    let elements: Vec<TaggedValue> = (0..CONS_BLOCK_SIZE as i64 + 3)
+        .map(TaggedValue::fixnum)
+        .collect();
+    let before_counts = heap.memory_use_counts_snapshot()[MemoryUseCountSlot::ConsCells.index()];
+    let before_bytes = heap.bytes_since_gc();
+    let before_allocated = heap.allocated_count;
+    let before_live = heap.cons_live_count;
+    let blocks_before = heap.cons_blocks.len();
+
+    let list = heap.list_from_slice(&elements);
+
+    let n = elements.len();
+    assert_eq!(
+        heap.memory_use_counts_snapshot()[MemoryUseCountSlot::ConsCells.index()],
+        before_counts + n as u64
+    );
+    assert_eq!(
+        heap.bytes_since_gc(),
+        before_bytes + n * size_of::<ConsCell>()
+    );
+    assert_eq!(heap.allocated_count, before_allocated + n);
+    assert_eq!(heap.cons_live_count, before_live + n);
+    assert!(
+        heap.cons_blocks.len() > blocks_before,
+        "the list spans a new block"
+    );
+    let cars = list_cars(list);
+    assert_eq!(cars.len(), n);
+    for (got, want) in cars.iter().zip(elements.iter()) {
+        assert_eq!(got.bits(), want.bits());
+    }
+}
+
+/// Every cell of a list built while a sweep or a concurrent mark is in
+/// flight is black, as `alloc_cons` makes each one; a quiet heap's are white.
+#[test]
+fn list_from_slice_is_black_only_while_sweeping_or_marking() {
+    let mut heap = TaggedHeap::new();
+    let elements = [TaggedValue::T, TaggedValue::NIL, TaggedValue::fixnum(7)];
+    let cells = |heap: &TaggedHeap, list: TaggedValue| {
+        let mut out = Vec::new();
+        let mut cursor = list;
+        while !cursor.is_nil() {
+            out.push(cursor);
+            cursor = car_cdr(cursor).1;
+        }
+        let _ = heap;
+        out
+    };
+
+    let quiet = heap.list_from_slice(&elements);
+    assert!(cells(&heap, quiet).iter().all(|c| !is_black(&heap, *c)));
+
+    heap.sweep_in_progress = true;
+    let during_sweep = heap.list_from_slice(&elements);
+    heap.sweep_in_progress = false;
+    assert!(
+        cells(&heap, during_sweep)
+            .iter()
+            .all(|c| is_black(&heap, *c))
+    );
+
+    heap.concurrent_mark_running = true;
+    let during_mark = heap.list_from_slice(&elements);
+    heap.concurrent_mark_running = false;
+    assert!(
+        cells(&heap, during_mark)
+            .iter()
+            .all(|c| is_black(&heap, *c))
+    );
+}
+
 /// The lifetime allocation total is derived, not counted, so it must survive
 /// the resets that clear the allocation budget it is derived from.
 ///
