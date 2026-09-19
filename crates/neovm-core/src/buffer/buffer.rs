@@ -6014,6 +6014,17 @@ impl BufferManager {
     }
 
     pub(in crate::buffer) fn buffers_sharing_root_ids(&self, root_id: BufferId) -> Vec<BufferId> {
+        // With no indirect buffer alive a buffer shares its text with nobody,
+        // so skip asking every buffer who its base is -- every text edit asks
+        // (magit inserts process output a line at a time, dozens of buffers
+        // live).
+        if !self.buffers.any_indirect() {
+            return if self.buffers.contains_key(&root_id) {
+                vec![root_id]
+            } else {
+                Vec::new()
+            };
+        }
         self.buffers
             .values()
             .filter_map(|buf| (buf.base_buffer.unwrap_or(buf.id) == root_id).then_some(buf.id))
