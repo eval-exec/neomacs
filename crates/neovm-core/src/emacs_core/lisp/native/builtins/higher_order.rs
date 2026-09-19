@@ -84,17 +84,14 @@ pub(crate) fn map_sequence_element(sequence: Value, index: usize) -> Result<Valu
                     )
                 })
         }
-        ValueKind::String => {
-            let string = sequence.as_lisp_string().expect("string");
-            super::lisp_string_char_at(string, index)
-                .map(|code| Value::fixnum(code as i64))
-                .ok_or_else(|| {
-                    signal(
-                        LispCondition::WrongTypeArgument,
-                        vec![Value::symbol("sequencep"), sequence],
-                    )
-                })
-        }
+        ValueKind::String => super::lisp_string_value_char_at(sequence, index)
+            .map(|code| Value::fixnum(code as i64))
+            .ok_or_else(|| {
+                signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("sequencep"), sequence],
+                )
+            }),
         _ => Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("sequencep"), sequence],

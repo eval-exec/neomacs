@@ -141,6 +141,27 @@ pub(crate) fn normalize_lisp_string_start_arg(
     string: &crate::heap_types::LispString,
     start: Option<&Value>,
 ) -> Result<usize, Flow> {
+    normalize_lisp_string_start_arg_for(None, string, start)
+}
+
+/// [`normalize_lisp_string_start_arg`] for the string object `value`: START
+/// converts through the position cache, which a `string-match' loop that
+/// resumes at the previous `match-end' (`split-string') hits every time.
+pub(crate) fn normalize_lisp_string_value_start_arg(
+    value: Value,
+    start: Option<&Value>,
+) -> Result<usize, Flow> {
+    let string = value
+        .as_lisp_string()
+        .expect("caller passes a string object");
+    normalize_lisp_string_start_arg_for(Some(value), string, start)
+}
+
+fn normalize_lisp_string_start_arg_for(
+    value: Option<Value>,
+    string: &crate::heap_types::LispString,
+    start: Option<&Value>,
+) -> Result<usize, Flow> {
     let Some(start_val) = start else {
         return Ok(0);
     };
@@ -190,7 +211,12 @@ pub(crate) fn normalize_lisp_string_start_arg(
         ));
     }
     let start_char_idx = start_idx as usize;
-    Ok(string.char_to_byte_pos(start_char_idx))
+    Ok(match value {
+        Some(value) => {
+            crate::emacs_core::string_pos_cache::string_char_to_byte(value, string, start_char_idx)
+        }
+        None => string.char_to_byte_pos(start_char_idx),
+    })
 }
 
 // ---------------------------------------------------------------------------

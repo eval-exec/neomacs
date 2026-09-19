@@ -65,6 +65,7 @@ fn register_core_load_hooks() {
     CORE_PDUMP_HOOKS.call_once(|| {
         pdumper_do_now_and_after_load(crate::emacs_core::syntax::reset_syntax_thread_locals);
         pdumper_do_now_and_after_load(crate::emacs_core::casetab::reset_casetab_thread_locals);
+        pdumper_do_now_and_after_load(crate::emacs_core::string_pos_cache::reset_string_pos_cache);
         pdumper_do_now_and_after_load(crate::emacs_core::category::reset_category_thread_locals);
         pdumper_do_now_and_after_load(crate::tagged::value::reset_current_subrs);
         pdumper_do_now_and_after_load(crate::emacs_core::value::reset_string_text_properties);

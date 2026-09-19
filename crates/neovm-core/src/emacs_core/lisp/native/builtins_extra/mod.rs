@@ -281,7 +281,8 @@ pub(crate) fn builtin_string_search(args: Vec<Value>) -> EvalResult {
     }
 
     let haystack_bytes = haystack_ls.as_bytes();
-    let start_byte = haystack_ls.char_to_byte_pos(start_char);
+    let start_byte =
+        crate::emacs_core::string_pos_cache::string_char_to_byte(args[1], haystack_ls, start_char);
     let search_in = &haystack_bytes[start_byte..];
     let needle_bytes_storage;
     let needle_bytes = if string_search_direct_bytes(haystack_ls, needle_ls) {

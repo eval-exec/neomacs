@@ -964,13 +964,23 @@ impl EngineMatchData {
                         .collect()
                 } else {
                     let string = string.expect("non-identity conversion has a string");
+                    // A heap string converts through the position cache: a
+                    // `string-match' loop publishes endpoints left to right.
+                    let to_char = |byte: usize| match &searched_string {
+                        SearchedString::Heap(value) => {
+                            crate::emacs_core::string_pos_cache::string_byte_to_char(
+                                *value, string, byte,
+                            )
+                        }
+                        SearchedString::Owned(_) => string.byte_to_char_pos(byte),
+                    };
                     self.groups
                         .into_iter()
                         .map(|range| {
                             range.map(|range| {
                                 MatchGroup::new(
-                                    string.byte_to_char_pos(range.start().get()),
-                                    string.byte_to_char_pos(range.end().get()),
+                                    to_char(range.start().get()),
+                                    to_char(range.end().get()),
                                 )
                             })
                         })

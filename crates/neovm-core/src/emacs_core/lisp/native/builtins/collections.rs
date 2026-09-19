@@ -69,8 +69,7 @@ pub(crate) fn builtin_aref_values(array: Value, index: Value) -> EvalResult {
         }
         ValueKind::String => {
             let idx = idx_fixnum as usize;
-            let string = array.as_lisp_string().expect("string");
-            super::lisp_string_char_at(string, idx)
+            super::lisp_string_value_char_at(array, idx)
                 .map(|cp| Value::fixnum(cp as i64))
                 .ok_or_else(|| signal(LispCondition::ArgsOutOfRange, vec![array, index]))
         }

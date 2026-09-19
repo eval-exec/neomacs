@@ -2154,6 +2154,12 @@ fn collect_thread_local_gc_roots(
     );
     collect_group(
         roots,
+        "string-pos-cache-thread-local",
+        stats,
+        super::string_pos_cache::collect_string_pos_cache_gc_roots,
+    );
+    collect_group(
+        roots,
         "category-thread-local",
         stats,
         super::category::collect_category_gc_roots,

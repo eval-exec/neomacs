@@ -351,6 +351,8 @@ pub mod regex_emacs;
 pub mod search;
 #[path = "text/string_escape/mod.rs"]
 pub(crate) mod string_escape;
+#[path = "text/string_pos_cache/mod.rs"]
+pub(crate) mod string_pos_cache;
 #[path = "text/syntax/mod.rs"]
 pub mod syntax;
 #[path = "text/textprop/mod.rs"]

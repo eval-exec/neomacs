@@ -84,6 +84,24 @@ pub(crate) fn lisp_string_char_at(
     Some(cp)
 }
 
+/// [`lisp_string_char_at`] for the string object `value`: the index goes
+/// through the one-entry position cache (GNU `string_char_to_byte`), so a
+/// walk over a multibyte string by index -- `aref', `mapcar', `seq-*' --
+/// steps from the previous character instead of rescanning.
+pub(crate) fn lisp_string_value_char_at(value: Value, idx: usize) -> Option<u32> {
+    let string = value.as_lisp_string()?;
+    let bytes = string.as_bytes();
+    if !string.is_multibyte() {
+        return bytes.get(idx).map(|&b| b as u32);
+    }
+    if idx >= string.schars() {
+        return None;
+    }
+    let byte_pos = crate::emacs_core::string_pos_cache::string_char_to_byte(value, string, idx);
+    let (cp, _) = crate::emacs_core::emacs_char::string_char_unchecked(&bytes[byte_pos..]);
+    Some(cp)
+}
+
 /// Iterate character codes via a closure (avoids allocation when possible).
 pub(crate) fn for_each_lisp_string_char(
     string: &crate::heap_types::LispString,

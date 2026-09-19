@@ -215,8 +215,13 @@ fn substring_impl(name: &str, args: &[Value], preserve_props: bool) -> EvalResul
                     ));
                 }
                 let (byte_from, byte_to) = if src.is_multibyte() {
-                    let bf = src.char_to_byte_pos(from);
-                    let bt = src.char_to_byte_pos(to);
+                    // Through the position cache: `split-string' and friends
+                    // take pieces left to right.
+                    let bf = crate::emacs_core::string_pos_cache::string_char_to_byte(
+                        args[0], src, from,
+                    );
+                    let bt =
+                        crate::emacs_core::string_pos_cache::string_char_to_byte(args[0], src, to);
                     (bf, bt)
                 } else {
                     (from, to)

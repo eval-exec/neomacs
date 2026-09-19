@@ -1833,8 +1833,8 @@ pub(crate) fn builtin_string_match_with_state(
                 (ValueKind::String, ValueKind::String) => {
                     let pattern = expect_lisp_string(&args[0])?;
                     let string = args[1].as_lisp_string().unwrap();
-                    let start = crate::emacs_core::search::normalize_lisp_string_start_arg(
-                        string,
+                    let start = crate::emacs_core::search::normalize_lisp_string_value_start_arg(
+                        args[1],
                         args.get(2),
                     )?;
                     let string_syntax = string_regexp_syntax_lookup(
@@ -1946,8 +1946,8 @@ pub(crate) fn builtin_posix_string_match_with_state(
                 (ValueKind::String, ValueKind::String) => {
                     let pattern = expect_lisp_string(&args[0])?;
                     let string = args[1].as_lisp_string().unwrap();
-                    let start = crate::emacs_core::search::normalize_lisp_string_start_arg(
-                        string,
+                    let start = crate::emacs_core::search::normalize_lisp_string_value_start_arg(
+                        args[1],
                         args.get(2),
                     )?;
                     let string_syntax = string_regexp_syntax_lookup(
@@ -2000,8 +2000,10 @@ pub(crate) fn builtin_string_match_p_with_case_fold(
         (ValueKind::String, ValueKind::String) => {
             let pattern = expect_lisp_string(&args[0])?;
             let string = args[1].as_lisp_string().unwrap();
-            let start =
-                crate::emacs_core::search::normalize_lisp_string_start_arg(string, args.get(2))?;
+            let start = crate::emacs_core::search::normalize_lisp_string_value_start_arg(
+                args[1],
+                args.get(2),
+            )?;
             let string_syntax = string_regexp_syntax_lookup(
                 syntax_table,
                 category_table,

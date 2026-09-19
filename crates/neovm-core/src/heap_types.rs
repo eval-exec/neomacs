@@ -720,9 +720,13 @@ impl LispString {
     /// character occupies one byte even if the string is marked multibyte, so
     /// the conversion is an O(1) identity operation.
     pub(crate) fn char_to_byte_pos(&self, char_pos: usize) -> usize {
-        let char_pos = char_pos.min(self.schars());
-        if !self.is_multibyte() || self.schars() == self.sbytes() {
+        let schars = self.schars();
+        let char_pos = char_pos.min(schars);
+        if !self.is_multibyte() || schars == self.sbytes() {
             char_pos
+        } else if char_pos > schars / 2 {
+            // Nearer the end: walk back from it, as GNU does.
+            emacs_char::char_to_byte_pos_from_end(self.as_bytes(), schars - char_pos)
         } else {
             emacs_char::char_to_byte_pos(self.as_bytes(), char_pos)
         }
@@ -732,9 +736,15 @@ impl LispString {
     ///
     /// Mirrors GNU `string_byte_to_char`'s `SCHARS == SBYTES` fast path.
     pub(crate) fn byte_to_char_pos(&self, byte_pos: usize) -> usize {
-        let byte_pos = byte_pos.min(self.sbytes());
-        if !self.is_multibyte() || self.schars() == self.sbytes() {
+        let sbytes = self.sbytes();
+        let byte_pos = byte_pos.min(sbytes);
+        if !self.is_multibyte() || self.schars() == sbytes {
             byte_pos
+        } else if byte_pos > sbytes / 2 {
+            // Characters before BYTE_POS = all of them less those starting
+            // at or after it -- the same count, read from the nearer end.
+            self.schars()
+                - emacs_char::byte_to_char_pos(&self.as_bytes()[byte_pos..], sbytes - byte_pos)
         } else {
             emacs_char::byte_to_char_pos(self.as_bytes(), byte_pos)
         }
@@ -805,7 +815,11 @@ impl LispString {
     }
 
     /// Recompute cached `size` (and `size_byte`) from the current data.
+    ///
+    /// Every change to a string's bytes ends here, so this is also where
+    /// the character<->byte position cache learns its pairs may be stale.
     fn recompute_size(&mut self, byte_len: usize) {
+        crate::emacs_core::string_pos_cache::note_string_bytes_changed();
         if self.size_byte >= 0 {
             // multibyte
             let data = if byte_len == 0 {

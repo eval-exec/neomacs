@@ -1431,6 +1431,40 @@ pub fn char_to_byte_pos(bytes: &[u8], char_idx: usize) -> usize {
     bytes.len()
 }
 
+/// [`char_to_byte_pos`] counted from the END: the byte offset of the
+/// character that starts `chars_before_end` characters before the end of
+/// `bytes`.  GNU `string_char_to_byte` walks from whichever of the start and
+/// the end is nearer; a position past the middle scanned from 0 made
+/// end-relative work (`string-suffix-p', a START near the end) cost the whole
+/// string.
+pub fn char_to_byte_pos_from_end(bytes: &[u8], chars_before_end: usize) -> usize {
+    if chars_before_end == 0 {
+        return bytes.len();
+    }
+    #[cfg(test)]
+    record_position_conversion_scan_step();
+    let mut remaining = chars_before_end;
+    let mut end = bytes.len();
+    const BLOCK: usize = 64;
+    while end >= BLOCK {
+        let leads = count_lead_bytes(&bytes[end - BLOCK..end]);
+        if leads >= remaining {
+            break;
+        }
+        remaining -= leads;
+        end -= BLOCK;
+    }
+    for pos in (0..end).rev() {
+        if (bytes[pos] & 0xC0) != 0x80 {
+            remaining -= 1;
+            if remaining == 0 {
+                return pos;
+            }
+        }
+    }
+    0
+}
+
 /// Convert a byte offset to a character index.
 ///
 /// `byte_pos` should fall on a character boundary. Returns the number of
