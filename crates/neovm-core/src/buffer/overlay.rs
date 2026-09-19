@@ -1243,7 +1243,11 @@ impl OverlayList {
                         .is_some_and(|value| !value.is_nil())
             })
             .collect();
-        carriers.sort_by(|left, right| compare_overlay_precedence(*left, *right));
+        // One carrier is the common case on a redisplay line, and it is
+        // already in order: key nothing and allocate nothing for it.
+        if carriers.len() > 1 {
+            sort_overlays_by_precedence_ascending(&mut carriers);
+        }
         carriers
             .into_iter()
             .filter_map(|overlay| overlay_property_in_lookup_order(overlay, property_lookup_order))
@@ -1385,7 +1389,20 @@ impl OverlayList {
     }
 
     pub fn sort_overlay_ids_by_priority_desc(&self, overlay_ids: &mut [Value]) {
-        overlay_ids.sort_by(|left, right| compare_overlay_precedence(*right, *left));
+        if overlay_ids.len() < 2 {
+            return;
+        }
+        // Key once per overlay, then sort (see `OverlayPrecedence`).
+        let mut keyed: Vec<(Value, Option<OverlayPrecedence>)> = overlay_ids
+            .iter()
+            .map(|overlay| (*overlay, overlay_precedence(*overlay)))
+            .collect();
+        keyed.sort_by(|(left, left_key), (right, right_key)| {
+            compare_overlay_precedence_keys(*right, *right_key, *left, *left_key)
+        });
+        for (slot, (overlay, _)) in overlay_ids.iter_mut().zip(keyed) {
+            *slot = overlay;
+        }
     }
 
     pub fn adjust_for_insert_at_emacs_byte_pos(
@@ -1660,19 +1677,68 @@ fn overlay_applies_to_window(overlay: Value, window_id: Option<u64>) -> bool {
     window_id.is_none_or(|current| current == target)
 }
 
+/// Everything `compare_overlay_precedence` reads from one overlay: its
+/// priorities, its range and its identity.  A sort reads this once per
+/// overlay instead of recomputing the range and walking the plist on every
+/// comparison (GNU `sort_overlays` likewise loads each overlay once).
+#[derive(Clone, Copy)]
+struct OverlayPrecedence {
+    priority: i64,
+    subpriority: i64,
+    range: EmacsByteRange,
+    identity: u64,
+}
+
+fn overlay_precedence(overlay: Value) -> Option<OverlayPrecedence> {
+    let data = overlay.as_overlay_data().filter(|d| d.buffer.is_some())?;
+    let (priority, subpriority) = overlay_priority(data);
+    Some(OverlayPrecedence {
+        priority,
+        subpriority,
+        range: overlay_data_range(data),
+        identity: overlay_identity_key(overlay),
+    })
+}
+
+/// Order `overlays` by ascending precedence, reading each overlay's key once.
+fn sort_overlays_by_precedence_ascending(overlays: &mut [Value]) {
+    let mut keyed: Vec<(Value, Option<OverlayPrecedence>)> = overlays
+        .iter()
+        .map(|overlay| (*overlay, overlay_precedence(*overlay)))
+        .collect();
+    keyed.sort_by(|(left, left_key), (right, right_key)| {
+        compare_overlay_precedence_keys(*left, *left_key, *right, *right_key)
+    });
+    for (slot, (overlay, _)) in overlays.iter_mut().zip(keyed) {
+        *slot = overlay;
+    }
+}
+
 fn compare_overlay_precedence(left: Value, right: Value) -> Ordering {
-    let left_data = left.as_overlay_data();
-    let right_data = right.as_overlay_data();
-    let Some(left_overlay) = left_data.filter(|d| d.buffer.is_some()) else {
+    compare_overlay_precedence_keys(
+        left,
+        overlay_precedence(left),
+        right,
+        overlay_precedence(right),
+    )
+}
+
+fn compare_overlay_precedence_keys(
+    left: Value,
+    left_key: Option<OverlayPrecedence>,
+    right: Value,
+    right_key: Option<OverlayPrecedence>,
+) -> Ordering {
+    let Some(left_key) = left_key else {
         return Ordering::Less;
     };
-    let Some(right_overlay) = right_data.filter(|d| d.buffer.is_some()) else {
+    let Some(right_key) = right_key else {
         return Ordering::Greater;
     };
-    let (left_priority, left_subpriority) = overlay_priority(left_overlay);
-    let (right_priority, right_subpriority) = overlay_priority(right_overlay);
-    let left_range = overlay_data_range(left_overlay);
-    let right_range = overlay_data_range(right_overlay);
+    let (left_priority, left_subpriority) = (left_key.priority, left_key.subpriority);
+    let (right_priority, right_subpriority) = (right_key.priority, right_key.subpriority);
+    let left_range = left_key.range;
+    let right_range = right_key.range;
 
     if left_priority != right_priority {
         return left_priority.cmp(&right_priority);
@@ -1699,7 +1765,7 @@ fn compare_overlay_precedence(left: Value, right: Value) -> Ordering {
         left_subpriority.cmp(&right_subpriority)
     } else if eq_value(&left, &right) {
         Ordering::Equal
-    } else if overlay_identity_key(left) < overlay_identity_key(right) {
+    } else if left_key.identity < right_key.identity {
         // GNU `compare_overlays` uses raw Lisp object identity as the final
         // stable tiebreaker for otherwise equal overlays.  Neomacs stores an
         // overlay allocation serial because Rust heap addresses are not
@@ -1718,8 +1784,14 @@ fn overlay_identity_key(overlay: Value) -> u64 {
         .unwrap_or(overlay.bits() as u64)
 }
 
+/// The symbol `priority', interned once.
+fn priority_symbol_id() -> crate::emacs_core::intern::SymId {
+    static ID: std::sync::OnceLock<crate::emacs_core::intern::SymId> = std::sync::OnceLock::new();
+    *ID.get_or_init(|| crate::emacs_core::intern::intern("priority"))
+}
+
 fn overlay_priority(overlay: &Overlay) -> (i64, i64) {
-    match plist_get_named(overlay.plist, "priority") {
+    match plist_get_by_symbol_id(overlay.plist, priority_symbol_id()) {
         None => (0, 0),
         Some(value) => match value.kind() {
             ValueKind::Fixnum(n) => (n, 0),
@@ -1739,7 +1811,10 @@ fn priority_component(value: Value) -> i64 {
     }
 }
 
-fn plist_get_named(plist: Value, prop_name: &str) -> Option<Value> {
+/// A plist lookup by symbol identity.  Resolving each key to its NAME and
+/// comparing strings cost a name lookup per entry, on every comparison of
+/// the sort `get-char-property' makes over the overlays at a position.
+fn plist_get_by_symbol_id(plist: Value, prop: crate::emacs_core::intern::SymId) -> Option<Value> {
     let mut tail = plist;
     loop {
         if !tail.is_cons() {
@@ -1750,7 +1825,7 @@ fn plist_get_named(plist: Value, prop_name: &str) -> Option<Value> {
         if !pair_cdr.is_cons() {
             return None;
         };
-        if pair_car.as_symbol_name() == Some(prop_name) {
+        if pair_car.as_symbol_id() == Some(prop) {
             return Some(pair_cdr.cons_car());
         }
         tail = pair_cdr.cons_cdr();

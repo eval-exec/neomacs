@@ -18697,6 +18697,36 @@ fn backward_sexp_scans_honor_backslash_quoting_like_gnu() {
 }
 
 #[test]
+fn stacked_overlays_pick_the_same_winner_and_order_as_gnu() {
+    crate::test_utils::init_test_tracing();
+    // Overlays sharing a position, with plain, nil and cons priorities:
+    // which one `get-char-property' reports, where the property changes,
+    // and the order `overlays-at' lists them in -- all GNU 31.1's.
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"
+        (with-temp-buffer
+   (insert "abcdefghij")
+   (let ((specs '((1 11 nil a) (2 9 5 b) (3 8 5 c) (1 11 10 d) (4 7 nil e) (2 6 (2 . 3) f) (3 9 (2 . 1) g))))
+     (dolist (s specs)
+       (let ((o (make-overlay (nth 0 s) (nth 1 s))))
+         (overlay-put o 'priority (nth 2 s))
+         (overlay-put o 'face (nth 3 s))
+         (overlay-put o 'my-tag (nth 3 s))))
+     (list (mapcar (lambda (p) (get-char-property p 'face)) '(1 2 3 4 5 6 7 8 9 10))
+           (mapcar (lambda (p) (get-char-property p 'my-tag)) '(1 5 9))
+           (let ((r (get-char-property-and-overlay 5 'face))) (list (car r) (and (cdr r) (overlay-get (cdr r) 'my-tag))))
+           (next-single-char-property-change 1 'face)
+           (previous-single-char-property-change 10 'face)
+           (mapcar (lambda (o) (overlay-get o 'my-tag)) (overlays-at 5)))))
+        "#,
+    );
+    assert_eq!(
+        result,
+        "OK ((d d d d d d d d d d) (d d d) (d d) 11 1 (d a f b g c e))"
+    );
+}
+
+#[test]
 fn forward_sexp_scans_treat_char_quote_inside_a_string_like_gnu() {
     crate::test_utils::init_test_tracing();
     // GNU `scan_lists' runs its Scharquote case into Sescape inside a string,
