@@ -63,7 +63,12 @@ the test oracle, so every rewritten subsystem is verified to behave identically.
 
 ### Latest videos
 
-Watch more demos and development updates on [Eval Exec's YouTube channel](https://www.youtube.com/@eval-exec).
+
+Watch more demos and development updates on
+[<img src="https://cdn.simpleicons.org/youtube/FF0000" width="16" alt="YouTube"> Eval Exec's YouTube channel](https://www.youtube.com/@eval-exec).
+
+
+
 
 <!-- BEGIN YOUTUBE-CARDS -->
 <a href="https://www.youtube.com/watch?v=X7CGiyeA-cA">
