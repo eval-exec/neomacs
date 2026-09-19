@@ -18484,6 +18484,52 @@ fn write_region_encodes_like_gnu_with_and_without_a_bound_coding() {
 }
 
 #[test]
+fn skip_chars_and_get_buffer_answer_like_gnu_over_mixed_text() {
+    crate::test_utils::init_test_tracing();
+    // `skip-chars-*' across the gap, over 1- to 4-byte characters and raw
+    // bytes, with limits and narrowing, a unibyte STRING's high bytes
+    // meaning eight-bit characters in a multibyte buffer (GNU `skip_chars'),
+    // a unibyte buffer; and `get-buffer' on non-ASCII and hidden names.
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"
+        (list
+  (with-temp-buffer
+    (insert "aaжжbb" (string-to-multibyte "\377\376") "ccй😀dd\n  xyz")
+    (goto-char 5) (insert "ж") ; gap in the middle
+    (let (r)
+      (goto-char 1) (push (list (skip-chars-forward "aж") (point)) r)
+      (push (list (skip-chars-forward "^c") (point)) r)
+      (push (list (skip-chars-forward "cй😀d") (point)) r)
+      (push (list (skip-chars-forward "\n ") (point)) r)
+      (goto-char (point-max)) (push (list (skip-chars-backward "a-z") (point)) r)
+      (push (list (skip-chars-backward "^ж") (point)) r)
+      (push (list (skip-chars-backward "ж" 5) (point)) r)
+      (goto-char 1) (push (list (skip-chars-forward "a-zа-я" 6) (point)) r)
+      (goto-char 1) (push (list (skip-chars-forward "^\377") (point)) r)
+      (push (list (skip-chars-forward "\376\377") (point)) r)
+      (save-restriction (narrow-to-region 3 9) (goto-char 3) (push (list (skip-chars-forward "^z") (point)) r)
+                        (push (list (skip-chars-backward "^q") (point)) r))
+      (goto-char 1) (push (list (skip-syntax-forward "w") (point)) r)
+      (nreverse r)))
+  (with-temp-buffer
+    (set-buffer-multibyte nil)
+    (insert "ab\377\376cd")
+    (goto-char 1)
+    (list (skip-chars-forward "a-b") (point) (skip-chars-forward "^c") (point)
+          (progn (goto-char (point-max)) (skip-chars-backward "^\377")) (point)))
+  (let ((b1 (get-buffer-create "日本語 buf")) (b2 (get-buffer-create " hidden")))
+    (prog1 (list (buffer-name (get-buffer "日本語 buf")) (get-buffer "日本語") (buffer-name (get-buffer " hidden"))
+                 (string-prefix-p " " (buffer-name b2)))
+      (kill-buffer b1) (kill-buffer b2))))
+        "#,
+    );
+    assert_eq!(
+        result,
+        "OK (((5 6) (4 10) (6 16) (3 19) (-3 19) (-13 6) (-1 5) (5 6) (7 8) (2 10) (6 9) (-6 3) (15 16)) (2 3 2 5 -3 4) (\"日本語 buf\" nil \" hidden\" t))"
+    );
+}
+
+#[test]
 fn a_bound_write_coding_is_reported_and_passes_raw_bytes_like_gnu() {
     crate::test_utils::init_test_tracing();
     // GNU `choose_write_coding_system' ends in `coding_inherit_eol_type': a
@@ -18516,5 +18562,52 @@ fn a_bound_write_coding_is_reported_and_passes_raw_bytes_like_gnu() {
     assert_eq!(
         result,
         "OK ((utf-8 utf-8-unix) (latin-1 iso-latin-1-unix) (koi8-r cyrillic-koi8-unix) (utf-8-dos utf-8-dos) (raw-text raw-text-unix) (windows-1252 (120 233 121 10)) (koi8-r (120 233 121 10)) (euc-jp (120 233 121 10)) (us-ascii (120 233 121 10)) (saved utf-8-unix))"
+    );
+}
+
+#[test]
+fn skip_chars_maps_a_unibyte_range_after_parsing_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // GNU `skip_chars' parses a unibyte STRING on its bytes and only then
+    // turns the high bytes into eight-bit characters: `a-\377' is `a'..DEL
+    // plus the eight-bit range, not every character in between.
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"
+        (list
+  (with-temp-buffer (insert "a中b") (goto-char 1) (list (skip-chars-forward "a-\377") (point)))
+  (with-temp-buffer (insert "中文😀abc") (goto-char 1) (list (skip-chars-forward "^\0-\377") (point)))
+  (with-temp-buffer (insert "中文😀abc") (goto-char (point-max)) (list (skip-chars-backward "\0-\377") (point)))
+  (with-temp-buffer (insert "é中") (goto-char 1) (list (skip-chars-forward "\177-\240") (point)))
+  (with-temp-buffer (insert "hello wörld 中文") (goto-char 1) (list (skip-chars-forward " -\377") (point)))
+  (with-temp-buffer (insert "x" (string-to-multibyte "\351\377") "y") (goto-char 2)
+    (list (skip-chars-forward "\200-\377") (point) (progn (goto-char 1) (skip-chars-forward "^\351")) (point))))
+        "#,
+    );
+    assert_eq!(result, "OK ((1 2) (3 4) (-3 4) (0 1) (7 8) (2 4 1 2))");
+}
+
+#[test]
+fn skip_chars_walks_rope_and_piece_tree_buffers() {
+    crate::test_utils::init_test_tracing();
+    // Chunked text backends lend no contiguous window; skip-chars must still
+    // walk them, with the gap buffer's answers.
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"
+        (mapcar
+         (lambda (backend)
+           (with-temp-buffer
+             (neomacs-set-buffer-text-backend backend)
+             (insert "hello world  жзй x")
+             (goto-char 1)
+             (list (skip-chars-forward "a-z") (point)
+                   (skip-chars-forward "^ж") (point)
+                   (progn (goto-char (point-max)) (skip-chars-backward "^ ")) (point)
+                   (skip-chars-backward " жзй") (point))))
+         '(gap-buffer rope piece-tree))
+        "#,
+    );
+    assert_eq!(
+        result,
+        "OK ((5 6 8 14 -1 18 -6 12) (5 6 8 14 -1 18 -6 12) (5 6 8 14 -1 18 -6 12))"
     );
 }

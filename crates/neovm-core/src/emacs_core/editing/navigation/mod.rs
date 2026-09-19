@@ -1225,6 +1225,43 @@ fn non_ascii_blank(code: u32) -> bool {
 ///
 /// `skip-chars-forward` as registered: fixed arity 2, called straight off the bytecode
 /// stack like GNU `funcall_subr`'s `a2` case (absent optionals arrive as nil).
+/// Parse a `skip-chars-*' STRING into its character set.  GNU
+/// `skip_chars': a unibyte STRING's bytes 0x80..0xFF mean eight-bit
+/// characters when the buffer is multibyte.  The set is parsed on the raw
+/// bytes first and mapped afterwards -- a range running from ASCII into the
+/// high bytes (`a-\377') keeps its ASCII part and gains the eight-bit range,
+/// rather than spanning every character in between.
+fn skip_chars_set(ctx: &super::eval::Context, string: Value) -> Result<SkipCharsSet, Flow> {
+    let Some(lisp_string) = ctx.lisp_string(string) else {
+        return Err(signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("stringp"), string],
+        ));
+    };
+    let codes = super::builtins::lisp_string_char_codes(lisp_string);
+    let mut set = parse_skip_chars_set(&codes)?;
+    let buffer_multibyte = ctx
+        .buffers
+        .current_buffer()
+        .is_some_and(|buf| buf.get_multibyte());
+    if !lisp_string.is_multibyte() && buffer_multibyte {
+        let byte8 = |code: u32| crate::emacs_core::emacs_char::byte8_to_char(code.min(0xFF) as u8);
+        let mut ranges = Vec::with_capacity(set.ranges.len());
+        for &(lo, hi) in &set.ranges {
+            if hi < 0x80 {
+                ranges.push((lo, hi));
+                continue;
+            }
+            if lo < 0x80 {
+                ranges.push((lo, 0x7F));
+            }
+            ranges.push((byte8(lo.max(0x80)), byte8(hi)));
+        }
+        set.ranges = ranges;
+    }
+    Ok(set)
+}
+
 pub(crate) fn builtin_skip_chars_forward_2(
     ctx: &mut super::eval::Context,
     string: Value,
@@ -1232,16 +1269,7 @@ pub(crate) fn builtin_skip_chars_forward_2(
 ) -> EvalResult {
     let args: [Value; 2] = [string, lim];
     expect_min_args("skip-chars-forward", &args, 1)?;
-    let set_codes = match ctx.lisp_string(args[0]) {
-        Some(string) => super::builtins::lisp_string_char_codes(string),
-        None => {
-            return Err(signal(
-                LispCondition::WrongTypeArgument,
-                vec![Value::symbol("stringp"), args[0]],
-            ));
-        }
-    };
-    let char_set = parse_skip_chars_set(&set_codes)?;
+    let char_set = skip_chars_set(ctx, args[0])?;
     let current_id = ctx.buffers.current_buffer_id().ok_or_else(no_buffer)?;
     let (start_pos, pos, limit, moved_chars) = {
         let buf = ctx.buffers.get(current_id).ok_or_else(no_buffer)?;
@@ -1253,8 +1281,18 @@ pub(crate) fn builtin_skip_chars_forward_2(
         let mut moved_chars = 0_i64;
         let limit = lim_byte.min(accessible.end());
 
+        // Walk the text's contiguous windows (the gap sits at a character
+        // boundary, so no character straddles one), decoding each character
+        // once, as GNU's skip_chars walks bytes.  Two per-character buffer
+        // lookups made this ~200 instructions a character against GNU's 15.
+        let multibyte = buf.get_multibyte();
         while pos < limit {
-            if let Some(code) = buf.char_code_after_emacs_byte_pos(pos) {
+            let Some((win_start, base, win_len)) = buf.contiguous_window_at(pos.get()) else {
+                // A chunked backend (rope, piece tree) lends no window: step
+                // one character through the accessors.
+                let Some(code) = buf.char_code_after_emacs_byte_pos(pos) else {
+                    break;
+                };
                 if !skip_char_matches(&char_set, code, &syntax_table) {
                     break;
                 }
@@ -1263,7 +1301,29 @@ pub(crate) fn builtin_skip_chars_forward_2(
                         .expect("char width should exist at valid point"),
                 );
                 moved_chars += 1;
-            } else {
+                continue;
+            };
+            // SAFETY: a pure read of the window `contiguous_window_at` just
+            // returned; nothing mutates the buffer until the loop ends.
+            let window = unsafe { std::slice::from_raw_parts(base, win_len) };
+            let end = (limit.get() - win_start).min(win_len);
+            let mut off = pos.get() - win_start;
+            let mut stopped = false;
+            while off < end {
+                let (code, len) = if !multibyte || window[off] < 0x80 {
+                    (window[off] as u32, 1)
+                } else {
+                    crate::emacs_core::emacs_char::string_char(&window[off..])
+                };
+                if !skip_char_matches(&char_set, code, &syntax_table) {
+                    stopped = true;
+                    break;
+                }
+                off += len.max(1);
+                moved_chars += 1;
+            }
+            pos = EmacsBytePos::new(win_start + off);
+            if stopped {
                 break;
             }
         }
@@ -1287,16 +1347,7 @@ pub(crate) fn builtin_skip_chars_backward_2(
 ) -> EvalResult {
     let args: [Value; 2] = [string, lim];
     expect_min_args("skip-chars-backward", &args, 1)?;
-    let set_codes = match ctx.lisp_string(args[0]) {
-        Some(string) => super::builtins::lisp_string_char_codes(string),
-        None => {
-            return Err(signal(
-                LispCondition::WrongTypeArgument,
-                vec![Value::symbol("stringp"), args[0]],
-            ));
-        }
-    };
-    let char_set = parse_skip_chars_set(&set_codes)?;
+    let char_set = skip_chars_set(ctx, args[0])?;
     let current_id = ctx.buffers.current_buffer_id().ok_or_else(no_buffer)?;
     let (pos, moved_chars) = {
         let buf = ctx.buffers.get(current_id).ok_or_else(no_buffer)?;
@@ -1307,9 +1358,14 @@ pub(crate) fn builtin_skip_chars_backward_2(
         let mut pos = start_pos;
         let mut moved_chars = 0_i64;
 
+        // As forward: the character before `pos` read from its window.
+        let multibyte = buf.get_multibyte();
         while pos > limit {
-            // Find the character before `pos`.
-            if let Some(code) = buf.char_code_before_emacs_byte_pos(pos) {
+            let Some((win_start, base, win_len)) = buf.contiguous_window_at(pos.get() - 1) else {
+                // A chunked backend lends no window (see forward).
+                let Some(code) = buf.char_code_before_emacs_byte_pos(pos) else {
+                    break;
+                };
                 if !skip_char_matches(&char_set, code, &syntax_table) {
                     break;
                 }
@@ -1318,7 +1374,35 @@ pub(crate) fn builtin_skip_chars_backward_2(
                         .expect("char width should exist before valid point"),
                 );
                 moved_chars -= 1;
-            } else {
+                continue;
+            };
+            // SAFETY: a pure read of the window `contiguous_window_at` just
+            // returned; nothing mutates the buffer until the loop ends.
+            let window = unsafe { std::slice::from_raw_parts(base, win_len) };
+            let floor = limit.get().max(win_start) - win_start;
+            let mut off = pos.get() - win_start;
+            let mut stopped = false;
+            while off > floor {
+                let mut start = off - 1;
+                if multibyte {
+                    while start > 0 && (window[start] & 0xC0) == 0x80 {
+                        start -= 1;
+                    }
+                }
+                let code = if !multibyte || window[start] < 0x80 {
+                    window[start] as u32
+                } else {
+                    crate::emacs_core::emacs_char::string_char(&window[start..off]).0
+                };
+                if !skip_char_matches(&char_set, code, &syntax_table) {
+                    stopped = true;
+                    break;
+                }
+                off = start;
+                moved_chars -= 1;
+            }
+            pos = EmacsBytePos::new(win_start + off);
+            if stopped {
                 break;
             }
         }

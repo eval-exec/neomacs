@@ -2622,11 +2622,31 @@ impl Buffer {
     }
 
     pub fn has_name(&self, name: &str) -> bool {
-        self.name_runtime_string_owned() == name
+        // Compare the bytes: `get-buffer' asks every buffer, and decoding each
+        // name into a fresh `String' made that ~10x GNU.  A name that is
+        // valid UTF-8 decodes to itself, so only a raw-byte name still needs
+        // the lossy comparison.
+        let bytes = self
+            .name
+            .as_lisp_string()
+            .expect("buffer name must be a Lisp string")
+            .as_bytes();
+        if bytes == name.as_bytes() {
+            return true;
+        }
+        if bytes.is_ascii() || std::str::from_utf8(bytes).is_ok() {
+            return false;
+        }
+        crate::emacs_core::emacs_char::to_utf8_lossy(bytes) == name
     }
 
     pub fn name_starts_with_space(&self) -> bool {
-        self.name_runtime_string_owned().starts_with(' ')
+        self.name
+            .as_lisp_string()
+            .expect("buffer name must be a Lisp string")
+            .as_bytes()
+            .first()
+            == Some(&b' ')
     }
 
     pub fn set_name_value(&mut self, name: Value) {
