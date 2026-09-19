@@ -4182,6 +4182,13 @@ impl Context {
         stacker::maybe_grow(EVAL_STACK_RED_ZONE, EVAL_STACK_SEGMENT, || callback(self))
     }
 
+    /// [`Self::maybe_grow_eval_stack`] without its depth sampling, for a cold
+    /// path that nests a Rust frame per occurrence whatever the Lisp depth.
+    #[cfg(feature = "jit")]
+    pub(crate) fn grow_eval_stack<R>(&mut self, callback: impl FnOnce(&mut Self) -> R) -> R {
+        stacker::maybe_grow(EVAL_STACK_RED_ZONE, EVAL_STACK_SEGMENT, || callback(self))
+    }
+
     /// Whether lexical-binding is currently enabled.
     pub fn lexical_binding(&self) -> bool {
         lexenv_is_active(self.lexenv)

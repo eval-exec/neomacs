@@ -876,6 +876,21 @@ impl InterpreterResumePoint {
     }
 }
 
+/// The outcome of [`Vm::osr_transfer`]. Word-sized, so the driver's frame
+/// carries no `EvalResult` slot for it.
+#[cfg(feature = "jit")]
+enum OsrOutcome {
+    /// Interpret on from `pc`: the branch target when nothing transferred or
+    /// a plain deopt ran no side effect, the deopt pc when a precise deopt's
+    /// captured state was installed in the frame.
+    Interpret { pc: usize },
+    /// The function ran to completion, with this value.
+    Returned(Value),
+    /// The function exited nonlocally; the flow is stashed
+    /// ([`crate::emacs_core::jit::compile::take_pending_flow`]).
+    Exited,
+}
+
 /// One-word immutable code handle for the function executed by a frame.
 ///
 /// The entry pointer is borrowed for exactly the `run_loop` call. Every nested
@@ -2589,6 +2604,7 @@ impl<'a> Vm<'a> {
     /// in its shim and interpreter arm, so resumed ops behave exactly as the
     /// remaining native ops would have.
     #[allow(clippy::too_many_arguments)]
+    #[inline(always)] // a forwarder: no Rust frame of its own per resumed deopt
     pub(crate) fn run_resumed_frame(
         &mut self,
         func: &ByteCodeFunction,
@@ -2599,6 +2615,38 @@ impl<'a> Vm<'a> {
         bind_entries: &[usize],
         specpdl_base: usize,
         condition_stack_base: usize,
+    ) -> EvalResult {
+        self.run_resumed_frame_latched(
+            func,
+            func_value,
+            start_pc,
+            stack,
+            handlers_active,
+            bind_entries,
+            specpdl_base,
+            condition_stack_base,
+            false,
+        )
+    }
+
+    /// [`Self::run_resumed_frame`], with the resumed frame's OSR latch set
+    /// to OSR_TRIED. A frame resumed from an OSR run's precise deopt starts
+    /// latched: its loop just deopted out of native code, and another
+    /// transfer would nest one more resumed frame on the Rust stack for
+    /// every retry (one per 256 iterations of a loop that keeps failing the
+    /// same guard).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn run_resumed_frame_latched(
+        &mut self,
+        func: &ByteCodeFunction,
+        func_value: Value,
+        start_pc: usize,
+        stack: &[Value],
+        handlers_active: usize,
+        bind_entries: &[usize],
+        specpdl_base: usize,
+        condition_stack_base: usize,
+        osr_tried: bool,
     ) -> EvalResult {
         let frame_base = self.ctx.bc_buf.len();
         // Native (JIT) catch/condition-case handlers transferred from the deopted
@@ -2635,7 +2683,14 @@ impl<'a> Vm<'a> {
             handlers.push(Handler::Condition);
         }
         let mut bind_stack: BindStack = bind_entries.iter().copied().collect();
-        let result = self.run_loop(func, frame_base, &mut pc, &mut handlers, &mut bind_stack);
+        let result = self.run_loop(
+            func,
+            frame_base,
+            &mut pc,
+            &mut handlers,
+            &mut bind_stack,
+            osr_tried,
+        );
         self.cleanup_bytecode_frame(result, condition_stack_base, specpdl_base, frame_base)
     }
 
@@ -2810,8 +2865,14 @@ impl<'a> Vm<'a> {
                     });
                     self.ctx.lexenv = env;
                 }
-                let result =
-                    self.run_loop(func, frame_base, &mut pc, &mut handlers, &mut bind_stack);
+                let result = self.run_loop(
+                    func,
+                    frame_base,
+                    &mut pc,
+                    &mut handlers,
+                    &mut bind_stack,
+                    false,
+                );
                 #[cfg(debug_assertions)]
                 if func.env.is_none() {
                     debug_assert!(
@@ -2884,7 +2945,14 @@ impl<'a> Vm<'a> {
                     );
                 }
             }
-            let result = self.run_loop(func, frame_base, &mut pc, &mut handlers, &mut bind_stack);
+            let result = self.run_loop(
+                func,
+                frame_base,
+                &mut pc,
+                &mut handlers,
+                &mut bind_stack,
+                false,
+            );
             return self.cleanup_bytecode_frame(
                 result,
                 condition_stack_base,
@@ -2912,7 +2980,14 @@ impl<'a> Vm<'a> {
             }
         }
 
-        let result = self.run_loop(func, frame_base, &mut pc, &mut handlers, &mut bind_stack);
+        let result = self.run_loop(
+            func,
+            frame_base,
+            &mut pc,
+            &mut handlers,
+            &mut bind_stack,
+            false,
+        );
         #[cfg(debug_assertions)]
         if func.env.is_none() {
             debug_assert!(
@@ -3402,6 +3477,82 @@ impl<'a> Vm<'a> {
             .dispatch_bytecode_call_from_stack(func, args_start, nargs, callee)
     }
 
+    /// OSR at a hot back-edge of the frame at `frame_base`: transfer the rest
+    /// of the call into native code entered at the loop header `target`, the
+    /// frame's live operand stack (`depth` values, published) as its entry
+    /// state. Out of line: the driver expands its branch macro at several
+    /// sites, and this cold path inlined at each of them cost the hot loop
+    /// its register allocation.
+    ///
+    /// A precise deopt means a guard failed after the native loop had run
+    /// iterations -- buffer edits, variable stores, calls -- so the frame's
+    /// pre-transfer stack is stale and interpreting on from it would run those
+    /// iterations again. OSR only takes bodies with no dynamic state (see
+    /// `osr_body_has_dynamic_state`), so the captured state is an operand
+    /// stack and a pc of this frame: it is installed in place, and the driver
+    /// continues at the pc on the Rust stack it already uses. State it could
+    /// not adopt (unreachable while OSR refuses such bodies) finishes the
+    /// function in a resumed frame instead -- latched against another
+    /// transfer, on a guarded stack.
+    #[cfg(feature = "jit")]
+    #[cold]
+    #[inline(never)]
+    fn osr_transfer(
+        &mut self,
+        func: &ByteCodeFunction,
+        frame_base: usize,
+        depth: usize,
+        target: usize,
+    ) -> OsrOutcome {
+        use crate::emacs_core::jit::compile::{DeoptResume, NativeRun, stash_pending_flow};
+        let snapshot: Vec<Value> = self.ctx.bc_buf[frame_base..frame_base + depth].to_vec();
+        let ctx_ptr: *mut crate::emacs_core::eval::Context = &mut *self.ctx;
+        let resume =
+            match crate::emacs_core::jit::cache::try_run_osr(ctx_ptr, func, target, &snapshot) {
+                Some(NativeRun::Ok(bits)) => return OsrOutcome::Returned(Value::from_bits(bits)),
+                Some(NativeRun::Signal) => return OsrOutcome::Exited,
+                Some(NativeRun::DeoptAt(resume)) => resume,
+                Some(NativeRun::Deopt) | None => return OsrOutcome::Interpret { pc: target },
+            };
+        let DeoptResume {
+            pc,
+            stack,
+            handlers,
+            binds,
+            spec_base,
+            cond_base,
+        } = *resume;
+        if handlers == 0
+            && binds.is_empty()
+            && spec_base == self.ctx.specpdl.len()
+            && cond_base == self.ctx.condition_stack_len()
+            && stack.len() <= func.max_stack as usize
+        {
+            self.ctx.bc_buf.truncate(frame_base);
+            self.ctx.bc_buf.extend_from_slice(&stack);
+            return OsrOutcome::Interpret { pc };
+        }
+        match self.ctx.grow_eval_stack(|ctx| {
+            Vm::from_context(ctx).run_resumed_frame_latched(
+                func,
+                Value::NIL,
+                pc,
+                &stack,
+                handlers,
+                &binds,
+                spec_base,
+                cond_base,
+                true,
+            )
+        }) {
+            Ok(value) => OsrOutcome::Returned(value),
+            Err(flow) => {
+                stash_pending_flow(flow);
+                OsrOutcome::Exited
+            }
+        }
+    }
+
     fn run_loop(
         &mut self,
         entry_func: &ByteCodeFunction,
@@ -3409,6 +3560,7 @@ impl<'a> Vm<'a> {
         pc: &mut usize,
         handlers: &mut HandlerStack,
         bind_stack: &mut BindStack,
+        #[cfg_attr(not(feature = "jit"), allow(unused_variables))] entry_osr_tried: bool,
     ) -> EvalResult {
         #[cfg(test)]
         let _run_loop_depth = RunLoopDepthGuard::enter();
@@ -3430,7 +3582,7 @@ impl<'a> Vm<'a> {
             code: ActiveCodeView::of(entry_func),
             frame_base,
             #[cfg(feature = "jit")]
-            resume: InterpreterResumePoint::new(*pc, false),
+            resume: InterpreterResumePoint::new(*pc, entry_osr_tried),
             #[cfg(not(feature = "jit"))]
             pc: *pc,
             cleanup: InterpreterFrameCleanup {
@@ -3770,7 +3922,11 @@ impl<'a> Vm<'a> {
             macro_rules! branch_to {
                 ($target:expr) => {{
                     let target = $target;
-                    if target < pc_local {
+                    let backward = target < pc_local;
+                    // Set first: an OSR attempt below may move it again (a
+                    // precise deopt resumes at the deopt pc).
+                    pc_local = target;
+                    if backward {
                         quitcounter = quitcounter.wrapping_add(1);
                         if quitcounter == 0 {
                             quitcounter = 1;
@@ -3786,12 +3942,13 @@ impl<'a> Vm<'a> {
                             // and the live operand stack matches the header's entry depth,
                             // transfer into native code and finish there. `Ok` = the
                             // function completed (its result); `Signal` propagates; a
-                            // deopt / non-transfer just falls back to interpreting (the
-                            // OSR ran in its own frame, so our state is untouched).
+                            // precise deopt resumes the rest of the function from the
+                            // native frame's captured state; a plain deopt (no side
+                            // effect before its guard) or a non-transfer falls back to
+                            // interpreting from here.
                             // Gates ordered cheapest-first: a local bool, then the
-                            // opt-in knob (default OFF, so it short-circuits the rest
-                            // for every stock build), then the kill switch, then the
-                            // heat load.
+                            // knob (`NEOVM_JIT_OSR`, default on), then the kill
+                            // switch, then the heat load.
                             #[cfg(feature = "jit")]
                             if !osr_tried
                                 && crate::emacs_core::jit::jit_osr_on()
@@ -3800,36 +3957,33 @@ impl<'a> Vm<'a> {
                             {
                                 let depth = cursor.len - frame_base;
                                 cursor.publish(&mut self.ctx);
-                                let snapshot: Vec<Value> =
-                                    self.ctx.bc_buf[frame_base..frame_base + depth].to_vec();
-                                let ctx_ptr: *mut crate::emacs_core::eval::Context = &mut *self.ctx;
-                                match crate::emacs_core::jit::cache::try_run_osr(
-                                    ctx_ptr, func, target, &snapshot,
-                                ) {
-                                    Some(crate::emacs_core::jit::compile::NativeRun::Ok(bits)) => {
+                                match self.osr_transfer(func, frame_base, depth, target) {
+                                    OsrOutcome::Interpret { pc } => {
+                                        // Not transferred, a plain deopt, or a precise
+                                        // deopt installed in place: this frame's state
+                                        // is current. Interpret on from `pc`; don't
+                                        // retry.
+                                        osr_tried = true;
+                                        cursor = StackCursor::acquire(&mut self.ctx);
+                                        pc_local = pc;
+                                    }
+                                    OsrOutcome::Returned(value) => {
                                         // Cold OSR exit: the native run left the
                                         // context authoritative; rearm the cursor
                                         // for the shared completion path.
                                         cursor = StackCursor::acquire(&mut self.ctx);
-                                        complete_value!(Value::from_bits(bits));
+                                        complete_value!(value);
                                     }
-                                    Some(crate::emacs_core::jit::compile::NativeRun::Signal) => {
+                                    OsrOutcome::Exited => {
                                         let flow =
                                             crate::emacs_core::jit::compile::take_pending_flow()
-                                                .expect("OSR Signal must stash a pending flow");
+                                                .expect("an OSR exit stashes its flow");
                                         resume_flow!(flow)
-                                    }
-                                    _ => {
-                                        // Deopt / DeoptAt / not-transferred: fall back to
-                                        // the interpreter (state unchanged); don't retry.
-                                        osr_tried = true;
-                                        cursor = StackCursor::acquire(&mut self.ctx);
                                     }
                                 }
                             }
                         }
                     }
-                    pc_local = target;
                 }};
             }
 

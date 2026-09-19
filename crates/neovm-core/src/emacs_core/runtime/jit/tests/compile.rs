@@ -2204,6 +2204,96 @@ fn osr_transfers_hot_loop_and_matches_interpreter() {
     crate::emacs_core::jit::force_osr_for_test(false);
 }
 
+/// A loop that OSR enters and that then deoptimizes at a precise pc must run
+/// each iteration exactly once. The native loop below increments a special
+/// variable (a side effect) while a local counts up from 1,500 below
+/// `most-positive-fixnum`, so its `1+` leaves the fixnum range mid-loop and
+/// the native code deopts with its state captured. The transfer used to drop
+/// that state and interpret on from the pre-transfer stack, replaying every
+/// iteration the native code had run: the special ended above N. The
+/// resumed frame must also not transfer again (see the transfer count).
+#[test]
+fn osr_precise_deopt_resumes_without_replaying_iterations() {
+    use crate::emacs_core::bytecode::vm::Vm;
+    use crate::emacs_core::eval::Context;
+    // (lambda (start n)
+    //   (let ((i 0) (x start))
+    //     (while (< i n)
+    //       (setq osr-deopt-counter (1+ osr-deopt-counter))
+    //       (setq i (1+ i))
+    //       (setq x (1+ x)))
+    //     i))
+    let mk = || {
+        let mut f = ByteCodeFunction::new(LambdaParams {
+            required: vec![SymId(1), SymId(2)], // start n
+            optional: Vec::new(),
+            rest: None,
+        });
+        f.lexical = true;
+        f.ops = vec![
+            Op::Constant(0), // i = 0            [start n i]
+            Op::StackRef(2), // x = start        [start n i x]
+            Op::StackRef(1), // 2: L_header (OSR entry) -- i
+            Op::StackRef(3), // n
+            Op::Lss,         // i < n
+            Op::GotoIfNil(16),
+            Op::VarRef(1), // osr-deopt-counter
+            Op::Add1,
+            Op::VarSet(1),   // the side effect
+            Op::StackRef(1), // i
+            Op::Add1,
+            Op::StackSet(2), // i = i + 1
+            Op::StackRef(0), // x
+            Op::Add1,        // leaves the fixnum range mid-loop
+            Op::StackSet(1), // x = x + 1
+            Op::Goto(2),
+            Op::StackRef(1), // 16: L_end -- i
+            Op::Return,
+        ];
+        f.constants = vec![Value::make_int(0), Value::symbol("osr-deopt-counter")].into();
+        f.max_stack = 16;
+        f.seal_hand_assembled_ops();
+        f
+    };
+    let n = 2000i64;
+    let start = Value::make_int(Value::MOST_POSITIVE_FIXNUM - 1500);
+    let counter = |ev: &mut Context| ev.eval_str("osr-deopt-counter").expect("counter");
+
+    // OSR OFF: the interpreter baseline.
+    let mut ev = Context::new();
+    ev.eval_str("(setq osr-deopt-counter 0)").unwrap();
+    crate::emacs_core::jit::force_osr_for_test(false);
+    let off = Vm::from_context(&mut ev)
+        .execute(&mk(), vec![start, Value::make_int(n)])
+        .expect("interp run");
+    assert_eq!(off, Value::make_int(n));
+    assert_eq!(counter(&mut ev), Value::make_int(n), "interpreter baseline");
+
+    // OSR ON + pinned hot: transfer mid-loop, deopt at the overflow.
+    ev.eval_str("(setq osr-deopt-counter 0)").unwrap();
+    crate::emacs_core::jit::force_osr_for_test(true);
+    let f_on = mk();
+    f_on.jit_runtime().set_hot_for_test();
+    let before = crate::emacs_core::jit::cache::OSR_TRANSFER_COUNT.load(Ordering::Relaxed);
+    let on = Vm::from_context(&mut ev)
+        .execute(&f_on, vec![start, Value::make_int(n)])
+        .expect("OSR run");
+    let transfers =
+        crate::emacs_core::jit::cache::OSR_TRANSFER_COUNT.load(Ordering::Relaxed) - before;
+    let count = counter(&mut ev);
+    crate::emacs_core::jit::force_osr_for_test(false);
+    // One transfer: the frame resumed from the deopt starts latched, so the
+    // 500 iterations left (a bignum now, which would deopt again) do not
+    // transfer and nest another resumed frame at the next hot back-edge.
+    assert_eq!(transfers, 1, "exactly one OSR transfer");
+    assert_eq!(on, Value::make_int(n), "the loop's own count");
+    assert_eq!(
+        count,
+        Value::make_int(n),
+        "each iteration's side effect runs exactly once"
+    );
+}
+
 #[test]
 fn compiles_unwind_protect_pop() {
     use crate::emacs_core::eval::Context;
