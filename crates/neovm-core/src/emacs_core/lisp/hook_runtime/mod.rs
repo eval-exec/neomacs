@@ -162,6 +162,14 @@ pub(crate) fn run_hook_value<R: HookRuntime>(
         hook_value,
         inherit_global,
     );
+    // Most hooks are empty most of the time (every command runs several).
+    // With nothing to call, nothing allocates, so no GC can see the roots
+    // the scope below would push and restore.  Mirrors GNU
+    // `run_hook_with_args` returning on a nil hook value before it binds
+    // anything.
+    if funcs.is_empty() {
+        return Ok(Value::NIL);
+    }
     runtime.with_hook_root_scope(|runtime| {
         for func in funcs.iter().copied() {
             runtime.push_hook_root(func);
@@ -243,6 +251,10 @@ pub(crate) fn safe_run_hook_value<R: HookRuntime>(
         hook_value,
         inherit_global,
     );
+    // Nothing to call: no roots to push (see `run_hook_value`).
+    if funcs.is_empty() {
+        return Ok(Value::NIL);
+    }
     runtime.with_hook_root_scope(|runtime| {
         for func in funcs.iter().copied() {
             runtime.push_hook_root(func);
@@ -277,6 +289,10 @@ pub(crate) fn run_hook_value_until_success<R: HookRuntime>(
         hook_value,
         inherit_global,
     );
+    // Nothing to call: no roots to push (see `run_hook_value`).
+    if funcs.is_empty() {
+        return Ok(Value::NIL);
+    }
     runtime.with_hook_root_scope(|runtime| {
         for func in funcs.iter().copied() {
             runtime.push_hook_root(func);
@@ -307,6 +323,10 @@ pub(crate) fn run_hook_value_until_failure<R: HookRuntime>(
         hook_value,
         inherit_global,
     );
+    // Nothing to call: no roots to push (see `run_hook_value`).
+    if funcs.is_empty() {
+        return Ok(Value::T);
+    }
     runtime.with_hook_root_scope(|runtime| {
         for func in funcs.iter().copied() {
             runtime.push_hook_root(func);
@@ -338,6 +358,10 @@ pub(crate) fn run_hook_value_wrapped<R: HookRuntime>(
         hook_value,
         inherit_global,
     );
+    // Nothing to call: no roots to push (see `run_hook_value`).
+    if funcs.is_empty() {
+        return Ok(Value::NIL);
+    }
     runtime.with_hook_root_scope(|runtime| {
         for func in funcs.iter().copied() {
             runtime.push_hook_root(func);

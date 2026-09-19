@@ -18727,6 +18727,47 @@ fn stacked_overlays_pick_the_same_winner_and_order_as_gnu() {
 }
 
 #[test]
+fn empty_hooks_answer_like_gnu_without_running_anything() {
+    crate::test_utils::init_test_tracing();
+    // An empty hook is the common case -- every command runs several -- so
+    // `run_hook_value' and friends return before pushing GC roots.  The
+    // answers still have to be GNU's: nil for `run-hooks',
+    // `run-hook-with-args', `-until-success' and `run-hook-wrapped', t for
+    // `-until-failure' (no function failed), and a buffer-local value of
+    // just `(t)' still inherits the global functions.
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r##"
+        (progn
+          (defvar h-empty nil)
+          (defvar h-global nil)
+          (defvar h-single nil)
+          (setq h-single (lambda (&rest _) 'single))
+          (add-hook 'h-global (lambda (&rest _) 'from-global))
+          (list
+           (run-hooks 'h-empty)
+           (run-hook-with-args 'h-empty 1 2)
+           (run-hook-with-args-until-success 'h-empty 1)
+           (run-hook-with-args-until-failure 'h-empty 1)
+           (run-hook-wrapped 'h-empty (lambda (f &rest _) (funcall f)))
+           (run-hook-with-args-until-success 'h-single 1)
+           (run-hooks 'h-never-defined)
+           (run-hook-with-args-until-failure 'h-never-defined)
+           (with-temp-buffer
+             (setq-local h-global (list t))
+             (setq-local h-empty (list t))
+             (list (run-hook-with-args-until-success 'h-global 1)
+                   (run-hook-with-args-until-failure 'h-empty 1)
+                   (run-hooks 'h-empty)
+                   (run-hook-wrapped 'h-empty (lambda (f &rest _) (funcall f)))))))
+        "##,
+    );
+    assert_eq!(
+        result,
+        "OK (nil nil nil t nil single nil t (from-global t nil nil))"
+    );
+}
+
+#[test]
 fn forward_sexp_scans_treat_char_quote_inside_a_string_like_gnu() {
     crate::test_utils::init_test_tracing();
     // GNU `scan_lists' runs its Scharquote case into Sescape inside a string,

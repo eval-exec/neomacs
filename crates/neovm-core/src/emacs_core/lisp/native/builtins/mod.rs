@@ -686,7 +686,18 @@ mod rust_subrs_shadowed_by_lisp_test;
 // Wrapper functions for builtins that need tracing or non-standard access
 // -----------------------------------------------------------------------
 
+/// `run-hooks`, with the debug trace around it.
+///
+/// The trace payload is an owned `String` per hook name, so building it cost
+/// three allocations and a UTF-8 conversion on a call that usually finds the
+/// hook nil and returns -- more than half of the 873 Ir this primitive spent
+/// per call, and `run-hooks` fires on every command and most buffer changes.
+/// Build it only when a subscriber is listening at DEBUG; the untraced path
+/// is the bare primitive.
 fn run_hooks_traced(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    if !tracing::enabled!(tracing::Level::DEBUG) {
+        return builtin_run_hooks(eval, args);
+    }
     let hook_names: Vec<String> = args
         .iter()
         .filter_map(|a| a.as_symbol_name().map(|s| s.to_string()))
@@ -705,6 +716,9 @@ fn run_hooks_traced(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalRe
 }
 
 fn load_traced(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    if !tracing::enabled!(tracing::Level::DEBUG) {
+        return builtin_load(eval, args);
+    }
     let file_name = args.first().map(|a| format!("{}", a)).unwrap_or_default();
     tracing::debug!(file = %file_name, "load called");
     let result = builtin_load(eval, args);
@@ -713,6 +727,9 @@ fn load_traced(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult 
 }
 
 fn message_traced(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
+    if !tracing::enabled!(tracing::Level::DEBUG) {
+        return builtin_message(eval, args);
+    }
     let msg_preview: String = args
         .first()
         .map(|a| {
