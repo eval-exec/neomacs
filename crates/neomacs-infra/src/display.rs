@@ -37,6 +37,11 @@ pub struct DisplaySession {
     env: Vec<(String, String)>,
     cleanup_dir: Option<PathBuf>,
     runtime_directory: Option<RuntimeDirectory>,
+    /// Keeps a `/proc/<pid>/fd/<n>` runtime address valid for the session's
+    /// lifetime: the address resolves through this open descriptor, so the
+    /// File must outlive every consumer of the env.  Sway sessions use this
+    /// directly; weston sessions hold theirs inside [`RuntimeDirectory`].
+    _held_directory: Option<fs::File>,
 }
 
 impl DisplaySession {
@@ -53,6 +58,7 @@ impl DisplaySession {
             env: Vec::new(),
             cleanup_dir: None,
             runtime_directory: None,
+            _held_directory: None,
         }
     }
 }
@@ -193,6 +199,7 @@ pub fn start_weston_with_desktop(
             ],
             cleanup_dir: None,
             runtime_directory: Some(runtime_directory),
+            _held_directory: None,
         })
     } else {
         let _ = child.kill();
@@ -329,6 +336,7 @@ impl PendingXvfbSession {
             env,
             cleanup_dir: self.cleanup_dir.take(),
             runtime_directory: None,
+            _held_directory: None,
         }
     }
 }
@@ -341,6 +349,123 @@ impl Drop for PendingXvfbSession {
         }
         if let Some(cleanup_dir) = self.cleanup_dir.take() {
             let _ = fs::remove_dir_all(cleanup_dir);
+        }
+    }
+}
+
+/// Start a headless sway compositor for scenarios that synthesise input.
+///
+/// `artifact_root` is the caller-owned directory that holds the session's
+/// artifacts; sway's config and log land beside them, and the directory
+/// doubles as the XDG runtime (addressed through /proc so long checkout
+/// paths cannot exceed sockaddr_un's limit).  `config` is sway
+/// configuration text — resolution, seats, and focus policy are scenario
+/// policy, not harness mechanics.
+pub fn start_sway(artifact_root: &Path, config: &str) -> io::Result<DisplaySession> {
+    fs::create_dir_all(artifact_root)?;
+    set_owner_only_dir_permissions(artifact_root)?;
+    let config_path = artifact_root.join("sway.conf");
+    fs::write(&config_path, config)?;
+    let log_path = artifact_root.join("sway.log");
+    let log = fs::File::create(&log_path)?;
+    let held_directory = fs::File::open(artifact_root)?;
+    #[cfg(target_os = "linux")]
+    let runtime = {
+        use std::os::fd::AsRawFd;
+        format!(
+            "/proc/{}/fd/{}",
+            std::process::id(),
+            held_directory.as_raw_fd()
+        )
+    };
+    #[cfg(not(target_os = "linux"))]
+    let runtime = artifact_root.to_string_lossy().into_owned();
+
+    let program = std::env::var_os("NEOMACS_GUI_SWAY").unwrap_or_else(|| "sway".into());
+    let mut pending = PendingSwaySession::default();
+    let child = Command::new(&program)
+        .args(["--unsupported-gpu", "--config"])
+        .arg(&config_path)
+        .env("XDG_RUNTIME_DIR", &runtime)
+        .env("WLR_BACKENDS", "headless")
+        .env("WLR_RENDERER", "pixman")
+        .env("WLR_LIBINPUT_NO_DEVICES", "1")
+        .env_remove("WAYLAND_DISPLAY")
+        .env_remove("DISPLAY")
+        .stdout(Stdio::from(log.try_clone()?))
+        .stderr(Stdio::from(log))
+        .spawn()?;
+    pending.child = Some(child);
+
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        if pending
+            .child
+            .as_mut()
+            .expect("pending sway owns its child")
+            .try_wait()?
+            .is_some()
+        {
+            return Err(io::Error::other(format!(
+                "sway exited early: {}",
+                read_log_tail(&log_path)
+            )));
+        }
+        if let Some(socket) = fs::read_dir(artifact_root)?
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|p| {
+                let name = p.file_name().map(|n| n.to_string_lossy().into_owned());
+                matches!(name, Some(n) if n.starts_with("wayland-") && !n.ends_with(".lock"))
+            })
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        {
+            return Ok(pending.into_session(
+                vec![
+                    ("XDG_RUNTIME_DIR".to_string(), runtime),
+                    ("WAYLAND_DISPLAY".to_string(), socket),
+                    locale_pin(),
+                ],
+                held_directory,
+            ));
+        }
+        if Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!(
+                    "sway socket absent below {}: {}",
+                    artifact_root.display(),
+                    read_log_tail(&log_path)
+                ),
+            ));
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+}
+
+/// Own every partially-started sway resource until its socket appears.
+#[derive(Default)]
+struct PendingSwaySession {
+    child: Option<Child>,
+}
+
+impl PendingSwaySession {
+    fn into_session(mut self, env: Vec<(String, String)>, held: fs::File) -> DisplaySession {
+        DisplaySession {
+            child: self.child.take(),
+            env,
+            cleanup_dir: None,
+            runtime_directory: None,
+            _held_directory: Some(held),
+        }
+    }
+}
+
+impl Drop for PendingSwaySession {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
         }
     }
 }

@@ -5,9 +5,8 @@
 use serde_json::Value;
 use std::{
     fs,
-    os::{fd::AsRawFd, unix::fs::PermissionsExt},
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Child, Command},
     thread,
     time::{Duration, Instant},
 };
@@ -20,10 +19,6 @@ impl Drop for OwnedChild {
         let _ = self.0.kill();
         let _ = self.0.wait();
     }
-}
-
-fn tool(name: &str) -> String {
-    std::env::var(format!("NEOMACS_GUI_{}", name.to_uppercase())).unwrap_or_else(|_| name.into())
 }
 
 fn state(path: &Path, after: u64) -> Value {
@@ -98,17 +93,8 @@ fn run_native_scroll(kind: ScrollKind, target: ScrollTarget) {
         std::process::id()
     ));
     fs::create_dir(&artifacts).unwrap();
-    fs::set_permissions(&artifacts, fs::Permissions::from_mode(0o700)).unwrap();
-    // Short path to the same workspace directory, below the Unix socket limit.
-    let runtime_dir = fs::File::open(&artifacts).unwrap();
-    let runtime = format!(
-        "/proc/{}/fd/{}",
-        std::process::id(),
-        runtime_dir.as_raw_fd()
-    );
-    let config = artifacts.join("sway.conf");
-    fs::write(
-        &config,
+    let session = neomacs_infra::display::start_sway(
+        &artifacts,
         r#"
 output * resolution 1000x700
 xwayland disable
@@ -117,46 +103,11 @@ default_border none
 focus_follows_mouse yes
 "#,
     )
-    .unwrap();
-    let log = fs::File::create(artifacts.join("sway.log")).unwrap();
-    let mut compositor = OwnedChild(
-        Command::new(tool("sway"))
-            .args(["--unsupported-gpu", "--config"])
-            .arg(&config)
-            .env("XDG_RUNTIME_DIR", &runtime)
-            .env("WLR_BACKENDS", "headless")
-            .env("WLR_RENDERER", "pixman")
-            .env("WLR_LIBINPUT_NO_DEVICES", "1")
-            .env_remove("WAYLAND_DISPLAY")
-            .env_remove("DISPLAY")
-            .stdout(Stdio::from(log.try_clone().unwrap()))
-            .stderr(Stdio::from(log))
-            .spawn()
-            .expect("start sway"),
-    );
-    let deadline = Instant::now() + Duration::from_secs(8);
-    let socket = loop {
-        if let Some(path) = fs::read_dir(&artifacts)
-            .unwrap()
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .find(|p| {
-                let n = p.file_name().unwrap().to_string_lossy();
-                n.starts_with("wayland-") && !n.ends_with(".lock")
-            })
-        {
-            break path.file_name().unwrap().to_string_lossy().into_owned();
-        }
-        assert!(
-            compositor.0.try_wait().unwrap().is_none(),
-            "sway exited: {artifacts:?}"
-        );
-        assert!(
-            Instant::now() < deadline,
-            "sway socket absent: {artifacts:?}"
-        );
-        thread::sleep(Duration::from_millis(25));
-    };
+    .expect("start sway");
+    let session_env: std::collections::HashMap<String, String> =
+        session.env().iter().cloned().collect();
+    let runtime = session_env["XDG_RUNTIME_DIR"].clone();
+    let socket = session_env["WAYLAND_DISPLAY"].clone();
     let state_path = artifacts.join("state.json");
     let pixels_path = artifacts.join("surface.png");
     let binary = std::env::var_os("NEOMACS_GUI_TEST_BINARY")
