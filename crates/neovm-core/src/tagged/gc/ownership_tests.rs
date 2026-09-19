@@ -3165,6 +3165,51 @@ fn a_plain_variable_store_logs_its_pre_image_only_while_marking() {
     );
 }
 
+/// A `let` of a special variable swaps its cell (`specbind`'s plain arm and
+/// `do_one_unbind`'s SPECPDL_LET arm): during a concurrent mark the swap logs
+/// the value it overwrites, off the mark it logs nothing, and both hand back
+/// the old value.
+#[test]
+fn a_specbind_swap_logs_its_pre_image_only_while_marking() {
+    use crate::emacs_core::intern::intern;
+    use crate::emacs_core::symbol::Obarray;
+    crate::test_utils::init_test_tracing();
+    let mut heap = TaggedHeap::new();
+    set_tagged_heap(&mut heap);
+    let mut ob = Obarray::new();
+    let sym = intern("specbind-swap-pre-image");
+    let first = heap.alloc_cons(TaggedValue::fixnum(1), TaggedValue::NIL);
+    ob.set_symbol_value_id(sym, first);
+
+    let second = heap.alloc_cons(TaggedValue::fixnum(2), TaggedValue::NIL);
+    let old = ob.swap_plain_untrapped_value_id(sym, second);
+    assert_eq!(old.map(|v| v.bits()), Some(first.bits()));
+    assert!(
+        heap.satb_shared.lock().unwrap().is_empty(),
+        "no mark, no log"
+    );
+
+    heap.concurrent_mark_running = true;
+    TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(true));
+    let old = ob.swap_plain_untrapped_value_id(sym, TaggedValue::fixnum(3));
+    let logged: Vec<usize> = heap
+        .satb_shared
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|v| v.bits())
+        .collect();
+    heap.concurrent_mark_running = false;
+    TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(false));
+
+    assert_eq!(old.map(|v| v.bits()), Some(second.bits()));
+    assert_eq!(logged, vec![second.bits()], "the overwritten value");
+    assert_eq!(
+        ob.symbol_value_id(sym).map(|v| v.bits()),
+        Some(TaggedValue::fixnum(3).bits())
+    );
+}
+
 /// A key-weak table whose key is live image data must keep that entry
 /// through the CONCURRENT first partition cycle. That cycle never
 /// side-marks in-span objects (the GC thread drops in-span children), so at

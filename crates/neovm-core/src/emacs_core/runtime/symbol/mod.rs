@@ -2301,22 +2301,44 @@ impl Obarray {
     /// The caller holds no Lisp-visible state between the swap and its
     /// specpdl push/pop: nothing here runs Lisp or reaches a safe point, and
     /// the SATB pre-image note below keeps a concurrent mark exact.
-    #[inline]
+    ///
+    /// Off the concurrent mark (the common case) the slot is visited once,
+    /// with no seqlock bracket and no SATB note, neither of which a swap
+    /// needs then; the mark cannot start inside this call, which reaches no
+    /// safe point.
+    #[inline(always)]
     pub(crate) fn swap_plain_untrapped_value_id(
         &mut self,
         id: SymId,
         value: Value,
     ) -> Option<Value> {
+        if crate::tagged::gc::concurrent_mark_active() {
+            return self.swap_plain_untrapped_value_id_while_marking(id, value);
+        }
+        let sym = self.symbols.get_mut(Self::slot_index(id))?;
+        if !sym.flags.is_plain_untrapped_unprojected() || !sym.interned_global {
+            return None;
+        }
+        #[cfg(test)]
+        note_plain_value_slot_visit();
+        // SAFETY: the redirect is `Plainval`, so `val.plain` is the live arm.
+        let old = unsafe { sym.val.plain };
+        store_value_atomic(unsafe { &mut sym.val.plain }, value);
+        Some(old)
+    }
+
+    /// [`Self::swap_plain_untrapped_value_id`] during a concurrent mark: the
+    /// store is bracketed by the chunk's seqlock, and the pre-image is noted
+    /// so the snapshot-at-the-beginning mark stays exact.
+    #[cold]
+    #[inline(never)]
+    fn swap_plain_untrapped_value_id_while_marking(
+        &mut self,
+        id: SymId,
+        value: Value,
+    ) -> Option<Value> {
         let idx = Self::slot_index(id);
-        // One read of the concurrent-mark gate for both the seqlock bracket
-        // and the SATB pre-image note, computed before the `&mut` borrow.
-        let marking = crate::tagged::gc::concurrent_mark_active();
-        let seq = if marking {
-            self.symbols.chunk_seq_ptr(idx)
-        } else {
-            None
-        };
-        let _seq_guard = SeqlockWriteGuard::new(seq);
+        let _seq_guard = SeqlockWriteGuard::new(self.symbols.chunk_seq_ptr(idx));
         let sym = self.symbols.get_mut(idx)?;
         if !sym.flags.is_plain_untrapped_unprojected() || !sym.interned_global {
             return None;
@@ -2325,9 +2347,7 @@ impl Obarray {
         note_plain_value_slot_visit();
         // SAFETY: the redirect is `Plainval`, so `val.plain` is the live arm.
         let old = unsafe { sym.val.plain };
-        if marking {
-            crate::tagged::gc::note_root_overwrite_while_marking(old);
-        }
+        crate::tagged::gc::note_root_overwrite_while_marking(old);
         store_value_atomic(unsafe { &mut sym.val.plain }, value);
         Some(old)
     }
