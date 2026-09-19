@@ -97,7 +97,19 @@ windows-sys.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 inotify.workspace = true
 
-[target.'cfg(unix)'.dependencies]
+# GNU's configure probes `dbus-1 >= 1.0` (`configure.ac:3919-3944`) and simply
+# sets `HAVE_DBUS=no` when it is missing, so dbusbind is absent rather than
+# fatal.  `libdbus-sys` has no such mode: with no `dbus-1.pc` its build script
+# `panic!()`s, which made every macOS build fail.  Stock macOS ships no
+# `dbus-1.pc` -- CI's macos-latest included, which is what turned `doom install
+# compatibility (macos aarch64)` red -- so the dependency itself has to be
+# absent there.  Every Rust use is already behind `cfg(neomacs_have_dbus)`, so
+# macOS takes the same `--without-dbus` configuration its GNU counterpart takes
+# (and the one CI's oracle is built with:
+# `.github/actions/setup-gnu-emacs/action.yml:121`).
+#
+# Keep this rule in step with `detect_dbus`'s macOS guard in `build.rs`.
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 dbus = { version = "0.9", default-features = false }
 
 [features]

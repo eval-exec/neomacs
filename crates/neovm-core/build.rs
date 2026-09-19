@@ -147,8 +147,9 @@ fn detect_wkwebview() {
 /// Whether this build has a libdbus transport for `dbusbind`.
 ///
 /// GNU's `configure.ac:3921-3942` sets `HAVE_DBUS` when `dbus-1 >= 1.0`
-/// links. The `dbus` crate is a Unix dependency (Linux + macOS); Windows
-/// stays the `--without-dbus` configuration until a socket watch arm exists.
+/// links.  The `dbus` crate is a Unix dependency, but not a macOS one:
+/// `Cargo.toml` keeps the rule and says why.  Windows stays the
+/// `--without-dbus` configuration until a socket watch arm exists.
 /// `c_features` reads this cfg so `(featurep 'dbusbind)` cannot go true
 /// without the library.
 fn detect_dbus() {
@@ -159,6 +160,13 @@ fn detect_dbus() {
 
     // Target, not host: Cargo sets `CARGO_CFG_UNIX` for the crate being built.
     if std::env::var_os("CARGO_CFG_UNIX").is_none() {
+        return;
+    }
+    // macOS is excluded to match the dependency rule in `Cargo.toml`: the
+    // `dbus` crate is not in that target's graph, so this cfg would compile
+    // `dbusbind` against a crate that is not there.  GNU reaches the same
+    // place on a stock macOS -- no `dbus-1.pc`, so `HAVE_DBUS=no`.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         return;
     }
     if std::env::var_os("NEOMACS_DISABLE_DBUS").is_some() {
