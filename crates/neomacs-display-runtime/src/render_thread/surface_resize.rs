@@ -66,10 +66,10 @@ impl RenderApp {
             .event_frame_for_winit(window)
             .unwrap_or(0);
         let is_primary = self.frame_windows.is_primary_winit(window);
-        if let Some(device) = self.gpu.as_ref().map(|gpu| gpu.device.clone())
+        if let Some(gpu) = self.gpu.as_ref()
             && let Some(ws) = self.frame_windows.get_by_winit_mut(window)
         {
-            ws.handle_resize(&device, size.width, size.height);
+            ws.handle_resize(&gpu.device, &gpu.instance, size.width, size.height);
             if is_primary {
                 if let Some(renderer) = &mut self.renderer {
                     renderer.set_scale_factor(ws.scale_factor() as f32);

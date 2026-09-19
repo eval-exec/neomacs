@@ -49,6 +49,9 @@ pub(crate) struct GuiFrameNativeWindowState {
     pub(super) content_insets: neomacs_display_protocol::ContentInsets,
     pub window: Arc<dyn Window>,
     pub surface: wgpu::Surface<'static>,
+    /// Backend of the adapter this surface presents through; wgpu surfaces
+    /// do not expose it, and the GL resize quirk needs it.
+    pub surface_backend: wgpu::Backend,
     pub surface_config: wgpu::SurfaceConfiguration,
     pub width: u32,
     pub height: u32,
@@ -86,6 +89,40 @@ impl GuiFrameNativeWindowState {
             }
             SurfaceState::Suspended => SurfaceState::Suspended,
         }
+    }
+
+    /// Bring the present surface to `surface_config`'s geometry after a
+    /// window resize, encoding the backend quirk in one place: GL's
+    /// emulated swapchain needs a rebuilt window surface, every other
+    /// backend reconfigures the existing one.  Returns true when the
+    /// surface object was replaced.
+    pub(super) fn surface_configure_or_rebuild(
+        &mut self,
+        device: &wgpu::Device,
+        instance: &wgpu::Instance,
+    ) -> bool {
+        if self.surface_backend == wgpu::Backend::Gl {
+            let rebuilt = instance
+                .create_surface(self.window.clone())
+                .map_err(|error| {
+                    tracing::warn!("surface rebuild after resize failed: {error:?}");
+                    error
+                });
+            match rebuilt {
+                Ok(surface) => {
+                    self.surface = surface;
+                    self.surface.configure(device, &self.surface_config);
+                    return true;
+                }
+                Err(_) => {
+                    // Fall through to the in-place reconfigure: a stale-
+                    // geometry surface is still better than losing the
+                    // window's present path entirely.
+                }
+            }
+        }
+        self.surface.configure(device, &self.surface_config);
+        false
     }
 }
 
@@ -1387,7 +1424,13 @@ impl GuiFrameWindowState {
         surface_state
     }
 
-    pub fn handle_resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+    pub fn handle_resize(
+        &mut self,
+        device: &wgpu::Device,
+        instance: &wgpu::Instance,
+        width: u32,
+        height: u32,
+    ) {
         if let Some(scale_factor) = self.pending_scale_factor.take() {
             self.set_scale_factor(scale_factor);
         }
@@ -1397,7 +1440,14 @@ impl GuiFrameWindowState {
         if let FrameLifecycle::Active { native, .. } = &mut self.lifecycle {
             native.surface_config.width = surface.device_width().get();
             native.surface_config.height = surface.device_height().get();
-            native.surface.configure(device, &native.surface_config);
+            // The GL backend's emulated swapchain does not survive a
+            // reconfigure-and-keep-surface resize: presents after it land a
+            // buffer with stale geometry (the present-path contract test
+            // shows exactly the stale-height fraction).  Rebuilding the
+            // surface from the window gives EGL a fresh window surface at
+            // the new size; every other backend reconfigures in place, as
+            // the same contract verifies for Vulkan.
+            native.surface_configure_or_rebuild(device, instance);
             clear_frame_transition_textures(&mut self.render.compositor.transitions);
             self.render.compositor.dirty = true;
         }
@@ -2052,6 +2102,7 @@ impl GuiFrameWindowManager {
                                     content_insets: Default::default(),
                                     window,
                                     surface,
+                                    surface_backend: adapter.get_info().backend,
                                     surface_config: config,
                                     width: phys.width,
                                     height: phys.height,
