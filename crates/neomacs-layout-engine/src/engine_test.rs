@@ -24098,8 +24098,16 @@ fn layout_frame_rust_renders_overlay_string_tabs_as_stretches() {
 #[test]
 fn layout_frame_rust_aligns_dired_filenames_after_nerd_icon_tabs() {
     let mut eval = Context::new();
-    eval.eval_str(r#"(set-fontset-font t '(#xf48a . #xf48a) "JetBrainsMono Nerd Font")"#)
-        .expect("install GNU-observed Dired icon fallback");
+    // A bare Context lacks fontset.el's encoding table. GNU treats an
+    // unmatched family-only rule as ASCII, excluding this private-use icon.
+    // Install the Unicode encoding entry and identify the registry explicitly.
+    eval.eval_str(
+        r#"(progn
+          (setq font-encoding-alist '(("iso10646-1$" . (unicode-bmp . nil))))
+          (set-fontset-font t '(#xf48a . #xf48a)
+                            '("JetBrainsMono Nerd Font" . "iso10646-1")))"#,
+    )
+    .expect("install GNU-observed Dired icon fallback");
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
@@ -24296,8 +24304,16 @@ fn layout_frame_rust_aligns_dired_filenames_after_nerd_icon_tabs() {
 #[test]
 fn layout_frame_rust_nerd_font_alias_icon_uses_resolved_monospace_cell_width() {
     let mut eval = Context::new();
-    eval.eval_str(r#"(set-fontset-font t '(#xf48a . #xf48a) "JetBrainsMono Nerd Font")"#)
-        .expect("install the concrete Nerd Font fallback used by the compatibility alias");
+    // A bare Context lacks fontset.el's encoding table. GNU treats an
+    // unmatched family-only rule as ASCII, excluding this private-use icon.
+    // Install the Unicode encoding entry and identify the registry explicitly.
+    eval.eval_str(
+        r#"(progn
+          (setq font-encoding-alist '(("iso10646-1$" . (unicode-bmp . nil))))
+          (set-fontset-font t '(#xf48a . #xf48a)
+                            '("JetBrainsMono Nerd Font" . "iso10646-1")))"#,
+    )
+    .expect("install the concrete Nerd Font fallback used by the compatibility alias");
     let buf_id = eval
         .buffer_manager()
         .current_buffer()
