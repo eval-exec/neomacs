@@ -4888,6 +4888,12 @@ pub enum UndoBoundaryOutcome {
 #[derive(Clone, Default)]
 struct LiveBuffers {
     slots: Vec<Option<Box<Buffer>>>,
+    /// The occupied slots' indices, ascending. Ids are never reused -- a
+    /// killed buffer's id stays its identity -- so `slots` only grows, one
+    /// hole per buffer ever killed, and a session makes thousands through
+    /// `with-temp-buffer`. Every name lookup and buffer walk goes through
+    /// the live ones; this list lets them skip the holes.
+    live_ids: Vec<u32>,
     live: usize,
     /// How many live buffers are indirect, i.e. carry a base buffer.
     ///
@@ -4932,6 +4938,11 @@ impl LiveBuffers {
         let previous = self.slots[index].replace(Box::new(buffer)).map(|b| *b);
         if previous.is_none() {
             self.live += 1;
+            // New ids are the largest yet, so this is a push; only a dump
+            // restore inserts out of order.
+            if let Err(pos) = self.live_ids.binary_search(&(index as u32)) {
+                self.live_ids.insert(pos, index as u32);
+            }
         }
         self.indirect += usize::from(indirect);
         self.indirect -= usize::from(previous.as_ref().is_some_and(|b| b.base_buffer.is_some()));
@@ -4941,6 +4952,9 @@ impl LiveBuffers {
         let removed = self.slots.get_mut(id.0 as usize)?.take().map(|b| *b);
         if let Some(removed) = removed.as_ref() {
             self.live -= 1;
+            if let Ok(pos) = self.live_ids.binary_search(&(id.0 as u32)) {
+                self.live_ids.remove(pos);
+            }
             self.indirect -= usize::from(removed.base_buffer.is_some());
         }
         removed
@@ -4951,21 +4965,23 @@ impl LiveBuffers {
         self.indirect != 0
     }
     fn keys(&self) -> impl Iterator<Item = BufferId> + '_ {
-        self.slots
+        self.live_ids
             .iter()
-            .enumerate()
-            .filter_map(|(index, slot)| slot.as_ref().map(|_| BufferId(index as u64)))
+            .map(|&index| BufferId(u64::from(index)))
     }
     fn values(&self) -> impl Iterator<Item = &Buffer> {
-        self.slots.iter().filter_map(|slot| slot.as_deref())
+        self.live_ids
+            .iter()
+            .filter_map(|&index| self.slots[index as usize].as_deref())
     }
     fn values_mut(&mut self) -> impl Iterator<Item = &mut Buffer> {
         self.slots.iter_mut().filter_map(|slot| slot.as_deref_mut())
     }
     fn iter(&self) -> impl Iterator<Item = (BufferId, &Buffer)> {
-        self.slots.iter().enumerate().filter_map(|(index, slot)| {
-            slot.as_deref()
-                .map(|buffer| (BufferId(index as u64), buffer))
+        self.live_ids.iter().filter_map(|&index| {
+            self.slots[index as usize]
+                .as_deref()
+                .map(|buffer| (BufferId(u64::from(index)), buffer))
         })
     }
     fn from_map(map: FxHashMap<BufferId, Buffer>) -> Self {
