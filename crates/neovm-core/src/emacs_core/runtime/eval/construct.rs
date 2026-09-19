@@ -897,7 +897,11 @@ impl Context {
         obarray.set_symbol_value("completions-detailed", Value::NIL);
         obarray.set_symbol_value("completions-format", Value::symbol("horizontal"));
         obarray.set_symbol_value("completions-group", Value::NIL);
-        obarray.set_symbol_value("completions-group-format", Value::string("     %s  "));
+        // `completions-group-format` is deliberately NOT seeded: GNU's
+        // `lisp/minibuffer.el:1538` defines it with `defcustom` as a `concat` of
+        // two `propertize`d strings (`completions-group-separator` and
+        // `completions-group-title`), and a plain-string seed would win forever
+        // over that `defcustom`, dropping the faces the grouping display needs.
         obarray.set_symbol_value("completions-group-sort", Value::NIL);
         obarray.set_symbol_value(
             "completions-header-format",
@@ -2021,9 +2025,7 @@ impl Context {
         // bindings.
         let special_event_map = make_sparse_list_keymap();
         let mode_line_window_dedicated_keymap = make_sparse_list_keymap();
-        let indent_rigidly_map = make_sparse_list_keymap();
         let text_mode_map = make_sparse_list_keymap();
-        let image_slice_map = make_sparse_list_keymap();
         let tool_bar_map = make_sparse_list_keymap();
         let key_translation_map = make_sparse_list_keymap();
         let function_key_map = make_sparse_list_keymap();
@@ -2095,9 +2097,13 @@ impl Context {
             "mode-line-window-dedicated-keymap",
             mode_line_window_dedicated_keymap,
         );
-        obarray.set_symbol_value("indent-rigidly-map", indent_rigidly_map);
         obarray.set_symbol_value("text-mode-map", text_mode_map);
-        obarray.set_symbol_value("image-slice-map", image_slice_map);
+        // `indent-rigidly-map` and `image-slice-map` are deliberately NOT
+        // seeded, completing the rule stated above this block: GNU defines both
+        // with `defvar-keymap` -- `lisp/indent.el:237` (TAB, <left>, <right>,
+        // S-<left>, S-<right>) and `lisp/image.el:168` (the image resize
+        // bindings) -- and a seeded empty keymap makes those definitions skip
+        // installing their bindings, leaving the keys dead.
         obarray.set_symbol_value("tool-bar-map", tool_bar_map);
         // keyboard.c:14210 / 14202 DEFVAR_LISP -- special like every C DEFVAR.
         obarray.define_special_variable("key-translation-map", key_translation_map);
