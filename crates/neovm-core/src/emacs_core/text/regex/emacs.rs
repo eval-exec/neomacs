@@ -652,7 +652,7 @@ fn relocate_charset_keys<V>(
 /// Match result — stores group start/end positions.
 ///
 /// Mirrors GNU's `struct re_registers` from regex-emacs.h.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct MatchRegisters {
     /// Start positions for each group (group 0 = full match).
     /// -1 means group did not participate in match.
@@ -771,8 +771,10 @@ struct MatchScratch {
 }
 
 thread_local! {
-    static MATCH_SCRATCH: std::cell::RefCell<MatchScratch> =
-        std::cell::RefCell::new(MatchScratch::default());
+    /// Boxed so a search leases it by moving one pointer: the scratch's
+    /// inline register arrays made each lease, and each return, a memcpy.
+    static MATCH_SCRATCH: std::cell::RefCell<Option<Box<MatchScratch>>> =
+        std::cell::RefCell::new(Some(Box::default()));
 
     /// Set when a match aborts on the GNU fail-stack limit.  `re_search`
     /// bails out of its candidate loop when it sees the flag; the
@@ -4645,24 +4647,29 @@ pub(crate) fn re_match(
 }
 
 /// The per-thread `MatchScratch`, leased out of its cell for one search and
-/// returned by `Drop` (so early returns and `?` hand it back too).
-struct MatchScratchLease(MatchScratch);
+/// returned by `Drop` (so early returns and `?` hand it back too). A
+/// re-entrant search finds the cell empty and works on a fresh one.
+struct MatchScratchLease(Option<Box<MatchScratch>>);
 
 impl MatchScratchLease {
     fn take() -> Self {
-        Self(MATCH_SCRATCH.with(|cell| match cell.try_borrow_mut() {
-            Ok(mut cur) => std::mem::take(&mut *cur),
-            Err(_) => MatchScratch::default(),
-        }))
+        Self(Some(MATCH_SCRATCH.with(
+            |cell| match cell.try_borrow_mut() {
+                Ok(mut cur) => cur.take().unwrap_or_default(),
+                Err(_) => Box::default(),
+            },
+        )))
     }
     fn get(&mut self) -> &mut MatchScratch {
-        &mut self.0
+        self.0
+            .as_deref_mut()
+            .expect("a lease holds its scratch until it is dropped")
     }
 }
 
 impl Drop for MatchScratchLease {
     fn drop(&mut self) {
-        let scratch = std::mem::take(&mut self.0);
+        let scratch = self.0.take();
         MATCH_SCRATCH.with(|cell| {
             if let Ok(mut cur) = cell.try_borrow_mut() {
                 *cur = scratch;
@@ -4682,10 +4689,18 @@ fn re_match_candidate(
     syntax: &dyn SyntaxLookup,
     point: usize,
 ) -> Option<(usize, MatchRegisters)> {
-    MATCH_SCRATCH.with(|cell| match cell.try_borrow_mut() {
-        Ok(mut scratch) => {
-            re_match_candidate_in(&mut scratch, pattern, text, pos, stop, syntax, point)
-        }
+    let mut regs = MatchRegisters::default();
+    let end = MATCH_SCRATCH.with(|cell| match cell.try_borrow_mut() {
+        Ok(mut scratch) => re_match_candidate_in(
+            scratch.get_or_insert_with(Box::default),
+            pattern,
+            text,
+            pos,
+            stop,
+            syntax,
+            point,
+            &mut regs,
+        ),
         Err(_) => re_match_candidate_in(
             &mut MatchScratch::default(),
             pattern,
@@ -4694,20 +4709,21 @@ fn re_match_candidate(
             stop,
             syntax,
             point,
+            &mut regs,
         ),
-    })
+    })?;
+    Some((end, regs))
 }
 
 /// One match attempt on a caller-held scratch: the search loop borrows the
 /// per-thread scratch ONCE and tries every candidate on it (17.6K attempts
 /// per org font-lock op paid a thread-local RefCell borrow each).
-/// MEASURED (2026-09-11): this returns a 176-byte
-/// `Option<(usize, MatchRegisters)>`, and Rust moves it out of the return slot
-/// with a `memcpy` whether or not it is `Some` -- one per candidate position,
-/// 21,938 of them per org-editing operation, ~30 Ir each. An `#[inline]` hint
-/// here and on `re_match_internal` did NOT remove it (the rows came back
-/// byte-identical). Taking the registers as an out-parameter is the fix; the
-/// hint is not.
+/// A match fills REGS (GNU's caller-owned `struct re_registers`) and returns
+/// its end; a failed attempt writes nothing. Returning the registers by value
+/// instead -- a 176-byte `Option<(usize, MatchRegisters)>` -- cost a `memcpy`
+/// out of the return slot at EVERY candidate position, matched or not:
+/// ~22K per org-editing operation, ~30 Ir each.
+#[allow(clippy::too_many_arguments)]
 fn re_match_candidate_in(
     scratch: &mut MatchScratch,
     pattern: &CompiledPattern,
@@ -4716,18 +4732,37 @@ fn re_match_candidate_in(
     stop: usize,
     syntax: &dyn SyntaxLookup,
     point: usize,
-) -> Option<(usize, MatchRegisters)> {
+    regs: &mut MatchRegisters,
+) -> Option<usize> {
     if pattern.pike_eligible && force_pike() {
-        return pike_match(pattern, text, pos, stop, syntax, point);
+        return pike_match_into(pattern, text, pos, stop, syntax, point, regs);
     }
     let budgeted = pattern.pike_eligible && !force_backtrack();
-    let result = re_match_internal(scratch, pattern, text, pos, stop, syntax, point, budgeted);
+    let result = re_match_internal(
+        scratch, pattern, text, pos, stop, syntax, point, budgeted, regs,
+    );
     // The budgeted backtracker gave up on a catastrophic match: recompute it
     // linearly (and byte-exactly) with the Pike VM.
     if budgeted && take_pike_fallback() {
-        return pike_match(pattern, text, pos, stop, syntax, point);
+        return pike_match_into(pattern, text, pos, stop, syntax, point, regs);
     }
     result
+}
+
+/// [`pike_match`] with [`re_match_candidate_in`]'s out-parameter protocol.
+#[cold]
+fn pike_match_into(
+    pattern: &CompiledPattern,
+    text: &[u8],
+    pos: usize,
+    stop: usize,
+    syntax: &dyn SyntaxLookup,
+    point: usize,
+    regs: &mut MatchRegisters,
+) -> Option<usize> {
+    let (end, found) = pike_match(pattern, text, pos, stop, syntax, point)?;
+    *regs = found;
+    Some(end)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4740,7 +4775,8 @@ fn re_match_internal(
     syntax: &dyn SyntaxLookup,
     point: usize,
     enable_pike_fallback: bool,
-) -> Option<(usize, MatchRegisters)> {
+    regs: &mut MatchRegisters,
+) -> Option<usize> {
     // SEALED selects unchecked bytecode fetches inside the loop, justified
     // by `validate_sealed_buffer`. Hand-assembled (unsealed) buffers take
     // the fully checked instantiation.
@@ -4754,6 +4790,7 @@ fn re_match_internal(
             syntax,
             point,
             enable_pike_fallback,
+            regs,
         )
     } else {
         re_match_loop::<false>(
@@ -4765,6 +4802,7 @@ fn re_match_internal(
             syntax,
             point,
             enable_pike_fallback,
+            regs,
         )
     }
 }
@@ -4782,7 +4820,8 @@ fn re_match_loop<const SEALED: bool>(
     // linear budget — the caller then re-runs on the Pike VM.  Only set for
     // `pike_eligible` patterns (the fallback is byte-exact there).
     enable_pike_fallback: bool,
-) -> Option<(usize, MatchRegisters)> {
+    regs: &mut MatchRegisters,
+) -> Option<usize> {
     let bytecode = &pattern.buffer;
     let num_regs = pattern.re_nsub + 1;
 
@@ -5913,25 +5952,30 @@ fn re_match_loop<const SEALED: bool>(
 
     // If we got here, we matched!
     // Fill in registers
-    let mut regs = MatchRegisters::new(num_regs);
-    regs.start[0] = pos as i64;
-    regs.end[0] = d as i64;
+    regs.start.clear();
+    regs.end.clear();
+    regs.start.push(pos as i64);
+    regs.end.push(d as i64);
     for i in 1..num_regs {
-        regs.start[i] = regstart
-            .get(i)
-            .copied()
-            .flatten()
-            .map(|v| v as i64)
-            .unwrap_or(-1);
-        regs.end[i] = regend
-            .get(i)
-            .copied()
-            .flatten()
-            .map(|v| v as i64)
-            .unwrap_or(-1);
+        regs.start.push(
+            regstart
+                .get(i)
+                .copied()
+                .flatten()
+                .map(|v| v as i64)
+                .unwrap_or(-1),
+        );
+        regs.end.push(
+            regend
+                .get(i)
+                .copied()
+                .flatten()
+                .map(|v| v as i64)
+                .unwrap_or(-1),
+        );
     }
 
-    Some((d, regs))
+    Some(d)
 }
 
 // ---------------------------------------------------------------------------
@@ -7966,10 +8010,15 @@ pub(crate) fn re_search(
     // re-entrant search finds an empty cell and works on a fresh one.
     let mut lease = MatchScratchLease::take();
     let scratch: &mut MatchScratch = lease.get();
+    // The registers of the one match this search returns: every candidate
+    // fills them only on success, so a failed candidate moves nothing.
+    let mut regs = MatchRegisters::default();
     macro_rules! try_candidate {
         ($pos:expr, $stop:expr) => {
-            match re_match_candidate_in(scratch, pattern, text, $pos, $stop, syntax, point) {
-                Some(result) => Some(result),
+            match re_match_candidate_in(
+                scratch, pattern, text, $pos, $stop, syntax, point, &mut regs,
+            ) {
+                Some(end) => Some((end, std::mem::take(&mut regs))),
                 None => {
                     if matcher_overflow_pending() {
                         return None;
