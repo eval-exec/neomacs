@@ -92,10 +92,21 @@ fn pipe_reader_into_file(reader: os_pipe::PipeReader) -> File {
 #[derive(Default)]
 struct ChildEnv {
     clear: bool,
+    /// Set by [`ChildCommand::set_exact_env`]: the child starts from exactly
+    /// these variables (the Lisp layer's resolved, de-duplicated list) rather
+    /// than from nothing or the editor's own, and `edits` apply on top.
+    base: Option<std::sync::Arc<[(OsString, OsString)]>>,
     edits: BTreeMap<OsString, Option<OsString>>,
 }
 
 impl ChildEnv {
+    /// The variables themselves when they are an exact list with nothing
+    /// applied on top -- the `call-process` shape -- so a spawn can hand them
+    /// to the child as they are, in `process-environment` order.
+    fn exact_without_edits(&self) -> Option<&[(OsString, OsString)]> {
+        self.base.as_deref().filter(|_| self.edits.is_empty())
+    }
+
     /// The child's complete environment, inherited unless cleared, with the
     /// recorded edits applied.
     fn materialize(&self) -> BTreeMap<OsString, OsString> {
@@ -104,6 +115,9 @@ impl ChildEnv {
         } else {
             std::env::vars_os().collect()
         };
+        for (name, value) in self.base.iter().flat_map(|base| base.iter()) {
+            env.insert(name.clone(), value.clone());
+        }
         for (name, value) in &self.edits {
             match value {
                 Some(value) => {
@@ -120,6 +134,9 @@ impl ChildEnv {
     fn apply_to_command(&self, command: &mut std::process::Command) {
         if self.clear {
             command.env_clear();
+        }
+        for (name, value) in self.base.iter().flat_map(|base| base.iter()) {
+            command.env(name, value);
         }
         for (name, value) in &self.edits {
             match value {
@@ -186,25 +203,28 @@ impl ChildCommand {
         self
     }
 
-    pub(crate) fn envs<I, K, V>(&mut self, vars: I) -> &mut Self
-    where
-        I: IntoIterator<Item = (K, V)>,
-        K: AsRef<OsStr>,
-        V: AsRef<OsStr>,
-    {
-        for (key, value) in vars {
-            self.env(key, value);
-        }
-        self
-    }
-
     pub(crate) fn env_remove<K: AsRef<OsStr>>(&mut self, key: K) -> &mut Self {
         self.env.edits.insert(key.as_ref().to_os_string(), None);
         self
     }
 
+    #[cfg(test)]
     pub(crate) fn env_clear(&mut self) -> &mut Self {
         self.env.clear = true;
+        self.env.base = None;
+        self.env.edits.clear();
+        self
+    }
+
+    /// Give the child exactly `vars` (unique names), replacing the inherited
+    /// environment and every earlier edit -- `env_clear` plus `envs`, without
+    /// copying each variable into the edit map.
+    pub(crate) fn set_exact_env(
+        &mut self,
+        vars: std::sync::Arc<[(OsString, OsString)]>,
+    ) -> &mut Self {
+        self.env.clear = true;
+        self.env.base = Some(vars);
         self.env.edits.clear();
         self
     }
@@ -817,11 +837,11 @@ mod posix {
         /// `PATH` set *for the child* before falling back to the editor's own
         /// `PATH` (`execvp`).  Mirror that: search the child's `PATH` here;
         /// otherwise let `posix_spawnp` search the editor's.
-        fn resolve_program(program: &OsStr, env: &BTreeMap<OsString, OsString>) -> Option<PathBuf> {
+        fn resolve_program(program: &OsStr, path: Option<&OsStr>) -> Option<PathBuf> {
             if program.as_bytes().contains(&b'/') {
                 return None;
             }
-            let path = env.get(OsStr::new("PATH"))?;
+            let path = path?;
             std::env::split_paths(path)
                 .map(|dir| dir.join(program))
                 .find(|candidate| is_executable_file(candidate))
@@ -841,8 +861,28 @@ mod posix {
             stdout: ChildStdio,
             stderr: ChildStdio,
         ) -> io::Result<SpawnedChild> {
-            let env = command.env.materialize();
-            let resolved = resolve_program(&command.program, &env);
+            // The child's variables: the exact list itself when nothing was
+            // edited on top of it (every `call-process`), else the
+            // materialized map.
+            let materialized;
+            let vars: Vec<(&OsStr, &OsStr)> = match command.env.exact_without_edits() {
+                Some(list) => list
+                    .iter()
+                    .map(|(name, value)| (name.as_os_str(), value.as_os_str()))
+                    .collect(),
+                None => {
+                    materialized = command.env.materialize();
+                    materialized
+                        .iter()
+                        .map(|(name, value)| (name.as_os_str(), value.as_os_str()))
+                        .collect()
+                }
+            };
+            let child_path = vars
+                .iter()
+                .find(|(name, _)| *name == OsStr::new("PATH"))
+                .map(|(_, value)| *value);
+            let resolved = resolve_program(&command.program, child_path);
             let search_path = resolved.is_none();
             let file = c_string(
                 resolved
@@ -853,7 +893,7 @@ mod posix {
             let argv: Vec<CString> = std::iter::once(c_string(&command.program, "program"))
                 .chain(command.args.iter().map(|arg| c_string(arg, "argument")))
                 .collect::<io::Result<_>>()?;
-            let envp: Vec<CString> = env
+            let envp: Vec<CString> = vars
                 .iter()
                 .map(|(name, value)| {
                     // `NAME=VALUE` plus the NUL `CString` appends, sized once:

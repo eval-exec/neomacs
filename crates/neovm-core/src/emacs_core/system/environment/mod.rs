@@ -80,7 +80,9 @@ pub(crate) fn install_host_environment_snapshot(eval: &mut Context) {
 
 #[derive(Clone, Debug)]
 pub(crate) struct ChildEnvironment {
-    entries: Vec<(OsString, OsString)>,
+    /// Shared so that handing the list to a command (possibly more than
+    /// once, on a retry) copies no variable.
+    entries: std::sync::Arc<[(OsString, OsString)]>,
 }
 
 fn environment_name_eq(left: &[u8], right: &[u8]) -> bool {
@@ -137,19 +139,30 @@ fn os_environment_name_eq(left: &OsStr, right: &OsStr) -> bool {
     }
 }
 
+/// The key an environment variable is de-duplicated by: its name, compared
+/// as `os_environment_name_eq` compares (case-insensitively on Windows).
+fn environment_name_key(name: &OsStr) -> Vec<u8> {
+    std::cfg_select! {
+        windows => {
+            name.to_string_lossy().to_ascii_uppercase().into_bytes()
+        }
+        _ => {
+            std::os::unix::ffi::OsStrExt::as_bytes(name).to_vec()
+        }
+    }
+}
+
 fn push_unique_environment_entry(
     entries: &mut Vec<(OsString, OsString)>,
-    seen: &mut Vec<OsString>,
+    seen: &mut rustc_hash::FxHashSet<Vec<u8>>,
     name: OsString,
     value: Option<OsString>,
 ) {
-    if seen
-        .iter()
-        .any(|existing| os_environment_name_eq(existing, &name))
-    {
+    // A set, not a scan of the names so far: a child's environment is a
+    // hundred-odd variables, and every spawn built it.
+    if !seen.insert(environment_name_key(&name)) {
         return;
     }
-    seen.push(name.clone());
     if let Some(value) = value {
         entries.push((name, value));
     }
@@ -218,7 +231,8 @@ impl ChildEnvironment {
         let process_environment = eval.visible_variable_value_or_nil("process-environment");
         let process_entries = process_environment_prefix(process_environment);
         let mut entries = Vec::with_capacity(process_entries.len() + 2);
-        let mut seen = Vec::with_capacity(process_entries.len() + 2);
+        let mut seen = rustc_hash::FxHashSet::default();
+        seen.reserve(process_entries.len() + 2);
 
         if matches!(
             lookup_environment_list(&LispString::from_utf8("PWD"), process_environment),
@@ -261,21 +275,22 @@ impl ChildEnvironment {
             push_unique_environment_entry(&mut entries, &mut seen, name, value);
         }
 
-        Self { entries }
+        Self {
+            entries: entries.into(),
+        }
     }
 
     pub(crate) fn apply_to_child_command(
         &self,
         command: &mut crate::emacs_core::callproc::ChildCommand,
     ) {
-        command.env_clear();
-        command.envs(self.entries.iter().map(|(name, value)| (name, value)));
+        command.set_exact_env(std::sync::Arc::clone(&self.entries));
     }
 
     #[cfg(unix)]
     pub(crate) fn apply_to_pty_command(&self, command: &mut portable_pty::CommandBuilder) {
         command.env_clear();
-        for (name, value) in &self.entries {
+        for (name, value) in self.entries.iter() {
             command.env(name, value);
         }
     }
