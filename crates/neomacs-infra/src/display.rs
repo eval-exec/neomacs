@@ -189,6 +189,7 @@ pub fn start_weston_with_desktop(
             env: vec![
                 ("XDG_RUNTIME_DIR".to_string(), path_to_string(runtime_dir)),
                 ("WAYLAND_DISPLAY".to_string(), socket),
+                locale_pin(),
             ],
             cleanup_dir: None,
             runtime_directory: Some(runtime_directory),
@@ -294,6 +295,7 @@ fn start_xvfb_on(artifact_root: &Path, display_number: u32) -> io::Result<Displa
         return Ok(pending.into_session(vec![
             ("DISPLAY".to_string(), display),
             ("XAUTHORITY".to_string(), path_to_string(&authority_path)),
+            locale_pin(),
         ]));
     }
     let diagnostics = read_log_tail(&stderr_path);
@@ -422,4 +424,15 @@ fn read_log_tail(path: &Path) -> String {
 
 fn path_to_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
+}
+
+/// The locale every display session pins into its environment.  A session
+/// started under the C locale leaks coding-default divergence between the
+/// editors (the mode line's mule-info renders GNU `=--` vs Neomacs `U==`
+/// before the engine fix, and font/coding behavior still follows the
+/// ambient locale elsewhere), and a runner that comes up without LANG puts
+/// every scenario there.  `LC_ALL` outranks LANG/LANGUAGE in POSIX
+/// precedence, so one assignment pins every consumer of the session env.
+fn locale_pin() -> (String, String) {
+    ("LC_ALL".to_string(), "C.UTF-8".to_string())
 }
