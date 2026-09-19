@@ -856,9 +856,15 @@ mod posix {
             let envp: Vec<CString> = env
                 .iter()
                 .map(|(name, value)| {
-                    let mut entry = name.as_bytes().to_vec();
+                    // `NAME=VALUE` plus the NUL `CString` appends, sized once:
+                    // growing an exact `to_vec` for `=`, the value and the
+                    // NUL reallocated up to three times per variable, per
+                    // spawn.
+                    let (name, value) = (name.as_bytes(), value.as_bytes());
+                    let mut entry = Vec::with_capacity(name.len() + value.len() + 2);
+                    entry.extend_from_slice(name);
                     entry.push(b'=');
-                    entry.extend_from_slice(value.as_bytes());
+                    entry.extend_from_slice(value);
                     CString::new(entry).map_err(|_| {
                         io::Error::new(
                             io::ErrorKind::InvalidInput,

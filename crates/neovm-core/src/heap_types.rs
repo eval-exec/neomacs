@@ -209,6 +209,20 @@ impl LispString {
         payload
     }
 
+    /// Append the NUL every owned payload carries. A producer that sized its
+    /// buffer exactly (most do: `to_vec`, `with_capacity(len)`, an encoder's
+    /// output) leaves no room for it, and a plain `push` would then double
+    /// the capacity -- a fresh allocation and a copy of the whole payload.
+    /// Growing by exactly one byte usually stays inside the allocation's
+    /// size class, where the allocator extends it in place.
+    #[inline]
+    fn push_terminator(payload: &mut Vec<u8>) {
+        if payload.len() == payload.capacity() {
+            payload.reserve_exact(1);
+        }
+        payload.push(0);
+    }
+
     fn from_owned_payload(mut payload: Vec<u8>, size: usize, size_byte: i64) -> Self {
         let size_byte = Self::normalize_size_byte(size_byte, false);
         Self::assert_valid_size_byte(size_byte);
@@ -217,7 +231,7 @@ impl LispString {
             Self::payload_len_for(size, size_byte),
             "LispString storage length must match GNU size/size_byte fields"
         );
-        payload.push(0);
+        Self::push_terminator(&mut payload);
         let data = payload.as_ptr();
         let storage_capacity = payload.capacity();
         std::mem::forget(payload);
@@ -265,7 +279,7 @@ impl LispString {
 
     fn replace_owned_payload(&mut self, mut payload: Vec<u8>) {
         self.release_owned_storage();
-        payload.push(0);
+        Self::push_terminator(&mut payload);
         self.data = payload.as_ptr();
         self.storage_capacity = payload.capacity();
         std::mem::forget(payload);

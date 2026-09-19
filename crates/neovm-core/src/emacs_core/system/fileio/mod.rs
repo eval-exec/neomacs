@@ -373,7 +373,8 @@ fn trim_trailing_slashes_except_roots_bytes(path: &mut Vec<u8>) {
 /// byte pass (no filesystem / symlink resolution), preserving the leading `//`
 /// root marker and the POSIX superroot spelling exactly like the `&str` version.
 fn clean_path_bytes(bytes: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(bytes.len());
+    // One byte of room for the NUL the result's Lisp string appends.
+    let mut out = Vec::with_capacity(bytes.len() + 1);
     let mut p = 0;
 
     while p < bytes.len() {
