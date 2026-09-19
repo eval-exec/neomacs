@@ -1589,9 +1589,11 @@ pub fn register_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::Obarray)
     // it is populated later by characters.el via unicode-property-table-internal.
     // character.c:1156 DEFVAR_LISP, init nil.
     obarray.define_special_variable("unicode-category-table", Value::NIL);
-    // char-unify-table is created lazily by define_charset (charset.c:1364).
-    // Initialize to nil so maybe_unify_char gracefully degrades.
-    obarray.set_symbol_value("char-unify-table", Value::NIL);
+    // `char-unify-table` is deliberately NOT seeded.  GNU creates it lazily --
+    // `define_charset` (charset.c:1364) is what gives the symbol a value, and
+    // `(boundp 'char-unify-table)` is nil until then, so a nil seed here would
+    // make the name bound where GNU's is not.  The unified-char table this port
+    // uses internally is Rust-side storage, not this symbol; nothing reads it.
     // composition-function-table must be a real char-table (composite.c:2289).
     obarray.set_symbol_value(
         "composition-function-table",

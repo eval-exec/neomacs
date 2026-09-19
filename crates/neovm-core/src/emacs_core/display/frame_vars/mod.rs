@@ -87,8 +87,12 @@ pub fn register_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::Obarray)
     // symbol special.  Neomacs models the selected-frame value separately,
     // but Lisp bindings must retain the same dynamic-scope contract.
     obarray.define_special_variable("window-system", Value::NIL);
-    obarray.set_symbol_value("handle-args-function", Value::symbol("command-line-1"));
-    obarray.set_symbol_value("handle-args-function-alist", Value::NIL);
+    // `handle-args-function` and `handle-args-function-alist` are deliberately
+    // NOT seeded.  They are per-window-system bindings (`lisp/term/x-win.el`,
+    // `lisp/term/ns-win.el`) that GNU leaves unbound until such a
+    // terminal is initialized — `(boundp 'handle-args-function)` is nil in a
+    // `-q` GNU session — so seeding `command-line-1` here would make the name
+    // bound where GNU's is not, and `defvar` could never correct it.
     // resize-mini-windows is registered by xdisp::register_bootstrap_vars with
     // GNU's real pre-loadup init (nil); lisp/loadup.el:142 assigns `grow-only'
     // right after window.el is loaded, exactly like GNU.

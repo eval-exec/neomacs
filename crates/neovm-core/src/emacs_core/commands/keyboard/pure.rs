@@ -642,7 +642,10 @@ pub(crate) fn register_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::O
     obarray.make_special("tty-erase-char");
     // keyboard.c:13993 DEFVAR_INT, init 0.
     obarray.define_int_variable("extra-keyboard-modifiers", 0);
-    obarray.set_symbol_value("inhibit-local-menu-bar-menus", Value::NIL);
+    // `inhibit-local-menu-bar-menus` is deliberately NOT seeded: GNU 31 has no
+    // such variable -- neither `src/` nor `lisp/` mentions it (only
+    // ChangeLog.16 does), and it is unbound in a GNU session, batch or GUI --
+    // so seeding it invents a binding GNU does not have.
     // keyboard.c:13777 DEFVAR_LISP, XSETINT 033.
     obarray.define_special_variable("meta-prefix-char", Value::fixnum(27));
     // keyboard.c:14319 DEFVAR_LISP, init nil.

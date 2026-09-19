@@ -69,7 +69,11 @@ pub fn register_bootstrap_vars(obarray: &mut crate::emacs_core::symbol::Obarray)
         "buffer-auto-save-file-format",
         Value::list(vec![Value::symbol("t")]),
     );
-    obarray.set_symbol_value("buffer-stale-function", Value::NIL);
+    // `buffer-stale-function` is deliberately NOT seeded: GNU defines it in
+    // Lisp -- `lisp/files.el:7087` spells it `(defvar buffer-stale-function
+    // #'buffer-stale--default-function ...)` -- and `defvar` only assigns to a
+    // *void* symbol, so a nil seed would win permanently and leave every
+    // stale-buffer check without the default function GNU gives it.
     obarray.set_symbol_value("buffer-undo-list", Value::NIL);
     obarray.set_symbol_value("buffer-display-table", Value::NIL);
     obarray.set_symbol_value("enable-multibyte-characters", Value::T);
