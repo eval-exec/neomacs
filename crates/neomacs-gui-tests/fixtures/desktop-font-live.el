@@ -354,13 +354,42 @@
            (+ (float-time) 8)))))
      (+ (float-time) 8))))
 
+(defun desktop-font-live-probe ()
+  "Everything the isolation failure needs on a runner: the setting
+values as GSettings itself sees them, the harness env, and the
+keyfile contents the keyfile backend would read."
+  (let ((probe
+         (lambda (key)
+           (condition-case nil
+               (format "%s=%S" key
+                       (with-output-to-string
+                         (call-process "gsettings" nil standard-output nil
+                                       "get" "org.gnome.desktop.interface" key)))
+             (error (format "%s=<gsettings unreadable>" key))))))
+    (list
+     (funcall probe "monospace-font-name")
+     (funcall probe "font-name")
+     (cons 'schema-dir (getenv "GSETTINGS_SCHEMA_DIR"))
+     (cons 'backend (getenv "GSETTINGS_BACKEND"))
+     (cons 'config-home (getenv "XDG_CONFIG_HOME"))
+     (cons 'data-dirs (getenv "XDG_DATA_DIRS"))
+     (cons 'keyfile
+           (condition-case nil
+               (with-temp-buffer
+                 (insert-file-contents
+                  (expand-file-name "glib-2.0/settings/keyfile"
+                                    (or (getenv "XDG_CONFIG_HOME") "~")))
+                 (buffer-string))
+             (error "<no keyfile>"))))))
+
 (run-at-time
  0.1 nil
  (lambda ()
    (condition-case err
        (progn
          (unless (equal (font-get-system-font) "Ubuntu Mono 13")
-           (error "Initial settings are not isolated: %S" (desktop-font-live-state)))
+           (error "Initial settings are not isolated: %S probe: %S"
+                  (desktop-font-live-state) (desktop-font-live-probe)))
          (desktop-font-live-log "LIVE-FONT-BEFORE %S" (desktop-font-live-state))
          (pcase (getenv "NEOMACS_GUI_LIVE_FONT_CASE")
            ("opt-in" (desktop-font-live-opt-in))
