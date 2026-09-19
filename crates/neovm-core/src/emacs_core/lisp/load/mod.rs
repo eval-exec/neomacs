@@ -3291,7 +3291,7 @@ fn prune_bootstrap_cache_generations(dump_path: &Path, keep: usize) {
 /// which run 15-20 MB apiece.
 #[cfg(test)]
 pub(crate) fn test_bootstrap_cache_path(kind: &str) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("target/test-cache");
+    let dir = crate::test_utils::workspace_root().join("target/test-cache");
     let _ = std::fs::create_dir_all(&dir);
     let fingerprint = bootstrap_source_fingerprint(&runtime_project_root());
     let path = dir.join(format!(

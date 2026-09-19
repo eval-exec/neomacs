@@ -136,9 +136,8 @@ fn named_font_string_requires_a_representable_positive_point_size() {
 #[test]
 fn gnu_faces_el_defines_x_color_aliases() {
     crate::test_utils::init_test_tracing();
-    let source =
-        fs::read_to_string(PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("lisp/faces.el"))
-            .expect("read faces.el");
+    let source = fs::read_to_string(crate::test_utils::workspace_root().join("lisp/faces.el"))
+        .expect("read faces.el");
     assert!(
         source.contains(
             "(define-obsolete-function-alias 'x-defined-colors #'defined-colors \"30.1\")"

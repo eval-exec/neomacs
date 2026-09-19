@@ -5481,9 +5481,8 @@ fn raw_context_does_not_prebind_window_inside_aliases() {
 #[test]
 fn gnu_window_el_defines_window_inside_aliases() {
     crate::test_utils::init_test_tracing();
-    let source =
-        fs::read_to_string(PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("lisp/window.el"))
-            .expect("read window.el");
+    let source = fs::read_to_string(crate::test_utils::workspace_root().join("lisp/window.el"))
+        .expect("read window.el");
     assert!(
         source.contains("(defun window-body-edges (&optional window)"),
         "GNU window.el should define window-body-edges",

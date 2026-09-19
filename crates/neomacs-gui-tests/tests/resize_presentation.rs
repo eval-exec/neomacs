@@ -270,7 +270,7 @@ fn x11_backend_requested() -> bool {
 }
 
 fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_WORKSPACE_DIR"))
+    neomacs_infra::workspace_root()
 }
 
 fn neomacs_binary(workspace_root: &Path) -> PathBuf {

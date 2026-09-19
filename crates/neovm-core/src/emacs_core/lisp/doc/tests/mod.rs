@@ -2000,7 +2000,9 @@ fn a_stale_reference_into_a_compiled_file_is_reread_and_retried() {
     // Under the repo's own `tmp/`, not `/tmp`: this project's temp output goes
     // in the tree (and `tmp/` is ignored), so a fixture cannot land on a
     // volume that has no room for it.
-    let dir = std::path::Path::new(env!("CARGO_WORKSPACE_DIR")).join("tmp/l194-doc-reread-unit");
+    let dir = crate::test_utils::workspace_root()
+        .as_path()
+        .join("tmp/l194-doc-reread-unit");
     std::fs::create_dir_all(&dir).expect("fixture dir");
     let path = dir.join("victim.el");
     let escaped = path.display().to_string();
@@ -2059,7 +2061,9 @@ fn a_reread_that_does_not_repair_the_reference_happens_exactly_once() {
     // Under the repo's own `tmp/`, not `/tmp`: this project's temp output goes
     // in the tree (and `tmp/` is ignored), so a fixture cannot land on a
     // volume that has no room for it.
-    let dir = std::path::Path::new(env!("CARGO_WORKSPACE_DIR")).join("tmp/l194-doc-reread-unit");
+    let dir = crate::test_utils::workspace_root()
+        .as_path()
+        .join("tmp/l194-doc-reread-unit");
     std::fs::create_dir_all(&dir).expect("fixture dir");
     let path = dir.join("norepair.el");
     let escaped = path.display().to_string();

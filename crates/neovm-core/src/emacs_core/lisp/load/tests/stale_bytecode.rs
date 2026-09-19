@@ -56,7 +56,7 @@ impl Fixture {
             .duration_since(std::time::UNIX_EPOCH)
             .expect("clock before epoch")
             .as_nanos();
-        let root = std::path::PathBuf::from(env!("CARGO_WORKSPACE_DIR"))
+        let root = crate::test_utils::workspace_root()
             .join("tmp")
             .join("stale-bytecode-tests")
             .join(format!("{name}-{unique}"));
@@ -490,7 +490,7 @@ fn only_the_shipped_editors_main_announces_itself() {
         "crates/neovm-core/src/emacs_core/lisp/load/tests/stale_bytecode.rs",
     ];
 
-    let root = std::path::PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let root = crate::test_utils::workspace_root();
 
     let mut scanned = 0usize;
     let mut callers: Vec<String> = Vec::new();

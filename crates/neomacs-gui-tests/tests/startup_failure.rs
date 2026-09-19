@@ -41,7 +41,7 @@ fn check_pending_gpu(action: GpuStartupAction) {
         time::Instant,
     };
 
-    let root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let root = neomacs_infra::workspace_root();
     let artifacts = root.join("target/neomacs-gui-tests").join(format!(
         "startup-pending-gpu-{}-{}",
         action.as_ref(),
@@ -298,7 +298,7 @@ enum PendingFontAction {
 fn run_with_pending_font(action: PendingFontAction) -> neomacs_gui_tests::GuiRunResult {
     use std::{io::Write, os::unix::fs::OpenOptionsExt, process::Command, time::Instant};
 
-    let root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let root = neomacs_infra::workspace_root();
     let artifacts = root.join("target/neomacs-gui-tests");
     fs::create_dir_all(&artifacts).unwrap();
     let scenario = match action {
@@ -410,7 +410,7 @@ fn successful_exit_during_lisp_startup_remains_successful() {
 }
 
 fn check_lisp_startup_exit_status(status: i32) {
-    let root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let root = neomacs_infra::workspace_root();
     let artifacts = root.join("target/neomacs-gui-tests");
     let backend = GuiBackend::LinuxWayland;
     let session = DisplayHarness::for_backend(backend)

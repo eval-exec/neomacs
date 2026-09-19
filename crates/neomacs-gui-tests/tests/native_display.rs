@@ -61,7 +61,7 @@ fn native_resource_font_drives_first_window() {
 }
 
 fn run_native_contract(name: &str, fixture: &str, resources: bool) -> GuiRunResult {
-    let root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let root = neomacs_infra::workspace_root();
     let backend = if cfg!(target_os = "macos") {
         GuiBackend::Macos
     } else if cfg!(windows) {

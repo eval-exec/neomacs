@@ -11,7 +11,7 @@ use super::{
 
 #[test]
 fn invalid_scenario_output_is_persisted_but_never_accepted_as_a_sample() {
-    let workspace_tmp = PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("tmp");
+    let workspace_tmp = crate::workspace_root().join("tmp");
     fs::create_dir_all(&workspace_tmp).expect("create workspace-local test scratch root");
     let workspace = tempfile::Builder::new()
         .prefix("neomacs-perf-test-")
@@ -65,7 +65,7 @@ fn invalid_scenario_output_is_persisted_but_never_accepted_as_a_sample() {
 
 #[test]
 fn fixture_overlay_count_is_checked_against_the_harness_oracle() {
-    let workspace_tmp = PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("tmp");
+    let workspace_tmp = crate::workspace_root().join("tmp");
     fs::create_dir_all(&workspace_tmp).expect("create workspace-local test scratch root");
     let workspace = tempfile::Builder::new()
         .prefix("neomacs-perf-oracle-test-")
@@ -114,7 +114,7 @@ fn fixture_overlay_count_is_checked_against_the_harness_oracle() {
 
 #[test]
 fn mx_tab_result_is_valid_only_when_the_real_completion_window_lifecycle_completed() {
-    let workspace_tmp = PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("tmp");
+    let workspace_tmp = crate::workspace_root().join("tmp");
     fs::create_dir_all(&workspace_tmp).expect("create workspace-local test scratch root");
     let workspace = tempfile::Builder::new()
         .prefix("neomacs-perf-mx-tab-result-")
@@ -170,7 +170,7 @@ fn mx_tab_result_is_valid_only_when_the_real_completion_window_lifecycle_complet
 
 #[test]
 fn mx_tab_result_cannot_treat_a_missing_completion_window_as_a_fast_sample() {
-    let workspace_tmp = PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("tmp");
+    let workspace_tmp = crate::workspace_root().join("tmp");
     fs::create_dir_all(&workspace_tmp).expect("create workspace-local test scratch root");
     let workspace = tempfile::Builder::new()
         .prefix("neomacs-perf-mx-tab-mismatch-")
@@ -228,7 +228,7 @@ fn mx_tab_result_cannot_treat_a_missing_completion_window_as_a_fast_sample() {
 
 #[test]
 fn bytecode_call_loop_accepts_only_the_full_interpreted_call_count() {
-    let workspace_tmp = PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("tmp");
+    let workspace_tmp = crate::workspace_root().join("tmp");
     fs::create_dir_all(&workspace_tmp).expect("create workspace-local test scratch root");
     let workspace = tempfile::Builder::new()
         .prefix("neomacs-perf-bytecode-call-result-")
@@ -276,7 +276,7 @@ fn bytecode_call_loop_accepts_only_the_full_interpreted_call_count() {
 
 #[test]
 fn bytecode_call_loop_rejects_a_short_or_wrong_result() {
-    let workspace_tmp = PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("tmp");
+    let workspace_tmp = crate::workspace_root().join("tmp");
     fs::create_dir_all(&workspace_tmp).expect("create workspace-local test scratch root");
     let workspace = tempfile::Builder::new()
         .prefix("neomacs-perf-bytecode-call-mismatch-")
@@ -325,7 +325,7 @@ fn bytecode_call_loop_rejects_a_short_or_wrong_result() {
 
 #[test]
 fn scenario_result_requires_every_schema_field() {
-    let workspace_tmp = PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("tmp");
+    let workspace_tmp = crate::workspace_root().join("tmp");
     fs::create_dir_all(&workspace_tmp).expect("create workspace-local test scratch root");
     let workspace = tempfile::Builder::new()
         .prefix("neomacs-perf-schema-test-")
@@ -364,7 +364,7 @@ fn scenario_result_requires_every_schema_field() {
 
 #[test]
 fn scenario_result_rejects_a_success_status_with_an_error() {
-    let workspace_tmp = PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("tmp");
+    let workspace_tmp = crate::workspace_root().join("tmp");
     fs::create_dir_all(&workspace_tmp).expect("create workspace-local test scratch root");
     let workspace = tempfile::Builder::new()
         .prefix("neomacs-perf-outcome-test-")
@@ -408,7 +408,7 @@ fn scenario_result_rejects_a_success_status_with_an_error() {
 
 #[test]
 fn editing_simulation_requires_every_promoted_phase_measurement() {
-    let workspace_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let workspace_root = crate::workspace_root();
     let workspace_tmp = workspace_root.join("tmp");
     fs::create_dir_all(&workspace_tmp).expect("create workspace-local test scratch root");
     let scratch = tempfile::Builder::new()
@@ -465,7 +465,7 @@ fn editing_simulation_requires_every_promoted_phase_measurement() {
 
 #[test]
 fn sustained_editing_reports_insert_and_delete_as_two_edits() {
-    let workspace_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let workspace_root = crate::workspace_root();
     let workspace_tmp = workspace_root.join("tmp");
     fs::create_dir_all(&workspace_tmp).expect("create workspace-local test scratch root");
     let scratch = tempfile::Builder::new()
@@ -534,7 +534,7 @@ fn sustained_editing_reports_insert_and_delete_as_two_edits() {
 
 #[test]
 fn gui_input_latency_counts_keystrokes_over_the_one_millisecond_budget() {
-    let workspace_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let workspace_root = crate::workspace_root();
     let workspace_tmp = workspace_root.join("tmp");
     fs::create_dir_all(&workspace_tmp).expect("create workspace-local test scratch root");
     let scratch = tempfile::Builder::new()
@@ -599,7 +599,7 @@ fn gui_input_latency_counts_keystrokes_over_the_one_millisecond_budget() {
 
 #[test]
 fn sustained_native_video_promotes_pacing_gpu_pool_and_memory_metrics() {
-    let workspace_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let workspace_root = crate::workspace_root();
     let workspace_tmp = workspace_root.join("tmp");
     fs::create_dir_all(&workspace_tmp).expect("create workspace-local test scratch root");
     let scratch = tempfile::Builder::new()
@@ -711,7 +711,7 @@ fn sustained_native_video_promotes_pacing_gpu_pool_and_memory_metrics() {
 
 #[test]
 fn sustained_native_video_rejects_a_cpu_upload_fallback() {
-    let workspace_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let workspace_root = crate::workspace_root();
     let workspace_tmp = workspace_root.join("tmp");
     fs::create_dir_all(&workspace_tmp).expect("create workspace-local test scratch root");
     let scratch = tempfile::Builder::new()
@@ -764,7 +764,7 @@ fn sustained_native_video_rejects_a_cpu_upload_fallback() {
 
 #[test]
 fn run_persists_a_missing_editor_as_an_infrastructure_failure() {
-    let workspace_tmp = PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("tmp");
+    let workspace_tmp = crate::workspace_root().join("tmp");
     fs::create_dir_all(&workspace_tmp).expect("create workspace-local test scratch root");
     let workspace = tempfile::Builder::new()
         .prefix("neomacs-perf-run-test-")
@@ -796,7 +796,7 @@ fn run_persists_a_missing_editor_as_an_infrastructure_failure() {
 
 #[test]
 fn non_video_scenario_rejects_a_video_file_before_launching_editor() {
-    let workspace_tmp = PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("tmp");
+    let workspace_tmp = crate::workspace_root().join("tmp");
     fs::create_dir_all(&workspace_tmp).expect("create workspace-local test scratch root");
     let workspace = tempfile::Builder::new()
         .prefix("neomacs-perf-input-contract-test-")
@@ -821,7 +821,7 @@ fn non_video_scenario_rejects_a_video_file_before_launching_editor() {
 #[cfg(unix)]
 #[test]
 fn pty_runner_publishes_the_raw_terminal_byte_stream() {
-    let workspace_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let workspace_root = crate::workspace_root();
     let scratch_root = workspace_root.join("tmp");
     fs::create_dir_all(&scratch_root).expect("create workspace-local test scratch root");
     let scratch = tempfile::Builder::new()
@@ -860,7 +860,7 @@ fn pty_runner_publishes_the_raw_terminal_byte_stream() {
 #[cfg(unix)]
 #[test]
 fn pty_runner_allows_a_profile_wrapper_to_finalize_after_the_sentinel() {
-    let workspace_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let workspace_root = crate::workspace_root();
     let scratch_root = workspace_root.join("tmp");
     fs::create_dir_all(&scratch_root).expect("create workspace-local test scratch root");
     let scratch = tempfile::Builder::new()
@@ -948,7 +948,7 @@ fn benchmark_environment_does_not_inherit_logging_or_allocator_controls() {
 fn editor_provenance_uses_content_and_pdump_fingerprints() {
     use std::os::unix::fs::PermissionsExt;
 
-    let workspace_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let workspace_root = crate::workspace_root();
     let scratch = tempfile::Builder::new()
         .prefix("neomacs-perf-editor-provenance-")
         .tempdir_in(workspace_root.join("tmp"))
@@ -1049,7 +1049,7 @@ fn benchmark_environment_forwards_the_allowlist_and_jit_knobs_only() {
 
 #[test]
 fn org_journal_open_result_is_valid_when_every_journal_invariant_holds() {
-    let workspace_tmp = PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("tmp");
+    let workspace_tmp = crate::workspace_root().join("tmp");
     fs::create_dir_all(&workspace_tmp).expect("create workspace-local test scratch root");
     let workspace = tempfile::Builder::new()
         .prefix("neomacs-perf-org-journal-")
@@ -1109,7 +1109,7 @@ fn org_journal_open_result_is_valid_when_every_journal_invariant_holds() {
 
 #[test]
 fn org_journal_open_rejects_a_journal_that_never_created_overlays_or_an_entry() {
-    let workspace_tmp = PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("tmp");
+    let workspace_tmp = crate::workspace_root().join("tmp");
     fs::create_dir_all(&workspace_tmp).expect("create workspace-local test scratch root");
     let workspace = tempfile::Builder::new()
         .prefix("neomacs-perf-org-journal-reject-")
@@ -1173,7 +1173,7 @@ fn org_journal_open_rejects_a_journal_that_never_created_overlays_or_an_entry() 
 
 #[test]
 fn org_journal_open_relaxes_creation_invariants_for_an_external_journal() {
-    let workspace_tmp = PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("tmp");
+    let workspace_tmp = crate::workspace_root().join("tmp");
     fs::create_dir_all(&workspace_tmp).expect("create workspace-local test scratch root");
     let workspace = tempfile::Builder::new()
         .prefix("neomacs-perf-org-journal-external-")

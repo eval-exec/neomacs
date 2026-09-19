@@ -250,7 +250,7 @@ impl ContractApp {
 #[test]
 fn resize_then_present_shows_the_new_frame_on_the_current_backend() {
     let backend_label = std::env::var("WGPU_BACKEND").unwrap_or_else(|_| "default".to_owned());
-    let artifact_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("target/neomacs-gui-tests");
+    let artifact_root = neomacs_infra::workspace_root().join("target/neomacs-gui-tests");
     std::fs::create_dir_all(&artifact_root).unwrap();
     let artifacts = artifact_root.join(format!("present-contract-{backend_label}"));
     std::fs::create_dir_all(&artifacts).unwrap();

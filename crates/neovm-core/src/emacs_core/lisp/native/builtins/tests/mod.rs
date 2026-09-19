@@ -149,7 +149,10 @@ fn load_gnu_save_selected_window_runtime(eval: &mut Context) {
     )
     .expect("eval forms");
 
-    let window_path = concat!(env!("CARGO_WORKSPACE_DIR"), "/lisp/window.el");
+    let window_path = crate::test_utils::workspace_root()
+        .join("lisp/window.el")
+        .to_string_lossy()
+        .into_owned();
     let window_source = fs::read_to_string(window_path).expect("read GNU window.el");
     for marker in [
         "(defun internal--before-save-selected-window ()",

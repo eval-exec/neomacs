@@ -18,7 +18,7 @@ fn git(directory: &std::path::Path, arguments: &[&str]) {
 
 #[test]
 fn git_metadata_watch_paths_are_absolute_and_worktree_aware() {
-    let workspace_tmp = PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("tmp");
+    let workspace_tmp = crate::workspace_root().join("tmp");
     fs::create_dir_all(&workspace_tmp).expect("create workspace-local test scratch root");
     let scratch = tempfile::Builder::new()
         .prefix("neomacs-perf-build-provenance-")

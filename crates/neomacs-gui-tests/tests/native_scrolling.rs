@@ -85,7 +85,7 @@ enum ScrollTarget {
 }
 
 fn run_native_scroll(kind: ScrollKind, target: ScrollTarget) {
-    let root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let root = neomacs_infra::workspace_root();
     let artifact_root = root.join("target/neomacs-gui-tests");
     fs::create_dir_all(&artifact_root).unwrap();
     let artifacts = artifact_root.join(format!(

@@ -312,9 +312,8 @@ fn headless_primary_selection_ownership_tracks_even_an_empty_value() {
 #[test]
 fn gnu_select_el_defines_x_selection_aliases() {
     crate::test_utils::init_test_tracing();
-    let source =
-        fs::read_to_string(PathBuf::from(env!("CARGO_WORKSPACE_DIR")).join("lisp/select.el"))
-            .expect("read select.el");
+    let source = fs::read_to_string(crate::test_utils::workspace_root().join("lisp/select.el"))
+        .expect("read select.el");
     assert!(
         source
             .contains("(define-obsolete-function-alias 'x-select-text 'gui-select-text \"25.1\")"),

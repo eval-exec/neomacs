@@ -31,7 +31,7 @@ struct Ready {
 
 #[test]
 fn native_submenu_hover_keeps_editor_and_compositor_alive() {
-    let root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let root = neomacs_infra::workspace_root();
     let artifacts = root.join(format!(
         "target/neomacs-gui-tests/native-submenu-{}-{}",
         std::process::id(),

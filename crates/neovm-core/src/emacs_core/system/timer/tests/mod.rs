@@ -38,7 +38,7 @@ fn install_bare_elisp_shims(ev: &mut Context) {
 }
 
 fn gnu_subr_sit_for_eval() -> Context {
-    let project_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = crate::test_utils::workspace_root();
     let subr_path = project_root.join("lisp/subr.el");
     let subr_source = fs::read_to_string(&subr_path).expect("read GNU subr.el");
 

@@ -12,7 +12,7 @@ use crate::heap_types::LispString;
 use std::path::{Path, PathBuf};
 
 fn workspace_temp_dir(prefix: &str) -> tempfile::TempDir {
-    let workspace_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let workspace_root = crate::test_utils::workspace_root();
     let temp_root = workspace_root.join("tmp");
     std::fs::create_dir_all(&temp_root).expect("create workspace tmp directory");
     tempfile::Builder::new()

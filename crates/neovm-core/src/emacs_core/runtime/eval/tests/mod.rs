@@ -19949,7 +19949,10 @@ fn vm_subr_mix_fontlock() {
     let mut ev = crate::test_utils::runtime_startup_context();
 
     // 256 KiB of real elisp, cut at a char boundary (same as the regex benches).
-    let path = concat!(env!("CARGO_WORKSPACE_DIR"), "/lisp/subr.el");
+    let path = crate::test_utils::workspace_root()
+        .join("lisp/subr.el")
+        .to_string_lossy()
+        .into_owned();
     let text = std::fs::read_to_string(path).expect("read lisp/subr.el haystack");
     let mut cut = text.len().min(256 * 1024);
     while !text.is_char_boundary(cut) {

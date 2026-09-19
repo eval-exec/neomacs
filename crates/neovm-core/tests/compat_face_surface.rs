@@ -8,7 +8,7 @@ use common::{oracle_enabled, run_neovm_eval, run_oracle_eval};
 use native_regex::Regex as NativeRegex;
 
 fn gnu_xfaces_c_path() -> Option<std::path::PathBuf> {
-    let mut dir = std::path::PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let mut dir = common::workspace_root();
     for _ in 0..5 {
         let candidate = dir.join("emacs-mirror/emacs/src/xfaces.c");
         if candidate.exists() {

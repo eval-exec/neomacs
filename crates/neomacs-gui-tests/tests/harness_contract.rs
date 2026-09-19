@@ -238,7 +238,7 @@ fn svg_package_defaults_are_checkout_relative_and_preserve_explicit_overrides() 
 #[cfg(target_os = "linux")]
 #[test]
 fn wayland_session_owns_runtime_below_long_artifact_root() {
-    let root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"))
+    let root = neomacs_infra::workspace_root()
         .join("target/neomacs-gui-tests")
         .join(format!(
             "long-wayland-{}-{}",
@@ -271,7 +271,7 @@ fn wayland_session_owns_runtime_below_long_artifact_root() {
 #[cfg(target_os = "linux")]
 #[test]
 fn x11_session_owns_authenticated_tcp_display_below_artifact_root() {
-    let workspace = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let workspace = neomacs_infra::workspace_root();
     let root = workspace.join(format!(
         "target/neomacs-gui-tests/xvfb-contract-{}",
         std::process::id()
@@ -439,7 +439,7 @@ fn test_plan_can_drive_an_init_directory_startup_surface() {
 
 #[test]
 fn test_plan_materializes_json_manifest_artifact() {
-    let workspace_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let workspace_root = neomacs_infra::workspace_root();
     let artifact_root = workspace_root.join("target/neomacs-gui-tests");
     let artifacts = GuiArtifactSet::new(&artifact_root, GuiBackend::LinuxWayland, "startup-smoke");
     let _ = std::fs::remove_file(&artifacts.json);
@@ -693,7 +693,7 @@ fn run_with_runner_records_frame_snapshot_artifacts() {
 }
 
 fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_WORKSPACE_DIR"))
+    neomacs_infra::workspace_root()
 }
 
 struct FakeRunner {

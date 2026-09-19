@@ -6697,7 +6697,7 @@ fn assert_typed_contracts() {
         2,
     );
 
-    let workspace = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let workspace = neomacs_melpa_test_support::workspace_root();
     assert!(OwnedAbsoluteRoot::new("relative", workspace.join("tmp/owned")).is_err());
     assert!(OwnedAbsoluteRoot::new(&workspace, "/tmp/ambient").is_err());
     assert!(OwnedAbsoluteRoot::new(&workspace, workspace.join("tmp")).is_err());

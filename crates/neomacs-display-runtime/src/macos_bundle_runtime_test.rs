@@ -2,7 +2,7 @@ use super::MacOsBundleRuntime;
 use std::fs;
 
 fn workspace_tempdir() -> tempfile::TempDir {
-    let workspace_tmp = std::path::Path::new(env!("CARGO_WORKSPACE_DIR")).join("tmp");
+    let workspace_tmp = neomacs_infra::workspace_root().as_path().join("tmp");
     fs::create_dir_all(&workspace_tmp).expect("workspace tmp directory");
     tempfile::Builder::new()
         .prefix("macos-bundle-runtime.")
