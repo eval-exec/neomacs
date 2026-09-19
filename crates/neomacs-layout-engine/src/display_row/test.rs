@@ -1647,7 +1647,7 @@ fn render_lisp_string_row_records_xwidget_media_fragments() {
     let mut renderer =
         DisplayRowRenderer::new(&mut font_metrics, DisplayRowMeasurementMode::LogicalCells);
     let table = FaceTable::new();
-    let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, None);
+    let resolver = FaceResolver::new(&table, 0x00FFFFFF, 0x00000000, 14.0, Some("neo".into()));
     let mut base_face = resolver.default_face().clone();
     base_face.set_measured_char_width_px(8.0);
     base_face.font_ascent = 12.0;

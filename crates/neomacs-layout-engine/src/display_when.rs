@@ -111,6 +111,7 @@ pub(crate) fn evaluate_window_display_when_forms(
     window_id: Option<u64>,
     from: CharPos0,
     to: CharPos0,
+    target: crate::display_property::DisplayPropertyTarget,
 ) -> DisplayWhenConditions {
     let default_prefixes: Vec<Value> = ["line-prefix", "wrap-prefix"]
         .iter()
@@ -125,7 +126,7 @@ pub(crate) fn evaluate_window_display_when_forms(
         window_id.map(neovm_core::window::WindowId),
         &sites,
         |spec| {
-            crate::display_property::classify_resolved_display_spec(spec)
+            crate::display_property::classify_resolved_display_spec(spec, target)
                 .replacement()
                 .is_some()
         },

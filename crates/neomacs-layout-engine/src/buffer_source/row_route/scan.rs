@@ -865,6 +865,7 @@ pub(super) fn routed_row_replacement_scan<B: LayoutBufferView>(
                 value,
                 &buffer.layout_display_when_conditions(),
                 DisplayPropertyObject::Buffer,
+                buffer.layout_display_target(),
             );
             let spec = classification.replacement_spec();
             // Parse the routable content shape, independent of anchoring:

@@ -1004,6 +1004,9 @@ pub(crate) fn resolve_next_display_source_item(
         let mut context = DisplaySourceContext::with_face_resolver_and_non_text_area_sink(
             &mut resolver,
             &mut pending_non_text_area,
+            crate::display_property::DisplayPropertyTarget::for_window_system(
+                params.face_basis().face_resolver().is_window_system(),
+            ),
         )
         .with_automatic_composition(params.automatic_composition);
         source

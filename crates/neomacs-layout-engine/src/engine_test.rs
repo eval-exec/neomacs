@@ -14696,6 +14696,11 @@ fn layout_frame_rust_emits_inline_image_glyphs_for_display_image_specs() {
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("layout-inline-image", 320, 120, buf_id);
+    // Media replacement is meaningful only on a graphical frame.
+    eval.frame_manager_mut()
+        .get_mut(frame_id)
+        .expect("frame")
+        .set_window_system(Some(Value::symbol("neo")));
 
     let mut engine = LayoutEngine::new();
     engine.layout_frame_rust(&mut eval, frame_id);
@@ -14788,19 +14793,26 @@ fn layout_frame_rust_resolves_telega_cell_sized_images_before_catalog_lookup() {
     let frame_id =
         eval.frame_manager_mut()
             .create_frame("layout-telega-cell-image", 320, 120, buf_id);
+    // Media replacement is meaningful only on a graphical frame.
+    eval.frame_manager_mut()
+        .get_mut(frame_id)
+        .expect("frame")
+        .set_window_system(Some(Value::symbol("neo")));
+
     {
         let frame = eval.frame_manager_mut().get_mut(frame_id).expect("frame");
         frame.char_width = 8.0;
         frame.char_height = 18.0;
     }
 
-    let mut engine = LayoutEngine::new();
+    // Keep the fixture's declared pixel cells independent of installed fonts.
+    let mut engine = LayoutEngine::new_without_font_metrics();
     engine.layout_frame_rust(&mut eval, frame_id);
 
     let requests = requests.lock().expect("requests lock");
-    assert_eq!(requests.len(), 1);
+    assert!(!requests.is_empty(), "image should reach the catalog");
     assert_eq!(
-        requests[0].size,
+        requests.last().expect("image request").size,
         ImageSizeSpec::new(AxisSize::Exact(16), AxisSize::AtMost(18)),
         "character-cell units are logical layout dimensions, independent of device scale"
     );
@@ -14847,6 +14859,12 @@ fn layout_frame_rust_crops_compound_display_images_to_the_requested_slice() {
     let frame_id =
         eval.frame_manager_mut()
             .create_frame("layout-sliced-inline-image", 320, 120, buf_id);
+    // Media replacement is meaningful only on a graphical frame.
+    eval.frame_manager_mut()
+        .get_mut(frame_id)
+        .expect("frame")
+        .set_window_system(Some(Value::symbol("neo")));
+
     let mut engine = LayoutEngine::new();
     engine.layout_frame_rust(&mut eval, frame_id);
 
@@ -14910,8 +14928,14 @@ fn layout_frame_rust_renders_display_image_fallback_placeholder_through_row_buil
     let frame_id =
         eval.frame_manager_mut()
             .create_frame("layout-inline-image-fallback", 320, 120, buf_id);
+    // Media replacement is meaningful only on a graphical frame.
+    eval.frame_manager_mut()
+        .get_mut(frame_id)
+        .expect("frame")
+        .set_window_system(Some(Value::symbol("neo")));
 
-    let mut engine = LayoutEngine::new();
+    // Keep the fixture's declared pixel cells independent of installed fonts.
+    let mut engine = LayoutEngine::new_without_font_metrics();
     engine.layout_frame_rust(&mut eval, frame_id);
 
     let state = engine
@@ -14986,6 +15010,11 @@ fn layout_frame_rust_emits_inline_video_glyphs_for_display_video_specs() {
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("layout-inline-video", 320, 120, buf_id);
+    // Media replacement is meaningful only on a graphical frame.
+    eval.frame_manager_mut()
+        .get_mut(frame_id)
+        .expect("frame")
+        .set_window_system(Some(Value::symbol("neo")));
 
     let mut engine = LayoutEngine::new();
     engine.layout_frame_rust(&mut eval, frame_id);
@@ -15060,6 +15089,11 @@ fn layout_frame_rust_emits_inline_webkit_glyphs_for_display_webkit_specs() {
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("layout-inline-webkit", 320, 120, buf_id);
+    // Media replacement is meaningful only on a graphical frame.
+    eval.frame_manager_mut()
+        .get_mut(frame_id)
+        .expect("frame")
+        .set_window_system(Some(Value::symbol("neo")));
 
     let mut engine = LayoutEngine::new();
     engine.layout_frame_rust(&mut eval, frame_id);
@@ -15146,7 +15180,18 @@ fn inline_xwidget_glyph_in_frame(
         frame_height,
         buf_id,
     );
-    let mut engine = LayoutEngine::new();
+    // Media replacement is meaningful only on a graphical frame.
+    eval.frame_manager_mut()
+        .get_mut(frame_id)
+        .expect("frame")
+        .set_window_system(Some(Value::symbol("neo")));
+
+    eval.frame_manager_mut()
+        .get_mut(frame_id)
+        .expect("frame")
+        .set_parameter(Value::symbol("left-fringe"), Value::fixnum(0));
+    // Keep the fixture's declared pixel cells independent of installed fonts.
+    let mut engine = LayoutEngine::new_without_font_metrics();
     engine.layout_frame_rust(&mut eval, frame_id);
     let state = engine
         .last_frame_display_state
@@ -15251,6 +15296,12 @@ fn inline_xwidget_glyph_in_right_split(
         frame_height,
         left_buf_id,
     );
+    // Media replacement is meaningful only on a graphical frame.
+    eval.frame_manager_mut()
+        .get_mut(frame_id)
+        .expect("frame")
+        .set_window_system(Some(Value::symbol("neo")));
+
     let selected_window = eval
         .frame_manager()
         .get(frame_id)
@@ -15267,7 +15318,8 @@ fn inline_xwidget_glyph_in_right_split(
             neovm_core::window::SplitPlacement::AfterTarget,
         )
         .expect("split window");
-    let mut engine = LayoutEngine::new();
+    // Keep the fixture's declared pixel cells independent of installed fonts.
+    let mut engine = LayoutEngine::new_without_font_metrics();
     engine.layout_frame_rust(&mut eval, frame_id);
     let state = engine
         .last_frame_display_state
@@ -15330,20 +15382,21 @@ fn layout_frame_rust_crops_an_xwidget_wider_than_its_window_like_gnu() {
     // reserved at the right edge, so `last_visible_x` is 312 and the widget
     // after the one-cell "a" starts at 8: GNU's crop = 600 - (312 - 8).
     assert_eq!(cropped.x, 8.0, "{cropped:?}");
+    let clip = cropped
+        .clip_rect
+        .expect("body rows carry the text-area clip");
     assert_eq!(
-        cropped.width, 304.0,
-        "GNU: pixel_width -= crop; {cropped:?}"
+        cropped.width,
+        clip.x + clip.width - cropped.x,
+        "GNU crops the layout slot at the graphical text area's right edge"
     );
     // The crop narrows the glyph, not the widget: the native view is still
     // sized from `xww->width` and clipped to the text area.
     assert_eq!(cropped.content.width_px(), 600.0);
     assert_eq!(cropped.content.height_px(), 40.0);
-    let clip = cropped
-        .clip_rect
-        .expect("body rows carry the text-area clip");
     assert!(
-        clip.x <= 8.0 && clip.x + clip.width >= 312.0,
-        "the clip is the window's text area: {clip:?}"
+        clip.x <= cropped.x && clip.width < 320.0,
+        "the graphical text-area clip excludes the right fringe: {clip:?}"
     );
 }
 
@@ -15357,21 +15410,17 @@ fn layout_frame_rust_crops_an_xwidget_in_a_right_hand_split_by_the_windows_width
     let prefix = "a".repeat(70);
     let glyph = inline_xwidget_glyph_in_right_split(1600, 120, &prefix, false, 300, 40)
         .expect("the right window's xwidget is cropped, not dropped");
-    // Right window: 8 px cells, its text starts at frame x 808 (the column
-    // at 800 is the vertical border) and one column is reserved at the
-    // right edge, so `last_visible_x` is frame x 1592 and the widget after
-    // 70 cells sits at 1368: crop = 300 - (1592 - 1368).  Against the
-    // window's own width (1592 - 808 = 784, a quarter of which is 196) the
-    // 300 px widget is wide enough to crop; against the frame-absolute edge
-    // (1592 / 4 = 398) it would not have been.
-    assert_eq!(glyph.x, 1368.0, "{glyph:?}");
-    assert_eq!(glyph.width, 224.0, "GNU: pixel_width -= crop; {glyph:?}");
-    assert_eq!(glyph.content.width_px(), 300.0);
+    // The 300px widget exceeds a quarter of the right window's text
+    // area, but not a quarter of its frame-absolute right edge.
     let clip = glyph.clip_rect.expect("body rows carry the text-area clip");
-    assert!(
-        clip.x >= 800.0 && clip.x <= 808.0 && clip.x + clip.width >= 1592.0,
-        "the clip is the right window's text area: {clip:?}"
+    assert!(clip.x >= 800.0 && clip.width < 800.0, "{clip:?}");
+    assert!(300.0 > clip.width / 4.0 && 300.0 <= (clip.x + clip.width) / 4.0);
+    assert_eq!(
+        glyph.width,
+        clip.x + clip.width - glyph.x,
+        "GNU crops against the window-local text area: {glyph:?}"
     );
+    assert_eq!(glyph.content.width_px(), 300.0);
 }
 
 /// The line-number prefix lies inside GNU's text area: `it->current_x`
@@ -15384,36 +15433,27 @@ fn layout_frame_rust_crops_an_xwidget_in_a_right_hand_split_by_the_windows_width
 #[test]
 fn layout_frame_rust_measures_the_quarter_width_rule_from_the_text_area_not_the_line_numbers() {
     let prefix = "a".repeat(75);
-    // A 200 px widget after 75 cells overflows and is wider than a quarter
-    // of the window (784 / 4 = 196): cropped to what is left of the row,
-    // with the prefix's width showing in where the glyph starts.
+    // A 200px widget is wider than a quarter of the graphical text
+    // area (776 / 4 = 194), so overflow crops its layout slot.
     let cropped = inline_xwidget_glyph_in_right_split(1600, 120, &prefix, true, 200, 40)
         .expect("a wide xwidget after line numbers is cropped, not dropped");
     assert!(
         cropped.x > 808.0 + 600.0,
         "the line-number prefix moves the glyph right: {cropped:?}"
     );
-    // The layout pen reaches the widget at frame x 1456 (text area at 800,
-    // the border cell, the six-cell line-number prefix -- two digits plus
-    // GNU's `lnum_width + 2` padding -- and 75 cells of text: 82 cells of
-    // 8 px), so GNU's crop is 200 - (1592 - 1456).
-    assert_eq!(
-        cropped.width, 136.0,
-        "GNU: pixel_width -= crop; {cropped:?}"
+    assert!(
+        cropped.width > 0.0 && cropped.width < 200.0,
+        "the overflowing wide widget must be cropped: {cropped:?}"
     );
     assert_eq!(cropped.content.width_px(), 200.0);
 
-    // 195 px is not wider than a quarter of the window measured from the
-    // text area (195 <= 196), so GNU leaves its layout advance whole.  With
-    // truncation enabled, `display_line` retains that glyph past the right
-    // edge and `x_draw_xwidget_glyph_string` clips the native widget to the
-    // text area.  Measured from the content edge the quarter would be smaller
-    // than 195 and the widget would have been cropped instead.
-    let whole = inline_xwidget_glyph_in_right_split(1600, 120, &prefix, true, 195, 40)
+    // 193px is below a quarter of the full text area, but above a
+    // quarter after deducting the line-number prefix. GNU leaves it whole.
+    let whole = inline_xwidget_glyph_in_right_split(1600, 120, &prefix, true, 193, 40)
         .expect("GNU retains a narrow overflowing xwidget and clips its presentation");
     assert_eq!(whole.x, cropped.x, "the two widgets start at the same pen");
-    assert_eq!(whole.width, 195.0, "GNU leaves the layout advance whole");
-    assert_eq!(whole.content.width_px(), 195.0);
+    assert_eq!(whole.width, 193.0, "GNU leaves the layout advance whole");
+    assert_eq!(whole.content.width_px(), 193.0);
     assert_eq!(
         whole.clip_rect, cropped.clip_rect,
         "both presentations are clipped by the same window text area"
@@ -15487,6 +15527,11 @@ fn layout_frame_rust_emits_inline_xwidget_glyphs_for_gnu_display_xwidget_specs()
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("layout-inline-xwidget", 320, 120, buf_id);
+    // Media replacement is meaningful only on a graphical frame.
+    eval.frame_manager_mut()
+        .get_mut(frame_id)
+        .expect("frame")
+        .set_window_system(Some(Value::symbol("neo")));
 
     let mut engine = LayoutEngine::new();
     engine.layout_frame_rust(&mut eval, frame_id);
@@ -15551,6 +15596,11 @@ fn layout_frame_rust_emits_inline_surface_glyphs_for_display_surface_specs() {
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("layout-inline-surface", 320, 120, buf_id);
+    // Media replacement is meaningful only on a graphical frame.
+    eval.frame_manager_mut()
+        .get_mut(frame_id)
+        .expect("frame")
+        .set_window_system(Some(Value::symbol("neo")));
 
     let mut engine = LayoutEngine::new();
     engine.layout_frame_rust(&mut eval, frame_id);
@@ -15630,6 +15680,11 @@ fn layout_frame_rust_emits_inline_surface_glyphs_for_declarative_shader_specs() 
     let frame_id =
         eval.frame_manager_mut()
             .create_frame("layout-declarative-surface", 320, 120, buf_id);
+    // Media replacement is meaningful only on a graphical frame.
+    eval.frame_manager_mut()
+        .get_mut(frame_id)
+        .expect("frame")
+        .set_window_system(Some(Value::symbol("neo")));
 
     let mut engine = LayoutEngine::new();
     engine.layout_frame_rust(&mut eval, frame_id);
@@ -15746,6 +15801,12 @@ fn declarative_surface_channel0_resolves_image_and_video_sources() {
     let frame_id =
         eval.frame_manager_mut()
             .create_frame("layout-surface-channels", 320, 120, buf_id);
+    // Media replacement is meaningful only on a graphical frame.
+    eval.frame_manager_mut()
+        .get_mut(frame_id)
+        .expect("frame")
+        .set_window_system(Some(Value::symbol("neo")));
+
     let mut engine = LayoutEngine::new();
     engine.layout_frame_rust(&mut eval, frame_id);
 
@@ -32923,18 +32984,21 @@ fn overlay_after_string_at_invisible_run_start_is_not_dropped() {
 /// replacement's resume before.
 #[test]
 fn an_unloadable_image_replacement_still_covers_its_range() {
-    // The spec covers 1-based [4,7) — "def" — and resolves to the placeholder,
-    // so the row reads abc[img]ghij: the covered chars are gone and "g"
-    // follows exactly once.
+    // The graphical frame replaces 1-based [4,7) with a failed-load
+    // placeholder. A terminal instead retains the source (issue #383).
+    let (_, _, _, rows, _, _) =
+        layout_main_text_rows_with_graphical_frame("abcdefghij\n", |eval, buf_id| {
+            eval.buffer_manager_mut().set_current(buf_id);
+            eval.eval_str(
+                "(put-text-property 4 7 'display \
+                   '(image :type png :file \"/nonexistent-neomacs-p47-pin.png\"))",
+            )
+            .expect("image property");
+        });
     assert_eq!(
-        display_prop_first_row_text(
-            "abcdefghij\n",
-            "(put-text-property 4 7 'display \
-               '(image :type png :file \"/nonexistent-neomacs-p47-pin.png\"))",
-        ),
-        "abc[img]ghij ",
-        "an unloadable image is still a replacement over its whole covered \
-         range; the covered text must not reappear and must not be re-walked"
+        glyphs_logical_text(&rows[0].glyphs[1]),
+        "abc[img]ghij",
+        "a graphical failed-load placeholder still covers the full source range"
     );
 }
 

@@ -718,6 +718,7 @@ fn display_property_source_action_classifies_strings_typed_items_and_resolver_fa
             Value::string("displayed"),
             &crate::display_when::DisplayWhenConditions::structural(),
             crate::display_property::DisplayPropertyObject::Buffer,
+            crate::display_property::DisplayPropertyTarget::Graphical,
         );
         match display_string.source_action(
             &mut context,
@@ -745,6 +746,7 @@ fn display_property_source_action_classifies_strings_typed_items_and_resolver_fa
             space_spec,
             &crate::display_when::DisplayWhenConditions::structural(),
             crate::display_property::DisplayPropertyObject::Buffer,
+            crate::display_property::DisplayPropertyTarget::Graphical,
         );
         match space_plan.source_action(
             &mut context,
@@ -769,6 +771,7 @@ fn display_property_source_action_classifies_strings_typed_items_and_resolver_fa
             Value::list(vec![Value::symbol("image")]),
             &crate::display_when::DisplayWhenConditions::structural(),
             crate::display_property::DisplayPropertyObject::Buffer,
+            crate::display_property::DisplayPropertyTarget::Graphical,
         );
         match image_plan.source_action(
             &mut context,
@@ -802,6 +805,7 @@ fn display_property_string_base_face_is_explicit_for_buffer_and_string_sources()
         Value::string("displayed"),
         &crate::display_when::DisplayWhenConditions::structural(),
         crate::display_property::DisplayPropertyObject::Buffer,
+        crate::display_property::DisplayPropertyTarget::Graphical,
     );
     let mut context = DisplaySourceContext::empty();
 

@@ -458,6 +458,7 @@ impl<'rows, 'emit, 'surface>
                                 replacement.value,
                                 &buffer.layout_display_when_conditions(),
                                 crate::display_property::DisplayPropertyObject::Buffer,
+                                buffer.layout_display_target(),
                             ),
                             crate::display_item::BufferDisplayReplacementSource::spanning(
                                 loop_context.buffer_id(),
@@ -705,6 +706,7 @@ impl<'rows, 'emit, 'surface>
                             replacement.value,
                             &buffer.layout_display_when_conditions(),
                             crate::display_property::DisplayPropertyObject::Buffer,
+                            buffer.layout_display_target(),
                         ),
                         crate::display_item::BufferDisplayReplacementSource::spanning(
                             loop_context.buffer_id(),

@@ -3450,12 +3450,16 @@ impl LayoutEngine {
         // walk can reach (the same one fontification just covered) here, so
         // the freshness and topology checks below cover this Lisp too, and
         // let the snapshot carry the results.
+        let display_target = crate::display_property::DisplayPropertyTarget::for_window_system(
+            face_resolver.is_window_system(),
+        );
         let display_when = crate::display_when::evaluate_window_display_when_forms(
             evaluator,
             buf_id,
             Some(window_id.0),
             neovm_core::buffer::CharPos0::new(window_start.max(0) as usize),
             neovm_core::buffer::CharPos0::new(fontify_end.max(0) as usize),
+            display_target,
         );
         // The retained key tracks buffer/face changes, not arbitrary Lisp
         // dependencies. A newly evaluated condition can change glyphs without
@@ -3489,6 +3493,7 @@ impl LayoutEngine {
                 buffer,
                 evaluator.obarray(),
                 Some(visible_char_bound(params)),
+                display_target,
             )
             .with_display_when(display_when),
             None => {

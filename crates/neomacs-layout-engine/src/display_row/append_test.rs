@@ -10384,6 +10384,7 @@ fn display_property_replacement_append_item_resolves_string_replacement() {
         value,
         &crate::display_when::DisplayWhenConditions::structural(),
         DisplayPropertyObject::Buffer,
+        crate::display_property::DisplayPropertyTarget::Graphical,
     );
     let params = test_display_space_window_params();
 
@@ -10419,6 +10420,7 @@ fn display_property_replacement_append_item_resolves_stretch_replacement() {
         value,
         &crate::display_when::DisplayWhenConditions::structural(),
         DisplayPropertyObject::Buffer,
+        crate::display_property::DisplayPropertyTarget::Graphical,
     );
     let params = test_display_space_window_params();
 
@@ -10487,6 +10489,7 @@ fn display_property_replacement_append_item_names_cursor_policy() {
         value,
         &crate::display_when::DisplayWhenConditions::structural(),
         DisplayPropertyObject::Buffer,
+        crate::display_property::DisplayPropertyTarget::Graphical,
     );
     let params = test_display_space_window_params();
     let string = test_display_property_replacement_resolve_context(
@@ -10598,6 +10601,7 @@ fn display_property_replacement_row_render_request_builds_append_plan() {
         value,
         &crate::display_when::DisplayWhenConditions::structural(),
         DisplayPropertyObject::Buffer,
+        crate::display_property::DisplayPropertyTarget::Graphical,
     );
     let params = test_display_space_window_params();
     let descriptor = DisplayPropertyReplacementDescriptor::new(
@@ -10767,6 +10771,7 @@ fn display_property_replacement_resolve_request_appends_and_reports_outcome() {
         value,
         &crate::display_when::DisplayWhenConditions::structural(),
         DisplayPropertyObject::Buffer,
+        crate::display_property::DisplayPropertyTarget::Graphical,
     );
     let params = test_display_space_window_params();
 
@@ -10882,6 +10887,7 @@ fn buffer_display_property_replacement_render_outcome_updates_progress() {
         value,
         &crate::display_when::DisplayWhenConditions::structural(),
         DisplayPropertyObject::Buffer,
+        crate::display_property::DisplayPropertyTarget::Graphical,
     );
     let params = test_display_space_window_params();
     let replacement = BufferDisplayPropertyReplacementItem::new(

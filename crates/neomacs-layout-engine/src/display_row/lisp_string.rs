@@ -377,9 +377,12 @@ impl<'a> LispStringSourceAppendSession<'a> {
         )
     }
 
-    fn discard_pending_until_row_break(&mut self) -> bool {
+    fn discard_pending_until_row_break(
+        &mut self,
+        target: crate::display_property::DisplayPropertyTarget,
+    ) -> bool {
         self.source_state.discard_pending_item();
-        self.source.discard_until_row_break()
+        self.source.discard_until_row_break(target)
     }
 }
 
@@ -772,8 +775,11 @@ impl<'a> LispStringSourceRowAppendSession<'a> {
             .render_to_text_row_and_emit(state, face_ids, frame, position)
     }
 
-    pub(crate) fn discard_pending_until_row_break(&mut self) -> bool {
-        self.source_session.discard_pending_until_row_break()
+    pub(crate) fn discard_pending_until_row_break(
+        &mut self,
+        target: crate::display_property::DisplayPropertyTarget,
+    ) -> bool {
+        self.source_session.discard_pending_until_row_break(target)
     }
 }
 

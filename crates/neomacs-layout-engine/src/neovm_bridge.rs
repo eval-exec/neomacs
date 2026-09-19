@@ -92,6 +92,11 @@ impl DisplayLineNumbersMode {
 }
 
 pub(crate) trait LayoutBufferView {
+    // Raw, frame-less buffer readers retain graphical classification. Window
+    // snapshots must supply their actual frame target at construction.
+    fn layout_display_target(&self) -> crate::display_property::DisplayPropertyTarget {
+        crate::display_property::DisplayPropertyTarget::Graphical
+    }
     /// Buffer-selected regexp tables for automatic composition of strings
     /// displayed in this window. Unibyte strings are excluded by their source,
     /// independently of the displayed buffer's own multibyte setting.
@@ -199,6 +204,7 @@ impl BufferFaceRemapping {
 
 #[derive(Clone)]
 pub(crate) struct LayoutBufferSnapshot {
+    display_target: crate::display_property::DisplayPropertyTarget,
     /// `(when FORM . SPEC)` results for the window walk this snapshot serves.
     display_when: crate::display_when::DisplayWhenConditions,
     name: String,
@@ -232,6 +238,7 @@ impl LayoutBufferSnapshot {
         let slots = buffer.slot_values_snapshot();
         Self {
             display_when: crate::display_when::DisplayWhenConditions::structural(),
+            display_target: crate::display_property::DisplayPropertyTarget::Graphical,
             name: buffer.name_runtime_string_owned(),
             text_snapshot: buffer.text_snapshot(),
             accessible_start_emacs_byte: buffer.point_min_emacs_byte_pos(),
@@ -249,7 +256,12 @@ impl LayoutBufferSnapshot {
 
     #[cfg(test)]
     pub fn from_buffer_with_obarray(buffer: &Buffer, obarray: &Obarray) -> Self {
-        Self::from_buffer_for_window(buffer, obarray, None)
+        Self::from_buffer_for_window(
+            buffer,
+            obarray,
+            None,
+            crate::display_property::DisplayPropertyTarget::Graphical,
+        )
     }
 
     /// Snapshot a buffer for one window.
@@ -262,8 +274,10 @@ impl LayoutBufferSnapshot {
         buffer: &Buffer,
         obarray: &Obarray,
         visible: Option<(usize, usize)>,
+        target: crate::display_property::DisplayPropertyTarget,
     ) -> Self {
         let mut snapshot = Self::from_buffer(buffer);
+        snapshot.display_target = target;
         snapshot.vars =
             resolve_layout_vars(snapshot.local_var_alist, &snapshot.slots, Some(obarray));
         snapshot.category_symbol_plists = capture_layout_category_symbol_plists(buffer, obarray);
@@ -663,6 +677,9 @@ impl LayoutBufferView for Buffer {
 }
 
 impl LayoutBufferView for LayoutBufferSnapshot {
+    fn layout_display_target(&self) -> crate::display_property::DisplayPropertyTarget {
+        self.display_target
+    }
     fn layout_string_composition_rules(
         &self,
     ) -> Option<neovm_core::emacs_core::composite::AutomaticCompositionRules> {
@@ -3189,6 +3206,7 @@ impl<'a, B: LayoutBufferView + ?Sized> RustTextPropAccess<'a, B> {
                     value,
                     &self.buffer.layout_display_when_conditions(),
                     crate::display_property::DisplayPropertyObject::Buffer,
+                    self.buffer.layout_display_target(),
                 )
                 .replacement()
                 .is_some()

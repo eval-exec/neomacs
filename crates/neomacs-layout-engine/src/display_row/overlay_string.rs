@@ -666,7 +666,7 @@ fn render_overlay_string<B: LayoutBufferView>(
         match stop {
             DisplayRowRenderStop::SourceExhausted => break,
             DisplayRowRenderStop::Clipped => {
-                if source_context.discard_pending_until_row_break() {
+                if source_context.discard_pending_until_row_break(buffer.layout_display_target()) {
                     state
                         .source_render
                         .output_emitter()

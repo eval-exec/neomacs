@@ -37,6 +37,7 @@ use neovm_core::emacs_core::value::{get_string_text_properties_table_for_value, 
 use neovm_core::face::LispFaceId;
 
 pub(crate) struct DisplaySourceContext<'a> {
+    target: crate::display_property::DisplayPropertyTarget,
     automatic_composition: Option<AutomaticCompositionRules>,
     face_resolver: Option<&'a mut dyn DisplayItemFaceResolver>,
     /// Typed side channel for output that does not belong to the text area.
@@ -51,6 +52,7 @@ pub(crate) struct DisplaySourceContext<'a> {
 impl<'a> DisplaySourceContext<'a> {
     pub(crate) const fn empty() -> Self {
         Self {
+            target: crate::display_property::DisplayPropertyTarget::Graphical,
             automatic_composition: None,
             face_resolver: None,
             non_text_area_sink: None,
@@ -60,6 +62,7 @@ impl<'a> DisplaySourceContext<'a> {
     #[cfg(test)]
     pub(crate) fn with_face_resolver(resolver: &'a mut dyn DisplayItemFaceResolver) -> Self {
         Self {
+            target: crate::display_property::DisplayPropertyTarget::Graphical,
             automatic_composition: None,
             face_resolver: Some(resolver),
             non_text_area_sink: None,
@@ -69,8 +72,10 @@ impl<'a> DisplaySourceContext<'a> {
     pub(crate) fn with_face_resolver_and_non_text_area_sink(
         resolver: &'a mut dyn DisplayItemFaceResolver,
         non_text_area_sink: &'a mut Vec<DisplayNonTextAreaEmission>,
+        target: crate::display_property::DisplayPropertyTarget,
     ) -> Self {
         Self {
+            target,
             automatic_composition: None,
             face_resolver: Some(resolver),
             non_text_area_sink: Some(non_text_area_sink),
@@ -83,6 +88,10 @@ impl<'a> DisplaySourceContext<'a> {
     ) -> Self {
         self.automatic_composition = rules;
         self
+    }
+
+    pub(crate) fn display_target(&self) -> crate::display_property::DisplayPropertyTarget {
+        self.target
     }
 
     fn collect_fringe(&mut self, layout: crate::display_spec::DisplayFringeLayout) {
@@ -2700,8 +2709,12 @@ impl LispStringSourceCursor {
         self
     }
 
-    pub(crate) fn discard_until_row_break(&mut self) -> bool {
+    pub(crate) fn discard_until_row_break(
+        &mut self,
+        target: crate::display_property::DisplayPropertyTarget,
+    ) -> bool {
         let mut context = DisplaySourceContext::empty();
+        context.target = target;
         while let Some(item) = self.next_item(&mut context) {
             if matches!(item.kind, DisplayItemKind::RowBreak(_)) {
                 return true;
@@ -3123,13 +3136,17 @@ impl LispStringSourceFrame {
             // than of a check someone has to remember to keep.
             if self.nested_display_policy == NestedDisplayPolicy::ModifiersOnly {
                 self.char_index = property_end;
-                item_layout =
-                    classify_display_property_modifiers_only(display_prop, &self.display_when);
+                item_layout = classify_display_property_modifiers_only(
+                    display_prop,
+                    &self.display_when,
+                    context.display_target(),
+                );
             } else {
                 let display_property = DisplayPropertySourcePlan::new(
                     display_prop,
                     &self.display_when,
                     DisplayPropertyObject::LispString,
+                    context.display_target(),
                 );
                 let display_end = if display_property.replacement().is_some() {
                     self.display_value_extent(display_prop, property_end)
@@ -3623,10 +3640,11 @@ impl DisplayPropertySourcePlan {
         value: Value,
         conditions: &DisplayWhenConditions,
         object: DisplayPropertyObject,
+        target: crate::display_property::DisplayPropertyTarget,
     ) -> Self {
         Self {
             value,
-            classification: classify_display_property(value, conditions, object),
+            classification: classify_display_property(value, conditions, object, target),
         }
     }
 

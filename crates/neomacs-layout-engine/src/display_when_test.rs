@@ -91,6 +91,7 @@ fn window_span_forms_are_evaluated_from_text_props_overlays_and_prefix_vars() {
         None,
         CharPos0::new(0),
         CharPos0::new(12),
+        crate::display_property::DisplayPropertyTarget::Graphical,
     );
     let holds = |form: Value| match conditions.verdict(form) {
         DisplayWhenVerdict::Holds => Some(true),
@@ -143,6 +144,7 @@ fn a_disable_eval_wrapper_makes_its_when_forms_fail_like_gnu() {
         None,
         CharPos0::new(0),
         CharPos0::new(4),
+        crate::display_property::DisplayPropertyTarget::Graphical,
     );
     let form = when_form(disabled, 0);
     assert_eq!(conditions.verdict(form), DisplayWhenVerdict::Unseen);
@@ -151,6 +153,7 @@ fn a_disable_eval_wrapper_makes_its_when_forms_fail_like_gnu() {
             disabled,
             &conditions,
             crate::display_property::DisplayPropertyObject::Buffer,
+            crate::display_property::DisplayPropertyTarget::Graphical
         )
         .replacement()
         .is_none(),
@@ -186,6 +189,7 @@ fn forms_are_evaluated_with_the_window_buffer_current() {
         None,
         CharPos0::new(0),
         CharPos0::new(4),
+        crate::display_property::DisplayPropertyTarget::Graphical,
     );
     assert_eq!(
         conditions.verdict(when_form(spec, 0)),
@@ -227,6 +231,7 @@ fn an_after_string_binds_buffer_position_to_the_overlay_end() {
         None,
         CharPos0::new(0),
         CharPos0::new(9),
+        crate::display_property::DisplayPropertyTarget::Graphical,
     );
     assert_eq!(
         conditions.verdict(prefix_when_form(after_string)),
@@ -266,6 +271,7 @@ fn an_overlay_scoped_to_another_window_is_not_scanned() {
         Some(u64::MAX),
         CharPos0::new(0),
         CharPos0::new(9),
+        crate::display_property::DisplayPropertyTarget::Graphical,
     );
     assert_eq!(
         conditions.verdict(when_form(display, 0)),
@@ -283,6 +289,7 @@ fn an_overlay_scoped_to_another_window_is_not_scanned() {
         Some(selected),
         CharPos0::new(0),
         CharPos0::new(9),
+        crate::display_property::DisplayPropertyTarget::Graphical,
     );
     assert_eq!(
         conditions.verdict(when_form(display, 0)),
@@ -317,6 +324,7 @@ fn a_hidden_overlay_shows_its_after_string_at_the_start_the_walk_reaches() {
         None,
         CharPos0::new(0),
         CharPos0::new(9),
+        crate::display_property::DisplayPropertyTarget::Graphical,
     );
     assert_eq!(
         conditions.verdict(prefix_when_form(after)),
@@ -358,6 +366,7 @@ fn an_after_string_ending_at_the_window_start_is_scanned_and_one_beyond_the_span
         None,
         CharPos0::new(4),
         CharPos0::new(8),
+        crate::display_property::DisplayPropertyTarget::Graphical,
     );
     assert_eq!(
         conditions.verdict(prefix_when_form(at_start)),
@@ -400,8 +409,14 @@ fn overlay_strings_anchored_at_point_max_are_evaluated_when_the_span_reaches_it(
         .get(buf_id)
         .expect("buffer")
         .layout_point_max_char_pos();
-    let conditions =
-        evaluate_window_display_when_forms(&mut eval, buf_id, None, CharPos0::new(0), point_max);
+    let conditions = evaluate_window_display_when_forms(
+        &mut eval,
+        buf_id,
+        None,
+        CharPos0::new(0),
+        point_max,
+        crate::display_property::DisplayPropertyTarget::Graphical,
+    );
     assert_eq!(
         conditions.verdict(prefix_when_form(empty_before)),
         DisplayWhenVerdict::Fails,
@@ -438,6 +453,7 @@ fn an_empty_overlay_supplies_no_display_property() {
         None,
         CharPos0::new(0),
         CharPos0::new(7),
+        crate::display_property::DisplayPropertyTarget::Graphical,
     );
     assert_eq!(
         conditions.verdict(when_form(display, 0)),

@@ -988,6 +988,7 @@ impl<'a, B: LayoutBufferView + ?Sized> BufferTextSourceCursor<'a, B> {
                     display_prop,
                     &self.display_when,
                     crate::display_property::DisplayPropertyObject::Buffer,
+                    context.display_target(),
                 );
                 if replacement_mode.consumes_typed_replacements()
                     && display_property.replacement().is_some()

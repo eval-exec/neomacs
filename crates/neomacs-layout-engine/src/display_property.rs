@@ -16,6 +16,26 @@ use neovm_core::emacs_core::emacs_char::EmacsChar;
 use neovm_core::emacs_core::value::list_to_vec;
 use std::ops::ControlFlow;
 
+/// The frame on which a display spec is interpreted, independent of whether
+/// an image decoder or display host happens to be available. GNU gates image
+/// replacements on FRAME_WINDOW_P before consuming any source text (xdisp.c,
+/// handle_single_display_spec). Keep that decision at classification time.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DisplayPropertyTarget {
+    Graphical,
+    Terminal,
+}
+
+impl DisplayPropertyTarget {
+    pub(crate) fn for_window_system(window_system: bool) -> Self {
+        if window_system {
+            Self::Graphical
+        } else {
+            Self::Terminal
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DisplayPropertyClassification {
     replacement: Option<DisplayReplacementProperty>,
@@ -267,11 +287,12 @@ pub(crate) fn classify_display_property(
     value: Value,
     conditions: &DisplayWhenConditions,
     object: DisplayPropertyObject,
+    target: DisplayPropertyTarget,
 ) -> DisplayPropertyClassification {
     let mut result = DisplayPropertyClassification::default();
     let specs = DisplayPropertySpecs::of(value);
     specs.for_each(|spec| {
-        let element = classify_single_display_spec(spec, conditions, specs.eval_enabled);
+        let element = classify_single_display_spec(spec, conditions, specs.eval_enabled, target);
         if result.replacement.is_none() && element.replacement.is_some() {
             result.replacement = element.replacement;
             result.replacement_spec = element.replacement_spec;
@@ -298,13 +319,14 @@ pub(crate) fn classify_display_property(
 pub(crate) fn classify_display_property_modifiers_only(
     value: Value,
     conditions: &DisplayWhenConditions,
+    target: DisplayPropertyTarget,
 ) -> DisplayTextPropertyModifiers {
     let mut modifiers = DisplayTextPropertyModifiers::default();
     let specs = DisplayPropertySpecs::of(value);
     specs.for_each(|spec| {
         merge_modifiers(
             &mut modifiers,
-            classify_single_display_spec(spec, conditions, specs.eval_enabled).modifiers,
+            classify_single_display_spec(spec, conditions, specs.eval_enabled, target).modifiers,
         );
         ControlFlow::Continue(())
     });
@@ -320,6 +342,7 @@ pub(crate) fn classify_single_display_spec(
     value: Value,
     conditions: &DisplayWhenConditions,
     eval_enabled: bool,
+    target: DisplayPropertyTarget,
 ) -> DisplayPropertyClassification {
     // GNU unwraps WHEN exactly once (xdisp.c:6130-6164), then proceeds
     // to the ordinary spec arms. A nested WHEN is not another clause.
@@ -335,17 +358,30 @@ pub(crate) fn classify_single_display_spec(
     } else {
         value
     };
-    classify_resolved_display_spec(value)
+    classify_resolved_display_spec(value, target)
 }
 
 /// Classify a spec after its optional WHEN has already been consumed.
 /// The evaluator uses this entry point so it cannot unwrap a second WHEN.
-pub(crate) fn classify_resolved_display_spec(value: Value) -> DisplayPropertyClassification {
+pub(crate) fn classify_resolved_display_spec(
+    value: Value,
+    target: DisplayPropertyTarget,
+) -> DisplayPropertyClassification {
     let kind = display_spec_kind(value);
     if matches!(kind, DisplaySpecKind::Margin) {
-        return classify_margin_display_spec(value);
+        return classify_margin_display_spec(value, target);
     }
 
+    // An unsupported graphical replacement is not a failed image load: it
+    // must leave source characters (including newlines) available to the walk.
+    // Do this for each spec, before choosing the first replacement in a list.
+    match (target, kind) {
+        (
+            DisplayPropertyTarget::Terminal,
+            DisplaySpecKind::Image | DisplaySpecKind::Xwidget | DisplaySpecKind::Media(_),
+        ) => return DisplayPropertyClassification::default(),
+        (DisplayPropertyTarget::Graphical, _) | (DisplayPropertyTarget::Terminal, _) => {}
+    }
     let replacement = match kind {
         DisplaySpecKind::Text => Some(DisplayReplacementProperty::String),
         DisplaySpecKind::Space => {
@@ -434,7 +470,10 @@ pub(crate) fn classify_resolved_display_spec(value: Value) -> DisplayPropertyCla
     }
 }
 
-fn classify_margin_display_spec(value: Value) -> DisplayPropertyClassification {
+fn classify_margin_display_spec(
+    value: Value,
+    target: DisplayPropertyTarget,
+) -> DisplayPropertyClassification {
     let Some(spec) = display_margin_spec(value) else {
         return DisplayPropertyClassification::default();
     };
@@ -450,7 +489,7 @@ fn classify_margin_display_spec(value: Value) -> DisplayPropertyClassification {
     ) {
         return DisplayPropertyClassification::default();
     }
-    let inner = classify_resolved_display_spec(spec.content());
+    let inner = classify_resolved_display_spec(spec.content(), target);
 
     // GNU's `((margin nil) CONTENT)` selects TEXT_AREA and is otherwise the
     // ordinary CONTENT replacement.  Preserve the inner classification rather
