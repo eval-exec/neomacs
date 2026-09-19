@@ -12,20 +12,20 @@ use neomacs_display_protocol::types::Color;
 use super::super::glyph_atlas::{
     AnyAtlasEntry, ComposedGlyphKey, GlyphKey, SubpixelRequest, WgpuGlyphAtlas,
 };
-use super::super::vertex::{GlyphVertex, RectVertex, RoundedRectVertex, SubpixelGlyphVertex};
+use super::super::vertex::{CoverageGlyphVertex, GlyphVertex, RectVertex, RoundedRectVertex};
 use super::frame_pass::{BoxSpanSet, FrameParams, FramePassCtx};
 use super::glyphs::{
-    CHAR_OVERLAP_MIN_AXIS, RenderedCharBounds, RenderedGlyphGeometry, build_subpixel_vertices,
-    color_is_grayscale, log_cursor_glyph_alignment, log_rendered_char_overlaps,
-    subpixel_background_color, subpixel_foreground_color, trace_face_debug_enabled,
+    CHAR_OVERLAP_MIN_AXIS, RenderedCharBounds, RenderedGlyphGeometry, build_coverage_vertices,
+    color_is_grayscale, coverage_background_color, coverage_foreground_color,
+    log_cursor_glyph_alignment, log_rendered_char_overlaps, trace_face_debug_enabled,
 };
 use super::row_reuse;
 use super::{GlyphRenderStats, WgpuRenderer};
 
 /// Per-pass glyph vertex batches keyed by atlas entry, split by pipeline.
 pub(super) struct TextGlyphBatches {
-    mask_data: Vec<(AnyAtlasEntry, [GlyphVertex; 6])>,
-    subpixel_data: Vec<(AnyAtlasEntry, [SubpixelGlyphVertex; 6])>,
+    mask_data: Vec<(AnyAtlasEntry, [CoverageGlyphVertex; 6])>,
+    subpixel_data: Vec<(AnyAtlasEntry, [CoverageGlyphVertex; 6])>,
     color_data: Vec<(AnyAtlasEntry, [GlyphVertex; 6])>,
     rendered_char_bounds: Vec<RenderedCharBounds>,
 }
@@ -485,12 +485,9 @@ impl row_reuse::RowTessellator for LiveRowTessellator<'_, '_> {
                                 effective_fg.a * fade_alpha,
                             ]
                         };
-                        let subpixel_fg = subpixel_foreground_color(
-                            effective_bg,
-                            effective_fg,
-                            effective_fg.a * fade_alpha,
-                        );
-                        let subpixel_bg = subpixel_background_color(effective_bg);
+                        let subpixel_fg =
+                            coverage_foreground_color(effective_fg, effective_fg.a * fade_alpha);
+                        let subpixel_bg = coverage_background_color(effective_bg);
 
                         // Debug: log glyphs near y≈27 (where gray line appears in screenshot)
                         // and first few header glyphs (y < 5) to see row start
@@ -621,7 +618,7 @@ impl row_reuse::RowTessellator for LiveRowTessellator<'_, '_> {
                         };
 
                         let subpixel_vertices = super::pointer_override::clip_subpixel_quad(
-                            build_subpixel_vertices(
+                            build_coverage_vertices(
                                 glyph_x,
                                 glyph_y,
                                 glyph_w,
@@ -639,7 +636,7 @@ impl row_reuse::RowTessellator for LiveRowTessellator<'_, '_> {
                         let overstrike_subpixel_vertices = if overstrike {
                             let ox = 1.0 / self.renderer.scale_factor;
                             super::pointer_override::clip_subpixel_quad(
-                                build_subpixel_vertices(
+                                build_coverage_vertices(
                                     glyph_x + ox,
                                     glyph_y,
                                     glyph_w,
@@ -670,8 +667,10 @@ impl row_reuse::RowTessellator for LiveRowTessellator<'_, '_> {
                                 out.subpixel.push((entry, ov));
                             }
                         } else {
-                            out.mask.push((entry, vertices));
-                            if let Some(ov) = overstrike_vertices {
+                            if let Some(vertices) = subpixel_vertices {
+                                out.mask.push((entry, vertices));
+                            }
+                            if let Some(ov) = overstrike_subpixel_vertices {
                                 out.mask.push((entry, ov));
                             }
                         }
@@ -723,7 +722,7 @@ impl WgpuRenderer {
         if !mask_data.is_empty() && !want_overlay {
             for (i, (entry, verts)) in mask_data.iter().take(3).enumerate() {
                 let p0 = verts[0].position;
-                let c0 = verts[0].color;
+                let c0 = verts[0].fg_color;
                 tracing::trace!(
                     "  glyph[{}]: page={:?} pos=({:.1},{:.1}) color=({:.3},{:.3},{:.3},{:.3}) logical_w={:.1}",
                     i,
@@ -739,12 +738,12 @@ impl WgpuRenderer {
             }
         }
 
-        // Draw mask glyphs with glyph pipeline (alpha tinted with foreground)
+        // Draw grayscale coverage with the same foreground/background contract as LCD masks.
         // Batch consecutive glyphs sharing the same atlas page.
         if !mask_data.is_empty() {
-            render_pass.set_pipeline(&self.pipelines.glyph);
+            render_pass.set_pipeline(&self.pipelines.grayscale_glyph);
 
-            let all_vertices: Vec<GlyphVertex> = mask_data
+            let all_vertices: Vec<CoverageGlyphVertex> = mask_data
                 .iter()
                 .flat_map(|(_, verts)| verts.iter().copied())
                 .collect();
@@ -760,15 +759,15 @@ impl WgpuRenderer {
                         vertex.position[1],
                         vertex.tex_coords[0],
                         vertex.tex_coords[1],
-                        vertex.color[0],
-                        vertex.color[1],
-                        vertex.color[2],
-                        vertex.color[3],
+                        vertex.fg_color[0],
+                        vertex.fg_color[1],
+                        vertex.fg_color[2],
+                        vertex.fg_color[3],
                         raw,
                     );
                 }
                 if let Some((idx, vertex)) = all_vertices.iter().enumerate().find(|(_, v)| {
-                    let [r, g, b, _] = v.color;
+                    let [r, g, b, _] = v.fg_color;
                     (r - g).abs() > 0.001 || (g - b).abs() > 0.001
                 }) {
                     let raw = bytemuck::bytes_of(vertex);
@@ -780,10 +779,10 @@ impl WgpuRenderer {
                         vertex.position[1],
                         vertex.tex_coords[0],
                         vertex.tex_coords[1],
-                        vertex.color[0],
-                        vertex.color[1],
-                        vertex.color[2],
-                        vertex.color[3],
+                        vertex.fg_color[0],
+                        vertex.fg_color[1],
+                        vertex.fg_color[2],
+                        vertex.fg_color[3],
                         raw,
                     );
                 } else {
@@ -796,12 +795,12 @@ impl WgpuRenderer {
 
             let mask_upload = self
                 .arenas
-                .glyph
+                .coverage
                 .upload(&self.device, &self.queue, &all_vertices);
             stats.glyph_vertex_buffer_creations += 1;
 
             if let Some(ref upload) = mask_upload {
-                render_pass.set_vertex_buffer(0, self.arenas.glyph.slice(upload));
+                render_pass.set_vertex_buffer(0, self.arenas.coverage.slice(upload));
             }
 
             let mut i = 0;
@@ -832,19 +831,19 @@ impl WgpuRenderer {
         if !subpixel_data.is_empty() {
             render_pass.set_pipeline(&self.pipelines.subpixel_glyph);
 
-            let all_vertices: Vec<SubpixelGlyphVertex> = subpixel_data
+            let all_vertices: Vec<CoverageGlyphVertex> = subpixel_data
                 .iter()
                 .flat_map(|(_, verts)| verts.iter().copied())
                 .collect();
 
             let subpixel_upload =
                 self.arenas
-                    .subpixel
+                    .coverage
                     .upload(&self.device, &self.queue, &all_vertices);
             stats.glyph_vertex_buffer_creations += 1;
 
             if let Some(ref upload) = subpixel_upload {
-                render_pass.set_vertex_buffer(0, self.arenas.subpixel.slice(upload));
+                render_pass.set_vertex_buffer(0, self.arenas.coverage.slice(upload));
             }
 
             let mut i = 0;

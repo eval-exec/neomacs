@@ -11,7 +11,7 @@
 use super::super::glyph_atlas::{
     AnyAtlasEntry, ComposedGlyphKey, GlyphKey, SubpixelRequest, WgpuGlyphAtlas,
 };
-use super::super::vertex::{GlyphVertex, RectVertex, RoundedRectVertex, SubpixelGlyphVertex};
+use super::super::vertex::{CoverageGlyphVertex, GlyphVertex, RectVertex, RoundedRectVertex};
 use super::GlyphRenderStats;
 use super::WgpuRenderer;
 use super::cursor_presentation::{
@@ -19,6 +19,9 @@ use super::cursor_presentation::{
     ResolvedCursorPaint,
 };
 use super::frame_pass::{BoxSpan, collect_frame_box_spans};
+use super::glyphs::{
+    build_coverage_vertices, coverage_background_color, coverage_foreground_color,
+};
 #[cfg(all(feature = "webview", target_os = "linux"))]
 use super::layer_media::inline_webview_quad;
 use super::layer_media::{MediaQuad, clipped_media_rect, textured_quad_vertices_uv};
@@ -153,72 +156,6 @@ pub(super) fn stretch_decoration_rects(
     rects
 }
 
-fn subpixel_foreground_color(bg: Color, fg: Color, blend: f32) -> [f32; 4] {
-    let t = blend.clamp(0.0, 1.0);
-    [
-        bg.r + (fg.r - bg.r) * t,
-        bg.g + (fg.g - bg.g) * t,
-        bg.b + (fg.b - bg.b) * t,
-        1.0,
-    ]
-}
-
-fn subpixel_background_color(bg: Color) -> [f32; 4] {
-    [bg.r, bg.g, bg.b, bg.a]
-}
-
-fn build_subpixel_vertices(
-    glyph_x: f32,
-    glyph_y: f32,
-    glyph_w: f32,
-    glyph_h: f32,
-    tex_u_min: f32,
-    tex_u_max: f32,
-    tex_v_min: f32,
-    tex_v_max: f32,
-    fg_color: [f32; 4],
-    bg_color: [f32; 4],
-) -> [SubpixelGlyphVertex; 6] {
-    [
-        SubpixelGlyphVertex {
-            position: [glyph_x, glyph_y],
-            tex_coords: [tex_u_min, tex_v_min],
-            fg_color,
-            bg_color,
-        },
-        SubpixelGlyphVertex {
-            position: [glyph_x + glyph_w, glyph_y],
-            tex_coords: [tex_u_max, tex_v_min],
-            fg_color,
-            bg_color,
-        },
-        SubpixelGlyphVertex {
-            position: [glyph_x + glyph_w, glyph_y + glyph_h],
-            tex_coords: [tex_u_max, tex_v_max],
-            fg_color,
-            bg_color,
-        },
-        SubpixelGlyphVertex {
-            position: [glyph_x, glyph_y],
-            tex_coords: [tex_u_min, tex_v_min],
-            fg_color,
-            bg_color,
-        },
-        SubpixelGlyphVertex {
-            position: [glyph_x + glyph_w, glyph_y + glyph_h],
-            tex_coords: [tex_u_max, tex_v_max],
-            fg_color,
-            bg_color,
-        },
-        SubpixelGlyphVertex {
-            position: [glyph_x, glyph_y + glyph_h],
-            tex_coords: [tex_u_min, tex_v_max],
-            fg_color,
-            bg_color,
-        },
-    ]
-}
-
 impl WgpuRenderer {
     /// Render all glyphs from a `FrameGlyphBuffer` with coordinate offset.
     ///
@@ -251,7 +188,7 @@ impl WgpuRenderer {
             0.0,
         );
         self.arenas.glyph.begin_frame();
-        self.arenas.subpixel.begin_frame();
+        self.arenas.coverage.begin_frame();
 
         tracing::debug!(
             "render_frame_content: frame={}x{} offset=({:.1},{:.1}) {} glyphs",
@@ -667,8 +604,8 @@ impl WgpuRenderer {
         }
 
         // --- Step 2: Collect text glyphs (with overstrike and composed) ---
-        let mut mask_data: Vec<(AnyAtlasEntry, [GlyphVertex; 6])> = Vec::new();
-        let mut subpixel_data: Vec<(AnyAtlasEntry, [SubpixelGlyphVertex; 6])> = Vec::new();
+        let mut mask_data: Vec<(AnyAtlasEntry, [CoverageGlyphVertex; 6])> = Vec::new();
+        let mut subpixel_data: Vec<(AnyAtlasEntry, [CoverageGlyphVertex; 6])> = Vec::new();
         let mut color_data: Vec<(AnyAtlasEntry, [GlyphVertex; 6])> = Vec::new();
         let enable_subpixel = glyph_atlas.subpixel_enabled();
 
@@ -838,9 +775,8 @@ impl WgpuRenderer {
                                 effective_fg.a,
                             ]
                         };
-                        let subpixel_fg =
-                            subpixel_foreground_color(effective_bg, effective_fg, 1.0);
-                        let subpixel_bg = subpixel_background_color(effective_bg);
+                        let subpixel_fg = coverage_foreground_color(effective_fg, effective_fg.a);
+                        let subpixel_bg = coverage_background_color(effective_bg);
 
                         let vertices = [
                             GlyphVertex {
@@ -916,23 +852,28 @@ impl WgpuRenderer {
                             None
                         };
 
-                        let subpixel_vertices = build_subpixel_vertices(
-                            glyph_x,
-                            glyph_y,
-                            glyph_w,
-                            glyph_h,
-                            tex_u_min,
-                            tex_u_max,
-                            tex_v_min,
-                            tex_v_max,
-                            subpixel_fg,
-                            subpixel_bg,
-                        );
+                        let Some(subpixel_vertices) = super::pointer_override::clip_subpixel_quad(
+                            build_coverage_vertices(
+                                glyph_x,
+                                glyph_y,
+                                glyph_w,
+                                glyph_h,
+                                tex_u_min,
+                                tex_u_max,
+                                tex_v_min,
+                                tex_v_max,
+                                subpixel_fg,
+                                subpixel_bg,
+                            ),
+                            effective_clip.as_ref(),
+                        ) else {
+                            continue;
+                        };
 
                         let overstrike_subpixel_vertices = if overstrike {
                             let ox = 1.0 / sf;
                             super::pointer_override::clip_subpixel_quad(
-                                build_subpixel_vertices(
+                                build_coverage_vertices(
                                     glyph_x + ox,
                                     glyph_y,
                                     glyph_w,
@@ -961,8 +902,8 @@ impl WgpuRenderer {
                                 subpixel_data.push((entry, ov));
                             }
                         } else {
-                            mask_data.push((entry, vertices));
-                            if let Some(ov) = overstrike_vertices {
+                            mask_data.push((entry, subpixel_vertices));
+                            if let Some(ov) = overstrike_subpixel_vertices {
                                 mask_data.push((entry, ov));
                             }
                         }
@@ -1277,9 +1218,9 @@ impl WgpuRenderer {
             &self.pipelines.rounded_rect
         };
         let glyph_pl = if use_stencil {
-            &self.pipelines.stencil_glyph
+            &self.pipelines.stencil_grayscale_glyph
         } else {
-            &self.pipelines.glyph
+            &self.pipelines.grayscale_glyph
         };
         let subpixel_pl = if use_stencil {
             &self.pipelines.stencil_subpixel_glyph
@@ -1421,21 +1362,21 @@ impl WgpuRenderer {
 
             // --- Draw mask text glyphs ---
             if !mask_data.is_empty() {
-                let all_vertices: Vec<GlyphVertex> = mask_data
+                let all_vertices: Vec<CoverageGlyphVertex> = mask_data
                     .iter()
                     .flat_map(|(_, verts)| verts.iter().copied())
                     .collect();
 
                 let mask_upload =
                     self.arenas
-                        .glyph
+                        .coverage
                         .upload(&self.device, &self.queue, &all_vertices);
                 stats.glyph_vertex_buffer_creations += 1;
 
                 pass.set_pipeline(glyph_pl);
                 pass.set_bind_group(0, draw.binding(), &[]);
                 if let Some(ref upload) = mask_upload {
-                    pass.set_vertex_buffer(0, self.arenas.glyph.slice(upload));
+                    pass.set_vertex_buffer(0, self.arenas.coverage.slice(upload));
                 }
 
                 let mut i = 0;
@@ -1465,21 +1406,21 @@ impl WgpuRenderer {
 
             // --- Draw subpixel LCD text glyphs ---
             if !subpixel_data.is_empty() {
-                let all_vertices: Vec<SubpixelGlyphVertex> = subpixel_data
+                let all_vertices: Vec<CoverageGlyphVertex> = subpixel_data
                     .iter()
                     .flat_map(|(_, verts)| verts.iter().copied())
                     .collect();
 
                 let subpixel_upload =
                     self.arenas
-                        .subpixel
+                        .coverage
                         .upload(&self.device, &self.queue, &all_vertices);
                 stats.glyph_vertex_buffer_creations += 1;
 
                 pass.set_pipeline(subpixel_pl);
                 pass.set_bind_group(0, draw.binding(), &[]);
                 if let Some(ref upload) = subpixel_upload {
-                    pass.set_vertex_buffer(0, self.arenas.subpixel.slice(upload));
+                    pass.set_vertex_buffer(0, self.arenas.coverage.slice(upload));
                 }
 
                 let mut i = 0;

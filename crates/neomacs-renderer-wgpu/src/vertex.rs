@@ -97,20 +97,21 @@ impl GlyphVertex {
     }
 }
 
-/// Vertex for background-aware subpixel glyph rendering.
+/// Linear foreground/background paint required by grayscale and LCD coverage.
+/// Unlike image quads, a coverage quad cannot omit its background.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
-pub struct SubpixelGlyphVertex {
+pub struct CoverageGlyphVertex {
     pub position: [f32; 2],
     pub tex_coords: [f32; 2],
     pub fg_color: [f32; 4],
     pub bg_color: [f32; 4],
 }
 
-impl SubpixelGlyphVertex {
+impl CoverageGlyphVertex {
     pub fn desc() -> wgpu::VertexBufferLayout<'static> {
         wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<SubpixelGlyphVertex>() as wgpu::BufferAddress,
+            array_stride: std::mem::size_of::<CoverageGlyphVertex>() as wgpu::BufferAddress,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &[
                 wgpu::VertexAttribute {

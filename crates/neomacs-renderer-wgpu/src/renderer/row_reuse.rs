@@ -52,7 +52,7 @@ use neomacs_display_protocol::frame_glyphs::{FrameGlyph, FrameGlyphBuffer};
 use neomacs_display_protocol::glyph_matrix::{FrameDisplayState, RowDamage};
 
 use super::super::glyph_atlas::AnyAtlasEntry;
-use super::super::vertex::{GlyphVertex, SubpixelGlyphVertex};
+use super::super::vertex::{CoverageGlyphVertex, GlyphVertex};
 use super::glyphs::RenderedCharBounds;
 
 // ---------------------------------------------------------------------------
@@ -222,8 +222,8 @@ pub(super) fn chunk_text_rows(
 /// The three text tessellation output streams plus the diagnostic bounds.
 #[derive(Default)]
 pub(super) struct RowStreams {
-    pub(super) mask: Vec<(AnyAtlasEntry, [GlyphVertex; 6])>,
-    pub(super) subpixel: Vec<(AnyAtlasEntry, [SubpixelGlyphVertex; 6])>,
+    pub(super) mask: Vec<(AnyAtlasEntry, [CoverageGlyphVertex; 6])>,
+    pub(super) subpixel: Vec<(AnyAtlasEntry, [CoverageGlyphVertex; 6])>,
     pub(super) color: Vec<(AnyAtlasEntry, [GlyphVertex; 6])>,
     pub(super) bounds: Vec<RenderedCharBounds>,
 }
@@ -259,7 +259,7 @@ impl RowStreams {
             return;
         }
         for &(entry, verts) in &row.mask {
-            self.mask.push((entry, shift_glyph_quad(verts, dy)));
+            self.mask.push((entry, shift_subpixel_quad(verts, dy)));
         }
         for &(entry, verts) in &row.subpixel {
             self.subpixel.push((entry, shift_subpixel_quad(verts, dy)));
@@ -290,7 +290,7 @@ fn shift_glyph_quad(mut verts: [GlyphVertex; 6], dy: f32) -> [GlyphVertex; 6] {
     verts
 }
 
-fn shift_subpixel_quad(mut verts: [SubpixelGlyphVertex; 6], dy: f32) -> [SubpixelGlyphVertex; 6] {
+fn shift_subpixel_quad(mut verts: [CoverageGlyphVertex; 6], dy: f32) -> [CoverageGlyphVertex; 6] {
     for v in &mut verts {
         v.position[1] += dy;
     }

@@ -11,7 +11,7 @@ use super::dynamic_buffer::FrameVertexArena;
 use super::full_frame_texture::FullFrameTexture;
 use super::gpu_budget::UnpooledTexture;
 use super::snapshot_pool::SnapshotSize;
-use crate::vertex::{GlyphVertex, RectVertex, RoundedRectVertex, SubpixelGlyphVertex};
+use crate::vertex::{CoverageGlyphVertex, GlyphVertex, RectVertex, RoundedRectVertex};
 
 /// All render pipelines. The `stencil_*` variants are identical to their base
 /// counterparts except for stencil state; they draw only where the stencil
@@ -21,6 +21,7 @@ pub(crate) struct Pipelines {
     pub(crate) rounded_rect: wgpu::RenderPipeline,
     pub(crate) corner_mask: wgpu::RenderPipeline,
     pub(crate) glyph: wgpu::RenderPipeline,
+    pub(crate) grayscale_glyph: wgpu::RenderPipeline,
     pub(crate) subpixel_glyph: wgpu::RenderPipeline,
     pub(crate) image: wgpu::RenderPipeline,
     pub(crate) surface_copy: wgpu::RenderPipeline,
@@ -31,7 +32,7 @@ pub(crate) struct Pipelines {
     pub(crate) opaque_image: wgpu::RenderPipeline,
     pub(crate) stencil_rect: wgpu::RenderPipeline,
     pub(crate) stencil_rounded_rect: wgpu::RenderPipeline,
-    pub(crate) stencil_glyph: wgpu::RenderPipeline,
+    pub(crate) stencil_grayscale_glyph: wgpu::RenderPipeline,
     pub(crate) stencil_subpixel_glyph: wgpu::RenderPipeline,
     pub(crate) stencil_image: wgpu::RenderPipeline,
     #[cfg(feature = "video")]
@@ -127,7 +128,7 @@ pub(crate) struct RenderCaches {
 /// queue is in-order, so a reset can never clobber an unconsumed region.
 pub(crate) struct VertexArenas {
     pub(crate) glyph: FrameVertexArena<GlyphVertex>,
-    pub(crate) subpixel: FrameVertexArena<SubpixelGlyphVertex>,
+    pub(crate) coverage: FrameVertexArena<CoverageGlyphVertex>,
     /// Textured quads drawn through the image pipelines (inline/floating
     /// images, videos, WebViews, blits, transition quads).
     pub(crate) image: FrameVertexArena<GlyphVertex>,
@@ -143,7 +144,7 @@ impl VertexArenas {
     pub(crate) fn new() -> Self {
         Self {
             glyph: FrameVertexArena::new("Glyph Vertex Arena"),
-            subpixel: FrameVertexArena::new("Subpixel Glyph Vertex Arena"),
+            coverage: FrameVertexArena::new("Coverage Glyph Vertex Arena"),
             image: FrameVertexArena::new("Image Vertex Arena"),
             rect: FrameVertexArena::new("Rect Vertex Arena"),
             rounded: FrameVertexArena::new("Rounded Rect Vertex Arena"),
@@ -153,7 +154,7 @@ impl VertexArenas {
 
     pub(crate) fn begin_frame(&mut self) {
         self.glyph.begin_frame();
-        self.subpixel.begin_frame();
+        self.coverage.begin_frame();
         self.image.begin_frame();
         self.rect.begin_frame();
         self.rounded.begin_frame();
@@ -161,7 +162,7 @@ impl VertexArenas {
 
     fn buffers_created_total(&self) -> u64 {
         self.glyph.buffers_created()
-            + self.subpixel.buffers_created()
+            + self.coverage.buffers_created()
             + self.image.buffers_created()
             + self.rect.buffers_created()
             + self.rounded.buffers_created()

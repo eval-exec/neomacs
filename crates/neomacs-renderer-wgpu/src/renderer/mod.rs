@@ -10,7 +10,7 @@ use neomacs_display_protocol::scene::{Scene, SceneCursorStyle};
 use neomacs_display_protocol::types::Color;
 
 use super::image_cache::ImageCache;
-use super::vertex::{GlyphVertex, RectVertex, RoundedRectVertex, SubpixelGlyphVertex};
+use super::vertex::{CoverageGlyphVertex, GlyphVertex, RectVertex, RoundedRectVertex};
 #[cfg(feature = "video")]
 use super::video_cache::VideoCache;
 #[cfg(all(feature = "webview", target_os = "linux"))]
@@ -493,10 +493,10 @@ impl WgpuRenderer {
             label: Some("Glyph Shader"),
             source: wgpu::ShaderSource::Wgsl(glyph_shader_source.into()),
         });
-        let subpixel_glyph_shader_source = include_str!("../shaders/glyph_subpixel.wgsl");
-        let subpixel_glyph_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Subpixel Glyph Shader"),
-            source: wgpu::ShaderSource::Wgsl(subpixel_glyph_shader_source.into()),
+        let coverage_glyph_shader_source = include_str!("../shaders/glyph_coverage.wgsl");
+        let coverage_glyph_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Coverage Glyph Shader"),
+            source: wgpu::ShaderSource::Wgsl(coverage_glyph_shader_source.into()),
         });
 
         // Glyph bind group layout (for per-glyph texture)
@@ -570,44 +570,48 @@ impl WgpuRenderer {
             multiview_mask: None,
         });
 
-        let subpixel_glyph_pipeline =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("Subpixel Glyph Pipeline"),
-                layout: Some(&glyph_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &subpixel_glyph_shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &[Some(SubpixelGlyphVertex::desc())],
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &subpixel_glyph_shader,
-                    entry_point: Some("fs_main"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: target_format,
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: None,
-                    polygon_mode: wgpu::PolygonMode::Fill,
-                    unclipped_depth: false,
-                    conservative: false,
-                },
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState {
-                    count: 1,
-                    mask: !0,
-                    alpha_to_coverage_enabled: false,
-                },
-                cache: None,
-                multiview_mask: None,
-            });
+        let coverage_pipeline =
+            |mask: GlyphCoverageMask, stencil: Option<wgpu::DepthStencilState>| {
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some("Coverage Glyph Pipeline"),
+                    layout: Some(&glyph_pipeline_layout),
+                    vertex: wgpu::VertexState {
+                        module: &coverage_glyph_shader,
+                        entry_point: Some("vs_main"),
+                        buffers: &[Some(CoverageGlyphVertex::desc())],
+                        compilation_options: Default::default(),
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &coverage_glyph_shader,
+                        entry_point: Some(mask.fragment_entry_point()),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format: target_format,
+                            blend: None,
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                        compilation_options: Default::default(),
+                    }),
+                    primitive: wgpu::PrimitiveState {
+                        topology: wgpu::PrimitiveTopology::TriangleList,
+                        strip_index_format: None,
+                        front_face: wgpu::FrontFace::Ccw,
+                        cull_mode: None,
+                        polygon_mode: wgpu::PolygonMode::Fill,
+                        unclipped_depth: false,
+                        conservative: false,
+                    },
+                    depth_stencil: stencil,
+                    multisample: wgpu::MultisampleState {
+                        count: 1,
+                        mask: !0,
+                        alpha_to_coverage_enabled: false,
+                    },
+                    cache: None,
+                    multiview_mask: None,
+                })
+            };
+        let grayscale_glyph_pipeline = coverage_pipeline(GlyphCoverageMask::Grayscale, None);
+        let subpixel_glyph_pipeline = coverage_pipeline(GlyphCoverageMask::Subpixel, None);
 
         // Create image cache (also creates its bind group layout)
         let image_cache = ImageCache::new(&device);
@@ -874,85 +878,15 @@ impl WgpuRenderer {
             });
 
         // Stencil-read glyph pipeline
-        let stencil_glyph_pipeline =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("Stencil Glyph Pipeline"),
-                layout: Some(&glyph_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &glyph_shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &[Some(GlyphVertex::desc())],
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &glyph_shader,
-                    entry_point: Some("fs_main"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: target_format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: None,
-                    polygon_mode: wgpu::PolygonMode::Fill,
-                    unclipped_depth: false,
-                    conservative: false,
-                },
-                depth_stencil: Some(stencil_read_state.clone()),
-                multisample: wgpu::MultisampleState {
-                    count: 1,
-                    mask: !0,
-                    alpha_to_coverage_enabled: false,
-                },
-                cache: None,
-                multiview_mask: None,
-            });
+        let stencil_grayscale_glyph_pipeline = coverage_pipeline(
+            GlyphCoverageMask::Grayscale,
+            Some(stencil_read_state.clone()),
+        );
+        let stencil_subpixel_glyph_pipeline = coverage_pipeline(
+            GlyphCoverageMask::Subpixel,
+            Some(stencil_read_state.clone()),
+        );
 
-        let stencil_subpixel_glyph_pipeline =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("Stencil Subpixel Glyph Pipeline"),
-                layout: Some(&glyph_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &subpixel_glyph_shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &[Some(SubpixelGlyphVertex::desc())],
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &subpixel_glyph_shader,
-                    entry_point: Some("fs_main"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: target_format,
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    strip_index_format: None,
-                    front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: None,
-                    polygon_mode: wgpu::PolygonMode::Fill,
-                    unclipped_depth: false,
-                    conservative: false,
-                },
-                depth_stencil: Some(stencil_read_state.clone()),
-                multisample: wgpu::MultisampleState {
-                    count: 1,
-                    mask: !0,
-                    alpha_to_coverage_enabled: false,
-                },
-                cache: None,
-                multiview_mask: None,
-            });
-
-        // Stencil-read image pipeline
         let stencil_image_pipeline =
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("Stencil Image Pipeline"),
@@ -1134,6 +1068,7 @@ impl WgpuRenderer {
                 rounded_rect: rounded_rect_pipeline,
                 corner_mask: corner_mask_pipeline,
                 glyph: glyph_pipeline,
+                grayscale_glyph: grayscale_glyph_pipeline,
                 subpixel_glyph: subpixel_glyph_pipeline,
                 image: image_pipeline,
                 surface_copy: surface_copy_pipeline,
@@ -1144,8 +1079,8 @@ impl WgpuRenderer {
                 opaque_image: opaque_image_pipeline,
                 stencil_rect: stencil_rect_pipeline,
                 stencil_rounded_rect: stencil_rounded_rect_pipeline,
-                stencil_glyph: stencil_glyph_pipeline,
                 stencil_subpixel_glyph: stencil_subpixel_glyph_pipeline,
+                stencil_grayscale_glyph: stencil_grayscale_glyph_pipeline,
                 stencil_image: stencil_image_pipeline,
                 #[cfg(feature = "video")]
                 stencil_bi_planar_video: stencil_bi_planar_video_pipeline,
@@ -2106,4 +2041,19 @@ impl WgpuRenderer {
     }
 
     // ── Scroll Effect Implementations ─────────────────────────────────────
+}
+
+#[derive(Clone, Copy)]
+enum GlyphCoverageMask {
+    Grayscale,
+    Subpixel,
+}
+
+impl GlyphCoverageMask {
+    fn fragment_entry_point(self) -> &'static str {
+        match self {
+            Self::Grayscale => "fs_grayscale",
+            Self::Subpixel => "fs_subpixel",
+        }
+    }
 }

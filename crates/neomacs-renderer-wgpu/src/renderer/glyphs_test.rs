@@ -1162,3 +1162,21 @@ fn char_overlap_classifies_adjacent_dual_bearing_overhang_separately() {
         CharOverlapClassification::Expected(ExpectedCharOverlap::HorizontalOverhang)
     );
 }
+
+#[test]
+fn coverage_shader_validates_grayscale_and_subpixel_entry_points() {
+    let source = include_str!("../shaders/glyph_coverage.wgsl");
+    let module = naga::front::wgsl::parse_str(source).expect("coverage WGSL syntax");
+    naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    )
+    .validate(&module)
+    .expect("coverage WGSL validation");
+    for name in ["vs_main", "fs_grayscale", "fs_subpixel"] {
+        assert!(
+            module.entry_points.iter().any(|entry| entry.name == name),
+            "missing coverage entry point {name}"
+        );
+    }
+}

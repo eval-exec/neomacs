@@ -1,6 +1,6 @@
 //! Immutable lookup of transient paint overrides for one presented frame.
 
-use super::super::vertex::{GlyphVertex, RectVertex, RoundedRectVertex, SubpixelGlyphVertex};
+use super::super::vertex::{CoverageGlyphVertex, GlyphVertex, RectVertex, RoundedRectVertex};
 use neomacs_display_protocol::Color;
 use neomacs_display_protocol::types::Rect;
 use neomacs_display_protocol::{
@@ -638,9 +638,9 @@ pub(super) fn clip_glyph_quad(
 }
 
 pub(super) fn clip_subpixel_quad(
-    quad: [SubpixelGlyphVertex; 6],
+    quad: [CoverageGlyphVertex; 6],
     clip: Option<&Rect>,
-) -> Option<[SubpixelGlyphVertex; 6]> {
+) -> Option<[CoverageGlyphVertex; 6]> {
     let glyph_quad = quad.map(|vertex| GlyphVertex {
         position: vertex.position,
         tex_coords: vertex.tex_coords,
@@ -649,7 +649,7 @@ pub(super) fn clip_subpixel_quad(
     let clipped = clip_glyph_quad(glyph_quad, clip)?;
     let fg_color = quad[0].fg_color;
     let bg_color = quad[0].bg_color;
-    Some(clipped.map(|vertex| SubpixelGlyphVertex {
+    Some(clipped.map(|vertex| CoverageGlyphVertex {
         position: vertex.position,
         tex_coords: vertex.tex_coords,
         fg_color,

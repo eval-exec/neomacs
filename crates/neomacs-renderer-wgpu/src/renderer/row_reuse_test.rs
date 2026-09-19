@@ -22,7 +22,7 @@ use super::super::super::glyph_atlas::types::{
     AlphaMask, AnyAtlasEntry, AtlasContentRect, AtlasEntry, ColorRgba, GlyphMaterialKind,
     GlyphMetrics, PageId, SubpixelMask, UvRect,
 };
-use super::super::super::vertex::{GlyphVertex, SubpixelGlyphVertex};
+use super::super::super::vertex::{CoverageGlyphVertex, GlyphVertex};
 use super::super::glyphs::{RenderedCharBounds, RenderedGlyphGeometry};
 use super::*;
 
@@ -243,7 +243,7 @@ impl RowTessellator for FakeTessellator<'_> {
             match entry {
                 AnyAtlasEntry::Subpixel(_) => {
                     let quad = fake_glyph_quad(*c, *x, *y, fg);
-                    let sub = quad.map(|v| SubpixelGlyphVertex {
+                    let sub = quad.map(|v| CoverageGlyphVertex {
                         position: v.position,
                         tex_coords: v.tex_coords,
                         fg_color: v.color,
@@ -255,7 +255,15 @@ impl RowTessellator for FakeTessellator<'_> {
                     out.color.push((entry, fake_glyph_quad(*c, *x, *y, fg)));
                 }
                 AnyAtlasEntry::Alpha(_) => {
-                    out.mask.push((entry, fake_glyph_quad(*c, *x, *y, fg)));
+                    out.mask.push((
+                        entry,
+                        fake_glyph_quad(*c, *x, *y, fg).map(|v| CoverageGlyphVertex {
+                            position: v.position,
+                            tex_coords: v.tex_coords,
+                            fg_color: v.color,
+                            bg_color: [0.0, 0.0, 0.0, 1.0],
+                        }),
+                    ));
                 }
             }
             out.bounds.push(RenderedCharBounds {

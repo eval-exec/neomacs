@@ -1,4 +1,4 @@
-// Glyph rendering shader for LCD/subpixel masks.
+// Background-aware glyph rendering for grayscale and LCD masks.
 //
 // The glyph texture stores per-channel coverage in RGB. We composite the glyph
 // against the per-vertex background color directly in the shader so black text
@@ -42,15 +42,33 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     return out;
 }
 
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let mask_sample = textureSample(glyph_texture, glyph_sampler, in.tex_coords);
-    let coverage = max(mask_sample.r, max(mask_sample.g, mask_sample.b));
-    if coverage <= 0.0 {
+// Cairo/FreeType text coverage is composited in encoded RGB. The surface
+// attachment is sRGB, so its fragment input/output must remain linear RGB.
+fn linear_to_srgb(rgb: vec3<f32>) -> vec3<f32> {
+    return select(1.055 * pow(max(rgb, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055,
+                  12.92 * rgb, rgb <= vec3(0.0031308));
+}
+
+fn srgb_to_linear(rgb: vec3<f32>) -> vec3<f32> {
+    return select(pow((rgb + 0.055) / 1.055, vec3(2.4)),
+                  rgb / 12.92, rgb <= vec3(0.04045));
+}
+
+fn composite_coverage(in: VertexOutput, coverage: vec3<f32>) -> vec4<f32> {
+    if max(coverage.r, max(coverage.g, coverage.b)) <= 0.0 {
         discard;
     }
+    let rgb = mix(linear_to_srgb(in.bg_color.rgb),
+                  linear_to_srgb(in.fg_color.rgb), coverage * in.fg_color.a);
+    return vec4<f32>(srgb_to_linear(rgb), 1.0);
+}
 
-    let rgb = in.bg_color.rgb * (vec3<f32>(1.0, 1.0, 1.0) - mask_sample.rgb)
-        + in.fg_color.rgb * mask_sample.rgb;
-    return vec4<f32>(rgb, 1.0);
+@fragment
+fn fs_subpixel(in: VertexOutput) -> @location(0) vec4<f32> {
+    return composite_coverage(in, textureSample(glyph_texture, glyph_sampler, in.tex_coords).rgb);
+}
+
+@fragment
+fn fs_grayscale(in: VertexOutput) -> @location(0) vec4<f32> {
+    return composite_coverage(in, vec3(textureSample(glyph_texture, glyph_sampler, in.tex_coords).r));
 }

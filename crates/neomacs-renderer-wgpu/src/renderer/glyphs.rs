@@ -1,7 +1,7 @@
 //! Glyphs methods for WgpuRenderer.
 
 use super::super::glyph_atlas::{ComposedGlyphKey, GlyphKey, WgpuGlyphAtlas};
-use super::super::vertex::{RectVertex, SubpixelGlyphVertex, Uniforms};
+use super::super::vertex::{CoverageGlyphVertex, RectVertex, Uniforms};
 use super::GlyphRenderStats;
 use super::ModeLineFadeEntry;
 use super::WgpuRenderer;
@@ -741,21 +741,16 @@ fn frame_default_glyph_metrics(frame_glyphs: &FrameGlyphBuffer) -> Option<(f32, 
     Some((font_size, line_height.max(font_size)))
 }
 
-pub(super) fn subpixel_foreground_color(bg: Color, fg: Color, blend: f32) -> [f32; 4] {
-    let t = blend.clamp(0.0, 1.0);
-    [
-        bg.r + (fg.r - bg.r) * t,
-        bg.g + (fg.g - bg.g) * t,
-        bg.b + (fg.b - bg.b) * t,
-        1.0,
-    ]
+/// Keep opacity separate from color until coverage is composed in encoded RGB.
+pub(super) fn coverage_foreground_color(fg: Color, opacity: f32) -> [f32; 4] {
+    [fg.r, fg.g, fg.b, opacity.clamp(0.0, 1.0)]
 }
 
-pub(super) fn subpixel_background_color(bg: Color) -> [f32; 4] {
+pub(super) fn coverage_background_color(bg: Color) -> [f32; 4] {
     [bg.r, bg.g, bg.b, bg.a]
 }
 
-pub(super) fn build_subpixel_vertices(
+pub(super) fn build_coverage_vertices(
     glyph_x: f32,
     glyph_y: f32,
     glyph_w: f32,
@@ -766,39 +761,39 @@ pub(super) fn build_subpixel_vertices(
     tex_v_max: f32,
     fg_color: [f32; 4],
     bg_color: [f32; 4],
-) -> [SubpixelGlyphVertex; 6] {
+) -> [CoverageGlyphVertex; 6] {
     [
-        SubpixelGlyphVertex {
+        CoverageGlyphVertex {
             position: [glyph_x, glyph_y],
             tex_coords: [tex_u_min, tex_v_min],
             fg_color,
             bg_color,
         },
-        SubpixelGlyphVertex {
+        CoverageGlyphVertex {
             position: [glyph_x + glyph_w, glyph_y],
             tex_coords: [tex_u_max, tex_v_min],
             fg_color,
             bg_color,
         },
-        SubpixelGlyphVertex {
+        CoverageGlyphVertex {
             position: [glyph_x + glyph_w, glyph_y + glyph_h],
             tex_coords: [tex_u_max, tex_v_max],
             fg_color,
             bg_color,
         },
-        SubpixelGlyphVertex {
+        CoverageGlyphVertex {
             position: [glyph_x, glyph_y],
             tex_coords: [tex_u_min, tex_v_min],
             fg_color,
             bg_color,
         },
-        SubpixelGlyphVertex {
+        CoverageGlyphVertex {
             position: [glyph_x + glyph_w, glyph_y + glyph_h],
             tex_coords: [tex_u_max, tex_v_max],
             fg_color,
             bg_color,
         },
-        SubpixelGlyphVertex {
+        CoverageGlyphVertex {
             position: [glyph_x, glyph_y + glyph_h],
             tex_coords: [tex_u_min, tex_v_max],
             fg_color,
