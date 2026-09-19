@@ -115,11 +115,26 @@ interns as the event symbol, so `[undo]`, `[XF86Back]`, `[henkan]` and
 
 ## Remaining gaps
 
-- `system-key-alist`, which GNU consults before the toolkit name and which a
-  user can therefore use to rename any key, is not consulted here: naming runs
-  on the frontend-to-core path, before the evaluator is available.
-- A `NamedKey` that winit's *other* backends can produce but its xkb keymap
-  cannot — `MediaPlayPause`, say, which X11 splits into `XF86AudioPlay` and
-  `XF86AudioPause` — still reaches the `key has no keysym mapping yet` log and
-  returns zero. The X11/Wayland set is complete; the platform-native sets are
-  not.
+- **A platform's keys are named by that platform's tables.** GNU names a key
+  from whichever backend delivered it, and the same physical key has different
+  names on different systems: on X11 the volume keys are
+  `XF86AudioRaiseVolume` and friends, while on Windows they are `volume-up`,
+  `volume-down`, `volume-mute` (`lispy_multimedia_keys`, `src/keyboard.c:5403`,
+  indexed by `VK - VK_BROWSER_BACK`). This port names by keysym, so a Windows
+  media key currently gets the X11 spelling — bindable, but not the symbol a
+  GNU-on-Windows config writes. Doing it properly means letting the Windows and
+  macOS backends hand over their *native* identity (the reserved bands exist
+  for exactly that) and porting the NT tables (`src/keyboard.c:5209` for VK,
+  `:5403` for multimedia) into `native_key_name`. That work needs a Windows or
+  macOS machine to verify, which is why it is written down rather than guessed
+  at.
+- Four `NamedKey`s the Windows/macOS backends can emit have no X11 keysym and
+  still reach the `key has no keysym mapping yet` log: `MediaPlayPause`
+  (GNU/Windows spells it `media-play-pause`), `Finish`, `Eisu`, and
+  `ZoomToggle` — the last two are remote-control values no keyboard produces.
+- `system-key-alist` is not consulted — but reading its two users in GNU shows
+  it is narrower than the name suggests: `lisp/term/ns-win.el:174` uses it for
+  *pseudo*-events (`ns-power-off`, `ns-drag-file` — C-to-Lisp plumbing rather
+  than keystrokes) and `lisp/term/x-win.el:252` for vendor keysyms
+  (`mute-acute`, `lira`, `reset`). It is not a general renaming hook, so
+  nothing user-visible depends on it yet.
