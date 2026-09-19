@@ -222,10 +222,9 @@ Design principles, the full module map, and why Rust/wgpu:
 
 NEO Emacs is a long-term project that takes significant ongoing work to build, test, and
 maintain. If NEO Emacs is useful or exciting to you, please consider supporting its
-development on ❤️ [GitHub Sponsors](https://github.com/sponsors/eval-exec) ❤️.
-
-Crypto donations are also welcome — scan a QR code or copy an address:
-
+development on:
+- ❤️ [GitHub Sponsors](https://github.com/sponsors/eval-exec) ❤️ -- **recommand**
+- 🪙 Crypto donations are also welcome — scan a QR code or copy an address:
 <table>
   <tr>
     <th align="center" width="240">BTC (Bitcoin)</th>
