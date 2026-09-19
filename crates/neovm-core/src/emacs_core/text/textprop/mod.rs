@@ -1895,11 +1895,11 @@ pub(crate) fn builtin_get_text_property_in_state(
         if char_pos.get() == s.schars() {
             return Ok(Value::NIL);
         }
-        if let Some(table) = get_string_text_properties_table_for_value(str_val) {
+        if let Some(table) = borrow_string_text_properties_table_for_value(str_val) {
             return Ok(lookup_string_text_property(
                 obarray,
                 buffers,
-                &table,
+                table,
                 char_pos.get(),
                 prop,
             ));
@@ -2959,7 +2959,7 @@ pub(crate) fn builtin_text_properties_at_in_buffers(
         if char_pos.get() == s.schars() {
             return Ok(Value::NIL);
         }
-        if let Some(table) = get_string_text_properties_table_for_value(str_val) {
+        if let Some(table) = borrow_string_text_properties_table_for_value(str_val) {
             return Ok(table.get_properties_plist_value_at_char_pos(char_pos));
         }
         return Ok(Value::NIL);
@@ -3024,7 +3024,14 @@ pub(crate) fn builtin_next_single_property_change_in_state(
         let s = str_val
             .as_lisp_string()
             .expect("string object must carry LispString payload");
-        let table = get_string_text_properties_table_for_value(str_val).unwrap_or_default();
+        let empty_table;
+        let table = match borrow_string_text_properties_table_for_value(str_val) {
+            Some(table) => table,
+            None => {
+                empty_table = TextPropertyTable::new();
+                &empty_table
+            }
+        };
         let char_pos = validate_string_char_pos_raw(s, pos, args[0])?;
         let len = CharPos0::new(s.schars());
         let outcome = walk_single_property_change(
@@ -3192,7 +3199,14 @@ pub(crate) fn builtin_previous_single_property_change_in_state(
         let s = str_val
             .as_lisp_string()
             .expect("string object must carry LispString payload");
-        let table = get_string_text_properties_table_for_value(str_val).unwrap_or_default();
+        let empty_table;
+        let table = match borrow_string_text_properties_table_for_value(str_val) {
+            Some(table) => table,
+            None => {
+                empty_table = TextPropertyTable::new();
+                &empty_table
+            }
+        };
         let char_pos = validate_string_char_pos_raw(s, pos, args[0])?;
         let (limit_pos, limit_val) = match args.get(3) {
             Some(v) if !v.is_nil() => {
@@ -3305,7 +3319,14 @@ pub(crate) fn builtin_next_property_change_in_buffers(
         let s = str_val
             .as_lisp_string()
             .expect("string object must carry LispString payload");
-        let table = get_string_text_properties_table_for_value(str_val).unwrap_or_default();
+        let empty_table;
+        let table = match borrow_string_text_properties_table_for_value(str_val) {
+            Some(table) => table,
+            None => {
+                empty_table = TextPropertyTable::new();
+                &empty_table
+            }
+        };
         let char_pos = validate_string_char_pos_raw(s, pos, args[0])?;
         let limit_arg = args.get(2);
         if limit_arg.is_some_and(|v| v.is_t()) {

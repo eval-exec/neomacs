@@ -132,9 +132,10 @@ fn substring_impl(name: &str, args: &[Value], preserve_props: bool) -> EvalResul
     expect_max_args(name, args, 3)?;
     match args[0].kind() {
         ValueKind::String => {
+            // Borrowed, not cloned: the slice below only reads it, and the
+            // source string (`args[0]') outlives the call.
             let src_props = if preserve_props {
-                get_string_text_properties_table_for_value(args[0])
-                    .filter(|table| !table.is_empty())
+                crate::emacs_core::value::borrow_string_text_properties_table_for_value(args[0])
             } else {
                 None
             };
@@ -243,7 +244,7 @@ fn substring_impl(name: &str, args: &[Value], preserve_props: bool) -> EvalResul
                     src.slice_no_properties_with_char_bounds(byte_from, byte_to, from, to)
                         .expect("validated storage substring bounds")
                 };
-                let sliced_props = if let Some(src_table) = src_props.as_ref() {
+                let sliced_props = if let Some(src_table) = src_props {
                     let sliced = src_table
                         .slice_copy_text_properties_char_range(string_char_range(from, to));
                     (!sliced.is_empty()).then_some(sliced)

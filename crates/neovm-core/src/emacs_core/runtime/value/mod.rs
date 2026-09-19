@@ -504,6 +504,18 @@ pub fn get_string_text_properties_table_for_value(value: Value) -> Option<TextPr
     }
 }
 
+/// [`get_string_text_properties_table_for_value`] without the clone, for a
+/// read-only primitive (`get-text-property', `text-properties-at', the
+/// property-change walks on a string).  Cloning copied the whole interval
+/// tree on every call, so walking a propertized string was quadratic.  The
+/// caller holds the string (its argument) and runs no Lisp while it reads,
+/// so the table can neither be freed nor mutated under the borrow.
+pub fn borrow_string_text_properties_table_for_value(
+    value: Value,
+) -> Option<&'static TextPropertyTable> {
+    string_text_props_nonempty(value)
+}
+
 /// Borrow a string's live interval table for a read-only comparison, with the
 /// same empty→None normalization as `get_string_text_properties_table_for_value`
 /// but WITHOUT cloning the tree.  `equal-including-properties` only reads the
