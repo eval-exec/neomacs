@@ -163,9 +163,14 @@ impl Context {
     /// collection (the SmallVec built merely to pass `&[Value]` was a
     /// measured ~30 Ir/call tax on native-to-native recursion).
     ///
+    /// Inlined into the JIT call shims: out of line, the call and its
+    /// prologue were a third of its ~30 instructions (GNU's
+    /// `record_in_backtrace` is a handful of stores).
+    ///
     /// # Safety
     /// `args_ptr` must address `nargs` valid tagged words, alive for the
     /// duration of this call (the caller's call-args slot).
+    #[inline(always)]
     pub(crate) unsafe fn push_backtrace_frame_from_native_args(
         &mut self,
         function: Value,
