@@ -1,0 +1,11 @@
+# The Spacemacs fixture the config-environment tests mount.
+#
+# Same contract as doom-spec.toml: `repo` and `revision` are the pinned
+# provenance of the tree GNU Emacs bootstraps during materialization.
+# The initial pin records the develop branch head at first use; develop
+# is where Spacemacs development happens (master has been stale for
+# years).  Re-pin by editing this file; materialization keys its cache
+# on the revision, so a new revision rebuilds rather than reuses.
+
+repo = "https://github.com/syl20bnr/spacemacs"
+revision = "ab5bb4cecff218d30c21fc4204260412c7ce8abd"

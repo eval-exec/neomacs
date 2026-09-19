@@ -7,6 +7,7 @@
 #![allow(dead_code)]
 
 use crate::support;
+use neomacs_infra::config_env::ConfigEnvironment as _;
 use neomacs_tui_tests::*;
 use std::ffi::OsString;
 use std::time::{Duration, Instant};

@@ -1,0 +1,310 @@
+//! The lifecycle every configuration fixture shares, written once.
+//!
+//! A fixture is staged under `target/infra/<name>-<rev12>/`, bootstrapped
+//! by GNU Emacs (so every derived file is canonical, not GNU-shaped
+//! guesswork), recorded in a `MANIFEST`, and then **sealed** read-only —
+//! after which any write from an editor mounting it fails loudly instead
+//! of silently dirtying it for every other session.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+/// Whether `root` carries the seal: every write bit cleared.
+///
+/// The seal is a Unix permission-bits property, so a host without them
+/// cannot hold a sealed fixture.  Answering `false` there keeps the
+/// fixture *absent* rather than accepted-unsealed, which is what lets an
+/// environment's `open` skip instead of running a suite against a
+/// writable tree.
+pub fn is_sealed(root: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::metadata(root)
+            .map(|meta| meta.permissions().mode() & 0o222 == 0)
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = root;
+        false
+    }
+}
+
+/// Link `target` at `link`.
+///
+/// Unix has one call; Windows splits it into file and directory forms and
+/// wants a privilege a fixture cannot assume.  The refusal is unreachable
+/// today -- `seal` stops a materialization before any copying starts --
+/// but the crate still has to compile for the workspace's Windows
+/// `cargo check`.
+#[cfg(unix)]
+pub fn symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(not(unix))]
+pub fn symlink(_target: &Path, _link: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "symlinks are unavailable on this platform",
+    ))
+}
+
+/// Overrides the fixture cache location (defaults to
+/// `<workspace>/target/infra`).
+pub const INFRA_CACHE_OVERRIDE: &str = "NEOMACS_INFRA_CACHE";
+
+/// The pinned provenance of one fixture, from its `<name>-spec.toml`
+/// beside this crate's manifest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Spec {
+    pub repo: String,
+    pub revision: String,
+}
+
+impl Spec {
+    pub fn load(name: &str) -> Result<Self, String> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("{name}-spec.toml"));
+        let text = fs::read_to_string(&path)
+            .map_err(|error| format!("read {}: {error}", path.display()))?;
+        let mut repo = None;
+        let mut revision = None;
+        for line in text.lines() {
+            let line = line.trim();
+            if let Some(value) = line.strip_prefix("repo = ") {
+                repo = Some(value.trim_matches('"').to_owned());
+            } else if let Some(value) = line.strip_prefix("revision = ") {
+                revision = Some(value.trim_matches('"').to_owned());
+            }
+        }
+        Ok(Self {
+            repo: repo.ok_or_else(|| format!("{name}-spec.toml: repo is missing"))?,
+            revision: revision.ok_or_else(|| format!("{name}-spec.toml: revision is missing"))?,
+        })
+    }
+}
+
+/// The fixture cache root: `$NEOMACS_INFRA_CACHE`, else the workspace's
+/// `target/infra` (anchored at this crate's manifest, so every suite and
+/// the xtask CLI resolve the same directory whatever their CWD).
+pub fn cache_root() -> PathBuf {
+    std::env::var_os(INFRA_CACHE_OVERRIDE).map_or_else(
+        || {
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .ancestors()
+                .nth(2)
+                .unwrap_or(Path::new("."))
+                .join("target")
+                .join("infra")
+        },
+        PathBuf::from,
+    )
+}
+
+/// The sealed fixture directory for one name and spec revision.
+pub fn fixture_root(name: &str, revision: &str) -> PathBuf {
+    cache_root().join(format!("{name}-{}", &revision[..12.min(revision.len())]))
+}
+
+/// A fixture root is openable when its MANIFEST exists, its tree exists,
+/// and the seal (read-only root) is in place.
+pub fn is_open_fixture(root: &Path) -> bool {
+    root.join("MANIFEST").is_file() && root.join("tree").is_dir() && is_sealed(root)
+}
+
+/// Shallow fetch-by-SHA into `tree`: exactly the pinned revision without
+/// cloning history.  github.com serves allow-reachable-SHA fetches, which
+/// both doomemacs/core and syl20bnr/spacemacs rely on here.
+pub fn shallow_fetch(repo: &str, revision: &str, tree: &Path) -> Result<(), String> {
+    for (program, args) in [
+        ("git", vec!["init".to_owned(), "--quiet".to_owned()]),
+        (
+            "git",
+            vec![
+                "remote".to_owned(),
+                "add".to_owned(),
+                "origin".to_owned(),
+                repo.to_owned(),
+            ],
+        ),
+        (
+            "git",
+            vec![
+                "fetch".to_owned(),
+                "--depth".to_owned(),
+                "1".to_owned(),
+                "origin".to_owned(),
+                revision.to_owned(),
+            ],
+        ),
+        (
+            "git",
+            vec![
+                "checkout".to_owned(),
+                "--quiet".to_owned(),
+                "--detach".to_owned(),
+                "FETCH_HEAD".to_owned(),
+            ],
+        ),
+    ] {
+        let status = Command::new(program)
+            .args(&args)
+            .current_dir(tree)
+            .status()
+            .map_err(|error| format!("spawn git {args:?}: {error}"))?;
+        if !status.success() {
+            return Err(format!("git {args:?} failed during clone"));
+        }
+    }
+    Ok(())
+}
+
+/// Recursive copy preserving directory structure and symlinks (straight
+/// and elpa symlink per-version build directories; replicate the link
+/// itself rather than copying through it).  Permissions default to the
+/// process umask; the seal fixes the final modes.
+pub fn copy_tree(source: &Path, destination: &Path) -> Result<(), String> {
+    let meta = fs::symlink_metadata(source)
+        .map_err(|error| format!("stat {}: {error}", source.display()))?;
+    if meta.is_symlink() {
+        let target = fs::read_link(source)
+            .map_err(|error| format!("readlink {}: {error}", source.display()))?;
+        std::os::unix::fs::symlink(&target, destination).map_err(|error| {
+            format!(
+                "symlink {} -> {}: {error}",
+                destination.display(),
+                target.display()
+            )
+        })?;
+        Ok(())
+    } else if meta.is_dir() {
+        fs::create_dir_all(destination)
+            .map_err(|error| format!("create {}: {error}", destination.display()))?;
+        let entries =
+            fs::read_dir(source).map_err(|error| format!("read {}: {error}", source.display()))?;
+        for entry in entries {
+            let entry = entry.map_err(|error| format!("read {}: {error}", source.display()))?;
+            copy_tree(&entry.path(), &destination.join(entry.file_name()))?;
+        }
+        Ok(())
+    } else {
+        fs::copy(source, destination)
+            .map_err(|error| {
+                format!(
+                    "copy {} -> {}: {error}",
+                    source.display(),
+                    destination.display()
+                )
+            })
+            .map(|_| ())
+    }
+}
+
+/// Copy a tree for per-session use: identical to [`copy_tree`], then
+/// restore owner write bits on everything copied.  The sources are
+/// sealed (read-only), and `fs::copy` reproduces their permission bits —
+/// a session that legitimately rewrites one of these files (Spacemacs
+/// re-saves `.cache/spacemacs-buffer.el` on every boot) would otherwise
+/// hit EACCES from its own seeded state.
+#[cfg(unix)]
+pub fn copy_tree_writable(source: &Path, destination: &Path) -> Result<(), String> {
+    copy_tree(source, destination)?;
+    fn unwall(path: &Path) -> Result<(), String> {
+        use std::os::unix::fs::PermissionsExt;
+        let meta = fs::symlink_metadata(path)
+            .map_err(|error| format!("stat {}: {error}", path.display()))?;
+        if meta.is_dir() {
+            let mut permissions = meta.permissions();
+            permissions.set_mode(meta.permissions().mode() | 0o700);
+            fs::set_permissions(path, permissions)
+                .map_err(|error| format!("unseal {}: {error}", path.display()))?;
+            let entries =
+                fs::read_dir(path).map_err(|error| format!("read {}: {error}", path.display()))?;
+            for entry in entries {
+                unwall(
+                    &entry
+                        .map_err(|error| format!("read {}: {error}", path.display()))?
+                        .path(),
+                )?;
+            }
+        } else if meta.is_file() {
+            let mut permissions = meta.permissions();
+            permissions.set_mode(meta.permissions().mode() | 0o600);
+            fs::set_permissions(path, permissions)
+                .map_err(|error| format!("unseal {}: {error}", path.display()))?;
+        }
+        Ok(())
+    }
+    unwall(destination)
+}
+
+/// A no-op where there are no permission bits to restore; the seal
+/// refusal already prevents reaching here on such hosts.
+#[cfg(not(unix))]
+pub fn copy_tree_writable(source: &Path, destination: &Path) -> Result<(), String> {
+    copy_tree(source, destination)
+}
+
+/// Recursively strip every write bit under `root`, sealing the fixture
+/// against writes from the editors that mount it.  This is failure
+/// isolation between tests, not a security boundary: a process running as
+/// the owning user could chmod the bits back, but editors do not.
+#[cfg(unix)]
+pub fn seal(root: &Path) -> Result<(), String> {
+    fn walk(path: &Path) -> Result<(), String> {
+        use std::os::unix::fs::PermissionsExt;
+        let meta = fs::symlink_metadata(path)
+            .map_err(|error| format!("stat {}: {error}", path.display()))?;
+        if meta.is_dir() {
+            let mut permissions = meta.permissions();
+            permissions.set_mode(meta.permissions().mode() & !0o222);
+            fs::set_permissions(path, permissions)
+                .map_err(|error| format!("seal {}: {error}", path.display()))?;
+            let entries =
+                fs::read_dir(path).map_err(|error| format!("read {}: {error}", path.display()))?;
+            for entry in entries {
+                walk(
+                    &entry
+                        .map_err(|error| format!("read {}: {error}", path.display()))?
+                        .path(),
+                )?;
+            }
+        } else if meta.is_file() {
+            let mut permissions = meta.permissions();
+            permissions.set_mode(meta.permissions().mode() & !0o222);
+            fs::set_permissions(path, permissions)
+                .map_err(|error| format!("seal {}: {error}", path.display()))?;
+        }
+        Ok(())
+    }
+    walk(root)
+}
+
+/// Write the MANIFEST recording the fixture's name and source note, then
+/// seal — the tail every environment's materialize shares.
+pub fn manifest_and_seal(root: &Path, name: &str, source_note: &str) -> Result<(), String> {
+    fs::write(
+        root.join("MANIFEST"),
+        format!("name = {name}\nsource = {source_note}\n"),
+    )
+    .map_err(|error| format!("write MANIFEST: {error}"))?;
+    seal(root)
+}
+
+/// Windows has no permission bits to clear, so the fixture cannot be
+/// sealed -- and for the editors that mount it, being sealed is the
+/// property that makes mounting safe.  Refusing keeps a host from
+/// materializing a writable tree that `open` would then have to guess
+/// about; `is_sealed` answers `false` for the same reason.  Unreachable
+/// in the suites, which are Unix-only; the crate still has to compile
+/// for the workspace's Windows `cargo check`.
+#[cfg(not(unix))]
+pub fn seal(_root: &Path) -> Result<(), String> {
+    Err(
+        "the fixture seal needs Unix permission bits; this platform \
+         cannot materialize the fixture"
+            .to_owned(),
+    )
+}

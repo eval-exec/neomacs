@@ -1,4 +1,4 @@
-//! `infra` — materialize and inspect shared editor-config fixtures.
+//! `infra` — materialize and inspect shared test environment fixtures.
 
 use std::process::exit;
 
@@ -6,16 +6,13 @@ fn main() {
     let mut args = std::env::args_os().skip(1);
     match args.next().as_deref().and_then(|arg| arg.to_str()) {
         Some("materialize") => match args.next().as_deref().and_then(|arg| arg.to_str()) {
-            Some("doom") => {
+            Some(name) if neomacs_infra::config_env::NAMES.contains(&name) => {
                 let source = match args.next() {
-                    Some(path) => neomacs_infra::DoomSource::Operator(path.into()),
-                    None => neomacs_infra::DoomSource::resolve()
-                        .unwrap_or(neomacs_infra::DoomSource::Pinned),
+                    Some(path) => operator_source(name, path),
+                    None => default_source(name),
                 };
-                match neomacs_infra::DoomEnvironment::materialize(source) {
-                    Ok(environment) => {
-                        println!("doom fixture ready at {}", environment.tree().display());
-                    }
+                match materialize(name, source) {
+                    Ok(()) => println!("{name} fixture ready"),
                     Err(error) => {
                         eprintln!("error: {error}");
                         exit(1);
@@ -23,20 +20,83 @@ fn main() {
                 }
             }
             other => {
-                eprintln!("usage: infra materialize doom");
+                eprintln!(
+                    "usage: infra materialize <{}> [operator-checkout]",
+                    neomacs_infra::config_env::NAMES.join("|")
+                );
                 if let Some(other) = other {
                     eprintln!("unknown environment: {other}");
                 }
                 exit(2);
             }
         },
-        Some("status") => match neomacs_infra::doom_status() {
-            Ok(status) => println!("doom: {status}"),
-            Err(status) => println!("doom: {status}"),
-        },
+        Some("status") => {
+            for name in neomacs_infra::config_env::NAMES {
+                let status = match name.as_ref() {
+                    "doom" => neomacs_infra::config_env::doom::doom_status().map(|_| ()),
+                    "spacemacs" => {
+                        neomacs_infra::config_env::spacemacs::spacemacs_status().map(|_| ())
+                    }
+                    _ => unreachable!("NAMES and status arms must stay in sync"),
+                };
+                match status {
+                    Ok(()) => println!("{name}: materialized and sealed"),
+                    Err(reason) => println!("{name}: {reason}"),
+                }
+            }
+        }
         _ => {
-            eprintln!("usage: infra <materialize doom|status>");
+            eprintln!("usage: infra <materialize {} [path]|status>", {
+                let mut usage = String::new();
+                for name in neomacs_infra::config_env::NAMES {
+                    usage.push_str(&format!("<{name}>|"));
+                }
+                usage
+            });
             exit(2);
         }
+    }
+}
+
+fn default_source(name: &str) -> MaterializeSource {
+    match name {
+        "doom" => MaterializeSource::Doom(
+            neomacs_infra::config_env::DoomSource::resolve()
+                .unwrap_or(neomacs_infra::config_env::DoomSource::Pinned),
+        ),
+        "spacemacs" => MaterializeSource::Spacemacs(
+            neomacs_infra::config_env::SpacemacsSource::resolve()
+                .unwrap_or(neomacs_infra::config_env::SpacemacsSource::Pinned),
+        ),
+        _ => unreachable!(),
+    }
+}
+
+fn operator_source(name: &str, path: std::ffi::OsString) -> MaterializeSource {
+    match name {
+        "doom" => {
+            MaterializeSource::Doom(neomacs_infra::config_env::DoomSource::Operator(path.into()))
+        }
+        "spacemacs" => MaterializeSource::Spacemacs(
+            neomacs_infra::config_env::SpacemacsSource::Operator(path.into()),
+        ),
+        _ => unreachable!(),
+    }
+}
+
+enum MaterializeSource {
+    Doom(neomacs_infra::config_env::DoomSource),
+    Spacemacs(neomacs_infra::config_env::SpacemacsSource),
+}
+
+fn materialize(name: &str, source: MaterializeSource) -> Result<(), String> {
+    match (name, source) {
+        ("doom", MaterializeSource::Doom(source)) => {
+            neomacs_infra::config_env::DoomEnvironment::materialize(source).map(|_| ())
+        }
+        ("spacemacs", MaterializeSource::Spacemacs(source)) => {
+            neomacs_infra::config_env::SpacemacsEnvironment::materialize(source).map(|_| ())
+        }
+        _ => unreachable!(),
     }
 }
