@@ -1008,22 +1008,19 @@ pub(crate) fn builtin_unintern(eval: &mut super::eval::Context, args: Vec<Value>
     expect_max_args("unintern", &args, 2)?;
     validate_optional_obarray_arg(&args)?;
 
-    // DIVERGENCES.md 167: the name arm borrows `args[0]`'s payload, so the
-    // enum's lifetime is the ARGUMENT's, not `'static`. The symbol arm's
-    // process-lifetime atom coerces into it; writing `'static` here forced the
-    // string arm to launder one.
+    // GNU tests SYMBOLP, which includes nil and t. Keep exact-symbol
+    // deletion distinct from name lookup; a namesake in another obarray
+    // must never be removed by a symbol argument.
     enum UninternTarget<'a> {
-        Symbol(SymId, &'a crate::heap_types::LispString),
-        Name(std::borrow::Cow<'a, crate::heap_types::LispString>),
+        Symbol(SymId),
+        Name(&'a crate::heap_types::LispString),
     }
 
     let target = match args[0].kind() {
-        ValueKind::Symbol(id) => {
-            UninternTarget::Symbol(id, crate::emacs_core::intern::resolve_sym_lisp_string(id))
+        ValueKind::Nil | ValueKind::T | ValueKind::Symbol(_) => {
+            UninternTarget::Symbol(args[0].xsymbol_id())
         }
-        ValueKind::String => UninternTarget::Name(std::borrow::Cow::Borrowed(
-            args[0].as_lisp_string().unwrap(),
-        )),
+        ValueKind::String => UninternTarget::Name(args[0].as_lisp_string().unwrap()),
         _ => {
             return Err(signal(
                 LispCondition::WrongTypeArgument,
@@ -1033,8 +1030,8 @@ pub(crate) fn builtin_unintern(eval: &mut super::eval::Context, args: Vec<Value>
     };
 
     let target_name = match &target {
-        UninternTarget::Symbol(_, name) => *name,
-        UninternTarget::Name(name) => name.as_ref(),
+        UninternTarget::Symbol(id) => crate::emacs_core::intern::resolve_sym_lisp_string(*id),
+        UninternTarget::Name(name) => *name,
     };
 
     // Custom obarray path
@@ -1066,14 +1063,13 @@ pub(crate) fn builtin_unintern(eval: &mut super::eval::Context, args: Vec<Value>
                     let car = current.cons_car();
                     let cdr = current.cons_cdr();
                     if !found {
-                        let should_remove = match (&target, car.kind()) {
-                            (UninternTarget::Symbol(target_id, _), ValueKind::Symbol(car_id)) => {
-                                car_id == *target_id
+                        let should_remove = match &target {
+                            UninternTarget::Symbol(target_id) => {
+                                car.as_symbol_id() == Some(*target_id)
                             }
-                            (UninternTarget::Name(name), _) => car
+                            UninternTarget::Name(name) => car
                                 .as_symbol_lisp_string()
-                                .is_some_and(|sym_name| sym_name == name.as_ref()),
-                            _ => false,
+                                .is_some_and(|sym_name| sym_name == *name),
                         };
                         if should_remove {
                             found = true;
@@ -1107,8 +1103,8 @@ pub(crate) fn builtin_unintern(eval: &mut super::eval::Context, args: Vec<Value>
 
     // Global obarray path
     let removed = match target {
-        UninternTarget::Symbol(id, _) => eval.obarray.unintern_id(id),
-        UninternTarget::Name(name) => eval.obarray.unintern_lisp_string(name.as_ref()),
+        UninternTarget::Symbol(id) => eval.obarray.unintern_id(id),
+        UninternTarget::Name(name) => eval.obarray.unintern_lisp_string(name),
     };
     Ok(if removed { Value::T } else { Value::NIL })
 }

@@ -1130,3 +1130,28 @@ fn pending_dump_entries_hydrate_at_first_access() {
     });
     assert_eq!(table.as_hash_table().unwrap().data.len(), 1);
 }
+
+#[test]
+fn unintern_constant_symbols_preserves_custom_obarray_namesakes() {
+    crate::test_utils::init_test_tracing();
+    let mut ctx = crate::emacs_core::eval::Context::new();
+    for name in ["nil", "t"] {
+        let form = format!(
+            r#"(let* ((ob (make-vector 31 0))
+                      (shadow (intern "{name}" ob)))
+                 (list (unintern {name} (make-vector 31 0))
+                       (unintern {name} ob)
+                       (eq shadow (intern-soft "{name}" ob))
+                       (unintern shadow ob)
+                       (unintern shadow ob)))"#
+        );
+        let result = ctx
+            .eval_str(&form)
+            .expect("unintern accepts every Lisp symbol");
+        let parts = list_to_vec(&result).expect("result list");
+        assert_eq!(
+            parts,
+            vec![Value::NIL, Value::NIL, Value::T, Value::T, Value::NIL]
+        );
+    }
+}

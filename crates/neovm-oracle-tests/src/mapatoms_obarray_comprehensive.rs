@@ -694,3 +694,29 @@ fn oracle_prop_mapatoms_chain_computation() {
     ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
+
+// Issue #382: centaur-tabs passes nil to unintern during Vertico redisplay.
+#[test]
+fn oracle_prop_unintern_constant_symbols_and_namesakes() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let form = r#"(mapcar
+      (lambda (symbol)
+        (let* ((name (symbol-name symbol))
+               (ob (make-vector 31 0))
+               (other (make-vector 31 0))
+               (shadow (intern name ob))
+               (foreign (intern name other)))
+          (list (unintern symbol (make-vector 31 0))
+                (unintern symbol ob)
+                (unintern foreign ob)
+                (eq shadow (intern-soft name ob))
+                (unintern shadow ob)
+                (unintern shadow ob)
+                (progn (intern name ob) (unintern name ob))
+                (unintern name ob))))
+      '(nil t neovm--issue-382-ordinary))"#;
+    let expect = expect_test::expect![[
+        r#""OK ((nil nil nil t t nil t nil) (nil nil nil t t nil t nil) (nil nil nil t t nil t nil))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
