@@ -141,21 +141,10 @@ fn compare_config_boot(env: &dyn neomacs_infra::config_env::ConfigEnvironment, n
     );
 }
 
-// Ignored while the probe design catches up with the finding: GNU GUI +
-// the sealed doom fixture boots doom successfully under Xvfb ("Doom
-// loaded 14 packages across 3 modules", pixel capture shows the themed
-// frame) -- but the minimal fixture doom (no DOOMDIR) sets
-// `initial-scratch-message' nil, so the selected window's text is
-// legitimately empty and a window-text needle can never fire.  The
-// comparison needs a doom-GUI-state probe (dashboard buffer, modeline
-// face, or pixel-diff), not window text.  Neomacs on the same fixture
-// shows the vanilla scratch text, which is itself a candidate
-// divergence to settle first.
 #[test]
-#[ignore = "probe design: window-text needle cannot fire on nil scratch; see comment"]
 fn doom_gui_boot_home_buffer_matches_gnu() {
     match neomacs_infra::DoomEnvironment::open() {
-        Some(env) => compare_config_boot(&env, "Doom"),
+        Some(env) => compare_config_boot(&env, "Doom loaded"),
         None => eprintln!(
             "skipping: no sealed Doom fixture; run \
              `cargo run -p xtask -- infra materialize doom`"
@@ -167,8 +156,13 @@ fn doom_gui_boot_home_buffer_matches_gnu() {
 // under Xvfb had not completed within 300s in the last harness run
 // (machine load ~35 during the chase; TUI boots in seconds).  Re-run
 // on a quiet machine before concluding anything about spacemacs GUI.
+// GNU-side only: during the harness run GNU spacemacs never opens its X
+// connection (no socket fd; gmain/gdbus idle; the drawn screen observed
+// on the shared Xvfb is the Neomacs side).  The doom sibling passes on
+// the identical env, so this is spacemacs-specific pre-display blocking,
+// not the harness.  TUI spacemacs parity is green.
 #[test]
-#[ignore = "probe design: see doom sibling; also re-run on quiet machine"]
+#[ignore = "GNU spacemacs GUI blocks before opening X: live investigation"]
 fn spacemacs_gui_boot_home_buffer_matches_gnu() {
     match neomacs_infra::SpacemacsEnvironment::open() {
         Some(env) => compare_config_boot(&env, "Find File"),

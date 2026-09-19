@@ -2,9 +2,8 @@
 ;;
 ;; Shared by the Doom and Spacemacs GUI comparisons: after the config
 ;; framework settles, dump the selected window's visible text and frame
-;; geometry to the artifacts the harness compares.  Which buffer to wait
-;; for is passed in NEOMACS_GUI_CONFIG_HOME_NEEDLE (a string that must
-;; appear in the buffer name or its contents).
+;; geometry to the artifacts the harness compares.  Which string to wait
+;; for is passed in NEOMACS_GUI_CONFIG_HOME_NEEDLE.
 
 (require 'cl-lib)
 
@@ -18,8 +17,7 @@
          (visible (buffer-substring-no-properties
                    (window-start) (window-end nil t)))
          (payload
-          (format "{\"frame\":{\"cols\":%d,\"rows\":%d,\"pixel\":\"%dx%d\"},\
-\"buffer\":\"%s\",\"text\":%S}"
+          (format "{\"frame\":{\"cols\":%d,\"rows\":%d,\"pixel\":\"%dx%d\"},\"buffer\":\"%s\",\"text\":%S}"
                   (frame-width) (frame-height)
                   (frame-pixel-width) (frame-pixel-height)
                   (buffer-name buf) visible)))
@@ -27,21 +25,36 @@
       (let ((coding-system-for-write 'utf-8))
         (with-temp-file path (insert payload))))))
 
+(defun neomacs-config-boot--finished-p (needle)
+  (or
+   ;; Some visible window names or shows the needle.
+   (cl-some
+    (lambda (window)
+      (or (string-match-p needle (buffer-name (window-buffer window)))
+          (cl-some (lambda (row)
+                     (and row (string-match-p needle row)))
+                   (split-string
+                    (buffer-substring-no-properties
+                     (window-start window) (window-end window t))
+                    "\n"))))
+    (window-list))
+   ;; A config framework may legitimately leave every window empty (the
+   ;; minimal doom fixture sets initial-scratch-message nil and ships no
+   ;; dashboard without a DOOMDIR); its finish line in *Messages* is
+   ;; then the only observable startup signal.  Verified on both editors:
+   ;; ISM=nil, scratch empty, "Doom loaded ..." in *Messages*.
+   (and (get-buffer "*Messages*")
+        (string-match-p
+         needle
+         (with-current-buffer "*Messages*"
+           (buffer-substring-no-properties (point-min) (point-max)))))))
+
 (defvar neomacs-config-boot--deadline nil)
 
 (defun neomacs-config-boot--tick ()
   (let ((needle (or (getenv "NEOMACS_GUI_CONFIG_HOME_NEEDLE") "SPC")))
     (cond
-     ((cl-some
-       (lambda (window)
-         (or (string-match-p needle (buffer-name (window-buffer window)))
-             (cl-some (lambda (row)
-                        (and row (string-match-p needle row)))
-                      (split-string
-                       (buffer-substring-no-properties
-                        (window-start window) (window-end window t))
-                       "\n"))))
-       (window-list))
+     ((neomacs-config-boot--finished-p needle)
       ;; Settle one more idle slice so deferred repaints land, then dump.
       (run-at-time
        2 nil
@@ -63,6 +76,5 @@
       (message "config boot timed out waiting for %S" needle)
       (let (kill-emacs-hook) (kill-emacs 1))))))
 
-(setq neomacs-config-boot--deadline
-      (time-add nil 240))
+(setq neomacs-config-boot--deadline (time-add nil 240))
 (run-at-time 3 nil #'neomacs-config-boot--tick)
