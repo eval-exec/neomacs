@@ -124,6 +124,40 @@ fn find_file_name_handler_matches_raw_unibyte_filename_bytes() {
 }
 
 #[test]
+fn find_file_name_handler_reads_its_variables_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // GNU reads the C variables: a lexical argument of the same name is not
+    // seen, and its bare `EQ` inhibits a nil OPERATION while
+    // `inhibit-file-name-operation' is nil. Values from GNU 31.1.
+    let results = bootstrap_eval(
+        r#"
+        (progn (defun vm-fnh-h (&rest _) nil) (defun vm-fnh-h2 (&rest _) nil) nil)
+        (let ((file-name-handler-alist '(("\\`/foo" . vm-fnh-h))))
+          (eval '(list
+                  (funcall (lambda (file-name-handler-alist)
+                             (find-file-name-handler "/foo/bar" 'file-exists-p))
+                           '(("\\`/foo" . vm-fnh-h2)))
+                  (funcall (lambda (inhibit-file-name-operation inhibit-file-name-handlers)
+                             (find-file-name-handler "/foo/bar" 'file-exists-p))
+                           'file-exists-p '(vm-fnh-h)))
+                t))
+        (let ((file-name-handler-alist '(("\\`/foo" . vm-fnh-h))))
+          (list (let ((inhibit-file-name-operation nil)
+                      (inhibit-file-name-handlers '(vm-fnh-h)))
+                  (find-file-name-handler "/foo/bar" nil))
+                (let ((inhibit-file-name-operation nil)
+                      (inhibit-file-name-handlers '(vm-fnh-h)))
+                  (find-file-name-handler "/foo/bar" 'file-exists-p))
+                (let ((inhibit-file-name-operation 'file-exists-p)
+                      (inhibit-file-name-handlers '(vm-fnh-h)))
+                  (find-file-name-handler "/foo/bar" 'file-exists-p))))
+        "#,
+    );
+    assert_eq!(results[1], "OK (vm-fnh-h vm-fnh-h)");
+    assert_eq!(results[2], "OK (nil vm-fnh-h nil)");
+}
+
+#[test]
 fn do_auto_save_names_a_fileless_buffer_under_a_raw_unibyte_prefix_directory() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();

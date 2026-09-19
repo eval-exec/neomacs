@@ -4799,6 +4799,26 @@ pub(crate) fn builtin_find_file_name_handler(eval: &mut Context, args: Vec<Value
     ))
 }
 
+/// The symbols `find-file-name-handler` consults on every call -- once per
+/// `exec-path` directory in each `call-process` -- interned once. They are
+/// core symbols, so their ids are stable across a pdump load.
+struct FileNameHandlerSymbols {
+    handler_alist: super::intern::SymId,
+    inhibit_operation: super::intern::SymId,
+    inhibit_handlers: super::intern::SymId,
+    operations: super::intern::SymId,
+}
+
+fn file_name_handler_symbols() -> &'static FileNameHandlerSymbols {
+    static SYMS: std::sync::OnceLock<FileNameHandlerSymbols> = std::sync::OnceLock::new();
+    SYMS.get_or_init(|| FileNameHandlerSymbols {
+        handler_alist: intern("file-name-handler-alist"),
+        inhibit_operation: intern("inhibit-file-name-operation"),
+        inhibit_handlers: intern("inhibit-file-name-handlers"),
+        operations: intern("operations"),
+    })
+}
+
 /// Walk `file-name-handler-alist` looking for a handler matching FILENAME
 /// for OPERATION. Mirrors GNU `Ffind_file_name_handler`
 /// (`src/fileio.c:371`).
@@ -4814,11 +4834,9 @@ pub(crate) fn builtin_find_file_name_handler(eval: &mut Context, args: Vec<Value
 /// handler is only used when `OPERATION` is in that list. This lets
 /// handlers declare a restricted operation set without writing
 /// trampolines for everything else.
-#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-fn dynamic_or_global_symbol_value(eval: &Context, name: &str) -> Option<Value> {
-    eval.eval_symbol_by_id(intern(name)).ok()
-}
-
+///
+/// The three variables are read as GNU reads its C variables: the dynamic
+/// value, never a lexical binding of the same name.
 pub(crate) fn find_file_name_handler_lisp_for_eval(
     eval: &Context,
     filename: &crate::heap_types::LispString,
@@ -4830,9 +4848,9 @@ pub(crate) fn find_file_name_handler_lisp_for_eval(
         super::builtins::search::FastStringMatchSyntax::for_current_buffer(eval),
         filename,
         operation,
-        dynamic_or_global_symbol_value(eval, "file-name-handler-alist"),
-        dynamic_or_global_symbol_value(eval, "inhibit-file-name-operation"),
-        dynamic_or_global_symbol_value(eval, "inhibit-file-name-handlers"),
+        eval.special_variable_value_by_id(file_name_handler_symbols().handler_alist),
+        eval.special_variable_value_by_id(file_name_handler_symbols().inhibit_operation),
+        eval.special_variable_value_by_id(file_name_handler_symbols().inhibit_handlers),
     )
 }
 
@@ -4853,10 +4871,10 @@ fn find_file_name_handler_lisp_with_values(
         _ => return Value::NIL,
     };
     // Compute the inhibit list lazily — only consulted when operation
-    // matches inhibit-file-name-operation.
+    // matches inhibit-file-name-operation. GNU's test is a bare `EQ`, so a
+    // nil OPERATION is inhibited while the variable is nil too.
     let mut inhibited: Option<Value> = None;
     if let Some(inh_op) = inhibit_operation
-        && !inh_op.is_nil()
         && super::value::eq_value(&inh_op, &operation)
     {
         inhibited = inhibit_handlers;
@@ -4883,7 +4901,7 @@ fn find_file_name_handler_lisp_with_values(
         // property, restrict to listed operations. Mirrors GNU's
         // `Fget (handler, Qoperations)` check at fileio.c:409.
         if let Some(handler_sym) = handler.as_symbol_id() {
-            let ops_sym = super::intern::intern("operations");
+            let ops_sym = file_name_handler_symbols().operations;
             if let Some(ops) = obarray
                 .get_property_id(handler_sym, ops_sym)
                 .filter(|v| !v.is_nil())
