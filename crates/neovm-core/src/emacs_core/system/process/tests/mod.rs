@@ -10185,7 +10185,10 @@ fn the_stderr_pipe_is_closed_and_attached_when_the_owner_sentinel_runs() {
 /// The deferred half of the same split: the pipe's own sentinel still runs,
 /// after the owner's. GNU's `status_notify` reaches the older stderr pipe on
 /// the same pass, so retiring it early in the fd loop must not cost it its
-/// notification.
+/// notification. The order is only defined when the child's EOF and its exit
+/// are pending together, so -- as in the row above -- nothing polls until the
+/// child has surely exited (a busy machine could otherwise deliver the EOF a
+/// pass earlier, running the pipe's sentinel first, as GNU would too).
 #[test]
 fn the_stderr_pipe_sentinel_still_runs_after_the_owners() {
     crate::test_utils::init_test_tracing();
@@ -10207,6 +10210,8 @@ fn the_stderr_pipe_sentinel_still_runs_after_the_owners() {
                   (when (memq (process-status pr) '(exit signal))
                     (push 'owner order)
                     (setq done t))))
+             (let ((end (+ (float-time) 0.5)))
+               (while (< (float-time) end)))
              (while (not done) (accept-process-output nil 0.05))
              (dotimes (_ 4) (accept-process-output nil 0.05))
              (nreverse order))"#
