@@ -4253,3 +4253,37 @@ fn buffer_search_match_data_is_in_characters_like_gnu() {
         "OK (((7 9 7 9 8 9 buf) (25 28 25 27 27 28 buf) (1 5 1 3 3 5 buf) (9 12 9 11 11 12 buf) (19 21 19 20 20 21 buf) (13 18 buf)) ((6 8 6 8 7 8 buf) (12 16 12 14 14 16 buf) (24 27 24 26 26 27 buf) (1 4 1 3 3 4 buf) (8 11 8 10 10 11 buf)))"
     );
 }
+
+/// GNU 31.1: a successful buffer search replaces the match data whatever it
+/// held (string match data, another buffer's), `COUNT` publishes the last
+/// match, and a failed search or `inhibit-changing-match-data` leaves it as
+/// it was -- the in-place publication must reuse nothing stale.
+#[test]
+fn buffer_search_replaces_match_data_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"
+        (let ((md (lambda () (mapcar (lambda (x) (cond ((bufferp x) (buffer-name x)) ((markerp x) (list 'm (marker-position x) (buffer-name (marker-buffer x)))) (t x))) (match-data)))))
+          (let ((a (get-buffer-create "md-a")) (b (get-buffer-create "md-b")) out)
+            (with-current-buffer a (erase-buffer) (insert "one two three two one"))
+            (with-current-buffer b (erase-buffer) (insert "αβ two γ two"))
+            (string-match "\\(t\\)wo" "xx two")
+            (push (match-data) out)
+            (with-current-buffer a (goto-char (point-min)) (re-search-forward "\\(t\\)\\(w\\)o" nil t) (push (funcall md) out))
+            (with-current-buffer b (goto-char (point-min)) (search-forward "two" nil t 2) (push (funcall md) out) (push (point) out))
+            (with-current-buffer a (goto-char (point-min)) (re-search-forward "zzz" nil t) (push (funcall md) out))
+            (with-current-buffer a (goto-char (point-max)) (re-search-backward "\\(o\\)ne" nil t) (push (funcall md) out))
+            (with-current-buffer a (goto-char (point-min))
+              (let ((inhibit-changing-match-data t)) (re-search-forward "three" nil t)) (push (point) out) (push (funcall md) out))
+            (with-current-buffer b (goto-char (point-max)) (search-backward "two" nil t) (push (funcall md) out))
+            (with-current-buffer a (goto-char (point-min)) (re-search-forward "\\(two\\)\\|\\(xyz\\)" nil t) (push (funcall md) out))
+            (with-current-buffer a (goto-char (point-min)) (condition-case e (re-search-forward "nope") (error (push (car e) out))) (push (funcall md) out))
+            (kill-buffer a) (kill-buffer b)
+            (nreverse out)))
+        "#,
+    );
+    assert_eq!(
+        result,
+        r#"OK ((3 6 3 4) ((m 5 "md-a") (m 8 "md-a") (m 5 "md-a") (m 6 "md-a") (m 6 "md-a") (m 7 "md-a")) ((m 10 "md-b") (m 13 "md-b")) 13 ((m 10 "md-b") (m 13 "md-b")) ((m 19 "md-a") (m 22 "md-a") (m 19 "md-a") (m 20 "md-a")) 14 ((m 19 "md-a") (m 22 "md-a") (m 19 "md-a") (m 20 "md-a")) ((m 10 "md-b") (m 13 "md-b")) ((m 5 "md-a") (m 8 "md-a") (m 5 "md-a") (m 8 "md-a")) search-failed ((m 5 "md-a") (m 8 "md-a") (m 5 "md-a") (m 8 "md-a")))"#
+    );
+}

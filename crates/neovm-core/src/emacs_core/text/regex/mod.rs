@@ -573,9 +573,39 @@ enum MatchDataKind {
 /// Keeping this outside `MatchDataKind` makes it impossible to publish raw
 /// registers accidentally.  It is consumed by a source-specific conversion
 /// before a search success crosses the regex module's interface.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 struct EngineMatchData {
     groups: smallvec::SmallVec<[Option<EmacsByteRange>; GNU_SEARCH_REGS_BASE_CAPACITY]>,
+}
+
+/// The engine registers of a buffer search, held by the caller across the
+/// search and its commit: the `_into` search entry points fill it and
+/// return only where point goes, and [`Self::publish_buffer_into`] writes it
+/// into the evaluator's match data in place -- GNU's global `search_regs`,
+/// without the ~180-byte result a by-value search success copied at every
+/// hop between the matcher and the match-data slot.
+#[derive(Default)]
+pub(crate) struct SearchRegisters(EngineMatchData);
+
+impl SearchRegisters {
+    /// Publish these registers, in Lisp character positions of BUF, as the
+    /// match data in TARGET, reusing TARGET's register storage when it
+    /// already holds buffer match data.
+    pub(crate) fn publish_buffer_into(&self, buf: &Buffer, target: &mut Option<MatchData>) {
+        if let Some(match_data) = target
+            && let MatchDataKind::Buffer { id, groups } = &mut match_data.kind
+        {
+            *id = buf.id;
+            groups.clear();
+            self.0.fill_buffer_groups(buf, groups);
+            #[cfg(debug_assertions)]
+            {
+                match_data.read_mask = Default::default();
+            }
+            return;
+        }
+        *target = Some(self.0.publish_buffer(buf));
+    }
 }
 
 /// A successful buffer search ready to commit to evaluator state.
@@ -944,15 +974,32 @@ impl EngineMatchData {
     }
 
     fn publish_buffer(&self, buf: &Buffer) -> MatchData {
+        let mut groups = smallvec::SmallVec::<
+            [Option<LispCharMatchRange>; GNU_SEARCH_REGS_BASE_CAPACITY],
+        >::with_capacity(self.groups.len());
+        self.fill_buffer_groups(buf, &mut groups);
+        MatchData {
+            kind: MatchDataKind::Buffer { id: buf.id, groups },
+            #[cfg(debug_assertions)]
+            read_mask: Default::default(),
+        }
+    }
+
+    /// Append these registers to GROUPS in Lisp character positions of BUF.
+    fn fill_buffer_groups(
+        &self,
+        buf: &Buffer,
+        groups: &mut smallvec::SmallVec<
+            [Option<LispCharMatchRange>; GNU_SEARCH_REGS_BASE_CAPACITY],
+        >,
+    ) {
         #[cfg(debug_assertions)]
         match_stats::count_publish(&self.groups);
+        groups.reserve(self.groups.len());
         // GNU `search_buffer_re` converts each register with `BYTE_TO_CHAR`,
         // whose first test is `Z == Z_BYTE`. That test is made once for the
         // whole set here: where every character is one byte, a register's
         // Lisp position is its clamped byte position plus one.
-        let mut groups = smallvec::SmallVec::<
-            [Option<LispCharMatchRange>; GNU_SEARCH_REGS_BASE_CAPACITY],
-        >::with_capacity(self.groups.len());
         if let Some(end) = buf.text_single_byte_chars_end() {
             let lisp = |pos: EmacsBytePos| LispMatchPosition::new(pos.min(end).get() + 1);
             for range in &self.groups {
@@ -971,11 +1018,6 @@ impl EngineMatchData {
                     end: lisp(range.end()),
                 }));
             }
-        }
-        MatchData {
-            kind: MatchDataKind::Buffer { id: buf.id, groups },
-            #[cfg(debug_assertions)]
-            read_mask: Default::default(),
         }
     }
 }
@@ -2621,6 +2663,9 @@ pub(crate) fn treesit_predicate_match_lisp(
 /// - `noerror` true: returns `None` without signaling
 ///
 /// `bound` optionally limits the search to positions <= bound.
+/// [`search_forward_into`] with its registers published into a
+/// [`BufferSearchSuccess`].
+#[cfg(test)]
 pub(crate) fn search_forward(
     buf: &mut Buffer,
     pattern: &crate::heap_types::LispString,
@@ -2628,6 +2673,19 @@ pub(crate) fn search_forward(
     noerror: bool,
     case_fold: bool,
 ) -> Result<Option<BufferSearchSuccess>, String> {
+    let mut regs = SearchRegisters::default();
+    let point = search_forward_into(buf, pattern, bound, noerror, case_fold, &mut regs)?;
+    Ok(point.map(|point| BufferSearchSuccess::new(buf, point, regs.0)))
+}
+
+pub(crate) fn search_forward_into(
+    buf: &mut Buffer,
+    pattern: &crate::heap_types::LispString,
+    bound: Option<usize>,
+    noerror: bool,
+    case_fold: bool,
+    out: &mut SearchRegisters,
+) -> Result<Option<EmacsBytePos>, String> {
     let start = buf.point_emacs_byte_pos();
     let accessible = buf.accessible_emacs_byte_region();
     let limit = bound
@@ -2665,11 +2723,10 @@ pub(crate) fn search_forward(
         let matched = found.shift(start.get());
         let match_end = matched.end();
         let engine_match = EngineMatchData::new(gnu_single_group_vec(Some(matched)));
-        Ok(Some(BufferSearchSuccess::new(
-            buf,
-            EmacsBytePos::new(match_end),
-            engine_match,
-        )))
+        {
+            out.0 = engine_match;
+            Ok(Some(EmacsBytePos::new(match_end)))
+        }
     } else if noerror {
         // When noerror is t, don't move point.
         // When noerror is a value, move point to bound.
@@ -2686,6 +2743,9 @@ pub(crate) fn search_forward(
 ///
 /// If found, returns the beginning of match as the point position the caller
 /// should apply.
+/// [`search_backward_into`] with its registers published into a
+/// [`BufferSearchSuccess`].
+#[cfg(test)]
 pub(crate) fn search_backward(
     buf: &mut Buffer,
     pattern: &crate::heap_types::LispString,
@@ -2693,6 +2753,19 @@ pub(crate) fn search_backward(
     noerror: bool,
     case_fold: bool,
 ) -> Result<Option<BufferSearchSuccess>, String> {
+    let mut regs = SearchRegisters::default();
+    let point = search_backward_into(buf, pattern, bound, noerror, case_fold, &mut regs)?;
+    Ok(point.map(|point| BufferSearchSuccess::new(buf, point, regs.0)))
+}
+
+pub(crate) fn search_backward_into(
+    buf: &mut Buffer,
+    pattern: &crate::heap_types::LispString,
+    bound: Option<usize>,
+    noerror: bool,
+    case_fold: bool,
+    out: &mut SearchRegisters,
+) -> Result<Option<EmacsBytePos>, String> {
     let end = buf.point_emacs_byte_pos();
     let accessible = buf.accessible_emacs_byte_region();
     let limit = bound
@@ -2727,11 +2800,10 @@ pub(crate) fn search_backward(
         let matched = found.shift(limit.get());
         let point = matched.start();
         let engine_match = EngineMatchData::new(gnu_single_group_vec(Some(matched)));
-        Ok(Some(BufferSearchSuccess::new(
-            buf,
-            EmacsBytePos::new(point),
-            engine_match,
-        )))
+        {
+            out.0 = engine_match;
+            Ok(Some(EmacsBytePos::new(point)))
+        }
     } else if noerror {
         Ok(None)
     } else {
@@ -3003,6 +3075,8 @@ fn buffer_search_translation_table(buf: &Buffer, case_fold: bool) -> Option<supe
     crate::emacs_core::casetab::buffer_case_canon_table(buf)
 }
 
+/// [`re_search_forward_lisp_with_posix_into`] with its registers published into a
+/// [`BufferSearchSuccess`].
 pub(crate) fn re_search_forward_lisp_with_posix(
     buf: &mut Buffer,
     pattern: &LispString,
@@ -3012,6 +3086,30 @@ pub(crate) fn re_search_forward_lisp_with_posix(
     posix: bool,
     match_context: BufferRegexpMatchContext<'_>,
 ) -> Result<Option<BufferSearchSuccess>, String> {
+    let mut regs = SearchRegisters::default();
+    let point = re_search_forward_lisp_with_posix_into(
+        buf,
+        pattern,
+        bound,
+        noerror,
+        case_fold,
+        posix,
+        match_context,
+        &mut regs,
+    )?;
+    Ok(point.map(|point| BufferSearchSuccess::new(buf, point, regs.0)))
+}
+
+pub(crate) fn re_search_forward_lisp_with_posix_into(
+    buf: &mut Buffer,
+    pattern: &LispString,
+    bound: Option<usize>,
+    noerror: bool,
+    case_fold: bool,
+    posix: bool,
+    match_context: BufferRegexpMatchContext<'_>,
+    out: &mut SearchRegisters,
+) -> Result<Option<EmacsBytePos>, String> {
     // GNU `re-search-forward` on a buffer drives the matcher with raw buffer
     // byte positions (`PT_BYTE`, `BEGV_BYTE`, `ZV_BYTE`), even when the
     // pattern itself is a Lisp string.
@@ -3058,7 +3156,10 @@ pub(crate) fn re_search_forward_lisp_with_posix(
     if let Some((_pos, regs)) = search_result {
         let engine_match = buffer_engine_match_data_from_registers(&regs, region_start.get());
         let point = EmacsBytePos::new(engine_match.group(0).unwrap().end());
-        Ok(Some(BufferSearchSuccess::new(buf, point, engine_match)))
+        {
+            out.0 = engine_match;
+            Ok(Some(point))
+        }
     } else if noerror {
         Ok(None)
     } else {
@@ -3068,13 +3169,14 @@ pub(crate) fn re_search_forward_lisp_with_posix(
 
 /// `re_search_forward_lisp_with_posix` for a pattern the caller already
 /// compiled: the same search, no second pattern-cache probe.
-pub(crate) fn re_search_forward_compiled(
+pub(crate) fn re_search_forward_compiled_into(
     buf: &mut Buffer,
     compiled: &CompiledPattern,
     bound: Option<usize>,
     noerror: bool,
     match_context: BufferRegexpMatchContext<'_>,
-) -> Result<Option<BufferSearchSuccess>, String> {
+    out: &mut SearchRegisters,
+) -> Result<Option<EmacsBytePos>, String> {
     // GNU `re-search-forward` on a buffer drives the matcher with raw buffer
     // byte positions (`PT_BYTE`, `BEGV_BYTE`, `ZV_BYTE`), even when the
     // pattern itself is a Lisp string.
@@ -3113,7 +3215,10 @@ pub(crate) fn re_search_forward_compiled(
     if let Some((_pos, regs)) = search_result {
         let engine_match = buffer_engine_match_data_from_registers(&regs, region_start.get());
         let point = EmacsBytePos::new(engine_match.group(0).unwrap().end());
-        Ok(Some(BufferSearchSuccess::new(buf, point, engine_match)))
+        {
+            out.0 = engine_match;
+            Ok(Some(point))
+        }
     } else if noerror {
         Ok(None)
     } else {
@@ -3121,7 +3226,7 @@ pub(crate) fn re_search_forward_compiled(
     }
 }
 
-pub(crate) fn re_search_backward_lisp_with_posix(
+pub(crate) fn re_search_backward_lisp_with_posix_into(
     buf: &mut Buffer,
     pattern: &LispString,
     bound: Option<usize>,
@@ -3129,7 +3234,8 @@ pub(crate) fn re_search_backward_lisp_with_posix(
     case_fold: bool,
     posix: bool,
     match_context: BufferRegexpMatchContext<'_>,
-) -> Result<Option<BufferSearchSuccess>, String> {
+    out: &mut SearchRegisters,
+) -> Result<Option<EmacsBytePos>, String> {
     // GNU `re-search-backward` likewise uses buffer byte positions
     // throughout, not character positions.
     let end = buf.point_emacs_byte_pos();
@@ -3175,7 +3281,10 @@ pub(crate) fn re_search_backward_lisp_with_posix(
     if let Some((_pos, regs)) = search_result {
         let engine_match = buffer_engine_match_data_from_registers(&regs, region_start.get());
         let point = EmacsBytePos::new(engine_match.group(0).unwrap().start());
-        Ok(Some(BufferSearchSuccess::new(buf, point, engine_match)))
+        {
+            out.0 = engine_match;
+            Ok(Some(point))
+        }
     } else if noerror {
         Ok(None)
     } else {

@@ -284,17 +284,24 @@ fn buffer_byte_to_char_pos(buf: &crate::buffer::Buffer, byte_pos: EmacsBytePos) 
     buf.emacs_byte_pos_to_char_pos_clamped(byte_pos)
 }
 
+/// Move point in BUFFER_ID to POINT and, unless the caller inhibits it,
+/// publish the search's REGS as the match data -- in place, GNU's
+/// `search_regs`. The buffer text is unchanged since the search, so the
+/// registers convert against the same text they were found in.
 fn commit_buffer_search_success(
     buffers: &mut crate::buffer::BufferManager,
-    success: super::regex::BufferSearchSuccess,
+    buffer_id: crate::buffer::BufferId,
+    point: EmacsBytePos,
+    regs: &super::regex::SearchRegisters,
     match_data: Option<&mut Option<super::regex::MatchData>>,
 ) -> Result<EmacsBytePos, Flow> {
-    let (buffer_id, point, published_match_data) = success.into_parts();
     buffers
         .goto_buffer_emacs_byte_pos(buffer_id, point)
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    if let Some(match_data) = match_data {
-        *match_data = Some(published_match_data);
+    if let Some(match_data) = match_data
+        && let Some(buf) = buffers.get(buffer_id)
+    {
+        regs.publish_buffer_into(buf, match_data);
     }
     Ok(point)
 }
@@ -341,6 +348,7 @@ pub(crate) fn builtin_search_forward_with_state(
         return Ok(Value::fixnum(start_char));
     }
 
+    let mut regs = super::regex::SearchRegisters::default();
     let mut last_pos = None;
     for _ in 0..opts.steps {
         let result = {
@@ -348,27 +356,31 @@ pub(crate) fn builtin_search_forward_with_state(
                 .get_mut(current_id)
                 .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
             match opts.direction {
-                SearchDirection::Forward => super::regex::search_forward(
+                SearchDirection::Forward => super::regex::search_forward_into(
                     buf,
                     pattern,
                     opts.bound.map(|bound| bound.get()),
                     false,
                     case_fold,
+                    &mut regs,
                 ),
-                SearchDirection::Backward => super::regex::search_backward(
+                SearchDirection::Backward => super::regex::search_backward_into(
                     buf,
                     pattern,
                     opts.bound.map(|bound| bound.get()),
                     false,
                     case_fold,
+                    &mut regs,
                 ),
             }
         };
         match result {
-            Ok(Some(success)) => {
+            Ok(Some(point)) => {
                 last_pos = Some(commit_buffer_search_success(
                     buffers,
-                    success,
+                    current_id,
+                    point,
+                    &regs,
                     match_data.as_deref_mut(),
                 )?)
             }
@@ -1074,6 +1086,7 @@ pub(crate) fn builtin_search_backward_with_state(
         return Ok(Value::fixnum(start_char));
     }
 
+    let mut regs = super::regex::SearchRegisters::default();
     let mut last_pos = None;
     for _ in 0..opts.steps {
         let result = {
@@ -1081,27 +1094,31 @@ pub(crate) fn builtin_search_backward_with_state(
                 .get_mut(current_id)
                 .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
             match opts.direction {
-                SearchDirection::Forward => super::regex::search_forward(
+                SearchDirection::Forward => super::regex::search_forward_into(
                     buf,
                     pattern,
                     opts.bound.map(|bound| bound.get()),
                     false,
                     case_fold,
+                    &mut regs,
                 ),
-                SearchDirection::Backward => super::regex::search_backward(
+                SearchDirection::Backward => super::regex::search_backward_into(
                     buf,
                     pattern,
                     opts.bound.map(|bound| bound.get()),
                     false,
                     case_fold,
+                    &mut regs,
                 ),
             }
         };
         match result {
-            Ok(Some(success)) => {
+            Ok(Some(point)) => {
                 last_pos = Some(commit_buffer_search_success(
                     buffers,
-                    success,
+                    current_id,
+                    point,
+                    &regs,
                     match_data.as_deref_mut(),
                 )?)
             }
@@ -1223,6 +1240,7 @@ fn re_search_forward_with_state_posix_and_syntax_properties(
         return Ok(Value::fixnum(start_char));
     }
 
+    let mut regs = super::regex::SearchRegisters::default();
     let mut last_pos = None;
     for _ in 0..opts.steps {
         let result = {
@@ -1231,14 +1249,15 @@ fn re_search_forward_with_state_posix_and_syntax_properties(
                 .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
             match opts.direction {
                 SearchDirection::Forward => match compiled {
-                    Some(compiled) => super::regex::re_search_forward_compiled(
+                    Some(compiled) => super::regex::re_search_forward_compiled_into(
                         buf,
                         compiled,
                         opts.bound.map(|bound| bound.get()),
                         false,
                         match_context,
+                        &mut regs,
                     ),
-                    None => super::regex::re_search_forward_lisp_with_posix(
+                    None => super::regex::re_search_forward_lisp_with_posix_into(
                         buf,
                         pattern,
                         opts.bound.map(|bound| bound.get()),
@@ -1246,9 +1265,10 @@ fn re_search_forward_with_state_posix_and_syntax_properties(
                         case_fold,
                         posix,
                         match_context,
+                        &mut regs,
                     ),
                 },
-                SearchDirection::Backward => super::regex::re_search_backward_lisp_with_posix(
+                SearchDirection::Backward => super::regex::re_search_backward_lisp_with_posix_into(
                     buf,
                     pattern,
                     opts.bound.map(|bound| bound.get()),
@@ -1256,15 +1276,18 @@ fn re_search_forward_with_state_posix_and_syntax_properties(
                     case_fold,
                     posix,
                     match_context,
+                    &mut regs,
                 ),
             }
         };
 
         match result {
-            Ok(Some(success)) => {
+            Ok(Some(point)) => {
                 last_pos = Some(commit_buffer_search_success(
                     buffers,
-                    success,
+                    current_id,
+                    point,
+                    &regs,
                     match_data.as_deref_mut(),
                 )?)
             }
@@ -1348,6 +1371,7 @@ fn re_search_backward_with_state_posix_and_syntax_properties(
         return Ok(Value::fixnum(start_char));
     }
 
+    let mut regs = super::regex::SearchRegisters::default();
     let mut last_pos = None;
     for _ in 0..opts.steps {
         let result = {
@@ -1355,7 +1379,7 @@ fn re_search_backward_with_state_posix_and_syntax_properties(
                 .get_mut(current_id)
                 .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
             match opts.direction {
-                SearchDirection::Forward => super::regex::re_search_forward_lisp_with_posix(
+                SearchDirection::Forward => super::regex::re_search_forward_lisp_with_posix_into(
                     buf,
                     pattern,
                     opts.bound.map(|bound| bound.get()),
@@ -1363,8 +1387,9 @@ fn re_search_backward_with_state_posix_and_syntax_properties(
                     case_fold,
                     posix,
                     match_context,
+                    &mut regs,
                 ),
-                SearchDirection::Backward => super::regex::re_search_backward_lisp_with_posix(
+                SearchDirection::Backward => super::regex::re_search_backward_lisp_with_posix_into(
                     buf,
                     pattern,
                     opts.bound.map(|bound| bound.get()),
@@ -1372,15 +1397,18 @@ fn re_search_backward_with_state_posix_and_syntax_properties(
                     case_fold,
                     posix,
                     match_context,
+                    &mut regs,
                 ),
             }
         };
 
         match result {
-            Ok(Some(success)) => {
+            Ok(Some(point)) => {
                 last_pos = Some(commit_buffer_search_success(
                     buffers,
-                    success,
+                    current_id,
+                    point,
+                    &regs,
                     match_data.as_deref_mut(),
                 )?)
             }
