@@ -3684,11 +3684,15 @@ impl Obarray {
         let id = intern(name);
         self.mark_global_member(id);
         let sym = self.ensure_symbol_id(id);
+        // See `set_symbol_function_id': the same value redefines nothing.
+        let unchanged = !sym.function_unbound && sym.function.bits() == function.bits();
         // SATB: retain the function cell's pre-image during a concurrent mark.
         crate::tagged::gc::note_root_overwrite(sym.function);
         store_value_atomic(&mut sym.function, function);
         sym.function_unbound = false;
-        self.note_function_redefined(id);
+        if !unchanged {
+            self.note_function_redefined(id);
+        }
     }
 
     /// Record that function-call behavior changed WITHOUT a cell write — the
@@ -3708,11 +3712,11 @@ impl Obarray {
     }
 
     /// A specific function `id` was redefined (cell write / fmakunbound): bump the
-    /// epoch (the coarse "any binding may have changed" signal + JIT backstop).
-    /// When JIT is enabled, also precisely evict the JIT cache entries of callers
-    /// that INLINED `id`, so an unrelated redefinition no longer re-JITs every
-    /// inlined function. Pure optimization layered on the epoch backstop — see
-    /// jit::cache::evict_inline_dependents.
+    /// epoch (the coarse "any binding may have changed" signal JIT call
+    /// speculation re-arms on). When JIT is enabled, also evict the JIT cache
+    /// entries of callers that INLINED `id` -- the only invalidation inlined
+    /// callees get, so every function-cell write must come through here (see
+    /// jit::cache::evict_inline_dependents).
     fn note_function_redefined(&mut self, _id: SymId) {
         self.function_epoch = self.function_epoch.wrapping_add(1);
         // u64::MAX is RESERVED as the JIT/AOT spec DISARMED sentinel
@@ -3730,11 +3734,17 @@ impl Obarray {
     pub fn set_symbol_function_id(&mut self, id: SymId, function: Value) {
         self.ensure_global_member_if_canonical(id);
         let sym = self.ensure_symbol_id(id);
+        // Storing the value the cell already holds changes no call's
+        // behavior, so it redefines nothing: no epoch move, no JIT eviction
+        // (a `defalias' re-run while a file reloads, an `fset' in a loop).
+        let unchanged = !sym.function_unbound && sym.function.bits() == function.bits();
         // SATB: retain the function cell's pre-image during a concurrent mark.
         crate::tagged::gc::note_root_overwrite(sym.function);
         store_value_atomic(&mut sym.function, function);
         sym.function_unbound = false;
-        self.note_function_redefined(id);
+        if !unchanged {
+            self.note_function_redefined(id);
+        }
     }
 
     /// Remove the function cell (fmakunbound).

@@ -156,11 +156,17 @@ thread_local! {
     /// Precise inline-dependency REVERSE map: callee `SymId` -> the set of caller
     /// `compiled_id`s that INLINED it. Populated at compile-miss (the `or_insert_with`
     /// closures register `leaf.inline_deps()`); consulted by `evict_inline_dependents`
-    /// when a function is redefined, to evict exactly the affected callers EARLY. The
-    /// coarse `inline_epoch`-vs-live-epoch backstop in `try_run_compiled` remains the
-    /// correctness floor regardless — this map is a pure churn-reduction optimization.
+    /// when a function is redefined, to evict exactly the affected callers. It is
+    /// the only invalidation of inlined callees: every function-cell write reaches
+    /// `evict_inline_dependents`.
     /// Same thread/scope as COMPILED (its values are only meaningful as COMPILED keys).
     static INLINE_DEPS: RefCell<HashMap<SymId, HashSet<u64>>> = RefCell::new(HashMap::default());
+
+    /// How many times redefining a symbol evicted callers that had inlined it.
+    /// A callee redefined over and over (a `cl-letf' in a loop, a mock
+    /// reinstalled per test) would otherwise recompile its hot callers on
+    /// every round; past [`UNSTABLE_INLINE_EVICTIONS`] it is not inlined again.
+    static INLINE_EVICTIONS: RefCell<HashMap<SymId, u32>> = RefCell::new(HashMap::default());
 
     /// The tagged-heap identity the cached leaves were compiled against. The JIT
     /// cache is thread-local, but every leaf's reloc vector + baked addresses
@@ -514,9 +520,7 @@ fn compile_cache_entry(
 
 /// Precise invalidation: function `sym` was just redefined — evict the JIT cache
 /// entries of every caller that INLINED it, so each re-JITs against the new
-/// definition on its next call. The coarse `inline_epoch`-vs-live-epoch backstop in
-/// [`try_run_compiled`] ALSO catches them lazily; this removes the affected callers
-/// EAGERLY while leaving unrelated callers cached (no per-redefinition re-JIT churn).
+/// definition on its next call, while unrelated callers stay cached.
 ///
 /// MUST be called OUTSIDE any `COMPILED`/`INLINE_DEPS` borrow (the redefinition path
 /// in symbol.rs is) — it takes the two thread_local borrows itself, separately and
@@ -532,10 +536,24 @@ pub(crate) fn evict_compiled(id: u64) {
     OSR_CACHE.with(|c| c.borrow_mut().retain(|(fid, _), _| *fid != id));
 }
 
+/// Evictions after which a callee counts as unstable (see `INLINE_EVICTIONS`).
+const UNSTABLE_INLINE_EVICTIONS: u32 = 2;
+
+/// Whether `sym` has been redefined out from under inlining callers often
+/// enough that inlining it again would just buy another recompile.
+pub(crate) fn inline_callee_is_unstable(sym: SymId) -> bool {
+    INLINE_EVICTIONS.with(|m| {
+        m.borrow()
+            .get(&sym)
+            .is_some_and(|&n| n >= UNSTABLE_INLINE_EVICTIONS)
+    })
+}
+
 pub(crate) fn evict_inline_dependents(sym: SymId) {
     let Some(dependents) = INLINE_DEPS.with(|m| m.borrow_mut().remove(&sym)) else {
         return;
     };
+    INLINE_EVICTIONS.with(|m| *m.borrow_mut().entry(sym).or_default() += 1);
     COMPILED.with(|cache| {
         let mut cache = cache.borrow_mut();
         for id in dependents {
@@ -572,6 +590,15 @@ pub(crate) fn cache_entry_kind_for_test(id: u64) -> &'static str {
 pub(crate) fn compiled_regalloc_for_test(id: u64) -> Option<RegallocChoice> {
     COMPILED.with(|c| match c.borrow().get(id) {
         Some(CacheEntry::Compiled(l)) => Some(l.regalloc),
+        _ => None,
+    })
+}
+
+/// Test-only: the identity of the compiled leaf cached for `id`.
+#[cfg(test)]
+pub(crate) fn compiled_leaf_ptr_for_test(id: u64) -> Option<*const CompiledLeaf> {
+    COMPILED.with(|c| match c.borrow().get(id) {
+        Some(CacheEntry::Compiled(leaf)) => Some(Rc::as_ptr(leaf)),
         _ => None,
     })
 }
@@ -826,6 +853,7 @@ pub(crate) fn clear() {
     );
     COMPILED.with(|c| c.borrow_mut().clear());
     INLINE_DEPS.with(|m| m.borrow_mut().clear());
+    INLINE_EVICTIONS.with(|m| m.borrow_mut().clear());
     OSR_CACHE.with(|c| c.borrow_mut().clear());
     // Every remembered NotCompilable verdict is now as stale as the cache.
     REJECTION_EPOCH.fetch_add(1, Ordering::Relaxed);
@@ -904,19 +932,20 @@ pub fn try_run_compiled(
         // for compile-time speculation. A null ctx (shim-free test bodies) just
         // disables speculation.
         let obarray = (!ctx.is_null()).then(|| unsafe { &(*ctx).obarray });
-        // Re-JIT a STALE INLINED leaf: if it inlined a callee and the obarray's
-        // function_epoch has since moved, a callee it inlined may have been
-        // redefined — drop the entry so it recompiles below (no stale inline runs).
-        let stale = matches!(
-            cache.get(id),
-            Some(CacheEntry::Compiled(l))
-                if l.inline_epoch().is_some()
-                    && l.inline_epoch() != obarray.map(|ob| ob.function_epoch())
-        );
+        // A leaf that inlined a callee needs no epoch check here: every write
+        // of a function cell (`note_function_redefined`: fset, defalias,
+        // fmakunbound, the silent clear) evicts exactly the leaves that
+        // inlined that symbol (`evict_inline_dependents`), and only
+        // `compile_cache_entry` makes inlining leaves, registering their
+        // deps. The old coarse check -- recompile whenever ANY function was
+        // redefined -- made each unrelated `fset' (a `cl-letf' of
+        // `message', an `advice-add', a `defalias' while a package loads)
+        // re-JIT every hot inlining leaf, ~250K instructions apiece.
+        //
         // Re-tier: a leaf built with the fast register allocator that the
         // interpreter keeps entering has proven hot — rebuild it with the
         // full allocator (`retier_heat`). A leaf that already earned `Full`
-        // keeps it when a stale inline makes it recompile: the tier is
+        // keeps it when an evicted inline makes it recompile: the tier is
         // earned, not re-decided. Never under a forced allocator, which
         // would rebuild `Fast` forever.
         let (prev_regalloc, prev_bypassed, prev_call_heavy) = match cache.get(id) {
@@ -931,7 +960,7 @@ pub fn try_run_compiled(
             && !prev_call_heavy
             && forced_regalloc().is_none()
             && super::retier_heat().is_some_and(|at| func.jit_runtime().heat() >= at);
-        if stale || retier {
+        if retier {
             cache.remove(id);
         }
         if retier {

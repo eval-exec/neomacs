@@ -8647,3 +8647,145 @@ fn type_of_call_sites_answer_as_the_builtin_on_the_fast_path() {
         }
     }
 }
+
+#[test]
+fn an_unrelated_redefinition_keeps_an_inlining_leaf_compiled() {
+    use crate::emacs_core::eval::Context;
+    use crate::emacs_core::intern::SymId;
+    // F = (C a) inlines C = (* x x). Redefining an UNRELATED D moves the
+    // function epoch but must not recompile F: its leaf is the same object
+    // across the next call. Redefining C does recompile F, which then
+    // computes with the new C.
+    let mut ev = Context::new();
+    let ctx = &mut ev as *mut Context;
+    let mk_sym = |name: &str| {
+        let s = Value::symbol(name);
+        let crate::emacs_core::value::ValueKind::Symbol(id) = s.kind() else {
+            panic!("symbol");
+        };
+        (s, id)
+    };
+    let mk_fn = |ops: Vec<Op>, consts: Vec<Value>| {
+        let mut bf = ByteCodeFunction::new(LambdaParams {
+            required: vec![SymId(1)],
+            optional: Vec::new(),
+            rest: None,
+        });
+        bf.lexical = true;
+        bf.ops = ops;
+        bf.constants = consts.into();
+        bf.max_stack = 16;
+        bf
+    };
+    let (c_sym, c_id) = mk_sym("jit-keep-c");
+    let (_d_sym, d_id) = mk_sym("jit-keep-d");
+    ev.obarray.set_symbol_function_id(
+        c_id,
+        Value::make_bytecode(mk_fn(vec![Op::Dup, Op::Mul, Op::Return], vec![])),
+    );
+    let f = mk_fn(
+        vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return],
+        vec![c_sym],
+    );
+    let f_val = Value::make_bytecode(f.clone());
+    let run = |ctx: *mut Context| {
+        crate::emacs_core::jit::try_run_compiled(ctx, &f, f_val, &[Value::make_int(4)])
+    };
+    assert!(matches!(run(ctx), Ok(Some(b)) if b == Value::make_int(16).bits()));
+    let f_id = f.jit_runtime().compiled_id_or_assign();
+    let before =
+        crate::emacs_core::jit::cache::compiled_leaf_ptr_for_test(f_id).expect("F is compiled");
+    ev.obarray.set_symbol_function_id(
+        d_id,
+        Value::make_bytecode(mk_fn(vec![Op::Sub1, Op::Return], vec![])),
+    );
+    assert!(matches!(run(ctx), Ok(Some(b)) if b == Value::make_int(16).bits()));
+    assert_eq!(
+        crate::emacs_core::jit::cache::compiled_leaf_ptr_for_test(f_id),
+        Some(before),
+        "an unrelated fset must not recompile an inlining leaf"
+    );
+    ev.obarray.set_symbol_function_id(
+        c_id,
+        Value::make_bytecode(mk_fn(vec![Op::Add1, Op::Return], vec![])),
+    );
+    assert!(
+        matches!(run(ctx), Ok(Some(b)) if b == Value::make_int(5).bits()),
+        "F recompiled against the new C: (1+ 4)"
+    );
+}
+
+#[test]
+fn refsetting_the_same_function_and_repeated_redefinitions_stop_recompiling() {
+    use crate::emacs_core::eval::Context;
+    use crate::emacs_core::intern::SymId;
+    // F = (C a) inlines C. Storing C's own value again redefines nothing, so F
+    // stays compiled. Redefining C for real evicts F each time, but after
+    // two such evictions C counts as unstable: F recompiles CALLING C, and
+    // later redefinitions no longer touch F -- while every answer follows
+    // the current C.
+    let mut ev = Context::new();
+    let ctx = &mut ev as *mut Context;
+    let c_sym = Value::symbol("jit-unstable-c");
+    let crate::emacs_core::value::ValueKind::Symbol(c_id) = c_sym.kind() else {
+        panic!("symbol");
+    };
+    let mk_fn = |ops: Vec<Op>, consts: Vec<Value>| {
+        let mut bf = ByteCodeFunction::new(LambdaParams {
+            required: vec![SymId(1)],
+            optional: Vec::new(),
+            rest: None,
+        });
+        bf.lexical = true;
+        bf.ops = ops;
+        bf.constants = consts.into();
+        bf.max_stack = 16;
+        bf
+    };
+    let square = Value::make_bytecode(mk_fn(vec![Op::Dup, Op::Mul, Op::Return], vec![]));
+    let add1 = Value::make_bytecode(mk_fn(vec![Op::Add1, Op::Return], vec![]));
+    ev.obarray.set_symbol_function_id(c_id, square);
+    let f = mk_fn(
+        vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return],
+        vec![c_sym],
+    );
+    let f_val = Value::make_bytecode(f.clone());
+    // `None` when F ran interpreted: once C is only called, a call-only
+    // body may stay below the JIT's profit gate.
+    let run = |ctx: *mut Context| match crate::emacs_core::jit::try_run_compiled(
+        ctx,
+        &f,
+        f_val,
+        &[Value::make_int(4)],
+    ) {
+        Ok(bits) => bits,
+        Err(flow) => panic!("F signalled: {flow:?}"),
+    };
+    assert_eq!(run(ctx), Some(Value::make_int(16).bits()));
+    let f_id = f.jit_runtime().compiled_id_or_assign();
+    let leaf = crate::emacs_core::jit::cache::compiled_leaf_ptr_for_test(f_id);
+    ev.obarray.set_symbol_function_id(c_id, square);
+    assert_eq!(run(ctx), Some(Value::make_int(16).bits()));
+    assert_eq!(
+        crate::emacs_core::jit::cache::compiled_leaf_ptr_for_test(f_id),
+        leaf,
+        "an fset to the same function redefines nothing"
+    );
+    for (round, (def, want)) in [(add1, 5), (square, 16), (add1, 5), (square, 16)]
+        .into_iter()
+        .enumerate()
+    {
+        ev.obarray.set_symbol_function_id(c_id, def);
+        if let Some(bits) = run(ctx) {
+            assert_eq!(bits, Value::make_int(want).bits(), "round {round}");
+        }
+    }
+    assert!(crate::emacs_core::jit::cache::inline_callee_is_unstable(
+        c_id
+    ));
+    assert_eq!(
+        crate::emacs_core::jit::cache::inline_dependent_count_for_test(c_id),
+        0,
+        "an unstable callee is called, not inlined"
+    );
+}

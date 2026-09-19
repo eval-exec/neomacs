@@ -1086,6 +1086,11 @@ const MAX_INLINE_INSTS: usize = 8;
 /// argument seeding matches the arity).
 fn resolve_inline_callee(ob: &Obarray, sym: Value) -> Option<mir::MirFunction> {
     let sym_id = sym.as_symbol_id()?;
+    // A callee that keeps being redefined is called, not inlined: each
+    // redefinition would evict and recompile every caller that inlined it.
+    if super::cache::inline_callee_is_unstable(sym_id) {
+        return None;
+    }
     let binding = ob.symbol_function_id(sym_id)?;
     let bc = binding.get_bytecode_data()?;
     // Required-only lexical, and no captured lexenv: inlining drops the lexenv
