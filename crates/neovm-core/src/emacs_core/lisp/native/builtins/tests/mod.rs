@@ -18566,6 +18566,38 @@ fn a_bound_write_coding_is_reported_and_passes_raw_bytes_like_gnu() {
 }
 
 #[test]
+fn interval_patterns_keep_their_fastmap_and_answer_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // A pattern starting with `\{N,M\}' (N >= 1) no longer looks nullable to
+    // the fastmap walk (GNU `forall_firstchar_1' skips the entry `succeed_n'),
+    // so its searches keep the first-character skip; the matches are GNU's.
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r##"
+        (let ((text "abc 12 x 1234 aab aaab ababab xxy y #a1b2c3 #zz 99"))
+   (with-temp-buffer
+     (insert text)
+     (let (r)
+       (dolist (re '("[0-9]\\{3\\}" "[0-9]\\{2,3\\}" "a\\{2,3\\}b" "\\(ab\\)\\{2\\}" "x\\{0,2\\}y" "[[:xdigit:]]\\{6\\}"
+                     "\\(?:a\\|b\\)\\{3\\}" "[0-9]\\{1\\}x" "q\\{2\\}" "[a-z]\\{0\\}1" "\\(z\\)\\{1,\\}"))
+         (goto-char (point-min))
+         (let (hits) (while (re-search-forward re nil t) (push (match-beginning 0) hits) (when (= (match-beginning 0) (match-end 0)) (forward-char 1)))
+           (push (cons re (nreverse hits)) r))
+         (goto-char (point-max))
+         (push (list 'back re (re-search-backward re nil t)) r)
+         (push (list 'sm re (string-match re text) (string-match re text 20)) r))
+       (nreverse r))))
+        "##,
+    );
+    assert_eq!(
+        result,
+        concat!(
+            "OK ",
+            r##"(("[0-9]\\{3\\}" 10) (back "[0-9]\\{3\\}" 11) (sm "[0-9]\\{3\\}" 9 nil) ("[0-9]\\{2,3\\}" 5 10 49) (back "[0-9]\\{2,3\\}" 49) (sm "[0-9]\\{2,3\\}" 4 48) ("a\\{2,3\\}b" 15 19) (back "a\\{2,3\\}b" 20) (sm "a\\{2,3\\}b" 14 nil) ("\\(ab\\)\\{2\\}" 24) (back "\\(ab\\)\\{2\\}" 26) (sm "\\(ab\\)\\{2\\}" 23 23) ("x\\{0,2\\}y" 31 35) (back "x\\{0,2\\}y" 35) (sm "x\\{0,2\\}y" 30 30) ("[[:xdigit:]]\\{6\\}" 24 38) (back "[[:xdigit:]]\\{6\\}" 38) (sm "[[:xdigit:]]\\{6\\}" 23 23) ("\\(?:a\\|b\\)\\{3\\}" 15 19 24 27) (back "\\(?:a\\|b\\)\\{3\\}" 27) (sm "\\(?:a\\|b\\)\\{3\\}" 14 23) ("[0-9]\\{1\\}x") (back "[0-9]\\{1\\}x" nil) (sm "[0-9]\\{1\\}x" nil nil) ("q\\{2\\}") (back "q\\{2\\}" nil) (sm "q\\{2\\}" nil nil) ("[a-z]\\{0\\}1" 5 10 39) (back "[a-z]\\{0\\}1" 39) (sm "[a-z]\\{0\\}1" 4 38) ("\\(z\\)\\{1,\\}" 46) (back "\\(z\\)\\{1,\\}" 47) (sm "\\(z\\)\\{1,\\}" 45 45))"##
+        )
+    );
+}
+
+#[test]
 fn skip_chars_maps_a_unibyte_range_after_parsing_like_gnu() {
     crate::test_utils::init_test_tracing();
     // GNU `skip_chars' parses a unibyte STRING on its bytes and only then
@@ -18610,4 +18642,27 @@ fn skip_chars_walks_rope_and_piece_tree_buffers() {
         result,
         "OK ((5 6 8 14 -1 18 -6 12) (5 6 8 14 -1 18 -6 12) (5 6 8 14 -1 18 -6 12))"
     );
+}
+
+#[test]
+fn a_raw_byte_literal_in_a_multibyte_regexp_matches_unibyte_text_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // GNU `analyze_first' also marks a multibyte pattern's leading raw-byte
+    // character by its byte, so it still finds that byte in unibyte text --
+    // with or without an interval around it.
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"
+        (let ((case-fold-search nil))
+   (list (string-match (string-to-multibyte "\377\\{2\\}") "a\377\377b")
+         (string-match "\\(?:é\\|\351\\)\\{1,\\}" "x\351 ")
+         (with-temp-buffer (set-buffer-multibyte nil) (insert "a\377\377b") (goto-char 1)
+           (re-search-forward (string-to-multibyte "\377\\{2\\}") nil t))
+         (with-temp-buffer (set-buffer-multibyte nil) (insert "a\377\377b") (goto-char (point-max))
+           (re-search-backward (string-to-multibyte "\377\\{2\\}") nil t))
+         (string-match (string-to-multibyte "\377\377") "a\377\377b")
+         (string-match (string-to-multibyte "\377+") "a\377\377b")
+         (string-match (string-to-multibyte "\351") "xy\351")))
+        "#,
+    );
+    assert_eq!(result, "OK (1 1 4 2 1 1 2)");
 }

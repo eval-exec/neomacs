@@ -541,10 +541,18 @@ impl CaseTranslation {
         Some(translated)
     }
 
+    /// Inline for the codes below 256 (the per-byte search scans and the
+    /// matcher ask for these constantly); the rest go out of line.
+    #[inline]
     pub(crate) fn translate(&self, c: u32) -> u32 {
         if let Some(translated) = self.byte_slot(c as usize) {
             return translated;
         }
+        self.translate_wide(c)
+    }
+
+    #[inline(never)]
+    fn translate_wide(&self, c: u32) -> u32 {
         if let Some(table) = self.table {
             return self
                 .wide
@@ -4133,18 +4141,30 @@ fn re_tr(translate: &Option<CaseTranslation>, c: u32) -> u32 {
     }
 }
 
-/// The leading code of the translation of the multibyte-text character at
-/// `pos`, a character boundary, and that character's length in bytes.
-#[inline]
-fn translated_leading_code(table: &CaseTranslation, text: &[u8], pos: usize) -> (u8, usize) {
-    let byte = text[pos];
-    let (c, len) = if byte < 0x80 {
-        (byte as u32, 1)
+/// The leading code of the translation of the ASCII byte `byte`: its own
+/// translation in every standard table.  Inlined into the scan loops, which
+/// meet an ASCII byte at almost every position.
+#[inline(always)]
+fn ascii_translated_leading_code(table: &CaseTranslation, byte: u8) -> usize {
+    let translated = table.translate(byte as u32);
+    if translated < 0x80 {
+        translated as usize
     } else {
-        emacs_char::string_char(&text[pos..])
-    };
+        emacs_char::char_leading_code(translated) as usize
+    }
+}
+
+/// The leading code of the translation of the non-ASCII character starting
+/// at `pos` (a character boundary) of multibyte text, and its length.
+#[inline(never)]
+fn multibyte_translated_leading_code(
+    table: &CaseTranslation,
+    text: &[u8],
+    pos: usize,
+) -> (usize, usize) {
+    let (c, len) = emacs_char::string_char(&text[pos..]);
     (
-        emacs_char::char_leading_code(table.translate(c)),
+        emacs_char::char_leading_code(table.translate(c)) as usize,
         len.max(1),
     )
 }
@@ -7505,6 +7525,15 @@ fn compile_fastmap_walk(
                     }
                     let first = bytecode[pc];
                     pattern.fastmap[first as usize] = true;
+                    // GNU `analyze_first': "Cover the case of matching a raw
+                    // char in a multibyte regexp against unibyte" -- the
+                    // eight-bit character's own byte is a candidate too.
+                    if pattern.multibyte && (first == 0xC0 || first == 0xC1) {
+                        let (c, _) = emacs_char::string_char(&bytecode[pc..]);
+                        if emacs_char::char_byte8_p(c) {
+                            pattern.fastmap[emacs_char::char_to_byte8(c) as usize] = true;
+                        }
+                    }
                     if !pattern.multibyte && first >= 0x80 {
                         // GNU `analyze_first': a unibyte pattern's byte
                         // matches multibyte text as its eight-bit character,
@@ -7767,7 +7796,21 @@ fn compile_fastmap_walk(
 
                 RegexOp::SetNumberAt => {
                     // set_number_at <offset:2> <value:2> — no input consumed.
-                    pc += 4;
+                    // GNU `forall_firstchar_1': when it sets the counter of
+                    // the `succeed_n' right after it (offset 5; an interval
+                    // with a lower bound of at least 1), that `succeed_n'
+                    // only decrements and falls through into the body, so
+                    // its skip branch is no first-character path.  Walking
+                    // it made `[0-9]\{3\}' look nullable and turned the
+                    // fastmap off.
+                    if pc + 3 < bytecode.len()
+                        && extract_number(bytecode, pc) == 5
+                        && bytecode.get(pc + 4) == Some(&(RegexOp::SucceedN as u8))
+                    {
+                        pc += 4 + 5;
+                    } else {
+                        pc += 4;
+                    }
                 }
             }
         }
@@ -8258,14 +8301,23 @@ pub(crate) fn re_search(
                         break;
                     }
                     if pos < text_len {
-                        if (text[pos] & 0xC0) == 0x80 {
+                        let byte = text[pos];
+                        if byte < 0x80 {
+                            if !pattern.fastmap_translated
+                                [ascii_translated_leading_code(table, byte)]
+                            {
+                                pos += 1;
+                                continue;
+                            }
+                        } else if (byte & 0xC0) == 0x80 {
                             pos += 1;
                             continue;
-                        }
-                        let (lead, len) = translated_leading_code(table, text, pos);
-                        if !pattern.fastmap_translated[lead as usize] {
-                            pos += len;
-                            continue;
+                        } else {
+                            let (lead, len) = multibyte_translated_leading_code(table, text, pos);
+                            if !pattern.fastmap_translated[lead] {
+                                pos += len;
+                                continue;
+                            }
                         }
                     }
                     if let Some(result) = try_candidate!(pos, end) {
@@ -8376,13 +8428,17 @@ pub(crate) fn re_search(
             {
                 for pos in (end..=start).rev() {
                     if pos < text_len {
-                        if (text[pos] & 0xC0) == 0x80 {
-                            continue;
-                        }
                         // As forward: the leading code of the translated
                         // character (GNU `re_search_2`).
-                        let (lead, _) = translated_leading_code(table, text, pos);
-                        if !pattern.fastmap_translated[lead as usize] {
+                        let byte = text[pos];
+                        let lead = if byte < 0x80 {
+                            ascii_translated_leading_code(table, byte)
+                        } else if (byte & 0xC0) == 0x80 {
+                            continue;
+                        } else {
+                            multibyte_translated_leading_code(table, text, pos).0
+                        };
+                        if !pattern.fastmap_translated[lead] {
                             continue;
                         }
                     }
