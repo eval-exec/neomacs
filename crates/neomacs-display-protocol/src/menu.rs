@@ -3,7 +3,7 @@
 mod item;
 mod text;
 pub use item::{MenuAvailability, MenuItemKind};
-pub use text::{MenuItemText, MenuTextLayout, MenuTextRun};
+pub use text::{MeasuredMenu, MenuItemText, MenuPanelRole, MenuTextLayout, MenuTextRun};
 
 /// Correlates a native heading intent with the evaluator's menu response.
 /// Distinct from MenuToken: one intent can produce multiple menu revisions.
@@ -141,9 +141,8 @@ impl MenuPanel {
 /// One measured panel. Coordinates are local to its drawing target.
 pub struct MenuPanelPaint<'a> {
     pub panel: &'a MenuPanel,
-    pub text: &'a MenuTextLayout,
-    pub all_items: &'a [PopupMenuItem],
-    pub title: Option<&'a str>,
+    pub menu: &'a MeasuredMenu,
+    pub role: MenuPanelRole,
     pub face_fg: Option<(f32, f32, f32)>,
     pub face_bg: Option<(f32, f32, f32)>,
     pub font_face: Option<&'a crate::face::Face>,

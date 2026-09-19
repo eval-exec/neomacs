@@ -36,10 +36,13 @@ triggers a redraw; it does not change the menu's labels or commands.
 
 ## Design
 
-`MenuTextLayout` owns immutable logical-pixel character positions and widths for
-labels, titles, and shortcuts. The menu's font/raster source supplies actual
+`MeasuredMenu` privately owns the item list, optional title, and immutable
+`MenuTextLayout` containing logical-pixel character positions and widths for
+labels, titles, and shortcuts. It consumes the contents during measurement and
+exposes only shared references, preventing later content/geometry mismatches. The menu's font/raster source supplies actual
 advances before panel sizing. Both panel measurement and painting consume this
-same value, and `MenuPanelPaint` requires it. Symbolic menu item state remains in
+same measured menu, and `MenuPanelPaint` requires it. `MenuPanelRole` explicitly
+selects root-title rendering or submenu rendering. Symbolic menu item state remains in
 the existing `MenuItemKind` enum; raster-cache state cannot define geometry.
 
 The snapshot stores its space advance explicitly for gaps and arrow gutters.
@@ -47,6 +50,12 @@ Missing/blank bitmap fallback uses this captured owner metric, never a mutable
 first-glyph cache. Text-run fields are private and widths are derived during
 measurement. The native submenu positioning and hit-test bounds use the measured
 panel extent. Menu tooltip spacing also uses the captured space metric.
+
+The native menu request retains the atlas populated during measurement. All
+panels reuse that atlas for the session lifetime, including reopened submenus,
+avoiding repeated font discovery and duplicate rasterization. Before drawing,
+the atlas adopts the target surface scale; a scale change clears raster caches
+without changing the immutable logical geometry.
 
 This keeps the existing scalar rasterization boundary; it does not introduce a
 new general shaping engine or claim new support for contextual scripts. A future
@@ -66,7 +75,10 @@ Results after the fix:
 
 - All 56 menu-session tests pass, including independently specified CJK advances,
   panel width, title offsets, and shortcut placement.
-- All three existing offscreen popup pixel tests pass.
+- All four offscreen popup pixel tests pass. The initial CJK test independently
+  shapes a repeated real-font glyph, checks measured advances and repeated ink
+  masks, and verifies visible shortcut ink with a clear column gap. Deliberately
+  restoring either one-cell measurement or one-cell painting makes it fail.
 - The existing native submenu GUI test passes before and after the change.
 - The new GUI regression fails twice against the old executable and passes
   against the fresh-build release, with identical menu-region pixels while
@@ -76,3 +88,11 @@ Results after the fix:
   labels on first paint and stable geometry after Control. Neomacs and Weston
   remain alive through 20 additional Control presses.
 - Formatting and diff checks pass. All reproduction artifacts are under `./tmp/`.
+
+Review follow-up verification: 73 focused menu/session/popup tests pass, as do
+both `neomacs-gui-tests` native menu regressions after a complete release fresh
+build. The reporter's full translation also retains identical menu-region pixels
+while Control is held and after 20 presses. The initial-spacing regression was
+checked against two deliberate mutations: one-cell measurement and one-cell
+painting both fail; restoring measured geometry passes. Logs are under
+`./tmp/neomacs-381/review-*` and `initial-*-red.log`.

@@ -75,16 +75,15 @@ impl RenderApp {
                         );
                         atlas.set_metrics(fs, lh);
                         atlas.set_current_frame_fonts(fonts.font_bindings());
-                        let text = atlas.measure_menu_text(
-                            &items,
-                            title.as_deref(),
+                        let menu = atlas.measure_menu(
+                            items,
+                            title,
                             cw,
                             fonts.faces.get(&neomacs_display_protocol::FaceId::new(0)),
                             &gpu.device,
                             &gpu.queue,
                         );
-                        let mut session =
-                            crate::menus::MenuSession::new(0.0, 0.0, items, title, fs, lh, text);
+                        let mut session = crate::menus::MenuSession::new(0.0, 0.0, menu, fs, lh);
                         session.face_fg = fg;
                         session.face_bg = bg;
                         let accepted = self.menus.open(crate::menus::MenuRequest {
@@ -95,6 +94,7 @@ impl RenderApp {
                             parent: parent.clone(),
                             placement,
                             session,
+                            atlas,
                             fonts,
                         });
                         if accepted && let Some(owner) = self.frame_windows.get_mut(emacs_frame_id)

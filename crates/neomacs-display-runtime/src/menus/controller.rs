@@ -20,6 +20,8 @@ pub(crate) struct MenuRequest {
     pub parent: Arc<dyn Window>,
     pub placement: PopupPlacement,
     pub session: MenuSession,
+    /// Atlas populated while measuring; shared by all panels for this session.
+    pub atlas: neomacs_renderer_wgpu::WgpuGlyphAtlas,
     /// Font bindings captured from the owner; no glyph rows are retained.
     pub fonts: neomacs_display_protocol::frame_glyphs::FrameGlyphBuffer,
 }
@@ -41,7 +43,6 @@ pub(crate) struct MenuPresentation {
 struct PanelState {
     scroll: f32,
     items: Vec<usize>,
-    atlas: neomacs_renderer_wgpu::WgpuGlyphAtlas,
 }
 
 impl MenuPresentation {
@@ -64,7 +65,7 @@ impl MenuPresentation {
             let row = usize::try_from(panel.hover_index).ok()?;
             let item = *panel.item_indices.get(row)?;
             r.tooltips.as_ref()?;
-            r.session.all_items.get(item)?.help.as_ref()?;
+            r.session.menu().items().get(item)?.help.as_ref()?;
             Some(super::help::HelpTarget {
                 panel: super::help::PanelId(depth),
                 item: neomacs_display_protocol::menu::MenuItemId(u32::try_from(item).ok()?),
@@ -104,7 +105,7 @@ impl MenuPresentation {
                 let panel = request.session.panel(depth).unwrap();
                 if let Some(row) = panel.item_indices.iter().position(|i| *i == item) {
                     let mut appearance = policy.appearance.clone();
-                    appearance.text = request.session.all_items[item]
+                    appearance.text = request.session.menu().items()[item]
                         .help
                         .clone()
                         .unwrap_or_default();
@@ -124,7 +125,7 @@ impl MenuPresentation {
                                 panel.bounds.2,
                                 panel.item_height,
                             ),
-                            metrics: (fs, lh, request.session.text.space_advance()),
+                            metrics: (fs, lh, request.session.menu().text().space_advance()),
                             fonts,
                         },
                         appearance,
@@ -165,7 +166,7 @@ impl MenuPresentation {
                     usize::try_from(panel.hover_index)
                         .ok()
                         .and_then(|i| panel.item_indices.get(i))
-                        .and_then(|i| r.session.all_items.get(*i))
+                        .and_then(|i| r.session.menu().items().get(*i))
                         .is_some_and(|item| item.enabled() && item.submenu())
                 });
                 (!has_submenu).then_some(1)
@@ -316,7 +317,7 @@ impl MenuPresentation {
                     PopupConstraintPolicy::FlipAndShift { padding: 0.0 },
                 )
             };
-            let Some(geometry) = self.host.open(
+            let Some(_geometry) = self.host.open(
                 commit,
                 request.parent.clone(),
                 placement,
@@ -329,16 +330,8 @@ impl MenuPresentation {
             else {
                 break;
             };
-            let mut atlas = neomacs_renderer_wgpu::WgpuGlyphAtlas::new_with_scale(
-                device,
-                geometry.device_scale().get(),
-            );
-            let metrics = request.session.metrics();
-            atlas.set_metrics(metrics.0, metrics.1);
-            atlas.set_current_frame_fonts(request.fonts.font_bindings());
             self.panels.push(PanelState {
                 items: panel.item_indices.clone(),
-                atlas,
                 scroll: 0.0,
             });
         }
@@ -448,16 +441,10 @@ impl MenuPresentation {
         match event {
             WindowEvent::CloseRequested | WindowEvent::Destroyed => self.cancel(),
             WindowEvent::SurfaceResized(size) => {
-                let geometry = self.host.resize(depth, device, Some(*size));
-                self.panels[depth]
-                    .atlas
-                    .set_scale_factor(geometry.device_scale().get());
+                self.host.resize(depth, device, Some(*size));
             }
             WindowEvent::ScaleFactorChanged { .. } => {
-                let geometry = self.host.resize(depth, device, None);
-                self.panels[depth]
-                    .atlas
-                    .set_scale_factor(geometry.device_scale().get());
+                self.host.resize(depth, device, None);
             }
             WindowEvent::PointerMoved { position, .. }
             | WindowEvent::PointerEntered { position, .. } => {
@@ -566,7 +553,7 @@ impl MenuPresentation {
         queue: &wgpu::Queue,
         renderer: &mut WgpuRenderer,
     ) {
-        let Some(request) = self.request.as_ref() else {
+        let Some(request) = self.request.as_mut() else {
             return;
         };
         let Some(panel) = request.session.panel(depth) else {
@@ -577,16 +564,21 @@ impl MenuPresentation {
         local.y = -self.panels[depth].scroll;
         local.bounds.0 = local.x;
         local.bounds.1 = local.y;
+        let Some(geometry) = self.host.geometry(depth) else {
+            return;
+        };
+        request
+            .atlas
+            .set_scale_factor(geometry.device_scale().get());
         self.host.draw(depth, device, queue, |target| {
             renderer.begin_draw(target).paint_menu(
                 &MenuPanelPaint {
                     panel: &local,
-                    text: &request.session.text,
-                    all_items: &request.session.all_items,
-                    title: if depth == 0 {
-                        request.session.title.as_deref()
+                    menu: request.session.menu(),
+                    role: if depth == 0 {
+                        neomacs_display_protocol::menu::MenuPanelRole::Root
                     } else {
-                        None
+                        neomacs_display_protocol::menu::MenuPanelRole::Submenu
                     },
                     face_fg: request.session.face_fg,
                     face_bg: request.session.face_bg,
@@ -596,7 +588,7 @@ impl MenuPresentation {
                         .faces
                         .get(&neomacs_display_protocol::FaceId::new(0)),
                 },
-                &mut self.panels[depth].atlas,
+                &mut request.atlas,
             );
         });
     }

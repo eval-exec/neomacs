@@ -2,7 +2,7 @@
 
 use neomacs_display_protocol::{
     PopupMenuItem,
-    menu::{MenuPanel, MenuTextLayout},
+    menu::{MeasuredMenu, MenuPanel, MenuPanelRole},
 };
 
 /// Revision ordering and immutable results, independent of native surfaces.
@@ -65,10 +65,7 @@ impl MenuLifetime {
 }
 
 pub struct MenuSession {
-    /// All items (flat, at all depths)
-    pub all_items: Vec<PopupMenuItem>,
-    /// Optional title
-    pub title: Option<String>,
+    menu: MeasuredMenu,
     /// The main (root) menu panel
     pub root_panel: MenuPanel,
     /// Open submenu panels (stack: each level is one deeper)
@@ -80,21 +77,13 @@ pub struct MenuSession {
     /// Font metrics
     font_size: f32,
     line_height: f32,
-    pub text: MenuTextLayout,
 }
 
 impl MenuSession {
-    pub fn new(
-        x: f32,
-        y: f32,
-        items: Vec<PopupMenuItem>,
-        title: Option<String>,
-        font_size: f32,
-        line_height: f32,
-        text: MenuTextLayout,
-    ) -> Self {
+    pub fn new(x: f32, y: f32, menu: MeasuredMenu, font_size: f32, line_height: f32) -> Self {
         // Collect top-level item indices (depth == 0)
-        let root_indices: Vec<usize> = items
+        let root_indices: Vec<usize> = menu
+            .items()
             .iter()
             .enumerate()
             .filter(|(_, item)| item.depth == 0)
@@ -104,25 +93,25 @@ impl MenuSession {
         let root_panel = super::layout::measure_panel(
             x,
             y,
-            &items,
+            &menu,
             &root_indices,
-            title.as_deref(),
-            font_size,
+            MenuPanelRole::Root,
             line_height,
-            &text,
         );
 
         MenuSession {
-            all_items: items,
-            title,
+            menu,
             root_panel,
             submenu_panels: Vec::new(),
             face_fg: None,
             face_bg: None,
             font_size,
             line_height,
-            text,
         }
+    }
+
+    pub fn menu(&self) -> &MeasuredMenu {
+        &self.menu
     }
 
     /// Get the active panel (deepest open submenu, or root)
@@ -195,7 +184,7 @@ impl MenuSession {
                 idx = 0;
             }
             let item_idx = indices[idx as usize];
-            let item = &self.all_items[item_idx];
+            let item = &self.menu.items()[item_idx];
             if !item.separator() && item.enabled() {
                 if idx != current_hover {
                     self.active_panel_mut().hover_index = idx;
@@ -222,15 +211,15 @@ impl MenuSession {
         let Some(parent_global_idx) = self.item_global_index(depth, local_index) else {
             return false;
         };
-        let parent = &self.all_items[parent_global_idx];
+        let parent = &self.menu.items()[parent_global_idx];
         if !parent.enabled() || !parent.submenu() {
             return self.truncate_submenus_after(depth);
         }
 
         let child_depth = parent.depth + 1;
         let mut child_indices = Vec::new();
-        for i in (parent_global_idx + 1)..self.all_items.len() {
-            let item = &self.all_items[i];
+        for i in (parent_global_idx + 1)..self.menu.items().len() {
+            let item = &self.menu.items()[i];
             if item.depth < child_depth {
                 break;
             }
@@ -255,12 +244,10 @@ impl MenuSession {
         let sub_panel = super::layout::measure_panel(
             sub_x,
             sub_y,
-            &self.all_items,
+            &self.menu,
             &child_indices,
-            None,
-            self.font_size,
+            MenuPanelRole::Submenu,
             self.line_height,
-            &self.text,
         );
 
         let child_panel_index = depth;
@@ -321,11 +308,11 @@ impl MenuSession {
         let Some(panel) = self.panel(depth) else {
             return;
         };
-        let local = Self::hit_test_panel(panel, &self.all_items, x + panel.x, y + panel.y);
+        let local = Self::hit_test_panel(panel, self.menu.items(), x + panel.x, y + panel.y);
         self.set_panel_hover(depth, local);
         if local >= 0 {
             let global = self.panel(depth).unwrap().item_indices[local as usize];
-            if self.all_items[global].enabled() {
+            if self.menu.items()[global].enabled() {
                 self.open_submenu_for(depth, local as usize);
             }
         }
@@ -336,7 +323,7 @@ impl MenuSession {
         let global = *panel
             .item_indices
             .get(usize::try_from(panel.hover_index).ok()?)?;
-        let item = &self.all_items[global];
+        let item = &self.menu.items()[global];
         use neomacs_display_protocol::menu::{MenuAvailability, MenuItemKind};
         match item.kind {
             MenuItemKind::Command {

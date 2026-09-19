@@ -49,7 +49,7 @@ impl MenuTextLayout {
     /// Measure each scalar once through the same font source used for paint.
     /// The fallback is an owner-supplied logical space, never an atlas cache's
     /// first rasterized glyph. Zero advances (e.g. combining marks) are valid.
-    pub fn measure(
+    fn measure(
         items: &[PopupMenuItem],
         title: Option<&str>,
         space_advance: f32,
@@ -84,5 +84,52 @@ impl MenuTextLayout {
     }
     pub fn space_advance(&self) -> f32 {
         self.space_advance
+    }
+}
+
+/// Immutable menu contents and the geometry measured from exactly those contents.
+/// Replacing labels or shortcuts requires constructing a new measured menu.
+#[derive(Clone, Debug)]
+pub struct MeasuredMenu {
+    items: Vec<PopupMenuItem>,
+    title: Option<String>,
+    text: MenuTextLayout,
+}
+
+impl MeasuredMenu {
+    pub fn measure(
+        items: Vec<PopupMenuItem>,
+        title: Option<String>,
+        space_advance: f32,
+        advance: impl FnMut(char) -> f32,
+    ) -> Self {
+        let text = MenuTextLayout::measure(&items, title.as_deref(), space_advance, advance);
+        Self { items, title, text }
+    }
+
+    pub fn items(&self) -> &[PopupMenuItem] {
+        &self.items
+    }
+    pub fn title(&self) -> Option<&str> {
+        self.title.as_deref()
+    }
+    pub fn text(&self) -> &MenuTextLayout {
+        &self.text
+    }
+}
+
+/// Only the root panel displays the menu's optional title.
+#[derive(Clone, Copy, Debug)]
+pub enum MenuPanelRole {
+    Root,
+    Submenu,
+}
+
+impl MenuPanelRole {
+    pub fn title(self, menu: &MeasuredMenu) -> Option<&MenuTextRun> {
+        match self {
+            Self::Root => menu.text().title(),
+            Self::Submenu => None,
+        }
     }
 }

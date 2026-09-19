@@ -1,20 +1,18 @@
 //! Menu panel measurement, independent of native window placement.
 
-use neomacs_display_protocol::{
-    PopupMenuItem,
-    menu::{MenuPanel, MenuTextLayout},
-};
+use neomacs_display_protocol::menu::{MeasuredMenu, MenuPanel, MenuPanelRole};
 
 pub(super) fn measure_panel(
     x: f32,
     y: f32,
-    all_items: &[PopupMenuItem],
+    menu: &MeasuredMenu,
     indices: &[usize],
-    title: Option<&str>,
-    font_size: f32,
+    role: MenuPanelRole,
     line_height: f32,
-    text: &MenuTextLayout,
 ) -> MenuPanel {
+    let all_items = menu.items();
+    let text = menu.text();
+    let title = role.title(menu);
     let padding = 4.0_f32;
     let item_height = line_height + 3.0;
     let separator_height = 8.0_f32;
@@ -36,7 +34,6 @@ pub(super) fn measure_panel(
     }
     total_h += padding;
 
-    let _ = font_size; // font_size kept in signature for future use
     let min_width = 150.0_f32;
     let rows = || {
         indices

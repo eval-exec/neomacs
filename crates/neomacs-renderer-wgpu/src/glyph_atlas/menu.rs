@@ -6,16 +6,16 @@ use neomacs_display_protocol::FaceId;
 impl WgpuGlyphAtlas {
     /// Freeze menu text advances before panel allocation. The painter uses
     /// these positions even when raster-cache contents change on a redraw.
-    pub fn measure_menu_text(
+    pub fn measure_menu(
         &mut self,
-        items: &[neomacs_display_protocol::PopupMenuItem],
-        title: Option<&str>,
+        items: Vec<neomacs_display_protocol::PopupMenuItem>,
+        title: Option<String>,
         space_advance: f32,
         face: Option<&neomacs_display_protocol::face::Face>,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-    ) -> neomacs_display_protocol::menu::MenuTextLayout {
-        neomacs_display_protocol::menu::MenuTextLayout::measure(items, title, space_advance, |ch| {
+    ) -> neomacs_display_protocol::menu::MeasuredMenu {
+        neomacs_display_protocol::menu::MeasuredMenu::measure(items, title, space_advance, |ch| {
             let key = GlyphKey {
                 charcode: ch as u32,
                 face_id: FaceId::new(0),

@@ -16,6 +16,9 @@ impl WgpuRenderer {
         menu: &neomacs_display_protocol::menu::MenuPanelPaint<'_>,
         glyph_atlas: &mut WgpuGlyphAtlas,
     ) {
+        let items = menu.menu.items();
+        let text = menu.menu.text();
+        let title = menu.role.title(menu.menu);
         let view = target.view;
         let scale_factor = target.surface.device_scale().get();
         // Native menus are standalone frames. All preceding window work has
@@ -86,15 +89,15 @@ impl WgpuRenderer {
         };
 
         let padding = 4.0_f32;
-        let char_width = menu.text.space_advance();
+        let char_width = text.space_advance();
         let font_size_bits = 0.0_f32.to_bits();
 
         // Render each panel (root + open submenus)
         {
             let panel = menu.panel;
             let (mx, my, mw, mh) = panel.bounds;
-            let indicator_width = panel.indicator_width(menu.all_items);
-            let shortcut_right = panel.shortcut_right(menu.all_items, char_width);
+            let indicator_width = panel.indicator_width(items);
+            let shortcut_right = panel.shortcut_right(items, char_width);
 
             // === Pass 1: Background rectangles ===
             let mut rect_vertices: Vec<RectVertex> = Vec::new();
@@ -141,7 +144,7 @@ impl WgpuRenderer {
 
             // Separators
             for (i, &item_idx) in panel.item_indices.iter().enumerate() {
-                if menu.all_items[item_idx].separator() {
+                if items[item_idx].separator() {
                     let iy = my + panel.item_offsets[i] + 3.0;
                     self.add_rect(
                         &mut rect_vertices,
@@ -155,7 +158,7 @@ impl WgpuRenderer {
             }
 
             for (i, &item_idx) in panel.item_indices.iter().enumerate() {
-                let item = &menu.all_items[item_idx];
+                let item = &items[item_idx];
                 let color = if item.enabled() {
                     text_color
                 } else {
@@ -181,7 +184,7 @@ impl WgpuRenderer {
             }
 
             // Title separator (root panel only)
-            if menu.title.is_some() {
+            if title.is_some() {
                 let sep_y = my + panel.item_height + 2.0;
                 self.add_rect(
                     &mut rect_vertices,
@@ -233,7 +236,7 @@ impl WgpuRenderer {
             let mut overlay_glyphs: Vec<(GlyphAtlasHandle, f32, f32, [f32; 4])> = Vec::new();
 
             // Title (root panel only)
-            if let Some(title) = menu.title.and(menu.text.title()) {
+            if let Some(title) = title {
                 let tx = mx + padding * 2.0;
                 for &(ch, x) in title.characters() {
                     let key = GlyphKey {
@@ -258,7 +261,7 @@ impl WgpuRenderer {
 
             // Menu items
             for (i, &item_idx) in panel.item_indices.iter().enumerate() {
-                let item = &menu.all_items[item_idx];
+                let item = &items[item_idx];
                 if item.separator() {
                     continue;
                 }
@@ -270,7 +273,7 @@ impl WgpuRenderer {
                 };
 
                 let label_x = mx + padding * 2.0 + indicator_width;
-                for &(ch, x) in menu.text.item(item_idx).label.characters() {
+                for &(ch, x) in text.item(item_idx).label.characters() {
                     let key = GlyphKey {
                         charcode: ch as u32,
                         face_id: FaceId::new(0),
@@ -291,8 +294,8 @@ impl WgpuRenderer {
                 }
 
                 if !item.shortcut.is_empty() {
-                    let shortcut_x = shortcut_right - menu.text.item(item_idx).shortcut.width();
-                    for &(ch, x) in menu.text.item(item_idx).shortcut.characters() {
+                    let shortcut_x = shortcut_right - text.item(item_idx).shortcut.width();
+                    for &(ch, x) in text.item(item_idx).shortcut.characters() {
                         let key = GlyphKey {
                             charcode: ch as u32,
                             face_id: FaceId::new(0),

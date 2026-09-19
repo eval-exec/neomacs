@@ -324,21 +324,24 @@ impl ApplicationHandler for Smoke {
                 root.label = format!("Native submenu item {i}");
                 items.push(root.clone());
             }
-            let text = neomacs_display_protocol::menu::MenuTextLayout::measure(
-                &items,
-                Some("Native menus"),
-                8.4,
-                |_| 8.4,
+            let gpu = self.graphics.as_ref().unwrap();
+            let fonts =
+                neomacs_display_protocol::frame_glyphs::FrameGlyphBuffer::with_size(0.0, 0.0);
+            let mut atlas = neomacs_renderer_wgpu::WgpuGlyphAtlas::new_with_scale(
+                &gpu.device,
+                self.parent.as_ref().unwrap().scale_factor() as f32,
             );
-            let mut session = MenuSession::new(
-                0.0,
-                0.0,
+            atlas.set_metrics(14.0, 18.0);
+            atlas.set_current_frame_fonts(fonts.font_bindings());
+            let menu = atlas.measure_menu(
                 items,
                 Some("Native menus".into()),
-                14.0,
-                18.0,
-                text,
+                8.4,
+                None,
+                &gpu.device,
+                &gpu.queue,
             );
+            let mut session = MenuSession::new(0.0, 0.0, menu, 14.0, 18.0);
             session.move_hover(1);
             assert!(session.open_submenu());
             self.menus.open(MenuRequest {
@@ -358,9 +361,8 @@ impl ApplicationHandler for Smoke {
                 frame_id: 1,
                 parent: self.parent.as_ref().unwrap().clone(),
                 session,
-                fonts: neomacs_display_protocol::frame_glyphs::FrameGlyphBuffer::with_size(
-                    0.0, 0.0,
-                ),
+                fonts,
+                atlas,
                 placement: neomacs_display_protocol::PopupPlacement::at(
                     neomacs_display_protocol::Point::new(180.0, 80.0),
                 ),

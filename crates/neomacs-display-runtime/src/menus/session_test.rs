@@ -78,13 +78,14 @@ fn simple_menu(items: Vec<PopupMenuItem>) -> MenuSession {
     MenuSession::new(
         100.0,
         50.0,
-        items.clone(),
-        None,
+        neomacs_display_protocol::menu::MeasuredMenu::measure(
+            items.clone(),
+            None,
+            CHAR_WIDTH,
+            |_| CHAR_WIDTH,
+        ),
         FONT_SIZE,
         LINE_HEIGHT,
-        neomacs_display_protocol::menu::MenuTextLayout::measure(&items, None, CHAR_WIDTH, |_| {
-            CHAR_WIDTH
-        }),
     )
 }
 
@@ -99,14 +100,15 @@ fn layout_panel_bounds_position() {
     let panel = crate::menus::layout::measure_panel(
         100.0,
         200.0,
-        &items,
+        &neomacs_display_protocol::menu::MeasuredMenu::measure(
+            items.clone(),
+            None,
+            CHAR_WIDTH,
+            |_| CHAR_WIDTH,
+        ),
         &indices,
-        None,
-        FONT_SIZE,
+        neomacs_display_protocol::menu::MenuPanelRole::Root,
         LINE_HEIGHT,
-        &neomacs_display_protocol::menu::MenuTextLayout::measure(&items, None, CHAR_WIDTH, |_| {
-            CHAR_WIDTH
-        }),
     );
     assert_eq!(panel.x, 100.0);
     assert_eq!(panel.y, 200.0);
@@ -121,14 +123,15 @@ fn layout_panel_hover_starts_at_minus_one() {
     let panel = crate::menus::layout::measure_panel(
         0.0,
         0.0,
-        &items,
+        &neomacs_display_protocol::menu::MeasuredMenu::measure(
+            items.clone(),
+            None,
+            CHAR_WIDTH,
+            |_| CHAR_WIDTH,
+        ),
         &indices,
-        None,
-        FONT_SIZE,
+        neomacs_display_protocol::menu::MenuPanelRole::Root,
         LINE_HEIGHT,
-        &neomacs_display_protocol::menu::MenuTextLayout::measure(&items, None, CHAR_WIDTH, |_| {
-            CHAR_WIDTH
-        }),
     );
     assert_eq!(panel.hover_index, -1);
 }
@@ -142,14 +145,15 @@ fn layout_panel_height_with_items() {
     let panel = crate::menus::layout::measure_panel(
         0.0,
         0.0,
-        &items,
+        &neomacs_display_protocol::menu::MeasuredMenu::measure(
+            items.clone(),
+            None,
+            CHAR_WIDTH,
+            |_| CHAR_WIDTH,
+        ),
         &indices,
-        None,
-        FONT_SIZE,
+        neomacs_display_protocol::menu::MenuPanelRole::Root,
         LINE_HEIGHT,
-        &neomacs_display_protocol::menu::MenuTextLayout::measure(&items, None, CHAR_WIDTH, |_| {
-            CHAR_WIDTH
-        }),
     );
     let expected_h = padding + 3.0 * item_height + padding;
     assert!(
@@ -170,14 +174,15 @@ fn layout_panel_height_with_separator() {
     let panel = crate::menus::layout::measure_panel(
         0.0,
         0.0,
-        &items,
+        &neomacs_display_protocol::menu::MeasuredMenu::measure(
+            items.clone(),
+            None,
+            CHAR_WIDTH,
+            |_| CHAR_WIDTH,
+        ),
         &indices,
-        None,
-        FONT_SIZE,
+        neomacs_display_protocol::menu::MenuPanelRole::Root,
         LINE_HEIGHT,
-        &neomacs_display_protocol::menu::MenuTextLayout::measure(&items, None, CHAR_WIDTH, |_| {
-            CHAR_WIDTH
-        }),
     );
     let expected_h = padding + item_height + separator_height + item_height + padding;
     assert!((panel.bounds.3 - expected_h).abs() < 0.01);
@@ -194,17 +199,15 @@ fn layout_panel_height_with_title() {
     let panel = crate::menus::layout::measure_panel(
         0.0,
         0.0,
-        &items,
-        &indices,
-        Some("My Menu"),
-        FONT_SIZE,
-        LINE_HEIGHT,
-        &neomacs_display_protocol::menu::MenuTextLayout::measure(
-            &items,
-            Some("My Menu"),
+        &neomacs_display_protocol::menu::MeasuredMenu::measure(
+            items.clone(),
+            Some("My Menu".into()),
             CHAR_WIDTH,
             |_| CHAR_WIDTH,
         ),
+        &indices,
+        neomacs_display_protocol::menu::MenuPanelRole::Root,
+        LINE_HEIGHT,
     );
     let expected_h = padding + title_height + item_height + padding;
     assert!((panel.bounds.3 - expected_h).abs() < 0.01);
@@ -218,14 +221,15 @@ fn layout_panel_minimum_width() {
     let panel = crate::menus::layout::measure_panel(
         0.0,
         0.0,
-        &items,
+        &neomacs_display_protocol::menu::MeasuredMenu::measure(
+            items.clone(),
+            None,
+            CHAR_WIDTH,
+            |_| CHAR_WIDTH,
+        ),
         &indices,
-        None,
-        FONT_SIZE,
+        neomacs_display_protocol::menu::MenuPanelRole::Root,
         LINE_HEIGHT,
-        &neomacs_display_protocol::menu::MenuTextLayout::measure(&items, None, CHAR_WIDTH, |_| {
-            CHAR_WIDTH
-        }),
     );
     assert!(panel.bounds.2 >= 150.0, "width was {}", panel.bounds.2);
 }
@@ -238,14 +242,15 @@ fn layout_panel_width_grows_with_label() {
     let panel = crate::menus::layout::measure_panel(
         0.0,
         0.0,
-        &items,
+        &neomacs_display_protocol::menu::MeasuredMenu::measure(
+            items.clone(),
+            None,
+            CHAR_WIDTH,
+            |_| CHAR_WIDTH,
+        ),
         &indices,
-        None,
-        FONT_SIZE,
+        neomacs_display_protocol::menu::MenuPanelRole::Root,
         LINE_HEIGHT,
-        &neomacs_display_protocol::menu::MenuTextLayout::measure(&items, None, CHAR_WIDTH, |_| {
-            CHAR_WIDTH
-        }),
     );
     let char_width = FONT_SIZE * 0.6;
     let padding = 4.0_f32;
@@ -265,14 +270,15 @@ fn layout_panel_width_accounts_for_shortcut() {
     let panel = crate::menus::layout::measure_panel(
         0.0,
         0.0,
-        &items,
+        &neomacs_display_protocol::menu::MeasuredMenu::measure(
+            items.clone(),
+            None,
+            CHAR_WIDTH,
+            |_| CHAR_WIDTH,
+        ),
         &indices,
-        None,
-        FONT_SIZE,
+        neomacs_display_protocol::menu::MenuPanelRole::Root,
         LINE_HEIGHT,
-        &neomacs_display_protocol::menu::MenuTextLayout::measure(&items, None, CHAR_WIDTH, |_| {
-            CHAR_WIDTH
-        }),
     );
     // label(4) + shortcut(7) + 4 extra = 15 chars
     let char_width = FONT_SIZE * 0.6;
@@ -295,14 +301,15 @@ fn menu_columns_reserve_the_widest_label_and_shortcut_independently() {
     let panel = super::super::layout::measure_panel(
         0.0,
         0.0,
-        &items,
+        &neomacs_display_protocol::menu::MeasuredMenu::measure(
+            items.clone(),
+            None,
+            CHAR_WIDTH,
+            |_| CHAR_WIDTH,
+        ),
         &[0, 1],
-        None,
-        FONT_SIZE,
+        neomacs_display_protocol::menu::MenuPanelRole::Root,
         LINE_HEIGHT,
-        &neomacs_display_protocol::menu::MenuTextLayout::measure(&items, None, CHAR_WIDTH, |_| {
-            CHAR_WIDTH
-        }),
     );
     let required = (25.0 + 15.0 + 4.0) * CHAR_WIDTH + 16.0;
     assert!(
@@ -319,14 +326,15 @@ fn layout_panel_width_accounts_for_submenu_arrow() {
     let panel = crate::menus::layout::measure_panel(
         0.0,
         0.0,
-        &items,
+        &neomacs_display_protocol::menu::MeasuredMenu::measure(
+            items.clone(),
+            None,
+            CHAR_WIDTH,
+            |_| CHAR_WIDTH,
+        ),
         &indices,
-        None,
-        FONT_SIZE,
+        neomacs_display_protocol::menu::MenuPanelRole::Root,
         LINE_HEIGHT,
-        &neomacs_display_protocol::menu::MenuTextLayout::measure(&items, None, CHAR_WIDTH, |_| {
-            CHAR_WIDTH
-        }),
     );
     // label(7) + arrow(3) = 10 chars
     let char_width = FONT_SIZE * 0.6;
@@ -343,17 +351,15 @@ fn layout_panel_width_uses_title_len_if_longer() {
     let panel = crate::menus::layout::measure_panel(
         0.0,
         0.0,
-        &items,
-        &indices,
-        Some(title),
-        FONT_SIZE,
-        LINE_HEIGHT,
-        &neomacs_display_protocol::menu::MenuTextLayout::measure(
-            &items,
-            Some(title),
+        &neomacs_display_protocol::menu::MeasuredMenu::measure(
+            items.clone(),
+            Some(title.into()),
             CHAR_WIDTH,
             |_| CHAR_WIDTH,
         ),
+        &indices,
+        neomacs_display_protocol::menu::MenuPanelRole::Root,
+        LINE_HEIGHT,
     );
     let char_width = FONT_SIZE * 0.6;
     let padding = 4.0_f32;
@@ -374,14 +380,15 @@ fn layout_panel_item_offsets_monotonic() {
     let panel = crate::menus::layout::measure_panel(
         0.0,
         0.0,
-        &items,
+        &neomacs_display_protocol::menu::MeasuredMenu::measure(
+            items.clone(),
+            None,
+            CHAR_WIDTH,
+            |_| CHAR_WIDTH,
+        ),
         &indices,
-        None,
-        FONT_SIZE,
+        neomacs_display_protocol::menu::MenuPanelRole::Root,
         LINE_HEIGHT,
-        &neomacs_display_protocol::menu::MenuTextLayout::measure(&items, None, CHAR_WIDTH, |_| {
-            CHAR_WIDTH
-        }),
     );
     assert_eq!(panel.item_offsets.len(), 4);
     for i in 1..panel.item_offsets.len() {
@@ -403,14 +410,15 @@ fn layout_panel_empty_indices() {
     let panel = crate::menus::layout::measure_panel(
         10.0,
         20.0,
-        &items,
+        &neomacs_display_protocol::menu::MeasuredMenu::measure(
+            items.clone(),
+            None,
+            CHAR_WIDTH,
+            |_| CHAR_WIDTH,
+        ),
         &indices,
-        None,
-        FONT_SIZE,
+        neomacs_display_protocol::menu::MenuPanelRole::Root,
         LINE_HEIGHT,
-        &neomacs_display_protocol::menu::MenuTextLayout::measure(&items, None, CHAR_WIDTH, |_| {
-            CHAR_WIDTH
-        }),
     );
     assert_eq!(panel.item_offsets.len(), 0);
     assert_eq!(panel.item_indices.len(), 0);
@@ -426,14 +434,15 @@ fn layout_panel_item_height_matches() {
     let panel = crate::menus::layout::measure_panel(
         0.0,
         0.0,
-        &items,
+        &neomacs_display_protocol::menu::MeasuredMenu::measure(
+            items.clone(),
+            None,
+            CHAR_WIDTH,
+            |_| CHAR_WIDTH,
+        ),
         &indices,
-        None,
-        FONT_SIZE,
+        neomacs_display_protocol::menu::MenuPanelRole::Root,
         LINE_HEIGHT,
-        &neomacs_display_protocol::menu::MenuTextLayout::measure(&items, None, CHAR_WIDTH, |_| {
-            CHAR_WIDTH
-        }),
     );
     assert!((panel.item_height - (LINE_HEIGHT + 3.0)).abs() < 0.01);
 }
@@ -447,7 +456,7 @@ fn new_state_defaults() {
     let state = simple_menu(vec![item("A", true, 0)]);
     assert!(state.face_fg.is_none());
     assert!(state.face_bg.is_none());
-    assert!(state.title.is_none());
+    assert!(state.menu().title().is_none());
     assert!(state.submenu_panels.is_empty());
     assert_eq!(state.font_size, FONT_SIZE);
     assert_eq!(state.line_height, LINE_HEIGHT);
@@ -473,18 +482,16 @@ fn new_state_with_title() {
     let state = MenuSession::new(
         10.0,
         20.0,
-        vec![item("A", true, 0)],
-        Some("Title".to_string()),
-        FONT_SIZE,
-        LINE_HEIGHT,
-        neomacs_display_protocol::menu::MenuTextLayout::measure(
-            &[item("A", true, 0)],
-            Some("Title"),
+        neomacs_display_protocol::menu::MeasuredMenu::measure(
+            vec![item("A", true, 0)],
+            Some("Title".into()),
             CHAR_WIDTH,
             |_| CHAR_WIDTH,
         ),
+        FONT_SIZE,
+        LINE_HEIGHT,
     );
-    assert_eq!(state.title.as_deref(), Some("Title"));
+    assert_eq!(state.menu().title(), Some("Title"));
 }
 
 #[test]
@@ -816,14 +823,15 @@ fn layout_panel_no_non_separator_items_uses_default_label_len() {
     let panel = crate::menus::layout::measure_panel(
         0.0,
         0.0,
-        &items,
+        &neomacs_display_protocol::menu::MeasuredMenu::measure(
+            items.clone(),
+            None,
+            CHAR_WIDTH,
+            |_| CHAR_WIDTH,
+        ),
         &indices,
-        None,
-        FONT_SIZE,
+        neomacs_display_protocol::menu::MenuPanelRole::Root,
         LINE_HEIGHT,
-        &neomacs_display_protocol::menu::MenuTextLayout::measure(&items, None, CHAR_WIDTH, |_| {
-            CHAR_WIDTH
-        }),
     );
     let char_width = FONT_SIZE * 0.6;
     let padding = 4.0_f32;
@@ -953,21 +961,29 @@ fn hide_before_show_tombstones_the_exact_snapshot() {
 
 #[test]
 fn menu_columns_and_paint_positions_use_measured_cjk_advances() {
-    use neomacs_display_protocol::menu::MenuTextLayout;
+    use neomacs_display_protocol::menu::MeasuredMenu;
     let items = vec![item_with_shortcut("中中中中中中中中", "C-y", 0)];
-    let text = MenuTextLayout::measure(&items, Some("中A"), 8.0, |ch| {
+    let text = MeasuredMenu::measure(items, Some("中A".into()), 8.0, |ch| {
         if ch == '中' { 16.0 } else { 8.0 }
     });
-    let session = MenuSession::new(0.0, 0.0, items, Some("中A".into()), 14.0, 18.0, text);
-    assert_eq!(session.text.item(0).label.width(), 128.0);
-    assert_eq!(session.text.item(0).label.characters()[1], ('中', 16.0));
-    assert_eq!(session.text.title().unwrap().characters()[1], ('A', 16.0));
+    let session = MenuSession::new(0.0, 0.0, text, 14.0, 18.0);
+    assert_eq!(session.menu().text().item(0).label.width(), 128.0);
+    assert_eq!(
+        session.menu().text().item(0).label.characters()[1],
+        ('中', 16.0)
+    );
+    assert_eq!(
+        session.menu().text().title().unwrap().characters()[1],
+        ('A', 16.0)
+    );
     // Eight 16px CJK advances, a four-space gutter, a 24px shortcut,
     // and 16px outer padding. This exceeds the 150px minimum panel width.
     assert_eq!(session.root_panel.bounds.2, 200.0);
     assert_eq!(
-        session.root_panel.shortcut_right(&session.all_items, 8.0)
-            - session.text.item(0).shortcut.width(),
+        session
+            .root_panel
+            .shortcut_right(session.menu().items(), 8.0)
+            - session.menu().text().item(0).shortcut.width(),
         168.0
     );
 }
