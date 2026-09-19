@@ -11,7 +11,6 @@
 pub mod display;
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 /// The workspace root baked in at compile time.
 ///
 /// This is the **build** machine's path — for binaries shipped through
@@ -132,9 +131,7 @@ impl DoomEnvironment {
         let revision = DoomSpec::load().ok()?.revision;
         let root = Self::cache_root().join(format!("doom-{}", &revision[..12.min(revision.len())]));
         let tree = root.join("tree");
-        let sealed = fs::metadata(&root)
-            .map(|meta| meta.permissions().mode() & 0o222 == 0)
-            .unwrap_or(false);
+        let sealed = is_sealed(&root);
         (root.join("MANIFEST").is_file() && tree.is_dir() && sealed).then_some(Self { root })
     }
 
@@ -310,7 +307,7 @@ impl DoomEnvironment {
         let straight = self.tree().join(".local").join("straight");
         let link = local.join("straight");
         if straight.is_dir() && !link.exists() {
-            std::os::unix::fs::symlink(&straight, &link).map_err(|error| {
+            symlink(&straight, &link).map_err(|error| {
                 format!(
                     "symlink {} -> {}: {error}",
                     link.display(),
@@ -347,9 +344,7 @@ impl DoomEnvironment {
     }
 
     fn open_at(root: &Path) -> Option<Self> {
-        let sealed = fs::metadata(root)
-            .map(|meta| meta.permissions().mode() & 0o222 == 0)
-            .unwrap_or(false);
+        let sealed = is_sealed(root);
         (root.join("MANIFEST").is_file() && root.join("tree").is_dir() && sealed).then(|| Self {
             root: root.to_owned(),
         })
@@ -366,7 +361,7 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<(), String> {
         // the link itself rather than copying through it.
         let target = fs::read_link(source)
             .map_err(|error| format!("readlink {}: {error}", source.display()))?;
-        std::os::unix::fs::symlink(&target, destination).map_err(|error| {
+        symlink(&target, destination).map_err(|error| {
             format!(
                 "symlink {} -> {}: {error}",
                 destination.display(),
@@ -397,11 +392,55 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<(), String> {
     }
 }
 
+/// Whether `root` carries the seal: every write bit cleared.
+///
+/// The seal is a Unix permission-bits property, so a host without them
+/// cannot hold a sealed fixture.  Answering `false` there keeps the fixture
+/// *absent* rather than accepted-unsealed, which is what lets
+/// [`DoomEnvironment::open`] skip instead of running a suite against a
+/// writable tree.
+fn is_sealed(root: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::metadata(root)
+            .map(|meta| meta.permissions().mode() & 0o222 == 0)
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = root;
+        false
+    }
+}
+
+/// Link `target` at `link`.
+///
+/// Unix has one call; Windows splits it into file and directory forms and
+/// wants a privilege a fixture cannot assume.  The refusal is unreachable
+/// today -- `seal` stops a materialization before any copying starts -- but
+/// the crate still has to compile for the workspace's Windows `cargo check`.
+#[cfg(unix)]
+fn symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(not(unix))]
+fn symlink(_target: &Path, _link: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "symlinks are unavailable on this platform",
+    ))
+}
+
 /// Recursively strip every write bit under `root`, sealing the fixture
 /// against writes from the editors that mount it.  This is failure
 /// isolation between tests, not a security boundary: a process running as
 /// the owning user could chmod the bits back, but editors do not.
+#[cfg(unix)]
 fn seal(root: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
     fn walk(path: &Path) -> Result<(), String> {
         let meta = fs::symlink_metadata(path)
             .map_err(|error| format!("stat {}: {error}", path.display()))?;
@@ -428,6 +467,22 @@ fn seal(root: &Path) -> Result<(), String> {
         Ok(())
     }
     walk(root)
+}
+
+/// Windows has no permission bits to clear, so the fixture cannot be
+/// sealed -- and for the editors that mount it, being sealed is the property
+/// that makes mounting safe.  Refusing keeps a host from materializing a
+/// writable tree that `open` would then have to guess about; `is_sealed`
+/// answers `false` for the same reason.  Unreachable in the suites, which
+/// are Unix-only; the crate still has to compile for the workspace's
+/// Windows `cargo check`.
+#[cfg(not(unix))]
+fn seal(_root: &Path) -> Result<(), String> {
+    Err(
+        "the Doom fixture seal needs Unix permission bits; this platform \
+         cannot materialize the fixture"
+            .to_owned(),
+    )
 }
 
 /// `DoomEnvironment::open` for callers that want the resolution status.
