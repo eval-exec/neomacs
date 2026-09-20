@@ -16,7 +16,7 @@ use crate::buffer_source::window_geometry::{BufferWindowGeometry, BufferWindowLo
 use crate::buffer_source::window_source::BufferWindowSource;
 use crate::display_cursor::{
     CursorGlyphFaceColors, CursorVisualColumnResolutionRequest, ResolvedBoxCursorPaint,
-    ResolvedCursorCoordinatePair,
+    ResolvedCursorCoordinatePair, cursor_style_for_window,
 };
 use crate::display_face_policy::EffectiveWindowDefaultFace;
 use crate::display_row::append_context::DisplayRowAppendSurface;
@@ -903,50 +903,54 @@ impl BufferSourceOutputSetup {
             // moved, resolve a fresh buffer-point placement on the retained row.
             let window_id_i64 = output_window_id as i64;
             let display_window_id = DisplayWindowId::new(window_id_i64);
-            let cursor = if let Some(retained) = replay.retained_cursor.as_ref() {
-                FastPathCursorPlacement::Retained(retained.clone())
-            } else {
-                let paint = replay_cursor_paint(
-                    &mut output,
-                    replay.new_cursor_row_index,
-                    replay.new_point as usize,
-                    params,
-                );
-                let cursor = PhysCursor {
-                    window_id: display_window_id,
-                    charpos: replay.new_point as usize,
-                    row: replay.new_cursor_row_index,
-                    col: 0,
-                    slot_id: DisplaySlotId {
+            // Cursor visibility/style belongs to current window policy, not
+            // retained row decoration: absent decoration must stay absent.
+            if let Some(style) = cursor_style_for_window(params) {
+                let cursor = if let Some(retained) = replay.retained_cursor.as_ref() {
+                    FastPathCursorPlacement::Retained(retained.clone())
+                } else {
+                    let paint = replay_cursor_paint(
+                        &mut output,
+                        replay.new_cursor_row_index,
+                        replay.new_point as usize,
+                        params,
+                    );
+                    let cursor = PhysCursor {
                         window_id: display_window_id,
-                        row: replay.new_cursor_row_index as u32,
+                        charpos: replay.new_point as usize,
+                        row: replay.new_cursor_row_index,
                         col: 0,
-                    },
-                    x: walk_setup.text_area_left,
-                    y: walk_setup.window_top + cursor_row_pixel_y,
-                    width: cursor_width,
-                    height: cursor_height,
-                    ascent: cursor_ascent,
-                    style: replay.cursor_style,
-                    color: paint.background,
-                    cursor_fg: paint.glyph_foreground,
+                        slot_id: DisplaySlotId {
+                            window_id: display_window_id,
+                            row: replay.new_cursor_row_index as u32,
+                            col: 0,
+                        },
+                        x: walk_setup.text_area_left,
+                        y: walk_setup.window_top + cursor_row_pixel_y,
+                        width: cursor_width,
+                        height: cursor_height,
+                        ascent: cursor_ascent,
+                        style,
+                        color: paint.background,
+                        cursor_fg: paint.glyph_foreground,
+                    };
+                    FastPathCursorPlacement::Reconstructed {
+                        output_cursor: cursor,
+                        char_width: geometry.char_width,
+                    }
                 };
-                FastPathCursorPlacement::Reconstructed {
-                    output_cursor: cursor,
-                    char_width: geometry.char_width,
-                }
-            };
-            // Publish through the shared role-directed machinery so a non-selected
-            // window in a split never clobbers the selected window's frame
-            // phys-cursor (see `publish_fast_path_cursor`).
-            publish_fast_path_cursor(
-                &mut output,
-                &mut output_emitter,
-                cursor,
-                params.cursor_role,
-                walk_setup.text_area_left,
-                walk_setup.window_top,
-            );
+                // Publish through the shared role-directed machinery so a non-selected
+                // window in a split never clobbers the selected window's frame
+                // phys-cursor (see `publish_fast_path_cursor`).
+                publish_fast_path_cursor(
+                    &mut output,
+                    &mut output_emitter,
+                    cursor,
+                    params.cursor_role,
+                    walk_setup.text_area_left,
+                    walk_setup.window_top,
+                );
+            }
 
             // Chrome is re-walked unless the replay carries a retained chrome
             // plan — GNU's one-line optimization never reaches
@@ -1163,14 +1167,16 @@ impl BufferSourceOutputSetup {
                     .builder()
                     .find_current_window_cursor_row(scroll.new_point as usize),
             };
-            if let Some(cursor_row) = cursor_row {
+            if let Some(cursor_row) = cursor_row
+                && let Some(style) = cursor_style_for_window(params)
+            {
                 decorate_window_cursor(
                     &mut output,
                     &mut output_emitter,
                     output_window_id,
                     cursor_row,
                     scroll.new_point as usize,
-                    scroll.cursor_style,
+                    style,
                     params,
                     walk_setup.text_area_left,
                     walk_setup.window_top,

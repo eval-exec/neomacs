@@ -3127,7 +3127,7 @@ impl LayoutEngine {
         evaluator: &neovm_core::emacs_core::Context,
     ) -> Option<CursorOnlyReplay> {
         // The cursor-only fast path applies to ANY window. The render cursor branch
-        // handles both styles (replay.cursor_style is hollow for a non-selected
+        // handles both styles (the resolved cursor is hollow for a non-selected
         // window). Phase A admits every replaying window's faces into one
         // frame-wide namespace before rendering, so a non-selected window
         // co-resident with a re-laid window cannot corrupt face resolution. The

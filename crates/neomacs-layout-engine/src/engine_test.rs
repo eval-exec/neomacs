@@ -3488,6 +3488,46 @@ fn phase1_cursor_move_is_cursor_only() {
     );
 }
 
+/// GNU xdisp.c:get_window_cursor_type preserves cursor-type=nil on redisplay.
+#[test]
+fn cursor_only_replay_preserves_hidden_buffer_cursor() {
+    let (mut eval, frame_id, buf_id, _window) = incr_editing_frame("abcdef\n", 800, 600);
+    realize_test_gui_frame(&mut eval, frame_id);
+    eval.buffer_manager_mut()
+        .get_mut(buf_id)
+        .unwrap()
+        .set_buffer_local("cursor-type", Value::NIL);
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    assert!(
+        engine
+            .last_frame_display_state
+            .as_ref()
+            .unwrap()
+            .phys_cursor
+            .is_none()
+    );
+
+    // Both an idle redraw and point motion must preserve the hidden state.
+    for byte in [0, 1, 1] {
+        eval.buffer_manager_mut()
+            .get_mut(buf_id)
+            .unwrap()
+            .goto_emacs_byte_pos(EmacsBytePos::new(byte));
+        engine.layout_frame_rust(&mut eval, frame_id);
+        assert_eq!(engine.last_layout_stats().cursor_only_windows, 1);
+        assert!(
+            engine
+                .last_frame_display_state
+                .as_ref()
+                .unwrap()
+                .phys_cursor
+                .is_none(),
+            "incremental redisplay must not resurrect a cursor hidden by cursor-type=nil"
+        );
+    }
+}
+
 /// GNU xterm.c:pgtk_set_cursor_gc draws a filled box with the frame cursor
 /// color behind a glyph whose foreground is resolved from that glyph's face
 /// background.  A cursor-only replay must preserve that paint, not replace its

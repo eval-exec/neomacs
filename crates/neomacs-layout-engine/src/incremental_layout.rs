@@ -19,7 +19,7 @@ use crate::types::{
     PointMotionBodyDependency, WindowParams,
 };
 use crate::window_layout::{WindowLayoutBox, WindowPartitionSignature};
-use neomacs_display_protocol::frame_glyphs::{CursorStyle, DisplaySlotId, PhysCursor};
+use neomacs_display_protocol::frame_glyphs::{DisplaySlotId, PhysCursor};
 pub use neomacs_display_protocol::glyph_matrix::RowDamage;
 use neomacs_display_protocol::glyph_matrix::{
     GlyphArea, GlyphMatrix, GlyphPointerOccurrenceIdentity, GlyphPointerSourceKind, GlyphRow,
@@ -545,8 +545,6 @@ pub struct CursorOnlyReplay {
     /// `None` when the chrome must be regenerated. Filled by the engine, which
     /// owns the dirty flags; the builder always produces `None`.
     pub chrome: Option<RetainedChrome>,
-    /// Cursor style carried over from the retained pass.
-    pub cursor_style: CursorStyle,
     /// The authoritative cursor identities from the retained display, when
     /// point is unchanged. The renderer-facing placement and GNU live-window
     /// output coordinate travel as one value so replay cannot collapse them.
@@ -629,8 +627,6 @@ pub struct ScrollReplay {
     /// 0-based point for this frame (the cursor is re-decorated as in Phase 1,
     /// since a scroll usually accompanies a point move).
     pub new_point: i64,
-    /// Cursor style carried over from the retained pass.
-    pub cursor_style: CursorStyle,
     /// Phase 3 below-reuse: when true, the partial walk is BOUNDED to
     /// `exposed_row_count` rows (the edited line only) — the rows below the edit
     /// are reused (charpos-shifted, same pixel_y) and are already included in
@@ -1033,7 +1029,6 @@ impl RetainedWindowMatrix {
         let new_point = curr.point;
         let mut body_rows: Vec<(usize, MatrixRow)> = Vec::new();
         let mut body_indices: rustc_hash::FxHashSet<usize> = rustc_hash::FxHashSet::default();
-        let mut cursor_style: Option<CursorStyle> = None;
         let mut retained_cursor_row_index: Option<usize> = None;
         let mut new_cursor: Option<(usize, &GlyphRow)> = None;
         for (idx, row) in self.matrix.rows.iter().enumerate() {
@@ -1041,7 +1036,6 @@ impl RetainedWindowMatrix {
                 continue;
             }
             if row.cursor_type.is_some() {
-                cursor_style = row.cursor_type;
                 retained_cursor_row_index = Some(idx);
             }
             let start = row.start_charpos as i64;
@@ -1116,7 +1110,6 @@ impl RetainedWindowMatrix {
             // Chrome is decided separately, by the engine, because the decision
             // needs the chrome dirty flags off the evaluator. `None` = walk.
             chrome: None,
-            cursor_style: cursor_style.unwrap_or(CursorStyle::FilledBox),
             retained_cursor: (self.key.point == curr.point)
                 .then(|| {
                     self.presented_cursor
@@ -1191,10 +1184,6 @@ impl RetainedWindowMatrix {
         if s == 0 {
             return None;
         }
-        let cursor_style = body
-            .iter()
-            .find_map(|(_, row)| row.cursor_type)
-            .unwrap_or(CursorStyle::FilledBox);
         let last = body.len() - 1;
         let dvpos = body[0].1.pixel_y - body[s].1.pixel_y;
         let dvpos_i64 = dvpos.round() as i64;
@@ -1249,7 +1238,6 @@ impl RetainedWindowMatrix {
             exposed_text_y: last_row.pixel_y + dvpos + last_row.height_px,
             new_window_start: curr.window_start,
             new_point: curr.point,
-            cursor_style,
             bound_walk: false,
             expected_walk: None,
             chrome: None,
@@ -1353,10 +1341,6 @@ impl RetainedWindowMatrix {
             .count();
         let first_dirty = first_dirty_by_charpos.min(stable_prefix);
         let pointer_shrunk_prefix = first_dirty < first_dirty_by_charpos;
-        let cursor_style = body
-            .iter()
-            .find_map(|(_, row)| row.cursor_type)
-            .unwrap_or(CursorStyle::FilledBox);
         let mut reused_rows = Vec::with_capacity(first_dirty);
         let mut above_indices: rustc_hash::FxHashSet<i64> = rustc_hash::FxHashSet::default();
         for &(idx, row) in body.iter().take(first_dirty) {
@@ -1611,7 +1595,6 @@ impl RetainedWindowMatrix {
                     exposed_text_y: dirty_row.pixel_y,
                     new_window_start: curr.window_start,
                     new_point: curr.point,
-                    cursor_style,
                     bound_walk: true,
                     expected_walk: Some(ExpectedBoundWalk {
                         last_row_end_charpos: (span_end_row.end_charpos as i64 + delta) as usize,
@@ -1640,7 +1623,6 @@ impl RetainedWindowMatrix {
             exposed_text_y: dirty_row.pixel_y,
             new_window_start: curr.window_start,
             new_point: curr.point,
-            cursor_style,
             bound_walk: false,
             expected_walk: None,
             chrome: None,
