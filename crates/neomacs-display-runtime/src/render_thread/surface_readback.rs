@@ -3,6 +3,10 @@ use image::{Rgba, RgbaImage};
 use neomacs_renderer_wgpu::WgpuRenderer;
 use std::path::Path;
 
+#[cfg(test)]
+#[path = "surface_readback_test.rs"]
+mod tests;
+
 pub(crate) fn surface_usage_for_debug_readback(
     supported_usages: wgpu::TextureUsages,
     pending: &mut bool,
@@ -291,9 +295,22 @@ fn write_surface_readback_png(
         }
     }
 
+    // Readers (including evaluator-side copy-file) can hold the previous
+    // capture open while the next one is encoded. Never truncate a published
+    // inode: the owned sibling temporary is unpublished until encoding ends,
+    // and is removed automatically if encoding or publication fails.
+    let directory = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut pending = tempfile::NamedTempFile::new_in(directory)
+        .map_err(|err| format!("image staging error: {err}"))?;
     image
-        .save(path)
+        .write_to(pending.as_file_mut(), image::ImageFormat::Png)
         .map_err(|err| format!("image save error: {err}"))?;
+    pending
+        .persist(path)
+        .map_err(|err| format!("image publication error: {err}"))?;
     tracing::info!("Wrote debug surface readback PNG {}", path.display());
     Ok(())
 }
