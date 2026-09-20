@@ -156,16 +156,10 @@ fn doom_gui_boot_home_buffer_matches_gnu() {
 // under Xvfb had not completed within 300s in the last harness run
 // (machine load ~35 during the chase; TUI boots in seconds).  Re-run
 // on a quiet machine before concluding anything about spacemacs GUI.
-// GNU-side only: during the harness run GNU spacemacs never opens its X
-// connection (no socket fd; gmain/gdbus idle; the drawn screen observed
-// on the shared Xvfb is the Neomacs side).  The doom sibling passes on
-// the identical env, so this is spacemacs-specific pre-display blocking,
-// not the harness.  TUI spacemacs parity is green.
 #[test]
-#[ignore = "GNU spacemacs GUI blocks before opening X: live investigation"]
 fn spacemacs_gui_boot_home_buffer_matches_gnu() {
     match neomacs_infra::SpacemacsEnvironment::open() {
-        Some(env) => compare_config_boot(&env, "Find File"),
+        Some(env) => compare_config_boot(&env, "Homepage"),
         None => eprintln!(
             "skipping: no sealed Spacemacs fixture; run \
              `cargo run -p xtask -- infra materialize spacemacs`"

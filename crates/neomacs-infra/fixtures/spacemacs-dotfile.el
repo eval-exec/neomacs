@@ -37,7 +37,7 @@
   (advice-add 'configuration-layer/display-startup-time :before
               (lambda (&rest _)
                 (setq configuration-layer--spacemacs-startup-time 0.500
-                      dotspacemacs--user-config-elapsed-time 0.500)))
+                      dotspacemacs--user-config-elapsed-time 0.500))))
 
 (defun dotspacemacs/emacs-custom-settings ()
   "Emacs custom settings are applied once everything is loaded.")
