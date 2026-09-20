@@ -290,6 +290,10 @@ impl row_reuse::RowTessellator for LiveRowTessellator<'_, '_> {
                     } else {
                         SubpixelRequest::Disabled
                     };
+                    // Keep ordinary glyph handles on the stack; only compositions
+                    // need the atlas-provided vector of handles.
+                    let single_handle;
+                    let composed_handles;
                     let handles = if let Some(text) = composed {
                         self.seen_composed_keys.insert(ComposedGlyphKey {
                             text: text.clone(),
@@ -302,7 +306,8 @@ impl row_reuse::RowTessellator for LiveRowTessellator<'_, '_> {
                             x_bin,
                             y_bin,
                         });
-                        self.atlas
+                        composed_handles = self
+                            .atlas
                             .get_or_create_composed_atlas(
                                 &self.renderer.device,
                                 &self.renderer.queue,
@@ -314,7 +319,8 @@ impl row_reuse::RowTessellator for LiveRowTessellator<'_, '_> {
                                 y_bin,
                                 subpixel_request,
                             )
-                            .unwrap_or_default()
+                            .unwrap_or_default();
+                        composed_handles.as_slice()
                     } else {
                         let key = GlyphKey {
                             charcode: *char as u32,
@@ -339,16 +345,14 @@ impl row_reuse::RowTessellator for LiveRowTessellator<'_, '_> {
                                 fg.a
                             );
                         }
-                        self.atlas
-                            .get_or_create_atlas(
-                                &self.renderer.device,
-                                &self.renderer.queue,
-                                &key,
-                                face,
-                                subpixel_request,
-                            )
-                            .into_iter()
-                            .collect()
+                        single_handle = self.atlas.get_or_create_atlas(
+                            &self.renderer.device,
+                            &self.renderer.queue,
+                            &key,
+                            face,
+                            subpixel_request,
+                        );
+                        single_handle.as_slice()
                     };
 
                     for handle in handles {

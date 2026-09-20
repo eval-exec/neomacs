@@ -666,6 +666,10 @@ impl WgpuRenderer {
                     } else {
                         SubpixelRequest::Disabled
                     };
+                    // Keep ordinary glyph handles on the stack; only compositions
+                    // need the atlas-provided vector of handles.
+                    let single_handle;
+                    let composed_handles;
                     let handles = if let Some(text) = composed {
                         stats.text_glyphs += 1;
                         stats.composed_glyphs += 1;
@@ -679,7 +683,7 @@ impl WgpuRenderer {
                             x_bin,
                             y_bin,
                         });
-                        glyph_atlas
+                        composed_handles = glyph_atlas
                             .get_or_create_composed_atlas(
                                 &self.device,
                                 &self.queue,
@@ -691,7 +695,8 @@ impl WgpuRenderer {
                                 y_bin,
                                 subpixel_request,
                             )
-                            .unwrap_or_default()
+                            .unwrap_or_default();
+                        composed_handles.as_slice()
                     } else {
                         stats.text_glyphs += 1;
                         let key = GlyphKey {
@@ -703,16 +708,14 @@ impl WgpuRenderer {
                             y_bin,
                         };
                         seen_single_keys.insert(key.clone());
-                        glyph_atlas
-                            .get_or_create_atlas(
-                                &self.device,
-                                &self.queue,
-                                &key,
-                                face,
-                                subpixel_request,
-                            )
-                            .into_iter()
-                            .collect()
+                        single_handle = glyph_atlas.get_or_create_atlas(
+                            &self.device,
+                            &self.queue,
+                            &key,
+                            face,
+                            subpixel_request,
+                        );
+                        single_handle.as_slice()
                     };
 
                     for handle in handles {
