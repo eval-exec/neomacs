@@ -1076,9 +1076,12 @@ impl OverlayList {
         pos: EmacsBytePos,
         property: Value,
     ) -> Option<Value> {
-        self.best_overlay_among(property, self.index.overlays_at_iter(pos), |overlay| {
-            overlay_covers_pos(overlay, pos)
-        })
+        self.best_overlay_among(
+            property,
+            self.index.overlays_at_iter(pos),
+            |overlay| overlay_covers_pos(overlay, pos),
+            &overlay_plist_property,
+        )
     }
 
     /// Select the highest-precedence window-visible overlay whose caller-owned
@@ -1373,29 +1376,60 @@ impl OverlayList {
         pos: EmacsBytePos,
         property: &Value,
     ) -> Option<Value> {
-        self.best_overlay_among(*property, self.index.overlays_touching(pos), |overlay| {
-            let Some(data) = overlay.as_overlay_data() else {
-                return false;
-            };
-            if data.buffer.is_none() {
-                return false;
-            }
-            let range = overlay_data_range(data);
-            !(range.start() == pos && data.front_advance
-                || range.end() == pos && !data.rear_advance)
-                && range.start() <= pos
-                && pos <= range.end()
-        })
+        self.highest_priority_overlay_for_inserted_emacs_byte_pos_with(
+            pos,
+            property,
+            &overlay_plist_property,
+        )
+    }
+
+    /// [`Self::highest_priority_overlay_for_inserted_emacs_byte_pos`] reading
+    /// `priority' the way the caller says (see [`OverlayPriorityLookup`]).
+    pub fn highest_priority_overlay_for_inserted_emacs_byte_pos_with(
+        &self,
+        pos: EmacsBytePos,
+        property: &Value,
+        value_of: OverlayPropertyLookup,
+    ) -> Option<Value> {
+        self.best_overlay_among(
+            *property,
+            self.index.overlays_touching(pos),
+            |overlay| {
+                let Some(data) = overlay.as_overlay_data() else {
+                    return false;
+                };
+                if data.buffer.is_none() {
+                    return false;
+                }
+                let range = overlay_data_range(data);
+                !(range.start() == pos && data.front_advance
+                    || range.end() == pos && !data.rear_advance)
+                    && range.start() <= pos
+                    && pos <= range.end()
+            },
+            value_of,
+        )
     }
 
     pub fn sort_overlay_ids_by_priority_desc(&self, overlay_ids: &mut [Value]) {
+        self.sort_overlay_ids_by_priority_desc_with(overlay_ids, &overlay_plist_priority);
+    }
+
+    /// [`Self::sort_overlay_ids_by_priority_desc`] reading `priority' the way
+    /// the caller says -- which is how a caller holding an obarray lets the
+    /// `category' fallback decide, as GNU's `sort_overlays' does.
+    pub fn sort_overlay_ids_by_priority_desc_with(
+        &self,
+        overlay_ids: &mut [Value],
+        priority_of: OverlayPriorityLookup,
+    ) {
         if overlay_ids.len() < 2 {
             return;
         }
         // Key once per overlay, then sort (see `OverlayPrecedence`).
         let mut keyed: Vec<(Value, Option<OverlayPrecedence>)> = overlay_ids
             .iter()
-            .map(|overlay| (*overlay, overlay_precedence(*overlay)))
+            .map(|overlay| (*overlay, overlay_precedence(*overlay, priority_of)))
             .collect();
         keyed.sort_by(|(left, left_key), (right, right_key)| {
             compare_overlay_precedence_keys(*right, *right_key, *left, *left_key)
@@ -1572,11 +1606,14 @@ impl OverlayList {
         property: Value,
         candidates: I,
         predicate: F,
+        value_of: OverlayPropertyLookup,
     ) -> Option<Value>
     where
         I: IntoIterator<Item = Value>,
         F: Fn(Value) -> bool,
     {
+        let priority_of = |overlay: Value| value_of(overlay, priority_value());
+        let priority_of: OverlayPriorityLookup = &priority_of;
         let mut best: Option<Value> = None;
         for overlay in candidates {
             #[cfg(test)]
@@ -1584,7 +1621,7 @@ impl OverlayList {
             if !predicate(overlay) {
                 continue;
             }
-            let Some(value) = overlay_property_named(overlay, property) else {
+            let Some(value) = value_of(overlay, property) else {
                 continue;
             };
             if value.is_nil() {
@@ -1592,7 +1629,14 @@ impl OverlayList {
             }
             match best {
                 None => best = Some(overlay),
-                Some(current) if compare_overlay_precedence(current, overlay) == Ordering::Less => {
+                Some(current)
+                    if compare_overlay_precedence_keys(
+                        current,
+                        overlay_precedence(current, priority_of),
+                        overlay,
+                        overlay_precedence(overlay, priority_of),
+                    ) == Ordering::Less =>
+                {
                     best = Some(overlay);
                 }
                 _ => {}
@@ -1689,9 +1733,12 @@ struct OverlayPrecedence {
     identity: u64,
 }
 
-fn overlay_precedence(overlay: Value) -> Option<OverlayPrecedence> {
+fn overlay_precedence(
+    overlay: Value,
+    priority_of: OverlayPriorityLookup,
+) -> Option<OverlayPrecedence> {
     let data = overlay.as_overlay_data().filter(|d| d.buffer.is_some())?;
-    let (priority, subpriority) = overlay_priority(data);
+    let (priority, subpriority) = overlay_priority(overlay, priority_of);
     Some(OverlayPrecedence {
         priority,
         subpriority,
@@ -1704,7 +1751,12 @@ fn overlay_precedence(overlay: Value) -> Option<OverlayPrecedence> {
 fn sort_overlays_by_precedence_ascending(overlays: &mut [Value]) {
     let mut keyed: Vec<(Value, Option<OverlayPrecedence>)> = overlays
         .iter()
-        .map(|overlay| (*overlay, overlay_precedence(*overlay)))
+        .map(|overlay| {
+            (
+                *overlay,
+                overlay_precedence(*overlay, &overlay_plist_priority),
+            )
+        })
         .collect();
     keyed.sort_by(|(left, left_key), (right, right_key)| {
         compare_overlay_precedence_keys(*left, *left_key, *right, *right_key)
@@ -1717,9 +1769,9 @@ fn sort_overlays_by_precedence_ascending(overlays: &mut [Value]) {
 fn compare_overlay_precedence(left: Value, right: Value) -> Ordering {
     compare_overlay_precedence_keys(
         left,
-        overlay_precedence(left),
+        overlay_precedence(left, &overlay_plist_priority),
         right,
-        overlay_precedence(right),
+        overlay_precedence(right, &overlay_plist_priority),
     )
 }
 
@@ -1790,8 +1842,34 @@ fn priority_symbol_id() -> crate::emacs_core::intern::SymId {
     *ID.get_or_init(|| crate::emacs_core::intern::intern("priority"))
 }
 
-fn overlay_priority(overlay: &Overlay) -> (i64, i64) {
-    match plist_get_by_symbol_id(overlay.plist, priority_symbol_id()) {
+/// How the sort reads an overlay's `priority'.
+///
+/// GNU's `sort_overlays' asks `Foverlay_get', which falls back to the
+/// `category' symbol's plist when the overlay carries none of its own. That
+/// fallback needs an obarray, which this layer has none of, so a caller that
+/// has one passes the lookup in; callers without one read the overlay's own
+/// plist, which is what this layer did for everyone before.
+pub type OverlayPriorityLookup<'a> = &'a dyn Fn(Value) -> Option<Value>;
+
+/// How a caller reads any property of an overlay -- `Foverlay_get' when the
+/// caller has an obarray (so `category' is followed), the overlay's own plist
+/// otherwise.
+pub type OverlayPropertyLookup<'a> = &'a dyn Fn(Value, Value) -> Option<Value>;
+
+fn overlay_plist_property(overlay: Value, property: Value) -> Option<Value> {
+    overlay_property_named(overlay, property)
+}
+
+fn priority_value() -> Value {
+    Value::from_sym_id(priority_symbol_id())
+}
+
+fn overlay_plist_priority(overlay: Value) -> Option<Value> {
+    plist_get_by_symbol_id(overlay.as_overlay_data()?.plist, priority_symbol_id())
+}
+
+fn overlay_priority(overlay: Value, priority_of: OverlayPriorityLookup) -> (i64, i64) {
+    match priority_of(overlay).filter(|value| !value.is_nil()) {
         None => (0, 0),
         Some(value) => match value.kind() {
             ValueKind::Fixnum(n) => (n, 0),

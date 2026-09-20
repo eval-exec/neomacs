@@ -19239,3 +19239,43 @@ fn a_user_defined_hash_table_test_answers_like_gnu() {
         "OK ((1 1 2 nil) (2 10) (1 nil 10) (2 3) (\"Foo\" \"baz\") (0 nil) (1 7) (5 3 0 nil) (5 40))"
     );
 }
+
+#[test]
+fn an_overlays_category_supplies_its_priority_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // GNU's `sort_overlays' reads `priority' through `Foverlay_get', so an
+    // overlay carrying only a `category' is ordered by that symbol's
+    // `priority' -- and contributes that symbol's other properties too. Ours
+    // read the overlay's own plist, so a category-only overlay sorted as
+    // priority 0 and was skipped for a property it does carry. An own
+    // `priority' still wins over the category's, and an own `priority' of nil
+    // stays nil rather than falling back, as GNU's `lookup_char_property'
+    // returns the first matching plist entry it meets.
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r##"
+(progn
+  (put 'cat-hi 'priority 1000)
+  (put 'cat-hi 'face 'bold)
+  (put 'cat-lo 'priority 1)
+  (put 'cat-lo 'face 'underline)
+  (with-temp-buffer
+    (insert "0123456789")
+    (let ((a (make-overlay 2 8)) (b (make-overlay 2 8)) (c (make-overlay 2 8)))
+      (overlay-put a 'priority 10)
+      (overlay-put a 'face 'italic)
+      (overlay-put b 'category 'cat-hi)
+      (overlay-put c 'category 'cat-lo)
+      (list (overlay-get b 'priority)
+            (overlay-get c 'priority)
+            (get-char-property 3 'face)
+            (get-pos-property 3 'face)
+            ;; an own priority still wins over its category's
+            (progn (overlay-put b 'priority 5)
+                   (list (overlay-get b 'priority) (get-char-property 3 'face)))
+            ;; and removing it falls back to the category again
+            (progn (overlay-put b 'priority nil)
+                   (list (overlay-get b 'priority) (get-char-property 3 'face)))))))
+        "##,
+    );
+    assert_eq!(result, "OK (1000 1 bold bold (5 italic) (nil italic))");
+}

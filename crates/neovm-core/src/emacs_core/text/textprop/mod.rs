@@ -1952,8 +1952,20 @@ pub(crate) fn buffer_overlay_property_at_byte_pos(
     let mut overlays = buf
         .overlays
         .overlays_at_emacs_byte_pos(EmacsBytePos::new(byte_pos));
+    // GNU's `sort_overlays' reads `priority' through `Foverlay_get', so an
+    // overlay carrying only a `category' is ordered by that symbol's
+    // `priority'. The overlay layer has no obarray to follow the category
+    // with; this one does.
+    let priority_sym = Value::symbol("priority");
     buf.overlays
-        .sort_overlay_ids_by_priority_desc(&mut overlays);
+        .sort_overlay_ids_by_priority_desc_with(&mut overlays, &|overlay| {
+            Some(lookup_overlay_property(
+                obarray,
+                buffers,
+                overlay,
+                priority_sym,
+            ))
+        });
     for overlay in overlays {
         if let Some(wid) = window_id {
             let window_prop =
@@ -1974,14 +1986,26 @@ pub(crate) fn buffer_overlay_property_at_byte_pos(
 }
 
 pub(crate) fn buffer_overlay_property_for_inserted_char_at_byte_pos(
+    obarray: &Obarray,
+    buffers: &BufferManager,
     buf: &crate::buffer::buffer::Buffer,
     byte_pos: usize,
     prop: Value,
 ) -> Option<(Value, Value)> {
+    // Every property this picker reads -- the one asked for and `priority' --
+    // goes through `Foverlay_get', so an overlay carrying only a `category'
+    // contributes that symbol's properties, as it does in GNU.
+    let value_of = |overlay: Value, property: Value| {
+        Some(lookup_overlay_property(obarray, buffers, overlay, property))
+    };
     let overlay_id = buf
         .overlays
-        .highest_priority_overlay_for_inserted_emacs_byte_pos(EmacsBytePos::new(byte_pos), &prop)?;
-    let value = buf.overlays.overlay_get(overlay_id, &prop)?;
+        .highest_priority_overlay_for_inserted_emacs_byte_pos_with(
+            EmacsBytePos::new(byte_pos),
+            &prop,
+            &value_of,
+        )?;
+    let value = value_of(overlay_id, prop).filter(|value| !value.is_nil())?;
     Some((value, overlay_id))
 }
 
@@ -2072,7 +2096,7 @@ fn buffer_pos_property_in_domain(
 ) -> Result<Value, Flow> {
     let byte_pos = buf.lisp_pos_to_emacs_byte_pos(LispCharPos1::new(pos)).get();
     if let Some((value, _overlay_id)) =
-        buffer_overlay_property_for_inserted_char_at_byte_pos(buf, byte_pos, prop)
+        buffer_overlay_property_for_inserted_char_at_byte_pos(obarray, buffers, buf, byte_pos, prop)
     {
         return Ok(value);
     }
