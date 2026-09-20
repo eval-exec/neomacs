@@ -515,6 +515,29 @@ const BUILTIN_SYM_BITS_WORDS: usize = 1 << 14;
 static BUILTIN_SYM_BITS: [std::sync::atomic::AtomicU64; BUILTIN_SYM_BITS_WORDS] =
     [const { std::sync::atomic::AtomicU64::new(0) }; BUILTIN_SYM_BITS_WORDS];
 
+/// The address and mask JIT-generated code uses to ask
+/// [`global_subr_is_builtin`] without calling it.
+///
+/// `neovm_jit_cbsym_read`'s only DYNAMIC arming test is this bitmap read
+/// (the arity check and the harness override are both compile-time under
+/// JIT), so a site that inlines the read has to reproduce exactly this and
+/// nothing else -- it is what makes the inline answer advice- and
+/// fset-sensitive in the same way the shim is.
+///
+/// `None` for a symbol beyond the bitmap, whose answer lives in a
+/// `RefCell`-guarded table that generated code must not touch; the caller
+/// then emits nothing and keeps the shim.
+///
+/// Baking a host address makes any emission using this JIT-only.
+pub(crate) fn builtin_sym_bit_probe(sym_id: SymId) -> Option<(usize, u64)> {
+    let idx = sym_id.0 as usize;
+    if idx >= BUILTIN_SYM_BITS_WORDS * 64 {
+        return None;
+    }
+    let word = &BUILTIN_SYM_BITS[idx >> 6];
+    Some((std::ptr::from_ref(word) as usize, 1u64 << (idx & 63)))
+}
+
 fn set_builtin_sym_bit(sym_id: SymId, on: bool) {
     use std::sync::atomic::Ordering;
     let idx = sym_id.0 as usize;

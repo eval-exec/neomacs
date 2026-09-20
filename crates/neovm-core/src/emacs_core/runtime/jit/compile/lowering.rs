@@ -863,6 +863,150 @@ fn emit_inline_aref(
 /// Every `cl-defstruct` accessor and predicate asks `(type-of x)`; through
 /// `neovm_jit_pred_spec` that was ~100 instructions a call, 2,508 per
 /// elb-eieio repeat.
+/// Lower a Tier-A buffer read INLINE -- the load itself, in place of a call to
+/// `neovm_jit_cbsym_read` that performs it on the caller's behalf.
+///
+/// GNU answers each of these with a single bytecode opcode reading a field of
+/// `current_buffer` (`Bpoint`, `Bpoint_min`); the shim's own prologue and
+/// epilogue cost more than the load, which is why `(point-min)` measured 78
+/// instructions against GNU's 2.
+///
+/// Returns a STATUS value with the shim's own meaning -- `STATUS_OK` with the
+/// answer already in `call_result_slot`, or `STATUS_NEED_GENERIC` -- so the
+/// call site's existing merge handles both paths unchanged. Returns `None` to
+/// emit nothing at all and keep the shim: for any `which` not handled here,
+/// and for any layout probe that could not prove what it found.
+///
+/// Everything that is not a plain field read bounces to the generic path: no
+/// current buffer, an id outside the slot vector, a freed slot, or the symbol
+/// no longer being a plain builtin.
+///
+/// SOUNDNESS: the loads are `MemFlagsData::trusted()`, which is `notrap` and
+/// `aligned` and deliberately NOT `readonly`. `dispatch.rs`'s ANTI-REQUIREMENT
+/// says buffer state must never be value-numbered across a `CallBuiltinSym`
+/// op, and that still holds with the read inlined -- not because the call is
+/// opaque any more, but because cranelift gives `Opcode::Call` memory-fence
+/// semantics (`inst_predicates.rs`), so a load after a call cannot forward
+/// from one before it, and only a `readonly` load is pure enough for the
+/// egraph to hoist. Marking these `readonly` would break exactly that.
+/// How many Tier-A sites were lowered inline, so a test can tell "the inline
+/// path answered" from "the emitter declined and the shim answered" -- which
+/// a correctness assertion alone cannot distinguish.
+#[cfg(debug_assertions)]
+pub(crate) static INLINE_CBSYM_READ_EMITTED: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+fn emit_inline_cbsym_read(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    which: u8,
+    sym: u32,
+) -> Option<ClifValue> {
+    use crate::buffer::buffer::{Buffer, jit_layout};
+    use crate::emacs_core::eval::runtime_projection::CONTEXT_BUFFERS_OFFSET;
+
+    // Only the three character-position reads so far. `bobp`/`eobp` compare
+    // BYTE coordinates and encode a boolean, so they are a separate shape.
+    let field_off = match which {
+        CBSYM_A_POINT => Buffer::POINT_CHAR_POS_OFFSET,
+        CBSYM_A_POINT_MIN => Buffer::BEGV_CHAR_POS_OFFSET,
+        CBSYM_A_POINT_MAX => Buffer::ZV_CHAR_POS_OFFSET,
+        _ => return None,
+    };
+    let Some((bits_addr, bits_mask)) =
+        crate::emacs_core::eval::builtin_sym_bit_probe(crate::emacs_core::intern::SymId(sym))
+    else {
+        return None;
+    };
+    let Some((tag_off, payload_off, none_tag)) = jit_layout::current_option_layout() else {
+        return None;
+    };
+    let Some((ptr_off, len_off)) = jit_layout::slots_vec_offsets() else {
+        return None;
+    };
+
+    let flags = MemFlagsData::trusted();
+    let manager = CONTEXT_BUFFERS_OFFSET;
+    let current = manager + jit_layout::BUFFER_MANAGER_CURRENT_OFFSET;
+    let slots =
+        manager + jit_layout::BUFFER_MANAGER_BUFFERS_OFFSET + jit_layout::LIVE_BUFFERS_SLOTS_OFFSET;
+
+    let miss = fb.create_block();
+    let done = fb.create_block();
+    let status = fb.declare_var(types::I64);
+
+    // Arming, and the ONLY dynamic test the shim makes: is the symbol still a
+    // plain builtin? (Its arity check and the harness override are both
+    // compile-time here.) A bitmap word and a mask, both baked.
+    let bits_ptr = fb.ins().iconst(rt.ptr_ty, bits_addr as i64);
+    let word = fb.ins().load(types::I64, flags, bits_ptr, 0);
+    let armed = band_imm_p(fb, word, bits_mask as i64);
+    let has_buffer = fb.create_block();
+    fb.ins().brif(armed, has_buffer, &[], miss, &[]);
+
+    // Is there a current buffer at all?
+    fb.switch_to_block(has_buffer);
+    fb.seal_block(has_buffer);
+    let vmctx = fb.use_var(rt.vmctx_var);
+    let tag = fb
+        .ins()
+        .load(types::I64, flags, vmctx, (current + tag_off) as i32);
+    let present = icmp_imm_p(fb, IntCC::NotEqual, tag, none_tag as i64);
+    let in_range = fb.create_block();
+    fb.ins().brif(present, in_range, &[], miss, &[]);
+
+    // Its id must index the slot vector. `LiveBuffers::len` is the live COUNT,
+    // not the vector's length, so the bound has to come from the probed word.
+    fb.switch_to_block(in_range);
+    fb.seal_block(in_range);
+    let id = fb
+        .ins()
+        .load(types::I64, flags, vmctx, (current + payload_off) as i32);
+    let len = fb
+        .ins()
+        .load(types::I64, flags, vmctx, (slots + len_off) as i32);
+    let within = fb.ins().icmp(IntCC::UnsignedLessThan, id, len);
+    let live = fb.create_block();
+    fb.ins().brif(within, live, &[], miss, &[]);
+
+    // Each slot is one niche-optimised pointer word, so a freed slot is null.
+    fb.switch_to_block(live);
+    fb.seal_block(live);
+    let base = fb
+        .ins()
+        .load(rt.ptr_ty, flags, vmctx, (slots + ptr_off) as i32);
+    let byte_index = fb.ins().imul_imm(id, 8);
+    let slot_addr = fb.ins().iadd(base, byte_index);
+    let buffer = fb.ins().load(rt.ptr_ty, flags, slot_addr, 0);
+    let read = fb.create_block();
+    let occupied = icmp_imm_p(fb, IntCC::NotEqual, buffer, 0);
+    fb.ins().brif(occupied, read, &[], miss, &[]);
+
+    // The read, then GNU's 1-based Lisp position, tagged.
+    fb.switch_to_block(read);
+    fb.seal_block(read);
+    let position = fb.ins().load(types::I64, flags, buffer, field_off as i32);
+    let lisp = fb.ins().iadd_imm(position, 1);
+    let tagged = retag_fixnum(fb, lisp);
+    fb.ins()
+        .stack_store(rt.ptr_ty, tagged, rt.call_result_slot, 0);
+    let ok = fb.ins().iconst(types::I64, STATUS_OK);
+    fb.def_var(status, ok);
+    fb.ins().jump(done, &[]);
+
+    fb.switch_to_block(miss);
+    fb.seal_block(miss);
+    let need_generic = fb.ins().iconst(types::I64, STATUS_NEED_GENERIC);
+    fb.def_var(status, need_generic);
+    fb.ins().jump(done, &[]);
+
+    fb.switch_to_block(done);
+    fb.seal_block(done);
+    #[cfg(debug_assertions)]
+    INLINE_CBSYM_READ_EMITTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    Some(fb.use_var(status))
+}
+
 fn emit_inline_record_type_of(
     fb: &mut FunctionBuilder,
     rt: &RtCtx,
@@ -5680,31 +5824,63 @@ pub(crate) fn lower_simple_op(
             // shim; NEED_GENERIC routes to `generic_fallback` (the ORIGINAL
             // named-builtin call). Everything else keeps the general lowering.
             let mut generic_fallback: Option<Block> = None;
-            let call = if let Some(which) = cbsym_a_which {
+            // A Tier-A read lowers INLINE where the host layout could be
+            // proved, performing the load itself instead of calling a shim to
+            // perform it -- GNU answers these with one bytecode opcode. The
+            // inline sequence yields the same STATUS the shim would, so the
+            // OK / NEED_GENERIC merge below is unchanged.
+            //
+            // JIT ONLY: it bakes host field offsets and a host static's
+            // address, neither of which means anything in an AOT object
+            // loaded into a different build. `force_cbsym_generic` and the
+            // arity are compile-time facts here, so they gate emission rather
+            // than costing anything at run time.
+            let mut inline_status: Option<ClifValue> = None;
+            if let Some(which) = cbsym_a_which
+                && !aot
+                && !super::force_cbsym_generic()
+                && nargs == super::dispatch::cbsym_read_expected_nargs(which)
+            {
+                inline_status = emit_inline_cbsym_read(fb, rt, which, sym);
+                if inline_status.is_some() {
+                    generic_fallback = Some(fb.create_block());
+                }
+            }
+            let call = if inline_status.is_some() {
+                None
+            } else if let Some(which) = cbsym_a_which {
                 generic_fallback = Some(fb.create_block());
                 let f = rt
                     .refs
                     .cbsym_read
                     .ok_or(CompileError::UnsupportedOp("cbsym-read-refs"))?;
                 let which_v = fb.ins().iconst(types::I64, which as i64);
-                fb.ins()
-                    .call(f, &[vmctx, which_v, sym_v, args_addr, n_val, out_addr])
+                Some(
+                    fb.ins()
+                        .call(f, &[vmctx, which_v, sym_v, args_addr, n_val, out_addr]),
+                )
             } else if cbsym_spec_b {
                 generic_fallback = Some(fb.create_block());
                 let f = rt
                     .refs
                     .cbsym_spec
                     .ok_or(CompileError::UnsupportedOp("cbsym-spec-refs"))?;
-                fb.ins()
-                    .call(f, &[vmctx, sym_v, args_addr, n_val, out_addr])
+                Some(
+                    fb.ins()
+                        .call(f, &[vmctx, sym_v, args_addr, n_val, out_addr]),
+                )
             } else {
                 let variant_v = fb.ins().iconst(types::I64, variant);
-                fb.ins().call(
+                Some(fb.ins().call(
                     rt.refs.named_builtin,
                     &[vmctx, variant_v, sym_v, args_addr, n_val, out_addr],
-                )
+                ))
             };
-            let status = fb.inst_results(call)[0];
+            let status = match (inline_status, call) {
+                (Some(status), _) => status,
+                (None, Some(call)) => fb.inst_results(call)[0],
+                (None, None) => unreachable!("a call is emitted unless the read inlined"),
+            };
             emit_cond_residual_roots_post(fb, rt, saved);
             let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack);
             let cont = fb.create_block();

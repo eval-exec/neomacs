@@ -27006,3 +27006,139 @@ fn an_invalid_function_signal_is_renamed_only_for_an_uncallable_callee_like_gnu(
          (void-function k3-never-defined))"
     );
 }
+
+/// The Tier-A buffer reads lower INLINE in JIT-generated code -- the load
+/// itself, in place of a call to a shim that performs it -- so the answers
+/// must be identical to the shim's under every shape that decides which field
+/// is read.
+///
+/// Narrowing is the row that matters: `point-min`/`point-max` read the
+/// ACCESSIBLE bounds rather than the buffer's, so an inline read of the wrong
+/// anchor would look perfectly plausible until something narrowed. The loop
+/// runs long enough for the leaf to tier up, so it is the inline path that
+/// answers it.
+///
+/// Expectations measured under GNU Emacs 31.1 (`tmp/rr/tiera.el`).
+#[test]
+fn inlined_tier_a_buffer_reads_answer_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let result = bootstrap_eval_one(
+        r#"(progn
+             (defun ta-probe ()
+               (with-temp-buffer
+                 (insert "hello world\nsecond line\n")
+                 (goto-char 7)
+                 (list (point) (point-min) (point-max)
+                       (progn (narrow-to-region 3 10)
+                              (list (point) (point-min) (point-max)))
+                       (progn (widen) (list (point) (point-min) (point-max)))
+                       (progn (goto-char (point-min)) (list (point) (bobp) (eobp)))
+                       (progn (goto-char (point-max)) (list (point) (bobp) (eobp))))))
+             (byte-compile 'ta-probe)
+             (defun ta-advised () (list (point) (point-min)))
+             (byte-compile 'ta-advised)
+             (list (ta-probe)
+                   (with-temp-buffer (insert "abcdef") (goto-char 3) (ta-advised))
+                   (with-temp-buffer
+                     (insert "0123456789")
+                     (goto-char 5)
+                     (let ((acc 0) (i 0))
+                       (while (< i 20000)
+                         (setq acc (+ acc (point) (point-min) (point-max)))
+                         (setq i (1+ i)))
+                       acc))))"#,
+    );
+    assert_eq!(
+        result,
+        "OK ((7 1 25 (7 3 10) (7 1 25) (1 t nil) (25 nil t)) (3 1) 340000)"
+    );
+}
+
+/// Engagement, which the behaviour test above cannot show: correct answers
+/// would look identical whether the read lowered inline or the emitter
+/// declined and the shim answered.
+///
+/// Uses the same forced-hot leaf harness as
+/// `jit_cbsym_read_tiera_engages_and_matches`, then requires BOTH that the
+/// inline emitter fired and that the compiled answer still equals the
+/// interpreter's for every Tier-A name -- including the ones that do NOT
+/// inline yet, which must keep routing through the shim unharmed.
+#[cfg(feature = "jit")]
+#[test]
+fn the_inline_tier_a_read_engages_and_still_matches_the_interpreter() {
+    crate::test_utils::init_test_tracing();
+    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+    let mut ev = Context::new();
+    ev.eval_str("(insert \"abc\\ndef\")").unwrap();
+    ev.eval_str("(goto-char 2)").unwrap();
+
+    let emitted = || {
+        crate::emacs_core::jit::compile::lowering::INLINE_CBSYM_READ_EMITTED
+            .load(std::sync::atomic::Ordering::Relaxed)
+    };
+    let before = emitted();
+
+    for name in [
+        "point",
+        "point-min",
+        "point-max",
+        "bolp",
+        "eolp",
+        "bobp",
+        "eobp",
+        "following-char",
+        "preceding-char",
+        "char-after",
+    ] {
+        let hot = jit_cbsym_spec_caller(name, 0, true);
+        let cold = jit_cbsym_spec_caller(name, 0, false);
+        let native = ev
+            .funcall_general_untraced(hot, Vec::<Value>::new())
+            .unwrap_or_else(|e| panic!("native {name}: {e:?}"));
+        let interp = ev
+            .funcall_general_untraced(cold, Vec::<Value>::new())
+            .unwrap_or_else(|e| panic!("interp {name}: {e:?}"));
+        assert_eq!(
+            native.bits(),
+            interp.bits(),
+            "{name}: inline vs interpreter"
+        );
+    }
+
+    if !jit_cbsym_fastpath_suppressed_by_harness() {
+        assert!(
+            emitted() > before,
+            "no Tier-A read lowered inline, so this proved only that the shim still works"
+        );
+    }
+}
+
+/// Redefining a Tier-A builtin does NOT change what byte-compiled code reads:
+/// GNU compiles `(point)` to the `Bpoint` opcode, which never consults the
+/// function cell, so only an explicit `funcall` sees the redefinition.
+///
+/// This is the property the inline lowering's arming guard has to preserve.
+/// It reads a bitmap that goes clear when the symbol stops being a plain
+/// builtin, which bounces the site to the generic path -- and the generic
+/// path has to land on the same answer GNU gives, not on the redefinition.
+///
+/// Expectations measured under GNU Emacs 31.1 (`tmp/rr/tiera-fset.el`).
+#[test]
+fn redefining_a_tier_a_builtin_leaves_compiled_reads_alone_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let result = bootstrap_eval_one(
+        r#"(progn
+             (defun tf-read () (point))
+             (byte-compile 'tf-read)
+             (with-temp-buffer
+               (insert "abcdefgh")
+               (goto-char 4)
+               (let ((before (tf-read)))
+                 (fset 'point (lambda () 999))
+                 (let ((after (tf-read))
+                       (via-funcall (funcall 'point)))
+                   (fset 'point (symbol-function 'ignore))
+                   (list before after via-funcall)))))"#,
+    );
+    assert_eq!(result, "OK (4 4 999)");
+}
