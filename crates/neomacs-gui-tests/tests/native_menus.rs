@@ -9,7 +9,6 @@
 //! behavioral: do not skip old compositors or assert a particular crash text.
 #![cfg(target_os = "linux")]
 
-use neomacs_gui_tests::DisplayHarness;
 use std::{
     fs,
     os::{fd::AsRawFd, unix::fs::PermissionsExt},
@@ -221,7 +220,12 @@ fn with_native_menu_at_scale(
     // Keep the handle alive: this short alias avoids Unix socket path limits.
     let directory = fs::File::open(&artifacts).unwrap();
     let runtime = format!("/proc/{}/fd/{}", std::process::id(), directory.as_raw_fd());
-    let display = DisplayHarness::Xvfb.start_session(&artifacts).unwrap();
+    let display = neomacs_infra::display::start_xvfb_with_size(
+        &artifacts,
+        (1000 * scale).max(1280),
+        (700 * scale).max(800),
+    )
+    .unwrap();
     let log = fs::File::create(artifacts.join("weston.log")).unwrap();
     let mut compositor = OwnedChild(
         Command::new(std::env::var_os("NEOMACS_GUI_WESTON").unwrap_or_else(|| "weston".into()))
@@ -348,4 +352,71 @@ fn input(env: &[(String, String)], args: &[&str]) {
         "xdotool {args:?}: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[path = "native_menus/contracts.rs"]
+mod contracts;
+
+#[test]
+fn shared_desktop_menu_contract() {
+    use neomacs_gui_tests::interaction::{DesktopRect, linux::LinuxSession};
+    with_native_menu("menu-driver.el", |env, window, ready, artifacts, _, _| {
+        let frame = DesktopRect {
+            x: 0.0,
+            y: 0.0,
+            width: 1000.0,
+            height: 700.0,
+        };
+        let mut driver =
+            LinuxSession::new(env, window, frame, artifacts.join("wayland.log")).unwrap();
+        contracts::exercise(
+            &mut driver,
+            artifacts,
+            frame,
+            ready.char_height as f64,
+            ready.char_width as f64,
+        );
+    });
+}
+
+#[test]
+fn shared_retina_menu_contract() {
+    use neomacs_gui_tests::interaction::{DesktopRect, linux::LinuxSession};
+    with_native_menu_at_scale(
+        "menu-driver.el",
+        2,
+        |env, window, ready, artifacts, _, _| {
+            let frame = DesktopRect {
+                x: 0.0,
+                y: 0.0,
+                width: 1000.0,
+                height: 700.0,
+            };
+            let mut driver =
+                LinuxSession::new(env, window, frame, artifacts.join("wayland.log")).unwrap();
+            contracts::exercise(
+                &mut driver,
+                artifacts,
+                frame,
+                ready.char_height as f64,
+                ready.char_width as f64,
+            );
+        },
+    );
+}
+
+#[test]
+fn shared_bottom_edge_contract() {
+    use neomacs_gui_tests::interaction::{DesktopRect, linux::LinuxSession};
+    with_native_menu("menu-driver-tall.el", |env, window, _, artifacts, _, _| {
+        let frame = DesktopRect {
+            x: 0.0,
+            y: 0.0,
+            width: 1000.0,
+            height: 700.0,
+        };
+        let mut driver =
+            LinuxSession::new(env, window, frame, artifacts.join("wayland.log")).unwrap();
+        contracts::exercise_bottom_edges(&mut driver, artifacts);
+    });
 }

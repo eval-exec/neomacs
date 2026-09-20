@@ -147,3 +147,10 @@ slow-timeout = { period = "960s", terminate-after = 1 }
 [[profile.default.overrides]]
 filter = 'package(neovm-core) and test(native_runtime_test)'
 slow-timeout = { period = "30s", terminate-after = 1, grace-period = "0s" }
+
+# These tests own the live desktop through one helper. Do not interleave them
+# with other tests in this nextest invocation (including other GUI binaries).
+[[profile.default.overrides]]
+filter = 'binary_id(neomacs-gui-tests::macos_native_menus)'
+platform = { host = 'cfg(target_os = "macos")' }
+threads-required = "num-test-threads"

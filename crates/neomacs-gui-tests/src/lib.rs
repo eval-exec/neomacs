@@ -5,6 +5,7 @@
 //! `target/neomacs-gui-tests`.
 
 use std::fs;
+pub mod interaction;
 use std::io;
 use std::io::Read;
 

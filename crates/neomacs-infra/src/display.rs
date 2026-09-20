@@ -216,6 +216,18 @@ pub fn start_weston_with_desktop(
 }
 
 pub fn start_xvfb(artifact_root: &Path) -> io::Result<DisplaySession> {
+    start_xvfb_with_size(artifact_root, 1280, 800)
+}
+
+/// An isolated framebuffer large enough for every pixel of a scaled compositor.
+pub fn start_xvfb_with_size(
+    artifact_root: &Path,
+    width: u32,
+    height: u32,
+) -> io::Result<DisplaySession> {
+    if width == 0 || height == 0 {
+        return Err(io::Error::other("Xvfb dimensions must be positive"));
+    }
     // X's conventional Unix socket and lock live below system /tmp. Package
     // and GUI tests deliberately never use that filesystem. Run Xvfb over
     // loopback TCP without a lock instead, and keep its cwd/logs in one exact
@@ -225,7 +237,7 @@ pub fn start_xvfb(artifact_root: &Path) -> io::Result<DisplaySession> {
     let mut last_err = None;
     for offset in 0..8u32 {
         let display_number = base + offset * 1000;
-        match start_xvfb_on(artifact_root, display_number) {
+        match start_xvfb_on(artifact_root, display_number, width, height) {
             Ok(session) => return Ok(session),
             Err(err) => last_err = Some(err),
         }
@@ -233,7 +245,12 @@ pub fn start_xvfb(artifact_root: &Path) -> io::Result<DisplaySession> {
     Err(last_err.unwrap_or_else(|| io::Error::other("no Xvfb display candidate worked")))
 }
 
-fn start_xvfb_on(artifact_root: &Path, display_number: u32) -> io::Result<DisplaySession> {
+fn start_xvfb_on(
+    artifact_root: &Path,
+    display_number: u32,
+    width: u32,
+    height: u32,
+) -> io::Result<DisplaySession> {
     let port_number = u16::try_from(6000 + display_number)
         .map_err(|_| io::Error::other(format!("X display {display_number} has no TCP port")))?;
     let endpoint = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port_number);
@@ -273,7 +290,7 @@ fn start_xvfb_on(artifact_root: &Path, display_number: u32) -> io::Result<Displa
         .arg(format!(":{display_number}"))
         .arg("-screen")
         .arg("0")
-        .arg("1280x800x24")
+        .arg(format!("{width}x{height}x24"))
         .arg("-nolisten")
         .arg("unix")
         .arg("-listen")

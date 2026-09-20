@@ -1043,6 +1043,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "core-foundation"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b2a6cd9ae233e7f62ba4e9353e81a88df7fc8a5987b8d445b4d90c879bd156f6"
+dependencies = [
+ "core-foundation-sys",
+ "libc",
+]
+
+[[package]]
 name = "core-foundation-sys"
 version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3835,12 +3845,14 @@ dependencies = [
 name = "neomacs-gui-tests"
 version = "0.0.18"
 dependencies = [
+ "core-foundation",
  "getrandom 0.4.3",
  "image",
  "libc",
  "neomacs-infra",
  "pollster",
  "rustix 1.1.4",
+ "serde",
  "serde_json",
  "strum",
  "wayland-client",
