@@ -315,12 +315,14 @@ struct CharsetInfo {
 
 /// Registry of known charsets, keyed by name.
 pub(crate) struct CharsetRegistry {
-    charsets: HashMap<SymId, CharsetInfo>,
+    // Keyed by SymId: small, dense, and probed twice per decoded or
+    // encoded character, so the hash is the fast one.
+    charsets: rustc_hash::FxHashMap<SymId, CharsetInfo>,
     /// Aliases mapping an alias name to its canonical charset name. Aliases
     /// resolve to the target dynamically (like GNU `define-charset-alias`), so
     /// later mutations of the target's plist (e.g. characters.el setting
     /// `preferred-coding-system`) are visible through the alias.
-    aliases: HashMap<SymId, SymId>,
+    aliases: rustc_hash::FxHashMap<SymId, SymId>,
     /// Priority-ordered list of charset names.
     priority: Vec<SymId>,
     /// Index into `priority` of the first *non-preferred* charset, mirroring
@@ -339,8 +341,8 @@ impl CharsetRegistry {
     /// Create a new registry pre-populated with the standard charsets.
     pub fn new() -> Self {
         let mut reg = Self {
-            charsets: HashMap::new(),
-            aliases: HashMap::new(),
+            charsets: rustc_hash::FxHashMap::default(),
+            aliases: rustc_hash::FxHashMap::default(),
             priority: Vec::new(),
             non_preferred_head: None,
             next_id: 256, // start above the Emacs built-in range
@@ -800,7 +802,10 @@ impl CharsetRegistry {
     }
 
     fn restore(snapshot: CharsetRegistrySnapshot) -> Self {
-        let mut charsets = HashMap::with_capacity(snapshot.charsets.len());
+        let mut charsets = rustc_hash::FxHashMap::with_capacity_and_hasher(
+            snapshot.charsets.len(),
+            Default::default(),
+        );
         for info in snapshot.charsets {
             let name = info.name;
             charsets.insert(
@@ -844,7 +849,7 @@ impl CharsetRegistry {
             charsets,
             // Aliases were materialized into `charsets` at snapshot time, so
             // none remain to resolve dynamically after a restore.
-            aliases: HashMap::new(),
+            aliases: rustc_hash::FxHashMap::default(),
             priority: snapshot.priority,
             non_preferred_head: snapshot.non_preferred_head,
             next_id: snapshot.next_id,
