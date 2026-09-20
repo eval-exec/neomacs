@@ -372,6 +372,11 @@ fn build_replacement_lisp_string(
     newtext: &crate::heap_types::LispString,
     literal: bool,
     md: &super::regex::MatchData,
+    // Which group `\&' stands for. GNU replaces the SUBEXP, so `\&' is the
+    // text being replaced (`substart = sub_start' in the string branch,
+    // src/search.c:2544-2547; `idx = sub' in the buffer branch, :2685-2686),
+    // NOT group 0. `\1'..`\9' keep addressing the whole match's groups.
+    subexp: usize,
     preserve_substitution_properties: bool,
     string_replacement: bool,
 ) -> Result<crate::heap_types::LispString, String> {
@@ -416,7 +421,7 @@ fn build_replacement_lisp_string(
                         .expect("validated replacement literal slice"),
                     );
                 }
-                if let Some(range) = match_group_to_byte_range(source, md, 0) {
+                if let Some(range) = match_group_to_byte_range(source, md, subexp) {
                     pieces.push(
                         lisp_string_slice_for_replace_match(
                             source,
@@ -565,6 +570,7 @@ fn replace_match_lisp_string_with_syntax_and_properties(
         newtext,
         literal,
         md,
+        subexp,
         preserve_substitution_properties,
         string_replacement,
     )?;

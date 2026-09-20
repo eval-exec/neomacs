@@ -1144,3 +1144,40 @@ fn replace_match_adjusts_the_registers_for_the_edit_it_made() {
     );
     assert_eq!(result, "OK ((7 4 7) (7 4 7))");
 }
+
+/// `replace-match' with a SUBEXP replaces that group, so `\&' stands for the
+/// group's text -- the text actually being replaced -- and not for the whole
+/// match. GNU sets `substart = sub_start' in the string branch
+/// (src/search.c:2544-2547) and `idx = sub' in the buffer branch (:2685-2686).
+///
+/// `\1'..`\9' are unaffected: they keep addressing the groups of the whole
+/// match, so the second row mixes both and pins them against each other. The
+/// no-SUBEXP row and the case-preservation row already agreed with GNU and are
+/// here to stay that way.
+///
+/// Expectations measured under GNU Emacs 31.1 (`tmp/rr/d3.el`).
+#[test]
+fn replace_match_expands_an_ampersand_as_the_subexp_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let result = bootstrap_eval_one(
+        r#"(list
+             (progn (string-match "\\(foo\\)\\(BAR\\)" "xxfooBARyy")
+                    (replace-match "<\\&>" t nil "xxfooBARyy" 2))
+             (progn (string-match "\\(foo\\)\\(BAR\\)" "xxfooBARyy")
+                    (replace-match "<\\1|\\&>" t nil "xxfooBARyy" 2))
+             (progn (string-match "\\(foo\\)\\(BAR\\)" "xxfooBARyy")
+                    (replace-match "<\\&>" t nil "xxfooBARyy"))
+             (progn (string-match "\\(FOO\\)" "FOO")
+                    (replace-match "baz" nil nil "FOO" 1))
+             (with-temp-buffer
+               (insert "xxfooBARyy")
+               (goto-char (point-min))
+               (re-search-forward "\\(foo\\)\\(BAR\\)")
+               (replace-match "<\\&>" t nil nil 2)
+               (buffer-string)))"#,
+    );
+    assert_eq!(
+        result,
+        r#"OK ("xxfoo<BAR>yy" "xxfoo<foo|BAR>yy" "xx<fooBAR>yy" "BAZ" "xxfoo<BAR>yy")"#
+    );
+}
