@@ -5,6 +5,14 @@
 (defvar native-presented-submission 0)
 (defvar native-presented-timer nil)
 
+(defun native-presented-enter-stage (stage receipt)
+  ;; A slow software compositor still owes one confirmed presentation for
+  ;; each transition. Time spent in earlier stages must not consume the
+  ;; restoration budget; the Rust harness separately bounds the whole run.
+  (setq native-presented-stage stage
+        native-presented-submission (plist-get receipt :submission)
+        native-presented-deadline (+ (float-time) 12)))
+
 (defun native-presented-receipt ()
   (let ((file (getenv "NEOMACS_GUI_PRESENTATION_RECEIPT")))
     (when (and file (file-exists-p file))
@@ -32,18 +40,15 @@
             (pcase native-presented-stage
               ('startup
                (when (= width 745)
-                 (setq native-presented-submission (plist-get receipt :submission)
-                       native-presented-stage 'resized)
+                 (native-presented-enter-stage 'resized receipt)
                  (set-frame-width nil 91)))
               ('resized
                (when (= width 844)
-                 (setq native-presented-submission (plist-get receipt :submission)
-                       native-presented-stage 'fullscreen)
+                 (native-presented-enter-stage 'fullscreen receipt)
                  (set-frame-parameter nil 'fullscreen 'fullboth)))
               ('fullscreen
                (when (= width 3840)
-                 (setq native-presented-submission (plist-get receipt :submission)
-                       native-presented-stage 'restored)
+                 (native-presented-enter-stage 'restored receipt)
                  (set-frame-parameter nil 'fullscreen nil)))
               ('restored
                (when (= width 844)

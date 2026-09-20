@@ -269,7 +269,9 @@ fn check_fixture_with_font(
     let result = plan
         .run_with(
             &mut ProcessGuiCommandRunner,
-            GuiRunOptions::with_timeout(Duration::from_secs(20)),
+            // The presentation fixture has four independently bounded 12s
+            // stages. Leave room for those plus startup/teardown at 8K.
+            GuiRunOptions::with_timeout(Duration::from_secs(60)),
         )
         .unwrap();
     assert!(!result.timed_out, "{result:#?}");
