@@ -171,7 +171,7 @@ pub fn copy_tree(source: &Path, destination: &Path) -> Result<(), String> {
     if meta.is_symlink() {
         let target = fs::read_link(source)
             .map_err(|error| format!("readlink {}: {error}", source.display()))?;
-        std::os::unix::fs::symlink(&target, destination).map_err(|error| {
+        symlink(&target, destination).map_err(|error| {
             format!(
                 "symlink {} -> {}: {error}",
                 destination.display(),
