@@ -3608,9 +3608,23 @@ impl WindowTree {
     /// shape that survives children becoming ids: a node is then reached by a
     /// lookup, and a lookup cannot be taken while a sibling is still borrowed.
     pub fn for_each_leaf_mut(&mut self, mut visit: impl FnMut(&mut Window)) {
-        for id in self.leaf_ids() {
-            if let Some(leaf) = self.find_mut(id) {
-                visit(leaf);
+        // Walk the tree once. `leaf_ids` built a vector of every id in the
+        // subtree, looked each one up to drop the internal ones, and then this
+        // looked every survivor up again -- three passes and an allocation for
+        // what is usually one window, on a path every buffer edit runs
+        // (`sync_window_positions_from_markers`).
+        let mut pending: smallvec::SmallVec<[WindowId; 8]> = smallvec::SmallVec::new();
+        pending.push(self.root);
+        while let Some(id) = pending.pop() {
+            let Some(node) = self.nodes.get_mut(&id) else {
+                continue;
+            };
+            match node {
+                Window::Leaf { .. } => visit(node),
+                // Reversed, so popping yields the children left to right and
+                // the leaves arrive in the same preorder `leaf_ids` produced
+                // -- the order in which a clone attaches its markers.
+                Window::Internal { children, .. } => pending.extend(children.iter().rev().copied()),
             }
         }
     }
