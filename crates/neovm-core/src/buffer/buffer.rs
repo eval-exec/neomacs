@@ -6070,6 +6070,14 @@ impl BufferManager {
         self.restore_buffer_emacs_byte_restriction(id, range)
     }
 
+    /// Whether any live buffer is indirect.
+    ///
+    /// `LiveBuffers` maintains this as a counter at its two mutation points,
+    /// so asking is a load and a compare rather than a walk over every buffer.
+    pub(in crate::buffer) fn any_indirect_buffer(&self) -> bool {
+        self.buffers.any_indirect()
+    }
+
     pub(in crate::buffer) fn buffers_sharing_root_ids(&self, root_id: BufferId) -> Vec<BufferId> {
         // With no indirect buffer alive a buffer shares its text with nobody,
         // so skip asking every buffer who its base is -- every text edit asks

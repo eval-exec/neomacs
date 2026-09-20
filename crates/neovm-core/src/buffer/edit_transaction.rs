@@ -919,11 +919,16 @@ impl BufferManager {
         &self,
         edited_id: BufferId,
     ) -> Option<SharedTextEditScope> {
+        // Liveness first, and unconditionally: a dead buffer still has no edit
+        // scope, which is what `?` says here and what callers rely on.
         let root_id = self.shared_text_root_id(edited_id)?;
-        Some(SharedTextEditScope::new(
+        if !self.any_indirect_buffer() {
+            return Some(SharedTextEditScope::Solo);
+        }
+        Some(SharedTextEditScope::Shared {
             edited_id,
-            self.buffers_sharing_root_ids(root_id),
-        ))
+            buffer_ids: self.buffers_sharing_root_ids(root_id),
+        })
     }
 
     fn shared_sibling_state_update(&self, sibling_id: BufferId) -> SharedBufferStateUpdate {
@@ -1704,24 +1709,35 @@ impl SharedTextEditMetadata {
 }
 
 #[derive(Clone, Debug)]
-pub(in crate::buffer) struct SharedTextEditScope {
-    edited_id: BufferId,
-    buffer_ids: Vec<BufferId>,
+pub(in crate::buffer) enum SharedTextEditScope {
+    /// No indirect buffer is alive, so the edited buffer shares its text with
+    /// nobody and every edit propagates to exactly zero siblings.
+    ///
+    /// This is the shape of nearly every session, and it used to cost a heap
+    /// allocation per edit: the scope held a one-element `Vec` containing the
+    /// edited buffer itself, which `siblings()` then filtered back out. GNU
+    /// pays nothing here at all -- its indirect buffers share one
+    /// `struct buffer_text` by pointer, so `insdel` has no propagation step.
+    Solo,
+    Shared {
+        edited_id: BufferId,
+        buffer_ids: Vec<BufferId>,
+    },
 }
 
 impl SharedTextEditScope {
-    pub(in crate::buffer) fn new(edited_id: BufferId, buffer_ids: Vec<BufferId>) -> Self {
-        Self {
-            edited_id,
-            buffer_ids,
-        }
-    }
-
     pub(in crate::buffer) fn siblings(&self) -> impl Iterator<Item = BufferId> + '_ {
-        self.buffer_ids
+        let (edited_id, buffer_ids) = match self {
+            Self::Solo => (None, [].as_slice()),
+            Self::Shared {
+                edited_id,
+                buffer_ids,
+            } => (Some(*edited_id), buffer_ids.as_slice()),
+        };
+        buffer_ids
             .iter()
             .copied()
-            .filter(|buffer_id| *buffer_id != self.edited_id)
+            .filter(move |buffer_id| Some(*buffer_id) != edited_id)
     }
 }
 
