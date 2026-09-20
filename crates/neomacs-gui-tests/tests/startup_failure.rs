@@ -398,21 +398,31 @@ fn run_with_pending_font(action: PendingFontAction) -> neomacs_gui_tests::GuiRun
 }
 
 #[test]
-// Prerequisites: requires a release binary and Weston.
+// Prerequisites: requires a release binary and a native graphical session.
 fn exit_during_lisp_startup_preserves_the_requested_status() {
     check_lisp_startup_exit_status(23);
 }
 
 #[test]
-// Prerequisites: requires a release binary and Weston.
+// Prerequisites: requires a release binary and a native graphical session.
 fn successful_exit_during_lisp_startup_remains_successful() {
     check_lisp_startup_exit_status(0);
+}
+
+fn startup_backend() -> GuiBackend {
+    if cfg!(target_os = "macos") {
+        GuiBackend::Macos
+    } else if cfg!(windows) {
+        GuiBackend::Windows
+    } else {
+        GuiBackend::LinuxWayland
+    }
 }
 
 fn check_lisp_startup_exit_status(status: i32) {
     let root = neomacs_infra::workspace_root();
     let artifacts = root.join("target/neomacs-gui-tests");
-    let backend = GuiBackend::LinuxWayland;
+    let backend = startup_backend();
     let session = DisplayHarness::for_backend(backend)
         .start_session(&artifacts)
         .unwrap();
@@ -448,13 +458,13 @@ fn check_lisp_startup_exit_status(status: i32) {
 }
 
 #[test]
-// Prerequisites: requires a release binary and Weston.
+// Prerequisites: requires a release binary and a native graphical session.
 fn evaluator_image_failure_exits_instead_of_waiting_for_initial_window() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let artifacts = root.join("target/neomacs-gui-tests");
     let missing_image = artifacts.join("startup-failure-intentionally-missing.pdump");
     assert!(!missing_image.exists(), "test requires an absent image");
-    let backend = GuiBackend::LinuxWayland;
+    let backend = startup_backend();
     let session = DisplayHarness::for_backend(backend)
         .start_session(&artifacts)
         .unwrap();
@@ -500,6 +510,7 @@ fn evaluator_image_failure_exits_instead_of_waiting_for_initial_window() {
     );
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 // Prerequisites: requires release binary/pdump, Fontconfig, and Weston.
 fn empty_native_font_catalog_reports_startup_failure_without_a_window() {
