@@ -1713,10 +1713,20 @@ impl Context {
 
         // --- src/charset.c: syms_of_charset ---
         // `charset-list' is a DEFVAR_LISP (the list of defined charsets), NOT a
-        // function -- GNU signals void-function for `(charset-list)'. Seed the
-        // variable so `boundp' agrees; the neomacs registry populates the
-        // ordered list separately.
-        obarray.set_symbol_value("charset-list", Value::NIL);
+        // function -- GNU signals void-function for `(charset-list)'. GNU
+        // defines five charsets in C before any Lisp runs, so they sit at the
+        // end of its list (newest first); `define-charset-internal' and
+        // `define-charset-alias' cons the rest onto the front, as GNU does.
+        obarray.set_symbol_value(
+            "charset-list",
+            Value::list(vec![
+                Value::symbol("eight-bit"),
+                Value::symbol("emacs"),
+                Value::symbol("unicode"),
+                Value::symbol("iso-8859-1"),
+                Value::symbol("ascii"),
+            ]),
+        );
         obarray.make_special("charset-list");
 
         // --- src/minibuf.c: read-buffer history ---

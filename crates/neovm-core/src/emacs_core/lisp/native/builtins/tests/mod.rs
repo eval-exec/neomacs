@@ -19168,3 +19168,30 @@ fn charset_codecs_round_trip_like_gnu_across_charsets() {
         "OK ((\"ascii only\" utf-8 (97 115 99 105 105 32 111 110 108 121) \"ascii only\" t) (\"ascii only\" latin-1 (97 115 99 105 105 32 111 110 108 121) \"ascii only\" t) (\"ascii only\" koi8-r (97 115 99 105 105 32 111 110 108 121) \"ascii only\" t) (\"ascii only\" euc-jp (97 115 99 105 105 32 111 110 108 121) \"ascii only\" t) (\"ascii only\" shift_jis (97 115 99 105 105 32 111 110 108 121) \"ascii only\" t) (\"ascii only\" iso-8859-5 (97 115 99 105 105 32 111 110 108 121) \"ascii only\" t) (\"ascii only\" windows-1251 (97 115 99 105 105 32 111 110 108 121) \"ascii only\" t) (\"Проверка кодировки\" utf-8 (208 159 209 128 208 190 208 178 208 181 209 128 208 186 208 176 32 208 186 208 190 208 180 208 184 209 128 208 190 208 178 208 186 208 184) \"Проверка кодировки\" t) (\"Проверка кодировки\" latin-1 (32 32 32 32 32 32 32 32 32 32 32 32 32 32 32 32 32 32) \"                  \" nil) (\"Проверка кодировки\" koi8-r (240 210 207 215 197 210 203 193 32 203 207 196 201 210 207 215 203 201) \"Проверка кодировки\" t) (\"Проверка кодировки\" euc-jp (167 177 167 226 167 224 167 211 167 214 167 226 167 220 167 209 32 167 220 167 224 167 213 167 218 167 226 167 224 167 211 167 220 167 218) \"Проверка кодировки\" t) (\"Проверка кодировки\" shift_jis (132 80 132 130 132 128 132 114 132 117 132 130 132 123 132 112 32 132 123 132 128 132 116 132 121 132 130 132 128 132 114 132 123 132 121) \"Проверка кодировки\" t) (\"Проверка кодировки\" iso-8859-5 (191 224 222 210 213 224 218 208 32 218 222 212 216 224 222 210 218 216) \"Проверка кодировки\" t) (\"Проверка кодировки\" windows-1251 (207 240 238 226 229 240 234 224 32 234 238 228 232 240 238 226 234 232) \"Проверка кодировки\" t) (\"日本語のテキスト\" utf-8 (230 151 165 230 156 172 232 170 158 227 129 174 227 131 134 227 130 173 227 130 185 227 131 136) \"日本語のテキスト\" t) (\"日本語のテキスト\" latin-1 (32 32 32 32 32 32 32 32) \"        \" nil) (\"日本語のテキスト\" koi8-r (32 32 32 32 32 32 32 32) \"        \" nil) (\"日本語のテキスト\" euc-jp (198 252 203 220 184 236 164 206 165 198 165 173 165 185 165 200) \"日本語のテキスト\" t) (\"日本語のテキスト\" shift_jis (147 250 150 123 140 234 130 204 131 101 131 76 131 88 131 103) \"日本語のテキスト\" t) (\"日本語のテキスト\" iso-8859-5 (32 32 32 32 32 32 32 32) \"        \" nil) (\"日本語のテキスト\" windows-1251 (32 32 32 32 32 32 32 32) \"        \" nil) (\"Grüße aus München\" utf-8 (71 114 195 188 195 159 101 32 97 117 115 32 77 195 188 110 99 104 101 110) \"Grüße aus München\" t) (\"Grüße aus München\" latin-1 (71 114 252 223 101 32 97 117 115 32 77 252 110 99 104 101 110) \"Grüße aus München\" t) (\"Grüße aus München\" koi8-r (71 114 32 32 101 32 97 117 115 32 77 32 110 99 104 101 110) \"Gr  e aus M nchen\" nil) (\"Grüße aus München\" euc-jp (71 114 143 171 228 143 169 206 101 32 97 117 115 32 77 143 171 228 110 99 104 101 110) \"Grüße aus München\" t) (\"Grüße aus München\" shift_jis (71 114 32 32 101 32 97 117 115 32 77 32 110 99 104 101 110) \"Gr  e aus M nchen\" nil) (\"Grüße aus München\" iso-8859-5 (71 114 32 32 101 32 97 117 115 32 77 32 110 99 104 101 110) \"Gr  e aus M nchen\" nil) (\"Grüße aus München\" windows-1251 (71 114 32 32 101 32 97 117 115 32 77 32 110 99 104 101 110) \"Gr  e aus M nchen\" nil) (\"\" utf-8 nil \"\" t) (\"\" latin-1 nil \"\" t) (\"\" koi8-r nil \"\" t) (\"\" euc-jp nil \"\" t) (\"\" shift_jis nil \"\" t) (\"\" iso-8859-5 nil \"\" t) (\"\" windows-1251 nil \"\" t) (decode-char koi8-r 32 32) (decode-char japanese-jisx0208 32 nil) (decode-char chinese-gb2312 32 nil) (decode-char korean-ksc5601 32 nil) (decode-char latin-iso8859-5 32 wrong-type-argument) (decode-char koi8-r 64 64) (decode-char japanese-jisx0208 64 nil) (decode-char chinese-gb2312 64 nil) (decode-char korean-ksc5601 64 nil) (decode-char latin-iso8859-5 64 wrong-type-argument) (decode-char koi8-r 128 9472) (decode-char japanese-jisx0208 128 nil) (decode-char chinese-gb2312 128 nil) (decode-char korean-ksc5601 128 nil) (decode-char latin-iso8859-5 128 wrong-type-argument) (decode-char koi8-r 200 1093) (decode-char japanese-jisx0208 200 nil) (decode-char chinese-gb2312 200 nil) (decode-char korean-ksc5601 200 nil) (decode-char latin-iso8859-5 200 wrong-type-argument) (decode-char koi8-r 8481 nil) (decode-char japanese-jisx0208 8481 12288) (decode-char chinese-gb2312 8481 12288) (decode-char korean-ksc5601 8481 12288) (decode-char latin-iso8859-5 8481 wrong-type-argument) (encode-char 97 (97 97 nil nil)) (encode-char 1076 (nil 196 10069 nil)) (encode-char 26085 (nil nil 18044 nil)) (encode-char 252 (nil nil nil 124)))"
     );
 }
+
+#[test]
+fn charset_list_holds_every_defined_charset_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // `charset-list' was nil: `define-charset-internal' and
+    // `define-charset-alias' never added to it, and the five charsets GNU
+    // defines in C before any Lisp runs were missing too. GNU conses each new
+    // name on the front, unconditionally -- so defining the same alias twice
+    // leaves two entries -- and its five built-ins sit at the end.
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r##"
+(list (length charset-list)
+      (seq-take charset-list 3)
+      (last charset-list 5)
+      (= (length charset-list) (length (delete-dups (copy-sequence charset-list))))
+      (and (memq 'koi8-r charset-list) t)
+      (progn (define-charset-alias 'probe-alias 'koi8-r)
+             (list (car charset-list) (length charset-list)))
+      (progn (define-charset-alias 'probe-alias 'koi8-r)
+             (length charset-list)))
+        "##,
+    );
+    assert_eq!(
+        result,
+        "OK (203 (chinese-cns11643-15 gb18030 gb18030-4-byte-ext-2) (eight-bit emacs unicode iso-8859-1 ascii) t t (probe-alias 204) 205)"
+    );
+}
