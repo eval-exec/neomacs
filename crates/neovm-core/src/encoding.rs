@@ -3051,8 +3051,18 @@ fn decode_via_charset_list(
         match decoded {
             // GNU annotates a run with the charset that decoded it, but ASCII
             // characters (`charset->id == charset_ascii`) carry no property.
+            //
+            // The test is on the CHARSET, never on the decoded character, and
+            // `CharsetRunBuilder::push` is where it lives (GNU's
+            // `charset->id != charset_ascii`, src/coding.c:5563). Testing
+            // `ch < 0x80` here instead asked a different question and got a
+            // different answer for every 8-bit charset: `iso-8859-2` decodes
+            // the byte `A` itself -- its code space is [0 255] -- so GNU's run
+            // covers position 0, while under `euc-jp` that byte really is
+            // decoded by charset `ascii` and GNU's run starts later. Both
+            // follow from handing the charset over and letting `push` decide.
             Some((charset, ch, consumed)) => {
-                let annotation = if ch < 0x80 { None } else { Some(charset) };
+                let annotation = Some(charset);
                 unit.take(consumed)?;
                 sink.push(ch as u32, annotation);
                 Ok(())

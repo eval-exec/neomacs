@@ -2586,3 +2586,48 @@ fn a_lone_trailing_lead_byte_refutes_big5_and_sjis_in_a_last_block() {
         )
     );
 }
+
+/// Which charset a decoded run is annotated with is decided by the CHARSET
+/// that decoded it (`charset->id != charset_ascii`, src/coding.c:5563), never
+/// by the value of the decoded character.
+///
+/// The two questions give different answers whenever an 8-bit charset decodes
+/// an ASCII byte itself: `iso-8859-2`'s code space is [0 255], so GNU's run
+/// covers position 0, and we used to leave that position bare because the
+/// character happened to be < 0x80. The last two rows are the control -- a
+/// coding system that really does carry `ascii` in its `:charset-list`, where
+/// the run must still start later -- and the eight-bit raw byte in the final
+/// row must EXTEND the run rather than split it.
+///
+/// Expectations measured under GNU Emacs 31.1 running this test's own program
+/// (`tmp/rr/d1a-pin.el`).
+#[test]
+fn a_decoded_run_is_annotated_from_its_charset_not_its_character_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"(let ((probe (lambda (cs bytes)
+                          (let ((s (decode-coding-string
+                                    (apply #'unibyte-string bytes) cs)))
+                            (cons (append s nil)
+                                  (mapcar (lambda (i) (get-text-property i 'charset s))
+                                          (number-sequence 0 (1- (length s)))))))))
+             (list
+              (funcall probe 'iso-8859-2 '(?A #xc0 ?B))
+              (funcall probe 'windows-1252 '(?A #xc0 ?B))
+              (funcall probe 'iso-8859-7 '(?A #xe1 ?B))
+              (funcall probe 'chinese-gbk '(?A #xd2 #xbb ?B))
+              (funcall probe 'chinese-gbk '(#xd2 #xbb #x80 #xd2 #xbb))))"#,
+    );
+
+    assert_eq!(
+        result,
+        concat!(
+            "OK (",
+            "((65 340 66) iso-8859-2 iso-8859-2 iso-8859-2) ",
+            "((65 192 66) windows-1252 windows-1252 windows-1252) ",
+            "((65 945 66) iso-8859-7 iso-8859-7 iso-8859-7) ",
+            "((65 19968 66) nil chinese-gbk chinese-gbk) ",
+            "((19968 4194176 19968) chinese-gbk chinese-gbk chinese-gbk))",
+        )
+    );
+}
