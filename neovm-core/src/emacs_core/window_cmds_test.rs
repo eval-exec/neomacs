@@ -4617,6 +4617,44 @@ fn frame_builtins_accept_frame_handle_values() {
 }
 
 #[test]
+fn frame_initial_p_accepts_terminal_object_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new();
+    let buf = ev.buffers.create_buffer("*scratch*");
+    ev.buffers.set_current(buf);
+
+    // The bootstrap initial terminal (id 0) is GNU's `output_initial`.
+    let initial_terminal = crate::emacs_core::terminal::pure::terminal_handle_value_for_id(
+        crate::emacs_core::terminal::pure::TERMINAL_ID,
+    )
+    .expect("initial terminal");
+    assert_eq!(
+        super::builtin_frame_initial_p(&mut ev, vec![initial_terminal]).unwrap(),
+        Value::T,
+        "initial terminal should satisfy frame-initial-p (xt-mouse.el passes terminals)"
+    );
+
+    // A live secondary tty is a terminal but not the initial one.
+    crate::emacs_core::terminal::pure::ensure_terminal_runtime_owner(
+        7,
+        "tty-7",
+        crate::emacs_core::terminal::pure::TerminalRuntimeConfig::interactive(
+            Some("xterm-256color".to_string()),
+            256,
+        ),
+    );
+    let secondary =
+        crate::emacs_core::terminal::pure::terminal_handle_value_for_id(7).expect("terminal 7");
+    assert_eq!(
+        super::builtin_frame_initial_p(&mut ev, vec![secondary]).unwrap(),
+        Value::NIL
+    );
+
+    // Non-frame, non-terminal values still signal wrong-type-argument.
+    assert!(super::builtin_frame_initial_p(&mut ev, vec![Value::symbol("nonsense")]).is_err());
+}
+
+#[test]
 fn select_frame_switches_active_kboard_to_frame_terminal() {
     crate::test_utils::init_test_tracing();
     let mut ev = Context::new();

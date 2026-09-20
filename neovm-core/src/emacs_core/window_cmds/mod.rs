@@ -8226,14 +8226,34 @@ pub(crate) fn builtin_frame_live_p(
 /// window-system frame is installed. `resolve_frame_id_in_state` only yields the
 /// id of a live frame, so the remaining `frame.initial` check completes GNU's
 /// `FRAME_LIVE_P (f) && FRAME_INITIAL_P (f)` test.
+///
+/// GNU also accepts a terminal object: `t->type == output_initial` is t. In
+/// Neomacs that is the bootstrap initial terminal (`TERMINAL_ID`), so when the
+/// argument is a terminal handle rather than a frame we resolve the terminal id
+/// and compare it instead of signaling `wrong-type-argument`.
 pub(crate) fn builtin_frame_initial_p(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
-    let fid = resolve_frame_id(eval, args.first(), "frame-initial-p")?;
-    Ok(Value::bool_val(
-        eval.frames.get(fid).is_some_and(|f| f.initial),
-    ))
+    match resolve_frame_id(eval, args.first(), "frame-initial-p") {
+        Ok(fid) => Ok(Value::bool_val(
+            eval.frames.get(fid).is_some_and(|f| f.initial),
+        )),
+        Err(flow) => {
+            // FRAMEP failed. GNU falls through to `decode_terminal (frame)` and
+            // reports `t->type == output_initial`, i.e. the bootstrap initial
+            // terminal. Terminal handles are only produced for real terminals,
+            // so `terminal_handle_id` cannot alias a frame object.
+            if let Some(arg) = args.first() {
+                if let Some(id) = crate::emacs_core::terminal::pure::terminal_handle_id(arg) {
+                    return Ok(Value::bool_val(
+                        id == crate::emacs_core::terminal::pure::TERMINAL_ID,
+                    ));
+                }
+            }
+            Err(flow)
+        }
+    }
 }
 
 // ===========================================================================
