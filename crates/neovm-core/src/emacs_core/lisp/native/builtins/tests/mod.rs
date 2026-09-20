@@ -18865,3 +18865,58 @@ fn sort_answers_like_gnu_for_every_predicate_shape() {
         )
     );
 }
+
+#[test]
+fn searches_after_an_edit_answer_like_gnu_from_the_narrowed_slice() {
+    crate::test_utils::init_test_tracing();
+    // A forward search and `looking-at' read from the character before point
+    // rather than from the region start, so that an edit loop stops moving
+    // the gap.  Everything that consults what precedes the search start has
+    // to survive that: `^', `\`', `\b', `\B', `\<', `\=', a narrowed
+    // region whose start is not the buffer start, and multibyte text.  The
+    // edit in each case (insert then delete) parks the gap at point, which
+    // is what the narrowed slice is for.
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r##"
+        (list
+  ;; A replace loop: the gap ends up at point on every iteration.
+  (with-temp-buffer
+    (dotimes (_ 4) (insert "the fox ate\n"))
+    (goto-char (point-min))
+    (let ((k 0))
+      (while (re-search-forward "\\bfox\\b" nil t) (replace-match "cat") (setq k (1+ k)))
+      (list k (buffer-string))))
+  ;; `^' and `\`' right where the gap now sits.
+  (with-temp-buffer
+    (insert "abc\ndef\nghi\n") (goto-char 5) (insert "Q") (delete-char -1)
+    (list (and (looking-at "^") t) (and (looking-at "\\`") t) (and (looking-at "\\<") t)
+          (and (looking-at "\\bd") t) (and (looking-at "\\Bd") t)
+          (re-search-forward "^g" nil t) (match-beginning 0)))
+  ;; Mid-line: `^' must fail, `\B' must hold.
+  (with-temp-buffer
+    (insert "abc\ndef\n") (goto-char 6) (insert "Q") (delete-char -1)
+    (list (and (looking-at "^") t) (and (looking-at "\\B") t) (and (looking-at "\\b") t)
+          (and (looking-at "e") t)))
+  ;; Narrowed: the region start is not the buffer start.
+  (with-temp-buffer
+    (insert "abc\ndef\nghi\n") (narrow-to-region 5 12) (goto-char 5)
+    (insert "Q") (delete-char -1)
+    (list (and (looking-at "\\`") t) (and (looking-at "^") t)
+          (re-search-forward "\\`d" nil t) (point-min) (point-max)))
+  ;; Multibyte, with the gap parked one character in.
+  (with-temp-buffer
+    (insert "λμν ξοπ\nρστ\n") (goto-char 2) (insert "Q") (delete-char -1)
+    (list (and (looking-at "\\bμ") t) (and (looking-at "\\Bμ") t)
+          (re-search-forward "ξ" nil t) (match-beginning 0)
+          (progn (goto-char (point-min)) (re-search-forward "^ρ" nil t))))
+  ;; `\=' (point) after an edit.
+  (with-temp-buffer
+    (insert "one two\n") (goto-char 5) (insert "Q") (delete-char -1)
+    (list (and (looking-at "\\=t") t) (re-search-forward "\\=two" nil t))))
+        "##,
+    );
+    assert_eq!(
+        result,
+        "OK ((4 \"the cat ate\nthe cat ate\nthe cat ate\nthe cat ate\n\") (t nil t t nil 10 9) (nil t nil t) (t t 6 5 12) (nil t 6 5 10) (t 8))"
+    );
+}
