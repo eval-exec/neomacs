@@ -653,6 +653,60 @@ fn hash_table_user_keys_equal(
     hash_table_user_defined_call(eval, table, cmp_function, args)
 }
 
+/// The user-defined hash of a key already stored in TABLE, asking the user's
+/// function only the first time.
+///
+/// GNU keeps every key's hash in the table and compares integers; ours had to
+/// call the user's Lisp hash function once per candidate, so a lookup cost one
+/// Lisp call per entry and grew with the table. Recording the answer makes a
+/// lookup one call plus integer compares.
+fn hash_table_stored_user_hash(
+    eval: &mut super::eval::Context,
+    table: Value,
+    hash_function: Value,
+    stored_key: &HashKey,
+    candidate: Value,
+) -> Result<Value, Flow> {
+    if let Some(cached) = table
+        .as_hash_table()
+        .and_then(|ht| ht.data.user_hash(stored_key))
+    {
+        return Ok(Value::fixnum(cached));
+    }
+    let hash = hash_table_user_hash(eval, table, hash_function, candidate)?;
+    if let Some(bits) = hash.as_fixnum() {
+        let key = stored_key.clone();
+        let _ = table.with_hash_table_mut(|ht| ht.data.set_user_hash(key, bits));
+    }
+    Ok(hash)
+}
+
+/// The stored keys whose remembered hash equals WANTED, or `None` when some
+/// live key has never been hashed.
+///
+/// With every hash remembered, a lookup needs no snapshot of the table and no
+/// clone of it: the keys that could match are found by comparing integers, and
+/// only those few are handed to the user's equality function. The first
+/// lookup after a key is stored still takes the slow path below, which is what
+/// fills this in.
+fn user_test_candidates_by_hash(table: Value, wanted: i64) -> (Vec<(HashKey, Value)>, bool) {
+    let Some(ht) = table.as_hash_table() else {
+        return (Vec::new(), true);
+    };
+    let mut candidates = Vec::new();
+    let mut unknown = false;
+    for key in ht.data.live_hash_keys_in_slot_order() {
+        match ht.data.user_hash(key) {
+            Some(hash) if hash == wanted => {
+                candidates.push((key.clone(), hash_key_to_visible_value(ht, key)));
+            }
+            Some(_) => {}
+            None => unknown = true,
+        }
+    }
+    (candidates, unknown)
+}
+
 fn builtin_gethash_user_defined(
     eval: &mut super::eval::Context,
     key_value: Value,
@@ -666,17 +720,54 @@ fn builtin_gethash_user_defined(
     let Some((cmp_function, hash_function)) = table_user_defined_test(ht_ref) else {
         return Ok(None);
     };
+    let wanted = hash_table_user_hash(eval, table, hash_function, key_value)?;
+    if let Some(wanted_bits) = wanted.as_fixnum() {
+        // Whatever hashes are already remembered answer without cloning the
+        // table or rooting a copy of every entry: only the keys that hash
+        // alike reach the user's equality function. A key first seen here has
+        // no remembered hash, so a miss among these falls through to the walk
+        // below, which records one as it goes.
+        let (candidates, unknown) = user_test_candidates_by_hash(table, wanted_bits);
+        if !candidates.is_empty() {
+            let root_scope = eval.save_specpdl_roots();
+            for (_, candidate) in &candidates {
+                eval.push_specpdl_root(*candidate);
+            }
+            let matched = (|| -> Result<Option<Value>, Flow> {
+                for (key, candidate) in &candidates {
+                    if hash_table_user_keys_equal(eval, table, cmp_function, key_value, *candidate)?
+                        .is_truthy()
+                    {
+                        return Ok(table
+                            .as_hash_table()
+                            .and_then(|ht| ht.data.get(key).copied()));
+                    }
+                }
+                Ok(None)
+            })();
+            eval.restore_specpdl_roots(root_scope);
+            let matched = matched?;
+            if matched.is_some() || !unknown {
+                return Ok(Some(matched.unwrap_or(default)));
+            }
+        } else if !unknown {
+            return Ok(Some(default));
+        }
+    }
+
     let ht = ht_ref.clone();
     let root_scope = eval.save_specpdl_roots();
     eval.push_specpdl_root(hash_snapshot_root_holder(&ht));
     let result = (|| -> Result<Option<Value>, Flow> {
-        let wanted_hash = hash_table_user_hash(eval, table, hash_function, key_value)?;
+        let wanted_hash = wanted;
         for key in ht.live_hash_keys_in_slot_order() {
             if !ht.data.contains_key(key) {
                 continue;
             }
             let candidate = hash_key_to_visible_value(&ht, key);
-            if hash_table_user_hash(eval, table, hash_function, candidate)? != wanted_hash {
+            if hash_table_stored_user_hash(eval, table, hash_function, key, candidate)?
+                != wanted_hash
+            {
                 continue;
             }
             if hash_table_user_keys_equal(eval, table, cmp_function, key_value, candidate)?
@@ -771,17 +862,57 @@ fn builtin_puthash_user_defined(
     let Some((cmp_function, hash_function)) = table_user_defined_test(ht_ref) else {
         return Ok(None);
     };
+    let wanted = hash_table_user_hash(eval, table, hash_function, key_value)?;
+    // As in the lookup: the hashes already remembered decide which stored keys
+    // can match, without cloning the table or rooting a copy of every entry.
+    if let Some(wanted_bits) = wanted.as_fixnum() {
+        let (candidates, unknown) = user_test_candidates_by_hash(table, wanted_bits);
+        let root_scope = eval.save_specpdl_roots();
+        for (_, candidate) in &candidates {
+            eval.push_specpdl_root(*candidate);
+        }
+        let matched = (|| -> Result<Option<HashKey>, Flow> {
+            for (key, candidate) in &candidates {
+                if hash_table_user_keys_equal(eval, table, cmp_function, key_value, *candidate)?
+                    .is_truthy()
+                {
+                    return Ok(Some(key.clone()));
+                }
+            }
+            Ok(None)
+        })();
+        eval.restore_specpdl_roots(root_scope);
+        let matched = matched?;
+        if matched.is_some() || !unknown {
+            let storage_key = matched.unwrap_or_else(|| key_value.to_hash_key(&HashTableTest::Eq));
+            let _ = table.with_hash_table_mut(|ht| {
+                if let Some(slot) = ht.data.get_mut(&storage_key) {
+                    *slot = value;
+                } else {
+                    maybe_resize_hash_table_for_insert(ht, true);
+                    ht.insert(storage_key.clone(), key_value, value);
+                }
+                // Remember the new key's hash, so a later lookup finds it
+                // without asking the user's function again.
+                ht.data.set_user_hash(storage_key, wanted_bits);
+            });
+            return Ok(Some(()));
+        }
+    }
+
     let ht_snapshot = ht_ref.clone();
     let root_scope = eval.save_specpdl_roots();
     eval.push_specpdl_root(hash_snapshot_root_holder(&ht_snapshot));
     let existing_key = (|| -> Result<Option<HashKey>, Flow> {
-        let wanted_hash = hash_table_user_hash(eval, table, hash_function, key_value)?;
+        let wanted_hash = wanted;
         for key in ht_snapshot.live_hash_keys_in_slot_order() {
             if !ht_snapshot.data.contains_key(key) {
                 continue;
             }
             let candidate = hash_key_to_visible_value(&ht_snapshot, key);
-            if hash_table_user_hash(eval, table, hash_function, candidate)? != wanted_hash {
+            if hash_table_stored_user_hash(eval, table, hash_function, key, candidate)?
+                != wanted_hash
+            {
                 continue;
             }
             if hash_table_user_keys_equal(eval, table, cmp_function, key_value, candidate)?
@@ -887,7 +1018,9 @@ fn builtin_remhash_user_defined(
                 continue;
             }
             let candidate = hash_key_to_visible_value(&ht_snapshot, key);
-            if hash_table_user_hash(eval, table, hash_function, candidate)? != wanted_hash {
+            if hash_table_stored_user_hash(eval, table, hash_function, key, candidate)?
+                != wanted_hash
+            {
                 continue;
             }
             if hash_table_user_keys_equal(eval, table, cmp_function, key_value, candidate)?

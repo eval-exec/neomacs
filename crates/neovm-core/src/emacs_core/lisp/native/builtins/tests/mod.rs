@@ -19195,3 +19195,47 @@ fn charset_list_holds_every_defined_charset_like_gnu() {
         "OK (203 (chinese-cns11643-15 gb18030 gb18030-4-byte-ext-2) (eight-bit emacs unicode iso-8859-1 ascii) t t (probe-alias 204) 205)"
     );
 }
+
+#[test]
+fn a_user_defined_hash_table_test_answers_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // A table made by `define-hash-table-test' remembers what the user's hash
+    // function said about each stored key, so a lookup compares integers and
+    // hands only the keys that hash alike to the user's equality function.
+    // Every answer has to stay GNU's: a case-insensitive test finding a key
+    // stored under different case, `puthash' UPDATING such a key rather than
+    // adding one, `remhash', `clrhash', reuse after clearing, and a second
+    // round of inserts that must all update.
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r##"
+(progn
+  (define-hash-table-test 'ci-test
+    (lambda (a b) (string= (downcase a) (downcase b)))
+    (lambda (k) (sxhash-equal (downcase k))))
+  (let ((h (make-hash-table :test 'ci-test)) (out nil))
+    (puthash "Foo" 1 h) (puthash "BAR" 2 h)
+    (push (list (gethash "foo" h) (gethash "FOO" h) (gethash "Bar" h) (gethash "nope" h)) out)
+    (puthash "fOo" 10 h)
+    (push (list (hash-table-count h) (gethash "FOO" h)) out)
+    (remhash "bar" h)
+    (push (list (hash-table-count h) (gethash "BAR" h) (gethash "foo" h)) out)
+    (puthash "baz" 3 h)
+    (push (list (hash-table-count h) (gethash "BAZ" h)) out)
+    (push (sort (let (ks) (maphash (lambda (k _v) (push k ks)) h) ks) #'string<) out)
+    (clrhash h)
+    (push (list (hash-table-count h) (gethash "foo" h)) out)
+    (puthash "again" 7 h)
+    (push (list (hash-table-count h) (gethash "AGAIN" h)) out)
+    (let ((c (make-hash-table :test 'ci-test)))
+      (dotimes (i 5) (puthash (format "K%d" i) i c))
+      (push (list (hash-table-count c) (gethash "k3" c) (gethash "K0" c) (gethash "zz" c)) out)
+      (dotimes (i 5) (puthash (format "k%d" i) (* 10 i) c))
+      (push (list (hash-table-count c) (gethash "K4" c)) out))
+    (nreverse out)))
+        "##,
+    );
+    assert_eq!(
+        result,
+        "OK ((1 1 2 nil) (2 10) (1 nil 10) (2 3) (\"Foo\" \"baz\") (0 nil) (1 7) (5 3 0 nil) (5 40))"
+    );
+}

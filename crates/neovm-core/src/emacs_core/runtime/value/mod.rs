@@ -705,6 +705,16 @@ pub struct HashTableStorage {
     index: HashIndex,
     slots: Vec<Option<HashTableEntry>>,
     free_slots: Vec<usize>,
+    /// What the table's user-defined hash function last answered for each
+    /// stored key.
+    ///
+    /// A table made by `define-hash-table-test` is keyed by identity here, so
+    /// a lookup has to ask which stored key the wanted one matches. Asking the
+    /// user's HASH function per candidate meant one Lisp call per entry --
+    /// GNU stores each key's hash and compares integers, which is why its
+    /// lookup is flat where ours grew with the table. Stale entries (for keys
+    /// since removed) are harmless: only keys still in the index are consulted.
+    user_hashes: rustc_hash::FxHashMap<HashKey, i64>,
     /// Dump entries not yet hydrated into `index`/`slots` (GNU pdumper's
     /// hash_rehash_needed, lazily: most loaded tables are never touched at
     /// startup, so the loader parks decoded entries here and the FIRST
@@ -762,6 +772,7 @@ impl HashTableStorage {
             index: HashIndex::with_capacity_and_hasher(capacity, Default::default()),
             slots: Vec::with_capacity(capacity),
             free_slots: Vec::new(),
+            user_hashes: rustc_hash::FxHashMap::default(),
             pending: None,
         }
     }
@@ -1001,6 +1012,18 @@ impl HashTableStorage {
         self.index.clear();
         self.slots.clear();
         self.free_slots.clear();
+        self.user_hashes.clear();
+    }
+
+    /// What the user-defined hash function answered for `key`, if it has been
+    /// asked since the key was stored.
+    pub fn user_hash(&self, key: &HashKey) -> Option<i64> {
+        self.user_hashes.get(key).copied()
+    }
+
+    /// Remember what the user-defined hash function answered for `key`.
+    pub fn set_user_hash(&mut self, key: HashKey, hash: i64) {
+        self.user_hashes.insert(key, hash);
     }
 
     pub fn reserve(&mut self, additional: usize) {
