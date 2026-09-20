@@ -74,8 +74,8 @@ fn parse_hex_range(value: &str) -> Option<(i64, i64)> {
 
 fn parse_charset_map_file(path: &Path, info: &CharsetInfo) -> Option<CharsetMapData> {
     let text = std::fs::read_to_string(path).ok()?;
-    let mut code_to_char = HashMap::new();
-    let mut char_to_code = HashMap::new();
+    let mut code_to_char = rustc_hash::FxHashMap::default();
+    let mut char_to_code = rustc_hash::FxHashMap::default();
 
     for line in text.lines() {
         let line = line.trim();
@@ -126,7 +126,44 @@ fn parse_charset_map_file(path: &Path, info: &CharsetInfo) -> Option<CharsetMapD
 /// Load (and cache) the code↔char tables of a charset `.map` file.  The owning
 /// `info` supplies the code-space used to convert the map's code points to
 /// linear indices (GNU `CODE_POINT_TO_INDEX`), so it is part of the cache key.
+/// One resolved charset map, remembered per charset.
+struct CharsetMapMemo {
+    map_name: String,
+    code_space: [i64; 8],
+    min_code: i64,
+    map: Option<Arc<CharsetMapData>>,
+}
+
+thread_local! {
+    /// The map each charset last resolved to, indexed by charset id.
+    ///
+    /// Decoding or encoding a string asks for the same few charset maps once
+    /// per character, and the global cache's key OWNS its name: every
+    /// character allocated a `String`, hashed it with SipHash and probed a
+    /// map -- 848 of the 1,450 instructions a KOI8-R character cost, against
+    /// GNU's table lookup. Charset ids are small and dense, so one slot each
+    /// keeps the lookup an index. A single-entry memo would thrash: encoding
+    /// Shift_JIS alternates between three charsets per line.
+    static CHARSET_MAP_MEMO: std::cell::RefCell<Vec<Option<CharsetMapMemo>>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn memoized_charset_map(map_name: &str, info: &CharsetInfo) -> Option<Option<Arc<CharsetMapData>>> {
+    let index = usize::try_from(info.id).ok()?;
+    CHARSET_MAP_MEMO.with(|memo| {
+        let memo = memo.borrow();
+        let entry = memo.get(index)?.as_ref()?;
+        (entry.map_name == map_name
+            && entry.code_space == info.code_space
+            && entry.min_code == info.min_code)
+            .then(|| entry.map.clone())
+    })
+}
+
 fn load_charset_map(map_name: &str, info: &CharsetInfo) -> Option<Arc<CharsetMapData>> {
+    if let Some(hit) = memoized_charset_map(map_name, info) {
+        return hit;
+    }
     let key = CharsetMapCacheKey {
         map_name: map_name.to_string(),
         code_space: info.code_space,
@@ -135,7 +172,9 @@ fn load_charset_map(map_name: &str, info: &CharsetInfo) -> Option<Arc<CharsetMap
     if let Ok(cache) = charset_map_cache().read()
         && let Some(cached) = cache.get(&key)
     {
-        return cached.clone();
+        let cached = cached.clone();
+        remember_charset_map(map_name, info, &cached);
+        return cached;
     }
 
     let loaded = parse_charset_map_file(&charset_map_dir().join(format!("{map_name}.map")), info)
@@ -143,7 +182,31 @@ fn load_charset_map(map_name: &str, info: &CharsetInfo) -> Option<Arc<CharsetMap
     if let Ok(mut cache) = charset_map_cache().write() {
         cache.insert(key, loaded.clone());
     }
+    remember_charset_map(map_name, info, &loaded);
     loaded
+}
+
+fn remember_charset_map(map_name: &str, info: &CharsetInfo, map: &Option<Arc<CharsetMapData>>) {
+    let Ok(index) = usize::try_from(info.id) else {
+        return;
+    };
+    // A charset id indexes the registry, so this stays as small as the number
+    // of charsets ever defined.
+    if index > 4096 {
+        return;
+    }
+    CHARSET_MAP_MEMO.with(|memo| {
+        let mut memo = memo.borrow_mut();
+        if memo.len() <= index {
+            memo.resize_with(index + 1, || None);
+        }
+        memo[index] = Some(CharsetMapMemo {
+            map_name: map_name.to_string(),
+            code_space: info.code_space,
+            min_code: info.min_code,
+            map: map.clone(),
+        });
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -173,8 +236,11 @@ pub(crate) enum CharsetMethodSnapshot {
 
 #[derive(Clone, Debug)]
 struct CharsetMapData {
-    code_to_char: HashMap<i64, i64>,
-    char_to_code: HashMap<i64, i64>,
+    // Keyed by code point and character code -- small integers, hashed once
+    // per decoded or encoded character. SipHash's mixing is for adversarial
+    // keys; these are dense and internal.
+    code_to_char: rustc_hash::FxHashMap<i64, i64>,
+    char_to_code: rustc_hash::FxHashMap<i64, i64>,
 }
 
 #[derive(Clone, Debug)]
