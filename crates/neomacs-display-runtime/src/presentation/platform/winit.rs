@@ -102,10 +102,21 @@ fn native_positioner(placement: PopupPlacement) -> WindowPositioner {
                 | WindowConstraintAdjustment::RESIZE_Y
         }
         PopupConstraintPolicy::FlipAndShift { .. } => {
+            // Flip across the attachment axis only, matching the semantic
+            // placement resolver. Flipping a side-attached submenu vertically
+            // can align its bottom with the row and move its top above it.
+            let flip = match placement.preferred_side() {
+                PopupPreferredSide::Below | PopupPreferredSide::Above => {
+                    WindowConstraintAdjustment::FLIP_Y
+                }
+                PopupPreferredSide::Right | PopupPreferredSide::Left => {
+                    WindowConstraintAdjustment::FLIP_X
+                }
+                PopupPreferredSide::AtAnchor => WindowConstraintAdjustment::empty(),
+            };
             WindowConstraintAdjustment::SLIDE_X
                 | WindowConstraintAdjustment::SLIDE_Y
-                | WindowConstraintAdjustment::FLIP_X
-                | WindowConstraintAdjustment::FLIP_Y
+                | flip
                 | WindowConstraintAdjustment::RESIZE_Y
         }
     };

@@ -1458,8 +1458,14 @@ impl PopupMenuPosition {
     fn at(x: f32, y: f32) -> Self {
         Self {
             request_id: None,
-            placement: neomacs_display_protocol::PopupPlacement::at(
-                neomacs_display_protocol::Point::new(x, y),
+            // Lisp normalizes mouse events to ((X Y) WINDOW), so both event
+            // and coordinate forms need native menu constraints. The point
+            // is a preferred origin, not permission to extend offscreen.
+            placement: neomacs_display_protocol::PopupPlacement::new(
+                neomacs_display_protocol::Rect::new(x, y, 0.0, 0.0),
+                neomacs_display_protocol::PopupPreferredSide::AtAnchor,
+                neomacs_display_protocol::Point::ZERO,
+                neomacs_display_protocol::PopupConstraintPolicy::Shift { padding: 0.0 },
             ),
         }
     }
@@ -1594,7 +1600,7 @@ fn popup_menu_position(ctx: &mut Context, position: Value) -> PopupMenuPosition 
                 neomacs_display_protocol::PopupConstraintPolicy::FlipAndShift { padding: 4.0 },
             )
         } else {
-            neomacs_display_protocol::PopupPlacement::at(neomacs_display_protocol::Point::new(x, y))
+            PopupMenuPosition::at(x, y).placement
         };
         tracing::debug!(
             position = ?position_debug,

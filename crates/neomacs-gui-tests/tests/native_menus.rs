@@ -19,6 +19,11 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+#[path = "native_menus/interaction.rs"]
+mod interaction;
+#[path = "native_menus/popup_trace.rs"]
+mod popup_trace;
+
 struct OwnedChild(Child);
 impl Drop for OwnedChild {
     fn drop(&mut self) {
@@ -190,6 +195,14 @@ fn with_native_menu(
     fixture: &str,
     exercise: impl FnOnce(&[(String, String)], &str, &Ready, &Path, &mut OwnedChild, &mut OwnedChild),
 ) {
+    with_native_menu_at_scale(fixture, 1, exercise);
+}
+
+fn with_native_menu_at_scale(
+    fixture: &str,
+    scale: u32,
+    exercise: impl FnOnce(&[(String, String)], &str, &Ready, &Path, &mut OwnedChild, &mut OwnedChild),
+) {
     let root = neomacs_infra::workspace_root();
     let artifacts = root.join(format!(
         "tmp/neomacs-gui-tests/native-menu-{}-{}",
@@ -200,6 +213,10 @@ fn with_native_menu(
             .as_nanos()
     ));
     fs::create_dir_all(&artifacts).unwrap();
+    eprintln!(
+        "native menu fixture {fixture}, scale {scale}; artifacts: {}",
+        artifacts.display()
+    );
     fs::set_permissions(&artifacts, fs::Permissions::from_mode(0o700)).unwrap();
     // Keep the handle alive: this short alias avoids Unix socket path limits.
     let directory = fs::File::open(&artifacts).unwrap();
@@ -217,6 +234,7 @@ fn with_native_menu(
                 "--height=700",
                 "--socket=menu-test",
             ])
+            .arg(format!("--scale={scale}"))
             .envs(display.env().iter().map(|(k, v)| (k, v)))
             .env("XDG_RUNTIME_DIR", &runtime)
             .env_remove("WAYLAND_DISPLAY")
