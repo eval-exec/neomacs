@@ -19076,3 +19076,52 @@ fn an_insertion_inside_nested_overlays_grows_them_like_gnu() {
         "OK ((2 insert (((1 13) (5 10) (7 8) (9 9) (1 5) (10 13)) 2 \"0AB123456789\")) (2 insert-before-markers (((1 13) (5 10) (7 8) (9 9) (1 5) (10 13)) 2 \"0AB123456789\")) (4 insert (((1 13) (3 10) (7 8) (9 9) (1 3) (10 13)) 2 \"012AB3456789\")) (4 insert-before-markers (((1 13) (3 10) (7 8) (9 9) (1 3) (10 13)) 2 \"012AB3456789\")) (5 insert (((1 13) (3 10) (5 8) (9 9) (1 3) (10 13)) 3 \"0123AB456789\")) (5 insert-before-markers (((1 13) (3 10) (7 8) (9 9) (1 3) (10 13)) 2 \"0123AB456789\")) (7 insert (((1 13) (3 10) (5 6) (7 7) (1 3) (10 13)) 2 \"012345AB6789\")) (7 insert-before-markers (((1 13) (3 10) (5 6) (9 9) (1 3) (10 13)) 2 \"012345AB6789\")) (9 insert (((1 13) (3 8) (5 6) (7 7) (1 3) (8 13)) 2 \"01234567AB89\")) (9 insert-before-markers (((1 13) (3 8) (5 6) (7 7) (1 3) (8 13)) 2 \"01234567AB89\")) ((2 14 9 11) \"01zzzzz23456789\"))"
     );
 }
+
+#[test]
+fn a_deletion_inside_nested_overlays_shrinks_them_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // A deletion that falls strictly inside an overlay only pulls its end
+    // back, so that overlay keeps its place in the index. Every other shape
+    // -- a deletion starting at an overlay's start, ending at its end,
+    // swallowing it whole, or straddling a boundary -- still takes the
+    // detach-and-reattach path, and an in-place grow followed by an in-place
+    // shrink has to leave the same ranges GNU does.
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r##"
+(let ((rows nil))
+  (dolist (dstart '(2 3 4 5 6 8))
+    (dolist (dlen '(1 2 4))
+      (push (list dstart dlen
+                  (with-temp-buffer
+                    (insert "0123456789")
+                    (let ((outer (make-overlay 1 11))
+                          (mid (make-overlay 3 8))
+                          (inner (make-overlay 5 6))
+                          (empty (make-overlay 7 7))
+                          (left (make-overlay 1 4))
+                          (right (make-overlay 7 11)))
+                      (goto-char dstart)
+                      (when (<= (+ dstart dlen) (point-max)) (delete-char dlen))
+                      (list (mapcar (lambda (o) (list (overlay-start o) (overlay-end o)))
+                                    (list outer mid inner empty left right))
+                            (buffer-string)))))
+            rows)))
+  (push (with-temp-buffer
+          (insert "0123456789")
+          (let ((o (make-overlay 2 9)) (inner (make-overlay 4 6)))
+            (goto-char 5) (insert "XYZ")
+            (goto-char 5) (delete-char 2)
+            (goto-char 3) (insert "Q")
+            (goto-char 8) (delete-char 1)
+            (list (list (overlay-start o) (overlay-end o)
+                        (overlay-start inner) (overlay-end inner))
+                  (buffer-string))))
+        rows)
+  (nreverse rows))
+        "##,
+    );
+    assert_eq!(
+        result,
+        "OK ((2 1 (((1 10) (2 7) (4 5) (6 6) (1 3) (6 10)) \"023456789\")) (2 2 (((1 9) (2 6) (3 4) (5 5) (1 2) (5 9)) \"03456789\")) (2 4 (((1 7) (2 4) (2 2) (3 3) (1 2) (3 7)) \"056789\")) (3 1 (((1 10) (3 7) (4 5) (6 6) (1 3) (6 10)) \"013456789\")) (3 2 (((1 9) (3 6) (3 4) (5 5) (1 3) (5 9)) \"01456789\")) (3 4 (((1 7) (3 4) (3 3) (3 3) (1 3) (3 7)) \"016789\")) (4 1 (((1 10) (3 7) (4 5) (6 6) (1 4) (6 10)) \"012456789\")) (4 2 (((1 9) (3 6) (4 4) (5 5) (1 4) (5 9)) \"01256789\")) (4 4 (((1 7) (3 4) (4 4) (4 4) (1 4) (4 7)) \"012789\")) (5 1 (((1 10) (3 7) (5 5) (6 6) (1 4) (6 10)) \"012356789\")) (5 2 (((1 9) (3 6) (5 5) (5 5) (1 4) (5 9)) \"01236789\")) (5 4 (((1 7) (3 5) (5 5) (5 5) (1 4) (5 7)) \"012389\")) (6 1 (((1 10) (3 7) (5 6) (6 6) (1 4) (6 10)) \"012346789\")) (6 2 (((1 9) (3 6) (5 6) (6 6) (1 4) (6 9)) \"01234789\")) (6 4 (((1 7) (3 6) (5 6) (6 6) (1 4) (6 7)) \"012349\")) (8 1 (((1 10) (3 8) (5 6) (7 7) (1 4) (7 10)) \"012345689\")) (8 2 (((1 9) (3 8) (5 6) (7 7) (1 4) (7 9)) \"01234569\")) (8 4 (((1 11) (3 8) (5 6) (7 7) (1 4) (7 11)) \"0123456789\")) ((2 10 5 8) \"01Q23Z46789\"))"
+    );
+}

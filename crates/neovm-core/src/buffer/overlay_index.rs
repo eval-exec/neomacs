@@ -927,7 +927,42 @@ impl OverlayIndex {
         if range.is_empty() {
             return Vec::new();
         }
-        let exceptions = self.deletion_exceptions(range);
+        let mut exceptions = self.deletion_exceptions(range);
+        // As for an insertion: an overlay that strictly contains the whole
+        // deletion keeps its start and only pulls its end back, so it holds
+        // its place in the index. It cannot collapse either -- text remains
+        // on both sides of the deletion inside it -- so no evaporation can
+        // follow. Its end endpoint lies at or after the deletion's end and is
+        // moved by the shift below; only the interval record needs telling.
+        let delta = EmacsByteDelta::deletion(range.len());
+        let mut shrunk_effects = Vec::new();
+        exceptions.retain(|overlay| {
+            let Some(old) = self.range(*overlay) else {
+                return true;
+            };
+            if old.start() < range.start() && old.end() > range.end() {
+                shrunk_effects.push((*overlay, old));
+                false
+            } else {
+                true
+            }
+        });
+        if !shrunk_effects.is_empty() {
+            let mut intervals = self.intervals.write();
+            for (overlay, old) in &shrunk_effects {
+                let new_range = EmacsByteRange::new(old.start(), delta.apply_to_pos(old.end()));
+                intervals
+                    .update_end_preserving_order(*overlay, new_range)
+                    .expect("overlay containing the deletion is indexed");
+            }
+        }
+        let shrunk_effects: Vec<OverlayEditEffect> = shrunk_effects
+            .into_iter()
+            .map(|(overlay, old)| OverlayEditEffect::Resized {
+                overlay,
+                range: EmacsByteRange::new(old.start(), delta.apply_to_pos(old.end())),
+            })
+            .collect();
 
         let mut detached = Vec::with_capacity(exceptions.len());
         for overlay in exceptions {
@@ -936,7 +971,6 @@ impl OverlayIndex {
             }
         }
 
-        let delta = EmacsByteDelta::deletion(range.len());
         self.intervals
             .write()
             .shift_at_or_after(range.end(), true, delta);
@@ -944,7 +978,8 @@ impl OverlayIndex {
             endpoints.shift_at_or_after(range.end(), true, delta);
         }
 
-        let mut effects = Vec::with_capacity(detached.len());
+        let mut effects = shrunk_effects;
+        effects.reserve(detached.len());
         let mut evaporated = Vec::new();
         for (overlay, old_range, attachment_order) in detached {
             #[cfg(test)]
