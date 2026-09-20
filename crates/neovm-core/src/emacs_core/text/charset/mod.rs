@@ -1335,6 +1335,116 @@ pub(crate) fn charset_leading_byte(charset: SymId) -> Option<CharsetLeadingByte>
     })
 }
 
+/// A charset resolved ONCE, so decoding a string does not re-resolve it for
+/// every character.
+///
+/// GNU holds a `struct charset *` for the duration of a decode and indexes its
+/// decoder vector directly (`CODING_DECODE_CHAR`, src/charset.h:436-440). We
+/// went back through the thread-local registry per character: two
+/// `resolve_name` + map probes in `decode_char_from_bytes`, then the map memo
+/// check inside `decode_char`.
+///
+/// The fast body is deliberately narrow. It covers ONLY a `Map` charset with
+/// no unify map, which is the shape the 8-bit and 2-byte legacy codecs use,
+/// and it reproduces `CharsetRegistry::decode_char`'s order exactly for that
+/// shape: the ASCII short-circuit, then the code range, then the map. Every
+/// other shape -- `Offset`, `Subset`, `Superset`, and ANY unified charset,
+/// where a unify hit must win over the method -- keeps going through the
+/// registry, so there is one implementation of those rules and not two.
+pub(crate) struct CharsetDecoder {
+    /// Resolved name, used by the fallback body.
+    name: SymId,
+    dimension: usize,
+    fast: Option<FastCharsetDecode>,
+}
+
+struct FastCharsetDecode {
+    ascii_compatible_p: bool,
+    min_code: i64,
+    max_code: i64,
+    map: Arc<CharsetMapData>,
+}
+
+impl CharsetDecoder {
+    /// How many bytes one character of this charset occupies.
+    pub(crate) fn dimension(&self) -> usize {
+        self.dimension
+    }
+
+    /// Decode the code point at the front of `bytes`, answering the character
+    /// and how many bytes it consumed -- the same contract as
+    /// [`charset_decode_char_from_bytes`], which this replaces at call sites
+    /// that can resolve once.
+    pub(crate) fn decode_from_bytes(&self, bytes: &[u8]) -> Option<(i64, usize)> {
+        if bytes.len() < self.dimension {
+            return None;
+        }
+        let code = bytes[..self.dimension]
+            .iter()
+            .fold(0i64, |acc, &byte| (acc << 8) | i64::from(byte));
+        let ch = match &self.fast {
+            Some(fast) => {
+                if fast.ascii_compatible_p && (0..=0x7f).contains(&code) {
+                    code
+                } else if code < fast.min_code || code > fast.max_code {
+                    return None;
+                } else {
+                    fast.map.code_to_char.get(&code).copied()?
+                }
+            }
+            None => charset_decode_char(self.name, code)?,
+        };
+        Some((ch, self.dimension))
+    }
+}
+
+/// Resolve `charset` for decoding, or `None` on exactly the condition
+/// [`charset_leading_byte`] declines: the charset is not registered. Callers
+/// must treat `None` the same way, or a charset silently drops out of a
+/// coding system's candidate list and a different one claims its bytes.
+/// Every registered charset name, for the decoder equivalence sweep.
+#[cfg(test)]
+pub(crate) fn registered_charset_names() -> Vec<SymId> {
+    CHARSET_REGISTRY.with(|slot| slot.borrow().charsets.keys().copied().collect())
+}
+
+/// `(min_code, max_code, dimension)` for the sweep's range.
+#[cfg(test)]
+pub(crate) fn charset_code_bounds(charset: SymId) -> Option<(i64, i64, usize)> {
+    CHARSET_REGISTRY.with(|slot| {
+        let registry = slot.borrow();
+        let info = registry.charsets.get(&registry.resolve_name(charset))?;
+        Some((
+            info.min_code,
+            info.max_code,
+            info.dimension.clamp(1, 4) as usize,
+        ))
+    })
+}
+
+pub(crate) fn charset_decoder(charset: SymId) -> Option<CharsetDecoder> {
+    CHARSET_REGISTRY.with(|slot| {
+        let registry = slot.borrow();
+        let name = registry.resolve_name(charset);
+        let info = registry.charsets.get(&name)?;
+        let fast = match &info.method {
+            CharsetMethod::Map(map_name) if !info.unified_p => load_charset_map(map_name, info)
+                .map(|map| FastCharsetDecode {
+                    ascii_compatible_p: info.ascii_compatible_p,
+                    min_code: info.min_code,
+                    max_code: info.max_code,
+                    map,
+                }),
+            _ => None,
+        };
+        Some(CharsetDecoder {
+            name,
+            dimension: info.dimension.clamp(1, 4) as usize,
+            fast,
+        })
+    })
+}
+
 /// The charset's CANONICAL name -- what GNU publishes as the `charset` text
 /// property of a decoded run (`CHARSET_NAME`, src/coding.c:7257).
 ///

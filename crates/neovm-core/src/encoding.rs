@@ -3020,19 +3020,38 @@ fn decode_via_charset_list(
     charset_list: &[SymId],
     eol: DosEolLookahead,
 ) -> DecodedSource {
-    let mut leads: Vec<(SymId, crate::emacs_core::charset::CharsetLeadingByte)> = charset_list
+    // Resolve each candidate charset ONCE per call, decoder included. GNU
+    // holds a `struct charset *` for the whole decode and indexes its decoder
+    // vector (`CODING_DECODE_CHAR', src/charset.h:436-440); we used to go back
+    // through the thread-local registry for every character, twice over.
+    //
+    // `charset_decoder` declines only for an unregistered charset, which
+    // `charset_leading_byte` declines too, so requiring both drops exactly the
+    // charsets that were already dropped -- if it dropped more, a charset
+    // would silently leave the candidate list and another would claim its
+    // bytes.
+    //
+    // INVARIANT: nothing in the loop below runs Lisp, so a charset cannot be
+    // redefined underneath these. A sink callback that did would invalidate
+    // every decoder held here.
+    let mut leads: Vec<(
+        SymId,
+        crate::emacs_core::charset::CharsetLeadingByte,
+        crate::emacs_core::charset::CharsetDecoder,
+    )> = charset_list
         .iter()
         .filter_map(|&charset| {
             Some((
                 charset,
                 crate::emacs_core::charset::charset_leading_byte(charset)?,
+                crate::emacs_core::charset::charset_decoder(charset)?,
             ))
         })
         .collect();
     // GNU inserts each charset ahead of the first entry with a LARGER
     // dimension, so a byte's candidate list is ascending by dimension and ties
     // keep `:charset-list` order.  `sort_by_key` is stable, so this is that.
-    leads.sort_by_key(|(_, lead)| lead.dimension);
+    leads.sort_by_key(|(_, lead, _)| lead.dimension);
 
     decode_units(bytes, eol, |unit, sink| {
         let start = unit.pos;
@@ -3043,8 +3062,8 @@ fn decode_via_charset_list(
         let mut short = false;
         let decoded = leads
             .iter()
-            .filter(|(_, lead)| lead.accepts(leading))
-            .find_map(|&(charset, lead)| {
+            .filter(|(_, lead, _)| lead.accepts(leading))
+            .find_map(|(charset, lead, decoder)| {
                 if rest.len() < lead.dimension {
                     // `ONE_MORE_BYTE` would have jumped to `no_more_source`
                     // here -- but only for a charset this byte can begin,
@@ -3052,8 +3071,9 @@ fn decode_via_charset_list(
                     short = true;
                     return None;
                 }
-                crate::emacs_core::charset::charset_decode_char_from_bytes(charset, rest)
-                    .map(|(ch, consumed)| (charset, ch, consumed))
+                decoder
+                    .decode_from_bytes(rest)
+                    .map(|(ch, consumed)| (*charset, ch, consumed))
             });
         match decoded {
             // GNU annotates a run with the charset that decoded it, but ASCII

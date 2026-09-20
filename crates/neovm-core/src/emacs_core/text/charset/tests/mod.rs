@@ -1518,3 +1518,62 @@ fn char_charset_restriction_unknown_charset_errors() {
         "expected signal, got {r:?}"
     );
 }
+
+/// A [`CharsetDecoder`] resolved once must answer EXACTLY what the
+/// per-character registry path answers, for every registered charset and
+/// across each one's whole code range.
+///
+/// This is the only thing standing between "resolve once" and a silently
+/// different decoding: the fast body reimplements `decode_char`'s order (ASCII
+/// short-circuit, then range, then map) for the one shape it claims, and a
+/// reordering there would still compile and would still decode most text
+/// correctly. Charsets the fast body declines -- `Offset`, `Subset`,
+/// `Superset`, and any unified charset -- are swept too, because they must
+/// keep going through the registry rather than silently acquiring a fast body.
+#[test]
+fn a_resolved_charset_decoder_answers_exactly_like_the_registry() {
+    crate::test_utils::init_test_tracing();
+    // The charsets are defined during startup, so a bare registry holds only
+    // the handful built in. Boot the image first, in THIS thread, because the
+    // registry is thread-local.
+    let _booted = crate::test_utils::runtime_startup_context();
+    let mut swept = 0usize;
+    let mut charsets = 0usize;
+    for charset in super::registered_charset_names() {
+        let Some((min_code, max_code, dimension)) = super::charset_code_bounds(charset) else {
+            continue;
+        };
+        let Some(decoder) = super::charset_decoder(charset) else {
+            continue;
+        };
+        assert_eq!(decoder.dimension(), dimension, "dimension for {charset:?}");
+        charsets += 1;
+
+        // The whole range where it is small, otherwise both ends plus a stride
+        // through the middle, so a map hole cannot hide between samples.
+        let span = max_code.saturating_sub(min_code);
+        let step = if span <= 4096 { 1 } else { span / 4096 };
+        let mut code = min_code;
+        while code <= max_code {
+            let bytes: Vec<u8> = (0..dimension)
+                .rev()
+                .map(|i| ((code >> (8 * i)) & 0xff) as u8)
+                .collect();
+            assert_eq!(
+                decoder.decode_from_bytes(&bytes),
+                super::charset_decode_char_from_bytes(charset, &bytes),
+                "{charset:?} disagreed at code point {code:#x}"
+            );
+            swept += 1;
+            code = code.saturating_add(step.max(1));
+        }
+    }
+    assert!(
+        charsets > 100,
+        "expected the image's charsets, saw {charsets}"
+    );
+    assert!(
+        swept > 100_000,
+        "sweep was too small to mean anything: {swept}"
+    );
+}
