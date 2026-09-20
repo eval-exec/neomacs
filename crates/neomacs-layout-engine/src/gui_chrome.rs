@@ -220,12 +220,9 @@ impl MenuHeadingMetrics<'_> {
                 width: text.chars().count() as f32 * *width,
             },
             Self::Pixels { service, face } => {
-                use crate::font::metrics::{
-                    FontsetBaseFamily, PrimaryFontFamily, RealizedFaceFontSelection,
-                };
+                use crate::font::metrics::RealizedFaceFontSelection;
                 let selection = RealizedFaceFontSelection::new(
-                    PrimaryFontFamily::new(&face.font_family),
-                    FontsetBaseFamily::new(&face.fontset_base_family),
+                    &face.font_family,
                     face.font_weight,
                     face.italic,
                     face.font_size,

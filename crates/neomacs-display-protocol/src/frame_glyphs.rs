@@ -1501,7 +1501,6 @@ impl FrameGlyphBuffer {
             strike_through_color,
             box_color: None,
             font_family: font_family.to_string(),
-            fontset_base_family: None,
             font_size,
             font_weight,
             attributes: attrs,

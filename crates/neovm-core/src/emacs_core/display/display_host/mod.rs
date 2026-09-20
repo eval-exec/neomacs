@@ -120,18 +120,6 @@ pub struct TerminalCreateRequest {
     pub shell: Option<String>,
 }
 
-/// The two face/fontset inputs GNU keeps distinct after face realization.
-///
-/// `ascii_face` owns the explicitly merged font attributes used for ASCII.
-/// `fontset_base_face` owns the frame-local base fontset used to select a font
-/// for non-ASCII characters. An inline `:family` changes the former without
-/// silently replacing the latter (`xfaces.c:6277-6370`).
-#[derive(Clone, Debug)]
-pub struct RealizedFaceFontContext {
-    pub ascii_face: RuntimeFace,
-    pub fontset_base_face: RuntimeFace,
-}
-
 /// Typed request crossing from GNU-compatible face realization into the
 /// platform font host. Keeping it here makes the host boundary—not the Lisp
 /// evaluator—the owner of native font selection.
@@ -141,7 +129,8 @@ pub struct FontResolveRequest {
     /// Full GNU Emacs character domain, including raw-byte and non-Unicode
     /// codes. Backends explicitly decide which subset they can encode.
     pub character: crate::emacs_core::emacs_char::EmacsChar,
-    pub faces: RealizedFaceFontContext,
+    /// Fully merged face attributes; family-less fontset rules inherit this family.
+    pub face: RuntimeFace,
 }
 
 /// A finite, positive scalar used by point-size and relative-size requests.

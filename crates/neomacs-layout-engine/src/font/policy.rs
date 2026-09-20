@@ -7,6 +7,43 @@
 use neovm_core::emacs_core::fontset::{StoredFontSpec, repertory_target_ranges};
 use neovm_core::emacs_core::intern::resolve_sym;
 
+/// A fontset's explicit family constrains the search. Without one, GNU
+/// `font_find_for_lface` inherits the fully merged face family and may fall
+/// back outside it. Keeping these cases distinct prevents a frame-default
+/// family from masquerading as a fontset rule.
+pub(super) enum FontFamilySource<'a> {
+    Fontset(&'a str),
+    Face(&'a str),
+}
+
+impl<'a> FontFamilySource<'a> {
+    pub(super) fn for_spec(face_family: &'a str, spec: &StoredFontSpec) -> Self {
+        match spec.family {
+            Some(family) => Self::Fontset(resolve_sym(family)),
+            None => Self::Face(face_family),
+        }
+    }
+
+    pub(super) fn search_order(self, resolve: impl Fn(&str) -> String) -> Vec<Option<String>> {
+        match self {
+            Self::Fontset(family) => vec![Some(resolve(family))],
+            Self::Face("") => vec![None],
+            Self::Face(family) => {
+                let mut order = Vec::new();
+                for family in neovm_core::emacs_core::font::alternative_font_families(family) {
+                    let resolved = resolve(&family);
+                    if resolved != family {
+                        order.push(Some(resolved));
+                    }
+                    order.push(Some(family));
+                }
+                order.push(None);
+                order
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct LanguageTag(String);
 

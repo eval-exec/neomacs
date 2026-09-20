@@ -504,75 +504,31 @@ impl MetricsCacheKey {
     }
 }
 
-/// Primary family opened for the ASCII half of a realized face.
-#[derive(Clone, Copy, Debug)]
-pub struct PrimaryFontFamily<'a>(&'a str);
-
-impl<'a> PrimaryFontFamily<'a> {
-    pub const fn new(family: &'a str) -> Self {
-        Self(family)
-    }
-}
-
-/// Family from which the realized face's non-ASCII fontset is derived.
-#[derive(Clone, Copy, Debug)]
-pub struct FontsetBaseFamily<'a>(&'a str);
-
-impl<'a> FontsetBaseFamily<'a> {
-    pub const fn new(family: &'a str) -> Self {
-        Self(family)
-    }
-}
-
-/// One frame-realized face/fontset selection context.
+/// Effective face attributes after inheritance, inline faces, and buffer remapping.
 ///
-/// GNU keeps the ASCII face font and its derived fontset as different pieces
-/// of realized state. Carrying both in one type prevents character lookup
-/// from accidentally treating an inline `:family` as a replacement for the
-/// frame's base fontset. The family newtypes make swapping those inputs a
-/// compile-time error.
+/// GNU `font_find_for_lface` uses this family for both ASCII and family-less
+/// fontset rules. Explicit fontset families are resolved by `FontResolver`;
+/// a fontset is a collection of rules, not a second inherited family string.
 #[derive(Clone, Copy, Debug)]
 pub struct RealizedFaceFontSelection<'a> {
-    primary_family: &'a str,
-    fontset_base_family: &'a str,
+    family: &'a str,
     weight: u16,
     italic: bool,
     font_size: f32,
 }
 
 impl<'a> RealizedFaceFontSelection<'a> {
-    pub fn new(
-        primary_family: PrimaryFontFamily<'a>,
-        fontset_base_family: FontsetBaseFamily<'a>,
-        weight: u16,
-        italic: bool,
-        font_size: f32,
-    ) -> Self {
+    pub fn new(family: &'a str, weight: u16, italic: bool, font_size: f32) -> Self {
         Self {
-            primary_family: primary_family.0,
-            fontset_base_family: fontset_base_family.0,
+            family,
             weight,
             italic,
             font_size,
         }
     }
-
-    fn same_fontset(family: &'a str, weight: u16, italic: bool, font_size: f32) -> Self {
-        Self::new(
-            PrimaryFontFamily::new(family),
-            FontsetBaseFamily::new(family),
-            weight,
-            italic,
-            font_size,
-        )
-    }
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
-struct RealizedFaceFontCacheKey {
-    primary: MetricsCacheKey,
-    fontset_base_family: String,
-}
+type RealizedFaceFontCacheKey = MetricsCacheKey;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SymbolFontPolicyKey {
@@ -901,15 +857,12 @@ impl FontMetricsService {
         &self,
         selection: RealizedFaceFontSelection<'_>,
     ) -> RealizedFaceFontCacheKey {
-        RealizedFaceFontCacheKey {
-            primary: self.cache_key(
-                selection.primary_family,
-                selection.weight,
-                selection.italic,
-                selection.font_size,
-            ),
-            fontset_base_family: selection.fontset_base_family.to_owned(),
-        }
+        self.cache_key(
+            selection.family,
+            selection.weight,
+            selection.italic,
+            selection.font_size,
+        )
     }
 
     fn selection_size(&self, font_size: f32) -> crate::font_backend::FontSelectionSize {
@@ -1510,7 +1463,7 @@ impl FontMetricsService {
         let Some(representative) = crate::composition::representative_char_for_cluster(text) else {
             return self.shape_run(
                 text,
-                selection.primary_family,
+                selection.family,
                 selection.weight,
                 selection.italic,
                 selection.font_size,
@@ -1521,7 +1474,7 @@ impl FontMetricsService {
         else {
             return self.shape_run(
                 text,
-                selection.primary_family,
+                selection.family,
                 selection.weight,
                 selection.italic,
                 selection.font_size,
@@ -1533,7 +1486,7 @@ impl FontMetricsService {
             // a complex run, retain the explicit primary-font fallback.
             return self.shape_run(
                 text,
-                selection.primary_family,
+                selection.family,
                 selection.weight,
                 selection.italic,
                 selection.font_size,
@@ -1733,7 +1686,7 @@ impl FontMetricsService {
     ) -> Option<SelectedFontInfo> {
         self.select_font_for_realized_face_char(
             ch,
-            RealizedFaceFontSelection::same_fontset(family, weight, italic, font_size),
+            RealizedFaceFontSelection::new(family, weight, italic, font_size),
         )
     }
 
@@ -2066,7 +2019,7 @@ impl FontMetricsService {
     ) -> Option<ResolvedFont> {
         self.resolved_font_for_realized_face_char(
             ch,
-            RealizedFaceFontSelection::same_fontset(family, weight, italic, font_size),
+            RealizedFaceFontSelection::new(family, weight, italic, font_size),
         )
     }
 
@@ -2086,7 +2039,7 @@ impl FontMetricsService {
     ) -> Option<LayoutFontHandle> {
         if ch.is_ascii() {
             return self.materialized_font_for_face(
-                selection.primary_family,
+                selection.family,
                 selection.weight,
                 selection.italic,
                 selection.font_size,
@@ -2098,7 +2051,7 @@ impl FontMetricsService {
         // before the base fontset is consulted.
         if self.symbol_font_policy.uses_primary_font_for(ch)
             && let Some(primary) = self.materialized_font_for_face(
-                selection.primary_family,
+                selection.family,
                 selection.weight,
                 selection.italic,
                 selection.font_size,
@@ -2299,7 +2252,7 @@ impl FontMetricsService {
     ) -> Option<(Vec<ResolvedGlyph>, Vec<ResolvedFont>)> {
         self.resolved_glyphs_for_realized_face_cluster(
             text,
-            RealizedFaceFontSelection::same_fontset(family, weight, italic, font_size),
+            RealizedFaceFontSelection::new(family, weight, italic, font_size),
         )
     }
 
@@ -2335,7 +2288,7 @@ impl FontMetricsService {
         let materialized = match representative {
             Some(ch) => self.materialized_font_for_realized_face_char(ch, selection),
             None => self.materialized_font_for_face(
-                selection.primary_family,
+                selection.family,
                 selection.weight,
                 selection.italic,
                 selection.font_size,
@@ -2646,10 +2599,8 @@ impl FontMetricsService {
             FontSlant::Normal
         };
         if ch.is_ascii() {
-            let resolved_family = self.resolve_family(
-                &self.font_resolver.resolve_family(selection.primary_family),
-                None,
-            );
+            let resolved_family =
+                self.resolve_family(&self.font_resolver.resolve_family(selection.family), None);
             let platform = self.platform_primary_match(
                 &resolved_family,
                 selection.weight,
@@ -2684,7 +2635,7 @@ impl FontMetricsService {
         }
 
         if let Some(matched) = self.font_resolver.resolve_for_char(
-            selection.fontset_base_family,
+            selection.family,
             ch,
             selection.weight,
             requested_slant,
@@ -2711,7 +2662,7 @@ impl FontMetricsService {
         }
 
         ResolvedCharFont {
-            family: selection.fontset_base_family.to_string(),
+            family: selection.family.to_string(),
             weight: selection.weight,
             slant: requested_slant,
             platform: None,
@@ -2729,7 +2680,7 @@ impl FontMetricsService {
     ) -> f32 {
         self.char_width_for_realized_face(
             ch,
-            RealizedFaceFontSelection::same_fontset(family, weight, italic, font_size),
+            RealizedFaceFontSelection::new(family, weight, italic, font_size),
         )
     }
 
@@ -2739,7 +2690,7 @@ impl FontMetricsService {
         selection: RealizedFaceFontSelection<'_>,
     ) -> f32 {
         let key = self.cache_key(
-            selection.primary_family,
+            selection.family,
             selection.weight,
             selection.italic,
             selection.font_size,
@@ -2753,7 +2704,7 @@ impl FontMetricsService {
             }
             // Fill the whole ASCII cache on miss
             let widths = self.fill_ascii_widths_inner(
-                selection.primary_family,
+                selection.family,
                 selection.weight,
                 selection.italic,
                 selection.font_size,
@@ -3242,8 +3193,7 @@ fn protocol_face_font_selection(
         face.font_family.as_str()
     };
     RealizedFaceFontSelection::new(
-        PrimaryFontFamily::new(primary_family),
-        FontsetBaseFamily::new(face.fontset_base_family_or_primary()),
+        primary_family,
         face.font_weight,
         face.is_italic(),
         face.font_size.max(1.0),

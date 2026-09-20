@@ -58,9 +58,6 @@ fn face_identity_hash(identity: &Face) -> u64 {
     hasher.write_u32(identity.background.g.to_bits());
     hasher.write_u32(identity.background.b.to_bits());
     hasher.write(identity.font_family.as_bytes());
-    if let Some(fontset_base_family) = &identity.fontset_base_family {
-        hasher.write(fontset_base_family.as_bytes());
-    }
     hasher.write_u16(identity.font_weight);
     hasher.write_u32(identity.font_size.to_bits());
     hasher.write_u8(identity.underline_style as u8);
@@ -77,7 +74,6 @@ fn resolved_face_route_hash(face: &crate::neovm_bridge::ResolvedFace) -> u64 {
     hasher.write_u32(face.fg);
     hasher.write_u32(face.bg);
     hasher.write(face.font_family.as_bytes());
-    hasher.write(face.fontset_base_family.as_bytes());
     hasher.write_u16(face.font_weight);
     hasher.write_u32(face.font_size.to_bits());
     hasher.write_u8(face.underline_style);

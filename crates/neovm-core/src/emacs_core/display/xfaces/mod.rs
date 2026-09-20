@@ -4456,12 +4456,9 @@ pub(crate) fn builtin_face_font(eval: &mut super::eval::Context, args: Vec<Value
         // an XLFD pixel size; fabricating a name corrupts window-font-*.
         crate::emacs_core::emacs_char::EmacsChar::from_char('M')
     };
-    let fontset_base_face = face_table.resolve("default");
-    Ok(
-        resolve_font_match(eval, frame_id, character, &face, &fontset_base_face)
-            .and_then(|matched| font_name_value(&opened_font_from_resolved_match(&face, &matched)))
-            .unwrap_or(Value::NIL),
-    )
+    Ok(resolve_font_match(eval, frame_id, character, &face)
+        .and_then(|matched| font_name_value(&opened_font_from_resolved_match(&face, &matched)))
+        .unwrap_or(Value::NIL))
 }
 
 /// `(internal-face-x-get-resource RESOURCE CLASS FRAME)` -- validate arguments and

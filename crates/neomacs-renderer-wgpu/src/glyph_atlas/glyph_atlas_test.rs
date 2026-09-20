@@ -397,7 +397,7 @@ fn glyph_font_identity_discriminates_resolved_font_id() {
     // Emergency non-ASCII fallback semantics are also part of an unresolved
     // face's raster identity.
     a.default_resolved_font_id = None;
-    b.fontset_base_family = Some("Different Base Fontset".to_string());
+    b.font_family = "Different Effective Family".to_string();
     assert_ne!(glyph_font_identity(Some(&a)), glyph_font_identity(Some(&b)));
 }
 

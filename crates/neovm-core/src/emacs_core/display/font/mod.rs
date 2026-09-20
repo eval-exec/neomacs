@@ -3357,7 +3357,6 @@ pub(crate) fn resolve_font_match(
     frame_id: FrameId,
     character: crate::emacs_core::emacs_char::EmacsChar,
     face: &RuntimeFace,
-    fontset_base_face: &RuntimeFace,
 ) -> Option<super::eval::ResolvedFontMatch> {
     eval.display_host
         .as_mut()
@@ -3365,10 +3364,7 @@ pub(crate) fn resolve_font_match(
             host.resolve_font_for_char(super::display_host::FontResolveRequest {
                 frame_id,
                 character,
-                faces: super::display_host::RealizedFaceFontContext {
-                    ascii_face: face.clone(),
-                    fontset_base_face: fontset_base_face.clone(),
-                },
+                face: face.clone(),
             })
             .ok()
         })
@@ -3448,10 +3444,7 @@ pub(crate) fn font_at(eval: &mut super::eval::Context, args: Vec<Value>) -> Eval
         let Some(character) = crate::emacs_core::emacs_char::EmacsChar::from_code(code) else {
             return Ok(Value::NIL);
         };
-        let fontset_base_face = face_table.resolve("default");
-        if let Some(matched) =
-            resolve_font_match(eval, frame_id, character, &face, &fontset_base_face)
-        {
+        if let Some(matched) = resolve_font_match(eval, frame_id, character, &face) {
             return Ok(opened_font_from_resolved_match(&face, &matched));
         }
         return Ok(Value::NIL);
@@ -3501,9 +3494,7 @@ pub(crate) fn font_at(eval: &mut super::eval::Context, args: Vec<Value>) -> Eval
                 vec![args[0], Value::fixnum(beg), Value::fixnum(end)],
             )
         })?;
-    let fontset_base_face = face_table.resolve("default");
-    if let Some(matched) = resolve_font_match(eval, frame_id, character, &face, &fontset_base_face)
-    {
+    if let Some(matched) = resolve_font_match(eval, frame_id, character, &face) {
         return Ok(opened_font_from_resolved_match(&face, &matched));
     }
     Ok(Value::NIL)
@@ -3522,7 +3513,7 @@ pub(crate) fn internal_char_font(eval: &mut super::eval::Context, args: Vec<Valu
     let position = args[0];
     let ch_arg = args.get(1).copied().unwrap_or(Value::NIL);
 
-    let (frame_id, character, face, fontset_base_face) = if position.is_nil() {
+    let (frame_id, character, face) = if position.is_nil() {
         let code = crate::emacs_core::builtins::expect_character_code(&ch_arg)?;
         let Some(character) = u32::try_from(code)
             .ok()
@@ -3540,7 +3531,7 @@ pub(crate) fn internal_char_font(eval: &mut super::eval::Context, args: Vec<Valu
         }
         let face_table = runtime_face_table_from_frame_lisp_faces(eval, frame_id, true);
         let default_face = face_table.resolve("default");
-        (frame_id, character, default_face.clone(), default_face)
+        (frame_id, character, default_face)
     } else {
         let current_buffer_id = eval
             .buffers
@@ -3623,12 +3614,10 @@ pub(crate) fn internal_char_font(eval: &mut super::eval::Context, args: Vec<Valu
                 })?
         };
         let face = resolved_face_at_buffer_byte(eval, &face_table, buffer, bytepos);
-        let fontset_base_face = face_table.resolve("default");
-        (frame_id, character, face, fontset_base_face)
+        (frame_id, character, face)
     };
 
-    let Some(matched) = resolve_font_match(eval, frame_id, character, &face, &fontset_base_face)
-    else {
+    let Some(matched) = resolve_font_match(eval, frame_id, character, &face) else {
         return Ok(Value::NIL);
     };
     let Some(glyph_code) = matched.glyph_code else {

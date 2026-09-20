@@ -16,11 +16,10 @@ use crate::font_backend::{
 };
 use neomacs_display_protocol::font::{FontBackendKind, ResolvedFontIdentity};
 use neovm_core::emacs_core::eval::FontSpecSelection;
-use neovm_core::emacs_core::font::alternative_font_families;
 use neovm_core::emacs_core::fontset::{
     FontSpecEntry, StoredFontSpec, fontset_generation, matching_entries_for_char,
 };
-use neovm_core::emacs_core::intern::{intern, resolve_sym};
+use neovm_core::emacs_core::intern::intern;
 use neovm_core::face::{FontSlant, FontWeight, FontWidth};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::sync::Mutex;
@@ -791,26 +790,8 @@ fn family_search_order(
     requested_family: &str,
     spec: &StoredFontSpec,
 ) -> Vec<Option<String>> {
-    if let Some(spec_family) = spec.family.map(resolve_sym) {
-        return vec![Some(backend.resolve_family(spec_family))];
-    }
-    if requested_family.is_empty() {
-        return vec![None];
-    }
-
-    let mut order = Vec::new();
-    for family in alternative_font_families(requested_family) {
-        let resolved = backend.resolve_family(&family);
-        if resolved != family {
-            order.push(Some(resolved));
-        }
-        order.push(Some(family));
-    }
-    // `None` asks the native backend for its ordered cascade from the base
-    // family. This is discovery, not policy: it is reached only after every
-    // GNU fontset/alternative-family pass has failed.
-    order.push(None);
-    order
+    crate::font::policy::FontFamilySource::for_spec(requested_family, spec)
+        .search_order(|family| backend.resolve_family(family))
 }
 
 fn candidate_score(

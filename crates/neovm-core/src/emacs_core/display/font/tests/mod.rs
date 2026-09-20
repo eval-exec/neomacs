@@ -1201,24 +1201,20 @@ fn font_at_eval_passes_inline_face_weight_and_family_to_display_host() {
         crate::emacs_core::emacs_char::EmacsChar::from_char('a')
     );
     assert_eq!(
-        request
-            .faces
-            .ascii_face
-            .family_runtime_string_owned()
-            .as_deref(),
+        request.face.family_runtime_string_owned().as_deref(),
         Some("Noto Sans Mono")
     );
-    assert_eq!(request.faces.ascii_face.weight, Some(FontWeight::SEMI_BOLD));
+    assert_eq!(request.face.weight, Some(FontWeight::SEMI_BOLD));
     // After the specbind refactor, float heights are treated as relative
     // instead of being converted to absolute decipoints.
     assert_eq!(
-        request.faces.ascii_face.height,
+        request.face.height,
         Some(crate::face::FaceHeight::Relative(0.9))
     );
 }
 
 #[test]
-fn font_at_eval_keeps_inline_primary_face_separate_from_realized_fontset_base() {
+fn font_at_eval_passes_effective_inline_family_to_font_selection() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::Context::new();
     ensure_selected_gui_frame(&mut eval);
@@ -1259,22 +1255,9 @@ fn font_at_eval_keeps_inline_primary_face_separate_from_realized_fontset_base() 
         .clone()
         .expect("display host should capture font-at request");
     assert_eq!(
-        request
-            .faces
-            .ascii_face
-            .family_runtime_string_owned()
-            .as_deref(),
+        request.face.family_runtime_string_owned().as_deref(),
         Some("Symbols Nerd Font Mono"),
         "the inline family realizes the ASCII/primary face"
-    );
-    assert_eq!(
-        request
-            .faces
-            .fontset_base_face
-            .family_runtime_string_owned()
-            .as_deref(),
-        Some("JetBrainsMono Nerd Font"),
-        "GNU realizes the non-ASCII fontset from the frame default face instead of reusing the inline ASCII family"
     );
 }
 

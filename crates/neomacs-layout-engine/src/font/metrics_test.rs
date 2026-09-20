@@ -183,23 +183,15 @@ fn char_width_accented_latin() {
 }
 
 #[test]
-fn realized_face_font_selection_separates_ascii_primary_from_non_ascii_fontset_base() {
+fn realized_face_font_selection_uses_effective_family_without_a_fontset_candidate() {
     let mut svc = make_svc();
     svc.font_resolver
         .replace_backend(Box::new(NoCandidateFontBackend));
-    let selection = RealizedFaceFontSelection::new(
-        PrimaryFontFamily::new("Symbols Nerd Font Mono"),
-        FontsetBaseFamily::new("JetBrainsMono Nerd Font"),
-        400,
-        false,
-        13.0,
-    );
-
+    let selection = RealizedFaceFontSelection::new("JetBrainsMono Nerd Font", 400, false, 13.0);
     let ascii = svc.font_request_for_char('A', selection);
-    let icon = svc.font_request_for_char('\u{f48a}', selection);
-
-    assert_eq!(ascii.family, "Symbols Nerd Font Mono");
-    assert_eq!(icon.family, "JetBrainsMono Nerd Font");
+    let circle = svc.font_request_for_char('○', selection);
+    assert_eq!(ascii.family, "JetBrainsMono Nerd Font");
+    assert_eq!(circle.family, "JetBrainsMono Nerd Font");
 }
 
 #[test]
@@ -217,7 +209,7 @@ fn symbol_font_policy_tracks_the_live_char_script_table_and_invalidates_char_cac
     assert!(svc.symbol_font_policy.uses_primary_font_for('▶'));
     assert!(!svc.symbol_font_policy.uses_primary_font_for('\u{2800}'));
 
-    let selection = RealizedFaceFontSelection::same_fontset("monospace", 400, false, 13.0);
+    let selection = RealizedFaceFontSelection::new("monospace", 400, false, 13.0);
     let cache_key = svc.realized_face_font_cache_key(selection);
     svc.char_cache.insert((cache_key, '▶'), 13.0);
 
@@ -282,7 +274,7 @@ fn covered_symbol_uses_and_publishes_the_realized_primary_font() {
 
     let mut svc = make_svc();
     let _ = svc.synchronize_symbol_font_policy(true, table);
-    let selection = RealizedFaceFontSelection::same_fontset("Monospace", 400, false, 14.0);
+    let selection = RealizedFaceFontSelection::new("Monospace", 400, false, 14.0);
     let primary = svc
         .materialized_font_for_face("Monospace", 400, false, 14.0)
         .expect("realized primary font");
@@ -308,33 +300,14 @@ fn covered_symbol_uses_and_publishes_the_realized_primary_font() {
 }
 
 #[test]
-fn realized_face_font_cache_identity_includes_primary_and_fontset_base() {
+fn realized_face_font_cache_identity_includes_effective_family() {
     let svc = make_svc();
-    let base = RealizedFaceFontSelection::new(
-        PrimaryFontFamily::new("Primary A"),
-        FontsetBaseFamily::new("Base A"),
-        400,
-        false,
-        13.0,
+    let a = RealizedFaceFontSelection::new("Family A", 400, false, 13.0);
+    let b = RealizedFaceFontSelection::new("Family B", 400, false, 13.0);
+    assert_ne!(
+        svc.realized_face_font_cache_key(a),
+        svc.realized_face_font_cache_key(b)
     );
-    let different_primary = RealizedFaceFontSelection::new(
-        PrimaryFontFamily::new("Primary B"),
-        FontsetBaseFamily::new("Base A"),
-        400,
-        false,
-        13.0,
-    );
-    let different_base = RealizedFaceFontSelection::new(
-        PrimaryFontFamily::new("Primary A"),
-        FontsetBaseFamily::new("Base B"),
-        400,
-        false,
-        13.0,
-    );
-
-    let key = svc.realized_face_font_cache_key(base);
-    assert_ne!(key, svc.realized_face_font_cache_key(different_primary));
-    assert_ne!(key, svc.realized_face_font_cache_key(different_base));
 }
 
 #[test]
@@ -342,13 +315,7 @@ fn realized_face_complex_run_shapes_with_the_exact_materialized_fontset_font() {
     let mut svc = make_svc();
     svc.font_resolver
         .replace_backend(Box::new(NoCandidateFontBackend));
-    let selection = RealizedFaceFontSelection::new(
-        PrimaryFontFamily::new("Symbols Nerd Font Mono"),
-        FontsetBaseFamily::new("JetBrainsMono Nerd Font"),
-        400,
-        false,
-        13.0,
-    );
+    let selection = RealizedFaceFontSelection::new("JetBrainsMono Nerd Font", 400, false, 13.0);
 
     let materialized = svc
         .materialized_font_for_realized_face_char('क', selection)
@@ -1921,7 +1888,7 @@ fn ascii_character_resolution_keeps_primary_face_that_lacks_the_glyph() {
     assert_eq!(
         svc.materialized_font_for_realized_face_char(
             ' ',
-            RealizedFaceFontSelection::same_fontset(requested_family, 400, false, 10.0),
+            RealizedFaceFontSelection::new(requested_family, 400, false, 10.0),
         )
         .expect("materialized primary face")
         .resolution,
@@ -2318,8 +2285,7 @@ fn measure_with_resolved_fontsystem(
     italic: bool,
     font_size: f32,
 ) -> f32 {
-    let selection =
-        RealizedFaceFontSelection::same_fontset(requested_family, weight, italic, font_size);
+    let selection = RealizedFaceFontSelection::new(requested_family, weight, italic, font_size);
     let selected = layout
         .select_font_for_realized_face_char(ch, selection)
         .unwrap_or_else(|| {
@@ -2502,13 +2468,7 @@ fn select_font_for_char_preserves_resolved_family_for_fallback_reports() {
     let mut svc = make_svc();
     let resolved = svc.font_request_for_char(
         '好',
-        RealizedFaceFontSelection::new(
-            PrimaryFontFamily::new("Noto Sans Mono"),
-            FontsetBaseFamily::new("Noto Sans Mono"),
-            400,
-            false,
-            13.0,
-        ),
+        RealizedFaceFontSelection::new("Noto Sans Mono", 400, false, 13.0),
     );
     let selected = svc
         .select_font_for_char('好', "Noto Sans Mono", 400, false, 24.0)

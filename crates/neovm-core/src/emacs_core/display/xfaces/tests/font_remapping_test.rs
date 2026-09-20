@@ -22,7 +22,7 @@ impl DisplayHost for PointSizeFontHost {
         &mut self,
         request: FontResolveRequest,
     ) -> Result<Option<ResolvedFontMatch>, String> {
-        let height = match request.faces.ascii_face.height {
+        let height = match request.face.height {
             Some(FaceHeight::Absolute(height)) => f64::from(height),
             Some(FaceHeight::Relative(scale)) => 150.0 * scale,
             None => 150.0,

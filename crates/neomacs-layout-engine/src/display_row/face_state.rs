@@ -36,7 +36,6 @@ pub(crate) struct DisplayRowFace {
     pub(crate) use_default_foreground: bool,
     pub(crate) use_default_background: bool,
     pub(crate) font_family: String,
-    pub(crate) fontset_base_family: String,
     pub(crate) font_file_path: Option<String>,
     pub(crate) font_weight: u16,
     pub(crate) italic: bool,
@@ -161,8 +160,7 @@ impl DisplayRowFaceMetrics {
 impl DisplayRowFace {
     fn font_selection(&self) -> crate::font::metrics::RealizedFaceFontSelection<'_> {
         crate::font::metrics::RealizedFaceFontSelection::new(
-            crate::font::metrics::PrimaryFontFamily::new(&self.font_family),
-            crate::font::metrics::FontsetBaseFamily::new(&self.fontset_base_family),
+            &self.font_family,
             self.font_weight,
             self.italic,
             self.font_size.max(1.0),
@@ -176,11 +174,6 @@ impl DisplayRowFace {
         } else {
             face.font_family.clone()
         };
-        let fontset_base_family = if face.fontset_base_family.is_empty() {
-            font_family.clone()
-        } else {
-            face.fontset_base_family.clone()
-        };
         Self {
             face_id,
             foreground: Color::from_pixel(face.fg),
@@ -192,7 +185,6 @@ impl DisplayRowFace {
             use_default_foreground: face.use_default_foreground,
             use_default_background: face.use_default_background,
             font_family,
-            fontset_base_family,
             font_file_path: None,
             font_weight: face.font_weight,
             italic: face.italic,
@@ -293,7 +285,6 @@ impl DisplayRowFace {
             strike_through_color: self.strike_through_color,
             box_color: self.box_color,
             font_family: self.font_family.clone(),
-            fontset_base_family: Some(self.fontset_base_family.clone()),
             font_size: self.font_size,
             font_weight: self.font_weight,
             attributes: attrs,

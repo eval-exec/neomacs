@@ -624,7 +624,6 @@ fn cjk_heading_bounds_and_popup_anchor_follow_real_font_advances() {
     let mut face = crate::neovm_bridge::ResolvedFace::default();
     face.font_size = 16.0;
     face.font_family = "monospace".into();
-    face.fontset_base_family = "monospace".into();
     let cjk = fonts.char_width('中', &face.font_family, 400, false, 16.0);
     let ascii = fonts.char_width('A', &face.font_family, 400, false, 16.0);
     assert!(cjk > ascii + 2.0, "test needs a real wide CJK font");

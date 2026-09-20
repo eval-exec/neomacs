@@ -160,3 +160,35 @@ Closed internal state uses Rust enums and exhaustive matching. Strum belongs at
 finite policy parsing/display interfaces; it is not needed for arbitrary face
 names or these internal geometry mappings. Platform selection remains outside
 these portable modules.
+
+## Effective font families and fontset rules
+
+GNU's base fontset is a collection of character-to-font rules, not an inherited
+font-family string. `xfaces.c:realize_gui_face` retains those rules while
+realizing the merged face. `fontset.c:fontset_find_font` passes the effective
+`face->lface` and the selected rule to `font.c:font_find_for_lface`. An explicit
+rule family wins; a family-less rule inherits `LFACE_FAMILY_INDEX` from the
+fully merged face, including inline attributes and buffer remapping.
+
+The former `fontset_base_family` field conflated rule identity with the frame's
+original family. In an Org buffer remapped from JetBrains Mono to Noto Sans CJK
+SC, ordinary text used Noto while the composed U+25CB heading circle still used
+JetBrains. Its smaller glyph made the Org Superstar bullet visibly too small.
+
+`RealizedFaceFontSelection` now carries one effective family. `FontResolveRequest`
+likewise carries one merged face for Lisp queries such as `font-at`.
+`FontFamilySource::{Fontset, Face}` owns the explicit-rule versus inherited-face
+search distinction in shared font policy. Layout, shaping, and all native
+catalog adapters use that policy. There is no second family for a caller to
+forget to update after remapping, and no Org-specific scale adjustment.
+
+The renderer continues to consume exact font/glyph bindings from layout. The
+obsolete family field has been removed from protocol faces, face cache keys,
+and emergency replay. Fontset mutation generation remains part of lookup cache
+identity. Future named-fontset support must carry actual rule-set identity;
+it must not reintroduce a second family as a substitute.
+
+`engine_font_selection_test.rs` exercises the published frame with composed and
+plain circles, changing buffer remappings across redisplays, inline family
+changes, and explicit fontset overrides. These tests require the same installed
+JetBrains Mono Nerd Font and Noto Sans CJK SC fonts as the reproduced GUI case.

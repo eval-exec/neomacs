@@ -1930,39 +1930,25 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         let Some(character) = request.character.as_rust_char() else {
             return Ok(None);
         };
-        let requested_family_storage = request.faces.ascii_face.family_runtime_string_owned();
+        let requested_family_storage = request.face.family_runtime_string_owned();
         let requested_family = requested_family_storage.as_deref().unwrap_or("Monospace");
-        let fontset_base_family_storage = request
-            .faces
-            .fontset_base_face
-            .family_runtime_string_owned();
-        let fontset_base_family = fontset_base_family_storage
-            .as_deref()
-            .unwrap_or("Monospace");
         let requested_weight = request
-            .faces
-            .ascii_face
+            .face
             .weight
             .unwrap_or(FontWeight::NORMAL)
             .css_weight();
         let requested_italic = request
-            .faces
-            .ascii_face
+            .face
             .slant
             .map(|slant| slant.is_italic())
             .unwrap_or(false);
-        let font_size = self
-            .font_sizing
-            .font_size_px_for_face(&request.faces.ascii_face);
+        let font_size = self.font_sizing.font_size_px_for_face(&request.face);
         let selected = self
             .synchronized_font_metrics()
             .select_font_for_realized_face_char(
                 character,
                 neomacs_layout_engine::font::metrics::RealizedFaceFontSelection::new(
-                    neomacs_layout_engine::font::metrics::PrimaryFontFamily::new(requested_family),
-                    neomacs_layout_engine::font::metrics::FontsetBaseFamily::new(
-                        fontset_base_family,
-                    ),
+                    requested_family,
                     requested_weight,
                     requested_italic,
                     font_size,
@@ -1975,7 +1961,7 @@ impl DisplayHost for PrimaryWindowDisplayHost {
             requested_weight,
             requested_italic,
             font_size,
-            request_faces = ?request.faces,
+            request_face = ?request.face,
             selected = ?selected,
             "display host resolved font-at request"
         );

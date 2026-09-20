@@ -22,7 +22,6 @@ use fontconfig_sys::constants::{
     FC_RGBA, FC_RGBA_BGR, FC_RGBA_NONE, FC_RGBA_RGB, FC_RGBA_VBGR, FC_RGBA_VRGB,
 };
 use neomacs_display_protocol::font::FontVariationCoord;
-use neovm_core::emacs_core::font::alternative_font_families;
 use neovm_core::emacs_core::fontset::{
     FontSpecEntry, StoredFontSpec, fontset_generation, matching_entries_for_char,
 };
@@ -557,28 +556,8 @@ fn best_candidate_for_pass(
 }
 
 fn family_search_order(requested_family: &str, spec: &StoredFontSpec) -> Vec<Option<String>> {
-    if let Some(spec_family) = spec.family.map(resolve_sym) {
-        return vec![Some(resolve_family(spec_family))];
-    }
-
-    if requested_family.is_empty() {
-        return vec![None];
-    }
-
-    // GNU font_find_for_lface consults face-alternative-font-family-alist
-    // before retrying with an unspecified family.
-    let mut order = Vec::new();
-    for family in alternative_font_families(requested_family) {
-        let resolved = resolve_family(&family);
-        if resolved == family {
-            order.push(Some(family));
-        } else {
-            order.push(Some(resolved));
-            order.push(Some(family));
-        }
-    }
-    order.push(None);
-    order
+    crate::font::policy::FontFamilySource::for_spec(requested_family, spec)
+        .search_order(resolve_family)
 }
 
 fn candidate_score(

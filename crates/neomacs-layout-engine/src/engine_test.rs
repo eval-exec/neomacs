@@ -24,6 +24,9 @@ use super::*;
 #[path = "engine_face_identity_test.rs"]
 mod face_identity;
 
+#[path = "engine_font_selection_test.rs"]
+mod font_selection;
+
 #[path = "engine_line_spacing_test.rs"]
 mod line_spacing;
 
@@ -24311,7 +24314,7 @@ fn layout_frame_rust_aligns_dired_filenames_after_nerd_icon_tabs() {
                 && !resolved
                     .family
                     .eq_ignore_ascii_case("Symbols Nerd Font Mono"),
-            "GNU derives the non-ASCII icon font from the frame-default JetBrains fontset, not the inline Symbols primary; resolved={resolved:?}"
+            "GNU's explicit JetBrains fontset rule overrides the inline Symbols family; resolved={resolved:?}"
         );
         assert!(
             (icon_glyph.pixel_width - glyphs[icon + 2].pixel_width).abs() < 0.01,
@@ -24449,11 +24452,6 @@ fn layout_frame_rust_nerd_font_alias_icon_uses_resolved_monospace_cell_width() {
         icon_face.font_family, "Symbols Nerd Font Mono",
         "test must exercise the Nerd Font compatibility alias"
     );
-    assert_ne!(
-        icon_face.fontset_base_family.as_deref(),
-        Some("Symbols Nerd Font Mono"),
-        "the inline primary family must not replace the realized face's base fontset"
-    );
     let binding = state
         .char_fonts
         .get(&icon.face_id)
@@ -24468,7 +24466,7 @@ fn layout_frame_rust_nerd_font_alias_icon_uses_resolved_monospace_cell_width() {
             && !resolved_icon_font
                 .family
                 .eq_ignore_ascii_case("Symbols Nerd Font Mono"),
-        "the realized base fontset must select a concrete JetBrains face instead of the inline Symbols primary; resolved={resolved_icon_font:?}"
+        "the explicit fontset rule must select a concrete JetBrains face instead of the inline Symbols primary; resolved={resolved_icon_font:?}"
     );
     let mut metrics = FontMetricsService::new();
     let resolved_tab_space = metrics.char_width(

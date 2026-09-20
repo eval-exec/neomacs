@@ -659,14 +659,6 @@ pub struct Face {
     /// Typed GNU-compatible vertical placement policy.
     #[serde(default)]
     pub underline_placement: UnderlinePosition,
-
-    /// Base family for the realized face's non-ASCII fontset. Layout consumes
-    /// it while publishing exact `default_resolved_font_id`/`CharFontTable`
-    /// entries. A renderer may consult it only for the explicitly diagnosed
-    /// emergency path where an exact published font cannot be replayed.
-    /// Appended to preserve the existing `#[repr(C)]` prefix.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fontset_base_family: Option<String>,
 }
 
 impl Default for Face {
@@ -685,7 +677,6 @@ impl Default for Face {
             strike_through_color: None,
             box_color: None,
             font_family: "monospace".to_string(),
-            fontset_base_family: None,
             font_size: 10.0,
             font_weight: 400,
             attributes: FaceAttributes::empty(),
@@ -717,21 +708,6 @@ impl Face {
             id,
             ..Default::default()
         }
-    }
-
-    /// Non-ASCII fontset base, with the legacy single-family representation
-    /// as a compatibility fallback.
-    pub fn fontset_base_family_or_primary(&self) -> &str {
-        self.fontset_base_family
-            .as_deref()
-            .filter(|family| !family.is_empty())
-            .unwrap_or({
-                if self.font_family.is_empty() {
-                    "monospace"
-                } else {
-                    self.font_family.as_str()
-                }
-            })
     }
 
     /// Check if face is bold
@@ -926,7 +902,6 @@ impl FaceDataFFI {
                 .then(|| Color::from_pixel(self.strike_through_color)),
             box_color: (box_type != BoxType::None).then(|| Color::from_pixel(self.box_color)),
             font_family,
-            fontset_base_family: None,
             font_size: self.font_size.max(0) as f32,
             font_weight,
             attributes: attrs,
