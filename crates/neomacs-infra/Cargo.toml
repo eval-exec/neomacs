@@ -19,3 +19,4 @@ publish = false
 
 [dependencies]
 getrandom.workspace = true
+sha2.workspace = true

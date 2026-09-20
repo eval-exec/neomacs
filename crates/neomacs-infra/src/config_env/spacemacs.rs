@@ -226,6 +226,11 @@ impl ConfigEnvironment for SpacemacsEnvironment {
     fn session_args(&self) -> Vec<String> {
         Vec::new()
     }
+
+    fn verify_deep(&self) -> Result<crate::config_env::inventory::Drift, String> {
+        let inventory = crate::config_env::inventory::Inventory::build(&self.root)?;
+        crate::config_env::inventory::verify_deep(&self.root, &inventory)
+    }
 }
 
 /// [`SpacemacsEnvironment::open`] for callers that want the resolution

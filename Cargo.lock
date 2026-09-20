@@ -3866,6 +3866,7 @@ name = "neomacs-infra"
 version = "0.0.18"
 dependencies = [
  "getrandom 0.4.3",
+ "sha2",
 ]
 
 [[package]]

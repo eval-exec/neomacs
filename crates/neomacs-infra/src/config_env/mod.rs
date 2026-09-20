@@ -8,9 +8,11 @@
 
 pub mod common;
 pub mod doom;
+pub mod inventory;
 pub mod spacemacs;
 
 pub use doom::{DoomEnvironment, DoomSource};
+pub use inventory::{Drift, Inventory};
 pub use spacemacs::{SpacemacsEnvironment, SpacemacsSource};
 
 use std::ffi::OsString;
@@ -41,6 +43,12 @@ pub trait ConfigEnvironment {
     /// state, share the multi-hundred-MB package builds read-only by
     /// symlink, so a write attempt hits the seal and fails loudly.
     fn prepare_session_state(&self, session_state: &Path) -> Result<(), String>;
+
+    /// Deep verification: re-walk the sealed fixture, re-hash every file,
+    /// and compare against the sealed inventory.  Ok(drift) with a clean
+    /// drift proves the fixture is byte-identical to the day it was
+    /// sealed; Err means the fixture state itself is unreadable.
+    fn verify_deep(&self) -> Result<crate::config_env::inventory::Drift, String>;
 }
 
 /// XDG directories pinned inside the session state, so GTK3, fontconfig,
