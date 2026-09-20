@@ -30,6 +30,31 @@ fn main() {
                 exit(2);
             }
         },
+        Some("verify") => match args.next().as_deref().and_then(|arg| arg.to_str()) {
+            Some("doom") => match neomacs_infra::config_env::DoomEnvironment::open() {
+                Some(environment) => {
+                    match neomacs_infra::config_env::ConfigEnvironment::verify_deep(&environment) {
+                        Ok(drift) if drift.is_clean() => println!("doom: verified clean"),
+                        Ok(drift) => {
+                            eprintln!("doom fixture DRIFTED: {drift:?}");
+                            exit(1);
+                        }
+                        Err(error) => {
+                            eprintln!("doom verify error: {error}");
+                            exit(1);
+                        }
+                    }
+                }
+                None => {
+                    eprintln!("doom: not materialized");
+                    exit(1);
+                }
+            },
+            other => {
+                eprintln!("unknown environment: {other:?}");
+                exit(2);
+            }
+        },
         Some("status") => {
             for name in neomacs_infra::config_env::NAMES {
                 let status = match name.as_ref() {

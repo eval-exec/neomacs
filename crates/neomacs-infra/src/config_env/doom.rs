@@ -214,6 +214,11 @@ impl ConfigEnvironment for DoomEnvironment {
             self.tree().to_string_lossy().into_owned(),
         ]
     }
+
+    fn verify_deep(&self) -> Result<crate::config_env::inventory::Drift, String> {
+        let inventory = crate::config_env::inventory::Inventory::build(&self.root)?;
+        crate::config_env::inventory::verify_deep(&self.root, &inventory)
+    }
 }
 
 /// [`DoomEnvironment::open`] for callers that want the resolution status.

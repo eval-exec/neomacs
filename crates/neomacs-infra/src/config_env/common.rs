@@ -284,13 +284,37 @@ pub fn seal(root: &Path) -> Result<(), String> {
 
 /// Write the MANIFEST recording the fixture's name and source note, then
 /// seal — the tail every environment's materialize shares.
+///
+/// The seal runs last so the INVENTORY's hashes describe the final sealed
+/// bytes; the INVENTORY itself is written before sealing so `seal`'s walk
+/// covers it too.
 pub fn manifest_and_seal(root: &Path, name: &str, source_note: &str) -> Result<(), String> {
     fs::write(
         root.join("MANIFEST"),
         format!("name = {name}\nsource = {source_note}\n"),
     )
     .map_err(|error| format!("write MANIFEST: {error}"))?;
-    seal(root)
+    seal(root)?;
+    // Self-check: the sealed fixture must verify clean against its own
+    // fresh inventory.  A drift here means the bootstrap wrote after the
+    // inventory was taken, or the seal missed a path -- fail loudly now,
+    // not six hours later in a mysterious parity divergence.
+    let inventory = super::inventory::Inventory::build(root)?;
+    let drift = super::inventory::verify_deep(root, &inventory)?;
+    if !drift.is_clean() {
+        return Err(format!(
+            "{name} fixture failed post-seal self-check:              {} missing, {} modified, {} added",
+            drift.missing.len(),
+            drift.modified.len(),
+            drift.added.len()
+        ));
+    }
+    Ok(())
+}
+
+/// Build the content inventory of a sealed fixture root.
+pub fn build_inventory(root: &Path) -> Result<super::inventory::Inventory, String> {
+    super::inventory::Inventory::build(root)
 }
 
 /// Windows has no permission bits to clear, so the fixture cannot be
