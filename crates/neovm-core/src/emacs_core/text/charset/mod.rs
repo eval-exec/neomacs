@@ -845,11 +845,32 @@ impl CharsetRegistry {
             );
         }
 
+        // Aliases were materialized into `charsets` at snapshot time, each as
+        // a clone of its target whose `name` is the ALIAS. That keeps the
+        // alias usable, but it loses which name is canonical -- and GNU
+        // publishes the canonical one (`CHARSET_NAME`, src/coding.c:7257), so
+        // a decoded string would say `koi8' where GNU says `koi8-r'.
+        //
+        // The clone carries its target's plist, whose `:name` IS the
+        // canonical name, so the mapping can be rebuilt here: ONCE per load,
+        // off data the snapshot already holds, rather than per decoded
+        // character. Every `resolve_name` caller is correct again afterwards.
+        let name_key = crate::emacs_core::intern::intern(":name");
+        let aliases: rustc_hash::FxHashMap<SymId, SymId> = charsets
+            .values()
+            .filter_map(|info| {
+                let canonical = info
+                    .plist
+                    .iter()
+                    .find(|(key, _)| *key == name_key)
+                    .and_then(|(_, value)| value.as_symbol_id())?;
+                (canonical != info.name).then_some((info.name, canonical))
+            })
+            .collect();
+
         Self {
             charsets,
-            // Aliases were materialized into `charsets` at snapshot time, so
-            // none remain to resolve dynamically after a restore.
-            aliases: rustc_hash::FxHashMap::default(),
+            aliases,
             priority: snapshot.priority,
             non_preferred_head: snapshot.non_preferred_head,
             next_id: snapshot.next_id,
@@ -1286,6 +1307,21 @@ pub(crate) fn charset_leading_byte(charset: SymId) -> Option<CharsetLeadingByte>
             last,
         })
     })
+}
+
+/// The charset's CANONICAL name -- what GNU publishes as the `charset` text
+/// property of a decoded run (`CHARSET_NAME`, src/coding.c:7257).
+///
+/// A coding system's `:charset-list` may name an ALIAS (`koi8` for `koi8-r`,
+/// `ibm866` for `cp866`, `cp850` for `ibm850`, `pt154` for `ptcp154`), and the
+/// decoder is handed whatever the list said. Publishing that verbatim made a
+/// decoded string disagree with GNU for the eight coding systems reachable
+/// through those four aliases.
+///
+/// Falls back to the name it was given when the charset is unregistered, so an
+/// unknown symbol publishes as itself rather than disappearing.
+pub(crate) fn charset_canonical_name(charset: SymId) -> SymId {
+    CHARSET_REGISTRY.with(|slot| slot.borrow().resolve_name(charset))
 }
 
 /// The dimension of `charset` (1 or 2), or `None` if unknown. Used by the

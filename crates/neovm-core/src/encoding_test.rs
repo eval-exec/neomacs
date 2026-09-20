@@ -2631,3 +2631,45 @@ fn a_decoded_run_is_annotated_from_its_charset_not_its_character_like_gnu() {
         )
     );
 }
+
+/// A decoded run is annotated with the charset's CANONICAL name, which is what
+/// GNU publishes (`CHARSET_NAME`, src/coding.c:7257) -- not with whatever name
+/// the coding system's `:charset-list' happened to use.
+///
+/// Four charset aliases are reachable through a coding system, between them
+/// under eight coding-system names, and every one of them disagreed with GNU:
+/// `koi8' for `koi8-r', `ibm866' for `cp866', `cp850' for `ibm850' and
+/// `pt154' for `ptcp154'. The last four rows are canonical charsets included
+/// as controls, because the fix must not rename anything that was right.
+///
+/// Expectations measured under GNU Emacs 31.1 (`tmp/rr/d1b-pin.el`).
+#[test]
+fn a_decoded_run_is_annotated_with_the_charsets_canonical_name_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"(let ((probe (lambda (cs byte)
+                          (let ((s (decode-coding-string
+                                    (unibyte-string ?A byte ?B) cs)))
+                            (get-text-property 1 'charset s)))))
+             (list
+              (funcall probe 'cyrillic-koi8 #xc0)
+              (funcall probe 'koi8 #xc0)
+              (funcall probe 'koi8-r #xc0)
+              (funcall probe 'cp878 #xc0)
+              (funcall probe 'cp866 #xc0)
+              (funcall probe 'cp850 #xc0)
+              (funcall probe 'ibm850 #xc0)
+              (funcall probe 'pt154 #xc0)
+              (funcall probe 'koi8-u #xc0)
+              (funcall probe 'windows-1251 #xc0)
+              (funcall probe 'iso-8859-2 #xc0)
+              (funcall probe 'windows-1252 #xc0)))"#,
+    );
+    assert_eq!(
+        result,
+        concat!(
+            "OK (koi8-r koi8-r koi8-r koi8-r cp866 ibm850 ibm850 ptcp154 ",
+            "koi8-u windows-1251 iso-8859-2 windows-1252)",
+        )
+    );
+}

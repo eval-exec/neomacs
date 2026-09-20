@@ -2290,7 +2290,14 @@ impl CharsetRunBuilder {
                 end,
                 plist: Value::list(vec![
                     Value::symbol("charset"),
-                    Value::symbol(resolve_sym(charset)),
+                    // GNU publishes the charset's CANONICAL name, not the one
+                    // the coding system's `:charset-list' happened to use, so
+                    // a `koi8-r' decode says `koi8-r' and not `koi8'. Resolved
+                    // here, once per RUN -- the per-character `push' below
+                    // compares the symbols as the decoder handed them.
+                    Value::symbol(resolve_sym(
+                        crate::emacs_core::charset::charset_canonical_name(charset),
+                    )),
                 ]),
             });
         }
