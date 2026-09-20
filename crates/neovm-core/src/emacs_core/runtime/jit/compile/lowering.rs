@@ -905,12 +905,24 @@ fn emit_inline_cbsym_read(
     use crate::buffer::buffer::{Buffer, jit_layout};
     use crate::emacs_core::eval::runtime_projection::CONTEXT_BUFFERS_OFFSET;
 
-    // Only the three character-position reads so far. `bobp`/`eobp` compare
-    // BYTE coordinates and encode a boolean, so they are a separate shape.
-    let field_off = match which {
-        CBSYM_A_POINT => Buffer::POINT_CHAR_POS_OFFSET,
-        CBSYM_A_POINT_MIN => Buffer::BEGV_CHAR_POS_OFFSET,
-        CBSYM_A_POINT_MAX => Buffer::ZV_CHAR_POS_OFFSET,
+    // Two shapes. The position reads answer a 1-based Lisp CHARACTER position;
+    // `bobp`/`eobp` compare point against an accessible bound in the BYTE
+    // coordinate and answer t/nil -- GNU's `Fbobp' is `PT == BEGV'. Reading
+    // the character coordinate for those would compare the wrong pair of
+    // coordinates and still typecheck, which is why both sets of offsets
+    // exist.
+    let (field_off, bound_off) = match which {
+        CBSYM_A_POINT => (Buffer::POINT_CHAR_POS_OFFSET, None),
+        CBSYM_A_POINT_MIN => (Buffer::BEGV_CHAR_POS_OFFSET, None),
+        CBSYM_A_POINT_MAX => (Buffer::ZV_CHAR_POS_OFFSET, None),
+        CBSYM_A_BOBP => (
+            Buffer::POINT_EMACS_BYTE_POS_OFFSET,
+            Some(Buffer::BEGV_EMACS_BYTE_POS_OFFSET),
+        ),
+        CBSYM_A_EOBP => (
+            Buffer::POINT_EMACS_BYTE_POS_OFFSET,
+            Some(Buffer::ZV_EMACS_BYTE_POS_OFFSET),
+        ),
         _ => return None,
     };
     let Some((bits_addr, bits_mask)) =
@@ -982,12 +994,25 @@ fn emit_inline_cbsym_read(
     let occupied = icmp_imm_p(fb, IntCC::NotEqual, buffer, 0);
     fb.ins().brif(occupied, read, &[], miss, &[]);
 
-    // The read, then GNU's 1-based Lisp position, tagged.
+    // The read itself.
     fb.switch_to_block(read);
     fb.seal_block(read);
-    let position = fb.ins().load(types::I64, flags, buffer, field_off as i32);
-    let lisp = fb.ins().iadd_imm(position, 1);
-    let tagged = retag_fixnum(fb, lisp);
+    let field = fb.ins().load(types::I64, flags, buffer, field_off as i32);
+    let tagged = match bound_off {
+        // A position: GNU's 1-based Lisp coordinate, tagged.
+        None => {
+            let lisp = fb.ins().iadd_imm(field, 1);
+            retag_fixnum(fb, lisp)
+        }
+        // A bound test: `PT == BEGV` / `PT == ZV`, answered as t or nil.
+        Some(bound_off) => {
+            let bound = fb.ins().load(types::I64, flags, buffer, bound_off as i32);
+            let at_bound = fb.ins().icmp(IntCC::Equal, field, bound);
+            let yes = fb.ins().iconst(types::I64, Value::T.bits() as i64);
+            let no = fb.ins().iconst(types::I64, Value::NIL.bits() as i64);
+            fb.ins().select(at_bound, yes, no)
+        }
+    };
     fb.ins()
         .stack_store(rt.ptr_ty, tagged, rt.call_result_slot, 0);
     let ok = fb.ins().iconst(types::I64, STATUS_OK);

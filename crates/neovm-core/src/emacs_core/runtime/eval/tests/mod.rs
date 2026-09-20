@@ -27106,9 +27106,14 @@ fn the_inline_tier_a_read_engages_and_still_matches_the_interpreter() {
     }
 
     if !jit_cbsym_fastpath_suppressed_by_harness() {
-        assert!(
-            emitted() > before,
-            "no Tier-A read lowered inline, so this proved only that the shim still works"
+        // Exactly the five that inline: point, point-min, point-max, bobp,
+        // eobp. The other five in the list above must still route through the
+        // shim, so a count of 10 would mean something inlined that should not
+        // have, and a count below 5 that one quietly stopped.
+        assert_eq!(
+            emitted() - before,
+            5,
+            "expected exactly the five inlinable Tier-A reads to lower inline"
         );
     }
 }
@@ -27141,4 +27146,45 @@ fn redefining_a_tier_a_builtin_leaves_compiled_reads_alone_like_gnu() {
                    (list before after via-funcall)))))"#,
     );
     assert_eq!(result, "OK (4 4 999)");
+}
+
+/// `bobp`/`eobp` inline as a BOUND TEST, not a position read: they compare
+/// point against the accessible bound in the BYTE coordinate and answer t or
+/// nil, where GNU's `Fbobp' is `PT == BEGV'.
+///
+/// Narrowing is what separates a correct implementation from one reading the
+/// buffer's own bounds, and the widen rows show the bounds moving back. The
+/// loop's buffer is EMPTY, where point-min and point-max coincide so both
+/// answer t -- 20000 iterations scoring 2 each.
+///
+/// Expectations measured under GNU Emacs 31.1 (`tmp/rr/bobp.el`).
+#[test]
+fn inlined_bobp_and_eobp_track_the_accessible_bounds_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let result = bootstrap_eval_one(
+        r#"(progn
+             (defun bp-probe ()
+               (with-temp-buffer
+                 (insert "hello world")
+                 (narrow-to-region 3 8)
+                 (list (progn (goto-char (point-min)) (list (bobp) (eobp)))
+                       (progn (goto-char 5) (list (bobp) (eobp)))
+                       (progn (goto-char (point-max)) (list (bobp) (eobp)))
+                       (progn (widen) (goto-char 1) (list (bobp) (eobp)))
+                       (progn (goto-char (point-max)) (list (bobp) (eobp))))))
+             (byte-compile 'bp-probe)
+             (list (bp-probe)
+                   (with-temp-buffer
+                     (let ((n 0) (i 0))
+                       (while (< i 20000)
+                         (goto-char (point-min))
+                         (when (bobp) (setq n (1+ n)))
+                         (when (eobp) (setq n (1+ n)))
+                         (setq i (1+ i)))
+                       n))))"#,
+    );
+    assert_eq!(
+        result,
+        "OK (((t nil) (nil nil) (nil t) (t nil) (nil t)) 40000)"
+    );
 }
