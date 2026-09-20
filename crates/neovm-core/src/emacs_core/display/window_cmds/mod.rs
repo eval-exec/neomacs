@@ -1252,22 +1252,12 @@ fn ensure_selected_frame_id_in_state_with_policy(
 
 /// Compute the height of a window in lines.
 fn window_height_lines(w: &Window, char_height: f32) -> i64 {
-    let h = w.bounds().height;
-    if char_height > 0.0 {
-        (h / char_height) as i64
-    } else {
-        0
-    }
+    w.total_lines(char_height)
 }
 
-/// Compute the width of a window in columns.
+/// Compute the committed width of a window in columns.
 fn window_width_cols(w: &Window, char_width: f32) -> i64 {
-    let cw = w.bounds().width;
-    if char_width > 0.0 {
-        (cw / char_width) as i64
-    } else {
-        0
-    }
+    w.total_columns(char_width)
 }
 
 /// GNU `init_iterator`'s line-wrap decision for one window+buffer pair
@@ -3876,7 +3866,13 @@ pub(crate) fn window_total_height_impl(
         .get(window.frame())
         .map(|f| f.char_height)
         .unwrap_or(16.0);
-    Ok(Value::fixnum(window_height_lines(w, ch)))
+    Ok(Value::fixnum(
+        match args.get(1).and_then(|value| value.as_symbol_name()) {
+            Some("floor") => (w.bounds().height / ch.max(1.0)).floor() as i64,
+            Some("ceiling") => (w.bounds().height / ch.max(1.0)).ceil() as i64,
+            _ => window_height_lines(w, ch),
+        },
+    ))
 }
 /// `(window-total-width &optional WINDOW ROUND)` -> integer.
 ///
@@ -3901,7 +3897,13 @@ pub(crate) fn window_total_width_impl(
         .get(window.frame())
         .map(|f| f.char_width)
         .unwrap_or(8.0);
-    Ok(Value::fixnum(window_width_cols(w, cw)))
+    Ok(Value::fixnum(
+        match args.get(1).and_then(|value| value.as_symbol_name()) {
+            Some("floor") => (w.bounds().width / cw.max(1.0)).floor() as i64,
+            Some("ceiling") => (w.bounds().width / cw.max(1.0)).ceil() as i64,
+            _ => window_width_cols(w, cw),
+        },
+    ))
 }
 /// `(window-list &optional FRAME MINIBUF WINDOW)` -> list of window objects.
 pub(crate) fn builtin_window_list(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
@@ -7533,47 +7535,17 @@ pub(crate) fn builtin_window_resize_apply_total(
     let root = frame.tree().root_id();
     crate::window::window_resize_apply_total(frame.tree_mut(), root, horflag, cw, ch);
 
-    // Handle minibuffer window — its `new_total` lives on the
-    // minibuffer leaf itself now.
-    // Read the root's bounds BEFORE the minibuffer arm takes its mutable
-    // borrow of the frame; it is a pure read, so hoisting it is free.
-    let root_bounds = *frame.root_window().bounds();
-    if !horflag
-        && frame.minibuffer_window.is_some()
+    // GNU updates the minibuffer's character grid only. Its pixel bounds,
+    // like the root's, were already installed by the pixel resize pass.
+    let mini_top = frame.root_window().top_line() + frame.root_window().total_lines(ch);
+    if frame.minibuffer_window.is_some()
         && let Some(mb) = frame.minibuffer_leaf.as_mut()
-        && let Some(new_total) = mb.new_total()
     {
-        let mb_top = root_bounds.y + root_bounds.height;
-        let mb_bounds = *mb.bounds();
-        let new_h = new_total.max(0) as f32 * ch;
-        mb.set_bounds(crate::window::Rect::new(
-            mb_bounds.x,
-            mb_top,
-            mb_bounds.width,
-            new_h,
-        ));
-        mb.set_new_total(None);
-    }
-
-    // Ensure root + minibuffer fit in frame after total resize.
-    frame.recalculate_minibuffer_bounds();
-
-    // GNU finishes by placing the minibuffer's CHARACTER row directly below
-    // the root, by summing the root's two fields (`src/window.c:5030`):
-    //
-    //     m->top_line = r->top_line + r->total_lines;
-    //
-    // This is where that sum belongs -- it is a resize-time assignment, one of
-    // only three sites in GNU, not an invariant re-established on every tree
-    // mutation.  It runs last because `recalculate_minibuffer_bounds` derives
-    // the row from the minibuffer's pixel origin, which is the right answer
-    // everywhere except right here, where the root's character row has just
-    // been moved to the frame's top margin while its pixel origin stayed put.
-    if !horflag && frame.minibuffer_window.is_some() {
-        let root_top_line = frame.root_window().top_line();
-        let root_total_lines = (frame.root_window().bounds().height / ch.max(1.0)).round() as i64;
-        if let Some(mb) = frame.minibuffer_leaf.as_mut() {
-            mb.set_top_line(root_top_line + root_total_lines);
+        if let Some(total) = mb.new_total() {
+            mb.commit_cell_total(horflag, total.max(0));
+        }
+        if !horflag {
+            mb.set_top_line(mini_top);
         }
     }
 

@@ -1348,6 +1348,15 @@ pub struct DeletedWindowRecord {
     pub change_stamp: Option<ChangeStamp>,
 }
 
+/// Character-grid dimensions assigned by GNU's pixel-to-total pass.
+/// Pixel mutations invalidate only the affected axis; until the next grid
+/// assignment, callers derive its initial extent from the frame's metrics.
+#[derive(Debug, Clone, Default)]
+pub struct WindowCellDimensions {
+    columns: Option<i64>,
+    lines: Option<i64>,
+}
+
 /// A window in the window tree.
 #[derive(Clone, Debug)]
 // Window nodes own their complete leaf/split state and are cloned as snapshots;
@@ -1458,6 +1467,7 @@ pub enum Window {
         /// `set-window-new-total`. GNU `w->new_total`
         /// (`src/window.h:284`).
         new_total: Option<i64>,
+        cell_dimensions: WindowCellDimensions,
         /// Pending normal-size fraction queued by
         /// `set-window-new-normal`. GNU `w->new_normal`
         /// (`src/window.h:285`). Stored as a `Value` to mirror
@@ -1508,6 +1518,7 @@ pub enum Window {
         new_pixel: Option<i64>,
         /// Pending total size — see `Leaf::new_total`.
         new_total: Option<i64>,
+        cell_dimensions: WindowCellDimensions,
         /// Pending normal-size fraction — see `Leaf::new_normal`.
         new_normal: Value,
         /// Persistent normal-size fraction — see
@@ -1559,6 +1570,7 @@ impl Window {
             // `window-new-normal`.
             new_pixel: None,
             new_total: None,
+            cell_dimensions: WindowCellDimensions::default(),
             new_normal: Value::fixnum(0),
             normal_lines: Value::make_float(1.0),
             normal_cols: Value::make_float(1.0),
@@ -1641,6 +1653,57 @@ impl Window {
     pub fn new_total(&self) -> Option<i64> {
         match self {
             Window::Leaf { new_total, .. } | Window::Internal { new_total, .. } => *new_total,
+        }
+    }
+
+    pub fn total_lines(&self, char_height: f32) -> i64 {
+        match self {
+            Self::Leaf {
+                cell_dimensions,
+                bounds,
+                ..
+            }
+            | Self::Internal {
+                cell_dimensions,
+                bounds,
+                ..
+            } => cell_dimensions
+                .lines
+                .unwrap_or((bounds.height / char_height.max(1.0)) as i64),
+        }
+    }
+
+    pub fn total_columns(&self, char_width: f32) -> i64 {
+        match self {
+            Self::Leaf {
+                cell_dimensions,
+                bounds,
+                ..
+            }
+            | Self::Internal {
+                cell_dimensions,
+                bounds,
+                ..
+            } => cell_dimensions
+                .columns
+                .unwrap_or((bounds.width / char_width.max(1.0)) as i64),
+        }
+    }
+
+    pub(crate) fn commit_cell_total(&mut self, horizontal: bool, total: i64) {
+        match self {
+            Self::Leaf {
+                cell_dimensions, ..
+            }
+            | Self::Internal {
+                cell_dimensions, ..
+            } => {
+                if horizontal {
+                    cell_dimensions.columns = Some(total);
+                } else {
+                    cell_dimensions.lines = Some(total);
+                }
+            }
         }
     }
 
@@ -1846,14 +1909,41 @@ impl Window {
     /// Mutable reference to bounds.
     pub fn bounds_mut(&mut self) -> &mut Rect {
         match self {
-            Window::Leaf { bounds, .. } | Window::Internal { bounds, .. } => bounds,
+            Window::Leaf {
+                bounds,
+                cell_dimensions,
+                ..
+            }
+            | Window::Internal {
+                bounds,
+                cell_dimensions,
+                ..
+            } => {
+                *cell_dimensions = WindowCellDimensions::default();
+                bounds
+            }
         }
     }
 
     /// Set bounds.
     pub fn set_bounds(&mut self, new_bounds: Rect) {
         match self {
-            Window::Leaf { bounds, .. } | Window::Internal { bounds, .. } => {
+            Window::Leaf {
+                bounds,
+                cell_dimensions,
+                ..
+            }
+            | Window::Internal {
+                bounds,
+                cell_dimensions,
+                ..
+            } => {
+                if bounds.width != new_bounds.width {
+                    cell_dimensions.columns = None;
+                }
+                if bounds.height != new_bounds.height {
+                    cell_dimensions.lines = None;
+                }
                 *bounds = new_bounds;
             }
         }
@@ -7390,6 +7480,7 @@ fn split_window_in_tree(
         combination_limit: attachment.new_parent_seal().as_stored_slot(),
         new_pixel: None,
         new_total: None,
+        cell_dimensions: WindowCellDimensions::default(),
         // GNU stages the new parent's `new_normal` from the OLD window's
         // pre-split fraction, captured before `make_parent_window` corrupts it
         // (`src/window.c:5543,5570`):
@@ -7869,20 +7960,9 @@ pub fn window_resize_check(tree: &WindowTree, id: WindowId, horflag: bool) -> bo
         .all(|child| window_resize_check(tree, *child, horflag))
 }
 
-/// Apply character-cell-based resize values to a window tree.
-///
-/// Mirrors GNU Emacs `window_resize_apply_total()` in window.c:
-/// - Reads `new_total` for each window from the provided map
-/// - Sets character-cell sizes and positions accordingly
-/// - This does NOT modify pixel bounds — it only updates the character-cell
-///   grid positions used by Emacs internals.
-///
-/// Since neomacs uses pixel bounds as the source of truth, this function
-/// converts new_total back to pixels using char_width/char_height and
-/// applies the result to window bounds.
-///
-/// The pending size for each window is read from `w->new_total`
-/// (now stored on the Window enum after audit Structural 1).
+/// Apply only character-grid sizes and edges, like GNU window_resize_apply_total.
+/// Pixel geometry was already committed by window_resize_apply and must not
+/// be reconstructed from rounded cell counts.
 pub fn window_resize_apply_total(
     tree: &mut WindowTree,
     id: WindowId,
@@ -7893,34 +7973,14 @@ pub fn window_resize_apply_total(
     let Some(window) = tree.find_mut(id) else {
         return;
     };
-    let new_total = window.new_total();
-
-    // Apply new_total converted to pixels.
-    let bounds = *window.bounds();
-    if let Some(total) = new_total {
-        let total = total.max(0) as f32;
-        if horflag {
-            let px = total * char_width;
-            window.set_bounds(Rect::new(bounds.x, bounds.y, px, bounds.height));
-        } else {
-            let px = total * char_height;
-            window.set_bounds(Rect::new(bounds.x, bounds.y, bounds.width, px));
-        }
-        // Mirror GNU `wset_new_total(w, make_fixnum(-1))`.
-        window.set_new_total(None);
+    if let Some(total) = window.new_total() {
+        window.commit_cell_total(horflag, total.max(0));
     }
-
-    let bounds = *window.bounds();
-    let edge = if horflag { bounds.x } else { bounds.y };
-    // GNU `window_resize_apply_total` maintains the CHARACTER-line edge in
-    // parallel with the pixel edge, starting from this window's own top_line /
-    // left_col (which the caller/parent already assigned).
-    let char_edge_start = if horflag {
+    let mut edge = if horflag {
         window.left_col()
     } else {
         window.top_line()
     };
-
     let Window::Internal {
         direction,
         children,
@@ -7929,43 +7989,24 @@ pub fn window_resize_apply_total(
     else {
         return;
     };
-    let dir = *direction;
+    let combines = (*direction == SplitDirection::Horizontal) == horflag;
     let children = children.clone();
-    let mut edge = edge;
-    let mut char_edge = char_edge_start;
-
     for child in children {
-        // Position child at current pixel edge.
         let Some(node) = tree.find_mut(child) else {
             continue;
         };
-        let cb = *node.bounds();
         if horflag {
-            node.set_bounds(Rect::new(edge, cb.y, cb.width, cb.height));
-            node.set_left_col(char_edge);
+            node.set_left_col(edge);
         } else {
-            node.set_bounds(Rect::new(cb.x, edge, cb.width, cb.height));
-            node.set_top_line(char_edge);
+            node.set_top_line(edge);
         }
-
-        // Recurse.
         window_resize_apply_total(tree, child, horflag, char_width, char_height);
-
-        // Accumulate the pixel edge and, in the same axis, the char edge
-        // by the child's total lines/cols (GNU `edge += c->total_lines`).
-        let Some(child_bounds) = tree.find(child).map(|node| *node.bounds()) else {
-            continue;
-        };
-        match (dir, horflag) {
-            (SplitDirection::Horizontal, true) => {
-                edge += child_bounds.width;
-                char_edge += (child_bounds.width / char_width).round() as i64;
-            }
-            (SplitDirection::Vertical, false) => {
-                edge += child_bounds.height;
-                char_edge += (child_bounds.height / char_height).round() as i64;
-            }
-            _ => {}
+        if combines && let Some(node) = tree.find(child) {
+            edge += if horflag {
+                node.total_columns(char_width)
+            } else {
+                node.total_lines(char_height)
+            };
         }
     }
 }
@@ -8053,6 +8094,16 @@ fn sync_window_character_edges_from_bounds_at(
     let Some(node) = tree.find_mut(window) else {
         return;
     };
+    match node {
+        Window::Leaf {
+            cell_dimensions, ..
+        }
+        | Window::Internal {
+            cell_dimensions, ..
+        } => {
+            *cell_dimensions = WindowCellDimensions::default();
+        }
+    }
     node.set_left_col(left_col);
     node.set_top_line(top_line);
 

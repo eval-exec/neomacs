@@ -2044,6 +2044,37 @@ fn fit_window_to_buffer_invalid_window_designators_signal_error() {
 }
 
 #[test]
+fn applying_character_totals_preserves_pixel_geometry() {
+    crate::test_utils::init_test_tracing();
+    let result = eval_with_gui_frame(
+        "(let* ((w (selected-window))
+                (edges (list (window-pixel-width w) (window-pixel-height w))))
+           (set-window-new-total w 3)
+           (window-resize-apply-total nil nil)
+           (list (equal edges (list (window-pixel-width w) (window-pixel-height w)))
+                 (window-total-height w)))",
+    );
+    assert_eq!(result, vec!["OK (t 3)"]);
+}
+
+#[test]
+fn rounded_window_totals_measure_pixels_independently_of_assigned_cells() {
+    let result = eval_with_gui_frame(
+        "(let* ((w (selected-window))
+                (height (window-total-height w 'floor))
+                (width (window-total-width w 'ceiling)))
+           (set-window-new-total w 3)
+           (window-resize-apply-total nil nil)
+           (set-window-new-total w 4)
+           (window-resize-apply-total nil t)
+           (list (window-total-height w) (window-total-width w)
+                 (= height (window-total-height w 'floor))
+                 (= width (window-total-width w 'ceiling))))",
+    );
+    assert_eq!(result, vec!["OK (3 4 t t)"]);
+}
+
+#[test]
 fn window_resize_apply_preserves_lisp_computed_vertical_sizes() {
     crate::test_utils::init_test_tracing();
     let result = bootstrap_eval_one_with_frame(
