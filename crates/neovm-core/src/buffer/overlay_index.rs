@@ -756,6 +756,22 @@ impl OverlayIndex {
             return Vec::new();
         }
         let mut exceptions = self.overlays_touching(position);
+        if exceptions.is_empty() {
+            // Nothing starts or ends here, so no overlay can change its order
+            // against the insertion: every one of them either lies wholly
+            // before it or is shifted wholly, which the shift below does in
+            // place. The detach-and-reattach dance is for the boundary cases
+            // only, and typing away from every overlay boundary -- the usual
+            // case -- should not build its sets and vectors.
+            let delta = EmacsByteDelta::insertion(length);
+            self.intervals
+                .write()
+                .shift_at_or_after(position, before_markers, delta);
+            if let Some(endpoints) = self.endpoints.get_mut() {
+                endpoints.shift_at_or_after(position, before_markers, delta);
+            }
+            return Vec::new();
+        }
         sort_and_dedup_overlay_identities(&mut exceptions);
 
         let front_candidates: Vec<_> = exceptions

@@ -74,6 +74,9 @@ editfns_cached_symbol!(
     "undo-auto--undoable-change"
 );
 editfns_cached_symbol!(first_change_hook_symbol, "first-change-hook");
+editfns_cached_symbol!(undo_auto_amalgamate_symbol, "undo-auto-amalgamate");
+editfns_cached_symbol!(kill_forward_chars_symbol, "kill-forward-chars");
+editfns_cached_symbol!(evaporate_symbol, "evaporate");
 editfns_cached_symbol!(before_change_functions_symbol, "before-change-functions");
 editfns_cached_symbol!(after_change_functions_symbol, "after-change-functions");
 editfns_cached_symbol!(
@@ -868,7 +871,7 @@ fn evaporate_emptied_overlays_at(
                 &ctx.obarray,
                 &ctx.buffers,
                 *overlay,
-                Value::symbol("evaporate"),
+                Value::from_sym_id(evaporate_symbol()),
             )
             .is_truthy()
         })
@@ -1423,12 +1426,17 @@ pub(crate) fn builtin_delete_char(
     let killflag = args.get(1).is_some_and(|v| v.is_truthy());
     ensure_current_buffer_writable_in_state(&ctx.obarray, &[], &ctx.buffers)?;
     if n.unsigned_abs() < 2 {
-        ctx.apply(Value::symbol("undo-auto-amalgamate"), vec![])?;
+        // GNU `Fdelete_char' calls this too, but does not intern its name
+        // on the way: every single-character deletion runs this line.
+        ctx.apply(Value::from_sym_id(undo_auto_amalgamate_symbol()), vec![])?;
     }
     // GNU `Fdelete_char` (cmds.c:221) dispatches to `kill-forward-chars`
     // when KILLFLAG is non-nil, saving the deleted text in the kill ring.
     if killflag {
-        return ctx.apply(Value::symbol("kill-forward-chars"), vec![args[0]]);
+        return ctx.apply(
+            Value::from_sym_id(kill_forward_chars_symbol()),
+            vec![args[0]],
+        );
     }
     if let Some(current_id) = ctx.buffers.current_buffer_id() {
         let Some(byte_range) = ({
