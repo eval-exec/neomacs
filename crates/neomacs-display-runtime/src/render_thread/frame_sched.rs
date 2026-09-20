@@ -846,7 +846,7 @@ impl FrameCoordinator {
         now: EventTime,
     ) -> PacingAction {
         let ws = self.window(id);
-        tracing::info!(
+        tracing::trace!(
             "finish_frame: id={id:?} work={:?} result={result:?} visible={} occluded={}",
             plan.work,
             ws.presentation.visible,
