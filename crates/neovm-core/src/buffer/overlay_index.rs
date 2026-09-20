@@ -756,6 +756,45 @@ impl OverlayIndex {
             return Vec::new();
         }
         let mut exceptions = self.overlays_touching(position);
+        // An overlay that STRICTLY contains the insertion keeps its start and
+        // grows its end, whatever its advance flags say -- those decide only
+        // what happens at a boundary. Its order against every other overlay is
+        // therefore unchanged, which is exactly the case GNU's itree handles
+        // by leaving the node where it is. Growing it in place spares it the
+        // detach-and-reattach path, and typing inside an overlay -- inside the
+        // region, inside hl-line's, inside a flycheck span -- is what editing
+        // a buffer with overlays mostly is.
+        //
+        // Its end endpoint lies after the insertion, so the endpoint shift
+        // below already moves it; only the interval record, which carries both
+        // bounds at once, has to be told.
+        let mut grown = Vec::new();
+        exceptions.retain(|overlay| {
+            let Some(range) = self.range(*overlay) else {
+                return true;
+            };
+            if range.start() < position && range.end() > position {
+                grown.push((*overlay, range));
+                false
+            } else {
+                true
+            }
+        });
+        let mut grown_effects = Vec::with_capacity(grown.len());
+        if !grown.is_empty() {
+            let delta = EmacsByteDelta::insertion(length);
+            let mut intervals = self.intervals.write();
+            for (overlay, range) in &grown {
+                let new_range = EmacsByteRange::new(range.start(), delta.apply_to_pos(range.end()));
+                intervals
+                    .update_end_preserving_order(*overlay, new_range)
+                    .expect("overlay containing the insertion is indexed");
+                grown_effects.push(OverlayEditEffect::Resized {
+                    overlay: *overlay,
+                    range: new_range,
+                });
+            }
+        }
         if exceptions.is_empty() {
             // Nothing starts or ends here, so no overlay can change its order
             // against the insertion: every one of them either lies wholly
@@ -770,7 +809,7 @@ impl OverlayIndex {
             if let Some(endpoints) = self.endpoints.get_mut() {
                 endpoints.shift_at_or_after(position, before_markers, delta);
             }
-            return Vec::new();
+            return grown_effects;
         }
         sort_and_dedup_overlay_identities(&mut exceptions);
 
@@ -813,7 +852,8 @@ impl OverlayIndex {
             endpoints.shift_at_or_after(position, before_markers, delta);
         }
 
-        let mut effects = Vec::with_capacity(detached.len());
+        let mut effects = grown_effects;
+        effects.reserve(detached.len());
         let mut front_updates = FxHashMap::default();
         for (overlay, old_range, attachment_order) in detached {
             #[cfg(test)]
