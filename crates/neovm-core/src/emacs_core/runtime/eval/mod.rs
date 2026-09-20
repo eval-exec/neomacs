@@ -5864,11 +5864,13 @@ impl Context {
             );
         }
 
-        let function_is_callable = self.function_value_is_callable(&function);
+        let callable_before = self.callable_before_call_snapshot(&function);
         let result = self.apply_untraced(function, args);
         match &result {
             Err(Flow::Signal(sig))
-                if !function_is_callable && sig.symbol == invalid_function_symbol() =>
+                if sig.symbol == invalid_function_symbol()
+                    && !callable_before
+                        .unwrap_or_else(|| self.function_value_is_callable(&function)) =>
             {
                 Err(signal(
                     LispCondition::InvalidFunction,
@@ -5917,11 +5919,13 @@ impl Context {
             );
         }
 
-        let function_is_callable = self.function_value_is_callable(&function);
+        let callable_before = self.callable_before_call_snapshot(&function);
         let result = self.funcall_general_untraced(function, args);
         match &result {
             Err(Flow::Signal(sig))
-                if !function_is_callable && sig.symbol == invalid_function_symbol() =>
+                if sig.symbol == invalid_function_symbol()
+                    && !callable_before
+                        .unwrap_or_else(|| self.function_value_is_callable(&function)) =>
             {
                 Err(signal(
                     LispCondition::InvalidFunction,
@@ -5948,11 +5952,13 @@ impl Context {
                         rewrite_builtin_wrong_arity,
                     );
                 }
-                let function_is_callable = self.function_value_is_callable(&func);
+                let callable_before = self.callable_before_call_snapshot(&func);
                 let result = self.funcall_general_untraced(func, args);
                 match &result {
                     Err(Flow::Signal(sig))
-                        if !function_is_callable && sig.symbol == invalid_function_symbol() =>
+                        if sig.symbol == invalid_function_symbol()
+                            && !callable_before
+                                .unwrap_or_else(|| self.function_value_is_callable(&func)) =>
                     {
                         Err(signal(
                             LispCondition::InvalidFunction,
@@ -5979,6 +5985,24 @@ impl Context {
                 vec![Value::from_sym_id(sym_id)],
             )),
         }
+    }
+
+    /// Whether `function` must be judged callable BEFORE the call is made.
+    ///
+    /// These three call sites rewrite an `invalid-function' signal raised by
+    /// the call into one naming the symbol, but only when the callee itself
+    /// was not callable -- so the answer has to describe the function value as
+    /// it stood before the call, not after.
+    ///
+    /// For every value kind but one that answer is a pure function of the
+    /// value's bits, and a `Copy` value carries those across the call
+    /// unchanged, so the test can be deferred to the error path and skipped
+    /// altogether on the success path. The exception is a SYMBOL, whose
+    /// callability is read out of the obarray and can therefore be changed by
+    /// the very call being made; that one is still decided up front.
+    fn callable_before_call_snapshot(&self, function: &Value) -> Option<bool> {
+        matches!(function.kind(), ValueKind::Symbol(_))
+            .then(|| self.function_value_is_callable(function))
     }
 
     pub(crate) fn function_value_is_callable(&self, function: &Value) -> bool {

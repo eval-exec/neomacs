@@ -26974,3 +26974,35 @@ fn only_a_buffers_own_read_only_slot_decides_writability_like_gnu() {
         "OK (inserted buffer-read-only inserted inserted buffer-read-only)"
     );
 }
+
+/// Calling a symbol rewrites an `invalid-function' signal into one naming the
+/// symbol, but only when the callee itself was not callable. The answer has to
+/// describe the function value as it stood BEFORE the call, which is why
+/// `callable_before_call_snapshot' still decides a SYMBOL's callability up
+/// front: a symbol resolves through the obarray, and the call can rewrite it.
+///
+/// Row three is the guard that matters -- a perfectly callable function
+/// raising `invalid-function' from inside keeps its own signal -- and row four
+/// is that same case where the callee UNDEFINES ITSELF first, so a callability
+/// test taken after the call would answer differently from one taken before.
+///
+/// Expectations measured under GNU Emacs 31.1 (`tmp/rr/k3.el`).
+#[test]
+fn an_invalid_function_signal_is_renamed_only_for_an_uncallable_callee_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let result = bootstrap_eval_one(
+        r#"(list
+             (progn (fset 'k3-c 42)
+                    (condition-case e (k3-c) (error (list (car e) (cadr e)))))
+             (progn (defun k3-outer () (funcall 42))
+                    (condition-case e (k3-outer) (error (list (car e) (cadr e)))))
+             (progn (defun k3-self () (fset 'k3-self 7) (funcall 42))
+                    (condition-case e (k3-self) (error (list (car e) (cadr e)))))
+             (condition-case e (k3-never-defined) (error (list (car e) (cadr e)))))"#,
+    );
+    assert_eq!(
+        result,
+        "OK ((invalid-function k3-c) (invalid-function 42) (invalid-function 42) \
+         (void-function k3-never-defined))"
+    );
+}
