@@ -500,7 +500,7 @@ fn window_params_default_colors_follow_buffer_default_face_remap() {
 
 #[test]
 fn test_window_params_from_neovm_internal_returns_none() {
-    use neovm_core::window::SplitDirection;
+    use neovm_core::window::{SplitDirection, WindowCellDimensions};
 
     let mut evaluator = neovm_core::emacs_core::Context::new();
     let buf_id = evaluator.buffer_manager_mut().create_buffer("*test*");
@@ -520,6 +520,7 @@ fn test_window_params_from_neovm_internal_returns_none() {
         combination_limit: false,
         new_pixel: None,
         new_total: None,
+        cell_dimensions: WindowCellDimensions::default(),
         new_normal: Value::NIL,
         normal_lines: Value::NIL,
         normal_cols: Value::NIL,
