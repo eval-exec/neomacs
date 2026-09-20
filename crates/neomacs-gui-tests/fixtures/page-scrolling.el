@@ -13,8 +13,10 @@
 (set-face-attribute 'default nil :family "DejaVu Sans Mono" :height 105
                     :foreground "#000000" :background "#ffffff")
 (set-face-attribute 'variable-pitch nil :family "DejaVu Sans" :height 105)
-(set-face-attribute 'org-level-1 nil :height 1.7)
-(set-face-attribute 'org-level-2 nil :height 1.4)
+;; Keep heading antialiasing out of the banner's orange pixel signature.
+;; macOS's default Org heading colors otherwise overlap that signature.
+(set-face-attribute 'org-level-1 nil :height 1.7 :foreground "#000000")
+(set-face-attribute 'org-level-2 nil :height 1.4 :foreground "#000000")
 (set-frame-size nil 680 700 t)
 
 (defvar neomacs-scroll-control (getenv "NEOMACS_GUI_SCROLL_CONTROL"))
