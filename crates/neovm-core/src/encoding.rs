@@ -3190,11 +3190,19 @@ fn encode_via_euc(
 
 /// Decode the GR bytes of a single-shifted / G1 EUC sequence: strip the high
 /// bit to recover the GL code, then look the character up in the charset.
-fn decode_euc_register(charset: Option<SymId>, bytes: &[u8]) -> Option<(u32, usize)> {
-    let charset = charset?;
-    let stripped: Vec<u8> = bytes.iter().take(3).map(|byte| byte & 0x7F).collect();
-    let (ch, consumed) =
-        crate::emacs_core::charset::charset_decode_char_from_bytes(charset, &stripped)?;
+fn decode_euc_register(
+    decoder: Option<&crate::emacs_core::charset::CharsetDecoder>,
+    bytes: &[u8],
+) -> Option<(u32, usize)> {
+    let decoder = decoder?;
+    // A fixed buffer, not a heap `Vec`: this runs once per decoded character,
+    // and the window is the same three bytes the registry path used to take.
+    let mut stripped = [0u8; 3];
+    let take = bytes.len().min(stripped.len());
+    for (slot, &byte) in stripped[..take].iter_mut().zip(bytes) {
+        *slot = byte & 0x7F;
+    }
+    let (ch, consumed) = decoder.decode_from_bytes(&stripped[..take])?;
     Some((ch as u32, consumed))
 }
 
@@ -3217,7 +3225,10 @@ fn decode_via_euc(
         let width = register
             .and_then(crate::emacs_core::charset::charset_dimension_by_sym)
             .unwrap_or(1) as usize;
-        (register, width)
+        // The decoder too, so the loop neither re-resolves the charset nor
+        // allocates for the stripped code point.
+        let decoder = register.and_then(crate::emacs_core::charset::charset_decoder);
+        (register, width, decoder)
     };
     let g1 = resolved(spec.initial[1]);
     let g2 = resolved(spec.initial[2]);
@@ -3234,11 +3245,12 @@ fn decode_via_euc(
         // (GNU's `decode_coding_iso_2022`).
         // SS2/SS3 spend a byte of their own; a plain GR byte is itself the
         // first byte of the register's code point.
-        let ((register, width), shift_bytes) = match b {
-            0x8E => (g2, 1),
-            0x8F => (g3, 1),
-            _ => (g1, 0),
+        let (slot, shift_bytes) = match b {
+            0x8E => (&g2, 1),
+            0x8F => (&g3, 1),
+            _ => (&g1, 0),
         };
+        let (register, width) = (slot.0, slot.1);
         let from = unit.start + shift_bytes;
         let rest = &unit.bytes[from.min(unit.bytes.len())..];
         // `ONE_MORE_BYTE` has to succeed for every position byte of the
@@ -3266,7 +3278,7 @@ fn decode_via_euc(
         {
             return invalid_code(unit, sink);
         }
-        match decode_euc_register(register, rest) {
+        match decode_euc_register(slot.2.as_ref(), rest) {
             Some((ch, consumed)) => {
                 unit.rewind();
                 unit.take(shift_bytes + consumed)?;
