@@ -607,10 +607,10 @@ fn candidate_score(
     candidate_selection_score(
         compatibility,
         0,
-        requested_weight,
+        FontWeight::from_css_weight(requested_weight),
         requested_slant,
         None,
-        candidate_weight,
+        FontWeight::from_css_weight(candidate_weight),
         candidate_slant,
         candidate.width,
         PlatformFontSize::Scalable,

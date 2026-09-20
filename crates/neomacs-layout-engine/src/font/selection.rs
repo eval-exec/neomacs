@@ -7,7 +7,7 @@
 //! that policy directly and prevents a refactor from silently reordering it.
 
 use crate::font_backend::PlatformFontSize;
-use neovm_core::face::{FontSlant, FontWidth};
+use neovm_core::face::{FontSlant, FontWeight, FontWidth};
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct PropertyDistance(u32);
@@ -33,10 +33,10 @@ pub(crate) struct CandidateSelectionScore {
 pub(crate) fn candidate_selection_score(
     compatibility: u32,
     requested_size_26_6: u32,
-    requested_weight: u16,
+    requested_weight: FontWeight,
     requested_slant: FontSlant,
     requested_width: Option<FontWidth>,
-    candidate_weight: u16,
+    candidate_weight: FontWeight,
     candidate_slant: FontSlant,
     candidate_width: Option<FontWidth>,
     candidate_size: PlatformFontSize,
@@ -57,7 +57,15 @@ pub(crate) fn candidate_selection_score(
             // entities carry Fontconfig's concrete pixel size and are scored
             // before the materializer opens anything, as GNU does.
             size,
-            weight: PropertyDistance(u32::from(candidate_weight.abs_diff(requested_weight))),
+            // GNU font.c:font_score compares the numeric weight-table values
+            // and caps each style distance at seven bits. CSS weight spacing
+            // is different (semi-light is not halfway from light to regular).
+            weight: PropertyDistance(u32::from(
+                candidate_weight
+                    .gnu_numeric()
+                    .abs_diff(requested_weight.gnu_numeric())
+                    .min(127),
+            )),
             slant: PropertyDistance(slant_distance(requested_slant, candidate_slant)),
         },
     })

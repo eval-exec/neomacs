@@ -338,7 +338,7 @@ fn real_gui_font_selection_oracle_matches_gnu_emacs_result_structure() {
 }
 
 #[test]
-fn real_gui_font_selection_semi_light_tie_matches_gnu_emacs() {
+fn real_gui_font_selection_semi_light_prefers_gnu_weight_distance() {
     run_font_selection_oracle(Some("noto-sans-weight-semi-light-h150-s12"));
 }
 

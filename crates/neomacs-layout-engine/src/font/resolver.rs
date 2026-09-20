@@ -827,10 +827,10 @@ fn candidate_score(
     candidate_selection_score(
         compatibility,
         request.size.device_px_26_6(),
-        request.weight,
+        FontWeight::from_css_weight(request.weight),
         request.slant,
         request.width,
-        candidate_weight,
+        FontWeight::from_css_weight(candidate_weight),
         candidate.matched.slant(),
         candidate.matched.metadata.width,
         candidate.matched.metadata.size,

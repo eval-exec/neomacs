@@ -281,6 +281,37 @@ fn candidate(family: &str, weight: u16, slant: FontSlant, spacing: i32) -> FontC
     }
 }
 
+#[test]
+fn primary_weight_selection_uses_gnu_distance_before_discovery_order() {
+    // GNU font.c:font_score compares weight-table values, not CSS weights.
+    // semi-light=55 is nearer light=50 than regular=80. The CSS distances
+    // are both 50, which incorrectly lets the first Regular entity win.
+    // Medium=100 likewise prefers regular=80 over semi-bold=180. Distances
+    // saturate at 127, so thin=0 ties black=210 with bold=200 in native order.
+    for (requested, weights, expected) in [
+        (350, [400, 300], 300),
+        (500, [600, 400], 400),
+        (100, [900, 700], 900),
+    ] {
+        let resolver = FontResolver::new(Box::new(CandidateBackend {
+            candidates: weights
+                .into_iter()
+                .map(|weight| candidate("Fixture Sans", weight, FontSlant::Normal, 0))
+                .collect(),
+        }));
+        let selected = resolver
+            .resolve_primary(
+                "Fixture Sans",
+                requested,
+                FontSlant::Normal,
+                FontWidth::Normal,
+                selection_size(),
+            )
+            .expect("available family");
+        assert_eq!(selected.weight(), Some(expected), "requested {requested}");
+    }
+}
+
 fn selection_size() -> FontSelectionSize {
     FontSelectionSize::new(13.0, DeviceScale::new(1.0).expect("unit scale"))
 }
