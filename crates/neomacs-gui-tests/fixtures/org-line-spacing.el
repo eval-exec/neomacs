@@ -5,22 +5,26 @@
       native-comp-deferred-compilation nil)
 (require 'org)
 (custom-set-faces '(org-block ((t (:background "gray93")))))
+(set-face-attribute 'region nil :background "red" :extend t)
 (defvar neomacs-spacing-phase 0)
 (defvar neomacs-spacing-timer nil)
+(defvar neomacs-spacing-pending-capture nil)
 
 (defun neomacs-spacing-capture (stage)
   (redisplay t)
   (neomacs--write-frame-snapshot
    (concat (getenv "NEOMACS_GUI_FRAME_SNAPSHOT_JSON") "." stage) nil 'json)
-  (run-at-time
-   0.5 nil
-   (lambda ()
-     (copy-file (getenv "NEOMACS_DEBUG_SURFACE_READBACK_PNG")
-                (concat (getenv "NEOMACS_GUI_FRAME_SNAPSHOT_JSON") "." stage ".png") t))))
+  (setq neomacs-spacing-pending-capture stage))
 
 (defun neomacs-spacing-step ()
   (condition-case err
-      (progn
+      (when (or (not neomacs-spacing-pending-capture)
+                (file-exists-p
+                 (concat (getenv "NEOMACS_GUI_FRAME_SNAPSHOT_JSON") "."
+                         neomacs-spacing-pending-capture ".captured")))
+        ;; The Rust driver acknowledges a stage only after reading its actual
+        ;; painted background. A timer firing is not presentation completion.
+        (setq neomacs-spacing-pending-capture nil)
         (when (> neomacs-spacing-phase 0) (set-buffer "*org-line-spacing*"))
         (pcase neomacs-spacing-phase
           (0
@@ -58,4 +62,4 @@
         (setq neomacs-spacing-phase (1+ neomacs-spacing-phase)))
     (error (message "Org line-spacing regression: %S" err) (kill-emacs 1))))
 
-(setq neomacs-spacing-timer (run-at-time 1 1 #'neomacs-spacing-step))
+(setq neomacs-spacing-timer (run-at-time 1 0.02 #'neomacs-spacing-step))

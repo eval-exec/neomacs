@@ -76,3 +76,8 @@ background. This establishes a pre-existing test failure, not identical
 failure modes or proof that all presentation behavior is unchanged. This
 separate timer/readback problem is not claimed fixed. The new regression
 uses native keyboard input and checks actual painted pixels.
+
+Follow-up: the separate capture failure was subsequently isolated to the
+spacing fixture's fixed-delay PNG sampling. See
+`2026-09-19-org-line-spacing-capture.md` for its reproduction and the bounded
+stage acknowledgment that replaces those delays.
