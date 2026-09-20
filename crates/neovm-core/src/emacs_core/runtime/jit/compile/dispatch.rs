@@ -2211,25 +2211,95 @@ pub extern "C" fn neovm_jit_cbsym_read(
     nargs: i64,
     out: *mut i64,
 ) -> i64 {
+    // SAFETY: see neovm_jit_call's function-level contract.
+    let ctx_ref = unsafe { &mut *(ctx as *mut Context) };
+    let which = which as u8;
+    // Advice/fset/override-immune: NO epoch guard. Bounce (general path) when
+    // the static entry is no longer a plain builtin, the arity is unexpected,
+    // or the harness forces it. Decided once, for both paths below.
+    if force_cbsym_generic()
+        || nargs as usize != cbsym_read_expected_nargs(which)
+        || !crate::emacs_core::eval::global_subr_is_builtin(SymId(sym as u32))
+    {
+        #[cfg(debug_assertions)]
+        CBSYM_SPEC_GENERIC_COUNT.fetch_add(1, Ordering::Relaxed);
+        return STATUS_NEED_GENERIC;
+    }
+    // The reads that only load already-published state answer here, outside
+    // the panic containment, as `neovm_jit_aref`'s fast path does: they walk
+    // no Lisp structure, allocate nothing and cannot signal. GNU answers each
+    // of these with one bytecode opcode (`Bpoint`, `Bpoint_min`, `Bbolp`,
+    // `Bmatch_beginning'), which is why 34,000 of them land here per org
+    // font-lock operation. Anything else -- the character reads,
+    // `current-buffer', or an argument these arms decline -- goes out of line
+    // to the contained path, which keeps this frame small enough for the
+    // bodies below to inline into it.
+    use crate::emacs_core::navigation;
+    let answered = match which {
+        CBSYM_A_POINT | CBSYM_A_POINT_MIN | CBSYM_A_POINT_MAX => {
+            match ctx_ref.buffers.current_buffer() {
+                Some(buf) => {
+                    let pos = match which {
+                        CBSYM_A_POINT => buf.point_lisp_char_pos(),
+                        CBSYM_A_POINT_MIN => buf.point_min_lisp_char_pos(),
+                        _ => buf.point_max_lisp_char_pos(),
+                    };
+                    Some(Value::fixnum(pos.as_i64()))
+                }
+                None => return STATUS_NEED_GENERIC,
+            }
+        }
+        CBSYM_A_MATCH_BEGINNING | CBSYM_A_MATCH_END => {
+            // SAFETY: the generated code stored exactly one argument word at
+            // `args_ptr` immediately before this call.
+            let group = Value::from_bits(unsafe { *args_ptr } as usize);
+            match group.as_fixnum().filter(|group| *group >= 0) {
+                Some(index) => Some(
+                    match ctx_ref
+                        .match_data
+                        .as_ref()
+                        .and_then(|md| md.group(index as usize))
+                    {
+                        Some(group) if which == CBSYM_A_MATCH_BEGINNING => {
+                            Value::fixnum(group.start() as i64)
+                        }
+                        Some(group) => Value::fixnum(group.end() as i64),
+                        None => Value::NIL,
+                    },
+                ),
+                None => return STATUS_NEED_GENERIC,
+            }
+        }
+        CBSYM_A_BOLP => navigation::builtin_bolp_0(ctx_ref).ok(),
+        CBSYM_A_EOLP => navigation::builtin_eolp_0(ctx_ref).ok(),
+        CBSYM_A_BOBP => navigation::builtin_bobp_0(ctx_ref).ok(),
+        CBSYM_A_EOBP => navigation::builtin_eobp_0(ctx_ref).ok(),
+        _ => None,
+    };
+    if let Some(value) = answered {
+        #[cfg(debug_assertions)]
+        CBSYM_SPEC_FAST_COUNT.fetch_add(1, Ordering::Relaxed);
+        // SAFETY: `out` is the generated code's result stack slot.
+        unsafe { *out = value.bits() as i64 };
+        return STATUS_OK;
+    }
+    cbsym_read_contained(ctx, which, args_ptr, out)
+}
+
+/// The Tier-A reads the fast path above does not answer: the two character
+/// reads, `current-buffer', and any arm that declined. Out of line and panic
+/// contained, as [`neovm_jit_aref`]'s slow path is.
+/// SAFETY: same vmctx contract as [`neovm_jit_call`]; the caller has already
+/// checked that the site is armed.
+#[cold]
+#[inline(never)]
+#[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
+fn cbsym_read_contained(ctx: *mut u8, which: u8, args_ptr: *const i64, out: *mut i64) -> i64 {
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
         #[cfg(debug_assertions)]
         CBSYM_SPEC_COUNT.fetch_add(1, Ordering::Relaxed);
-        let which = which as u8;
-        let nargs = nargs as usize;
         // SAFETY: see neovm_jit_call's function-level contract.
         let ctx = unsafe { &mut *(ctx as *mut Context) };
-        let sym_id = SymId(sym as u32);
-        // Advice/fset/override-immune: NO epoch guard. Bounce (general path) when the
-        // static entry is no longer a plain builtin, the arity is unexpected, or the
-        // harness forces it.
-        let armed = !force_cbsym_generic()
-            && nargs == cbsym_read_expected_nargs(which)
-            && crate::emacs_core::eval::global_subr_is_builtin(sym_id);
-        if !armed {
-            #[cfg(debug_assertions)]
-            CBSYM_SPEC_GENERIC_COUNT.fetch_add(1, Ordering::Relaxed);
-            return STATUS_NEED_GENERIC;
-        }
         // current-buffer: NEVER allocate. Read the already-materialized buffer value;
         // bounce when it was never made (general path -> make_buffer, rooted).
         if which == CBSYM_A_CURRENT_BUFFER {
@@ -2255,48 +2325,12 @@ pub extern "C" fn neovm_jit_cbsym_read(
         }
         #[cfg(debug_assertions)]
         CBSYM_SPEC_FAST_COUNT.fetch_add(1, Ordering::Relaxed);
-        // DELEGATE to the builtin body (GC-free OK path). match-beginning/end read
-        // ctx.match_data through the same published-register interface, so a
-        // separate register-read reimplementation could drift from Lisp.
-        // These are GNU's inline opcodes (Bpoint .. Bmatch_end): like the
-        // interpreter's inline tier (`Vm::op_point`, `call_fixed_builtin_direct`)
-        // they neither poll for quit nor push a frame, and the three hottest
-        // read the Context directly (34K reads per org font-lock op: point
-        // 14K, match-beginning 11K, match-end 5K).
+        // DELEGATE to the builtin body (GC-free OK path). These are GNU's
+        // inline opcodes: like the interpreter's inline tier (`Vm::op_point`,
+        // `call_fixed_builtin_direct`) they neither poll for quit nor push a
+        // frame.
         use crate::emacs_core::{editfns, navigation};
         let res = match which {
-            CBSYM_A_POINT | CBSYM_A_POINT_MIN | CBSYM_A_POINT_MAX => {
-                let Some(buf) = ctx.buffers.current_buffer() else {
-                    return STATUS_NEED_GENERIC;
-                };
-                let pos = match which {
-                    CBSYM_A_POINT => buf.point_lisp_char_pos(),
-                    CBSYM_A_POINT_MIN => buf.point_min_lisp_char_pos(),
-                    _ => buf.point_max_lisp_char_pos(),
-                };
-                Ok(Value::fixnum(pos.as_i64()))
-            }
-            CBSYM_A_MATCH_BEGINNING | CBSYM_A_MATCH_END => {
-                let group = Value::from_bits(unsafe { *args_ptr } as usize);
-                let Some(index) = group.as_fixnum().filter(|g| *g >= 0) else {
-                    return STATUS_NEED_GENERIC;
-                };
-                // Same reads as `builtin_match_beginning/end_with_state`, minus
-                // the argument re-validation and the timing wrapper.
-                Ok(
-                    match ctx
-                        .match_data
-                        .as_ref()
-                        .and_then(|md| md.group(index as usize))
-                    {
-                        Some(g) if which == CBSYM_A_MATCH_BEGINNING => {
-                            Value::fixnum(g.start() as i64)
-                        }
-                        Some(g) => Value::fixnum(g.end() as i64),
-                        None => Value::NIL,
-                    },
-                )
-            }
             CBSYM_A_BOLP => navigation::builtin_bolp_0(ctx),
             CBSYM_A_EOLP => navigation::builtin_eolp_0(ctx),
             CBSYM_A_BOBP => navigation::builtin_bobp_0(ctx),
