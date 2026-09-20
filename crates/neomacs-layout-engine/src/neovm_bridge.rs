@@ -2900,7 +2900,20 @@ impl LayoutCharPropertyLookup {
         };
         let overlays = buffer.layout_overlays();
         let mut overlay_ids = overlays.overlays_at_emacs_byte_pos(bytepos);
-        overlays.sort_overlay_ids_by_priority_desc(&mut overlay_ids);
+        // GNU's `sort_overlays' reads `priority' through `Foverlay_get', so an
+        // overlay carrying only a `category' is ordered by that symbol's
+        // `priority'. The overlay layer cannot follow a category on its own;
+        // this view already knows how, for the property values below.
+        let priority_property = Value::symbol("priority");
+        let category_property = Value::symbol("category");
+        let priority_of = |overlay: Value| -> Option<Value> {
+            if let Some(own) = overlays.overlay_get_named(overlay, priority_property) {
+                return Some(own);
+            }
+            let category = overlays.overlay_get_named(overlay, category_property)?;
+            buffer.layout_category_symbol_property(category, priority_property)
+        };
+        overlays.sort_overlay_ids_by_priority_desc_with(&mut overlay_ids, &priority_of);
         overlay_ids.reverse();
         overlay_ids
             .into_iter()

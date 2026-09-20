@@ -1743,6 +1743,70 @@ fn overlay_mouse_face_uses_the_highest_priority_effective_property() {
 }
 
 #[test]
+fn an_overlay_category_decides_priority_against_another_overlay() {
+    // GNU's `sort_overlays' reads `priority' through `Foverlay_get', so the
+    // overlay carrying only a `category' is ordered by that symbol's priority
+    // -- 1000 here -- and its face therefore stacks ABOVE the face of the
+    // overlay whose own priority is 10. Ordering by the overlay's own plist
+    // alone put it below, so redisplay showed the wrong face.
+    let mut eval = Context::new();
+    eval.eval_str("(put 'winning-category 'priority 1000)")
+        .expect("category priority");
+    eval.eval_str("(put 'winning-category 'face 'category-face)")
+        .expect("category face");
+    let buffer_id = eval.buffer_manager().current_buffer().unwrap().id();
+    {
+        let buffer = eval.buffer_manager_mut().get_mut(buffer_id).unwrap();
+        buffer.insert("xy");
+        let loser = Value::make_overlay(neovm_core::heap_types::OverlayDataInit {
+            serial: 1,
+            plist: Value::NIL,
+            buffer: Some(buffer_id),
+            start: 0,
+            end: 2,
+            front_advance: false,
+            rear_advance: false,
+        });
+        buffer.overlays_mut().insert_overlay(loser);
+        buffer
+            .overlays_mut()
+            .overlay_put(loser, Value::symbol("priority"), Value::fixnum(10))
+            .unwrap();
+        buffer
+            .overlays_mut()
+            .overlay_put(loser, Value::symbol("face"), Value::symbol("own-face"))
+            .unwrap();
+        let winner = Value::make_overlay(neovm_core::heap_types::OverlayDataInit {
+            serial: 2,
+            plist: Value::list(vec![
+                Value::symbol("category"),
+                Value::symbol("winning-category"),
+            ]),
+            buffer: Some(buffer_id),
+            start: 0,
+            end: 2,
+            front_advance: false,
+            rear_advance: false,
+        });
+        buffer.overlays_mut().insert_overlay(winner);
+    }
+    let buffer = eval.buffer_manager().get(buffer_id).unwrap();
+    let snapshot = LayoutBufferSnapshot::from_buffer_with_obarray(buffer, eval.obarray());
+
+    let faces = crate::neovm_bridge::overlay_faces_at(&snapshot, EmacsBytePos::new(0), None);
+
+    // Ascending precedence: the category's face is last, so it wins.
+    assert_eq!(
+        faces
+            .faces
+            .iter()
+            .map(|face| format!("{face}"))
+            .collect::<Vec<_>>(),
+        vec!["own-face".to_string(), "category-face".to_string()]
+    );
+}
+
+#[test]
 fn overlay_mouse_face_resolves_through_its_category() {
     let mut eval = Context::new();
     eval.eval_str("(put 'mouse-face-category 'mouse-face 'highlight)")
