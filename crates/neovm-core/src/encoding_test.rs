@@ -2700,3 +2700,39 @@ fn a_bad_line_in_a_charset_map_skips_that_line_not_the_map_like_gnu() {
     );
     assert_eq!(result, "OK ((nil nil nil 12288 nil) 50849 12288 42148)");
 }
+
+/// A EUC position byte is validated BEFORE the character is decoded. GNU
+/// treats a C0 byte, a byte in the C1 hole 0x80..0x9F, or one whose high bit
+/// disagrees with the lead byte's as `invalid_code'
+/// (`decode_coding_iso_2022', src/coding.c:3895-3901).
+///
+/// Without that check `0xC0 0x42' under euc-jp decoded as ONE character;
+/// GNU emits 0xC0 as a raw eight-bit byte and then decodes `B' normally, so
+/// the string is three characters, not two. The remaining rows are cases that
+/// already agreed with GNU and must not move -- in particular the lone 0xA0,
+/// the 0xFF lead, and a well-formed pair.
+///
+/// Expectations measured under GNU Emacs 31.1 (`tmp/rr/euc.el`).
+#[test]
+fn a_euc_position_byte_is_validated_before_decoding_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"(let ((probe (lambda (cs bytes)
+                          (append (decode-coding-string
+                                   (apply #'unibyte-string bytes) cs)
+                                  nil))))
+             (list (funcall probe 'euc-jp '(?A #xc0 ?B))
+                   (funcall probe 'euc-jp '(?A #xa1 #xa1 ?B))
+                   (funcall probe 'euc-jp '(#xa0))
+                   (funcall probe 'euc-jp '(#xff #xa1))
+                   (funcall probe 'euc-jp '(?A #xa1 #xa1 #xff))
+                   (funcall probe 'euc-jp '(?A #xa1 #xa1 #xc0))))"#,
+    );
+    assert_eq!(
+        result,
+        concat!(
+            "OK ((65 4194240 66) (65 12288 66) (4194208) (4194303 4194209) ",
+            "(65 12288 4194303) (65 12288 4194240))",
+        )
+    );
+}

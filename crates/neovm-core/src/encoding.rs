@@ -3184,7 +3184,25 @@ fn decode_via_euc(
     spec: &crate::emacs_core::coding::Iso2022Spec,
     eol: DosEolLookahead,
 ) -> DecodedSource {
-    decode_units(bytes, eol, |unit, sink| {
+    // Resolve each designated register ONCE per call rather than per decoded
+    // character. `charset_dimension_by_sym` is a thread-local borrow plus two
+    // registry probes, and this loop ran it for every character it decoded.
+    //
+    // Sound because an EUC designation cannot change mid-string: the profile
+    // has no escape sequences at all, which `euc_iso2022_spec` enforces by
+    // refusing any coding system carrying `IsoFlag::Designation` (or
+    // `SevenBits`). Do NOT copy this hoist into the full ISO-2022 decoder,
+    // where an escape sequence re-designates a register as the string is read.
+    let resolved = |register: Option<crate::emacs_core::intern::SymId>| {
+        let width = register
+            .and_then(crate::emacs_core::charset::charset_dimension_by_sym)
+            .unwrap_or(1) as usize;
+        (register, width)
+    };
+    let g1 = resolved(spec.initial[1]);
+    let g2 = resolved(spec.initial[2]);
+    let g3 = resolved(spec.initial[3]);
+    decode_units(bytes, eol, move |unit, sink| {
         let b = unit.byte()?;
         if b < 0x80 {
             sink.push(u32::from(b), None);
@@ -3196,14 +3214,11 @@ fn decode_via_euc(
         // (GNU's `decode_coding_iso_2022`).
         // SS2/SS3 spend a byte of their own; a plain GR byte is itself the
         // first byte of the register's code point.
-        let (register, shift_bytes) = match b {
-            0x8E => (spec.initial[2], 1),
-            0x8F => (spec.initial[3], 1),
-            _ => (spec.initial[1], 0),
+        let ((register, width), shift_bytes) = match b {
+            0x8E => (g2, 1),
+            0x8F => (g3, 1),
+            _ => (g1, 0),
         };
-        let width = register
-            .and_then(crate::emacs_core::charset::charset_dimension_by_sym)
-            .unwrap_or(1) as usize;
         let from = unit.start + shift_bytes;
         let rest = &unit.bytes[from.min(unit.bytes.len())..];
         // `ONE_MORE_BYTE` has to succeed for every position byte of the
@@ -3211,6 +3226,25 @@ fn decode_via_euc(
         // inside one leaves the whole character for the next read.
         if rest.len() < width {
             return Err(NoMoreSource);
+        }
+        // GNU checks each POSITION byte before it decodes the character
+        // (`decode_coding_iso_2022', src/coding.c:3895-3901): a C0 byte, a
+        // byte in the C1 hole 0x80..0x9F, or one whose high bit disagrees
+        // with the lead byte's is `invalid_code'. We decoded the pair
+        // regardless, so `0xC0 0x42' under euc-jp came out as ONE character
+        // where GNU emits 0xC0 as a raw byte and then decodes `B' normally.
+        //
+        // Restricted to a plain GR sequence: the byte after SS2/SS3 has its
+        // own rules (src/coding.c:3720-3742) which are not implemented here,
+        // and those rows already agree with GNU.
+        if shift_bytes == 0
+            && rest[1..width].iter().any(|&position| {
+                position < 0x20
+                    || (0x80..0xA0).contains(&position)
+                    || (b & 0x80) != (position & 0x80)
+            })
+        {
+            return invalid_code(unit, sink);
         }
         match decode_euc_register(register, rest) {
             Some((ch, consumed)) => {
