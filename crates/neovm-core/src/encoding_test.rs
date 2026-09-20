@@ -2673,3 +2673,30 @@ fn a_decoded_run_is_annotated_with_the_charsets_canonical_name_like_gnu() {
         )
     );
 }
+
+/// One unusable line in a charset map must skip that line, not discard the
+/// whole map. GNU's `load_charset_map_from_file' filters an entry outside the
+/// charset's code space or character range and carries on (src/charset.c:530).
+///
+/// This was not hypothetical. `big5-hkscs''s map opens with `0x8740', below
+/// that charset's own minimum lead byte, so the single `?' that rejected it
+/// threw away the entire map and left the charset dead: `decode-char' answered
+/// the raw code offset and `encode-char' answered nil for every character.
+///
+/// The filter also keeps the materialising loop bounded -- for a code-LINEAR
+/// charset the index is a plain subtraction with no upper bound, so a code
+/// past `max_code' would walk an enormous range.
+///
+/// Expectations measured under GNU Emacs 31.1 (`tmp/rr/hkscs.el`).
+#[test]
+fn a_bad_line_in_a_charset_map_skips_that_line_not_the_map_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"(list (mapcar (lambda (c) (decode-char 'big5-hkscs c))
+                        '(#x8740 #x8741 #x8862 #xA140 #xFFFF))
+                (encode-char #x2460 'big5-hkscs)
+                (decode-char 'big5 #xA140)
+                (encode-char ?中 'big5))"#,
+    );
+    assert_eq!(result, "OK ((nil nil nil 12288 nil) 50849 12288 42148)");
+}

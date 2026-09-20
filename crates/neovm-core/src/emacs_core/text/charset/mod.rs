@@ -83,10 +83,19 @@ fn parse_charset_map_file(path: &Path, info: &CharsetInfo) -> Option<CharsetMapD
             continue;
         }
         let mut fields = line.split_whitespace();
-        let source = fields.next()?;
-        let target = fields.next()?;
-        let (from, to) = parse_hex_range(source)?;
-        let from_char = parse_hex_i64(target)?;
+        // GNU skips an entry it cannot use and carries on with the rest of the
+        // file (`load_charset_map_from_file', src/charset.c). Every one of
+        // these used to abandon the WHOLE map, which is not a hypothetical:
+        // `big5-hkscs''s map opens with `0x8740', below that charset's own
+        // minimum lead byte, so the entire charset was silently dead and every
+        // `decode-char' for it answered the raw code offset instead.
+        let (Some(source), Some(target)) = (fields.next(), fields.next()) else {
+            continue;
+        };
+        let (Some((from, to)), Some(from_char)) = (parse_hex_range(source), parse_hex_i64(target))
+        else {
+            continue;
+        };
         // GNU `load_charset_map` (src/charset.c): a map entry "FROM-TO C" maps
         // the *code-point* range [FROM, TO] to consecutive characters starting
         // at C, but the stepping follows the charset's code-space — i.e. it is
@@ -97,11 +106,28 @@ fn parse_charset_map_file(path: &Path, info: &CharsetInfo) -> Option<CharsetMapD
         // then walk index by index, materializing each real code point via
         // INDEX_TO_CODE_POINT.  (The old code iterated raw integers, which
         // produced bogus code↔char pairs for every 4-byte charset.)
-        let from_index = charset_code_point_to_index(info, from)?;
+        // GNU's own range filter (src/charset.c:530-531), which also keeps the
+        // loop below bounded: for a code-LINEAR charset
+        // `charset_code_point_to_index' is a plain subtraction with no upper
+        // bound, so a code past `max_code' would otherwise produce an enormous
+        // index range to walk.
+        if from < info.min_code
+            || to > info.max_code
+            || from > to
+            || from_char > i64::from(crate::emacs_core::emacs_char::MAX_CHAR)
+        {
+            continue;
+        }
+        let Some(from_index) = charset_code_point_to_index(info, from) else {
+            continue;
+        };
         let to_index = if from == to {
             from_index
         } else {
-            charset_code_point_to_index(info, to)?
+            match charset_code_point_to_index(info, to) {
+                Some(index) => index,
+                None => continue,
+            }
         };
         if from_index < 0 || to_index < 0 || to_index < from_index {
             continue;
