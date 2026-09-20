@@ -247,6 +247,11 @@ jobs:
       # dependencies at all).  Three entries are easy to miss and mandatory:
       #   libdrm-devel  gstreamer-allocators-sys links drm (the .pc file passes
       #                 -ldrm), which the payload's DT_NEEDED does not reveal
+      #   dbus-devel    neovm-core depends on `dbus` for every unix but macOS,
+      #                 and `libdbus-sys`'s build script `panic!()`s outright
+      #                 when `dbus-1.pc` is missing -- it has no HAVE_DBUS=no
+      #                 mode. Ubuntu's list gets this as `libdbus-1-dev`
+      #                 (scripts/ci/setup-linux.sh); el9 calls it dbus-devel.
       #   gawk          neovm-core/build.rs generates Lisp with awk and panics
       #                 without GNU awk
       #   gcc-c++       simdutf (via rio-vt) compiles C++ and links libstdc++
@@ -265,9 +270,10 @@ jobs:
             make binutils cpio diffutils file gcc gcc-c++ pkgconf-pkg-config \
             gawk ncurses-devel fontconfig-devel freetype-devel glib2-devel \
             gstreamer1-devel gstreamer1-plugins-base-devel libdrm-devel \
+            dbus-devel \
             zlib-devel lcms2-devel rpm-build
           dnf install -y gstreamer1 gstreamer1-plugins-base glib2 fontconfig \
-            freetype ncurses-libs libstdc++ zlib libdrm
+            freetype ncurses-libs libstdc++ zlib libdrm dbus-libs
 
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
