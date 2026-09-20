@@ -2851,6 +2851,29 @@ impl Buffer {
         }
     }
 
+    /// Byte offsets of the three positions a compiled `(point)`, `(point-min)`
+    /// or `(point-max)` reads, measured from the start of the buffer object.
+    ///
+    /// GNU answers each of these with a single bytecode opcode reading a field
+    /// of `current_buffer`; these constants let the JIT do the same thing
+    /// instead of calling a shim that does the load on its behalf. See
+    /// [`TextPositionAnchor::CHAR_POS_OFFSET`] for why baking an offset is
+    /// sound for JIT-generated code and not for an AOT object.
+    pub(crate) const POINT_CHAR_POS_OFFSET: usize =
+        std::mem::offset_of!(Self, point) + TextPositionAnchor::CHAR_POS_OFFSET;
+    pub(crate) const BEGV_CHAR_POS_OFFSET: usize =
+        std::mem::offset_of!(Self, accessible_start) + TextPositionAnchor::CHAR_POS_OFFSET;
+    pub(crate) const ZV_CHAR_POS_OFFSET: usize =
+        std::mem::offset_of!(Self, accessible_end) + TextPositionAnchor::CHAR_POS_OFFSET;
+    /// The byte-coordinate twins, for `bobp`/`eobp`, which compare
+    /// `point_emacs_byte_pos` against the accessible region's byte bounds.
+    pub(crate) const POINT_EMACS_BYTE_POS_OFFSET: usize =
+        std::mem::offset_of!(Self, point) + TextPositionAnchor::EMACS_BYTE_POS_OFFSET;
+    pub(crate) const BEGV_EMACS_BYTE_POS_OFFSET: usize =
+        std::mem::offset_of!(Self, accessible_start) + TextPositionAnchor::EMACS_BYTE_POS_OFFSET;
+    pub(crate) const ZV_EMACS_BYTE_POS_OFFSET: usize =
+        std::mem::offset_of!(Self, accessible_end) + TextPositionAnchor::EMACS_BYTE_POS_OFFSET;
+
     /// Current point converted to a character position.
     pub fn point_char_pos(&self) -> CharPos0 {
         self.point.char_pos()
@@ -4946,6 +4969,146 @@ struct LiveBuffers {
     /// below are the only places it can be wrong, and the scan asserts it in
     /// debug builds.
     indirect: usize,
+}
+
+/// What JIT-generated code needs in order to read the current buffer's point
+/// and accessible bounds without calling a shim to do it.
+///
+/// GNU answers `(point)`, `(point-min)`, `(bobp)` and friends with a single
+/// bytecode opcode reading a field of `current_buffer`; we called a C-ABI shim
+/// whose own prologue and epilogue cost more than the read. These let the
+/// generated code walk the same chain the shim walks --
+/// `Context` -> `BufferManager` -> `LiveBuffers::slots` -> `Box<Buffer>`.
+///
+/// Everything here is JIT-ONLY. A baked host offset is a constant for the
+/// process that generated the code, not a portable fact, so an AOT object --
+/// which is loaded into a DIFFERENT build -- must never contain one.
+///
+/// Two of the hops CANNOT be baked, because std promises nothing about them:
+/// `Vec`'s field order and `Option<BufferId>`'s tag position. Those are probed
+/// on live values instead, in the shape of
+/// [`crate::tagged::header::LispValueVec::jit_slice_offsets`], and every probe
+/// returns `None` rather than a guess when it cannot prove what it found --
+/// the caller then emits nothing and keeps the shim.
+pub(crate) mod jit_layout {
+    use super::{Buffer, BufferId, BufferManager, LiveBuffers};
+    use std::sync::OnceLock;
+
+    /// `Option<Box<Buffer>>` is a single niche-optimised pointer word, so a
+    /// free slot reads as null and the generated code needs no tag test.
+    const _: () = assert!(
+        std::mem::size_of::<Option<Box<Buffer>>>() == std::mem::size_of::<usize>(),
+        "a slot must be one pointer word for the null test to mean `empty`"
+    );
+    const _: () = assert!(std::mem::size_of::<Option<BufferId>>() == 2 * WORD);
+
+    const WORD: usize = std::mem::size_of::<usize>();
+
+    pub(crate) const BUFFER_MANAGER_BUFFERS_OFFSET: usize =
+        std::mem::offset_of!(BufferManager, buffers);
+    pub(crate) const BUFFER_MANAGER_CURRENT_OFFSET: usize =
+        std::mem::offset_of!(BufferManager, current);
+    pub(crate) const LIVE_BUFFERS_SLOTS_OFFSET: usize = std::mem::offset_of!(LiveBuffers, slots);
+
+    fn find_unique(words: &[usize], want: usize) -> Option<usize> {
+        let mut hits = words.iter().enumerate().filter(|&(_, &w)| w == want);
+        let (index, _) = hits.next()?;
+        // A second hit means the value is ambiguous and the probe has proved
+        // nothing -- decline rather than pick one.
+        hits.next().is_none().then_some(index * WORD)
+    }
+
+    fn read_words<T>(value: &T) -> Vec<usize> {
+        let base = std::ptr::from_ref(value).cast::<usize>();
+        // SAFETY: reads whole words inside `value`.
+        (0..std::mem::size_of::<T>() / WORD)
+            .map(|i| unsafe { base.add(i).read_unaligned() })
+            .collect()
+    }
+
+    /// Byte offsets of the slot vector's data pointer and length, within the
+    /// `Vec` itself. `None` if they cannot be identified unambiguously.
+    pub(crate) fn slots_vec_offsets() -> Option<(usize, usize)> {
+        static OFFSETS: OnceLock<Option<(usize, usize)>> = OnceLock::new();
+        *OFFSETS.get_or_init(|| {
+            // Length and capacity are kept different so neither can be
+            // mistaken for the other.
+            let probe = |capacity: usize, length: usize| -> Option<(usize, usize)> {
+                let mut slots: Vec<Option<Box<Buffer>>> = Vec::with_capacity(capacity);
+                slots.resize_with(length, || None);
+                let words = read_words(&slots);
+                Some((
+                    find_unique(&words, slots.as_ptr() as usize)?,
+                    find_unique(&words, length)?,
+                ))
+            };
+            let first = probe(5, 3)?;
+            // A second, differently shaped vector must agree, or the match was
+            // a coincidence of this one's contents.
+            (first == probe(9, 7)?).then_some(first)
+        })
+    }
+
+    /// `(tag offset, payload offset, the tag value that means `None`)` for
+    /// `Option<BufferId>`. `BufferId` wraps a `u64` and so has no niche: the
+    /// option is two words whose order std does not fix.
+    pub(crate) fn current_option_layout() -> Option<(usize, usize, u64)> {
+        static LAYOUT: OnceLock<Option<(usize, usize, u64)>> = OnceLock::new();
+        *LAYOUT.get_or_init(|| {
+            const SENTINEL: u64 = 0x5EED_1234_ABCD_9876;
+            let read = |value: &Option<BufferId>| -> [u64; 2] {
+                let base = std::ptr::from_ref(value).cast::<u64>();
+                // SAFETY: the const assert above fixes this at two words.
+                unsafe { [base.read_unaligned(), base.add(1).read_unaligned()] }
+            };
+            let none = read(&None);
+            let some = read(&Some(BufferId(SENTINEL)));
+            let payload = match (some[0] == SENTINEL, some[1] == SENTINEL) {
+                (true, false) => 0,
+                (false, true) => 1,
+                // The sentinel landed in both words or neither: prove nothing.
+                _ => return None,
+            };
+            let tag = 1 - payload;
+            // The tag has to actually distinguish the two, or a null current
+            // buffer would read as present.
+            (none[tag] != some[tag]).then_some((tag * WORD, payload * WORD, none[tag]))
+        })
+    }
+
+    /// The address of the current buffer, reached exactly the way generated
+    /// code reaches it. Test-only: it is the oracle the walk test compares
+    /// `BufferManager::current_buffer` against.
+    #[cfg(test)]
+    pub(crate) fn current_buffer_ptr_via_walk(manager: &BufferManager) -> Option<*const Buffer> {
+        let (tag_off, payload_off, none_tag) = current_option_layout()?;
+        let (ptr_off, len_off) = slots_vec_offsets()?;
+        let base = std::ptr::from_ref(manager).cast::<u8>();
+        // SAFETY: every offset below is `offset_of!` or a validated probe on
+        // this very type, so each read is inside `manager`.
+        unsafe {
+            let current = base.add(BUFFER_MANAGER_CURRENT_OFFSET);
+            if current.add(tag_off).cast::<u64>().read_unaligned() == none_tag {
+                return None;
+            }
+            let id = current.add(payload_off).cast::<u64>().read_unaligned() as usize;
+            let slots = base
+                .add(BUFFER_MANAGER_BUFFERS_OFFSET)
+                .add(LIVE_BUFFERS_SLOTS_OFFSET);
+            if id >= slots.add(len_off).cast::<usize>().read_unaligned() {
+                return None;
+            }
+            // Each slot is ONE pointer word (the const assert above), so the
+            // vector's data pointer addresses an array of buffer pointers.
+            let slot = slots
+                .add(ptr_off)
+                .cast::<*const *const Buffer>()
+                .read_unaligned()
+                .add(id)
+                .read();
+            (!slot.is_null()).then_some(slot)
+        }
+    }
 }
 
 impl LiveBuffers {

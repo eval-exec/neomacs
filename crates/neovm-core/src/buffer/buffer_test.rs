@@ -3857,3 +3857,91 @@ fn killing_a_base_buffer_kills_its_indirect_children() {
         vec!["OK ((nil nil) nil)"],
     );
 }
+
+/// The JIT bakes [`Buffer::POINT_CHAR_POS_OFFSET`] and its two companions into
+/// generated code and loads through them directly, so a wrong offset would not
+/// fail to compile -- it would silently read a neighbouring field. Read through
+/// the raw offsets the way generated code does and require the same answer the
+/// accessors give, after point and the accessible region have all been moved to
+/// distinct values so no two fields could be confused for each other.
+#[test]
+fn the_baked_position_offsets_address_the_fields_the_accessors_read() {
+    let mut buf = buf_with_text("hello world");
+    buf.set_accessible_region_and_point_from_emacs_bytes(
+        EmacsByteRange::from_usize(2, 8),
+        EmacsBytePos::new(5),
+    );
+
+    // Distinct on purpose: BEGV 2, point 5, ZV 8. An offset that landed on the
+    // wrong anchor would still read a plausible position, so the three must not
+    // be allowed to coincide.
+    assert_eq!(buf.point_char_pos().get(), 5);
+    assert_eq!(buf.point_min_char_pos().get(), 2);
+    assert_eq!(buf.point_max_char_pos().get(), 8);
+
+    let base = std::ptr::from_ref(&buf).cast::<u8>();
+    // SAFETY: each offset is `offset_of!` within this very buffer object, so
+    // the address is inside `buf` and holds the `usize` the anchor stores.
+    let read = |offset: usize| unsafe { base.add(offset).cast::<usize>().read() };
+
+    assert_eq!(
+        read(Buffer::POINT_CHAR_POS_OFFSET),
+        buf.point_char_pos().get()
+    );
+    assert_eq!(
+        read(Buffer::BEGV_CHAR_POS_OFFSET),
+        buf.point_min_char_pos().get()
+    );
+    assert_eq!(
+        read(Buffer::ZV_CHAR_POS_OFFSET),
+        buf.point_max_char_pos().get()
+    );
+}
+
+/// JIT-generated code reaches the current buffer by walking
+/// `Context` -> `BufferManager` -> `LiveBuffers::slots` -> `Box<Buffer>` with
+/// baked offsets and two probed layouts, instead of calling a shim to do it.
+/// A wrong offset there is not a compile error -- it is a wild read -- so the
+/// walk is exercised here against the accessor it must agree with.
+///
+/// The `swap_buffer_text` row is why the walk exists at all. Caching the
+/// current buffer's ADDRESS would be faster still, but swapping text removes
+/// and re-inserts the current buffer under the same id, moving a LIVE current
+/// buffer to a new address; a cache would have to be invalidated there and at
+/// every kill. Walking has no such surface, and costs a handful of loads.
+#[test]
+fn the_jit_buffer_walk_finds_what_current_buffer_finds() {
+    use crate::buffer::buffer::jit_layout;
+
+    let agrees = |mgr: &BufferManager, what: &str| {
+        let walked = jit_layout::current_buffer_ptr_via_walk(mgr);
+        let expected = mgr.current_buffer().map(std::ptr::from_ref);
+        assert_eq!(walked, expected, "{what}");
+    };
+
+    assert!(
+        jit_layout::slots_vec_offsets().is_some(),
+        "the slot-vector probe must succeed on this host, or no site inlines"
+    );
+    assert!(jit_layout::current_option_layout().is_some());
+
+    let mut mgr = BufferManager::new();
+    let first = mgr.create_buffer("*first*");
+    let second = mgr.create_buffer("*second*");
+
+    mgr.set_current(first);
+    agrees(&mgr, "a plain current buffer");
+
+    mgr.set_current(second);
+    agrees(&mgr, "after switching buffers");
+
+    // The hazard: this relocates a live current buffer under the same id.
+    mgr.swap_buffer_text(first, second);
+    agrees(&mgr, "after buffer-swap-text moved the current buffer");
+
+    mgr.kill_buffer(second);
+    agrees(&mgr, "after killing the current buffer");
+
+    mgr.set_current(first);
+    agrees(&mgr, "after making a surviving buffer current again");
+}

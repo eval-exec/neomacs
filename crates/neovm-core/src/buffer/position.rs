@@ -141,6 +141,23 @@ impl TextPositionAnchor {
         emacs_byte_pos: EmacsBytePos::ZERO,
     };
 
+    /// Byte offset of the character coordinate inside this anchor.
+    ///
+    /// The JIT bakes this so a compiled `(point)` loads the position out of the
+    /// buffer directly instead of calling a shim to do it. `offset_of!` reports
+    /// the offset the compiler actually chose, so nothing here assumes a field
+    /// order; and the JIT only ever generates code for the host it is running
+    /// on, so a baked host offset is a constant, not a portability claim. An
+    /// AOT object, which is loaded into a DIFFERENT build, must never bake it.
+    pub(crate) const CHAR_POS_OFFSET: usize = std::mem::offset_of!(Self, char_pos);
+
+    /// The byte coordinate's offset, the twin of [`Self::CHAR_POS_OFFSET`].
+    ///
+    /// `bobp`/`eobp` compare BYTE positions, not character ones, so they need
+    /// this rather than the character offset -- reusing the other would
+    /// compare the wrong pair of coordinates and still typecheck.
+    pub(crate) const EMACS_BYTE_POS_OFFSET: usize = std::mem::offset_of!(Self, emacs_byte_pos);
+
     pub const fn new(char_pos: CharPos0, emacs_byte_pos: EmacsBytePos) -> Self {
         Self {
             char_pos,

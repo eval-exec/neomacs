@@ -19,6 +19,11 @@ pub(crate) const CONTEXT_QUIT_FLAG_OFFSET: usize = std::mem::offset_of!(Context,
 /// See [`CONTEXT_QUIT_FLAG_OFFSET`].
 pub(crate) const CONTEXT_THROW_ON_INPUT_OFFSET: usize =
     std::mem::offset_of!(Context, throw_on_input);
+/// Where compiled code finds the buffer manager, the first hop of the walk to
+/// the current buffer's `point` / `BEGV` / `ZV`. See
+/// [`crate::buffer::buffer::jit_layout`] for the rest of the chain and for why
+/// two of its hops are probed rather than baked.
+pub(crate) const CONTEXT_BUFFERS_OFFSET: usize = std::mem::offset_of!(Context, buffers);
 /// Where compiled code reads `Context::quit_requested`'s `Arc` pointer.
 pub(crate) const CONTEXT_QUIT_REQUESTED_OFFSET: usize =
     std::mem::offset_of!(Context, quit_requested);
