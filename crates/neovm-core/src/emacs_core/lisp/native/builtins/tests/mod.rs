@@ -19279,3 +19279,62 @@ fn an_overlays_category_supplies_its_priority_like_gnu() {
     );
     assert_eq!(result, "OK (1000 1 bold bold (5 italic) (nil italic))");
 }
+
+/// A `define-hash-table-test` table is stored by key IDENTITY, so a lookup has
+/// to work out which stored key the wanted one matches. The bucket index makes
+/// that flat in the table size, the way GNU's per-entry hash plus bucket chain
+/// does (fns.c:5086-5100), and this pins the semantics it must not change.
+///
+/// The first row is the ordering case: every key collides on hash 42 and the
+/// comparison matches on the first character, so several stored keys are
+/// candidates for one lookup. It also shows why two cmp-equal keys cannot
+/// accumulate -- `puthash "a2"` finds the existing `"a1"` entry and overwrites
+/// it rather than adding a second -- and that `remhash "a9"` removes `"a1"`.
+///
+/// Expectations measured under GNU Emacs 31.1 (`tmp/rr/htsem3.el`).
+#[test]
+fn a_user_defined_hash_table_test_answers_like_gnu_through_the_bucket_index() {
+    crate::test_utils::init_test_tracing();
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"(progn
+             (define-hash-table-test 'ht-collide
+               (lambda (a b) (equal (substring a 0 1) (substring b 0 1)))
+               (lambda (_k) 42))
+             (define-hash-table-test 'ht-plain
+               (lambda (a b) (equal a b))
+               (lambda (k) (sxhash-equal k)))
+             (list
+              (let ((h (make-hash-table :test 'ht-collide)))
+                (puthash "a1" 'first h) (puthash "b1" 'other h)
+                (list (gethash "a1" h) (gethash "a2" h) (gethash "b9" h)
+                      (gethash "zz" h) (hash-table-count h)
+                      (progn (puthash "a2" 'second h)
+                             (list (gethash "a1" h) (hash-table-count h)))
+                      (progn (remhash "a9" h)
+                             (list (gethash "a1" h) (gethash "b1" h)
+                                   (hash-table-count h)))))
+              (let ((h (make-hash-table :test 'ht-plain)))
+                (dotimes (i 5) (puthash (format "k%d" i) i h))
+                (list (gethash "k3" h)
+                      (progn (puthash "k3" 99 h) (gethash "k3" h))
+                      (progn (remhash "k3" h) (gethash "k3" h 'missing))
+                      (progn (puthash "k3" 7 h) (gethash "k3" h))
+                      (hash-table-count h)
+                      (let (acc) (maphash (lambda (k v) (push (cons k v) acc)) h)
+                           (sort (nreverse acc)
+                                 (lambda (x y) (string< (car x) (car y)))))))
+              (let ((h (make-hash-table :test 'ht-plain)))
+                (puthash "x" 1 h) (clrhash h)
+                (list (gethash "x" h 'gone) (hash-table-count h)
+                      (progn (puthash "x" 2 h) (gethash "x" h))))))"#,
+    );
+    assert_eq!(
+        result,
+        concat!(
+            "OK (",
+            "(first first other nil 2 (second 2) (nil other 1)) ",
+            r#"(3 99 missing 7 5 (("k0" . 0) ("k1" . 1) ("k2" . 2) ("k3" . 7) ("k4" . 4))) "#,
+            "(gone 0 2))",
+        )
+    );
+}

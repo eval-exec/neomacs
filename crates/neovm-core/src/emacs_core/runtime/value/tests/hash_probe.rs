@@ -305,3 +305,91 @@ fn retain_entries_matches_removal_by_key_in_iteration_order() {
         assert_eq!(fresh(&mut storage), fresh(&mut by_key), "{test:?}");
     }
 }
+
+/// `user_hash_incomplete` derives "some live key has no remembered hash" from
+/// `index.len() != user_hashes.len()`, which is exact only while neither memo
+/// map holds a key that is no longer in the index.
+///
+/// A stale memo is not merely wasted space: it would cancel against a live
+/// unhashed key, making the comparison read "complete" when it is not, and a
+/// lookup would then answer the default for a key that IS present. So every
+/// removal path has to drop the memo -- including `retain_entries`, the weak
+/// table sweep, which frees slots itself instead of going through `remove`
+/// and is the one that would otherwise be missed.
+#[test]
+fn every_removal_path_drops_the_user_hash_memo() {
+    let test = HashTableTest::Equal;
+    let key_of = |i: i64| Value::fixnum(i).to_hash_key_swp(&test, false);
+
+    let mut storage = HashTableStorage::with_capacity(8);
+    for i in 0..6 {
+        let key = Value::fixnum(i);
+        storage.insert(key_of(i), key, key);
+        storage.set_user_hash(key_of(i), i % 2);
+    }
+    assert!(!storage.user_hash_incomplete(), "all six were remembered");
+
+    // remove
+    storage.remove(&key_of(0));
+    // remove_by_value
+    storage.remove_by_value(Value::fixnum(1), test, false);
+    // retain_entries: the weak sweep. Drop 2 and 3, keep the rest.
+    storage.retain_entries(|key, _| !matches!(key.as_fixnum(), Some(2 | 3)));
+
+    let live: Vec<_> = (0..6)
+        .filter(|i| storage.contains_key(&key_of(*i)))
+        .collect();
+    assert_eq!(live, vec![4, 5], "only 4 and 5 should survive");
+
+    for key in storage.remembered_user_hash_keys() {
+        assert!(
+            storage.contains_key(&key),
+            "a removal path left a memo for a key no longer in the table"
+        );
+    }
+    assert!(
+        !storage.user_hash_incomplete(),
+        "the survivors are all remembered, so nothing is incomplete"
+    );
+    // The buckets must have been pruned too, not just `user_hashes`.
+    for hash in [0, 1] {
+        for key in storage.user_candidates(hash) {
+            assert!(
+                storage.contains_key(key),
+                "a bucket still names a removed key"
+            );
+        }
+    }
+
+    storage.clear();
+    assert!(storage.remembered_user_hash_keys().is_empty());
+    assert!(storage.user_candidates(0).is_empty());
+    assert!(storage.user_candidates(1).is_empty());
+}
+
+/// A Lisp hash function is free to answer differently for the same key on two
+/// calls -- GNU never sees this because it hashes once, at insertion -- so
+/// re-remembering a key must move it between buckets rather than leave it in
+/// both.
+#[test]
+fn re_remembering_a_key_moves_it_between_buckets() {
+    let test = HashTableTest::Equal;
+    let key = Value::fixnum(7);
+    let hash_key = key.to_hash_key_swp(&test, false);
+
+    let mut storage = HashTableStorage::with_capacity(4);
+    storage.insert(hash_key.clone(), key, key);
+    storage.set_user_hash(hash_key.clone(), 100);
+    assert_eq!(storage.user_candidates(100).len(), 1);
+
+    storage.set_user_hash(hash_key.clone(), 200);
+    assert!(
+        storage.user_candidates(100).is_empty(),
+        "the key was left behind in its old bucket"
+    );
+    assert_eq!(storage.user_candidates(200).len(), 1);
+
+    // Re-recording the SAME hash must not duplicate the key in its bucket.
+    storage.set_user_hash(hash_key, 200);
+    assert_eq!(storage.user_candidates(200).len(), 1);
+}

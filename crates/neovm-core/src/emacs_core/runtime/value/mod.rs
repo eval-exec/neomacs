@@ -715,6 +715,24 @@ pub struct HashTableStorage {
     /// lookup is flat where ours grew with the table. Stale entries (for keys
     /// since removed) are harmless: only keys still in the index are consulted.
     user_hashes: rustc_hash::FxHashMap<HashKey, i64>,
+    /// The reverse of `user_hashes`: which stored keys carry a given hash.
+    ///
+    /// This is GNU's bucket vector plus next-chain (`hash_find_with_hash`,
+    /// fns.c:5086-5100) in map form, and it is what makes a user-test lookup
+    /// flat in the table size instead of linear: without it, finding the keys
+    /// that hash alike means walking every live key.
+    ///
+    /// INVARIANT: a key appears here under `h` exactly when `user_hashes` maps
+    /// it to `h`, and neither map holds a key absent from `index`. The second
+    /// half matters more than it looks. `user_hash_incomplete` derives "some
+    /// live key has no remembered hash" from a length comparison, and a STALE
+    /// entry (a removed key still remembered) would cancel against a live
+    /// unhashed key and make that comparison read "complete" when it is not --
+    /// a lookup would then answer the default for a key that is present. So
+    /// every removal path drops the memo: `remove`, `remove_by_value`,
+    /// `clear`, and `retain_entries` (the weak-table sweep, which frees slots
+    /// itself and is the one that would otherwise be missed).
+    user_buckets: rustc_hash::FxHashMap<i64, smallvec::SmallVec<[HashKey; 1]>>,
     /// Dump entries not yet hydrated into `index`/`slots` (GNU pdumper's
     /// hash_rehash_needed, lazily: most loaded tables are never touched at
     /// startup, so the loader parks decoded entries here and the FIRST
@@ -773,6 +791,7 @@ impl HashTableStorage {
             slots: Vec::with_capacity(capacity),
             free_slots: Vec::new(),
             user_hashes: rustc_hash::FxHashMap::default(),
+            user_buckets: rustc_hash::FxHashMap::default(),
             pending: None,
         }
     }
@@ -923,12 +942,15 @@ impl HashTableStorage {
         test: HashTableTest,
         symbols_with_pos_enabled: bool,
     ) -> Option<Value> {
-        let slot = match ValueKeyProbe::new(value, test, symbols_with_pos_enabled) {
-            Some(probe) => self.index.remove(&probe)?,
+        // `remove_entry` rather than `remove`: the owned key is what
+        // `forget_user_hash` needs to keep the memo maps from going stale.
+        let (removed_key, slot) = match ValueKeyProbe::new(value, test, symbols_with_pos_enabled) {
+            Some(probe) => self.index.remove_entry(&probe)?,
             None => self
                 .index
-                .remove(&value.to_hash_key_swp(&test, symbols_with_pos_enabled))?,
+                .remove_entry(&value.to_hash_key_swp(&test, symbols_with_pos_enabled))?,
         };
+        self.forget_user_hash(&removed_key);
         self.remove_slot(slot)
     }
     pub fn get_mut(&mut self, key: &HashKey) -> Option<&mut Value> {
@@ -996,6 +1018,7 @@ impl HashTableStorage {
 
     pub fn remove(&mut self, key: &HashKey) -> Option<Value> {
         let slot = self.index.remove(key)?;
+        self.forget_user_hash(key);
         self.remove_slot(slot)
     }
     /// Free the entry at `slot` (already unlinked from the index) and hand
@@ -1013,6 +1036,7 @@ impl HashTableStorage {
         self.slots.clear();
         self.free_slots.clear();
         self.user_hashes.clear();
+        self.user_buckets.clear();
     }
 
     /// What the user-defined hash function answered for `key`, if it has been
@@ -1023,7 +1047,58 @@ impl HashTableStorage {
 
     /// Remember what the user-defined hash function answered for `key`.
     pub fn set_user_hash(&mut self, key: HashKey, hash: i64) {
-        self.user_hashes.insert(key, hash);
+        if let Some(previous) = self.user_hashes.insert(key.clone(), hash) {
+            if previous == hash {
+                return;
+            }
+            // The user's hash function answered differently for a key it has
+            // already been asked about. GNU would never see this (it hashes
+            // once, at insertion), but a Lisp hash function is free to be
+            // inconsistent, and leaving the key in its old bucket would strand
+            // it there. Move it.
+            self.drop_from_user_bucket(previous, &key);
+        }
+        self.user_buckets.entry(hash).or_default().push(key);
+    }
+
+    /// The stored keys whose remembered user hash is `hash`.
+    ///
+    /// These are candidates, not answers: the caller still runs the user's
+    /// equality function over them, exactly as GNU compares `hash ==
+    /// HASH_HASH (h, i)` before calling `cmpfn` (fns.c:5095-5099).
+    pub fn user_candidates(&self, hash: i64) -> &[HashKey] {
+        self.user_buckets.get(&hash).map_or(&[][..], |keys| keys)
+    }
+
+    /// Whether any live key's user hash is NOT remembered, in which case a
+    /// bucket probe can miss and the caller must fall back to the full walk.
+    ///
+    /// Exact only because no removal path leaves a memo behind -- see the
+    /// invariant on `user_buckets`.
+    pub fn user_hash_incomplete(&self) -> bool {
+        self.index.len() != self.user_hashes.len()
+    }
+
+    /// Forget `key`'s remembered hash, keeping both maps in step.
+    fn forget_user_hash(&mut self, key: &HashKey) {
+        if let Some(hash) = self.user_hashes.remove(key) {
+            self.drop_from_user_bucket(hash, key);
+        }
+    }
+
+    fn drop_from_user_bucket(&mut self, hash: i64, key: &HashKey) {
+        if let Some(bucket) = self.user_buckets.get_mut(&hash) {
+            bucket.retain(|stored| stored != key);
+            if bucket.is_empty() {
+                self.user_buckets.remove(&hash);
+            }
+        }
+    }
+
+    /// Every key with a remembered hash, for the consistency test.
+    #[cfg(test)]
+    pub fn remembered_user_hash_keys(&self) -> Vec<HashKey> {
+        self.user_hashes.keys().cloned().collect()
     }
 
     pub fn reserve(&mut self, additional: usize) {
@@ -1087,12 +1162,26 @@ impl HashTableStorage {
     pub fn retain_entries(&mut self, mut keep: impl FnMut(Value, Value) -> bool) {
         let slots = &mut self.slots;
         let free_slots = &mut self.free_slots;
-        self.index.retain(|_, &mut slot| {
+        // The weak-table sweep frees slots here rather than going through
+        // `remove`, so it is the one removal path that would leave the user
+        // hash memos behind. A stale memo is not merely wasted memory: it
+        // skews `user_hash_incomplete` and can make a present key look absent.
+        let user_hashes = &mut self.user_hashes;
+        let user_buckets = &mut self.user_buckets;
+        self.index.retain(|key, &mut slot| {
             let entry = slots[slot]
                 .as_ref()
                 .expect("hash index points to an empty entry slot");
             if keep(entry.key, entry.value) {
                 return true;
+            }
+            if let Some(hash) = user_hashes.remove(key)
+                && let Some(bucket) = user_buckets.get_mut(&hash)
+            {
+                bucket.retain(|stored| stored != key);
+                if bucket.is_empty() {
+                    user_buckets.remove(&hash);
+                }
             }
             slots[slot] = None;
             free_slots.push(slot);
@@ -1116,6 +1205,15 @@ impl HashTableStorage {
     }
 
     pub fn replace_pointer_key(&mut self, old_ptr: usize, new_ptr: usize, new_key: Value) {
+        // A user-test table never reaches here: both call sites guard on an
+        // `Eq`/`Eql` test, and a `define-hash-table-test` table is created
+        // with `Equal`. That matters because re-keying an entry in place
+        // would strand its old `HashKey` in `user_buckets`. Enforce the
+        // guarantee rather than rely on it.
+        debug_assert!(
+            self.user_hashes.is_empty(),
+            "replace_pointer_key on a table carrying user hashes would strand a bucket entry"
+        );
         let old = HashKey::Ptr(old_ptr);
         let Some(slot) = self.index.remove(&old) else {
             return;

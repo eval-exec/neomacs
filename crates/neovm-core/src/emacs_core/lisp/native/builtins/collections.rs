@@ -693,18 +693,23 @@ fn user_test_candidates_by_hash(table: Value, wanted: i64) -> (Vec<(HashKey, Val
     let Some(ht) = table.as_hash_table() else {
         return (Vec::new(), true);
     };
-    let mut candidates = Vec::new();
-    let mut unknown = false;
-    for key in ht.data.live_hash_keys_in_slot_order() {
-        match ht.data.user_hash(key) {
-            Some(hash) if hash == wanted => {
-                candidates.push((key.clone(), hash_key_to_visible_value(ht, key)));
-            }
-            Some(_) => {}
-            None => unknown = true,
-        }
-    }
-    (candidates, unknown)
+    // GNU reaches the keys that hash alike through a bucket vector and a
+    // next-chain (`hash_find_with_hash', fns.c:5086-5100) rather than by
+    // walking the table, which is why its lookup is flat in the table size.
+    // `user_candidates' is that bucket.
+    //
+    // The `contains_key' filter is deliberate belt-and-braces: every removal
+    // path drops the memo, so a bucket should never name a dead key, but if
+    // one ever did this turns the bug into a slower answer rather than a
+    // wrong one.
+    let candidates = ht
+        .data
+        .user_candidates(wanted)
+        .iter()
+        .filter(|key| ht.data.contains_key(key))
+        .map(|key| (key.clone(), hash_key_to_visible_value(ht, key)))
+        .collect();
+    (candidates, ht.data.user_hash_incomplete())
 }
 
 fn builtin_gethash_user_defined(
@@ -932,7 +937,14 @@ fn builtin_puthash_user_defined(
             *slot = value;
         } else {
             maybe_resize_hash_table_for_insert(ht, true);
-            ht.insert(storage_key, key_value, value);
+            ht.insert(storage_key.clone(), key_value, value);
+        }
+        // Record here too, not only on the fast arm above. `unknown' is
+        // derived from "every live key has a remembered hash", so a single
+        // insert that skipped this would make every later lookup take the
+        // full walk for the rest of the table's life.
+        if let Some(wanted_bits) = wanted.as_fixnum() {
+            ht.data.set_user_hash(storage_key, wanted_bits);
         }
     });
     Ok(Some(()))
@@ -1007,11 +1019,45 @@ fn builtin_remhash_user_defined(
         return Ok(None);
     };
     check_mutable_hash_table(table)?;
+    // Same fast arm as `gethash'/`puthash': the remembered hashes pick the
+    // candidates, so only the keys that hash alike reach the user's equality
+    // function and the table is neither cloned nor snapshot-rooted. Without
+    // this, `remhash' walked and re-hashed every entry -- it was the most
+    // expensive of the three by an order of magnitude.
+    let wanted = hash_table_user_hash(eval, table, hash_function, key_value)?;
+    if let Some(wanted_bits) = wanted.as_fixnum() {
+        let (candidates, unknown) = user_test_candidates_by_hash(table, wanted_bits);
+        let root_scope = eval.save_specpdl_roots();
+        for (_, candidate) in &candidates {
+            eval.push_specpdl_root(*candidate);
+        }
+        let matched = (|| -> Result<Option<HashKey>, Flow> {
+            for (key, candidate) in &candidates {
+                if hash_table_user_keys_equal(eval, table, cmp_function, key_value, *candidate)?
+                    .is_truthy()
+                {
+                    return Ok(Some(key.clone()));
+                }
+            }
+            Ok(None)
+        })();
+        eval.restore_specpdl_roots(root_scope);
+        if let Some(storage_key) = matched? {
+            let _ = table.with_hash_table_mut(|ht| {
+                let _ = ht.data.remove(&storage_key);
+            });
+            return Ok(Some(()));
+        }
+        if !unknown {
+            return Ok(Some(()));
+        }
+    }
+
     let ht_snapshot = ht_ref.clone();
     let root_scope = eval.save_specpdl_roots();
     eval.push_specpdl_root(hash_snapshot_root_holder(&ht_snapshot));
     let existing_key = (|| -> Result<Option<HashKey>, Flow> {
-        let wanted_hash = hash_table_user_hash(eval, table, hash_function, key_value)?;
+        let wanted_hash = wanted;
         let mut existing_key = None;
         for key in ht_snapshot.live_hash_keys_in_slot_order() {
             if !ht_snapshot.data.contains_key(key) {
