@@ -10927,6 +10927,51 @@ fn load_form_log_preview_keeps_source_elisp_forms() {
 }
 
 #[test]
+fn load_elc_preserves_unicode_symbol_identity() {
+    crate::test_utils::init_test_tracing();
+    let dir = tempfile::tempdir().expect("fixture directory");
+    let compiled = dir.path().join("colors.elc");
+    // GNU source_file_get decodes characters before tokenization. In 蠟,
+    // the continuation byte A0 must not become a whitespace delimiter.
+    fs::write(
+        &compiled,
+        "(defconst n-白 \"#ffffff\")\n(defconst n-蠟白 \"#FEF8DE\")\n",
+    )
+    .unwrap();
+    let mut eval = Context::new();
+    load_file(&mut eval, &compiled).expect("load Unicode constants");
+    assert_eq!(
+        format_eval_result(&eval.eval_str("(list n-白 n-蠟白)")),
+        "OK (\"#ffffff\" \"#FEF8DE\")"
+    );
+}
+
+#[test]
+fn load_elc_decodes_characters_but_skips_docstring_bytes() {
+    crate::test_utils::init_test_tracing();
+    let dir = tempfile::tempdir().expect("fixture directory");
+    let compiled = dir.path().join("reader-boundary.elc");
+    let payload = " 文档蠟\u{1f}";
+    let mut bytes = format!("#@{}{}", payload.len(), payload).into_bytes();
+    bytes.extend_from_slice("(setq probe (list ?白 \"é\" \"白\" ".as_bytes());
+    bytes.extend_from_slice(b"\"\xff\" \"\xc3\" \"\xc3(\" \"\xf8\x88\x80\x80\x80\"))\n");
+    fs::write(&compiled, bytes).unwrap();
+    let mut eval = Context::new();
+    load_file(&mut eval, &compiled).expect("load mixed encoded file");
+    // Verified with GNU source_file_get: valid multibyte runs are decoded,
+    // malformed runs preserve their bytes, including the following '('.
+    // The five-byte character is Emacs-specific, outside Unicode.
+    assert_eq!(
+        format_eval_result(&eval.eval_str(
+            "(cons (car probe)
+               (mapcar (lambda (s) (list (multibyte-string-p s) (append s nil)))
+                       (cdr probe)))"
+        )),
+        "OK (30333 (t (233)) (t (30333)) (nil (255)) (nil (195)) (nil (195 40)) (t (2097152)))"
+    );
+}
+
+#[test]
 fn load_elc_is_supported() {
     crate::test_utils::init_test_tracing();
     // .elc files are now supported. A valid .elc with a simple setq should work.

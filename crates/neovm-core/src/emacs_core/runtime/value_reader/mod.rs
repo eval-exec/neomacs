@@ -140,7 +140,7 @@ pub fn read_one_with_source_multibyte(
     Ok(Some((value, reader.pos)))
 }
 
-/// Read one form from the Latin-1 envelope used for compiled-file bytes.
+/// Read one form from encoded compiled-file bytes, retaining byte offsets.
 ///
 /// This is intentionally separate from the unibyte string API above.  GNU
 /// decodes file input but preserves each byte of unibyte Lisp objects.
@@ -438,7 +438,10 @@ impl ReaderSourceSemantics {
     }
 
     const fn is_multibyte(self) -> bool {
-        matches!(self, Self::MultibyteCharacters)
+        match self {
+            Self::MultibyteCharacters | Self::EncodedFileBytes => true,
+            Self::UnibyteCharacters => false,
+        }
     }
 }
 
@@ -1336,70 +1339,6 @@ impl<'a> Reader<'a> {
             // string builder preserves the raw byte and keeps the result
             // unibyte, even when adjacent bytes happen to form valid UTF-8.
             Self::push_string_char(buf, flags, emacs_char::byte8_to_char(code as u8));
-            return;
-        }
-
-        if self.source_semantics == ReaderSourceSemantics::EncodedFileBytes
-            && (0x80..=0xFF).contains(&code)
-        {
-            // Compiled-file bytes arrive through a Latin-1 `&str` envelope.
-            // GNU's file source decodes valid multibyte byte runs before the
-            // string parser, so reconstruct those runs only in this state.
-            let byte0 = code as u8;
-            let decoded = if byte0 >= 0xC0 {
-                let expected_len = if byte0 < 0xE0 {
-                    2
-                } else if byte0 < 0xF0 {
-                    3
-                } else if byte0 < 0xF8 {
-                    4
-                } else {
-                    0
-                };
-                if expected_len >= 2 {
-                    let save_pos = self.pos;
-                    let mut utf8_bytes = vec![byte0];
-                    let mut ok = true;
-                    for _ in 1..expected_len {
-                        match self.current_code() {
-                            Some(c) if (0x80..=0xBF).contains(&c) => {
-                                utf8_bytes.push(c as u8);
-                                self.bump();
-                            }
-                            _ => {
-                                ok = false;
-                                break;
-                            }
-                        }
-                    }
-                    if ok {
-                        if let Ok(s) = std::str::from_utf8(&utf8_bytes) {
-                            s.chars().next().map(|ch| ch as u32)
-                        } else {
-                            self.pos = save_pos;
-                            None
-                        }
-                    } else {
-                        self.pos = save_pos;
-                        None
-                    }
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-
-            if let Some(decoded_code) = decoded {
-                Self::push_string_char(buf, flags, decoded_code);
-            } else {
-                // A high byte that begins no valid multibyte run is a raw
-                // byte.  GNU's file source hands `read_string_literal` a
-                // BYTE8 character for it, so route it as one: it stays the
-                // raw byte in a unibyte literal, and becomes a well-formed
-                // BYTE8 sequence if some later character forces multibyte.
-                Self::push_string_char(buf, flags, emacs_char::byte8_to_char(byte0));
-            }
             return;
         }
 
@@ -2543,16 +2482,8 @@ impl<'a> Reader<'a> {
         }
     }
 
-    /// Advance `pos` past `len` source bytes from a `.elc` file.
-    ///
-    /// `.elc` bytes are Latin-1-decoded into a Rust `String` so that every
-    /// source byte (including raw 0x80..=0xFF) becomes exactly one `char`.
-    /// `#@LEN` skips count source bytes, not UTF-8 bytes, so we advance by
-    /// `len` chars and let each char contribute its actual UTF-8 width to
-    /// `pos`. A naive byte-wise advance would under-skip by 1 for every
-    /// 0x80..=0xFF source byte (which becomes a 2-byte UTF-8 sequence in
-    /// our `String`) and land mid-docstring on files like `window.elc`,
-    /// where docstrings contain U+2019 (`'`) stored as `0xe2 0x80 0x99`.
+    /// Skip raw file bytes without passing them through character decoding.
+    /// The legacy runtime-string source retains its Latin-1 envelope offsets.
     fn skip_exact_source_bytes(&mut self, len: usize) -> Result<(), ReadError> {
         match self.source {
             // GNU `skip_dyn_bytes` skips BYTES; with the file's own bytes as
@@ -2669,7 +2600,21 @@ impl<'a> Reader<'a> {
             return None;
         }
         match self.source {
-            ReaderSource::FileBytes(input) => Some((u32::from(input[pos]), pos + 1)),
+            ReaderSource::FileBytes(input) => {
+                // GNU source_file_get (lread.c): decode before tokenization,
+                // including symbols and character literals. Keep positions in
+                // file bytes so #@ docstring skips remain byte-exact.
+                let bytes = &input[pos..self.limit];
+                let width = emacs_char::bytes_by_char_head(bytes[0]);
+                if bytes.len() >= width && bytes[1..width].iter().all(|b| b & 0xC0 == 0x80) {
+                    let (code, _) = emacs_char::string_char_unchecked(&bytes[..width]);
+                    Some((code, pos + width))
+                } else {
+                    // A malformed/truncated sequence consumes only its lead
+                    // byte; subsequent bytes must still reach the parser.
+                    Some((emacs_char::byte8_to_char(bytes[0]), pos + 1))
+                }
+            }
             ReaderSource::Runtime(input) => {
                 crate::emacs_core::string_escape::storage_code_step(input, pos, true)
                     .filter(|(_, next)| *next <= self.limit)

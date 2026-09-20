@@ -2729,7 +2729,7 @@ fn load_file_body(
     // GNU lread.c readevalloop order: specbind lexenv [with_load_context] ->
     // readevalloop -> unbind_to -> do-after-load-evaluation.
     //
-    // .elc reads via the &str reader. .el decodes straight to a faithful
+    // .elc decodes file bytes incrementally. .el decodes straight to a faithful
     // Emacs-bytes LispString and reads via the LispString reader, so source
     // characters — including non-Unicode literals — keep their real codes and
     // never round-trip through the in-Unicode storage-string form (issue #131).
