@@ -4495,6 +4495,13 @@ fn decode_via_iso2022(
     };
     use crate::emacs_core::coding::IsoFlag;
     let seven = spec.flags.contains(IsoFlag::SevenBits);
+    // GNU honours the shifts only when the coding system asks for them
+    // (src/coding.c:3604-3625); otherwise the byte is `invalid_code' and comes
+    // out as an ordinary control character. We honoured all four
+    // unconditionally, so under iso-2022-jp -- which has neither flag -- a
+    // `0x0F' was silently swallowed as a shift-in instead of being decoded.
+    let locking_shift = spec.flags.contains(IsoFlag::LockingShift);
+    let single_shift = spec.flags.contains(IsoFlag::SingleShift);
     let ascii = intern("ascii");
     let gr: i32 = if seven { -1 } else { 1 };
     state.designate_initially(spec);
@@ -4570,18 +4577,31 @@ fn decode_via_iso2022(
             }
         }
         if b == 0x0E {
+            // Shift-out also requires G1 to be designated (src/coding.c:3605).
+            if !locking_shift || state.designation[1].is_none() {
+                return invalid_code(unit, sink);
+            }
             state.gl = 1;
             return Ok(());
         }
         if b == 0x0F {
+            if !locking_shift {
+                return invalid_code(unit, sink);
+            }
             state.gl = 0;
             return Ok(());
         }
         if !seven && b == 0x8E {
+            if !single_shift {
+                return invalid_code(unit, sink);
+            }
             state.single_shift = Some(2);
             return Ok(());
         }
         if !seven && b == 0x8F {
+            if !single_shift {
+                return invalid_code(unit, sink);
+            }
             state.single_shift = Some(3);
             return Ok(());
         }

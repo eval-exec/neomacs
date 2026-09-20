@@ -2736,3 +2736,36 @@ fn a_euc_position_byte_is_validated_before_decoding_like_gnu() {
         )
     );
 }
+
+/// ISO-2022 honours a shift only when the coding system asks for it. GNU
+/// treats SO without `CODING_ISO_FLAG_LOCKING_SHIFT' (or with G1 undesignated),
+/// SI without it, and SS2/SS3 without `CODING_ISO_FLAG_SINGLE_SHIFT', as
+/// `invalid_code' (src/coding.c:3604-3625) -- the byte comes out as an
+/// ordinary character.
+///
+/// We honoured all four unconditionally, so under `iso-2022-jp', which
+/// carries neither flag, a `0x0F' was silently SWALLOWED as a shift-in: the
+/// decoded string lost a character outright rather than merely mis-annotating
+/// one.
+///
+/// Expectations measured under GNU Emacs 31.1 (`tmp/rr/iso.el`).
+#[test]
+fn iso_2022_honours_a_shift_only_when_its_flag_is_set_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"(let ((probe (lambda (cs bytes)
+                          (append (decode-coding-string
+                                   (apply #'unibyte-string bytes) cs)
+                                  nil))))
+             (list (funcall probe 'iso-2022-jp '(?A #x1b ?$ ?B #x24 #x0f ?B))
+                   (funcall probe 'iso-2022-jp '(?A #x0f ?B))
+                   (funcall probe 'iso-2022-jp '(?A #x0e ?B))
+                   (funcall probe 'iso-2022-7bit '(?A #x0f ?B))
+                   (funcall probe 'iso-2022-jp
+                            '(?A #x1b ?$ ?B #x24 #x22 #x1b ?\( ?B ?B))))"#,
+    );
+    assert_eq!(
+        result,
+        "OK ((65 36 15 66) (65 15 66) (65 14 66) (65 15 66) (65 12354 66))"
+    );
+}
