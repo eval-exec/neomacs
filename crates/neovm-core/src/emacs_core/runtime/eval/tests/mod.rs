@@ -26930,3 +26930,47 @@ fn a_signal_enters_the_debugger_once_with_the_innermost_binding_live() {
         .expect("the case should evaluate");
     assert_eq!(crate::emacs_core::print::print_value(&value), "((2) 0)");
 }
+
+/// `buffer-read-only` is an always-local buffer slot, so every buffer carries
+/// its own value and the GLOBAL default never decides whether a buffer is
+/// writable -- GNU's `Fbarf_if_buffer_read_only' reads
+/// `BVAR (current_buffer, read_only)' and nothing else (src/buffer.c:2464).
+///
+/// The first row is the one that matters: after `(setq-default
+/// buffer-read-only t)' a fresh buffer is still WRITABLE, because a new
+/// buffer's slot is seeded from the slot's own default rather than from
+/// `buffer-defaults'. `buffer_read_only_active_in_state' used to fall back to
+/// that global default, which would have signalled here had the fallback ever
+/// been reachable; it was not, and the single slot read cannot reach it.
+///
+/// Expectations measured under GNU Emacs 31.1 (`tmp/rr/k4a.el`).
+#[test]
+fn only_a_buffers_own_read_only_slot_decides_writability_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let result = bootstrap_eval_one(
+        r#"(list
+             (progn (setq-default buffer-read-only t)
+                    (prog1 (with-temp-buffer
+                             (condition-case e (progn (insert "x") 'inserted)
+                               (error (car e))))
+                      (setq-default buffer-read-only nil)))
+             (with-temp-buffer
+               (setq buffer-read-only t)
+               (condition-case e (progn (insert "x") 'inserted) (error (car e))))
+             (with-temp-buffer
+               (setq buffer-read-only t)
+               (let ((inhibit-read-only t))
+                 (condition-case e (progn (insert "x") 'inserted) (error (car e)))))
+             (with-temp-buffer
+               (setq buffer-read-only t)
+               (setq-local inhibit-read-only t)
+               (condition-case e (progn (insert "x") 'inserted) (error (car e))))
+             (with-temp-buffer
+               (insert "abc") (goto-char (point-min)) (setq buffer-read-only t)
+               (condition-case e (progn (delete-char 1) 'deleted) (error (car e)))))"#,
+    );
+    assert_eq!(
+        result,
+        "OK (inserted buffer-read-only inserted inserted buffer-read-only)"
+    );
+}

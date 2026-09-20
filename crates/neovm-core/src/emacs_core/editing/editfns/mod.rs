@@ -63,7 +63,6 @@ macro_rules! editfns_cached_symbol {
     };
 }
 editfns_cached_symbol!(inhibit_read_only_symbol, "inhibit-read-only");
-editfns_cached_symbol!(buffer_read_only_symbol, "buffer-read-only");
 editfns_cached_symbol!(
     inhibit_modification_hooks_symbol,
     "inhibit-modification-hooks"
@@ -84,6 +83,28 @@ editfns_cached_symbol!(
     "combine-after-change-calls"
 );
 
+// `buffer-read-only` is an UNCONDITIONAL buffer slot (`local_flags_idx: -1`),
+// so `get_buffer_local_by_sym_id_gated` cannot take its `local_flags_idx >= 0`
+// early return for this symbol and always answers with the very slot word
+// `Buffer::get_read_only` reads. That is what lets the read-only test below be
+// a single slot read. The equivalence is a property of the slot TABLE, not of
+// the call site, so give the slot a local flag and this fails the build rather
+// than quietly turning the check into a read-only bypass.
+const _: () = {
+    let mut i = 0;
+    while i < crate::buffer::buffer::BUFFER_SLOT_INFO.len() {
+        let info = &crate::buffer::buffer::BUFFER_SLOT_INFO[i];
+        if info.offset.index() == crate::buffer::buffer::BUFFER_SLOT_READ_ONLY.index() {
+            assert!(
+                info.local_flags_idx < 0,
+                "buffer-read-only gained a local flag: buffer_read_only_active_in_state \
+                 must go back to consulting get_buffer_local_by_sym_id_gated"
+            );
+        }
+        i += 1;
+    }
+};
+
 pub(crate) fn buffer_read_only_active_in_state(
     obarray: &Obarray,
     dynamic: &[OrderedRuntimeBindingMap],
@@ -95,13 +116,11 @@ pub(crate) fn buffer_read_only_active_in_state(
     // the common one -- should not pay for the two `inhibit-read-only'
     // lookups to learn that it is writable.
     let _ = dynamic;
-    let bro = buffer_read_only_symbol();
-    let read_only = buf.get_read_only()
-        || match buf.get_buffer_local_by_sym_id_gated(bro, obarray.is_localized(bro)) {
-            Some(value) => value.is_truthy(),
-            None => obarray.symbol_value_id_or_nil(bro).is_truthy(),
-        };
-    if !read_only {
+    // One slot read, as GNU does: `!NILP (BVAR (current_buffer, read_only))'
+    // (src/buffer.c:2464). The second lookup this used to perform could only
+    // ever return the very same word -- see the assertion below -- so it asked
+    // the same question twice on a path that runs four times per keystroke.
+    if !buf.get_read_only() {
         return false;
     }
 
