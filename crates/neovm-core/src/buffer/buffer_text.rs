@@ -2058,13 +2058,35 @@ impl BufferText {
             .try_for_each_interval_plist_in_char_range(range, f)
     }
 
+    /// GNU's `offset_intervals' answers a buffer with no interval tree by
+    /// returning before it does anything: `if (!buffer_intervals (buffer) ||
+    /// length == 0) return;' (src/intervals.c:1358-1361). A buffer with no
+    /// text properties is the ordinary case -- every keystroke in one runs
+    /// this twice -- and asking first also keeps `Rc::make_mut', a refcount
+    /// check and possibly a clone of the whole table, off that path.
+    ///
+    /// Nothing is skipped by doing so. The two things `adjust_for_insert_raw'
+    /// does ahead of its own emptiness test are a `mutation_tick' bump, read
+    /// only by the STRING property caches (overlay.rs, string_property_input)
+    /// and never for buffer text, and a shift of the cached `syntax-table'
+    /// property ranges, which an empty interval set cannot have produced and
+    /// whose own tick guard already refuses a stale one.
     pub(crate) fn adjust_text_props_for_insert_at(&self, pos: CharPos0, len: CharLen) {
-        Rc::make_mut(&mut self.storage.borrow_mut().text_props)
-            .adjust_for_insert_at_char_pos(pos, len);
+        let mut storage = self.storage.borrow_mut();
+        if storage.text_props.is_empty() {
+            return;
+        }
+        Rc::make_mut(&mut storage.text_props).adjust_for_insert_at_char_pos(pos, len);
     }
 
+    /// See [`Self::adjust_text_props_for_insert_at`] for why the empty table
+    /// can be answered without touching it.
     pub(crate) fn adjust_text_props_for_delete_range(&self, range: CharRange) {
-        Rc::make_mut(&mut self.storage.borrow_mut().text_props).adjust_for_delete_char_range(range);
+        let mut storage = self.storage.borrow_mut();
+        if storage.text_props.is_empty() {
+            return;
+        }
+        Rc::make_mut(&mut storage.text_props).adjust_for_delete_char_range(range);
     }
 
     pub(crate) fn adjust_text_props_for_replace_at(
