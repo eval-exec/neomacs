@@ -178,7 +178,10 @@ pub(crate) fn assert_oracle_batch_cases(
                 // The panic only records the case id; this preserves the
                 // actual output that diverged from the pinned snapshot so a
                 // failing batch can be triaged from CI logs alone.
-                eprintln!("NEO_DEBUG_MISMATCH [{editor}] case `{}` actual:\n{actual}", case.id);
+                eprintln!(
+                    "NEO_DEBUG_MISMATCH [{editor}] case `{}` actual:\n{actual}",
+                    case.id
+                );
                 snapshot_mismatches.push(format!("{} ({editor})", case.id));
             }
         }
