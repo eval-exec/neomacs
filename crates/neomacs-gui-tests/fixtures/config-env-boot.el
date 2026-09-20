@@ -11,16 +11,39 @@
 ;; harness probe must exit unconditionally.
 (setq confirm-kill-emacs nil)
 
+(defun neomacs-config-boot--json-escape (value)
+  "Escape VALUE for embedding inside a JSON string literal."
+  ;; The spacemacs home buffer carries control characters (form-feed
+  ;; separators among them); raw %S would emit them unescaped and the
+  ;; harness's JSON parser rejects them.  Escape per RFC 8259.
+  (let ((start 0)
+        (out ""))
+    (while (string-match "[\"\\\001-\037\\\\]" value start)
+      (let ((ch (match-string 0 value)))
+        (setq out
+              (concat out
+                      (substring value start (match-beginning 0))
+                      (cond
+                       ((string= ch "\\") "\\\\")
+                       ((string= ch "\"") "\\\"")
+                       ((string= ch "\n") "\\n")
+                       ((string= ch "\r") "\\r")
+                       ((string= ch "\t") "\\t")
+                       (t (format "\\u%04x" (string-to-char ch)))))))
+      (setq start (match-end 0)))
+    (concat out (substring value start))))
+
 (defun neomacs-config-boot--write-state ()
   (let* ((path (getenv "NEOMACS_GUI_STATE_JSON"))
          (buf (window-buffer (selected-window)))
          (visible (buffer-substring-no-properties
                    (window-start) (window-end nil t)))
          (payload
-          (format "{\"frame\":{\"cols\":%d,\"rows\":%d,\"pixel\":\"%dx%d\"},\"buffer\":\"%s\",\"text\":%S}"
+          (format "{\"frame\":{\"cols\":%d,\"rows\":%d,\"pixel\":\"%dx%d\"},\"buffer\":\"%s\",\"text\":\"%s\"}"
                   (frame-width) (frame-height)
                   (frame-pixel-width) (frame-pixel-height)
-                  (buffer-name buf) visible)))
+                  (buffer-name buf)
+                  (neomacs-config-boot--json-escape visible))))
     (when path
       (let ((coding-system-for-write 'utf-8))
         (with-temp-file path (insert payload))))))
