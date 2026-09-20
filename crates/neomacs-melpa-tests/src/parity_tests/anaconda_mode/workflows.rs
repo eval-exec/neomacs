@@ -322,9 +322,7 @@ fn eldoc_highlights_the_argument_under_point_and_trims_to_one_line_on_request() 
                     :text (substring-no-properties captured)))
             :requests (ana-test-request-methods))))
     "##,
-        expect![[
-            r#"OK (:registered (:buffer-local (anaconda-mode-eldoc-function python-eldoc-function t) :global (eldoc-show-help-at-pt) :eldoc-mode t) :second-argument (:text "Widget(name, price)" :faces ((font-lock-function-name-face "Widget") (nil "(name, ") (eldoc-highlight-function-argument "price") (nil ")"))) :first-argument (:text "Widget(name, price)" :faces ((font-lock-function-name-face "Widget") (nil "(") (eldoc-highlight-function-argument "name") (nil ", price)"))) :echo-area-message nil :single-line (:frame-width 80 :length 80 :text "print(*values: object, sep: Optional[str]=..., end: Optional[str]=..., file: Opt") :multi-line (:length 127 :text "print(*values: object, sep: Optional[str]=..., end: Optional[str]=..., file: Optional[SupportsWrite[str]]=..., flush: bool=...)") :requests (("eldoc" 39 24) ("eldoc" 39 17) ("eldoc" 36 15) ("eldoc" 36 15)))"#
-        ]],
+        expect![[r#"OK (:registered (:buffer-local (anaconda-mode-eldoc-function python-eldoc-function t) :global nil :eldoc-mode t) :second-argument (:text "Widget(name, price)" :faces ((font-lock-function-name-face "Widget") (nil "(name, ") (eldoc-highlight-function-argument "price") (nil ")"))) :first-argument (:text "Widget(name, price)" :faces ((font-lock-function-name-face "Widget") (nil "(") (eldoc-highlight-function-argument "name") (nil ", price)"))) :echo-area-message #("Widget(name, price)" 0 6 (face font-lock-function-name-face) 7 11 (face eldoc-highlight-function-argument)) :single-line (:frame-width 80 :length 80 :text "print(*values: object, sep: Optional[str]=..., end: Optional[str]=..., file: Opt") :multi-line (:length 127 :text "print(*values: object, sep: Optional[str]=..., end: Optional[str]=..., file: Optional[SupportsWrite[str]]=..., flush: bool=...)") :requests (("eldoc" 39 24) ("eldoc" 39 17) ("eldoc" 36 15) ("eldoc" 36 15)))"#]],
     )
     .fresh_process()
 }

@@ -150,9 +150,7 @@ fn the_mode_installs_and_removes_its_hook_and_leaves_plain_typing_alone() -> Par
      (global-alt-codes-mode -1)
      (list :armed armed
            :after (with-temp-buffer (text-mode) (alt-codes-test-hook))))))"##,
-        expect![[
-            r#"OK (:lifecycle (:on (t t t) :off (nil t nil) :hook-value (eldoc-pre-command-refresh-echo-area t)) :mode-off (:digits "65" :keypad "" :hook nil) :globalized (:armed (t t t) :after (nil t nil)))"#
-        ]],
+        expect![[r#"OK (:lifecycle (:on (t t t) :off (nil nil nil) :hook-value (tooltip-hide)) :mode-off (:digits "65" :keypad "" :hook nil) :globalized (:armed (t t t) :after (nil nil nil)))"#]],
     )
 }
 
