@@ -86,27 +86,29 @@ pub(crate) fn buffer_read_only_active_in_state(
     dynamic: &[OrderedRuntimeBindingMap],
     buf: &Buffer,
 ) -> bool {
+    // GNU `Fbarf_if_buffer_read_only' reads the buffer's `read_only' slot
+    // first and looks at `inhibit-read-only' only when it is set. Every
+    // insertion and deletion runs this check twice, and a writable buffer --
+    // the common one -- should not pay for the two `inhibit-read-only'
+    // lookups to learn that it is writable.
+    let _ = dynamic;
+    let bro = buffer_read_only_symbol();
+    let read_only = buf.get_read_only()
+        || match buf.get_buffer_local_by_sym_id_gated(bro, obarray.is_localized(bro)) {
+            Some(value) => value.is_truthy(),
+            None => obarray.symbol_value_id_or_nil(bro).is_truthy(),
+        };
+    if !read_only {
+        return false;
+    }
+
     let iro = inhibit_read_only_symbol();
     if let Some(value) = buf.get_buffer_local_by_sym_id_gated(iro, obarray.is_localized(iro))
         && value.is_truthy()
     {
         return false;
     }
-
-    if obarray.symbol_value_id_or_nil(iro).is_truthy() {
-        return false;
-    }
-
-    if buf.get_read_only() {
-        return true;
-    }
-
-    let _ = dynamic;
-    let bro = buffer_read_only_symbol();
-    if let Some(value) = buf.get_buffer_local_by_sym_id_gated(bro, obarray.is_localized(bro)) {
-        return value.is_truthy();
-    }
-    obarray.symbol_value_id_or_nil(bro).is_truthy()
+    !obarray.symbol_value_id_or_nil(iro).is_truthy()
 }
 
 pub(crate) fn ensure_current_buffer_writable_in_state(

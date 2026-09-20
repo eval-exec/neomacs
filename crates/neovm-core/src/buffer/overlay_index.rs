@@ -728,6 +728,14 @@ impl OverlayIndex {
     /// removed and reinserted so endpoint gravity and evaporation remain
     /// GNU-compatible.
     pub(super) fn adjust_for_text_edit(&mut self, edit: OverlayTextEdit) -> Vec<OverlayEditEffect> {
+        // Most buffers carry no overlays, and every insertion and deletion
+        // comes through here: with nothing to shift, the queries and vectors
+        // below cost more than the edit itself (479 instructions per edit on
+        // an empty index). GNU's `adjust_overlays_for_insert' likewise walks
+        // a tree that is empty.
+        if self.is_empty() {
+            return Vec::new();
+        }
         match edit {
             OverlayTextEdit::Insert {
                 position,

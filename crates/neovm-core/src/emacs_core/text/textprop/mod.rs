@@ -1279,6 +1279,12 @@ pub(crate) fn verify_text_read_only_emacs_byte_range_in_state(
     let Some(buf) = buffers.get(buf_id) else {
         return Ok(());
     };
+    // GNU `verify_interval_modification' runs only when the buffer has
+    // intervals (`prepare_to_modify_buffer_1'); without them there is no
+    // `read-only' to find.
+    if buf.text_props_is_empty() {
+        return Ok(());
+    }
     let iro = inhibit_read_only_sym();
     let inhibit = buf
         .get_buffer_local_by_sym_id_gated(iro, obarray.is_localized(iro))
@@ -1418,7 +1424,15 @@ pub(crate) fn verify_text_read_only_for_insert_in_state(
     if !inhibit.is_nil() && !inhibit.is_cons() {
         return Ok(());
     }
-    let read_only_sym = Value::symbol("read-only");
+    // GNU `prepare_to_modify_buffer_1' calls `verify_interval_modification'
+    // only `if (buffer_intervals (current_buffer))'. A buffer with no text
+    // properties -- the common one, and every keystroke lands here -- has no
+    // `read-only' to find, and the four property lookups below cost more than
+    // the insertion.
+    if buf.text_props_is_empty() {
+        return Ok(());
+    }
+    let read_only_sym = Value::from_sym_id(read_only_sym());
     let accessible = buf.accessible_emacs_byte_range();
     let begv = accessible.start().get();
     let zv = accessible.end().get();

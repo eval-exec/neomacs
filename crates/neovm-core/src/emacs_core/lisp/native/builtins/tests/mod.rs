@@ -18920,3 +18920,72 @@ fn searches_after_an_edit_answer_like_gnu_from_the_narrowed_slice() {
         "OK ((4 \"the cat ate\nthe cat ate\nthe cat ate\nthe cat ate\n\") (t nil t t nil 10 9) (nil t nil t) (t t 6 5 12) (nil t 6 5 10) (t 8))"
     );
 }
+
+#[test]
+fn modifying_a_buffer_checks_read_only_and_overlays_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    // The modification path skips the text-property read-only check on a
+    // buffer with no properties and the overlay shift on an index with no
+    // overlays, and reads the `read_only' slot before `inhibit-read-only'.
+    // None of that may change an answer: a read-only text property still
+    // blocks an insertion and a deletion, its front-sticky and
+    // rear-nonsticky neighbours still decide the boundaries,
+    // `inhibit-read-only' still lets an edit through, a read-only buffer and
+    // a let-bound `buffer-read-only' still signal, and overlays still move
+    // with the text.
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r##"
+        (progn
+  (defun try (thunk) (condition-case e (progn (funcall thunk) 'ok) (error (car e))))
+(list
+  ;; read-only TEXT PROPERTY still blocks insertion and deletion
+  (with-temp-buffer
+    (insert "abcdef") (put-text-property 2 5 'read-only t)
+    (list (try (lambda () (goto-char 3) (insert "X")))
+          (try (lambda () (goto-char 3) (delete-char 1)))
+          (try (lambda () (goto-char 1) (insert "X")))
+          (let ((inhibit-read-only t)) (try (lambda () (goto-char 3) (insert "X"))))
+          (buffer-string)))
+  ;; front-sticky / rear-nonsticky stickiness at the boundaries
+  (with-temp-buffer
+    (insert "abcdef") (put-text-property 3 5 'front-sticky '(read-only))
+    (put-text-property 3 5 'read-only t)
+    (list (try (lambda () (goto-char 3) (insert "X")))
+          (try (lambda () (goto-char 5) (insert "X")))
+          (buffer-string)))
+  (with-temp-buffer
+    (insert "abcdef") (put-text-property 3 5 'rear-nonsticky '(read-only))
+    (put-text-property 3 5 'read-only t)
+    (list (try (lambda () (goto-char 5) (insert "X"))) (buffer-string)))
+  ;; buffer read-only flag, inhibit-read-only, and a buffer-local binding
+  (with-temp-buffer
+    (insert "abc") (setq buffer-read-only t)
+    (list (try (lambda () (insert "X")))
+          (let ((inhibit-read-only t)) (try (lambda () (insert "X"))))
+          (progn (setq buffer-read-only nil) (try (lambda () (insert "Y"))))
+          (buffer-string)))
+  (with-temp-buffer
+    (insert "abc")
+    (let ((buffer-read-only t)) (list (try (lambda () (insert "X"))) (buffer-string))))
+  ;; overlays still move with edits (the empty-index short-circuit must not
+  ;; apply once an overlay exists)
+  (with-temp-buffer
+    (insert "0123456789")
+    (let ((o (make-overlay 3 7)) (o2 (make-overlay 1 2)))
+      (goto-char 5) (insert "XX")
+      (goto-char 1) (insert "YY")
+      (goto-char 4) (delete-char 2)
+      (list (overlay-start o) (overlay-end o) (overlay-start o2) (overlay-end o2)
+            (buffer-string))))
+  ;; an overlay created after edits on an empty index
+  (with-temp-buffer
+    (insert "0123456789") (goto-char 5) (insert "ZZ")
+    (let ((o (make-overlay 3 7))) (goto-char 3) (insert "Q")
+      (list (overlay-start o) (overlay-end o))))))
+        "##,
+    );
+    assert_eq!(
+        result,
+        "OK ((text-read-only text-read-only ok ok #(\"XaXbcdef\" 3 6 (read-only t))) (text-read-only text-read-only #(\"abcdef\" 2 4 (read-only t front-sticky (read-only)))) (ok #(\"abcdXef\" 2 4 (read-only t rear-nonsticky (read-only)))) (buffer-read-only ok ok \"abcXY\") (buffer-read-only \"abc\") (4 9 1 4 \"YY03XX456789\") (3 8))"
+    );
+}
