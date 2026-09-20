@@ -3261,7 +3261,43 @@ fn eval_x_display_queries_accept_live_frame_designator() {
 }
 
 #[test]
-fn eval_x_display_pixel_queries_use_selected_gui_display() {
+fn graphical_display_dimensions_use_monitor_extent() {
+    crate::test_utils::init_test_tracing();
+    use crate::emacs_core::builtins::{NeomacsMonitorInfo, set_neomacs_monitor_info};
+    let mut eval = crate::emacs_core::Context::new();
+    let fid = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
+    eval.frames
+        .get_mut(fid)
+        .unwrap()
+        .set_window_system(Some(Value::symbol("neo")));
+    set_neomacs_monitor_info(vec![NeomacsMonitorInfo {
+        x: 0,
+        y: 0,
+        width: 3024,
+        height: 1964,
+        scale: 2.0,
+        width_mm: 0,
+        height_mm: 0,
+        name: Some("Retina".into()),
+    }]);
+    let expected = if cfg!(target_os = "macos") {
+        (1512, 982)
+    } else {
+        (3024, 1964)
+    };
+    assert_eq!(
+        builtin_x_display_pixel_width(&mut eval, vec![]).unwrap(),
+        Value::fixnum(expected.0)
+    );
+    assert_eq!(
+        builtin_x_display_pixel_height(&mut eval, vec![Value::make_frame(fid.0)]).unwrap(),
+        Value::fixnum(expected.1)
+    );
+    set_neomacs_monitor_info(vec![]);
+}
+
+#[test]
+fn graphical_display_without_monitor_snapshot_does_not_invent_dimensions() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::emacs_core::Context::new();
     let frame_id = crate::emacs_core::window_cmds::ensure_selected_frame_id(&mut eval);
@@ -3270,22 +3306,11 @@ fn eval_x_display_pixel_queries_use_selected_gui_display() {
         .expect("selected frame")
         .set_window_system(Some(Value::symbol(gui_window_system_symbol())));
 
-    assert_eq!(
-        builtin_x_display_pixel_width(&mut eval, vec![]).unwrap(),
-        Value::fixnum(80)
-    );
-    assert_eq!(
-        builtin_x_display_pixel_height(&mut eval, vec![]).unwrap(),
-        Value::fixnum(25)
-    );
-    assert_eq!(
-        builtin_x_display_pixel_width(&mut eval, vec![Value::make_frame(frame_id.0)]).unwrap(),
-        Value::fixnum(80)
-    );
-    assert_eq!(
-        builtin_x_display_pixel_height(&mut eval, vec![Value::make_frame(frame_id.0)]).unwrap(),
-        Value::fixnum(25)
-    );
+    crate::emacs_core::builtins::set_neomacs_monitor_info(vec![]);
+    for designator in [vec![], vec![Value::make_frame(frame_id.0)]] {
+        assert!(builtin_x_display_pixel_width(&mut eval, designator.clone()).is_err());
+        assert!(builtin_x_display_pixel_height(&mut eval, designator).is_err());
+    }
 }
 
 #[test]

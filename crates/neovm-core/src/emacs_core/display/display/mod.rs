@@ -17,6 +17,7 @@ pub(crate) use crate::emacs_core::error::{expect_args, expect_args_range, expect
 use crate::window::{FrameId, WindowId};
 use strum::{EnumString, IntoStaticStr};
 
+mod desktop;
 mod tooltip;
 pub(crate) use tooltip::{builtin_x_hide_tip_eval, builtin_x_show_tip_eval};
 
@@ -3133,6 +3134,16 @@ pub(crate) fn builtin_x_close_connection(
     }
 }
 
+fn graphical_desktop_extent() -> Result<desktop::DesktopExtent, Flow> {
+    desktop::DesktopExtent::from_monitors(&super::builtins::neomacs_monitor_info_snapshot())
+        .map_err(|_| {
+            signal(
+                "error",
+                vec![Value::string("Graphical display geometry is unavailable")],
+            )
+        })
+}
+
 /// Context-aware variant of `x-display-pixel-width`.
 ///
 /// Accepts live frame designators and maps them to the same batch/no-X error
@@ -3142,7 +3153,7 @@ pub(crate) fn builtin_x_display_pixel_width(
     args: Vec<Value>,
 ) -> EvalResult {
     if gui_x_query_target_eval(eval, "x-display-pixel-width", &args)? {
-        return Ok(Value::fixnum(80));
+        return Ok(Value::fixnum(graphical_desktop_extent()?.width));
     }
     x_optional_display_query_error_eval(eval, "x-display-pixel-width", args)
 }
@@ -3156,7 +3167,7 @@ pub(crate) fn builtin_x_display_pixel_height(
     args: Vec<Value>,
 ) -> EvalResult {
     if gui_x_query_target_eval(eval, "x-display-pixel-height", &args)? {
-        return Ok(Value::fixnum(25));
+        return Ok(Value::fixnum(graphical_desktop_extent()?.height));
     }
     x_optional_display_query_error_eval(eval, "x-display-pixel-height", args)
 }
