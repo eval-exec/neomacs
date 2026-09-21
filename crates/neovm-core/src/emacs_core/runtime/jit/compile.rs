@@ -4380,6 +4380,9 @@ mod array_shim_tests;
 #[path = "tests/inline.rs"]
 mod inline_tests;
 #[cfg(test)]
+#[path = "tests/mir_cons_deopt.rs"]
+mod mir_cons_deopt_tests;
+#[cfg(test)]
 #[path = "tests/mir_named_calls.rs"]
 mod mir_named_calls_tests;
 #[cfg(test)]
