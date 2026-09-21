@@ -3172,14 +3172,11 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
                     // leave cval[r]=None — every use is a CarCdr that forwards to the
                     // operands.
                     MirOp::Cons(..) if cons_repl[r].is_some() => {}
-                    // An ESCAPING cons is heap-allocated via the neovm_jit_cons shim —
-                    // a GC SAFEPOINT, but NOT an observable side effect (a fresh
-                    // unshared object), so it needs NO precise deopt: rerun-from-start
-                    // (pure body) re-allocates a fresh cons the caller never saw, and a
-                    // call-bearing body spills the allocated cons (a real Value) into
-                    // its precise framestate normally. Force-tag car+cdr (no raw fixnum
-                    // into the heap pair / across the safepoint; the shim self-roots
-                    // them) + gc-root the live-across-allocation residual, like a call.
+                    // An escaping cons uses the non-collecting neovm_jit_cons shim.
+                    // A pure body may rerun from the start: a fresh unshared object
+                    // is not observable yet. A precise body spills the real Value
+                    // normally. Tag both fields before storing them in the heap;
+                    // no root publication is needed across this allocation.
                     MirOp::Cons(car, cdr) => {
                         let rt = rt
                             .as_ref()

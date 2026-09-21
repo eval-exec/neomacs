@@ -1876,6 +1876,12 @@ pub fn is_d0_aot_candidate(
 #[cfg(target_os = "linux")]
 #[doc(hidden)]
 pub fn testkit_mir_cons_reconstruction_selftest(dir: &std::path::Path) {
+    testkit_mir_cons_reconstruction_case(dir, false);
+    testkit_mir_cons_reconstruction_case(dir, true);
+}
+
+#[cfg(target_os = "linux")]
+fn testkit_mir_cons_reconstruction_case(dir: &std::path::Path, singleton: bool) {
     use crate::emacs_core::bytecode::{ByteCodeFunction, Vm};
     use crate::emacs_core::eval::Context;
     use crate::emacs_core::jit::compile::{DeoptResume, LoadedUnit, NativeRun};
@@ -1911,6 +1917,9 @@ pub fn testkit_mir_cons_reconstruction_selftest(dir: &std::path::Path) {
         Op::Car,
         Op::Return,
     ];
+    if singleton {
+        f.ops.splice(5..7, [Op::List(1)]);
+    }
     f.seal_hand_assembled_ops();
     let m = mir::build_mir(&f.ops, &f.constants, 2).unwrap();
     assert_eq!(
@@ -1924,7 +1933,11 @@ pub fn testkit_mir_cons_reconstruction_selftest(dir: &std::path::Path) {
     let (obj, hash) = compile_leaf_to_object(&f.ops, &f.constants, 2, None)
         .unwrap()
         .unwrap();
-    let path = dir.join("cons-reconstruction.so");
+    let path = dir.join(if singleton {
+        "singleton-reconstruction.so"
+    } else {
+        "cons-reconstruction.so"
+    });
     link_object_to_so(&obj, &path).unwrap();
     // SAFETY: this is the object just emitted by our compiler; its runtime
     // imports are the same exported shims used by the JIT.
@@ -1939,10 +1952,13 @@ pub fn testkit_mir_cons_reconstruction_selftest(dir: &std::path::Path) {
     let NativeRun::DeoptAt(resume) = result else {
         panic!("precise AOT deopt expected: {result:?}")
     };
-    assert_eq!(resume.pc, 9);
+    assert_eq!(resume.pc, if singleton { 8 } else { 9 });
     assert_eq!(resume.stack[2], resume.stack[3]);
     assert_eq!(resume.stack[2].cons_car(), Value::make_int(8));
-    assert_eq!(resume.stack[2].cons_cdr(), float);
+    assert_eq!(
+        resume.stack[2].cons_cdr(),
+        if singleton { Value::NIL } else { float }
+    );
     let DeoptResume {
         pc,
         stack,

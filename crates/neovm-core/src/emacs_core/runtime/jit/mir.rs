@@ -606,7 +606,7 @@ fn lower_value_op(
             let r = emit(b, MirOp::Const(v), LispType::of_value(v), Effect::PURE);
             stack.push(r);
         }
-        Op::Nil => {
+        Op::Nil | Op::List(0) => {
             let r = emit(b, MirOp::Const(Value::NIL), LispType::Nil, Effect::PURE);
             stack.push(r);
         }
@@ -723,6 +723,16 @@ fn lower_value_op(
         Op::Cons => {
             let cdr = pop!();
             let car = pop!();
+            let r = emit(b, MirOp::Cons(car, cdr), LispType::Cons, Effect::ALLOCATES);
+            stack.push(r);
+        }
+        Op::List(1) => {
+            // The byte compiler also uses list1 for (cons x nil). Expose the
+            // pair to ordinary cons escape analysis and cold reconstruction.
+            // Both allocation shims are non-collecting; neither can run Lisp.
+            // Wider lists remain opaque until nested virtual objects qualify.
+            let car = pop!();
+            let cdr = emit(b, MirOp::Const(Value::NIL), LispType::Nil, Effect::PURE);
             let r = emit(b, MirOp::Cons(car, cdr), LispType::Cons, Effect::ALLOCATES);
             stack.push(r);
         }

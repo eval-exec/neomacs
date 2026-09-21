@@ -107,30 +107,40 @@ fn mir_cons_precise_frames_preserve_aliases_and_completed_effects() {
 
 #[test]
 fn mir_cons_block_local_loop_allocation_count() {
+    assert_block_local_loop_allocation_count(false);
+}
+
+#[test]
+fn mir_singleton_block_local_loop_allocation_count() {
+    assert_block_local_loop_allocation_count(true);
+}
+
+fn assert_block_local_loop_allocation_count(singleton: bool) {
     let mut ev = Context::new();
-    let f = function(
-        vec![
-            Op::Constant(0),
-            Op::StackRef(1),
-            Op::Constant(0),
-            Op::Gtr,
-            Op::GotoIfNil(16),
-            Op::StackRef(0),
-            Op::StackRef(2),
-            Op::Nil,
-            Op::Cons,
-            Op::Car,
-            Op::Add,
-            Op::StackSet(1),
-            Op::StackRef(1),
-            Op::Sub1,
-            Op::StackSet(2),
-            Op::Goto(1),
-            Op::Return,
-        ],
-        vec![Value::make_int(0)],
-        1,
-    );
+    let mut ops = vec![
+        Op::Constant(0),
+        Op::StackRef(1),
+        Op::Constant(0),
+        Op::Gtr,
+        Op::GotoIfNil(16),
+        Op::StackRef(0),
+        Op::StackRef(2),
+        Op::Nil,
+        Op::Cons,
+        Op::Car,
+        Op::Add,
+        Op::StackSet(1),
+        Op::StackRef(1),
+        Op::Sub1,
+        Op::StackSet(2),
+        Op::Goto(1),
+        Op::Return,
+    ];
+    if singleton {
+        ops.splice(7..9, [Op::List(1)]);
+        ops[4] = Op::GotoIfNil(15);
+    }
+    let f = function(ops, vec![Value::make_int(0)], 1);
     let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).unwrap();
     assert_eq!(leaf.tier, leaf::LeafTier::Mir);
     // Fewer than 255 back edges avoids a service poll, so the allocation
@@ -170,6 +180,11 @@ fn mir_singleton_precise_frames_preserve_aliases_and_completed_effects() {
         2,
     );
     let m = mir::build_mir(&f.ops, &f.constants, 2).unwrap();
+    assert_eq!(
+        plan_mir_leaf(&m).cons_repl.iter().flatten().count(),
+        2,
+        "both singleton lists are reconstructed only on a cold exit"
+    );
     let leaf = lower_mir_pure(&m).unwrap();
     let float = ev.eval_str("1.5").unwrap();
     let result = leaf.call(
@@ -253,10 +268,49 @@ fn mir_empty_list_preserves_the_residual_stack() {
         (vec![Op::List(0), Op::Pop, Op::Return], element),
     ] {
         let m = mir::build_mir(&ops, &[], 1).unwrap();
+        assert!(!plan_mir_leaf(&m).needs_rt);
         let leaf = lower_mir_pure(&m).unwrap();
         assert_eq!(
             leaf.call(&mut ev as *mut Context as *mut u8, &[element]),
             NativeRun::Ok(expected.bits())
         );
     }
+}
+
+#[test]
+fn mir_singleton_precise_frame_preserves_a_heap_element() {
+    let mut ev = Context::new();
+    ev.eval_str("(setq mir-list-heap-v 0)").unwrap();
+    let f = function(
+        vec![
+            Op::Constant(0),
+            Op::VarSet(1),
+            Op::StackRef(0),
+            Op::List(1),
+            Op::StackRef(1),
+            Op::Add1,
+            Op::Pop,
+            Op::Car,
+            Op::Return,
+        ],
+        vec![Value::make_int(7), Value::symbol("mir-list-heap-v")],
+        1,
+    );
+    let m = mir::build_mir(&f.ops, &f.constants, 1).unwrap();
+    assert_eq!(plan_mir_leaf(&m).cons_repl.iter().flatten().count(), 1);
+    let leaf = lower_mir_pure(&m).unwrap();
+    let float = ev.eval_str("1.5").unwrap();
+    let result = leaf.call(&mut ev as *mut Context as *mut u8, &[float]);
+    let NativeRun::DeoptAt(ref resume) = result else {
+        panic!("expected precise float deopt: {result:?}")
+    };
+    assert_eq!(resume.pc, 5);
+    assert_eq!(resume.stack.len(), 3);
+    assert_eq!(resume.stack[1].cons_car().bits(), float.bits());
+    assert!(resume.stack[1].cons_cdr().is_nil());
+    assert_eq!(
+        mir_inline_guards::resume(&mut ev, &f, result).bits(),
+        float.bits()
+    );
+    assert_eq!(ev.jit_root_stack_top, 0);
 }
