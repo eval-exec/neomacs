@@ -25290,6 +25290,53 @@ fn specpdl_entry_stays_compact_for_hot_backtrace_pushes() {
     );
 }
 
+/// Native frames must retain their logical fields and exact-GC roots whether
+/// the specpdl already has room or the push first grows its backing allocation.
+#[test]
+fn native_backtrace_push_preserves_values_across_growth_and_gc() {
+    for grow in [false, true] {
+        for nargs in [0, 1, 2, 3, 8] {
+            let mut ev = Context::new();
+            ev.gc_collect_exact();
+            assert!(ev.specpdl.is_empty());
+            ev.specpdl = if grow {
+                Vec::new()
+            } else {
+                Vec::with_capacity(1)
+            };
+            let function = Value::string("native frame function");
+            let args: Vec<Value> = (0..nargs)
+                .map(|i| Value::string(&format!("native frame arg {i}")))
+                .collect();
+            // SAFETY: the argument buffer is stable and outlives the frame,
+            // including the root snapshot taken by the exact collection.
+            unsafe {
+                ev.push_backtrace_frame_from_native_args(function, args.as_ptr().cast(), nargs);
+            }
+            assert_eq!(ev.specpdl.len(), 1);
+            ev.gc_collect_exact();
+            let (actual_function, actual_args, debug, unevalled) = ev
+                .backtrace_entry_values(&ev.specpdl[0])
+                .expect("native frame is inspectable");
+            assert_eq!(actual_function, function);
+            assert_eq!(actual_args.as_slice(), args.as_slice());
+            assert!(!debug && !unevalled);
+            for value in std::iter::once(function).chain(args.iter().copied()) {
+                assert!(ev.tagged_heap.owns_heap_value_for_test(value));
+            }
+            assert_eq!(actual_function.as_utf8_str(), Some("native frame function"));
+            for (i, arg) in actual_args.iter().enumerate() {
+                assert_eq!(
+                    arg.as_utf8_str(),
+                    Some(format!("native frame arg {i}").as_str())
+                );
+            }
+            assert!(ev.pop_native_backtrace_frame(0));
+            assert!(ev.specpdl.is_empty());
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Redisplay skip: a change that lands DURING the paint must still be painted
 // ---------------------------------------------------------------------------
