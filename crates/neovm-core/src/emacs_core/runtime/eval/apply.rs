@@ -963,11 +963,19 @@ impl Context {
             super::super::marker::make_registered_point_marker(&mut self.buffers, buffer_id)
                 .expect("the current buffer is live, so its point marker registers");
         let count = self.specpdl.len();
-        self.specpdl.push(SpecBinding::SaveExcursion {
+        // Reserve before constructing the entry so it is written directly
+        // into its final slot. Vec::push built a 32-byte stack temporary;
+        // copying it with wide loads stalled on the preceding narrow stores.
+        self.specpdl.reserve(1);
+        self.specpdl.spare_capacity_mut()[0].write(SpecBinding::SaveExcursion {
             buffer_id,
             marker_id,
             marker,
         });
+        // SAFETY: reserve ensured a spare slot and write initialized it above.
+        // Publishing the length makes its marker visible to the root walk;
+        // neither reserving Rust memory nor writing the entry can run Lisp GC.
+        unsafe { self.specpdl.set_len(count + 1) };
         Some(count)
     }
 
