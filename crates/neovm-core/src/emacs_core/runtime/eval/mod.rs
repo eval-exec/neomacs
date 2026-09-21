@@ -4806,6 +4806,19 @@ impl Context {
             .map(|message| crate::emacs_core::emacs_char::to_utf8_lossy(message.as_bytes()))
     }
 
+    /// Whether an echo-area message is currently displayed.
+    ///
+    /// GNU's condition for installing the echo-area buffer in the inactive
+    /// mini-window is `echo_area_buffer[0]` being non-nil while the message
+    /// is up (xdisp.c `with_echo_area_buffer`); callers such as the layout
+    /// engine's display-source decision must not render the echo buffer once
+    /// the message has cleared, because the idle mini-window then shows its
+    /// own buffer — `" *Minibuf-0*"` (minibuf.c:1281-1284) — whose contents
+    /// packages like `minibuffer-line' own.
+    pub fn has_current_message(&self) -> bool {
+        self.current_message.is_some()
+    }
+
     /// Whether redisplay should move the active cursor into an inactive echo
     /// area while displaying the current message.
     ///
