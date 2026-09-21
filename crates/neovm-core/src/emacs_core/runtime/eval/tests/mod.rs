@@ -16718,6 +16718,93 @@ fn jit_subr_spec_inplace_rewrite_calls_fresh_entry() {
     }
 }
 
+/// Exercise the fixed native-call return paths with observable cleanup: a
+/// normal value, a binding left by the callee, debugger replacement, a signal
+/// hook that must see the binding before unwind, and a throw from a flagged
+/// frame. The debugger collects while inspecting a freshly allocated result.
+#[cfg(feature = "jit")]
+#[test]
+fn jit_subr_spec_fixed_return_preserves_unwind_protocol() {
+    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+    fn callee(ctx: &mut Context, mode: Value) -> EvalResult {
+        let mode = mode.as_int().unwrap();
+        let frame = ctx.specpdl.len() - 1;
+        if mode == 2 || mode == 4 {
+            assert!(ctx.set_backtrace_debug_on_exit(frame, true));
+        }
+        if mode != 0 {
+            ctx.specbind_resolved(intern("neo-return-binding"), Value::fixnum(42))?;
+        }
+        let value = Value::string("native-result");
+        match mode {
+            3 => Err(signal(LispCondition::Error, vec![value])),
+            4 => Err(Flow::throw(Value::symbol("neo-return-tag"), value)),
+            _ => Ok(value),
+        }
+    }
+    let mut ev = Context::new();
+    ev.register_subr(SubrSpec::fixed1(
+        "neo-fixed-return-probe",
+        callee,
+        FixedMin1::One,
+    ));
+    let hot = jit_subr_spec_caller("neo-fixed-return-probe", 1, true);
+    let cold = jit_subr_spec_caller("neo-fixed-return-probe", 1, false);
+    #[cfg(debug_assertions)]
+    let (_, fast0, _) = jit_subr_spec_counters();
+    for mode in 0..5 {
+        let mut observations = Vec::new();
+        for caller in [hot, cold] {
+            ev.eval_str(
+                r#"(setq neo-return-binding 7
+                         neo-return-debug nil neo-return-hook nil
+                         debugger (lambda (&rest args)
+                                    (garbage-collect)
+                                    (setq neo-return-debug args)
+                                    'debug-result)
+                         signal-hook-function
+                         (lambda (sym data)
+                           (setq neo-return-hook
+                                 (list sym data neo-return-binding))))"#,
+            )
+            .expect("return protocol setup");
+            let count = ev.specpdl.len();
+            let depth = ev.depth;
+            let result = ev.funcall_general_untraced(caller, vec![Value::fixnum(mode)]);
+            assert_eq!(ev.specpdl.len(), count, "mode {mode}: frame cleanup");
+            assert_eq!(ev.depth, depth, "mode {mode}: depth cleanup");
+            if mode < 2 {
+                assert_eq!(
+                    result.as_ref().unwrap().as_utf8_str(),
+                    Some("native-result")
+                );
+            } else if mode == 2 {
+                assert_eq!(*result.as_ref().unwrap(), Value::symbol("debug-result"));
+            } else {
+                assert!(result.is_err(), "non-local return must propagate");
+            }
+            let result = format_eval_result(&result.map_err(crate::emacs_core::error::map_flow));
+            let state = ev
+                .eval_str("(list neo-return-binding neo-return-debug neo-return-hook)")
+                .expect("return protocol state");
+            let state = crate::emacs_core::print::print_value(&state);
+            let expected = match mode {
+                2 => "(7 (exit \"native-result\") nil)",
+                3 => "(7 nil (error (\"native-result\") 42))",
+                _ => "(7 nil nil)",
+            };
+            assert_eq!(state, expected, "mode {mode}: hooks and restored binding");
+            observations.push((result, state));
+        }
+        assert_eq!(observations[0], observations[1], "mode {mode}: JIT parity");
+    }
+    #[cfg(debug_assertions)]
+    assert!(
+        jit_subr_spec_counters().1 >= fast0 + 5,
+        "fixed native calls engaged"
+    );
+}
+
 /// R2 phase 2 (Op::Call Many allowlist) engagement + parity: `re-search-forward`
 /// is an allowlisted `SubrFn::Many` builtin — round-1 EXCLUDED as non-fixed-arity
 /// — that now routes through the `SubrGeneral` subr shim. A hot `(re-search-forward
