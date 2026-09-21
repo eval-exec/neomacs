@@ -16817,6 +16817,140 @@ fn jit_subr_spec_string_queries_match_interpreter() {
     }
 }
 
+/// Position query dispatch must preserve buffer coordinates, marker handling,
+/// input validation and arity when the same bytecode caller runs natively.
+#[cfg(feature = "jit")]
+#[test]
+fn jit_subr_spec_position_queries_match_interpreter() {
+    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+    let mut ev = Context::new();
+    for name in ["position-bytes", "byte-to-position"] {
+        let hot = jit_subr_spec_caller(name, 1, true);
+        let cold = jit_subr_spec_caller(name, 1, false);
+        cold.get_bytecode_data()
+            .unwrap()
+            .jit_runtime()
+            .set_cold_for_test();
+        let setups: [(&str, &[i64], &[i64]); 4] = [
+            ("(progn (widen) (erase-buffer))", &[1], &[1]),
+            (
+                "(progn (widen) (erase-buffer) (set-buffer-multibyte t) (insert \"éa日b\") (narrow-to-region 2 4))",
+                &[1, 3, 4, 7, 8],
+                &[1, 1, 2, 3, 3, 3, 4, 5],
+            ),
+            (
+                "(progn (widen) (erase-buffer) (set-buffer-multibyte nil) (insert (unibyte-string 65 128 255)))",
+                &[1, 2, 3, 4],
+                &[1, 2, 3, 4],
+            ),
+            (
+                "(progn (widen) (erase-buffer) (set-buffer-multibyte t) (insert (string 65 #x3fffff 66)))",
+                &[1, 2, 4, 5],
+                &[1, 2, 2, 3, 4],
+            ),
+        ];
+        for (setup, char_bytes, byte_chars) in setups {
+            ev.eval_str(setup).expect("position query buffer");
+            let expected = if name == "position-bytes" {
+                char_bytes
+            } else {
+                byte_chars
+            };
+            for pos in -1..=expected.len() as i64 + 1 {
+                let answer = if pos > 0 && pos <= expected.len() as i64 {
+                    Value::fixnum(expected[pos as usize - 1])
+                } else {
+                    Value::NIL
+                };
+                for caller in [hot, cold] {
+                    assert_eq!(
+                        ev.funcall_general_untraced(caller, vec![Value::fixnum(pos)])
+                            .expect("position query"),
+                        answer,
+                        "{name}: {setup}, position {pos}"
+                    );
+                }
+            }
+        }
+        ev.eval_str("(progn (widen) (erase-buffer) (insert \"éa日b\") (narrow-to-region 2 4))")
+            .unwrap();
+        for form in [
+            "nil",
+            "1.0",
+            "\"x\"",
+            "1208925819614629174706176",
+            "(copy-marker 3)",
+            "(make-marker)",
+        ] {
+            let arg = ev.eval_str(form).expect("position query input");
+            let roots = save_scratch_gc_roots();
+            push_scratch_gc_root(arg);
+            let mut results = Vec::new();
+            for caller in [hot, cold] {
+                let result = ev.funcall_general_untraced(caller, vec![arg]);
+                match (name, form) {
+                    ("position-bytes", "1208925819614629174706176") => {
+                        assert_eq!(result.as_ref().unwrap(), &Value::NIL)
+                    }
+                    ("position-bytes", "(copy-marker 3)") => {
+                        assert_eq!(result.as_ref().unwrap(), &Value::fixnum(4))
+                    }
+                    ("position-bytes", "(make-marker)") => {
+                        let Err(Flow::Signal(sig)) = &result else {
+                            panic!("unset marker must signal");
+                        };
+                        assert_eq!(sig.symbol_name(), "error");
+                        assert_eq!(
+                            sig.data[0].as_utf8_str(),
+                            Some("Marker does not point anywhere")
+                        );
+                    }
+                    _ => {
+                        let Err(Flow::Signal(sig)) = &result else {
+                            panic!("invalid position must signal");
+                        };
+                        assert_eq!(sig.symbol_name(), "wrong-type-argument");
+                        let predicate = if name == "position-bytes" {
+                            "integer-or-marker-p"
+                        } else {
+                            "fixnump"
+                        };
+                        assert_eq!(sig.data, vec![Value::symbol(predicate), arg]);
+                    }
+                }
+                results.push(format_eval_result(
+                    &result.map_err(crate::emacs_core::error::map_flow),
+                ));
+            }
+            assert_eq!(results[0], results[1], "{name}: {form}");
+            restore_scratch_gc_roots(roots);
+        }
+        assert!(jit_compiled_id(hot).is_some(), "{name}: native caller");
+        assert!(
+            jit_compiled_id(cold).is_none(),
+            "{name}: interpreter control"
+        );
+        for nargs in [0, 2] {
+            let mut errors = Vec::new();
+            for native in [true, false] {
+                let caller = jit_subr_spec_caller(name, nargs, native);
+                let flow = ev
+                    .funcall_general_untraced(caller, vec![Value::NIL; nargs])
+                    .expect_err("wrong arity");
+                let Flow::Signal(sig) = &flow else {
+                    panic!("arity must signal");
+                };
+                assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
+                assert_eq!(sig.data.last(), Some(&Value::fixnum(nargs as i64)));
+                errors.push(format_eval_result(&Err(
+                    crate::emacs_core::error::map_flow(flow),
+                )));
+            }
+            assert_eq!(errors[0], errors[1], "{name}: arity {nargs}");
+        }
+    }
+}
+
 /// In-place entry-rewrite soundness: registering a fixed one-slot subr under the SAME
 /// name rewrites the static registry entry while the immediate subr bits stay
 /// unchanged, and bumps function_epoch. The site re-validates, RE-ARMS (bits
