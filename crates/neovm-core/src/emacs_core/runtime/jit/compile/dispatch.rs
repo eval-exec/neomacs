@@ -1519,16 +1519,34 @@ fn call_fixed_builtin_from_native(
         _ => unreachable!("slot count matched above"),
     };
     ctx.depth -= 1;
-    let result = if result.is_err() {
-        ctx.dispatch_signal_result_if_needed(result)
-    } else {
-        result
-    };
-    Some(if ctx.pop_native_backtrace_frame(bt_count) {
-        result
-    } else {
-        ctx.pop_bytecode_backtrace_frame_with_result(bt_count, result)
+    // Extract the value before cleanup. Passing the whole Result through
+    // the signal/unwind joins made LLVM copy its 16-byte aggregate with wide
+    // loads after the builtin's narrow stores, even on balanced Ok returns.
+    Some(match result {
+        Ok(value) => {
+            if ctx.pop_native_backtrace_frame(bt_count) {
+                return Some(Ok(value));
+            }
+            finish_fixed_builtin_from_native(ctx, bt_count, Ok(value))
+        }
+        Err(flow) => finish_fixed_builtin_from_native(ctx, bt_count, Err(flow)),
     })
+}
+
+/// Preserve signal-hook ordering and the general unwinder for non-local
+/// returns, debugger exit flags, or bindings left above the native frame.
+/// Keeping these aggregate Result moves out of line lets the common return
+/// carry only the successful Value through its frame pop.
+#[cfg(feature = "jit")]
+#[cold]
+#[inline(never)]
+fn finish_fixed_builtin_from_native(
+    ctx: &mut Context,
+    bt_count: usize,
+    result: crate::emacs_core::error::EvalResult,
+) -> crate::emacs_core::error::EvalResult {
+    let result = ctx.dispatch_signal_result_if_needed(result);
+    ctx.pop_bytecode_backtrace_frame_with_result(bt_count, result)
 }
 
 /// Speculated direct SUBR call (`Op::Call` whose callee slot provably holds a
