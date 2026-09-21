@@ -27072,10 +27072,15 @@ fn the_inline_tier_a_read_engages_and_still_matches_the_interpreter() {
     ev.eval_str("(insert \"abc\\ndef\")").unwrap();
     ev.eval_str("(goto-char 2)").unwrap();
 
+    // The emitted counter exists only under `debug_assertions` (release
+    // lowering must not pay for it), so the engagement assertion is
+    // debug-only, exactly like the other CBSym fastpath counters above.
+    #[cfg(debug_assertions)]
     let emitted = || {
         crate::emacs_core::jit::compile::lowering::INLINE_CBSYM_READ_EMITTED
             .load(std::sync::atomic::Ordering::Relaxed)
     };
+    #[cfg(debug_assertions)]
     let before = emitted();
 
     for name in [
@@ -27105,6 +27110,7 @@ fn the_inline_tier_a_read_engages_and_still_matches_the_interpreter() {
         );
     }
 
+    #[cfg(debug_assertions)]
     if !jit_cbsym_fastpath_suppressed_by_harness() {
         // Exactly the five that inline: point, point-min, point-max, bobp,
         // eobp. The other five in the list above must still route through the
