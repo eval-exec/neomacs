@@ -64,6 +64,9 @@ fn hash_key_to_value(key: &HashKey) -> Value {
         HashKey::Symbol(id) => Value::from_sym_id(*id),
         HashKey::Keyword(id) => Value::keyword_id(*id),
         HashKey::Text(text) => Value::string(text.to_string()),
+        HashKey::StringContent(content) => Value::heap_string(
+            crate::heap_types::LispString::from_bytes_with_schars(&content.0, content.1),
+        ),
         HashKey::Char(c) => Value::char(*c),
         HashKey::Window(id) => Value::make_window(*id),
         HashKey::Frame(id) => Value::make_frame(*id),

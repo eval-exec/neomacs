@@ -532,6 +532,25 @@ impl LispString {
         std::mem::offset_of!(LispString, data)
     }
 
+    /// Rebuild a string from its raw internal bytes and character count.
+    ///
+    /// `schars == bytes.len()` means every byte is one character, which is
+    /// the unibyte shape; anything else is Emacs's multibyte encoding.
+    ///
+    /// The multibyte FLAG is deliberately not recoverable here, and must not
+    /// be: `equal` compares SCHARS, SBYTES and bytes (GNU `Fequal`), so an
+    /// all-ASCII unibyte string and its multibyte twin are `equal` and are
+    /// therefore the same hash key. Distinguishing them would be wrong.
+    pub(crate) fn from_bytes_with_schars(bytes: &[u8], schars: usize) -> Self {
+        if schars == bytes.len() {
+            Self::from_unibyte_slice(bytes)
+        } else {
+            let data = Self::copy_payload(bytes);
+            let size_byte = bytes.len() as i64;
+            Self::from_owned_payload(data, schars, size_byte)
+        }
+    }
+
     /// Create a multibyte string from valid UTF-8.
     /// Standard Unicode == Emacs encoding, so just copy the bytes.
     pub fn from_utf8(s: &str) -> Self {

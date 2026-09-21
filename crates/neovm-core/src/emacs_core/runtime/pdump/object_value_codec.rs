@@ -324,6 +324,7 @@ const HASH_KEY_OVERLAY: u8 = 19;
 const HASH_KEY_BOOL_VEC: u8 = 20;
 const HASH_KEY_BIGNUM: u8 = 21;
 const HASH_KEY_BYTE_CODE: u8 = 22;
+const HASH_KEY_STRING_CONTENT: u8 = 23;
 
 const BYTE_CODE_KEY_OBSERVABLE_SLOT_COUNT: u8 = 0;
 const BYTE_CODE_KEY_VALUE: u8 = 1;
@@ -440,6 +441,11 @@ fn write_hash_key(out: &mut Vec<u8>, key: &DumpHashKey) -> Result<(), DumpError>
         DumpHashKey::Text(text) => {
             write_u8(out, HASH_KEY_TEXT);
             write_string(out, text)?;
+        }
+        DumpHashKey::StringContent(bytes, schars) => {
+            write_u8(out, HASH_KEY_STRING_CONTENT);
+            write_bytes(out, bytes)?;
+            write_u64(out, *schars);
         }
     }
     Ok(())
@@ -1172,6 +1178,11 @@ impl<'a> Cursor<'a> {
             )),
             HASH_KEY_CYCLE => Ok(DumpHashKey::Cycle(self.read_u32("hash cycle key")?)),
             HASH_KEY_TEXT => Ok(DumpHashKey::Text(self.read_string()?)),
+            HASH_KEY_STRING_CONTENT => {
+                let bytes = self.read_bytes()?;
+                let schars = self.read_u64("hash key string content schars")?;
+                Ok(DumpHashKey::StringContent(bytes, schars))
+            }
             other => Err(DumpError::ImageFormatError(format!(
                 "unknown hash key tag {other}"
             ))),

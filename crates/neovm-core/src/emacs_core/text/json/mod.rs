@@ -509,6 +509,12 @@ fn strip_plist_colon(name: &str) -> &str {
 fn hash_key_to_string(key: &HashKey) -> Result<String, Flow> {
     match key {
         HashKey::Text(s) => Ok(s.to_string()),
+        HashKey::StringContent(content) => String::from_utf8(content.0.to_vec()).map_err(|_| {
+            signal(
+                "json-serialize",
+                vec![Value::string("invalid UTF-8 in key")],
+            )
+        }),
         HashKey::Symbol(id) => Ok(resolve_sym(*id).to_owned()),
         HashKey::Keyword(id) => {
             let s = resolve_sym(*id);
@@ -1226,7 +1232,10 @@ impl<'a> JsonParser<'a> {
 
             {
                 let key_val = Value::string(&key);
-                let hash_key = HashKey::Text(key.into_boxed_str());
+                // A JSON member name becomes a Lisp STRING key, so it must
+                // be keyed the way any Lisp string is -- `HashKey::Text` is a
+                // runtime tag and a `gethash` probe would never match it.
+                let hash_key = HashKey::from_str(key);
                 let _ = ht.with_hash_table_mut(|table| {
                     table.insert(hash_key, key_val, val);
                 });

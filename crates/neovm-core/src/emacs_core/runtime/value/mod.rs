@@ -1460,7 +1460,27 @@ pub enum HashKey {
     /// Back-reference marker used when structural objects recurse.
     Cycle(u32),
     /// Owned textual key used for structural hashing.
+    ///
+    /// This is a TAG, built from a `&str` the runtime chose (a lambda's
+    /// shape, a JSON member name). A Lisp string VALUE is never keyed with
+    /// it -- see `StringContent`.
     Text(Box<str>),
+    /// A Lisp string keyed by its content, whatever its bytes.
+    ///
+    /// GNU keys every string by content under `equal`: `Fequal` compares
+    /// SCHARS, SBYTES and then the bytes (src/fns.c). Keying by `Box<str>`
+    /// instead lost information twice -- a non-UTF-8 string fell back to an
+    /// IDENTITY key, and a unibyte string whose bytes happened to be valid
+    /// UTF-8 collided with the MULTIBYTE string of those same bytes even
+    /// though the two are not `equal`.
+    ///
+    /// `schars` is carried because the bytes alone do not decide equality:
+    /// equal bytes imply equal SBYTES, so the character count is the only
+    /// thing left that can differ.
+    ///
+    /// Boxed as a pair, like `Marker` and `Overlay`: `HashKey` sits inline in
+    /// every bucket, and a test pins it at three words or fewer.
+    StringContent(Box<(Box<[u8]>, usize)>),
 }
 
 /// Hash index of a Lisp hash table: materialized [`HashKey`] → entry slot.
@@ -1525,10 +1545,10 @@ pub(crate) fn fast_probe_supported(
         ValueKind::Nil | ValueKind::T | ValueKind::Fixnum(_) | ValueKind::Symbol(_) => true,
         // `to_eq_key` keys a float by identity; the value tests key its bits.
         ValueKind::Float | ValueKind::Subr(_) | ValueKind::Unbound | ValueKind::Unknown => true,
-        ValueKind::String => match test {
-            HashTableTest::Equal => value.as_utf8_str().is_some(),
-            HashTableTest::Eq | HashTableTest::Eql => true,
-        },
+        // Any string is admissible now: the key is its bytes plus SCHARS, so
+        // there is nothing to validate. Asking `as_utf8_str()` here ran
+        // `std::str::from_utf8` over the WHOLE string on every probe.
+        ValueKind::String => true,
         ValueKind::Cons => match test {
             HashTableTest::Eq | HashTableTest::Eql => true,
             HashTableTest::Equal => {
@@ -1594,13 +1614,12 @@ impl ValueKeyProbe {
             },
             ValueKind::String => match self.test {
                 HashTableTest::Equal => {
-                    16u8.hash(state);
-                    hash_char_array(
-                        value
-                            .as_utf8_str()
-                            .expect("fast probe admits only UTF-8 strings under `equal`"),
-                        state,
-                    );
+                    23u8.hash(state);
+                    let string = value
+                        .as_lisp_string()
+                        .expect("a String value carries a LispString payload");
+                    hash_char_array(string.as_bytes(), state);
+                    string.schars().hash(state);
                 }
                 HashTableTest::Eq | HashTableTest::Eql => identity(state),
             },
@@ -1629,9 +1648,11 @@ impl ValueKeyProbe {
             (ValueKind::Float, HashKey::Float(bits)) => {
                 !matches!(self.test, HashTableTest::Eq) && value.xfloat().to_bits() == *bits
             }
-            (ValueKind::String, HashKey::Text(text)) => {
+            (ValueKind::String, HashKey::StringContent(content)) => {
                 matches!(self.test, HashTableTest::Equal)
-                    && value.as_utf8_str().is_some_and(|s| s == &**text)
+                    && value.as_lisp_string().is_some_and(|string| {
+                        string.schars() == content.1 && string.as_bytes() == &*content.0
+                    })
             }
             (ValueKind::Cons, HashKey::EqualCons(car, cdr)) => {
                 matches!(self.test, HashTableTest::Equal)
@@ -1686,9 +1707,8 @@ impl hashbrown::Equivalent<HashKey> for ValueKeyProbe {
 /// The stored key (`HashKey::Text`) and the borrowed probe (`ValueKeyProbe`)
 /// must feed the hasher IDENTICALLY or a lookup can never find its own entry,
 /// so both go through this one function.
-fn hash_char_array<H: std::hash::Hasher>(text: &str, state: &mut H) {
+fn hash_char_array<H: std::hash::Hasher>(bytes: &[u8], state: &mut H) {
     const WORD: usize = size_of::<u64>();
-    let bytes = text.as_bytes();
     state.write_usize(bytes.len());
     if bytes.len() < WORD {
         state.write(bytes);
@@ -1729,6 +1749,7 @@ impl std::hash::Hash for HashKey {
             HashKey::Keyword(_) => 14,
             HashKey::Cycle(_) => 15,
             HashKey::Text(_) => 16,
+            HashKey::StringContent(_) => 23,
             HashKey::SymbolWithPos(_, _) => 17,
             HashKey::Marker(_) => 18,
             HashKey::Overlay(_) => 19,
@@ -1778,7 +1799,11 @@ impl std::hash::Hash for HashKey {
                 pos.hash(state);
             }
             HashKey::Cycle(index) => index.hash(state),
-            HashKey::Text(text) => hash_char_array(text, state),
+            HashKey::Text(text) => hash_char_array(text.as_bytes(), state),
+            HashKey::StringContent(content) => {
+                hash_char_array(&content.0, state);
+                content.1.hash(state);
+            }
         }
     }
 }
@@ -1811,6 +1836,7 @@ impl PartialEq for HashKey {
             }
             (HashKey::Cycle(a), HashKey::Cycle(b)) => a == b,
             (HashKey::Text(a), HashKey::Text(b)) => a == b,
+            (HashKey::StringContent(a), HashKey::StringContent(b)) => a == b,
             _ => false,
         }
     }
@@ -1824,8 +1850,14 @@ impl HashKey {
     // is an established public helper used by table clients.
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: impl Into<String>) -> Self {
-        // For `equal` hash tables, use text content directly
-        HashKey::Text(s.into().into_boxed_str())
+        // The key a Lisp string with this text would get: content, not a tag.
+        let text = s.into();
+        HashKey::string_content(text.as_bytes(), text.chars().count())
+    }
+
+    /// The `equal` key for a Lisp string: its raw internal bytes and SCHARS.
+    pub fn string_content(bytes: &[u8], schars: usize) -> Self {
+        HashKey::StringContent(Box::new((bytes.into(), schars)))
     }
 }
 
@@ -3553,14 +3585,11 @@ impl TaggedValue {
                     )),
                 )
             }
-            ValueKind::String => {
-                // Use content for equal hashing
-                if let Some(s) = self.as_utf8_str() {
-                    HashKey::Text(s.into())
-                } else {
-                    self.to_eq_key()
-                }
-            }
+            ValueKind::String => match self.as_lisp_string() {
+                // Content, always -- GNU has no UTF-8 notion to fall back on.
+                Some(string) => HashKey::string_content(string.as_bytes(), string.schars()),
+                None => self.to_eq_key(),
+            },
             ValueKind::Cons => {
                 let ptr = self.bits();
                 if let Some(index) = seen.iter().position(|&p| p == ptr) {

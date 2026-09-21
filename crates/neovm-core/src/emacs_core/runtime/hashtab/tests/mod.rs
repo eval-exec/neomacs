@@ -1155,3 +1155,76 @@ fn unintern_constant_symbols_preserves_custom_obarray_namesakes() {
         );
     }
 }
+
+/// An `equal` hash table must key EVERY string by its content, and must treat
+/// two strings that are not `equal` as two keys.
+///
+/// GNU keys a string by content whatever its bytes: `Fequal' compares SCHARS,
+/// SBYTES and the bytes (src/fns.c).  We keyed only VALID UTF-8 strings by
+/// content, via a `Box<str>`, and that lost information twice:
+///
+///   1. A string whose bytes are not UTF-8 fell back to an IDENTITY key.  Two
+///      `equal` raw unibyte strings were therefore different keys: `gethash`
+///      answered nil for a key `equal' to the stored one, and `puthash' then
+///      added a SECOND entry equal to the first.
+///
+///   2. Worse, a UNIBYTE string whose bytes happen to be valid UTF-8 produced
+///      the same `Box<str>` as the MULTIBYTE string with those bytes -- even
+///      though the two have different character counts and are NOT `equal'.
+///      Storing both left ONE entry: the second `puthash' silently destroyed
+///      the first.
+///
+/// Both rows are pinned to GNU Emacs 31.1.
+#[test]
+fn an_equal_table_keys_every_string_by_content() {
+    crate::test_utils::init_test_tracing();
+
+    // (1) Raw, non-UTF-8 bytes: an `equal` copy must find the entry, and
+    //     re-`puthash` must replace rather than duplicate.
+    let observed = crate::test_utils::runtime_startup_eval_one(
+        r#"(let ((h (make-hash-table :test 'equal))
+                 (a (unibyte-string 255 65 254))
+                 (b (unibyte-string 255 65 254)))
+             (puthash a 1 h)
+             (list (equal a b) (gethash b h) (gethash a h)
+                   (hash-table-count h)
+                   (progn (puthash b 2 h) (hash-table-count h))))"#,
+    );
+    assert_eq!(observed, "OK (t 1 1 1 1)");
+
+    // (2) Same BYTES, different character counts: two distinct keys.
+    let observed = crate::test_utils::runtime_startup_eval_one(
+        r#"(let ((h (make-hash-table :test 'equal))
+                 (uni (unibyte-string #xC3 #xA9))
+                 (mul "é"))
+             (puthash uni 'from-unibyte h)
+             (puthash mul 'from-multibyte h)
+             (list (equal uni mul)
+                   (length uni) (length mul)
+                   (hash-table-count h)
+                   (gethash uni h) (gethash mul h)))"#,
+    );
+    assert_eq!(observed, "OK (nil 2 1 2 from-unibyte from-multibyte)");
+}
+
+/// A table built by `json-parse-string` must answer `gethash`.
+///
+/// Its member names become Lisp STRING keys, so they have to be keyed the way
+/// any Lisp string is.  The JSON reader built a `HashKey::Text` -- the
+/// runtime's TAG form -- which a `gethash` probe can never match.  That was
+/// invisible while both the reader and the tests used the same tag
+/// constructor, and would have become a silent "every lookup returns nil" the
+/// moment string keys moved to a content key.
+///
+/// Pinned to GNU Emacs 31.1.  (`json-serialize` member ORDER differs from
+/// GNU's and is not asserted here; that is a separate, pre-existing gap.)
+#[test]
+fn json_parsed_tables_answer_gethash() {
+    crate::test_utils::init_test_tracing();
+    let observed = crate::test_utils::runtime_startup_eval_one(
+        r#"(let ((h (json-parse-string "{\"name\": 1, \"é\": 2, \"a b\": 3}")))
+             (list (gethash "name" h) (gethash "é" h) (gethash "a b" h)
+                   (gethash "absent" h) (hash-table-count h)))"#,
+    );
+    assert_eq!(observed, "OK (1 2 3 nil 3)");
+}

@@ -298,6 +298,8 @@ pub enum DumpHashKey {
         bits: u128,
     },
     SymbolWithPos(Box<DumpHashKey>, Box<DumpHashKey>),
+    /// A Lisp string keyed by content: raw internal bytes plus SCHARS.
+    StringContent(Vec<u8>, u64),
     Cycle(u32),
     Text(String),
 }

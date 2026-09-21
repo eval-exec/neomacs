@@ -2865,6 +2865,9 @@ pub(crate) fn dump_hash_key(encoder: &mut DumpEncoder, k: &HashKey) -> DumpHashK
         ),
         HashKey::Cycle(index) => DumpHashKey::Cycle(*index),
         HashKey::Text(text) => DumpHashKey::Text(text.to_string()),
+        HashKey::StringContent(content) => {
+            DumpHashKey::StringContent(content.0.to_vec(), content.1 as u64)
+        }
     }
 }
 
@@ -4557,6 +4560,9 @@ pub(crate) fn load_hash_key(decoder: &mut LoadDecoder, k: &DumpHashKey) -> HashK
             Box::new(load_hash_key(decoder, pos)),
         ),
         DumpHashKey::Cycle(index) => HashKey::Cycle(*index),
+        DumpHashKey::StringContent(bytes, schars) => {
+            HashKey::string_content(bytes, *schars as usize)
+        }
         DumpHashKey::Text(text) => HashKey::Text(text.clone().into_boxed_str()),
     }
 }
@@ -4646,6 +4652,9 @@ fn load_hash_key_owned(decoder: &mut LoadDecoder, k: DumpHashKey) -> HashKey {
             Box::new(load_hash_key_owned(decoder, *pos)),
         ),
         DumpHashKey::Cycle(index) => HashKey::Cycle(index),
+        DumpHashKey::StringContent(bytes, schars) => {
+            HashKey::string_content(&bytes, schars as usize)
+        }
         DumpHashKey::Text(text) => HashKey::Text(text.into_boxed_str()),
     }
 }
