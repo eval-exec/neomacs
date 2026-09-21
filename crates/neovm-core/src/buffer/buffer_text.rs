@@ -178,6 +178,53 @@ impl PositionCache {
     }
 }
 
+/// A bracket already proven to contain only single-byte characters. Reusing
+/// it avoids finding the same anchors again for nearby conversions. Unlike
+/// individual anchors, the proof is discarded after every content edit.
+#[derive(Clone, Copy, Default)]
+struct SingleBytePositionSpan {
+    epoch: u64,
+    start: TextPositionAnchor,
+    len: EmacsByteLen,
+}
+
+impl SingleBytePositionSpan {
+    fn from_bounds(epoch: u64, bounds: TextPositionBounds) -> Option<Self> {
+        let start = bounds.below();
+        let end = bounds.above();
+        let bytes = end.emacs_byte_pos().get() - start.emacs_byte_pos().get();
+        let chars = end.char_pos().get() - start.char_pos().get();
+        // An exact-anchor query must not evict a useful span with one point.
+        (bytes != 0 && bytes == chars).then_some(Self {
+            epoch,
+            start,
+            len: EmacsByteLen::new(bytes),
+        })
+    }
+
+    fn char_to_byte(self, epoch: u64, target: CharPos0) -> Option<EmacsBytePos> {
+        if self.epoch == 0 || self.epoch != epoch {
+            return None;
+        }
+        let offset = target.get().checked_sub(self.start.char_pos().get())?;
+        (offset <= self.len.get()).then(|| {
+            self.start
+                .emacs_byte_pos()
+                .add_len(EmacsByteLen::new(offset))
+        })
+    }
+
+    fn byte_to_char(self, epoch: u64, target: EmacsBytePos) -> Option<CharPos0> {
+        if self.epoch == 0 || self.epoch != epoch {
+            return None;
+        }
+        let offset = target
+            .get()
+            .checked_sub(self.start.emacs_byte_pos().get())?;
+        (offset <= self.len.get()).then(|| self.start.char_pos().add_len(CharLen::new(offset)))
+    }
+}
+
 struct BufferTextStorage {
     metrics: TextMetrics,
     backend: TextBackend,
@@ -214,6 +261,7 @@ struct BufferTextStorage {
     markers_head: *mut crate::tagged::header::MarkerObj,
     /// Interior-mutable last-query cache for char↔byte conversion.
     pos_cache: Cell<PositionCache>,
+    single_byte_span: Cell<SingleBytePositionSpan>,
     /// Internal (non-Lisp-visible) anchor positions populated on long scans.
     /// Invalidated wholesale when the content epoch advances.
     anchor_cache: RefCell<Vec<TextPositionAnchor>>,
@@ -361,6 +409,7 @@ impl Clone for BufferTextStorage {
             // rebuilds it via register_marker.
             markers_head: std::ptr::null_mut(),
             pos_cache: self.pos_cache.clone(),
+            single_byte_span: self.single_byte_span.clone(),
             anchor_cache: self.anchor_cache.clone(),
             anchor_cache_key: self.anchor_cache_key.clone(),
             anchor_cache_cursor: self.anchor_cache_cursor.clone(),
@@ -432,6 +481,7 @@ impl BufferText {
                 text_props: Rc::new(TextPropertyTable::new()),
                 markers_head: std::ptr::null_mut(),
                 pos_cache: Cell::new(PositionCache::default()),
+                single_byte_span: Cell::new(SingleBytePositionSpan::default()),
                 anchor_cache: RefCell::new(Vec::new()),
                 anchor_cache_key: Cell::new(0),
                 anchor_cache_cursor: Cell::new(0),
@@ -480,6 +530,9 @@ impl BufferText {
         Self::refresh_backend_metrics(storage);
         storage.content_epoch = storage.content_epoch.wrapping_add(1).max(1);
         let epoch = storage.content_epoch;
+        storage
+            .single_byte_span
+            .set(SingleBytePositionSpan::default());
         *storage.syntax_run_memo.borrow_mut() = [SyntaxRunMemoEntry::default(); 4];
         *storage.syntax_byte_run_memo.borrow_mut() = [SyntaxByteRunMemoEntry::default(); 4];
         *storage.syntax_char_run_memo.borrow_mut() = [SyntaxCharRunMemoEntry::default(); 4];
@@ -618,6 +671,9 @@ impl BufferText {
 
     fn invalidate_position_caches(storage: &mut BufferTextStorage) {
         storage.pos_cache.set(PositionCache::default());
+        storage
+            .single_byte_span
+            .set(SingleBytePositionSpan::default());
         storage.anchor_cache.borrow_mut().clear();
         storage.anchor_cache_key.set(0);
         // Default entries have epoch 0, which never matches a live epoch.
@@ -2792,6 +2848,18 @@ impl BufferText {
             return result;
         }
 
+        if let Some(result) = storage
+            .single_byte_span
+            .get()
+            .char_to_byte(content_epoch, target)
+        {
+            storage.pos_cache.set(PositionCache {
+                epoch: content_epoch,
+                anchor: TextPositionAnchor::new(target, result),
+            });
+            return result;
+        }
+
         Self::ensure_position_anchor_cache_current(&storage, content_epoch);
 
         // Cheap-first bracket; see the byte->char direction above.
@@ -2809,6 +2877,7 @@ impl BufferText {
                 mini.consider_char_anchor(target, cached.anchor);
             }
             if let Some(result) = mini.interpolate_char(target) {
+                Self::remember_single_byte_span(&storage, mini);
                 storage.pos_cache.set(PositionCache {
                     epoch: content_epoch,
                     anchor: TextPositionAnchor::new(target, result),
@@ -2824,6 +2893,7 @@ impl BufferText {
         // multibyte for a handful of curly quotes, so the whole-buffer fast
         // path above misses while nearly every local span still qualifies.
         if let Some(result) = bounds.interpolate_char(target) {
+            Self::remember_single_byte_span(&storage, bounds);
             storage.pos_cache.set(PositionCache {
                 epoch: content_epoch,
                 anchor: TextPositionAnchor::new(target, result),
@@ -2916,6 +2986,18 @@ impl BufferText {
             return result;
         }
 
+        if let Some(result) = storage
+            .single_byte_span
+            .get()
+            .byte_to_char(content_epoch, target)
+        {
+            storage.pos_cache.set(PositionCache {
+                epoch: content_epoch,
+                anchor: TextPositionAnchor::new(result, target),
+            });
+            return result;
+        }
+
         Self::ensure_position_anchor_cache_current(&storage, content_epoch);
 
         // Cheap-first bracket: structural anchors plus the position cache
@@ -2938,6 +3020,7 @@ impl BufferText {
                 mini.consider_byte_anchor(target, cached.anchor);
             }
             if let Some(result) = mini.interpolate_byte(target) {
+                Self::remember_single_byte_span(&storage, mini);
                 storage.pos_cache.set(PositionCache {
                     epoch: content_epoch,
                     anchor: TextPositionAnchor::new(result, target),
@@ -2953,6 +3036,7 @@ impl BufferText {
         // is necessarily a character boundary inside such a span, so this
         // cannot seed the bogus mid-character anchor guarded against below.
         if let Some(result) = bounds.interpolate_byte(target) {
+            Self::remember_single_byte_span(&storage, bounds);
             storage.pos_cache.set(PositionCache {
                 epoch: content_epoch,
                 anchor: TextPositionAnchor::new(result, target),
@@ -2992,6 +3076,12 @@ impl BufferText {
             });
         }
         result
+    }
+
+    fn remember_single_byte_span(storage: &BufferTextStorage, bounds: TextPositionBounds) {
+        if let Some(span) = SingleBytePositionSpan::from_bounds(storage.content_epoch, bounds) {
+            storage.single_byte_span.set(span);
+        }
     }
 
     #[cfg(test)]
