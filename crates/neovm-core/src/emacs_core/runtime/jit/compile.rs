@@ -1105,6 +1105,34 @@ fn resolve_inline_callee(ob: &Obarray, sym: Value) -> Option<mir::MirFunction> {
     if bc.jit_runtime().patched_prefix() > 0 {
         return None;
     }
+    // Read the CALLEE's feedback before splicing: afterwards every copied
+    // instruction carries the caller's call-site pc. MIR has only a fixnum
+    // arithmetic path, so inlining a known float/generic helper would deopt
+    // at each call even when the baseline already runs that helper natively.
+    let ops = bc.executable_ops();
+    if ops.iter().enumerate().any(|(pc, op)| {
+        matches!(
+            op,
+            Op::Add
+                | Op::Sub
+                | Op::Mul
+                | Op::Div
+                | Op::Rem
+                | Op::Max
+                | Op::Min
+                | Op::Add1
+                | Op::Sub1
+                | Op::Negate
+                | Op::Eqlsign
+                | Op::Lss
+                | Op::Gtr
+                | Op::Leq
+                | Op::Geq
+        ) && bc.jit_runtime().numeric_feedback(pc)
+            != crate::emacs_core::jit::NumericFeedback::FixnumOnly
+    }) {
+        return None;
+    }
     mir::build_mir(bc.executable_ops(), &bc.constants, bc.params.required.len()).ok()
 }
 
@@ -1202,6 +1230,7 @@ fn compile_bytecode_function_inner(
             }
             (n > 0).then_some(armed)
         });
+        mir.inline_epoch = inline_epoch;
         // The tier gate reads the INLINED body's plan (what would be lowered)
         // and is decided BEFORE the lowering: a rejected body goes to the
         // baseline, so lowering it first would be a wasted compile (75 of
@@ -1212,15 +1241,9 @@ fn compile_bytecode_function_inner(
         //  * loop-opaque: keep unqualified adapter families on the baseline.
         //    Named read fast paths share the baseline emitter; their generic
         //    fallbacks retain precise deopt and full rooting.
-        //  * loop-inline: a back-edge poll can run post-gc-hook, which can
-        //    redefine an inlined callee. Entry-only invalidation is not enough.
-        //  * inline-opaque: a body that INLINED a callee and still has a shim-
-        //    lowered op. Inlining is guarded by the function epoch only at
-        //    ENTRY; an adapter op (`fset`, a builtin, a `setq` whose watcher
-        //    runs Lisp) can redefine the inlined callee mid-activation, and
-        //    the running code would go on executing the stale copy. Before
-        //    the adapter every such op bailed the lowering, so an inlining
-        //    body was always shim-free; this keeps it that way.
+        // Inlined calls in loops or shim-bearing bodies validate their
+        // dependency epoch and call-observability state at each original
+        // call boundary. A mismatch resumes that call precisely.
         //  * generic-call: a `Call`/`Apply` or unspecialized `CallBuiltinSym`
         //    left in the body after inlining. Ordinary calls still lack the
         //    baseline's native-to-native speculation. Named builtins use the
@@ -1241,15 +1264,11 @@ fn compile_bytecode_function_inner(
                 "gate:loop-opaque:{}",
                 lowering::mir_loop_adapter_op(&mir)
             ))
-        } else if plan.has_backedge && inline_epoch.is_some() {
-            Some("gate:loop-inline".to_string())
         } else if plan.has_generic_call {
             Some(format!(
                 "gate:generic-call:{}",
                 lowering::mir_generic_call_kinds(&mir)
             ))
-        } else if inline_epoch.is_some() && plan.has_opaque {
-            Some("gate:inline-opaque".to_string())
         } else {
             None
         };
@@ -4382,6 +4401,9 @@ mod inline_tests;
 #[cfg(test)]
 #[path = "tests/mir_cons_deopt.rs"]
 mod mir_cons_deopt_tests;
+#[cfg(test)]
+#[path = "tests/mir_inline_guards.rs"]
+mod mir_inline_guards;
 #[cfg(test)]
 #[path = "tests/mir_named_calls.rs"]
 mod mir_named_calls_tests;

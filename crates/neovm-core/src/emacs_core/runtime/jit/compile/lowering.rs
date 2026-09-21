@@ -1710,6 +1710,112 @@ pub(crate) fn lower_mir_inst_via_baseline(
     Ok(())
 }
 
+/// An inlined call in a reentrant body must observe state changed by the
+/// preceding callback or service poll. These loads are deliberately mutable:
+/// they cannot be forwarded across a call. Failure resumes the original call,
+/// where the interpreter handles redefinition, debugging, quit and depth.
+fn emit_mir_inline_entry_guard(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    epoch: u64,
+    deopt: Block,
+) -> Result<(), CompileError> {
+    use crate::emacs_core::eval::runtime_projection::{
+        CONTEXT_COMPILER_OVERRIDES_ACTIVE_OFFSET, CONTEXT_QUIT_FLAG_OFFSET,
+        CONTEXT_QUIT_REQUESTED_OFFSET, CONTEXT_THROW_ON_INPUT_OFFSET, arc_atomic_bool_data_offset,
+    };
+    use crate::emacs_core::forward::LISP_BOOL_FWD_VALUE_OFFSET;
+    use crate::emacs_core::symbol::{
+        OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET, OBARRAY_FUNCTION_EPOCH_OFFSET,
+    };
+    let requested_off =
+        arc_atomic_bool_data_offset().ok_or(CompileError::UnsupportedOp("inline-quit-layout"))?;
+    let ob = core::mem::offset_of!(Context, obarray);
+    let flags = MemFlagsData::trusted();
+    let vmctx = fb.use_var(rt.vmctx_var);
+    let current = fb.ins().load(
+        types::I64,
+        flags,
+        vmctx,
+        (ob + OBARRAY_FUNCTION_EPOCH_OFFSET) as i32,
+    );
+    let epoch_ok = icmp_imm_p(fb, IntCC::Equal, current, epoch as i64);
+    let overrides = fb.ins().uload8(
+        types::I64,
+        flags,
+        vmctx,
+        CONTEXT_COMPILER_OVERRIDES_ACTIVE_OFFSET as i32,
+    );
+    let quit = fb
+        .ins()
+        .load(types::I64, flags, vmctx, CONTEXT_QUIT_FLAG_OFFSET as i32);
+    let throw = fb.ins().load(
+        types::I64,
+        flags,
+        vmctx,
+        CONTEXT_THROW_ON_INPUT_OFFSET as i32,
+    );
+    let requested_arc = fb.ins().load(
+        rt.ptr_ty,
+        flags,
+        vmctx,
+        CONTEXT_QUIT_REQUESTED_OFFSET as i32,
+    );
+    let requested = fb
+        .ins()
+        .uload8(types::I64, flags, requested_arc, requested_off as i32);
+    let signal_addr = fb.ins().iconst(
+        rt.ptr_ty,
+        crate::emacs_core::os_signal::pending_flag_addr() as i64,
+    );
+    let signal = fb.ins().uload8(types::I64, flags, signal_addr, 0);
+    let tick_addr = fb.ins().iconst(
+        rt.ptr_ty,
+        crate::emacs_core::profiler::profiler_sample_due_addr() as i64,
+    );
+    let tick = fb.ins().uload8(types::I64, flags, tick_addr, 0);
+    let fwd = fb.ins().load(
+        rt.ptr_ty,
+        flags,
+        vmctx,
+        (ob + OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET) as i32,
+    );
+    let armed = fb.ins().iconst(
+        rt.ptr_ty,
+        std::ptr::from_ref(&crate::emacs_core::forward::JIT_ALWAYS_TRUE_BOOL_FWD) as i64,
+    );
+    let resolved = icmp_imm_p(fb, IntCC::NotEqual, fwd, 0);
+    let cell = fb.ins().select(resolved, fwd, armed);
+    let debug = fb
+        .ins()
+        .uload8(types::I64, flags, cell, LISP_BOOL_FWD_VALUE_OFFSET as i32);
+    let depth = fb.ins().load(
+        rt.ptr_ty,
+        flags,
+        vmctx,
+        core::mem::offset_of!(Context, depth) as i32,
+    );
+    let max_depth = fb.ins().load(
+        rt.ptr_ty,
+        flags,
+        vmctx,
+        core::mem::offset_of!(Context, max_depth) as i32,
+    );
+    let depth_ok = fb.ins().icmp(IntCC::UnsignedLessThan, depth, max_depth);
+    debug_assert_eq!(Value::NIL.bits(), 0);
+    let set = fb.ins().bor(overrides, quit);
+    let set = fb.ins().bor(set, throw);
+    let set = fb.ins().bor(set, requested);
+    let set = fb.ins().bor(set, signal);
+    let set = fb.ins().bor(set, tick);
+    let set = fb.ins().bor(set, debug);
+    let clear = icmp_imm_p(fb, IntCC::Equal, set, 0);
+    let valid = fb.ins().band(epoch_ok, clear);
+    let valid = fb.ins().band(valid, depth_ok);
+    emit_guard(fb, deopt, valid);
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn mir_deopt_block(
     fb: &mut FunctionBuilder,
@@ -1910,6 +2016,7 @@ pub(crate) fn raw_fixnum_maxmin(
 pub(crate) struct MirLeafPlan {
     /// Any [`mir::MirOp::Opaque`] — an op lowered through the baseline's
     /// shim-calling emitters (a call, a variable op, a builtin, ...).
+    #[cfg(test)]
     pub(crate) has_opaque: bool,
     /// An ordinary call, or a named builtin without shared specialization.
     /// Such bodies keep the baseline's call machinery until MIR has parity.
@@ -2071,6 +2178,7 @@ pub(crate) fn plan_mir_leaf(m: &mir::MirFunction) -> MirLeafPlan {
         .filter(|i| matches!(&i.op, MirOp::Opaque { op, .. } if super::is_rooting_site_op(op)))
         .count();
     MirLeafPlan {
+        #[cfg(test)]
         has_opaque,
         has_generic_call,
         has_unqualified_adapter,
@@ -2698,6 +2806,30 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
                 match &inst.op {
                     MirOp::Arg(_) => {
                         // The param already holds the argument (bound above).
+                    }
+                    MirOp::InlineEntry => {
+                        if precise && let Some(epoch) = m.inline_epoch {
+                            if aot {
+                                return Err(CompileError::UnsupportedOp("aot-inline-epoch"));
+                            }
+                            let d = mir_deopt_block(
+                                &mut fb,
+                                precise,
+                                inst,
+                                &cval,
+                                &cval_raw,
+                                cons_repl,
+                                rt.as_ref(),
+                                &mut deopt,
+                                &mut pending,
+                            )?;
+                            emit_mir_inline_entry_guard(
+                                &mut fb,
+                                rt.as_ref().expect("precise inline runtime"),
+                                epoch,
+                                d,
+                            )?;
+                        }
                     }
                     MirOp::Const(v) => {
                         // Which non-fixnum consts route through the reloc vector vs

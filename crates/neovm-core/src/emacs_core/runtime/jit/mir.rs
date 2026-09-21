@@ -194,6 +194,9 @@ pub enum BinKind {
 pub enum MirOp {
     /// Function argument `i` (`0..arity`), seeding the entry block's stack.
     Arg(usize),
+    /// The original call boundary before an inlined body, including an
+    /// identity callee with no instructions. Carries the call's framestate.
+    InlineEntry,
     /// A compile-time constant from the function's constant pool.
     Const(Value),
     /// Fixnum-fast-path binary arithmetic (guards emitted at CLIF lowering).
@@ -298,6 +301,9 @@ pub struct MirFunction {
     /// pool when the baseline's emitter lowers it. (An inlined callee never
     /// carries an `Opaque`, so no spliced op indexes the wrong pool.)
     pub constants: Box<[Value]>,
+    /// Function epoch used by inline-entry guards in reentrant bodies.
+    /// Pure bodies retain the cache's entry validation; AOT never inlines.
+    pub(crate) inline_epoch: Option<u64>,
 }
 
 impl MirFunction {
@@ -556,6 +562,7 @@ pub fn build_mir_with_feedback(
         value_types: b.value_types,
         block_for,
         constants: constants.into(),
+        inline_epoch: None,
     })
 }
 
@@ -836,7 +843,7 @@ impl fmt::Display for MirFunction {
 /// renumbering during inline-splicing and for inlined-call result substitution.
 fn map_op_operands(op: &mut MirOp, mut f: impl FnMut(MirValue) -> MirValue) {
     match op {
-        MirOp::Arg(_) | MirOp::Const(_) => {}
+        MirOp::Arg(_) | MirOp::Const(_) | MirOp::InlineEntry => {}
         MirOp::Bin(_, a, b) | MirOp::Cmp(_, a, b) | MirOp::Eq(a, b) | MirOp::Cons(a, b) => {
             *a = f(*a);
             *b = f(*b);
@@ -854,7 +861,7 @@ fn map_op_operands(op: &mut MirOp, mut f: impl FnMut(MirValue) -> MirValue) {
 /// The `MirValue` operands of an op (read-only twin of [`map_op_operands`]).
 pub(crate) fn op_operands(op: &MirOp) -> impl Iterator<Item = MirValue> + '_ {
     let (fixed, rest): ([Option<MirValue>; 2], &[MirValue]) = match op {
-        MirOp::Arg(_) | MirOp::Const(_) => ([None, None], &[]),
+        MirOp::Arg(_) | MirOp::Const(_) | MirOp::InlineEntry => ([None, None], &[]),
         MirOp::Bin(_, a, b) | MirOp::Cmp(_, a, b) | MirOp::Eq(a, b) | MirOp::Cons(a, b) => {
             ([Some(*a), Some(*b)], &[])
         }
@@ -991,10 +998,20 @@ pub fn infer_value_types(m: &MirFunction) -> Vec<LispType> {
 fn callee_inlinable(c: &MirFunction, max_insts: usize) -> bool {
     c.blocks.len() == 1
         && matches!(c.blocks[0].term, MirTerm::Return(_))
-        && c.blocks[0]
-            .insts
-            .iter()
-            .all(|i| !matches!(i.op, MirOp::Opaque { .. } | MirOp::Eq(..) | MirOp::Cons(..)))
+        && c.blocks[0].insts.iter().all(|i| {
+            !matches!(
+                i.op,
+                MirOp::Opaque { .. } | MirOp::Eq(..) | MirOp::Cons(..) | MirOp::InlineEntry
+            )
+        })
+        // Even before feedback arrives, a known non-fixnum operand cannot
+        // pass this tier's numeric guards. Keep its real call path.
+        && c.blocks[0].insts.iter().all(|i| {
+            !matches!(i.op, MirOp::Bin(..) | MirOp::Unary(..) | MirOp::Cmp(..))
+                || op_operands(&i.op).all(|v| {
+                    matches!(c.value_type(v), LispType::Unknown | LispType::Any | LispType::Fixnum)
+                })
+        })
         && c.blocks[0]
             .insts
             .iter()
@@ -1014,9 +1031,9 @@ fn callee_inlinable(c: &MirFunction, max_insts: usize) -> bool {
 /// flow ACROSS the former call boundary (the optimization the per-pc baseline
 /// cannot do). Returns the number of sites inlined.
 ///
-/// NOTE: redefinition is NOT guarded here — a caller that lowers + runs an inlined
-/// result MUST first emit an epoch guard (deopt if the callee changed; a later
-/// wiring increment). Until then this is an unwired transform exercised by tests.
+/// Each splice retains an `InlineEntry` marker. Production compilation arms
+/// `inline_epoch`: reentrant bodies guard each marker and deopt to the original
+/// call; pure bodies rely on the cache's entry validation.
 pub fn inline_pure_single_block_callees(
     m: &mut MirFunction,
     resolve: &impl Fn(Value) -> Option<MirFunction>,
@@ -1061,6 +1078,20 @@ pub fn inline_pure_single_block_callees(
                 new_insts.push(inst);
                 continue;
             };
+
+            let marker = MirValue(m.value_types.len() as u32);
+            m.value_types.push(LispType::Nil);
+            new_insts.push(MirInst {
+                result: marker,
+                op: MirOp::InlineEntry,
+                ty: LispType::Nil,
+                // The guard observes function bindings and runtime flags.
+                effect: Effect::READ_BINDINGS
+                    .with(Effect::READ_HEAP)
+                    .with(Effect::MAY_DEOPT),
+                pc: inst.pc,
+                pre_stack: inst.pre_stack.clone(),
+            });
 
             // Splice the callee's single block: params -> the call's args; other
             // values -> fresh caller values.
@@ -1170,7 +1201,7 @@ pub(crate) fn cons_scalar_repl_targets(m: &MirFunction) -> Vec<Option<(MirValue,
                 cons_of[inst.result.0 as usize] = Some((*car, *cdr));
             }
             match &inst.op {
-                MirOp::Arg(_) | MirOp::Const(_) => {}
+                MirOp::Arg(_) | MirOp::Const(_) | MirOp::InlineEntry => {}
                 // A car/cdr read is the ONLY non-escaping use of a cons.
                 MirOp::CarCdr { .. } => {}
                 MirOp::Bin(_, a, b) | MirOp::Cmp(_, a, b) | MirOp::Eq(a, b) | MirOp::Cons(a, b) => {

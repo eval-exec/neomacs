@@ -1643,8 +1643,8 @@ fn mir_loop_overflow_after_a_poll_deopts_at_the_current_iteration() {
     assert_eq!(ev.jit_root_stack_top, 0);
 }
 
-/// A poll can run Lisp that redefines a callee. Until MIR revalidates inline
-/// dependencies after polls, such loops must keep the baseline's call sites.
+/// A poll can run Lisp that redefines a callee. The next inlined call must
+/// deopt to its original boundary, preserving iterations already completed.
 #[test]
 fn mir_loop_does_not_keep_an_inlined_callee_across_a_gc_hook() {
     use crate::emacs_core::eval::Context;
@@ -1682,14 +1682,32 @@ fn mir_loop_does_not_keep_an_inlined_callee_across_a_gc_hook() {
         Op::Goto(0),
         Op::Return,
     ];
+    f.seal_hand_assembled_ops();
+    let _ = ev.debug_on_next_call_is_armed();
     let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
-    assert_eq!(leaf.tier, super::leaf::LeafTier::Baseline);
+    assert_eq!(leaf.tier, super::leaf::LeafTier::Mir);
+    assert_eq!(
+        leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(1000)]),
+        NativeRun::Ok(Value::make_int(0).bits())
+    );
     ev.eval_str("(setq post-gc-hook (list (lambda () (fset 'mir-loop-step (lambda (n) -7)))))")
         .expect("install redefining GC hook");
     ev.gc_stress = true;
     let result = leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(1000)]);
     ev.gc_stress = false;
-    assert_eq!(result, NativeRun::Ok(Value::make_int(-7).bits()));
+    let NativeRun::DeoptAt(frame) = &result else {
+        panic!("{result:?}")
+    };
+    assert_eq!(frame.pc, 6);
+    assert!(
+        frame.stack[0].as_fixnum().unwrap() < 1000,
+        "completed iterations are retained"
+    );
+    assert_eq!(
+        mir_inline_guards::resume(&mut ev, &f, result),
+        Value::make_int(-7)
+    );
+    assert_eq!(ev.jit_root_stack_top, 0);
 }
 
 #[test]
@@ -3557,15 +3575,14 @@ fn tier_gate_sends_a_loop_with_a_shim_op_to_the_baseline() {
     }
 }
 
-/// `gate:inline-opaque`: a body that inlines `f` and then redefines it through
-/// an adapter op must not run the stale inlined copy. The epoch check that
-/// guards inlining runs only at ENTRY.
+/// A body that inlines `f` and redefines it through an adapter checks the
+/// epoch at the original call boundary, then resumes with the new definition.
 ///
 ///     (lambda (x new) (fset 'f new) (f x))   ; f = (lambda (y) (1+ y)) at compile time
 ///
 /// Called with new = (lambda (y) (1- y)): GNU and the interpreter give 4.
 #[test]
-fn tier_gate_keeps_an_inlining_body_free_of_shim_ops() {
+fn mir_inline_call_revalidates_after_fset_and_allows_state_reads() {
     use crate::emacs_core::eval::Context;
     use crate::emacs_core::intern::SymId;
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
@@ -3607,19 +3624,24 @@ fn tier_gate_keeps_an_inlining_body_free_of_shim_ops() {
     ];
     bar.constants = vec![f_sym].into();
     bar.max_stack = 16;
+    bar.seal_hand_assembled_ops();
+    let _ = ev.debug_on_next_call_is_armed();
     let leaf = compile_bytecode_function_with(&bar, Some(&ev.obarray)).expect("compiles");
     assert_eq!(
         leaf.tier,
-        super::leaf::LeafTier::Baseline,
-        "an inlining body with an fset stays on the baseline"
+        super::leaf::LeafTier::Mir,
+        "reentrant inlining has precise entry guards"
     );
-    match leaf.call(ctx, &[Value::make_int(5), dec]) {
-        NativeRun::Ok(bits) => assert_eq!(bits, Value::make_int(4).bits(), "(f 5) after fset is 4"),
-        other => panic!("bar: {other:?}"),
-    }
-    // The gate is keyed on ANY shim-lowered op, not on the ones that can
-    // redefine a function: a variable read in an inlining body keeps it on
-    // the baseline too.
+    let result = leaf.call(ctx, &[Value::make_int(5), dec]);
+    let NativeRun::DeoptAt(frame) = &result else {
+        panic!("{result:?}")
+    };
+    assert_eq!(frame.pc, 6);
+    assert_eq!(
+        mir_inline_guards::resume(&mut ev, &bar, result),
+        Value::make_int(4)
+    );
+    // A state read that leaves the dependency valid runs natively.
     ev.obarray.set_symbol_function_id(f_id, inc);
     let mut baz = ByteCodeFunction::new(LambdaParams {
         required: vec![SymId(2)],
@@ -3637,11 +3659,16 @@ fn tier_gate_keeps_an_inlining_body_free_of_shim_ops() {
     ];
     baz.constants = vec![f_sym, Value::symbol("jit-gate-some-var")].into();
     baz.max_stack = 16;
+    ev.eval_str("(setq jit-gate-some-var 1)").unwrap();
     let leaf = compile_bytecode_function_with(&baz, Some(&ev.obarray)).expect("compiles");
     assert_eq!(
         leaf.tier,
-        super::leaf::LeafTier::Baseline,
-        "an inlining body with any shim-lowered op stays on the baseline"
+        super::leaf::LeafTier::Mir,
+        "state reads do not prevent guarded inlining"
+    );
+    assert_eq!(
+        leaf.call(ctx, &[Value::make_int(5)]),
+        NativeRun::Ok(Value::make_int(6).bits())
     );
 }
 
