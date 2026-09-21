@@ -1575,21 +1575,63 @@ fn obarray_bucket_symbols(mut bucket: Value) -> Vec<Value> {
     symbols
 }
 
-fn obarray_symbol_count(buckets: &[Value]) -> usize {
-    buckets
-        .iter()
-        .map(|bucket| obarray_bucket_symbols(*bucket).len())
-        .sum()
+/// Walk a bucket chain, counting members without materialising them.
+fn obarray_bucket_len(mut bucket: Value) -> usize {
+    let mut len = 0;
+    while bucket.is_cons() {
+        if bucket.cons_car().as_symbol_lisp_string().is_some() {
+            len += 1;
+        }
+        bucket = bucket.cons_cdr();
+    }
+    len
 }
 
+/// The membership count derived by WALKING, not the maintained one.
+///
+/// Only the tests use this, and they use it precisely because it is
+/// independent of `ObarrayObj::count`: it is what proves the maintained count
+/// has not drifted from the chains it claims to summarise.
+#[cfg(test)]
+pub(crate) fn obarray_symbol_count_for_test(value: Value) -> usize {
+    obarray_buckets(value)
+        .map(|buckets| buckets.iter().copied().map(obarray_bucket_len).sum())
+        .unwrap_or(0)
+}
+
+/// GNU `intern_sym` (src/lread.c:4696):
+///
+/// ```c
+/// o->count++;
+/// if (o->count > obarray_size (o))
+///   grow_obarray (o);
+/// ```
+///
+/// The test is against the count the obarray already maintains, so it is O(1)
+/// and every intern pays it happily. RECOMPUTING that count walks every bucket
+/// chain instead -- and the walk used to allocate a `Vec` per chain just to
+/// read its length -- which made filling an obarray quadratic: 32,000 names
+/// took 5,427ms against GNU's 12.9ms.
+///
+/// `count` is maintained on every path that changes membership (intern here,
+/// `obarray-put` in abbrev, unintern in hashtab, `obarray-clear`, and the
+/// pdump restore), and the printer already reports it, so trusting it here
+/// adds no new obligation.
 fn grow_obarray_vector_if_needed(obarray_val: Value) {
+    // Read both fields out before any mutation: the borrow must not span the
+    // rehash below.
+    let Some((count, old_len)) = obarray_val
+        .as_obarray_obj()
+        .map(|obj| (obj.count as usize, obj.buckets.len()))
+    else {
+        return;
+    };
+    if old_len == 0 || count <= old_len {
+        return;
+    }
     let Some(buckets) = obarray_buckets(obarray_val) else {
         return;
     };
-    let old_len = buckets.len();
-    if old_len == 0 || obarray_symbol_count(buckets.as_slice()) <= old_len {
-        return;
-    }
 
     let mut new_buckets = vec![Value::NIL; old_len.saturating_mul(2).max(1)];
     for bucket in buckets.iter().copied() {

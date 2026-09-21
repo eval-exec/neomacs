@@ -655,6 +655,9 @@ mod fixed_arity_hot_subrs;
 mod replace_region_contents_test;
 
 #[cfg(test)]
+#[path = "tests/obarray_growth.rs"]
+mod obarray_growth_test;
+#[cfg(test)]
 #[path = "tests/obarray_order.rs"]
 mod obarray_order_test;
 
