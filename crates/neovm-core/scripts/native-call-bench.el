@@ -1,15 +1,18 @@
-;;; native-call-bench.el --- native frame push cost -*- lexical-binding: t; -*-
+;;; native-call-bench.el --- native builtin call cost -*- lexical-binding: t; -*-
 ;; Run with: taskset -c CORE EDITOR -Q --batch -l native-call-bench.el
 ;; Byte-compiled callers, 500,000 calls per sample, median of seven samples
 ;; after warmup. Run baseline/candidate processes in alternating order.
-;; string-bytes is a ContextVec builtin in Neomacs: its one-argument row is
-;; a control that uses the stack call path rather than the native frame push.
+;; The string query rows compare fixed and allocating entries. max-char remains
+;; a ContextVec builtin and controls for the allocating stack-call path.
 (require 'bytecomp)
 ;; Aliases keep the compiler from replacing these calls with dedicated opcodes.
 (fset 'native-frame-zero (symbol-function 'point))
 (fset 'native-frame-one (symbol-function 'string-bytes))
 (fset 'native-frame-two (symbol-function 'string-lessp))
 (fset 'native-frame-three (symbol-function 'get-text-property))
+(fset 'native-frame-multibyte (symbol-function 'multibyte-string-p))
+(fset 'native-frame-character (symbol-function 'char-or-string-p))
+(fset 'native-frame-vector-control (symbol-function 'max-char))
 (defun native-frame-loop-zero (n)
   (let ((answer nil))
     (dotimes (_ n) (setq answer (native-frame-zero))) answer))
@@ -22,10 +25,22 @@
 (defun native-frame-loop-three (n)
   (let ((answer nil))
     (dotimes (_ n) (setq answer (native-frame-three 0 'face "abc"))) answer))
+(defun native-frame-loop-multibyte (n)
+  (let ((answer nil))
+    (dotimes (_ n) (setq answer (native-frame-multibyte "Aé中"))) answer))
+(defun native-frame-loop-character (n)
+  (let ((answer nil))
+    (dotimes (_ n) (setq answer (native-frame-character #x3fffff))) answer))
+(defun native-frame-loop-vector-control (n)
+  (let ((answer nil))
+    (dotimes (_ n) (setq answer (native-frame-vector-control t))) answer))
 (dolist (case '((native-frame-loop-zero . 1)
                 (native-frame-loop-one . 3)
                 (native-frame-loop-two . t)
-                (native-frame-loop-three . nil)))
+                (native-frame-loop-three . nil)
+                (native-frame-loop-multibyte . t)
+                (native-frame-loop-character . t)
+                (native-frame-loop-vector-control . #x10ffff)))
   (byte-compile (car case))
   (unless (byte-code-function-p (symbol-function (car case)))
     (error "Expected bytecode for %s" (car case)))
