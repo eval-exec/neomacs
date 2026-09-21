@@ -1797,14 +1797,58 @@ fn scan_sexps_with_options(
     ))
 }
 
-fn is_sexp_ignored_syntax(class: SyntaxClass, ignore_comments: bool) -> bool {
-    matches!(
-        class,
+/// Which of GNU's two `scan_lists` loops is asking.
+///
+/// The two loops classify comment syntax DIFFERENTLY, and the difference is
+/// not a symmetry -- which is exactly why sharing one predicate between them
+/// behind a `bool` produced a silently wrong `backward-sexp`. Making the
+/// direction part of the question means a new caller has to state which loop
+/// it is, and a new direction has to decide the rule.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScanDirection {
+    /// GNU's `while (count > 0)` loop.
+    Forward,
+    /// GNU's `while (count < 0)` loop.
+    Backward,
+}
+
+impl ScanDirection {
+    /// Whether a comment-START character (`;` in Lisp, syntax class `<`) is
+    /// stepped over rather than taken as the edge of a sexp.
+    ///
+    /// FORWARD, GNU reads `case Scomment: if (!parse_sexp_ignore_comments)
+    /// break;` -- reaching that case at all means comments are NOT being
+    /// ignored, because when they are the body was already consumed by
+    /// `forw_comment`. So the char is stepped over only in the not-ignoring
+    /// case.
+    ///
+    /// BACKWARD, GNU has NO `case Scomment` whatsoever: it falls to
+    /// `default:` -- "Ignore whitespace, punctuation, quote, endcomment" --
+    /// and is stepped over unconditionally. That is deliberate, not an
+    /// omission: going backward a comment is entered through its END
+    /// (`Sendcomment` -> `back_comment`), so meeting a bare `;` means point
+    /// was already inside the comment body, where the `;` is ordinary text.
+    const fn steps_over_comment_start(self, ignore_comments: bool) -> bool {
+        match self {
+            Self::Forward => !ignore_comments,
+            Self::Backward => true,
+        }
+    }
+}
+
+fn is_sexp_ignored_syntax(
+    class: SyntaxClass,
+    ignore_comments: bool,
+    direction: ScanDirection,
+) -> bool {
+    match class {
         SyntaxClass::Whitespace
-            | SyntaxClass::EndComment
-            | SyntaxClass::Punctuation
-            | SyntaxClass::Quote
-    ) || (!ignore_comments && class == SyntaxClass::Comment)
+        | SyntaxClass::EndComment
+        | SyntaxClass::Punctuation
+        | SyntaxClass::Quote => true,
+        SyntaxClass::Comment => direction.steps_over_comment_start(ignore_comments),
+        _ => false,
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1934,7 +1978,7 @@ fn skip_sexp_ignored_forward(
             idx = skip.next();
             continue;
         }
-        if is_sexp_ignored_syntax(class, policy.ignore_comments) {
+        if is_sexp_ignored_syntax(class, policy.ignore_comments, ScanDirection::Forward) {
             idx += 1;
             continue;
         }
@@ -1975,7 +2019,7 @@ fn skip_sexp_ignored_backward(
             idx = next;
             continue;
         }
-        if is_sexp_ignored_syntax(class, policy.ignore_comments) {
+        if is_sexp_ignored_syntax(class, policy.ignore_comments, ScanDirection::Backward) {
             idx -= 1;
             continue;
         }

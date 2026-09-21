@@ -4424,3 +4424,60 @@ fn a_resumed_parse_pairs_a_comment_opener_split_at_its_start_like_gnu() {
         );
     }
 }
+
+/// Scanning BACKWARD over a comment-start character.
+///
+/// GNU's two `scan_lists` loops treat comment syntax asymmetrically, and the
+/// asymmetry is easy to miss because the forward rule reads like the general
+/// one. Forward (`while (count > 0)`) has `case Scomment: if
+/// (!parse_sexp_ignore_comments) break;` -- when comments ARE ignored the body
+/// was already consumed by `forw_comment`, so reaching the case at all means
+/// they are not. Backward (`while (count < 0)`) has NO `case Scomment` at all:
+/// a comment-start character falls to `default:` -- "Ignore whitespace,
+/// punctuation, quote, endcomment" -- and is stepped over unconditionally.
+///
+/// That is not an oversight in GNU. Going backward a comment is entered
+/// through its END (`Sendcomment` -> `back_comment`), so meeting a bare `;`
+/// means point was already inside the comment body, where the `;` is just
+/// text. Treating it as a sexp made `backward-sexp` stop on the semicolon
+/// instead of skipping the comment and finding the form before it.
+///
+/// The third column is `forward-sexp`, which already agreed with GNU and is
+/// pinned so the fix cannot be made by changing the forward rule.
+///
+/// Expectations measured under GNU Emacs 31.1 (`tmp/rr/bsexp-oracle2.el`).
+#[test]
+fn scanning_backward_steps_over_a_comment_start_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"(mapcar
+             (lambda (c)
+               (let ((text (car c)) (pos (cadr c)))
+                 (with-temp-buffer
+                   (insert text)
+                   (emacs-lisp-mode)
+                   (list (progn (goto-char pos)
+                                (ignore-errors (backward-sexp 1)) (point))
+                         (ignore-errors (scan-sexps pos -1))
+                         (progn (goto-char pos)
+                                (ignore-errors (forward-sexp 1)) (point))))))
+             '(("(foo)\n;; bar\n"        8)
+               ("(foo)\n;; bar\n"        9)
+               ("(foo)\n;; bar\n"       11)
+               ("(foo)\n;; bar\n"       13)
+               ("(foo)\n; bar"          10)
+               ("(foo) ; bar\n"          9)
+               ("(a) (b)\n;; c\n"       11)
+               ("(foo)\n;;\n"            9)
+               ("(foo)\n(bar)\n"        12)
+               ("foo ;; bar\n"           8)
+               ("(foo)\n;; a ;; b\n"    14)))"#,
+    );
+    assert_eq!(
+        result,
+        concat!(
+            "OK ((1 1 14) (1 1 13) (10 10 13) (10 10 14) (9 9 12) (1 1 12) ",
+            "(5 5 13) (1 1 10) (7 7 13) (1 1 11) (10 10 16))",
+        )
+    );
+}
