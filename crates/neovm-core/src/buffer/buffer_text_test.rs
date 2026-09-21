@@ -841,6 +841,119 @@ fn char_pos_to_emacs_byte_pos_invalidates_on_mutation() {
     assert_ne!(first, second, "cache returned stale bytepos after mutation");
 }
 
+fn check_warmed_ascii_position_conversions(text: &BufferText, expected: &str) {
+    let mut starts: Vec<usize> = expected.char_indices().map(|(byte, _)| byte).collect();
+    starts.push(expected.len());
+    // Long queries establish anchors on either side of the central ASCII
+    // region. Alternate directions and positions inside/outside that region.
+    for cp in [
+        6000,
+        14000,
+        10000,
+        12000,
+        7500,
+        12500,
+        1,
+        19999,
+        9000,
+        0,
+        starts.len(),
+    ] {
+        let expected_byte = starts[cp.min(starts.len() - 1)];
+        assert_eq!(char_pos_to_byte_pos(text, cp), expected_byte, "char {cp}");
+        assert_eq!(
+            byte_pos_to_char_pos(text, expected_byte),
+            cp.min(starts.len() - 1)
+        );
+    }
+    let mut bytes: Vec<usize> = (0..=expected.len()).step_by(229).collect();
+    for pair in starts.windows(2).filter(|pair| pair[1] - pair[0] > 1) {
+        bytes.extend(pair[0]..=pair[1]);
+    }
+    bytes.extend([expected.len(), expected.len() + 1]);
+    for byte in bytes {
+        if byte < expected.len() && starts.binary_search(&byte).is_err() {
+            // Internal mid-character queries depend on scan direction (the
+            // Lisp builtin snaps to a boundary first). They must not poison
+            // a later conversion at an actual character boundary.
+            let _ = byte_pos_to_char_pos(text, byte);
+            let cp = starts.partition_point(|&start| start <= byte) - 1;
+            assert_eq!(char_pos_to_byte_pos(text, cp), starts[cp]);
+            assert_eq!(byte_pos_to_char_pos(text, starts[cp]), cp);
+            continue;
+        }
+        let expected_char = starts.partition_point(|&start| start <= byte) - 1;
+        assert_eq!(
+            byte_pos_to_char_pos(text, byte),
+            expected_char,
+            "byte {byte}"
+        );
+    }
+}
+
+#[test]
+fn warmed_ascii_position_conversions_follow_edits() {
+    for kind in BufferTextBackendKind::implemented_variants() {
+        let mut expected = format!("é{}日", "a".repeat(20_000));
+        let mut text = BufferText::from_str_with_backend_kind(&expected, implemented_kind(kind));
+        check_warmed_ascii_position_conversions(&text, &expected);
+
+        // Insert a wide character inside the previously queried ASCII span.
+        insert_storage_string(&mut text, emacs_byte_pos(9001), "λ");
+        expected.insert(9001, 'λ');
+        check_warmed_ascii_position_conversions(&text, &expected);
+
+        // Removing the leading wide character changes every later offset.
+        delete_emacs_byte_range(&mut text, emacs_byte_range(0, 2));
+        expected.drain(..2);
+        check_warmed_ascii_position_conversions(&text, &expected);
+
+        // Same byte AND character counts, but a different wide-character
+        // location: a cached arithmetic span must not survive this replacement.
+        let replacement = format!("{}λ{}日", "a".repeat(7000), "a".repeat(13000));
+        assert_eq!(expected.len(), replacement.len());
+        assert_eq!(expected.chars().count(), replacement.chars().count());
+        text.replace_same_len_emacs_byte_range(
+            emacs_byte_range(0, expected.len()),
+            replacement.as_bytes(),
+        );
+        check_warmed_ascii_position_conversions(&text, &replacement);
+    }
+}
+
+#[test]
+fn warmed_ascii_position_conversions_preserve_snapshot_and_shared_text() {
+    let original = format!("é{}日", "a".repeat(20_000));
+    let text = BufferText::from_str(&original);
+    check_warmed_ascii_position_conversions(&text, &original);
+    let snapshot = text.clone();
+    let mut shared = text.shared_clone();
+    insert_storage_string(&mut shared, emacs_byte_pos(8001), "中");
+    let mut edited = original.clone();
+    edited.insert(8001, '中');
+    check_warmed_ascii_position_conversions(&text, &edited);
+    check_warmed_ascii_position_conversions(&shared, &edited);
+    check_warmed_ascii_position_conversions(&snapshot, &original);
+}
+
+#[test]
+fn warmed_ascii_position_conversions_survive_storage_changes() {
+    let original = format!("é{}日", "a".repeat(20_000));
+    let text = BufferText::from_str(&original);
+    for kind in BufferTextBackendKind::implemented_variants() {
+        text.try_convert_backend_kind(kind)
+            .expect("implemented backend");
+        check_warmed_ascii_position_conversions(&text, &original);
+        text.set_multibyte(false);
+        for pos in [1, 6000, 12000, original.len()] {
+            assert_eq!(char_pos_to_byte_pos(&text, pos), pos);
+            assert_eq!(byte_pos_to_char_pos(&text, pos), pos);
+        }
+        text.set_multibyte(true);
+        check_warmed_ascii_position_conversions(&text, &original);
+    }
+}
+
 #[test]
 fn emacs_byte_pos_to_char_pos_matches_oracle() {
     let mut s = String::new();
