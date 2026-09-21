@@ -28,6 +28,10 @@
             ('ascii-span (concat "é" (make-string 20000 ?a) "日"))
             ('ascii-control (make-string 20002 ?a))
             ('multibyte-control (make-string 20002 ?日))))
+  ;; Establish anchors outside the queried region before either direction is
+  ;; timed. The mixed-text case can then prove the entire bracket single-byte.
+  (position-bytes 5001)
+  (position-bytes 14001)
   (dolist (test (list (cons 'position-span-char-loop (nth 1 case))
                      (cons 'position-span-byte-loop (nth 2 case))))
     (dotimes (_ 40) (funcall (car test) 1000))
