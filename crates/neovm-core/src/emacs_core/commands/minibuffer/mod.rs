@@ -2481,6 +2481,133 @@ fn completion_candidates_from_custom_obarray(collection: Value) -> Vec<Completio
     candidates
 }
 
+/// What a single `oblookup` settled about an obarray collection.
+///
+/// GNU's `Ftest_completion` obarray branch (src/minibuf.c) is exactly three
+/// outcomes, and naming them keeps the caller from inventing a fourth:
+///
+/// ```c
+/// tem = oblookup (collection, SSDATA (string), SCHARS (string), SBYTES (string));
+/// if (completion_ignore_case && !BARE_SYMBOL_P (tem))
+///   DOOBARRAY (...)   /* the walk, comparing with Fcompare_strings */
+/// if (!BARE_SYMBOL_P (tem)) return Qnil;
+/// ```
+///
+/// The walk is not merely the slower road: it materialises a
+/// `CompletionCandidate` for every symbol in the obarray -- ~17K of them for
+/// the global one -- on every `M-x` keystroke.
+enum ObarrayProbe {
+    /// `oblookup` found the symbol. GNU commits to it: the regexps and the
+    /// predicate then decide, and a rejection is nil rather than a reason to
+    /// keep looking.
+    Found(CompletionCandidate),
+    /// `oblookup` missed and `completion-ignore-case` is off, so the walk
+    /// compares the same way the lookup just did and cannot find more.
+    Absent,
+    /// Not an obarray, or a case-insensitive walk is still owed.
+    WalkRequired,
+}
+
+/// Run GNU's `oblookup` against an obarray collection.
+///
+/// Both arms build the candidate from the SAME source the corresponding walk
+/// would have used -- `resolve_lisp_visible_symbol_name` for the global
+/// obarray, `completion_text_from_value` on the bucket entry for a custom one
+/// -- so the shortcut cannot answer with a differently spelled completion than
+/// the slow path would have.
+fn probe_obarray_completion(
+    obarray: &Obarray,
+    collection: Value,
+    string: &crate::heap_types::LispString,
+    ignore_case: bool,
+) -> ObarrayProbe {
+    use super::builtins::symbols as sym;
+    let found = match collection.kind() {
+        ValueKind::Veclike(VecLikeType::Vector)
+            if is_global_obarray_proxy_in_state(obarray, &collection) =>
+        {
+            obarray
+                .intern_soft_lisp_string(string)
+                .map(|id| CompletionCandidate {
+                    completion: completion_text_from_symbol_name(
+                        crate::emacs_core::intern::resolve_lisp_visible_symbol_name(id),
+                    ),
+                    predicate_arg: Value::from_sym_id(id),
+                    predicate_extra_arg: None,
+                })
+        }
+        ValueKind::Veclike(VecLikeType::Vector | VecLikeType::Obarray) => {
+            let Ok(value) = sym::check_obarray_value(collection) else {
+                return ObarrayProbe::WalkRequired;
+            };
+            // A zero-length obarray is `intern-soft`'s wrong-type signal, not
+            // something to answer here; let the ordinary path raise it.
+            let len = sym::obarray_len(value).unwrap_or(0);
+            if len == 0 {
+                return ObarrayProbe::WalkRequired;
+            }
+            let bucket = sym::obarray_bucket(value, sym::obarray_hash_lisp_string(string, len))
+                .unwrap_or(Value::NIL);
+            sym::obarray_bucket_find(bucket, string).and_then(|symbol| {
+                Some(CompletionCandidate {
+                    completion: completion_text_from_value(&symbol)?,
+                    predicate_arg: symbol,
+                    predicate_extra_arg: None,
+                })
+            })
+        }
+        _ => return ObarrayProbe::WalkRequired,
+    };
+    match found {
+        Some(candidate) => ObarrayProbe::Found(candidate),
+        None if ignore_case => ObarrayProbe::WalkRequired,
+        None => ObarrayProbe::Absent,
+    }
+}
+
+/// Look `string` up DIRECTLY in a hash-table collection, the way GNU does
+/// before it considers walking (`hash_find` in `Ftest_completion`,
+/// src/minibuf.c, with `DOHASH` only as the fallback).
+///
+/// Materialising the whole collection first is what made `test-completion`
+/// over a 20,000-entry table 213ms against GNU's 0.1ms -- on a path that runs
+/// on every minibuffer keystroke.
+///
+/// `None` means "no direct answer, walk the collection". That covers a real
+/// miss, which GNU also falls back on so `completion-ignore-case` can still
+/// find a differently cased key.
+///
+/// The user-defined-test bail is DEFENSIVE, and deliberately labelled as such:
+/// `get_by_value` would use `table.test`, which for a `define-hash-table-test`
+/// table is `Equal` and not the user's actual predicate, so the lookup would
+/// not mean what the table means. I could not construct a case where it
+/// changes an answer -- GNU's own fallback walk compares keys with
+/// `Fcompare_strings` rather than the table's test, so an `eq`-strict user
+/// table still answers `t` for an equal-but-not-eq string in both engines --
+/// and a mutation test removing this bail stayed green. It is kept because
+/// relying on a lookup whose semantics differ from the table's is fragile,
+/// not because a test pins it.
+fn direct_hash_completion_candidate(
+    collection: Value,
+    string: &crate::heap_types::LispString,
+    symbols_with_pos_enabled: bool,
+) -> Option<CompletionCandidate> {
+    let table = collection.as_hash_table()?;
+    if table.user_cmp_function.is_some() {
+        return None;
+    }
+    let probe = Value::heap_string(string.clone());
+    let value = *table
+        .data
+        .get_by_value(probe, table.test, symbols_with_pos_enabled)?;
+    let completion = completion_text_from_value(&probe)?;
+    Some(CompletionCandidate {
+        completion,
+        predicate_arg: probe,
+        predicate_extra_arg: Some(value),
+    })
+}
+
 fn completion_candidates_from_hash_table(collection: Value) -> Vec<CompletionCandidate> {
     let table = collection.as_hash_table().unwrap().clone();
     let mut candidates = Vec::new();
@@ -2676,6 +2803,43 @@ pub(crate) fn builtin_test_completion(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
+    // GNU answers a hash-table collection with one `hash_find' and only walks
+    // the table when that misses. Taking the same shortcut keeps this off the
+    // whole-collection materialisation on every minibuffer keystroke.
+    //
+    // A direct HIT is committed to, exactly as GNU's `goto found_matching_key'
+    // does: the regexps and the predicate then decide, and a rejection is nil
+    // rather than a reason to keep looking.
+    if args.len() >= 2
+        && let Ok(string) = expect_lisp_string(&args[0])
+    {
+        let ignore_case = completion_ignore_case(&eval.obarray);
+        let probe =
+            match direct_hash_completion_candidate(args[1], &string, eval.symbols_with_pos_enabled)
+            {
+                Some(candidate) => ObarrayProbe::Found(candidate),
+                None => probe_obarray_completion(&eval.obarray, args[1], &string, ignore_case),
+            };
+        match probe {
+            ObarrayProbe::Found(candidate) => {
+                let regexps = completion_regexp_lisp_list_from_obarray(&eval.obarray);
+                let syntax =
+                    super::builtins::search::FastStringMatchSyntax::for_current_buffer(eval);
+                return builtin_test_completion_with_candidates(
+                    eval,
+                    &args,
+                    Some(vec![candidate]),
+                    ignore_case,
+                    &regexps,
+                    syntax,
+                );
+            }
+            // GNU returns straight from the missed `oblookup': with no
+            // candidate, neither the regexps nor the predicate can say `t'.
+            ObarrayProbe::Absent => return Ok(Value::NIL),
+            ObarrayProbe::WalkRequired => {}
+        }
+    }
     let candidates = completion_candidates_from_collection(eval, &args[1])?;
     let ignore_case = completion_ignore_case(&eval.obarray);
     let regexps = completion_regexp_lisp_list_from_obarray(&eval.obarray);

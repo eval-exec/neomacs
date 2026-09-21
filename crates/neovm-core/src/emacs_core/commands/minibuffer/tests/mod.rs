@@ -1797,3 +1797,95 @@ fn completion_regexp_list_reads_candidate_syntax_table_properties() {
         "candidate syntax-table properties must be honored only under parse-sexp-lookup-properties"
     );
 }
+
+/// `test-completion` answers a hash-table collection with one direct lookup
+/// where GNU does (`hash_find`, src/minibuf.c), walking the table only when
+/// that misses. These pin the semantics the shortcut must not change.
+///
+/// Two rows carry the weight. `ALPHA` under `completion-ignore-case` is the
+/// FALLBACK: the direct lookup misses and the walk still has to find the
+/// differently cased key. And a predicate rejecting a DIRECT hit must answer
+/// nil rather than resume scanning -- GNU commits to the key it found
+/// (`goto found_matching_key`) and lets the predicate decide.
+///
+/// A `define-hash-table-test` table is included because its hash is a Lisp
+/// function the direct lookup cannot call, so it must take the walk.
+///
+/// Expectations measured under GNU Emacs 31.1 (`tmp/rr/tc-oracle.el`).
+#[test]
+fn test_completion_answers_a_hash_table_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"(let ((ht (make-hash-table :test 'equal))
+                (sym (make-hash-table :test 'equal))
+                (usr nil))
+             (puthash "Alpha" 1 ht) (puthash "beta" 2 ht) (puthash "gamma" 3 ht)
+             (puthash 'delta 4 sym) (puthash "eps" 5 sym)
+             (define-hash-table-test 'tc-user
+               (lambda (a b) (equal a b)) (lambda (k) (sxhash-equal k)))
+             (setq usr (make-hash-table :test 'tc-user))
+             (puthash "zeta" 6 usr)
+             (list
+              (test-completion "beta" ht)
+              (test-completion "nope" ht)
+              (let ((completion-ignore-case t)) (test-completion "ALPHA" ht))
+              (let ((completion-ignore-case nil)) (test-completion "ALPHA" ht))
+              (test-completion "beta" ht (lambda (k v) (= v 2)))
+              (test-completion "beta" ht (lambda (k v) (= v 99)))
+              (test-completion "delta" sym)
+              (test-completion "eps" sym)
+              (test-completion "zeta" usr)
+              (let ((completion-regexp-list '("^b")))   (test-completion "beta" ht))
+              (let ((completion-regexp-list '("^zzz"))) (test-completion "beta" ht))
+              ;; A user test STRICTER than equal. GNU's fallback walk compares
+              ;; keys with `compare-strings', NOT the table's own test, so an
+              ;; equal-but-not-eq string still answers t.
+              (progn
+                (define-hash-table-test 'tc-eq (lambda (a b) (eq a b)) (lambda (_k) 0))
+                (let* ((stored "zeta") (h (make-hash-table :test 'tc-eq)))
+                  (puthash stored 6 h)
+                  (list (test-completion stored h)
+                        (test-completion (copy-sequence "zeta") h)
+                        (test-completion "nope" h))))))"#,
+    );
+    assert_eq!(result, "OK (t nil t nil t nil t t t t nil (t t nil))");
+}
+
+/// `test-completion` over an obarray, pinned to GNU 31.1.
+///
+/// The direct `oblookup` shortcut must not change a single answer here: the
+/// case-insensitive rows are the ones that still owe a walk, and the
+/// predicate/regexp rows pin that a HIT is committed to rather than silently
+/// upgraded to a match.
+#[test]
+fn test_completion_answers_an_obarray_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"(list
+             (test-completion "forward-char" obarray)
+             (test-completion "no-such-symbol-xyzzy" obarray)
+             (let ((completion-ignore-case t))   (test-completion "FORWARD-CHAR" obarray))
+             (let ((completion-ignore-case nil)) (test-completion "FORWARD-CHAR" obarray))
+             (test-completion "forward-char" obarray #'commandp)
+             (test-completion "forward-char" obarray (lambda (_s) nil))
+             (let ((completion-regexp-list '("^forward-c"))) (test-completion "forward-char" obarray))
+             (let ((completion-regexp-list '("^zzz")))       (test-completion "forward-char" obarray))
+             ;; Interned but never assigned: membership is the whole question.
+             (progn (intern "tc-obarray-probe-unbound")
+                    (test-completion "tc-obarray-probe-unbound" obarray))
+             (let ((ob (obarray-make)))
+               (intern "Alpha" ob) (intern "beta" ob)
+               (list (test-completion "beta" ob)
+                     (test-completion "nope" ob)
+                     (let ((completion-ignore-case t))   (test-completion "ALPHA" ob))
+                     (let ((completion-ignore-case nil)) (test-completion "ALPHA" ob))
+                     (test-completion "beta" ob (lambda (s) (equal (symbol-name s) "beta")))
+                     (test-completion "beta" ob (lambda (_s) nil))
+                     (let ((completion-regexp-list '("^b"))) (test-completion "beta" ob))
+                     (let ((completion-regexp-list '("^z"))) (test-completion "beta" ob)))))"#,
+    );
+    assert_eq!(
+        result,
+        "OK (t nil t nil t nil t nil t (t nil t nil t nil t nil))"
+    );
+}
