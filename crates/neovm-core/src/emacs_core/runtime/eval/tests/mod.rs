@@ -16355,11 +16355,21 @@ fn jit_subr_spec_vectorp_stays_general() {
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
     let mut ev = Context::new();
     let hot = jit_subr_spec_caller("vectorp", 1, true);
+    // Later setup evaluations can collect. Keep each earlier fixture rooted
+    // so this test reaches the JIT with the object it intended to inspect.
+    let roots = save_scratch_gc_roots();
     let boolvec = ev
         .eval_str("(make-bool-vector 3 t)")
         .expect("make-bool-vector");
+    push_scratch_gc_root(boolvec);
     let chartable = ev.eval_str("(make-char-table 'test)").expect("char-table");
+    push_scratch_gc_root(chartable);
     let vector = ev.eval_str("[1 2 3]").expect("vector");
+    push_scratch_gc_root(vector);
+    assert!(
+        crate::emacs_core::chartable::is_bool_vector(&boolvec),
+        "bool-vector fixture must survive setup before entering the native caller"
+    );
     #[cfg(debug_assertions)]
     let (_, fast0, _) = jit_subr_spec_counters();
     let native = ev
@@ -16385,6 +16395,7 @@ fn jit_subr_spec_vectorp_stays_general() {
             "vectorp engages as a GENERAL subr spec site (direct dispatch of the real builtin)"
         );
     }
+    restore_scratch_gc_roots(roots);
 }
 
 /// `symbol-with-pos-p` predicate site: exact under BOTH
