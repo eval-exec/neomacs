@@ -16665,6 +16665,102 @@ fn jit_subr_spec_arity_and_variadic_stay_generic() {
     }
 }
 
+/// Fixed string queries must preserve string representation, character bounds,
+/// error payloads and arity checks when a bytecode caller enters native code.
+#[cfg(feature = "jit")]
+#[test]
+fn jit_subr_spec_string_queries_match_interpreter() {
+    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+    let mut ev = Context::new();
+    let names = ["string-bytes", "multibyte-string-p", "char-or-string-p"];
+    let cases = [
+        (
+            "\"\"",
+            [Some(Value::fixnum(0)), Some(Value::NIL), Some(Value::T)],
+        ),
+        (
+            "\"abc\"",
+            [Some(Value::fixnum(3)), Some(Value::NIL), Some(Value::T)],
+        ),
+        (
+            "(string-as-multibyte \"abc\")",
+            [Some(Value::fixnum(3)), Some(Value::T), Some(Value::T)],
+        ),
+        (
+            "\"Aé中\"",
+            [Some(Value::fixnum(6)), Some(Value::T), Some(Value::T)],
+        ),
+        (
+            "(unibyte-string 0 128 255)",
+            [Some(Value::fixnum(3)), Some(Value::NIL), Some(Value::T)],
+        ),
+        (
+            "(string #x3fffff)",
+            [Some(Value::fixnum(2)), Some(Value::T), Some(Value::T)],
+        ),
+        ("0", [None, Some(Value::NIL), Some(Value::T)]),
+        ("4194303", [None, Some(Value::NIL), Some(Value::T)]),
+        ("-1", [None, Some(Value::NIL), Some(Value::NIL)]),
+        ("4194304", [None, Some(Value::NIL), Some(Value::NIL)]),
+        ("1.0", [None, Some(Value::NIL), Some(Value::NIL)]),
+        ("nil", [None, Some(Value::NIL), Some(Value::NIL)]),
+        ("'other", [None, Some(Value::NIL), Some(Value::NIL)]),
+        ("[1 2]", [None, Some(Value::NIL), Some(Value::NIL)]),
+    ];
+    for (index, name) in names.into_iter().enumerate() {
+        let hot = jit_subr_spec_caller(name, 1, true);
+        let cold = jit_subr_spec_caller(name, 1, false);
+        cold.get_bytecode_data()
+            .unwrap()
+            .jit_runtime()
+            .set_cold_for_test();
+        for (form, expected) in cases {
+            let arg = ev.eval_str(form).expect("query argument");
+            let roots = save_scratch_gc_roots();
+            push_scratch_gc_root(arg);
+            for caller in [hot, cold] {
+                let result = ev.funcall_general_untraced(caller, vec![arg]);
+                if let Some(expected) = expected[index] {
+                    assert_eq!(result.expect("query result"), expected, "{name}: {form}");
+                } else {
+                    let Err(Flow::Signal(sig)) = result else {
+                        panic!("{name}: {form} must signal wrong-type-argument");
+                    };
+                    assert_eq!(sig.symbol_name(), "wrong-type-argument");
+                    assert_eq!(sig.data, vec![Value::symbol("stringp"), arg]);
+                }
+            }
+            restore_scratch_gc_roots(roots);
+        }
+        assert!(
+            jit_compiled_id(hot).is_some(),
+            "{name}: native caller compiled"
+        );
+        assert!(
+            jit_compiled_id(cold).is_none(),
+            "{name}: interpreter control"
+        );
+        for nargs in [0, 2] {
+            let mut errors = Vec::new();
+            for hot in [true, false] {
+                let caller = jit_subr_spec_caller(name, nargs, hot);
+                let flow = ev
+                    .funcall_general_untraced(caller, vec![Value::NIL; nargs])
+                    .expect_err("query rejects the wrong arity");
+                let Flow::Signal(sig) = &flow else {
+                    panic!("arity must signal");
+                };
+                assert_eq!(sig.symbol_name(), "wrong-number-of-arguments");
+                assert_eq!(sig.data.last(), Some(&Value::fixnum(nargs as i64)));
+                errors.push(format_eval_result(&Err(
+                    crate::emacs_core::error::map_flow(flow),
+                )));
+            }
+            assert_eq!(errors[0], errors[1], "{name}: arity {nargs}");
+        }
+    }
+}
+
 /// In-place entry-rewrite soundness: registering a fixed one-slot subr under the SAME
 /// name rewrites the static registry entry while the immediate subr bits stay
 /// unchanged, and bumps function_epoch. The site re-validates, RE-ARMS (bits
