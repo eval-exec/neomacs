@@ -3021,14 +3021,29 @@ fn baseline_fallback_meet_keeps_only_the_slots_both_paths_agree_on() {
     ];
     f.constants = vec![Value::symbol("jit-meet-carry-v")].into();
     f.max_stack = 16;
-    let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
-    assert_eq!(leaf.tier, super::leaf::LeafTier::Baseline);
-    assert_eq!(
-        super::lowering::rootwin_counters(),
-        (4, 2),
-        "a+b, then the fallback's c (b elided), then the last site's c (b elided); \
-         (3, 3) means the meet kept the fallback's slot 0 though the fast path never wrote it"
-    );
+    // Both tiers now use the same named-read fast path and rooted fallback.
+    for baseline in [true, false] {
+        let leaf = if baseline {
+            lower_leaf_full(&f.ops, &f.constants, 2, None, Some(&ev.obarray), 0)
+                .expect("baseline compiles")
+        } else {
+            compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("MIR compiles")
+        };
+        assert_eq!(
+            leaf.tier,
+            if baseline {
+                super::leaf::LeafTier::Baseline
+            } else {
+                super::leaf::LeafTier::Mir
+            }
+        );
+        assert_eq!(
+            super::lowering::rootwin_counters(),
+            (4, 2),
+            "a+b, then the fallback's c (b elided), then the last site's c (b elided); \
+             (3, 3) means the meet kept the fallback's slot 0 though the fast path never wrote it"
+        );
+    }
 }
 
 /// Rule 3 at a handler-dispatch block. Dispatch blocks are emitted after the

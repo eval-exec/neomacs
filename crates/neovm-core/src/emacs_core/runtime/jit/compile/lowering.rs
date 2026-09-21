@@ -1561,7 +1561,7 @@ fn op_variant_name(op: &Op) -> String {
 ///   operand.
 ///
 /// No adapter-reachable arm queues a deopt or a handler dispatch (asserted):
-/// `spec` is `None` and a MIR leaf has no handlers.
+/// Only slotless named-builtin specialization is supported; a MIR leaf has no handlers.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn lower_mir_inst_via_baseline(
     fb: &mut FunctionBuilder,
@@ -1672,7 +1672,11 @@ pub(crate) fn lower_mir_inst_via_baseline(
         Some(rt),
         &[],
         &mut dispatch,
-        None,
+        super::named_builtin_call(op).map(|call| {
+            // CBSym uses only the kind and the op's symbol. No epoch slot or
+            // expected callee is needed, identically to the baseline/AOT path.
+            (0, 0, 0, 0, call.kind)
+        }),
         op,
         &HashSet::new(),
         reloc_base,
@@ -1870,10 +1874,14 @@ pub(crate) struct MirLeafPlan {
     /// Any [`mir::MirOp::Opaque`] — an op lowered through the baseline's
     /// shim-calling emitters (a call, a variable op, a builtin, ...).
     pub(crate) has_opaque: bool,
-    /// An `Opaque` `Call`/`Apply`/`CallBuiltinSym`: a generic call the
-    /// baseline lowers BETTER (speculated native-to-native, CBSym intrinsics),
-    /// so the tier gate sends such a body to the baseline.
+    /// An ordinary call, or a named builtin without shared specialization.
+    /// Such bodies keep the baseline's call machinery until MIR has parity.
     pub(crate) has_generic_call: bool,
+    /// An opaque op without a qualified read-only named-builtin fast path.
+    /// Its presence keeps loop admission conservative while each family is
+    /// measured. Even qualified reads retain full fallback effects.
+    pub(crate) has_unqualified_adapter: bool,
+    pub(crate) has_named_builtin: bool,
     /// A loop (an edge to a block at or before its source).
     pub(crate) has_backedge: bool,
     /// Every guard deopts PRECISELY (`STATUS_DEOPT_AT`), never rerun-from-
@@ -1966,13 +1974,26 @@ pub(crate) fn plan_mir_leaf(m: &mir::MirFunction) -> MirLeafPlan {
     use mir::{MirOp, PredKind as MP};
     let insts = || m.blocks.iter().flat_map(|b| b.insts.iter());
     let has_opaque = insts().any(|i| matches!(i.op, MirOp::Opaque { .. }));
-    let has_generic_call = insts().any(|i| {
+    let has_generic_call = insts().any(|i| match &i.op {
+        MirOp::Opaque {
+            op: Op::Call(_) | Op::Apply(_),
+            ..
+        } => true,
+        MirOp::Opaque {
+            op: op @ Op::CallBuiltinSym(..),
+            ..
+        } => super::named_builtin_call(op).is_none(),
+        _ => false,
+    });
+    let has_named_builtin = insts().any(|i| {
         matches!(
-            &i.op,
-            MirOp::Opaque {
-                op: Op::Call(_) | Op::Apply(_) | Op::CallBuiltinSym(..),
-                ..
-            }
+            &i.op, MirOp::Opaque { op, .. } if super::named_builtin_call(op).is_some()
+        )
+    });
+    let has_unqualified_adapter = insts().any(|i| {
+        matches!(
+            &i.op, MirOp::Opaque { op, .. } if !super::named_builtin_call(op)
+                .is_some_and(|call| call.fast_effects.is_read_only())
         )
     });
     // Any op that goes through a runtime shim: an `Opaque`, an `Eq` (the
@@ -2020,6 +2041,8 @@ pub(crate) fn plan_mir_leaf(m: &mir::MirFunction) -> MirLeafPlan {
     MirLeafPlan {
         has_opaque,
         has_generic_call,
+        has_unqualified_adapter,
+        has_named_builtin,
         has_backedge,
         precise,
         needs_rt: has_adapter_site || has_escaping_cons || has_backedge,
@@ -2455,10 +2478,16 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
         // Runtime context for polls, calls and allocation. declare_rt_refs
         // declares the full import set; only referenced shims are resolved.
         let mut rt = if plan.needs_rt {
-            // `module` is already `&mut M`; reborrow it for the call. The MIR
-            // tier never emits subr-speculated or CBSym-intrinsic calls
-            // (subr_spec=false, cbsym_spec=false).
-            let refs = declare_rt_refs(&mut *module, fb.func, call_conv, ptr_ty, false, false)?;
+            // Named builtins share the baseline/AOT specialization emitter.
+            // Ordinary function calls still use the generic MIR call path.
+            let refs = declare_rt_refs(
+                &mut *module,
+                fb.func,
+                call_conv,
+                ptr_ty,
+                false,
+                plan.has_named_builtin,
+            )?;
             let vmctx_var = fb.declare_var(ptr_ty);
             let call_args_slot = fb.create_sized_stack_slot(StackSlotData::new(
                 StackSlotKind::ExplicitSlot,

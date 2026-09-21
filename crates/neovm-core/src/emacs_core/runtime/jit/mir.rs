@@ -7,7 +7,7 @@
 //! the layer where those optimizations live: a control-flow graph of SSA
 //! operations over lisp `Value`s, each carrying a [`LispType`] fact (the type
 //! lattice that lets a proven-fixnum drop its guard / stay unboxed) and an
-//! [`Effect`] fact (pure / allocates / calls / signals — for reordering and GC
+//! [`Effect`] fact (state access, allocation, reentry and deopt — for reordering and GC
 //! safety). Passes run over the MIR, then it lowers to CLIF reusing the
 //! baseline tier's shims and precise-deopt emission.
 //!
@@ -137,17 +137,8 @@ impl LispType {
     }
 }
 
-/// The effect lattice — what an operation does, for reordering / GC-safety
-/// reasoning. Ordered weakest→strongest: a pass may hoist/CSE `Pure` ops freely,
-/// must keep `Allocates` ops behind GC-rooting, and must never reorder across
-/// `Calls`/`Signals`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Effect {
-    Pure,
-    Allocates,
-    Calls,
-    Signals,
-}
+/// Independent effects shared with the call lowering contracts.
+pub use super::compile::calls::Effects as Effect;
 
 /// A comparison kind for the fixnum-comparison MIR op.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -315,35 +306,10 @@ impl MirFunction {
     }
 }
 
-/// The default effect of an opaque opcode — coarse but sound (over-approximate):
-/// allocation/call/variable ops are treated as their strongest effect so a
-/// later pass never reorders across them unsafely.
+/// Unmodelled instructions conservatively include arbitrary Lisp reentry.
+/// A named builtin's fast-path contract never weakens its fallback effects.
 fn opaque_effect(op: &Op) -> Effect {
-    match op {
-        Op::Cons | Op::List(_) | Op::Concat(_) | Op::Nconc | Op::Substring => Effect::Allocates,
-        Op::Call(_)
-        | Op::Apply(_)
-        | Op::VarSet(_)
-        | Op::VarBind(_)
-        | Op::Unbind(_)
-        | Op::Aset
-        | Op::CallBuiltin(..)
-        | Op::CallBuiltinSym(..)
-        | Op::SaveCurrentBuffer
-        | Op::SaveExcursion
-        | Op::SaveRestriction
-        | Op::SaveWindowExcursion
-        | Op::UnwindProtectPop
-        // Setcar/Setcdr MUTATE a cons in place — a side effect (like Aset/VarSet
-        // above), NOT pure. They reach this fn only as Opaque ops; inert today (no
-        // pass reads `.effect` for a correctness decision + lower_mir_pure bails on
-        // them), but keeping the metadata correct guards the escape analysis if the
-        // Opaque bail is ever narrowed (a mutated cons must never be scalar-replaced).
-        | Op::Setcar
-        | Op::Setcdr => Effect::Calls,
-        Op::VarRef(_) => Effect::Signals,
-        _ => Effect::Pure,
-    }
+    super::compile::calls::named_builtin_call(op).map_or(Effect::UNKNOWN, |call| call.effects)
 }
 
 /// Builder state: the growing SSA value space + per-value types.
@@ -457,7 +423,7 @@ pub fn build_mir_with_feedback(
                     result: p,
                     op: MirOp::Arg(i),
                     ty: LispType::Any,
-                    effect: Effect::Pure,
+                    effect: Effect::PURE,
                     pc: 0,
                     pre_stack: Vec::new(),
                 });
@@ -630,15 +596,15 @@ fn lower_value_op(
             let v = *constants
                 .get(*idx as usize)
                 .ok_or(CompileError::BadOperand)?;
-            let r = emit(b, MirOp::Const(v), LispType::of_value(v), Effect::Pure);
+            let r = emit(b, MirOp::Const(v), LispType::of_value(v), Effect::PURE);
             stack.push(r);
         }
         Op::Nil => {
-            let r = emit(b, MirOp::Const(Value::NIL), LispType::Nil, Effect::Pure);
+            let r = emit(b, MirOp::Const(Value::NIL), LispType::Nil, Effect::PURE);
             stack.push(r);
         }
         Op::True => {
-            let r = emit(b, MirOp::Const(Value::T), LispType::True, Effect::Pure);
+            let r = emit(b, MirOp::Const(Value::T), LispType::True, Effect::PURE);
             stack.push(r);
         }
         Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Rem | Op::Max | Op::Min => {
@@ -658,7 +624,7 @@ fn lower_value_op(
                 b,
                 MirOp::Bin(kind, lhs, rhs),
                 LispType::Fixnum,
-                Effect::Pure,
+                Effect::MAY_DEOPT,
             );
             stack.push(r);
         }
@@ -670,7 +636,12 @@ fn lower_value_op(
                 Op::Negate => UnaryKind::Negate,
                 _ => unreachable!(),
             };
-            let r = emit(b, MirOp::Unary(kind, a), LispType::Fixnum, Effect::Pure);
+            let r = emit(
+                b,
+                MirOp::Unary(kind, a),
+                LispType::Fixnum,
+                Effect::MAY_DEOPT,
+            );
             stack.push(r);
         }
         Op::Eqlsign | Op::Lss | Op::Gtr | Op::Leq | Op::Geq => {
@@ -688,7 +659,7 @@ fn lower_value_op(
                 b,
                 MirOp::Cmp(kind, lhs, rhs),
                 LispType::Boolean,
-                Effect::Pure,
+                Effect::MAY_DEOPT,
             );
             stack.push(r);
         }
@@ -712,13 +683,18 @@ fn lower_value_op(
                 Op::Numberp => PredKind::Numberp,
                 _ => unreachable!(),
             };
-            let r = emit(b, MirOp::Pred(kind, a), LispType::Boolean, Effect::Pure);
+            let r = emit(
+                b,
+                MirOp::Pred(kind, a),
+                LispType::Boolean,
+                Effect::READ_HEAP,
+            );
             stack.push(r);
         }
         Op::Eq => {
             let rhs = pop!();
             let lhs = pop!();
-            let r = emit(b, MirOp::Eq(lhs, rhs), LispType::Boolean, Effect::Pure);
+            let r = emit(b, MirOp::Eq(lhs, rhs), LispType::Boolean, Effect::READ_HEAP);
             stack.push(r);
         }
         Op::Car | Op::Cdr | Op::CarSafe | Op::CdrSafe => {
@@ -729,14 +705,18 @@ fn lower_value_op(
                 b,
                 MirOp::CarCdr { cdr, safe, arg: a },
                 LispType::Any,
-                Effect::Pure,
+                if safe {
+                    Effect::READ_HEAP
+                } else {
+                    Effect::READ_HEAP.with(Effect::MAY_DEOPT)
+                },
             );
             stack.push(r);
         }
         Op::Cons => {
             let cdr = pop!();
             let car = pop!();
-            let r = emit(b, MirOp::Cons(car, cdr), LispType::Cons, Effect::Allocates);
+            let r = emit(b, MirOp::Cons(car, cdr), LispType::Cons, Effect::ALLOCATES);
             stack.push(r);
         }
         // Pure operand-stack shuffles — modelled as stack manipulation, no inst.

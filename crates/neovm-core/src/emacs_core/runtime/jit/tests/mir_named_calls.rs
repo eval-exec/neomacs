@@ -102,11 +102,55 @@ fn mir_named_read_loop_observes_gc_hook_changes() {
         vec![Value::make_int(0)],
         1,
     );
-    let m = mir::build_mir(&f.ops, &f.constants, 1).unwrap();
-    let leaf = lower_mir_pure(&m).unwrap();
+    let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).unwrap();
+    assert_eq!(leaf.tier, leaf::LeafTier::Mir);
     ev.gc_stress = true;
     let result = leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(600)]);
     ev.gc_stress = false;
     assert_eq!(result, NativeRun::Ok(Value::make_int(4).bits()));
     assert_eq!(ev.jit_root_stack_top, 0);
+}
+
+#[test]
+fn named_call_effects_keep_fast_reads_separate_from_fallbacks() {
+    use super::calls::Effects;
+    let _ev = Context::new();
+    let read = named_builtin_call(&Op::CallBuiltinSym(intern("point"), 0)).unwrap();
+    assert!(read.fast_effects.contains(Effects::READ_BUFFER));
+    assert!(read.fast_effects.is_read_only());
+    assert!(!read.fast_effects.contains(Effects::MAY_GC));
+    assert!(read.effects.contains(Effects::MAY_GC));
+    assert!(read.effects.contains(Effects::MAY_REENTER));
+    assert!(read.effects.contains(Effects::WRITE_BUFFER));
+    assert!(!read.effects.is_read_only());
+    let mutation = named_builtin_call(&Op::CallBuiltinSym(intern("insert"), 1)).unwrap();
+    assert!(!mutation.fast_effects.is_read_only());
+    assert!(mutation.effects.contains(Effects::WRITE_BUFFER));
+    assert!(named_builtin_call(&Op::CallBuiltinSym(intern("eval"), 1)).is_none());
+
+    let m = mir::build_mir(
+        &[
+            Op::StackRef(0),
+            Op::Car,
+            Op::Constant(0),
+            Op::Add,
+            Op::Return,
+        ],
+        &[Value::make_int(1)],
+        1,
+    )
+    .unwrap();
+    let car = m.blocks[0]
+        .insts
+        .iter()
+        .find(|i| matches!(i.op, mir::MirOp::CarCdr { .. }))
+        .unwrap();
+    assert!(car.effect.contains(Effects::READ_HEAP));
+    assert!(car.effect.contains(Effects::MAY_DEOPT));
+    let add = m.blocks[0]
+        .insts
+        .iter()
+        .find(|i| matches!(i.op, mir::MirOp::Bin(..)))
+        .unwrap();
+    assert!(add.effect.contains(Effects::MAY_DEOPT));
 }

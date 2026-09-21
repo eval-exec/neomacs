@@ -1209,8 +1209,9 @@ fn compile_bytecode_function_inner(
         // compile-heavy run). One key per reason:
         //  * float-site: the baseline has the f64 path; MIR would deopt on
         //    every entry (see above).
-        //  * loop-opaque: keep adapter-bearing loops on the baseline until
-        //    their performance is qualified independently of pure loops.
+        //  * loop-opaque: keep unqualified adapter families on the baseline.
+        //    Named read fast paths share the baseline emitter; their generic
+        //    fallbacks retain precise deopt and full rooting.
         //  * loop-inline: a back-edge poll can run post-gc-hook, which can
         //    redefine an inlined callee. Entry-only invalidation is not enough.
         //  * inline-opaque: a body that INLINED a callee and still has a shim-
@@ -1220,10 +1221,10 @@ fn compile_bytecode_function_inner(
         //    the running code would go on executing the stale copy. Before
         //    the adapter every such op bailed the lowering, so an inlining
         //    body was always shim-free; this keeps it that way.
-        //  * generic-call: a `Call`/`Apply`/`CallBuiltinSym` left in the body
-        //    after inlining. The baseline speculates such a site (native-to-
-        //    native `call_spec`/`call_subr_spec`, CBSym intrinsics); the MIR
-        //    tier lowers it through the generic shim. This used to be waived
+        //  * generic-call: a `Call`/`Apply` or unspecialized `CallBuiltinSym`
+        //    left in the body after inlining. Ordinary calls still lack the
+        //    baseline's native-to-native speculation. Named builtins use the
+        //    same specialization and fallback emitter in both tiers. This used to be waived
         //    when the body inlined SOMETHING, on the theory that cross-
         //    boundary unboxing wins; measured, it does not: a dhrystone body
         //    that inlined one callee and kept a speculated call ran the
@@ -1235,7 +1236,7 @@ fn compile_bytecode_function_inner(
             Some("gate:float-site".to_string())
         } else if has_generic_arith_site {
             Some("gate:generic-arith-site".to_string())
-        } else if plan.has_backedge && plan.has_opaque {
+        } else if plan.has_backedge && plan.has_unqualified_adapter {
             Some(format!(
                 "gate:loop-opaque:{}",
                 lowering::mir_loop_adapter_op(&mir)
@@ -1745,78 +1746,6 @@ const CBSYM_SPECIAL_NAMES: &[&str] = &[
     "%%defconst",
     "%%unimplemented-elc-bytecode",
 ];
-
-/// Classify an `Op::CallBuiltinSym(sym, nargs)` site for R2 intrinsification, or
-/// `None` when it must stay on the general named-builtin lowering. The
-/// distinguishing property of CallBuiltinSym (vs the `Op::Call` sites
-/// `subr_spec_kind` handles): the op carries the EXACT nargs and name-dispatches
-/// the static subr table (`subr_from_sym_id(builtin_name_id(resolve_sym(sym)))`,
-/// vm.rs) — it is advice/fset/override-IMMUNE, so there is NO epoch guard and NO
-/// `compiler_function_overrides_active` gate; the target is name-canonical and
-/// `Box::leak` process-stable. Every clause is load-bearing:
-///
-/// * `lookup_global_subr_entry(sym)` + `dispatch_kind == Builtin` — the op must
-///   currently name a plain builtin. Re-checked FRESH in the shim (entries are
-///   rewritten in place); a mismatch there bounces to `STATUS_NEED_GENERIC`.
-/// * ALLOWLIST by name (the profiled R2 winners only) — so nothing outside the
-///   audited ship set is ever intrinsified. This structurally excludes the
-///   `aset`/`fillarray` writeback names, `funcall`/`apply`/`eval`, and every
-///   `dispatch_vm_builtin_unrooted` special name (none are in the allowlist);
-///   the explicit denylist below is defence-in-depth.
-/// * NO fixed-arity gate (unlike `subr_spec_kind`): the Tier-B shim dispatches
-///   through `funcall_general` on the exact-length arg vector, so a `Many` subr
-///   gets `into_vec()` (byte-identical) and a wrong-arity call signals
-///   `wrong-number-of-arguments` with the SUBR payload identically to the
-///   interpreter arm — no need to force those to the generic path.
-///
-/// Obarray-FREE: consults only `lookup_global_subr_entry` (the static subr table)
-/// and name resolution, so it classifies identically at JIT emit (`Some(obarray)`,
-/// via `find_spec_sites`) AND AOT baseline emit (`obarray=None`, via
-/// `find_cbsym_spec_sites` — increment A). The CallBuiltinSym op then takes the
-/// Tier-A/B fast shim in BOTH tiers (its op-SymId is reloc'd by name under AOT).
-fn cbsym_spec_kind(sym: SymId, _nargs: usize) -> Option<SpecCalleeKind> {
-    let entry = lookup_global_subr_entry(sym)?;
-    if entry.dispatch_kind != SubrDispatchKind::Builtin {
-        return None;
-    }
-    let name = resolve_sym(sym);
-    // Defence-in-depth denylist (the allowlist below already excludes these).
-    if CBSYM_SPECIAL_NAMES.contains(&name)
-        || matches!(name, "aset" | "fillarray" | "funcall" | "apply" | "eval")
-    {
-        return None;
-    }
-    // Tier-A: provably-trivial GC-free reads (COMMIT 5 shims). char-after is
-    // Tier-A only in its 0-arg form; a 1-arg / marker call bounces to Tier-B's
-    // generic path via the None fall-through here.
-    let tier_a = match name {
-        "point" => Some(CBSYM_A_POINT),
-        "point-min" => Some(CBSYM_A_POINT_MIN),
-        "point-max" => Some(CBSYM_A_POINT_MAX),
-        "bolp" => Some(CBSYM_A_BOLP),
-        "eolp" => Some(CBSYM_A_EOLP),
-        "bobp" => Some(CBSYM_A_BOBP),
-        "eobp" => Some(CBSYM_A_EOBP),
-        "following-char" => Some(CBSYM_A_FOLLOWING_CHAR),
-        "preceding-char" => Some(CBSYM_A_PRECEDING_CHAR),
-        "char-after" if _nargs == 0 => Some(CBSYM_A_CHAR_AFTER),
-        "current-buffer" => Some(CBSYM_A_CURRENT_BUFFER),
-        "match-beginning" => Some(CBSYM_A_MATCH_BEGINNING),
-        "match-end" => Some(CBSYM_A_MATCH_END),
-        _ => None,
-    };
-    if let Some(which) = tier_a {
-        return Some(SpecCalleeKind::CbsymTierA { which });
-    }
-    // Tier-B: every other plain builtin reaches its primitive through
-    // `neovm_jit_cbsym_spec`, which dispatches it directly like the
-    // interpreter's `Op::CallBuiltinSym` arm (GNU inline-opcode semantics: no
-    // funcall, no backtrace frame). An allowlist used to gate this while the
-    // shim still went through `funcall_general`; the direct dispatch is the
-    // same code for every builtin, so the only exclusions left are the
-    // specials above and entries without a Rust function pointer.
-    entry.function.map(|_| SpecCalleeKind::CbsymTierB)
-}
 
 /// Per-site speculation state, baked into generated code by raw address and
 /// read by `neovm_jit_call_spec`. `epoch` is the obarray `function_epoch` at
@@ -4429,6 +4358,9 @@ fn build_leaf_fn<M: Module>(
 
     Ok(fid)
 }
+
+pub(crate) mod calls;
+use calls::{cbsym_spec_kind, named_builtin_call};
 
 mod leaf;
 pub use leaf::*;
