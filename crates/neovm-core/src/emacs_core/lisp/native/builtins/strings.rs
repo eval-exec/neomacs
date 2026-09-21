@@ -2123,8 +2123,10 @@ fn do_format(
     let mut i = 0usize;
     let mut format_char_pos = 0usize;
     let mut result_char_pos = 0usize;
-    let fmt_has_props =
-        crate::emacs_core::value::get_string_text_properties_table_for_value(args[0]).is_some();
+    // Only whether the table is non-empty, never its contents: the cloning
+    // accessor copied the whole interval tree to answer a bool, once for the
+    // format string and once PER ARGUMENT.
+    let fmt_has_props = crate::emacs_core::value::string_has_text_properties_for_value(args[0]);
     // GNU `styled_format` only does interval bookkeeping when the format
     // string or some argument actually carries text properties
     // (editfns.c `arg_intervals` / `spec->intervals`). The spans collected
@@ -2137,7 +2139,7 @@ fn do_format(
             // name can carry text properties — probe the same source value
             // the %s arm formats.
             let source = super::misc_pure::symbol_name_string_for_format(*arg).unwrap_or(*arg);
-            crate::emacs_core::value::get_string_text_properties_table_for_value(source).is_some()
+            crate::emacs_core::value::string_has_text_properties_for_value(source)
         });
 
     while i < fmt_bytes.len() {
@@ -2446,8 +2448,7 @@ fn exact_percent_s_string_result(args: &[Value]) -> Option<Value> {
     let format = args.first()?;
     let format_string = format.as_lisp_string()?;
     if format_string.as_bytes() != b"%s"
-        || crate::emacs_core::value::get_string_text_properties_table_for_value(*format)
-            .is_some_and(|table| !table.is_empty())
+        || crate::emacs_core::value::string_has_text_properties_for_value(*format)
     {
         return None;
     }

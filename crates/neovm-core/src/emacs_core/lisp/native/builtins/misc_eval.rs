@@ -48,7 +48,10 @@ pub(crate) fn builtin_get_pos_property_impl(
     let prop = super::textprop::expect_property_key(&args[1])?;
 
     if let Some(str_val) = args.get(2).filter(|v| v.is_string()) {
-        if get_string_text_properties_table_for_value(*str_val).is_some() {
+        // Existence only -- `get-text-property` re-reads the table itself.
+        // Cloning the whole interval tree to answer a bool put a copy of it
+        // on the redisplay path.
+        if crate::emacs_core::value::string_has_text_properties_for_value(*str_val) {
             return super::textprop::builtin_get_text_property_in_state(
                 obarray,
                 buffers,
@@ -151,7 +154,21 @@ pub(crate) fn builtin_previous_property_change_in_buffers(
         let s = str_val
             .as_lisp_string()
             .expect("string object must carry LispString payload");
-        let table = get_string_text_properties_table_for_value(*str_val).unwrap_or_default();
+        // A read-only walk: borrow the live table rather than copying it.
+        // The clone made `previous-property-change` O(intervals) per call
+        // where GNU is O(log n) -- 2,000 calls on a 3,200-interval string
+        // took 18.8ms against GNU's 1.0ms.  Nothing below runs Lisp, so the
+        // borrow cannot be invalidated under us.
+        let empty_table;
+        let table =
+            match crate::emacs_core::value::borrow_string_text_properties_table_for_value(*str_val)
+            {
+                Some(table) => table,
+                None => {
+                    empty_table = crate::buffer::text_props::TextPropertyTable::new();
+                    &empty_table
+                }
+            };
         let char_pos = textprop::validate_string_point_raw(s, pos, args[0])?;
         let (limit_pos, limit_val) = match args.get(2) {
             Some(v) if !v.is_nil() => {
