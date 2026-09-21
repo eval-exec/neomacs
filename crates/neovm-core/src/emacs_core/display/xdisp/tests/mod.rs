@@ -6280,3 +6280,44 @@ fn redisplay_start_before_point_scans_the_window_buffer_not_the_current_one() {
         "the placement scan restores the buffer redisplay was entered with"
     );
 }
+
+/// `window-text-pixel-size` must honour its Y-LIMIT argument.
+///
+/// GNU's signature is
+/// `(WINDOW &optional FROM TO X-LIMIT Y-LIMIT MODE-LINES IGNORE-LINE-AT-END)`,
+/// and Y-LIMIT bounds how far `move_it_to' walks (src/xdisp.c).  We read
+/// MODE-LINES at argument 5 but never read Y-LIMIT at argument 4, handing the
+/// scanner `None` and walking BEGV..ZV however large the buffer was.
+///
+/// That is what made `fit-window-to-buffer' scan the whole buffer: its
+/// vertical branch passes `(frame-pixel-height frame)' as Y-LIMIT
+/// (lisp/window.el).  200 calls over a 320,000-character buffer took 2,154ms
+/// against GNU's flat 31ms.
+///
+/// The answers change, not just the timing, so every row here is pinned to
+/// GNU Emacs 31.1.  Y-LIMIT is in PIXELS while the scanner caps LINES, and
+/// GNU counts the row that REACHES the limit -- with a char height of 1,
+/// Y-LIMIT 5 yields 6 rows, not 5.  The increasing sweep is what pins that
+/// conversion; a single row would pass with an off-by-one.
+#[test]
+fn window_text_pixel_size_honours_its_y_limit_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let observed = crate::test_utils::runtime_startup_eval_one(
+        r#"(with-current-buffer (get-buffer-create "wt-ylimit")
+             (erase-buffer)
+             (dotimes (i 300) (insert (format "line %d of some text\n" i)))
+             (set-window-buffer (selected-window) (current-buffer))
+             (list (frame-char-height)
+                   (window-text-pixel-size (selected-window) nil t nil nil t)
+                   (window-text-pixel-size (selected-window) nil t nil 1 t)
+                   (window-text-pixel-size (selected-window) nil t nil 5 t)
+                   (window-text-pixel-size (selected-window) nil t nil 50 t)
+                   (window-text-pixel-size (selected-window) nil t nil 100000 t)
+                   (window-text-pixel-size (selected-window) nil t 40 10 t)
+                   (window-text-pixel-size (selected-window) 1 200 nil 5 t)))"#,
+    );
+    assert_eq!(
+        observed,
+        "OK (1 (21 . 301) (19 . 2) (19 . 6) (20 . 51) (21 . 301) (20 . 11) (19 . 6))"
+    );
+}

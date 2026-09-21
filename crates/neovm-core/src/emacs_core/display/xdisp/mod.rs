@@ -4348,6 +4348,33 @@ pub(crate) fn builtin_window_text_pixel_size_ctx(
     }) else {
         return Ok(Value::cons(Value::fixnum(0), Value::fixnum(0)));
     };
+    // GNU `window-text-pixel-size' is
+    // (WINDOW &optional FROM TO X-LIMIT Y-LIMIT MODE-LINES IGNORE-LINE-AT-END),
+    // so Y-LIMIT is argument 4.  It was never read: the scanner was handed
+    // `None` and walked BEGV..ZV however large the buffer was, which is what
+    // made `fit-window-to-buffer' -- whose vertical branch passes
+    // `(frame-pixel-height frame)' as Y-LIMIT (lisp/window.el) -- scan the
+    // whole buffer.  GNU stops after one frame's worth of rows: 2,154ms
+    // against its flat 31ms on a 320,000-character buffer.
+    //
+    // Y-LIMIT is in PIXELS and the scanner's cap is in LINES, so it has to be
+    // converted.  GNU's `move_it_to' stops once the row's y REACHES the
+    // limit, and that row still counts, which is the `+ 1`: with a char
+    // height of 1, Y-LIMIT 5 yields 6 rows.
+    let y_limit = match args.get(4) {
+        Some(value) if !value.is_nil() && !value.is_t() => match value.kind() {
+            ValueKind::Fixnum(pixels) if pixels >= 0 => {
+                Some((pixels as f32 / char_h.max(1.0)).floor() as usize + 1)
+            }
+            _ => {
+                return Err(signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("natnump"), *value],
+                ));
+            }
+        },
+        _ => None,
+    };
     let (default_x_limit, wrap_columns) = tty_body_columns
         .map(|body_columns| {
             let line_wrap = super::window_cmds::window_line_wrap(
@@ -4426,7 +4453,7 @@ pub(crate) fn builtin_window_text_pixel_size_ctx(
         apply_trim,
         CharColumnWidth::One,
         default_x_limit,
-        None,
+        y_limit,
         wrap_columns,
     );
     if offset_landed_on_occupied_row && from_pos >= to_pos {
