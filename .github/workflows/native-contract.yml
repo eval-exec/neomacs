@@ -158,6 +158,14 @@ jobs:
     steps:
       - *checkout
 
+      # neovm-core depends on `dbus` for every unix but macOS, and
+      # `libdbus-sys`'s build script panic!()s when `dbus-1.pc` is missing --
+      # it has no HAVE_DBUS=no mode (see release.yml's dbus-devel comment).
+      # Ubuntu's package is `libdbus-1-dev`.
+      - name: Install libdbus dev headers
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+
       - name: Set up Rust tooling
         uses: ./.github/actions/setup-rust
         with:
