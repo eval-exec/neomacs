@@ -5929,6 +5929,90 @@ fn jit_bench_countdown_loop() {
     );
 }
 
+/// Compare the previous baseline tier and the production MIR tier in one
+/// process. The same Elisp workloads for GNU live in scripts/mir-loop-bench.el.
+/// Compilation and warmup are excluded; alternate order and report medians.
+#[test]
+#[ignore = "manual perf measurement; pin to an idle core"]
+fn jit_bench_mir_loops_against_baseline() {
+    use crate::emacs_core::eval::Context;
+    use crate::emacs_core::intern::SymId;
+    use std::time::Instant;
+
+    let mut ev = Context::new();
+    let ctx = &mut ev as *mut Context as *mut u8;
+    let n = 1_000_000_i64;
+    for name in ["countdown", "sum", "polynomial"] {
+        let mut f = ByteCodeFunction::new(LambdaParams {
+            required: vec![SymId(1)],
+            optional: Vec::new(),
+            rest: None,
+        });
+        f.lexical = true;
+        f.constants = vec![Value::make_int(0), Value::make_int(3), Value::make_int(7)].into();
+        f.max_stack = 8;
+        f.ops.push(Op::Constant(0)); // [n acc]
+        f.ops
+            .extend([Op::StackRef(1), Op::Constant(0), Op::Gtr, Op::GotoIfNil(0)]);
+        if name != "countdown" {
+            f.ops.extend([Op::StackRef(0), Op::StackRef(2)]); // [n acc acc n]
+            if name == "polynomial" {
+                f.ops.extend([
+                    Op::Dup,
+                    Op::Mul,
+                    Op::StackRef(3),
+                    Op::Constant(1),
+                    Op::Mul,
+                    Op::Add,
+                    Op::Constant(2),
+                    Op::Add,
+                ]);
+            }
+            f.ops.extend([Op::Add, Op::StackSet(1)]);
+        }
+        f.ops
+            .extend([Op::StackRef(1), Op::Sub1, Op::StackSet(2), Op::Goto(1)]);
+        f.ops[4] = Op::GotoIfNil(f.ops.len() as u32);
+        f.ops.push(Op::Return);
+        let expected = match name {
+            "countdown" => 0,
+            "sum" => n * (n + 1) / 2,
+            "polynomial" => n * (n + 1) * (2 * n + 1) / 6 + 3 * n * (n + 1) / 2 + 7 * n,
+            _ => unreachable!(),
+        };
+        let baseline = lower_leaf(&f.ops, &f.constants, 1).expect("baseline compiles");
+        let optimized =
+            compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("MIR compiles");
+        assert_eq!(optimized.tier, super::leaf::LeafTier::Mir);
+        let args = [Value::make_int(n)];
+        let mut samples = [Vec::new(), Vec::new()];
+        for round in 0..8 {
+            for which in [round % 2, 1 - round % 2] {
+                let leaf = [&baseline, &optimized][which];
+                let start = Instant::now();
+                for _ in 0..5 {
+                    assert_eq!(
+                        leaf.call(ctx, &args),
+                        NativeRun::Ok(Value::make_int(expected).bits())
+                    );
+                }
+                if round != 0 {
+                    samples[which].push(start.elapsed());
+                }
+            }
+        }
+        for sample in &mut samples {
+            sample.sort();
+        }
+        let baseline_us = samples[0][3].as_secs_f64() * 1e6 / 5.0;
+        let mir_us = samples[1][3].as_secs_f64() * 1e6 / 5.0;
+        eprintln!(
+            "BENCH mir-loop {name} n={n} baseline_us={baseline_us:.1} mir_us={mir_us:.1} speedup={:.3}",
+            baseline_us / mir_us
+        );
+    }
+}
+
 /// Differential fuzzing (the Phase-9 discipline, brought forward): generate
 /// seeded random straight-line bodies over the supported non-allocating op
 /// subset, run each through BOTH tiers, and hold the tiering contract:
