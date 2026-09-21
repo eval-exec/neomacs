@@ -12520,6 +12520,62 @@ fn save_excursion_unlinks_point_markers_after_unwind() {
 }
 
 #[test]
+fn save_excursion_preserves_marker_across_stack_growth_and_gc() {
+    for grow in [false, true] {
+        let mut ev = Context::new();
+        let buffer_id = ev.buffers.create_buffer("se-stack-growth");
+        let other_buffer = ev.buffers.create_buffer("se-other-buffer");
+        ev.buffers.set_current(buffer_id);
+        ev.buffers
+            .insert_into_buffer(buffer_id, "abé中")
+            .expect("insert initial text");
+        ev.gc_collect_exact();
+        assert!(ev.specpdl.is_empty());
+        ev.specpdl = Vec::with_capacity(if grow { 1 } else { 2 });
+        let outer_root = Value::string("outer specpdl root");
+        ev.specpdl.push(SpecBinding::GcRoot { value: outer_root });
+
+        let count = ev.record_save_excursion().expect("save live buffer");
+        assert_eq!(count, 1);
+        assert_eq!(ev.specpdl.len(), 2);
+        let SpecBinding::SaveExcursion {
+            buffer_id: saved_buffer,
+            marker,
+            ..
+        } = ev.specpdl[count]
+        else {
+            panic!("save-excursion record missing");
+        };
+        assert_eq!(saved_buffer, buffer_id);
+        ev.gc_collect_exact();
+        assert!(ev.tagged_heap.owns_heap_value_for_test(marker));
+        assert!(ev.tagged_heap.owns_heap_value_for_test(outer_root));
+
+        ev.buffers
+            .goto_buffer_emacs_byte_pos(buffer_id, crate::buffer::EmacsBytePos::new(0))
+            .expect("move before saved point");
+        ev.buffers
+            .insert_into_buffer(buffer_id, "λ")
+            .expect("move the saved marker through a multibyte edit");
+        ev.buffers.set_current(other_buffer);
+        ev.gc_collect_exact();
+        ev.unbind_to_result(count).expect("restore excursion");
+
+        assert_eq!(ev.buffers.current_buffer_id(), Some(buffer_id));
+        let buffer = ev.buffers.get(buffer_id).unwrap();
+        assert_eq!(
+            buffer.point_emacs_byte_pos(),
+            crate::buffer::EmacsBytePos::new(9)
+        );
+        assert_eq!(buffer.marker_chain_len(), 0);
+        assert_eq!(ev.specpdl.len(), count);
+        assert_eq!(outer_root.as_utf8_str(), Some("outer specpdl root"));
+        ev.unbind_to_result(0).expect("release outer root");
+        assert!(ev.specpdl.is_empty());
+    }
+}
+
+#[test]
 fn insert_before_markers_advances_before_markers_at_point() {
     crate::test_utils::init_test_tracing();
     let results = bootstrap_eval_all(

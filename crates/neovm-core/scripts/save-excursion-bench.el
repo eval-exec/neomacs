@@ -1,0 +1,36 @@
+;;; save-excursion-bench.el --- excursion record cost -*- lexical-binding: t; -*-
+;; Run with: taskset -c CORE EDITOR -Q --batch -l save-excursion-bench.el
+;; Alternate baseline/candidate processes. NEOVM_JIT=0 measures the interpreter.
+;; Keep default GC behavior: creating and retiring point markers is part of
+;; save-excursion's cost. save-current-buffer controls for a marker-free record.
+(require 'bytecomp)
+(set-buffer (get-buffer-create "*save-excursion-bench*"))
+(erase-buffer)
+(insert "abcdef")
+(defun excursion-bench-loop (n)
+  (let (answer)
+    (dotimes (_ n)
+      (setq answer (save-excursion (goto-char 1) (point))))
+    (list answer (point))))
+(defun excursion-bench-control (n)
+  (let (answer)
+    (dotimes (_ n)
+      (setq answer (save-current-buffer (point))))
+    (list answer (point))))
+(dolist (case '((excursion-bench-loop . (1 7))
+                (excursion-bench-control . (7 7))))
+  (byte-compile (car case))
+  (unless (byte-code-function-p (symbol-function (car case)))
+    (error "Expected bytecode for %s" (car case)))
+  (dotimes (_ 40) (funcall (car case) 2000))
+  (let (samples)
+    (dotimes (_ 7)
+      (let* ((start (float-time))
+             (value (funcall (car case) 250000))
+             (elapsed (- (float-time) start)))
+        (unless (equal value (cdr case))
+          (error "Wrong result for %s: %S" (car case) value))
+        (push (* elapsed 1e6) samples)))
+    (princ (format "BENCH %s n=250000 median_us=%.1f samples_us=%S\n"
+                   (car case) (nth 3 (sort (copy-sequence samples) #'<))
+                   (nreverse samples)))))
