@@ -177,43 +177,40 @@ impl Context {
         args_ptr: *const i64,
         nargs: usize,
     ) {
-        // SAFETY: caller contract.
-        let read = |i: usize| Value::from_bits(unsafe { *args_ptr.add(i) } as usize);
-        let entry = match nargs {
-            1 => SpecBinding::Backtrace1 {
-                function,
-                arg: read(0),
-                debug_on_exit: false,
-            },
-            2 => SpecBinding::Backtrace2 {
-                function,
-                arg0: read(0),
-                arg1: read(1),
-            },
-            // GNU stores exactly this: a pointer into the caller's frame
-            // plus the count. The 3+-arity path previously copied the args
-            // twice and parked them on the owned side-stack — ~100 Ir per
-            // call on 3-arg native recursion (tak).
-            _ => SpecBinding::BacktraceNative {
-                function,
-                args_ptr,
-                nargs: nargs as u32,
-            },
-        };
-        // Written straight into the specpdl's next slot.  `Vec::push` took
-        // the 32-byte entry by value: built in a stack temporary with narrow
-        // stores and read back with one wide load for the copy -- a
-        // store-forwarding stall on every native call (perf annotate put
-        // 72% of this function's samples on that load).
+        // Reserve BEFORE constructing the entry, and write within each arm.
+        // Joining the variants into a local before reserving made LLVM build
+        // a 32-byte stack temporary even with ptr::write below. Its wide copy
+        // loads stalled on the preceding narrow stores in native call shims.
         let len = self.specpdl.len();
         if len == self.specpdl.capacity() {
             self.specpdl.reserve(1);
         }
         // SAFETY: capacity for one more entry was just ensured; the slot at
         // `len` is uninitialised spare capacity, written before the length
-        // grows to cover it.
+        // grows to cover it. The caller's native argument buffer remains
+        // valid across the Rust allocation and throughout the frame's life.
         unsafe {
-            std::ptr::write(self.specpdl.as_mut_ptr().add(len), entry);
+            let slot = self.specpdl.as_mut_ptr().add(len);
+            let read = |i: usize| Value::from_bits(*args_ptr.add(i) as usize);
+            match nargs {
+                1 => slot.write(SpecBinding::Backtrace1 {
+                    function,
+                    arg: read(0),
+                    debug_on_exit: false,
+                }),
+                2 => slot.write(SpecBinding::Backtrace2 {
+                    function,
+                    arg0: read(0),
+                    arg1: read(1),
+                }),
+                // The other arities retain a pointer into the caller's
+                // frame, which remains readable by backtrace and GC walks.
+                _ => slot.write(SpecBinding::BacktraceNative {
+                    function,
+                    args_ptr,
+                    nargs: nargs as u32,
+                }),
+            }
             self.specpdl.set_len(len + 1);
         }
     }
