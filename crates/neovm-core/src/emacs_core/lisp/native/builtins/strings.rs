@@ -101,9 +101,59 @@ pub(crate) fn string_ordering(
             left.cmp(right.iter().copied().map(u32::from))
         }
         (StringOrderingView::MultibyteChars(left), StringOrderingView::MultibyteChars(right)) => {
-            left.cmp(right)
+            multibyte_ordering(left.bytes, right.bytes)
         }
     }
+}
+
+/// Byte index of the first difference between `a` and `b`, or `min(len)` when
+/// one is a prefix of the other.
+///
+/// Word-at-a-time, like GNU `string_cmp`'s `load_unaligned_size_t` loop
+/// (src/fns.c). Decoding characters just to find where two strings diverge
+/// means touching every byte of the common prefix one at a time.
+fn common_prefix_len(a: &[u8], b: &[u8]) -> usize {
+    const WORD: usize = size_of::<usize>();
+    let n = a.len().min(b.len());
+    let mut i = 0;
+    while i + WORD <= n {
+        let x = usize::from_ne_bytes(a[i..i + WORD].try_into().unwrap());
+        let y = usize::from_ne_bytes(b[i..i + WORD].try_into().unwrap());
+        if x != y {
+            // `to_le` puts byte 0 in the low bits on either endianness, so the
+            // count of trailing zero BITS divided by 8 is the byte offset.
+            return i + (x ^ y).to_le().trailing_zeros() as usize / 8;
+        }
+        i += WORD;
+    }
+    while i < n && a[i] == b[i] {
+        i += 1;
+    }
+    i
+}
+
+/// GNU `string_cmp`'s two-arbitrary-multibyte-strings arm (src/fns.c).
+///
+/// A plain `memcmp` is NOT available here, which is the whole reason GNU
+/// spells this case out: Emacs stores a raw eight-bit byte as an overlong
+/// two-byte sequence, so byte order would sort those between U+007F and
+/// U+0080 instead of above every real character. Skipping the common prefix
+/// is safe, though -- equal bytes decode to equal characters -- so only the
+/// ONE character where the strings diverge has to be decoded.
+fn multibyte_ordering(a: &[u8], b: &[u8]) -> std::cmp::Ordering {
+    let mut at = common_prefix_len(a, b);
+    if at >= a.len().min(b.len()) {
+        // One is a byte-prefix of the other, so the shorter one sorts first.
+        return a.len().cmp(&b.len());
+    }
+    // The difference can fall in the middle of a character; back up to the
+    // last byte that is not a 10xxxxxx continuation, as GNU does.
+    while at > 0 && (a[at] & 0xC0) == 0x80 {
+        at -= 1;
+    }
+    let (left, _) = crate::emacs_core::emacs_char::string_char(&a[at..]);
+    let (right, _) = crate::emacs_core::emacs_char::string_char(&b[at..]);
+    left.cmp(&right)
 }
 
 fn string_equal_designators(

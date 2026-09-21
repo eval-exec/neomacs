@@ -908,3 +908,53 @@ fn format_maps_format_string_properties_across_conversion_fields_like_gnu() {
         );
     }
 }
+
+/// `string-lessp` over two genuinely multibyte strings, pinned to GNU 31.1.
+///
+/// GNU `string_cmp` (src/fns.c) skips the common byte prefix and then decodes
+/// only the ONE character where the strings diverge.  It spells this case out
+/// rather than reusing its `memcmp` arm for a reason: Emacs stores a raw
+/// eight-bit byte as an overlong two-byte sequence, so byte order would sort
+/// those between U+007F and U+0080 instead of above every real character.
+///
+/// The eight-bit rows are therefore the ones that matter -- they are what a
+/// naive `memcmp` shortcut gets wrong, and they answer the same way in both
+/// engines only because the divergent character is decoded.
+#[test]
+fn string_lessp_orders_multibyte_strings_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let observed = crate::test_utils::runtime_startup_eval_one(
+        r#"(let* ((raw (string-to-multibyte (unibyte-string #xC3)))
+                 (u80 (string (decode-char 'ucs #x80)))
+                 (u7f (string (decode-char 'ucs #x7f)))
+                 (e "é") (u "ü"))
+             (list
+              ;; A raw eight-bit char sorts ABOVE every real character.
+              (list (string-lessp raw u80) (string-lessp u80 raw))
+              (list (string-lessp raw u7f) (string-lessp u7f raw))
+              (list (string-lessp e u) (string-lessp u e))
+              ;; Long shared prefix, difference in the last character.
+              (let ((a (concat (make-string 50 ?é) "a"))
+                    (b (concat (make-string 50 ?é) "b")))
+                (list (string-lessp a b) (string-lessp b a)))
+              ;; One string is a byte-prefix of the other.
+              (let ((a (make-string 50 ?é))
+                    (b (concat (make-string 50 ?é) "z")))
+                (list (string-lessp a b) (string-lessp b a) (string-lessp a a)))
+              ;; The difference falls INSIDE a character, not on a byte boundary.
+              (let ((a (concat "xx" (string (decode-char 'ucs #x4e00))))
+                    (b (concat "xx" (string (decode-char 'ucs #x4e01)))))
+                (list (string-lessp a b) (string-lessp b a)))
+              ;; A raw eight-bit char after a shared multibyte prefix: the
+              ;; prefix skip must not carry the wrong comparison past it.
+              (let ((a (concat (make-string 20 ?é) raw))
+                    (b (concat (make-string 20 ?é) u80)))
+                (list (string-lessp a b) (string-lessp b a)))
+              ;; `value<' reads the same order.
+              (list (value< raw u80) (value< e u))))"#,
+    );
+    assert_eq!(
+        observed,
+        "OK ((nil t) (nil t) (t nil) (t nil) (t nil nil) (t nil) (nil t) (nil t))"
+    );
+}
