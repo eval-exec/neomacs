@@ -1361,17 +1361,36 @@ fn builtin_call_process_region_impl(
         command.current_dir(dir);
     }
     subprocess_env.apply_to_child_command(&mut command);
-    let mut child = command
+    // GNU does NOT pipe the region into the child. `Fcall_process_region'
+    // writes it to a temp file with `create_temp_file' and hands that to
+    // `call_process' as INFILE (src/callproc.c:1063-1094), so the child's
+    // stdin is a seekable FILE.
+    //
+    // Piping it deadlocks. The parent blocks in `write_all' on stdin while
+    // the child blocks writing stdout that nobody is draining yet, because
+    // `wait_with_output' -- the only thing that drains it -- is not reached
+    // until the write finishes. Any region past the pipe buffer (~64KB) hangs
+    // forever with no C-g escape: `M-| tr a-z A-Z' over 256KB never returned.
+    //
+    // A temp file also preserves the behaviour a pipe cannot: a program that
+    // seeks on stdin gets what it gets under GNU.
+    let mut region_file = tempfile::NamedTempFile::new()
+        .map_err(|e| super::process::signal_process_io("Creating process input file", None, e))?;
+    region_file
+        .write_all(&region_text)
+        .and_then(|()| region_file.as_file_mut().sync_data())
+        .map_err(|e| super::process::signal_process_io("Writing process input file", None, e))?;
+    let region_stdin = region_file
+        .reopen()
+        .map_err(|e| super::process::signal_process_io("Opening process input file", None, e))?;
+
+    let child = command
         .args(cmd_args.iter().map(lisp_string_to_os_string))
-        .stdin(ChildStdio::Piped)
+        .stdin(ChildStdio::from(region_stdin))
         .stdout(ChildStdio::Piped)
         .stderr(ChildStdio::Piped)
         .spawn()
         .map_err(|e| super::process::signal_process_io("Searching for program", None, e))?;
-
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(&region_text);
-    }
 
     let output = child
         .wait_with_output()

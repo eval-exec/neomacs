@@ -230,3 +230,45 @@ fn shell_command_with_legacy_args_preserves_raw_unibyte_string_bytes() {
     assert!(!combined.is_multibyte());
     assert_eq!(combined.as_bytes(), &[0xFF, b' ', 0xFE, b'!']);
 }
+
+/// `call-process-region` must not deadlock on a region larger than a pipe
+/// buffer, and the child's stdin must be SEEKABLE.
+///
+/// Piping the region in deadlocks: the parent blocks writing stdin while the
+/// child blocks writing stdout that nothing is draining yet, because the only
+/// drain (`wait_with_output`) comes after the write finishes. Anything past
+/// the pipe buffer (~64KB) hung forever with no `C-g` escape -- `M-|` through
+/// `tr` over a 256KB region never returned.
+///
+/// GNU does not pipe at all: `Fcall_process_region' writes the region to a
+/// temp file and passes it as INFILE (src/callproc.c:1063-1094). The `tail`
+/// case pins the consequence that a writer thread would NOT have preserved --
+/// `tail` seeks, so it needs a real file rather than a pipe, and it answers
+/// the last two lines under GNU.
+///
+/// The region here is deliberately far past the pipe buffer: at 64KB or less
+/// the old code passed.
+#[cfg(unix)]
+#[test]
+fn call_process_region_handles_a_region_larger_than_a_pipe_buffer() {
+    crate::test_utils::init_test_tracing();
+    // The booted evaluator, not `Context::new()`: `with-temp-buffer` is a
+    // subr.el macro and a bare context does not have it.
+    let cat = find_bin("cat");
+    let tail = find_bin("tail");
+
+    let program = format!(
+        r#"(list
+             (with-temp-buffer
+               (dotimes (i 20000) (insert (format "line %d abcdefghij\n" i)))
+               (let ((before (buffer-size)))
+                 (call-process-region (point-min) (point-max) {cat:?} t t nil)
+                 (list before (buffer-size) (= before (buffer-size)))))
+             (with-temp-buffer
+               (dotimes (i 5000) (insert (format "L%d\n" i)))
+               (call-process-region (point-min) (point-max) {tail:?} t t nil "-2")
+               (buffer-string)))"#
+    );
+    let observed = crate::test_utils::runtime_startup_eval_one(&program);
+    assert_eq!(observed, "OK ((428890 428890 t) \"L4998\nL4999\n\")");
+}
