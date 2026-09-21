@@ -142,7 +142,13 @@ pub(crate) fn aset_string_replacement(
                 )],
             ));
         }
-        let byte_pos = crate::emacs_core::emacs_char::char_to_byte_pos(string.as_bytes(), idx);
+        // GNU `Faset` locates the byte with `string_char_to_byte' (src/fns.c),
+        // which returns the index unchanged when `SCHARS == SBYTES' and
+        // otherwise scans from whichever END is nearer. `LispString` already
+        // implements both; the bare-slice converter can implement neither,
+        // because a `&[u8]` does not know SCHARS -- so reaching for it made
+        // this O(index).
+        let byte_pos = string.char_to_byte_pos(idx);
         if string.as_bytes()[byte_pos] > 0x7f {
             return Err(signal(
                 "error",

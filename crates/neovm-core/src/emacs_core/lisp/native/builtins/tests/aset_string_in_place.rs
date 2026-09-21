@@ -56,3 +56,60 @@ fn aset_on_strings_is_observably_unchanged() {
         }
     }
 }
+
+/// `aset` must locate the byte through GNU `string_char_to_byte`'s two outs,
+/// not by counting characters forward from byte 0.
+///
+/// GNU (src/fns.c) returns CHAR_INDEX unchanged when `SCHARS == SBYTES` -- an
+/// all-ASCII multibyte string stores one byte per character, so the byte
+/// offset IS the index -- and otherwise scans from whichever END is nearer.
+/// `LispString::char_to_byte_pos` already implements both; `aset` reached
+/// past it to the bare-slice `char_to_byte_pos`, which can do neither,
+/// because a `&[u8]` does not know SCHARS.
+///
+/// That made `aset` O(index): 2,000 writes near the end of a 320,000-char
+/// multibyte string took 147.5ms against GNU Emacs 31.1's 0.7ms.
+///
+/// The scan-step counter is the discriminating assertion. A correctness test
+/// cannot see the difference -- both routes return the same byte offset.
+#[test]
+fn aset_on_a_multibyte_string_does_not_scan_from_the_start() {
+    use crate::emacs_core::emacs_char::{
+        position_conversion_scan_steps_for_test, reset_position_conversion_scan_steps_for_test,
+    };
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+
+    // (a) All-ASCII MULTIBYTE: the `SCHARS == SBYTES` identity, so writing at
+    // any index costs no conversion scan at all.
+    let setup = eval.eval_str(r#"(setq s (string-to-multibyte (make-string 4096 ?a)))"#);
+    assert_eq!(
+        format_eval_result(&setup).split(' ').next(),
+        Some("OK"),
+        "build the all-ASCII multibyte string"
+    );
+    assert_eq!(
+        format_eval_result(&eval.eval_str("(multibyte-string-p s)")),
+        "OK t"
+    );
+    reset_position_conversion_scan_steps_for_test();
+    let wrote = eval.eval_str("(progn (aset s 4000 ?z) (aref s 4000))");
+    assert_eq!(format_eval_result(&wrote), "OK 122");
+    assert_eq!(
+        position_conversion_scan_steps_for_test(),
+        0,
+        "an all-ASCII multibyte string needs no scan: the index IS the byte offset"
+    );
+
+    // (b) Genuinely multibyte, index near the END: one scan, and it must come
+    // from the end rather than walking the whole string.
+    let setup = eval.eval_str(r#"(setq m (concat "é" (make-string 4096 ?a)))"#);
+    assert_eq!(format_eval_result(&setup).split(' ').next(), Some("OK"));
+    let wrote =
+        eval.eval_str("(progn (aset m 4000 ?z) (list (aref m 4000) (aref m 0) (length m)))");
+    assert_eq!(
+        format_eval_result(&wrote),
+        "OK (122 233 4097)",
+        "the write landed on the right character and left the rest alone"
+    );
+}
