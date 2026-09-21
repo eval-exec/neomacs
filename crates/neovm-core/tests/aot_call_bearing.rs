@@ -163,3 +163,11 @@ fn aot_baseline_symbol_const_and_var_ops_reloc_sym_by_name() {
         panic!("baseline op-SymId reloc self-test failed: {e}");
     }
 }
+
+/// The unit-test host does not export runtime shims. Use this integration
+/// host for the serialized cons-reconstruction/precise-frame round trip.
+#[test]
+fn aot_mir_cons_reconstruction_preserves_precise_frames() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    neovm_core::emacs_core::jit::aot::testkit_mir_cons_reconstruction_selftest(dir.path());
+}

@@ -28,8 +28,14 @@ fn mir_cons_precise_frames_preserve_aliases_and_completed_effects() {
             Op::StackRef(1),
             Op::Cons,
             Op::Dup,
-            Op::StackRef(2),
+            Op::StackRef(0),
+            Op::Car,
+            Op::StackRef(3),
+            Op::Cons,
+            Op::StackRef(3),
             Op::Add1,
+            Op::Pop,
+            Op::Car,
             Op::Pop,
             Op::Car,
             Op::Pop,
@@ -42,7 +48,7 @@ fn mir_cons_precise_frames_preserve_aliases_and_completed_effects() {
     let m = mir::build_mir(&f.ops, &f.constants, 2).unwrap();
     let plan = plan_mir_leaf(&m);
     assert!(plan.precise);
-    assert_eq!(plan.cons_repl.iter().filter(|c| c.is_some()).count(), 0);
+    assert_eq!(plan.cons_repl.iter().filter(|c| c.is_some()).count(), 2);
     let leaf = lower_mir_pure(&m).unwrap();
     let float = ev.eval_str("1.5").unwrap();
     let result = leaf.call(
@@ -52,8 +58,8 @@ fn mir_cons_precise_frames_preserve_aliases_and_completed_effects() {
     let NativeRun::DeoptAt(resume) = result else {
         panic!("expected precise float deopt: {result:?}")
     };
-    assert_eq!(resume.pc, 8);
-    assert_eq!(resume.stack.len(), 5);
+    assert_eq!(resume.pc, 12);
+    assert_eq!(resume.stack.len(), 6);
     let pair = resume.stack[2];
     assert!(pair.is_cons());
     assert_eq!(
@@ -63,6 +69,14 @@ fn mir_cons_precise_frames_preserve_aliases_and_completed_effects() {
     );
     assert_eq!(pair.cons_car(), Value::make_int(8), "retag the raw car");
     assert_eq!(pair.cons_cdr(), float, "preserve the heap-valued cdr");
+    let other = resume.stack[4];
+    assert_ne!(
+        pair.bits(),
+        other.bits(),
+        "distinct virtual conses stay distinct"
+    );
+    assert_eq!(other.cons_car(), pair.cons_car());
+    assert_eq!(other.cons_cdr(), pair.cons_cdr());
     let DeoptResume {
         pc,
         stack,
@@ -124,5 +138,5 @@ fn mir_cons_block_local_loop_allocation_count() {
     let before = ev.tagged_heap.allocated_count;
     let result = leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(100)]);
     assert_eq!(result, NativeRun::Ok(Value::make_int(5050).bits()));
-    assert_eq!(ev.tagged_heap.allocated_count, before + 100);
+    assert_eq!(ev.tagged_heap.allocated_count, before);
 }

@@ -3769,7 +3769,7 @@ fn mir_adapter_sizes_the_args_slot_for_a_wide_list() {
     assert!(l.is_nil());
 }
 
-/// No cons scalar replacement in an Opaque-bearing body, and the adapter's
+/// A cons live across an Opaque safepoint remains real, and the adapter's
 /// residual rooting holds across a shim that REALLY collects:
 ///
 ///     (lambda (a b) (let ((p (cons (list a) b))) (garbage-collect) (make-list 4096 0) (car p)))
@@ -3804,7 +3804,7 @@ fn mir_adapter_keeps_conses_real_across_a_shim() {
     assert!(plan.has_opaque && plan.precise);
     assert!(
         plan.cons_repl.iter().all(|c| c.is_none()),
-        "no elided cons in an Opaque body"
+        "a cons live across an Opaque safepoint cannot be elided"
     );
     let leaf = lower_mir_pure(&mir).expect("lowers via the adapter");
     for _ in 0..3 {

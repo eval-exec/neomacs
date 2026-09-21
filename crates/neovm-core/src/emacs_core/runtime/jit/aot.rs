@@ -1870,6 +1870,107 @@ pub fn is_d0_aot_candidate(
     )
 }
 
+/// Reconstruct an aliased virtual cons through an emitted object's sidecar,
+/// then resume after an observable call. This exercises the serialized
+/// precise-frame metadata and the imported allocator together.
+#[cfg(target_os = "linux")]
+#[doc(hidden)]
+pub fn testkit_mir_cons_reconstruction_selftest(dir: &std::path::Path) {
+    use crate::emacs_core::bytecode::{ByteCodeFunction, Vm};
+    use crate::emacs_core::eval::Context;
+    use crate::emacs_core::jit::compile::{DeoptResume, LoadedUnit, NativeRun};
+    use crate::emacs_core::value::LambdaParams;
+
+    let mut ev = Context::new();
+    ev.eval_str("(setq aot-rebuild-count 0) (fset 'aot-rebuild-effect (lambda () (setq aot-rebuild-count (1+ aot-rebuild-count))))").unwrap();
+    let mut f = ByteCodeFunction::new(LambdaParams {
+        required: vec![
+            crate::emacs_core::intern::SymId(1),
+            crate::emacs_core::intern::SymId(2),
+        ],
+        optional: Vec::new(),
+        rest: None,
+    });
+    f.lexical = true;
+    f.max_stack = 16;
+    f.constants = vec![Value::symbol("aot-rebuild-effect")].into();
+    f.ops = vec![
+        Op::Constant(0),
+        Op::Call(0),
+        Op::Pop,
+        Op::StackRef(1),
+        Op::Add1,
+        Op::StackRef(1),
+        Op::Cons,
+        Op::Dup,
+        Op::StackRef(2),
+        Op::Add1,
+        Op::Pop,
+        Op::Car,
+        Op::Pop,
+        Op::Car,
+        Op::Return,
+    ];
+    f.seal_hand_assembled_ops();
+    let m = mir::build_mir(&f.ops, &f.constants, 2).unwrap();
+    assert_eq!(
+        super::compile::plan_mir_leaf(&m)
+            .cons_repl
+            .iter()
+            .filter(|c| c.is_some())
+            .count(),
+        1
+    );
+    let (obj, hash) = compile_leaf_to_object(&f.ops, &f.constants, 2, None)
+        .unwrap()
+        .unwrap();
+    let path = dir.join("cons-reconstruction.so");
+    link_object_to_so(&obj, &path).unwrap();
+    // SAFETY: this is the object just emitted by our compiler; its runtime
+    // imports are the same exported shims used by the JIT.
+    let library = unsafe { libloading::Library::new(&path) }.unwrap();
+    let unit = std::sync::Arc::new(LoadedUnit::new(library));
+    let leaf = load_leaf_from_unit(&unit, hash, 2, &collect_reloc_consts(&m), None).unwrap();
+    let float = ev.eval_str("1.5").unwrap();
+    let result = leaf.call(
+        &mut ev as *mut Context as *mut u8,
+        &[Value::make_int(7), float],
+    );
+    let NativeRun::DeoptAt(resume) = result else {
+        panic!("precise AOT deopt expected: {result:?}")
+    };
+    assert_eq!(resume.pc, 9);
+    assert_eq!(resume.stack[2], resume.stack[3]);
+    assert_eq!(resume.stack[2].cons_car(), Value::make_int(8));
+    assert_eq!(resume.stack[2].cons_cdr(), float);
+    let DeoptResume {
+        pc,
+        stack,
+        handlers,
+        binds,
+        spec_base,
+        cond_base,
+    } = *resume;
+    let result = Vm::from_context(&mut ev)
+        .run_resumed_frame(
+            &f,
+            Value::NIL,
+            pc,
+            &stack,
+            handlers,
+            &binds,
+            spec_base,
+            cond_base,
+        )
+        .unwrap();
+    assert_eq!(result, Value::make_int(8));
+    assert_eq!(
+        ev.eval_str("aot-rebuild-count").unwrap(),
+        Value::make_int(1)
+    );
+    assert_eq!(ev.jit_root_stack_top, 0);
+}
+
 /// Crate-internal self-test for CALL-BEARING AOT, invoked from the
 /// `tests/aot_call_bearing.rs` integration test (which runs in a shim-exporting
 /// `-rdynamic` binary; see build.rs). It needs crate-private types (obarray, Vm,

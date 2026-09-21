@@ -1710,25 +1710,62 @@ pub(crate) fn lower_mir_inst_via_baseline(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn mir_deopt_block(
     fb: &mut FunctionBuilder,
     precise: bool,
     inst: &mir::MirInst,
     cval: &[Option<ClifValue>],
     cval_raw: &[bool],
+    cons_repl: &[Option<(mir::MirValue, mir::MirValue)>],
+    rt: Option<&RtCtx>,
     shared: &mut Option<Block>,
     pending: &mut Vec<PendingDeopt>,
 ) -> Result<Block, CompileError> {
     if precise {
         let mut stack = Vec::with_capacity(inst.pre_stack.len());
         let mut raw = Vec::with_capacity(inst.pre_stack.len());
-        for v in &inst.pre_stack {
-            stack.push(cval[v.0 as usize].ok_or(CompileError::BadOperand)?);
-            raw.push(cval_raw[v.0 as usize]);
+        let mut cons_rebuilds: Vec<ConsReconstruction> = Vec::new();
+        let mut rebuilt: Option<HashMap<mir::MirValue, usize>> = None;
+        for (slot, &v) in inst.pre_stack.iter().enumerate() {
+            if let Some((car, cdr)) = cons_repl[v.0 as usize] {
+                let value = |v: mir::MirValue| -> Result<(ClifValue, bool), CompileError> {
+                    Ok((
+                        cval[v.0 as usize].ok_or(CompileError::BadOperand)?,
+                        cval_raw[v.0 as usize],
+                    ))
+                };
+                let car = value(car)?;
+                let cdr = value(cdr)?;
+                // This placeholder is replaced before spilling. Repeated
+                // references to the same virtual cons must get ONE object.
+                stack.push(car.0);
+                raw.push(false);
+                let rebuilt = rebuilt.get_or_insert_with(HashMap::new);
+                if let Some(&i) = rebuilt.get(&v) {
+                    cons_rebuilds[i].slots.push(slot);
+                } else {
+                    rebuilt.insert(v, cons_rebuilds.len());
+                    cons_rebuilds.push(ConsReconstruction {
+                        slots: vec![slot],
+                        car,
+                        cdr,
+                        allocator: rt
+                            .ok_or(CompileError::UnsupportedOp("mir-cons-deopt-no-rt"))?
+                            .refs
+                            .cons,
+                    });
+                }
+            } else {
+                stack.push(cval[v.0 as usize].ok_or(CompileError::BadOperand)?);
+                raw.push(cval_raw[v.0 as usize]);
+            }
         }
-        // handlers_len = 0: build_mir bails on handler/bind opcodes, so a MIR leaf
-        // never has condition-case/catch frames to transfer on resume.
-        Ok(deopt_site(fb, inst.pc, 0, &stack, &raw, pending))
+        let block = deopt_site(fb, inst.pc, 0, &stack, &raw, pending);
+        let site = pending.last_mut().expect("deopt_site queues one site");
+        debug_assert!(site.region.is_none(), "MIR carries its own call framestate");
+        site.cons_rebuilds = cons_rebuilds;
+        Ok(block)
     } else {
         Ok(*shared.get_or_insert_with(|| fb.create_block()))
     }
@@ -1891,9 +1928,8 @@ pub(crate) struct MirLeafPlan {
     pub(crate) precise: bool,
     /// The body needs vmctx + the shim scaffolding (`RtCtx`).
     pub(crate) needs_rt: bool,
-    /// Cons scalar replacement (`cons_scalar_repl_targets`): all-`None` in
-    /// any precisely deoptimizing body, whose framestates and residual roots
-    /// must hold real values.
+    /// Block-local cons scalar replacement. Precise exits reconstruct virtual
+    /// pairs; opaque safepoints and outgoing edges retain real stack values.
     pub(crate) cons_repl: Vec<Option<(mir::MirValue, mir::MirValue)>>,
     /// Words the call-args scratch slot must hold: the widest operand set any
     /// `Opaque` marshals (the baseline's arms store `needs` words at `i*8`).
@@ -2011,11 +2047,7 @@ pub(crate) fn plan_mir_leaf(m: &mir::MirFunction) -> MirLeafPlan {
             .any(|(t, _)| m.blocks[t.0 as usize].bytecode_pc <= b.bytecode_pc)
     });
     let precise = has_opaque || has_backedge;
-    let cons_repl = if precise {
-        vec![None; m.value_types.len()]
-    } else {
-        mir::cons_scalar_repl_targets(m)
-    };
+    let cons_repl = mir::cons_scalar_repl_targets(m);
     let has_escaping_cons = insts()
         .any(|i| matches!(i.op, MirOp::Cons(..)) && cons_repl[i.result.0 as usize].is_none());
     let max_call_args = insts()
@@ -2070,10 +2102,10 @@ pub(crate) fn lower_mir_pure(m: &mir::MirFunction) -> Result<CompiledLeaf, Compi
     use mir::MirOp;
 
     // Loops and shim-lowered ops route EVERY guard to STATUS_DEOPT_AT, so a
-    // deopt never replays work across a call or a poll's Lisp hooks. Scalar
-    // replacement stays limited to straight-line pure bodies: a precise
-    // framestate must contain real Values, not virtual cons pairs. Allocation
-    // itself is not a safe point; the back-edge/call polls perform collection.
+    // deopt never replays work across a call or a poll's Lisp hooks. Virtual
+    // conses are reconstructed on cold exits, preserving frame aliases. They
+    // cannot cross a safepoint or outgoing edge. Cons allocation itself never
+    // collects, so reconstruction needs no intermediate GC root publication.
     let plan = plan_mir_leaf(m);
 
     // --- JIT-only module prologue (the wrapper). ----------------------------
@@ -2711,6 +2743,8 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
                             inst,
                             &cval,
                             &cval_raw,
+                            cons_repl,
+                            rt.as_ref(),
                             &mut deopt,
                             &mut pending,
                         )?;
@@ -2756,6 +2790,8 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
                             inst,
                             &cval,
                             &cval_raw,
+                            cons_repl,
+                            rt.as_ref(),
                             &mut deopt,
                             &mut pending,
                         )?;
@@ -2785,6 +2821,8 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
                             inst,
                             &cval,
                             &cval_raw,
+                            cons_repl,
+                            rt.as_ref(),
                             &mut deopt,
                             &mut pending,
                         )?;
@@ -2877,6 +2915,8 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
                                     inst,
                                     &cval,
                                     &cval_raw,
+                                    cons_repl,
+                                    rt.as_ref(),
                                     &mut deopt,
                                     &mut pending,
                                 )?)
@@ -3935,12 +3975,23 @@ pub(crate) struct DeoptCells {
     pub(crate) handlers: core::cell::Cell<i64>,
 }
 
+/// A block-local virtual cons, reconstructed only on a precise deopt exit.
+/// The allocator does not collect; all operands and previously reconstructed
+/// objects remain valid until the complete interpreter stack is installed.
+pub(crate) struct ConsReconstruction {
+    slots: Vec<usize>,
+    car: (ClifValue, bool),
+    cdr: (ClifValue, bool),
+    allocator: FuncRef,
+}
+
 /// A precise-deopt exit block queued at a guard-emitting op: created (and
 /// targeted by that op's guards) during lowering, filled after the bytecode
 /// block terminates. Captures the op's index and the operand stack snapshot
 /// from BEFORE the op popped its operands — the interpreter reruns the
 /// failing op itself.
 pub(crate) struct PendingDeopt {
+    cons_rebuilds: Vec<ConsReconstruction>,
     pub(crate) block: Block,
     pub(crate) pc: usize,
     pub(crate) handlers_len: usize,
@@ -4062,6 +4113,7 @@ pub(crate) fn deopt_site(
         }
     };
     pending.push(PendingDeopt {
+        cons_rebuilds: Vec::new(),
         block,
         pc,
         handlers_len,
@@ -4163,6 +4215,22 @@ pub(crate) fn emit_pending_deopts(
             ),
             None => (pd.pc, pd.stack.as_slice(), pd.stack_raw.as_slice()),
         };
+        // Baseline sites borrow their snapshots unchanged. Only a virtual
+        // cons needs a mutable copy; its aliases share one reconstructed cell.
+        let mut stack = std::borrow::Cow::Borrowed(stack);
+        for cons in &pd.cons_rebuilds {
+            let tag = |fb: &mut FunctionBuilder, (v, raw)| {
+                if raw { retag_fixnum(fb, v) } else { v }
+            };
+            let car = tag(fb, cons.car);
+            let cdr = tag(fb, cons.cdr);
+            let call = fb.ins().call(cons.allocator, &[car, cdr]);
+            let value = fb.inst_results(call)[0];
+            for &slot in &cons.slots {
+                debug_assert!(!stack_raw[slot]);
+                stack.to_mut()[slot] = value;
+            }
+        }
         for (j, &v) in stack.iter().enumerate() {
             // Retag raw fixnum slots in the COLD deopt block (zero hot-path cost):
             // the framestate is read back as tagged Values by run_resumed_frame.

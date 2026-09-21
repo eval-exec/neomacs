@@ -1151,8 +1151,8 @@ pub fn inline_pure_single_block_callees(
 /// (phi) arg, not consed into another cons, not `eq`'d, not an `Opaque` operand,
 /// not an arithmetic/predicate/compare operand. Such a cons can be eliminated with
 /// NO heap allocation — its car/cdr reads forward directly to the operand SSA
-/// values (the caller restricts this to PURE bodies, where a deopt reruns from
-/// start and re-creates the cons, so no framestate ever observes the elided value).
+/// values. Precise deopt records reconstruct the cons in the cold exit;
+/// opaque safepoints and outgoing block edges require real values instead.
 ///
 /// Conservative: any non-CarCdr use marks the cons escaping (`None` — keep the
 /// allocation / bail). A cons consed into ANOTHER cons is treated as escaping (the
@@ -1179,7 +1179,11 @@ pub(crate) fn cons_scalar_repl_targets(m: &MirFunction) -> Vec<Option<(MirValue,
                 }
                 MirOp::Unary(_, a) | MirOp::Pred(_, a) => esc(*a, &mut escapes),
                 MirOp::Opaque { args, .. } => {
-                    for a in args {
+                    for a in args.iter().chain(inst.pre_stack.iter()) {
+                        // A runtime safepoint needs real stack roots. Keep any
+                        // cons live in its framestate, even when it is not a
+                        // direct call operand. Virtual conses stay block-local
+                        // and cannot survive a service poll or Lisp callback.
                         esc(*a, &mut escapes);
                     }
                 }
