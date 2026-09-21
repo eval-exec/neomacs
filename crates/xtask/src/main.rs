@@ -1408,7 +1408,11 @@ fn initial_cargo_build_args(options: &FreshBuildOptions) -> Vec<OsString> {
 #[cfg(target_os = "linux")]
 fn verify_built_product(_options: &FreshBuildOptions, binary: &Path) -> Result<()> {
     let expected = "LinkedGstreamer";
+    // LC_ALL=C: readelf localizes the "Shared library: [...]" tag (e.g.
+    // zh_CN prints "共享库"), which would break the English-only grep below
+    // even when the binary is correctly linked.
     let output = Command::new("readelf")
+        .env("LC_ALL", "C")
         .args([OsStr::new("--dynamic"), binary.as_os_str()])
         .output()
         .map_err(|error| {
