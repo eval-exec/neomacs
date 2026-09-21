@@ -449,12 +449,42 @@ fn cursor_width_for_style(
         .width_px(face_char_w)
 }
 
+/// What an inactive mini-window's layout must render.
+///
+/// GNU's `with_echo_area_buffer` (xdisp.c:12961, :13038) temporarily installs
+/// the echo-area buffer in the mini-window **while a message is displayed**
+/// and restores `w->contents` on unwind; with no message up, the window
+/// renders its own buffer, which GNU keeps pointing at the
+/// permanently-inactive minibuffer `" *Minibuf-0*"` (minibuf.c:1281-1284,
+/// set at startup and re-installed by `minibuffer_unwind` after every
+/// minibuffer exit).  Package code such as `minibuffer-line' (GNU ELPA)
+/// relies on that idle state: it writes status text into `" *Minibuf-0*"`
+/// and the mini-window must show it whenever no message is up.
+pub(crate) enum InactiveMiniWindowSource {
+    /// A message is up (`current_message` non-nil): render the transient
+    /// echo buffer the message text is mirrored into.
+    EchoMessage,
+    /// No message: render the window's own buffer (`" *Minibuf-0*"`).
+    OwnBuffer,
+}
+
+impl InactiveMiniWindowSource {
+    fn for_context(evaluator: &neovm_core::emacs_core::Context) -> Self {
+        if evaluator.has_current_message() {
+            Self::EchoMessage
+        } else {
+            Self::OwnBuffer
+        }
+    }
+}
+
 /// Resolve the buffer and range that this window actually displays.
 ///
 /// GNU's `with_echo_area_buffer` temporarily installs the echo-area buffer in an
-/// inactive mini-window before redisplay measures or walks it.  Resolve that
-/// semantic source once, before fontification and incremental-key creation,
-/// so every phase observes the same buffer identity, ticks, range, and point.
+/// inactive mini-window before redisplay measures or walks it **while a message
+/// is displayed**; resolve that semantic source once, before fontification and
+/// incremental-key creation, so every phase observes the same buffer identity,
+/// ticks, range, and point.
 fn resolve_window_display_source_params(
     evaluator: &mut neovm_core::emacs_core::Context,
     params: &WindowParams,
@@ -493,6 +523,21 @@ fn resolve_window_display_source_params(
             params: params.clone(),
             source: WindowDisplaySource::LiveWindow,
         };
+    }
+
+    // The inactive mini-window renders the echo buffer only while a message
+    // is displayed; once the message clears it must fall back to its own
+    // buffer (`" *Minibuf-0*"`), which is what makes idle mini-window content
+    // — `minibuffer-line' status text — visible.  The match is exhaustive on
+    // purpose: a new source state must decide its buffer here.
+    match InactiveMiniWindowSource::for_context(evaluator) {
+        InactiveMiniWindowSource::OwnBuffer => {
+            return ResolvedWindowDisplaySource {
+                params: params.clone(),
+                source: WindowDisplaySource::LiveWindow,
+            };
+        }
+        InactiveMiniWindowSource::EchoMessage => {}
     }
 
     evaluator.ensure_echo_area_buffers();

@@ -48,6 +48,8 @@ mod issue_383_dashboard_banner;
 mod mark_region_fill;
 #[path = "menu_bar.rs"]
 mod menu_bar;
+#[path = "minibuffer_line.rs"]
+mod minibuffer_line;
 #[path = "minor_mode_order_repro.rs"]
 mod minor_mode_order_repro;
 #[path = "modes.rs"]
