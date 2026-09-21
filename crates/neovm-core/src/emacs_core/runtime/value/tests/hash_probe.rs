@@ -393,3 +393,89 @@ fn re_remembering_a_key_moves_it_between_buckets() {
     storage.set_user_hash(hash_key, 200);
     assert_eq!(storage.user_candidates(200).len(), 1);
 }
+
+/// Hashing a string key must cost the same whatever the string's length.
+///
+/// GNU `hash_char_array' (src/fns.c) seeds with the LENGTH, strides through
+/// at most eight machine words, and adds the last word.  It does not walk the
+/// string.  We fed every byte to the hasher instead, so a table keyed by long
+/// strings paid O(len) on every probe -- including every MISS, where the cost
+/// buys nothing at all: 2,000 `gethash` misses against a 320,000-character key
+/// took 39.7ms against GNU's flat 0.7ms.
+///
+/// Counting the bytes handed to the hasher is the assertion. Nothing about
+/// the ANSWERS changes when the hash walks the whole string, so a correctness
+/// test cannot see this; only the volume can.
+#[test]
+fn hashing_a_string_key_does_not_scale_with_its_length() {
+    #[derive(Default)]
+    struct CountingHasher {
+        bytes: usize,
+    }
+    impl Hasher for CountingHasher {
+        fn finish(&self) -> u64 {
+            0
+        }
+        fn write(&mut self, bytes: &[u8]) {
+            self.bytes += bytes.len();
+        }
+    }
+
+    fn hashed_bytes(len: usize) -> usize {
+        let key = HashKey::Text("x".repeat(len).into_boxed_str());
+        let mut hasher = CountingHasher::default();
+        key.hash(&mut hasher);
+        hasher.bytes
+    }
+
+    let small = hashed_bytes(64);
+    for len in [1_000usize, 100_000, 1_000_000] {
+        assert_eq!(
+            hashed_bytes(len),
+            small,
+            "hashing a {len}-byte key fed a different volume than a 64-byte one"
+        );
+    }
+}
+
+/// The probe and the stored key must still agree after the sampling change --
+/// including for keys built to defeat sampling.
+///
+/// Sampling reads the length, eight strided words and the tail, so the keys
+/// that stress it are ones sharing a long prefix AND a long suffix and
+/// differing only in between.  Those may COLLIDE, which is fine: `equal`
+/// decides.  What must never happen is a key failing to find its own entry.
+#[test]
+fn sampled_string_hashing_still_finds_every_key() {
+    let mut eval = Context::new();
+    // Only special forms and subrs: `Context::new()` is bare, so `push`
+    // and `dolist` (subr.el macros) are not available here.
+    let program = r#"(let ((h (make-hash-table :test 'equal))
+                          (pre (make-string 5000 ?a))
+                          (suf (make-string 5000 ?b))
+                          (keys nil)
+                          (i 0)
+                          (found 0)
+                          (rest nil))
+                      (while (< i 200)
+                        (setq keys (cons (concat pre (number-to-string i) suf) keys))
+                        (setq i (1+ i)))
+                      (setq rest keys)
+                      (while rest
+                        (puthash (car rest) (length (car rest)) h)
+                        (setq rest (cdr rest)))
+                      (setq rest keys)
+                      (while rest
+                        (if (gethash (car rest) h) (setq found (1+ found)))
+                        (setq rest (cdr rest)))
+                      (list (hash-table-count h)
+                            found
+                            (gethash (concat pre "999999" suf) h)
+                            (progn (setq rest keys)
+                                   (while rest
+                                     (puthash (car rest) 0 h)
+                                     (setq rest (cdr rest)))
+                                   (hash-table-count h))))"#;
+    let observed = crate::emacs_core::format_eval_result(&eval.eval_str(program));
+    assert_eq!(observed, "OK (200 200 nil 200)");
+}

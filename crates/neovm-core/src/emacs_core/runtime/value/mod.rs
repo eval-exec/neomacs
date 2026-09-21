@@ -1595,10 +1595,12 @@ impl ValueKeyProbe {
             ValueKind::String => match self.test {
                 HashTableTest::Equal => {
                     16u8.hash(state);
-                    value
-                        .as_utf8_str()
-                        .expect("fast probe admits only UTF-8 strings under `equal`")
-                        .hash(state);
+                    hash_char_array(
+                        value
+                            .as_utf8_str()
+                            .expect("fast probe admits only UTF-8 strings under `equal`"),
+                        state,
+                    );
                 }
                 HashTableTest::Eq | HashTableTest::Eql => identity(state),
             },
@@ -1667,6 +1669,44 @@ impl hashbrown::Equivalent<HashKey> for ValueKeyProbe {
     fn equivalent(&self, key: &HashKey) -> bool {
         self.value_matches(self.value, key)
     }
+}
+
+/// Feed `text` to `state` the way GNU `hash_char_array` (src/fns.c) does.
+///
+/// GNU deliberately does NOT hash every byte. It seeds with the LENGTH,
+/// strides through at most eight machine words, and then adds the LAST word
+/// -- "because that is often the part where strings differ", as its comment
+/// puts it. A hash table keyed by long strings would otherwise pay O(len) on
+/// every probe, including every miss: 2,000 `gethash` misses against a
+/// 320,000-character key took 39.7ms here against GNU's flat 0.7ms.
+///
+/// Sampling can only produce COLLISIONS, never wrong answers -- `equal` still
+/// compares the strings in full, so a collision costs one comparison.
+///
+/// The stored key (`HashKey::Text`) and the borrowed probe (`ValueKeyProbe`)
+/// must feed the hasher IDENTICALLY or a lookup can never find its own entry,
+/// so both go through this one function.
+fn hash_char_array<H: std::hash::Hasher>(text: &str, state: &mut H) {
+    const WORD: usize = size_of::<u64>();
+    let bytes = text.as_bytes();
+    state.write_usize(bytes.len());
+    if bytes.len() < WORD {
+        state.write(bytes);
+        return;
+    }
+    // GNU: `step = max (sizeof hash, (end - p) >> 3)`, i.e. at most 8 strides.
+    let step = WORD.max(bytes.len() >> 3);
+    let mut at = 0;
+    while at + WORD <= bytes.len() {
+        state.write_u64(u64::from_ne_bytes(
+            bytes[at..at + WORD].try_into().expect("WORD bytes"),
+        ));
+        at += step;
+    }
+    let tail = bytes.len() - WORD;
+    state.write_u64(u64::from_ne_bytes(
+        bytes[tail..].try_into().expect("WORD bytes"),
+    ));
 }
 
 impl std::hash::Hash for HashKey {
@@ -1738,7 +1778,7 @@ impl std::hash::Hash for HashKey {
                 pos.hash(state);
             }
             HashKey::Cycle(index) => index.hash(state),
-            HashKey::Text(text) => text.hash(state),
+            HashKey::Text(text) => hash_char_array(text, state),
         }
     }
 }
