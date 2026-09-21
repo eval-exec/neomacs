@@ -3950,6 +3950,21 @@ impl Buffer {
         self.text.chain_walk_collect().len()
     }
 
+    /// The chain's marker ids, head to tail.
+    ///
+    /// Chain ORDER is how "did this operation re-chain the marker?" becomes
+    /// observable: a re-splice always lands at the head.
+    #[cfg(test)]
+    pub(crate) fn marker_chain_ids(&self) -> Vec<Option<u64>> {
+        self.text
+            .chain_walk_collect()
+            .into_iter()
+            // SAFETY: `chain_walk_collect` yields live chain-owned MarkerObj
+            // pointers and nothing mutates the chain in between.
+            .map(|ptr| unsafe { (*ptr).data.marker_id })
+            .collect()
+    }
+
     #[cfg(test)]
     pub(crate) unsafe fn marker_chain_contains_raw_for_test(
         &self,
@@ -3993,6 +4008,21 @@ impl Buffer {
 
     pub fn move_marker_to_anchor(&self, marker_id: u64, position: TextPositionAnchor) {
         self.text.move_marker_to_anchor(marker_id, position);
+    }
+
+    /// Move a marker that is ALREADY on this buffer's chain to `pos`, GNU
+    /// `attach_marker's same-buffer arm (src/marker.c).
+    ///
+    /// The anchor is canonicalised exactly as `register_marker_at_anchor`
+    /// does, so the in-place and the re-chaining path cannot disagree about
+    /// where a given byte position lands.
+    pub fn move_marker_ptr_to_emacs_byte_pos(
+        &self,
+        marker_ptr: *mut crate::tagged::header::MarkerObj,
+        pos: EmacsBytePos,
+    ) {
+        let position = self.marker_anchor_for_emacs_byte_pos(pos);
+        self.text.move_marker_ptr_to_anchor(marker_ptr, position);
     }
 
     pub fn update_marker_insertion_type(&mut self, marker_id: u64, insertion_type: InsertionType) {
@@ -7235,6 +7265,19 @@ impl BufferManager {
         ptr: *mut crate::tagged::header::MarkerObj,
     ) -> Option<()> {
         self.buffers.get(&buffer_id)?.unlink_marker_ptr(ptr);
+        Some(())
+    }
+
+    /// See `Buffer::move_marker_ptr_to_emacs_byte_pos`.
+    pub fn move_marker_ptr_to_emacs_byte_pos(
+        &self,
+        buffer_id: BufferId,
+        marker_ptr: *mut crate::tagged::header::MarkerObj,
+        pos: EmacsBytePos,
+    ) -> Option<()> {
+        self.buffers
+            .get(&buffer_id)?
+            .move_marker_ptr_to_emacs_byte_pos(marker_ptr, pos);
         Some(())
     }
 

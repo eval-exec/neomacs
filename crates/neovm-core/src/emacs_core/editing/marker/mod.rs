@@ -683,6 +683,52 @@ fn register_marker_in_buffer(
     register_marker_in_buffers(&mut eval.buffers, marker, buffer_id, position);
 }
 
+/// Which half of GNU `attach_marker' (src/marker.c) a registration needs.
+///
+/// GNU writes `m->charpos'/`m->bytepos' unconditionally and guards only the
+/// chain work:
+///
+/// ```c
+/// m->charpos = charpos;
+/// m->bytepos = bytepos;
+/// if (m->buffer != b)
+///   {
+///     unchain_marker (m);
+///     m->buffer = b;
+///     m->next = BUF_MARKERS (b);
+///     BUF_MARKERS (b) = m;
+///   }
+/// ```
+///
+/// Naming the two cases keeps the guard from silently degrading into "always
+/// re-chain", which is what it was: unlinking walks the chain to find the
+/// node, and the splice's precondition check walks it again, so `set-marker'
+/// cost O(markers in the buffer) for a marker that never moved buffers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MarkerAttach {
+    /// Already on the target buffer's chain: rewrite the position, nothing
+    /// else. GNU's `m->buffer == b' fall-through.
+    InPlace,
+    /// A different buffer, or not chained anywhere yet: unchain, then splice
+    /// onto the target. GNU's `m->buffer != b' arm.
+    Rechain,
+}
+
+impl MarkerAttach {
+    fn classify(marker: &Value, buffer_id: BufferId) -> Self {
+        // `chained` is the O(1) answer to "is this marker on a chain?"; the
+        // buffer it names says WHICH chain. Both must agree with the target
+        // before the chain work can be skipped.
+        let on_target_chain = marker_buffer_id(marker) == Some(buffer_id)
+            && marker.as_marker_data().is_some_and(|data| data.chained);
+        if on_target_chain {
+            Self::InPlace
+        } else {
+            Self::Rechain
+        }
+    }
+}
+
 fn register_marker_in_buffers(
     buffers: &mut BufferManager,
     marker: &Value,
@@ -703,6 +749,24 @@ fn register_marker_in_buffers(
 
     // Get or assign a marker-id
     let existing_mid = marker_id_value(marker);
+
+    // GNU `attach_marker' (src/marker.c) always writes the position and only
+    // touches the chain when the marker changes buffer. Taking the same
+    // shortcut is what keeps `set-marker' O(1): unlinking is a walk, and so
+    // is the splice's precondition check.
+    if let (Some(buf_id), Some(pos)) = (buffer_id, position)
+        && existing_mid.is_some()
+        && MarkerAttach::classify(marker, buf_id) == MarkerAttach::InPlace
+        && let Some(ptr) = marker
+            .as_veclike_ptr()
+            .map(|p| p as *mut crate::tagged::header::MarkerObj)
+        && let Some(byte_pos) = buffers.get(buf_id).map(|buf| lisp_pos_to_byte(buf, pos))
+    {
+        // The id, the buffer and the insertion type are all unchanged: the
+        // marker never left the chain it is already on.
+        let _ = buffers.move_marker_ptr_to_emacs_byte_pos(buf_id, ptr, byte_pos);
+        return;
+    }
 
     // Remove old registration from all buffers (this also unchains the
     // marker on the old buffer's intrusive chain, clearing

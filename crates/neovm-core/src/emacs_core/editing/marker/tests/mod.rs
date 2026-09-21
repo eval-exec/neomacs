@@ -323,3 +323,100 @@ fn set_marker_uses_live_source_marker_position_after_insertions() {
         "OK 5"
     );
 }
+
+/// `set-marker` into the buffer the marker is ALREADY in must not touch the
+/// buffer's marker chain.
+///
+/// GNU `attach_marker' (src/marker.c) writes `m->charpos'/`m->bytepos'
+/// unconditionally and only unchains + re-chains when `m->buffer != b'.  We
+/// unlinked and re-spliced every time, and BOTH of those walk the buffer's
+/// intrusive marker chain -- so `set-marker' cost O(markers in the buffer).
+///
+/// Moving one marker over and over hides it, because the re-splice puts that
+/// marker back at the head where the next unlink finds it immediately.  The
+/// shape that bites is cyclic access -- walking a list of markers and moving
+/// each, which is what org and magit do with their per-section marker pairs.
+/// 40,000 such calls took 12.7ms over a 100-marker chain but 163.8ms over a
+/// 4,000-marker chain, against a FLAT 8.5ms in GNU Emacs 31.1.
+///
+/// Chain order is the observable: a re-splice hoists the moved marker to the
+/// head, so asserting the order survived pins the in-place update.
+#[test]
+fn set_marker_within_the_same_buffer_leaves_the_marker_chain_alone() {
+    crate::test_utils::init_test_tracing();
+    MARKER_TEST_CTX.with(|slot| {
+        let mut ctx = Box::new(super::super::eval::Context::new());
+        let buffer_id = ctx.buffers.create_buffer("marker-chain-order");
+        assert!(ctx.buffers.switch_current(buffer_id));
+        ctx.buffers
+            .insert_lisp_string_into_buffer(
+                buffer_id,
+                &crate::heap_types::LispString::from_utf8("abcdefghij"),
+            )
+            .expect("insert buffer text");
+
+        // Three markers, spliced at the head in turn, so the chain reads
+        // [6, 4, 2] and the one we move is in the MIDDLE.
+        let markers: Vec<Value> = [2i64, 4, 6]
+            .into_iter()
+            .map(|pos| {
+                let pos = LispCharPos1::new(pos);
+                let marker = make_marker_value(Some(buffer_id), Some(pos), false);
+                register_marker_in_buffers(&mut ctx.buffers, &marker, Some(buffer_id), Some(pos));
+                marker
+            })
+            .collect();
+
+        let before = ctx.buffers.get(buffer_id).unwrap().marker_chain_ids();
+        assert_eq!(before.len(), 3, "three markers are on the chain");
+
+        builtin_set_marker_in_buffers(&mut ctx.buffers, &[markers[1], Value::fixnum(8)])
+            .expect("set-marker");
+
+        let after = ctx.buffers.get(buffer_id).unwrap().marker_chain_ids();
+        assert_eq!(
+            before, after,
+            "set-marker inside the same buffer re-chained the marker"
+        );
+        let moved = builtin_marker_position(&mut ctx, vec![markers[1]]).expect("marker-position");
+        assert_eq!(moved.as_fixnum(), Some(8), "the position still moved");
+        let others: Vec<Option<i64>> = [0usize, 2]
+            .into_iter()
+            .map(|i| {
+                builtin_marker_position(&mut ctx, vec![markers[i]])
+                    .expect("marker-position")
+                    .as_fixnum()
+            })
+            .collect();
+        assert_eq!(others, vec![Some(2), Some(6)], "the others did not move");
+
+        // Changing buffer still unchains and re-chains: GNU's `m->buffer != b'
+        // arm is the half that must survive the shortcut.
+        let other_id = ctx.buffers.create_buffer("marker-chain-order-other");
+        ctx.buffers
+            .insert_lisp_string_into_buffer(
+                other_id,
+                &crate::heap_types::LispString::from_utf8("zyxwv"),
+            )
+            .expect("insert other buffer text");
+        builtin_set_marker_in_buffers(
+            &mut ctx.buffers,
+            &[markers[1], Value::fixnum(3), Value::make_buffer(other_id)],
+        )
+        .expect("set-marker across buffers");
+        assert_eq!(
+            ctx.buffers.get(buffer_id).unwrap().marker_chain_len(),
+            2,
+            "the marker left the old buffer's chain"
+        );
+        assert_eq!(
+            ctx.buffers.get(other_id).unwrap().marker_chain_len(),
+            1,
+            "the marker joined the new buffer's chain"
+        );
+        let moved = builtin_marker_position(&mut ctx, vec![markers[1]]).expect("marker-position");
+        assert_eq!(moved.as_fixnum(), Some(3));
+
+        *slot.borrow_mut() = Some(ctx);
+    });
+}

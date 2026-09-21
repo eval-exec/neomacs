@@ -2200,6 +2200,27 @@ impl BufferText {
         }
     }
 
+    /// GNU `attach_marker's position write (src/marker.c): `m->charpos' and
+    /// `m->bytepos', and nothing else.
+    ///
+    /// The `marker_id` sibling above has to FIND the node first, and finding
+    /// it is a chain walk. Every caller that reached here from `set-marker'
+    /// already holds the pointer and must not pay for that walk.
+    pub(crate) fn move_marker_ptr_to_anchor(
+        &self,
+        marker: *mut crate::tagged::header::MarkerObj,
+        position: TextPositionAnchor,
+    ) {
+        // SAFETY: `marker` is a live GC-owned MarkerObj that the caller has
+        // established is on THIS buffer's chain (`data.chained` set and
+        // `data.buffer` equal to this buffer), so the heap still owns the
+        // allocation and the write targets chain-owned fields only.
+        unsafe {
+            set_marker_data_anchor(&mut (*marker).data, position);
+            (*marker).data.last_position_valid = true;
+        }
+    }
+
     /// Walk this buffer's intrusive marker chain and return the raw
     /// MarkerObj pointer for the first node whose `marker_id` matches,
     /// or null when none found. Used by pdump load (v26) to resolve
