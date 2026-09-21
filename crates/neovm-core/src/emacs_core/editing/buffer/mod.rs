@@ -4833,12 +4833,20 @@ fn get_byte_from_multibyte_char_code(code: u32) -> EvalResult {
     ))
 }
 
+#[cfg(test)]
 pub(crate) fn builtin_byte_to_position(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("byte-to-position", &args, 1)?;
-    let byte_pos = expect_fixnum(&args[0])?;
+    builtin_byte_to_position_1(eval, args[0])
+}
+
+pub(crate) fn builtin_byte_to_position_1(
+    eval: &mut super::eval::Context,
+    arg: Value,
+) -> EvalResult {
+    let byte_pos = expect_fixnum(&arg)?;
     if byte_pos <= 0 {
         return Ok(Value::NIL);
     }
@@ -4872,12 +4880,17 @@ pub(crate) fn builtin_byte_to_position(
     )))
 }
 
+#[cfg(test)]
 pub(crate) fn builtin_position_bytes(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
 ) -> EvalResult {
     expect_args("position-bytes", &args, 1)?;
-    let pos = expect_integer_or_marker_in_buffers(&eval.buffers, &args[0])?;
+    builtin_position_bytes_1(eval, args[0])
+}
+
+pub(crate) fn builtin_position_bytes_1(eval: &mut super::eval::Context, arg: Value) -> EvalResult {
+    let pos = expect_integer_or_marker_in_buffers(&eval.buffers, &arg)?;
 
     let buf = eval
         .buffers

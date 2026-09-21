@@ -776,15 +776,15 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         builtin_char_before_1,
         FixedMin1::Zero,
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed1(
         "byte-to-position",
-        NativeFn::ContextVec(builtin_byte_to_position),
-        SubrArity::new(1, Some(1)),
+        builtin_byte_to_position_1,
+        FixedMin1::One,
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed1(
         "position-bytes",
-        NativeFn::ContextVec(builtin_position_bytes),
-        SubrArity::new(1, Some(1)),
+        builtin_position_bytes_1,
+        FixedMin1::One,
     ));
     ctx.register_subr(SubrSpec::new(
         "get-byte",

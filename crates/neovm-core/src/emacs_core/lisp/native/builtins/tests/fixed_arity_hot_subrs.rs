@@ -6,7 +6,7 @@ use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::intern;
 use crate::tagged::header::SubrFn;
 
-const HOT_FIXED_ARITY_SUBRS: [(&str, usize); 69] = [
+const HOT_FIXED_ARITY_SUBRS: [(&str, usize); 71] = [
     ("get-char-property", 3),
     ("match-beginning", 1),
     ("widen", 0),
@@ -29,6 +29,8 @@ const HOT_FIXED_ARITY_SUBRS: [(&str, usize); 69] = [
     ("skip-syntax-backward", 2),
     ("char-after", 1),
     ("char-before", 1),
+    ("byte-to-position", 1),
+    ("position-bytes", 1),
     ("set-syntax-table", 1),
     ("syntax-table", 0),
     ("subr-arity", 1),
