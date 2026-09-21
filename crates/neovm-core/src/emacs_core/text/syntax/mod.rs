@@ -5627,6 +5627,95 @@ pub(crate) fn builtin_forward_word(
 /// `(forward-sexp &optional COUNT)` — move point forward over COUNT balanced
 /// expressions.
 #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
+/// Scan over sexps with GNU's LAZY propertize target.
+///
+/// GNU asks `syntax-propertize` for `min (zv, charpos + 1)`, lets it pick its
+/// own chunk, scans to that frontier, and asks again only on crossing it
+/// (src/syntax.c:266 and `UPDATE_SYNTAX_TABLE_FORWARD`). Asking for the whole
+/// accessible tail instead re-propertized the rest of the buffer on EVERY
+/// motion: after an edit a fifth of the way into an 894KB elisp file,
+/// `forward-sexp` drove `syntax-propertize--done` to 894,490 where GNU left it
+/// at 180,925 -- 715,592 characters of redundant Lisp per motion.
+///
+/// A backward scan never examines text past its start, so it keeps the cheap
+/// target. `forward-comment` in this file already had this same whole-tail
+/// mistake fixed; this is that loop, shared.
+fn scan_sexps_lazily(
+    eval: &mut super::eval::Context,
+    from_byte: usize,
+    effective_count: i64,
+    honor: bool,
+) -> Result<Option<usize>, Flow> {
+    let run = |eval: &mut super::eval::Context| -> Result<Option<usize>, Flow> {
+        let props = SyntaxProperties::for_scan(honor, &eval.obarray, &eval.buffers);
+        let policy = SexpScanPolicy::for_context(eval);
+        let buf = eval
+            .buffers
+            .current_buffer()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let table = SyntaxTable::for_buffer(buf);
+        scan_sexps_with_options(buf, &table, from_byte, effective_count, props, policy)
+            .map_err(|err| signal(LispCondition::ScanError, err.signal_data()))
+    };
+
+    if !honor {
+        return run(eval);
+    }
+
+    let (from_char, end_char) = {
+        let buf = eval
+            .buffers
+            .current_buffer()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let region = buf.accessible_char_region();
+        (
+            buf.emacs_byte_pos_to_char_pos_clamped(EmacsBytePos::new(from_byte))
+                .get(),
+            region.end().get(),
+        )
+    };
+
+    if effective_count < 0 {
+        maybe_syntax_propertize_for_scan(eval, from_char.saturating_add(1))?;
+        return run(eval);
+    }
+
+    let mut target = from_char.saturating_add(1);
+    let mut last_window_end = 0usize;
+    loop {
+        maybe_syntax_propertize_for_scan(eval, target)?;
+        let mut window_end = syntax_propertize_frontier_for_scan(eval, from_char, end_char);
+        if window_end <= last_window_end {
+            // The frontier did not advance; take the rest as is rather than spin.
+            window_end = end_char;
+        }
+        last_window_end = window_end;
+        let found = run(eval)?;
+        // Accept only an answer inside propertized text: past the frontier the
+        // scan reads properties that have not been applied yet. A miss is
+        // re-run against the wider window for the same reason.
+        let settled = window_end >= end_char
+            || match found {
+                Some(byte) => {
+                    let char_pos = eval
+                        .buffers
+                        .current_buffer()
+                        .map(|buf| {
+                            buf.emacs_byte_pos_to_char_pos_clamped(EmacsBytePos::new(byte))
+                                .get()
+                        })
+                        .unwrap_or(end_char);
+                    char_pos.saturating_add(1) <= window_end
+                }
+                None => false,
+            };
+        if settled {
+            return Ok(found);
+        }
+        target = window_end.saturating_add(2);
+    }
+}
+
 pub(crate) fn builtin_forward_sexp(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
@@ -5646,25 +5735,17 @@ pub(crate) fn builtin_forward_sexp(
     };
 
     let honor = parse_sexp_lookup_properties_enabled(eval);
-    if honor {
-        let target = eval
-            .buffers
-            .current_buffer()
-            .map(|buf| buf.accessible_char_region().end().get().saturating_add(1))
-            .unwrap_or(1);
-        maybe_syntax_propertize_for_scan(eval, target)?;
-    }
-    let props = SyntaxProperties::for_scan(honor, &eval.obarray, &eval.buffers);
+    let from = eval
+        .buffers
+        .current_buffer()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
+        .point_emacs_byte_pos();
+    let found = scan_sexps_lazily(eval, from.get(), count, honor)?;
     let buf = eval
         .buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    let table = SyntaxTable::for_buffer(buf);
-    let from = buf.point_emacs_byte_pos();
-    let policy = SexpScanPolicy::for_context(eval);
-    let new_pos = match scan_sexps_with_options(buf, &table, from.get(), count, props, policy)
-        .map_err(|err| signal(LispCondition::ScanError, err.signal_data()))?
-    {
+    let new_pos = match found {
         Some(pos) => EmacsBytePos::new(pos),
         None if count < 0 => buf.accessible_emacs_byte_region().start(),
         None => buf.accessible_emacs_byte_region().end(),
@@ -5700,26 +5781,18 @@ pub(crate) fn builtin_backward_sexp(
     };
 
     let honor = parse_sexp_lookup_properties_enabled(eval);
-    if honor {
-        let target = eval
-            .buffers
-            .current_buffer()
-            .map(|buf| buf.accessible_char_region().end().get().saturating_add(1))
-            .unwrap_or(1);
-        maybe_syntax_propertize_for_scan(eval, target)?;
-    }
-    let props = SyntaxProperties::for_scan(honor, &eval.obarray, &eval.buffers);
+    let from = eval
+        .buffers
+        .current_buffer()
+        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?
+        .point_emacs_byte_pos();
+    // backward-sexp with positive count => scan_sexps with negative count
+    let found = scan_sexps_lazily(eval, from.get(), -count, honor)?;
     let buf = eval
         .buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    let table = SyntaxTable::for_buffer(buf);
-    let from = buf.point_emacs_byte_pos();
-    // backward-sexp with positive count => scan_sexps with negative count
-    let policy = SexpScanPolicy::for_context(eval);
-    let new_pos = match scan_sexps_with_options(buf, &table, from.get(), -count, props, policy)
-        .map_err(|err| signal(LispCondition::ScanError, err.signal_data()))?
-    {
+    let new_pos = match found {
         Some(pos) => EmacsBytePos::new(pos),
         None if count < 0 => buf.accessible_emacs_byte_region().end(),
         None => buf.accessible_emacs_byte_region().start(),
@@ -5791,43 +5864,86 @@ pub(crate) fn builtin_scan_lists_3(
     };
 
     let honor = parse_sexp_lookup_properties_enabled(ctx);
-    if honor {
-        // A backward scan (COUNT < 0) never examines positions past FROM, so
-        // propertizing through FROM suffices (GNU parse_sexp_propertize is
-        // lazy and would stop there); only forward scans need the
-        // conservative whole-accessible target.
-        let target = ctx
+
+    let (from_char, end_char) = {
+        let buf = ctx
             .buffers
             .current_buffer()
-            .map(|buf| {
-                if count < 0 {
-                    (from.max(1) as usize).saturating_add(1)
-                } else {
-                    buf.accessible_char_region().end().get().saturating_add(1)
-                }
-            })
-            .unwrap_or(1);
-        maybe_syntax_propertize_for_scan(ctx, target)?;
-    }
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let accessible_chars = buf.accessible_char_region();
+        let point_min = accessible_chars.start_lisp().as_i64();
+        let point_max = accessible_chars.end_lisp().as_i64();
+        let clipped_from = from.clamp(point_min, point_max);
+        (
+            LispCharPos1::new(clipped_from).to_char_pos().get(),
+            accessible_chars.end().get(),
+        )
+    };
 
-    let props = SyntaxProperties::for_scan(honor, &ctx.obarray, &ctx.buffers);
-    let buf = ctx
-        .buffers
-        .current_buffer()
-        .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    let table = SyntaxTable::for_buffer(buf);
-
-    let accessible_chars = buf.accessible_char_region();
-    let point_min = accessible_chars.start_lisp().as_i64();
-    let point_max = accessible_chars.end_lisp().as_i64();
-    let clipped_from = from.clamp(point_min, point_max);
-    let from_char = LispCharPos1::new(clipped_from).to_char_pos().get();
-
-    let policy = SexpScanPolicy::for_context(ctx);
-    match scan_lists_with_options(buf, &table, from_char, count, depth, props, policy) {
+    // Run the scan against whatever text is propertized now, recomputing the
+    // resolver inputs first: propertizing ran arbitrary Lisp.
+    let mut scan = |ctx: &mut super::eval::Context| {
+        let props = SyntaxProperties::for_scan(honor, &ctx.obarray, &ctx.buffers);
+        let policy = SexpScanPolicy::for_context(ctx);
+        let buf = ctx
+            .buffers
+            .current_buffer()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let table = SyntaxTable::for_buffer(buf);
+        Ok(scan_lists_with_options(
+            buf, &table, from_char, count, depth, props, policy,
+        ))
+    };
+    let finish = |outcome: Result<Option<usize>, ScanListError>| match outcome {
         Ok(Some(new_char)) => Ok(Value::fixnum(char_pos_to_lisp_i64(new_char))),
         Ok(None) => Ok(Value::NIL),
         Err(err) => Err(signal(LispCondition::ScanError, err.signal_data())),
+    };
+
+    if !honor {
+        return finish(scan(ctx)?);
+    }
+    if count < 0 {
+        // A backward scan never examines positions past FROM, so propertizing
+        // through FROM suffices -- GNU's `parse_sexp_propertize` is lazy and
+        // would stop there too.
+        maybe_syntax_propertize_for_scan(ctx, (from.max(1) as usize).saturating_add(1))?;
+        return finish(scan(ctx)?);
+    }
+
+    // Forward: GNU asks `syntax-propertize` for `min (zv, charpos + 1)` and
+    // lets it choose its own chunk, then scans to that frontier and asks
+    // again only on crossing it (src/syntax.c:266, and
+    // `UPDATE_SYNTAX_TABLE_FORWARD`). Asking for the whole accessible tail
+    // instead re-propertized the rest of the buffer on EVERY call: after an
+    // edit 1/5 into an 894KB elisp file, `forward-sexp` drove
+    // `syntax-propertize--done` to 894,490 where GNU left it at 180,925 --
+    // 715,592 characters of redundant Lisp per motion, 2,820us against GNU's
+    // 427us. `forward-comment` above already had this exact mistake fixed;
+    // this is the same loop.
+    let mut target = (from.max(1) as usize).saturating_add(1);
+    let mut last_window_end = 0usize;
+    loop {
+        maybe_syntax_propertize_for_scan(ctx, target)?;
+        let mut window_end = syntax_propertize_frontier_for_scan(ctx, from_char, end_char);
+        if window_end <= last_window_end {
+            // The frontier did not advance; scan the rest as is rather than
+            // spin (GNU: "internal--syntax-propertize did not move
+            // syntax-propertize--done").
+            window_end = end_char;
+        }
+        last_window_end = window_end;
+        let outcome = scan(ctx)?;
+        // Accept only an answer that lies inside propertized text: past the
+        // frontier the scan is reading properties that have not been applied
+        // yet. A miss or a scan error is re-run against the wider window for
+        // the same reason.
+        let settled = window_end >= end_char
+            || matches!(&outcome, Ok(Some(new_char)) if new_char.saturating_add(1) <= window_end);
+        if settled {
+            return finish(outcome);
+        }
+        target = window_end.saturating_add(2);
     }
 }
 
@@ -5877,45 +5993,29 @@ pub(crate) fn builtin_scan_sexps_2(
     };
 
     let honor = parse_sexp_lookup_properties_enabled(ctx);
-    if honor {
-        // A backward scan (COUNT < 0) never examines positions past FROM, so
-        // propertizing through FROM suffices (GNU parse_sexp_propertize is
-        // lazy and would stop there); only forward scans need the
-        // conservative whole-accessible target.
-        let target = ctx
+
+    let from_byte = {
+        let buf = ctx
             .buffers
             .current_buffer()
-            .map(|buf| {
-                if count < 0 {
-                    (from.max(1) as usize).saturating_add(1)
-                } else {
-                    buf.accessible_char_region().end().get().saturating_add(1)
-                }
-            })
-            .unwrap_or(1);
-        maybe_syntax_propertize_for_scan(ctx, target)?;
-    }
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let from_char = LispCharPos1::new(from)
+            .to_char_pos()
+            .min(buf.total_char_end_pos());
+        buffer_char_to_emacs_byte_pos(buf, from_char)
+    };
 
-    let props = SyntaxProperties::for_scan(honor, &ctx.obarray, &ctx.buffers);
+    let found = scan_sexps_lazily(ctx, from_byte.get(), count, honor)?;
     let buf = ctx
         .buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-    let table = SyntaxTable::for_buffer(buf);
-
-    let from_char = LispCharPos1::new(from)
-        .to_char_pos()
-        .min(buf.total_char_end_pos());
-    let from_byte = buffer_char_to_emacs_byte_pos(buf, from_char);
-
-    let policy = SexpScanPolicy::for_context(ctx);
-    match scan_sexps_with_options(buf, &table, from_byte.get(), count, props, policy) {
-        Ok(Some(new_byte)) => Ok(Value::fixnum(buffer_byte_to_lisp_pos(
+    match found {
+        Some(new_byte) => Ok(Value::fixnum(buffer_byte_to_lisp_pos(
             buf,
             EmacsBytePos::new(new_byte),
         ))),
-        Ok(None) => Ok(Value::NIL),
-        Err(err) => Err(signal(LispCondition::ScanError, err.signal_data())),
+        None => Ok(Value::NIL),
     }
 }
 
