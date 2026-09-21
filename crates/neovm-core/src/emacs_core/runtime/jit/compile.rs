@@ -3078,13 +3078,42 @@ fn emit_backedge_jump(
     handlers: &[HandlerStatic],
     pending: &mut Vec<PendingDispatch>,
 ) {
+    let vals: Vec<ClifValue> = (0..target_depth).map(|k| fb.use_var(vars[k])).collect();
+    emit_backedge_jump_with_args(
+        fb,
+        rt,
+        counter_slot,
+        signal_exit,
+        &vals,
+        target_block,
+        &[],
+        handlers,
+        pending,
+    );
+}
+
+/// Shared poll for the baseline's slot variables and MIR's explicit edge
+/// arguments. `vals` is the tagged live stack at the target; `target_args`
+/// carries it into MIR block parameters (empty for the baseline).
+#[allow(clippy::too_many_arguments)]
+fn emit_backedge_jump_with_args(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    counter_slot: StackSlot,
+    signal_exit: &mut Option<Block>,
+    vals: &[ClifValue],
+    target_block: Block,
+    target_args: &[BlockArg],
+    handlers: &[HandlerStatic],
+    pending: &mut Vec<PendingDispatch>,
+) {
     let c = fb.ins().stack_load(rt.ptr_ty, types::I64, counter_slot, 0);
     let c1 = lowering::iadd_imm_p(fb, c, 1);
     let c1m = lowering::band_imm_p(fb, c1, 0xFF);
     fb.ins().stack_store(rt.ptr_ty, c1m, counter_slot, 0);
     let wrapped = lowering::icmp_imm_p(fb, IntCC::Equal, c1m, 0);
     let poll = fb.create_block();
-    fb.ins().brif(wrapped, poll, &[], target_block, &[]);
+    fb.ins().brif(wrapped, poll, &[], target_block, target_args);
 
     fb.switch_to_block(poll);
     fb.seal_block(poll);
@@ -3096,22 +3125,20 @@ fn emit_backedge_jump(
     lowering::rootwin_carry_reset();
     let one = fb.ins().iconst(types::I64, 1);
     fb.ins().stack_store(rt.ptr_ty, one, counter_slot, 0);
-    // The live operand stack at the jump (already written to vars): rooted
-    // across the poll, and the handler-entry snapshot if a quit signal lands
-    // in a protected extent (condition-case catching `quit` around a loop).
-    let vals: Vec<ClifValue> = (0..target_depth).map(|k| fb.use_var(vars[k])).collect();
+    // Root the target stack across the poll, including a handler-entry
+    // snapshot when a baseline loop is inside a protected extent.
     let saved = if vals.is_empty() {
         CondRoots::NONE
     } else {
-        emit_cond_residual_roots_pre(fb, rt, &vals)
+        emit_cond_residual_roots_pre(fb, rt, vals)
     };
     let vmctx = fb.use_var(rt.vmctx_var);
     let call = fb.ins().call(rt.refs.backedge, &[vmctx]);
     let status = fb.inst_results(call)[0];
     emit_cond_residual_roots_post(fb, rt, saved);
-    let se = signal_target_for_site(fb, signal_exit, handlers, pending, &vals);
+    let se = signal_target_for_site(fb, signal_exit, handlers, pending, vals);
     let ok = lowering::icmp_imm_p(fb, IntCC::Equal, status, STATUS_OK);
-    fb.ins().brif(ok, target_block, &[], se, &[]);
+    fb.ins().brif(ok, target_block, target_args, se, &[]);
 }
 
 /// Lower a leaf bytecode body taking `arity` fixed arguments to native code.
