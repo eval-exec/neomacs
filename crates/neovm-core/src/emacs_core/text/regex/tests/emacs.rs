@@ -1932,3 +1932,82 @@ fn prefilter_is_built_by_the_first_long_forward_search() {
         "a long search builds and uses the prefilter"
     );
 }
+
+/// A BOUNDED search must not scan past its bound, and must still find a match
+/// that ends exactly at it.
+///
+/// GNU's fastmap skip loop is bounded by the remaining RANGE
+/// (`while (range > lim && !fastmap[*d]) { d++; range--; }`,
+/// src/regex-emacs.c `re_search_2`), so a bounded search costs the bound, not
+/// the buffer.  Our literal prefilter ran its SIMD scan to `text_len` and only
+/// then rejected the candidate for being past `end`, which made every bounded
+/// FAILING search cost the whole buffer: 34.6ms over 800KB against GNU's flat
+/// 0.7ms.  Font-lock issues exactly this shape (a bounded search to LIMIT that
+/// usually fails) on every fontified chunk.
+///
+/// The boundary rows are the ones that matter: the new scan bound is
+/// `end + offset + longest-needle`, and if that arithmetic is wrong by even
+/// one byte the match ending exactly at the bound disappears.  Pinned to GNU
+/// Emacs 31.1.
+#[test]
+fn a_bounded_search_finds_a_match_ending_exactly_at_the_bound() {
+    crate::test_utils::init_test_tracing();
+    let observed = crate::test_utils::runtime_startup_eval_one(
+        r#"(with-temp-buffer
+             ;; Span well past PREFILTER_MIN_BUILD_SPAN so the prefilter is live.
+             (insert (make-string 4000 ?a))
+             (goto-char 2001) (delete-char 4) (insert "XYZZ")
+             (list
+              (progn (goto-char (point-min)) (re-search-forward "XYZZ" 2004 t))
+              (progn (goto-char (point-min)) (re-search-forward "XYZZ" 2005 t))
+              (progn (goto-char (point-min)) (re-search-forward "XYZZ" 2006 t))
+              (progn (goto-char (point-min)) (re-search-forward "XYZZ" nil t))
+              (progn (goto-char (point-min)) (re-search-forward "XYZZ" 300 t))
+              (progn (goto-char (point-min)) (re-search-forward "QQQQ\\|XYZZ" 2005 t))
+              (progn (goto-char 2100) (re-search-forward "XYZZ" nil t))))"#,
+    );
+    assert_eq!(observed, "OK (nil 2005 2005 2005 nil 2005 nil)");
+}
+
+/// Sweep the BOUND across every offset around a match, for several needle
+/// lengths and alternation shapes, and pin the whole answer set to GNU.
+///
+/// This is the assertion the single-boundary test above could not make. The
+/// prefilter's scan span now stops just past the search bound, and an error of
+/// one byte there hides a match at exactly one offset, for exactly one needle
+/// length -- which a hand-picked case will miss. Sweeping d from -6 to +40
+/// over needles of length 2..9, in three alternation shapes, covers the ways
+/// that arithmetic can be wrong.
+///
+/// The 240 rows below were verified identical to GNU Emacs 31.1 row by row
+/// (not by hash -- `sxhash` is not comparable across implementations).
+#[test]
+fn bounded_searches_answer_like_gnu_across_a_bound_sweep() {
+    crate::test_utils::init_test_tracing();
+    let observed = crate::test_utils::runtime_startup_eval_one(
+        r#"(let ((out '()))
+             (dolist (needle '("XY" "XYZ" "XYZZ" "XYZZY" "XYZZYQWER"))
+               (dolist (pat (list needle
+                                  (concat "QQQQQQ\\|" needle)
+                                  (concat needle "\\|ZZZZZZ")))
+                 (with-temp-buffer
+                   (insert (make-string 3000 ?a))
+                   (let ((at 1500))
+                     (goto-char at) (delete-char (length needle)) (insert needle)
+                     (dolist (d '(-6 -3 -1 0 1 2 3 6 40))
+                       (let ((bound (+ at (length needle) d)))
+                         (when (and (> bound 1) (<= bound (point-max)))
+                           (goto-char (point-min))
+                           (push (re-search-forward pat bound t) out))))
+                     (dolist (s '(1 1400 1499 1500 1501 1505 2000))
+                       (goto-char s)
+                       (push (re-search-forward pat nil t) out))))))
+             (list (length out)
+                   (length (delq nil (copy-sequence out)))
+                   (apply #'+ (delq nil (copy-sequence out)))))"#,
+    );
+    // Taken from GNU Emacs 31.1, not hand-derived: 240 probes, 150 of which
+    // find a match, the found positions summing to 225,690.  Any offset that
+    // stopped matching moves the second and third numbers.
+    assert_eq!(observed, "OK (240 150 225690)");
+}

@@ -8257,12 +8257,26 @@ pub(crate) fn re_search(
                 // `text[m + off ..]`; the earliest candidate is `start`, whose
                 // literal begins at `start + off`.
                 let mut next_lit = start.saturating_add(off).min(text_len);
-                while next_lit <= text_len {
+                // GNU's fastmap skip loop is bounded by the remaining RANGE
+                // (`while (range > lim && !fastmap[*d])`, regex-emacs.c), so a
+                // bounded search never looks past its bound. Scanning to
+                // `text_len` instead made every bounded FAILING search cost the
+                // whole buffer -- 34.6ms on 800KB against GNU's flat 0.7ms --
+                // which is the shape font-lock runs constantly.
+                //
+                // `end` is the match STOP handed to `re_match_candidate_in`,
+                // so an acceptable match lies entirely within `[cand, end]`.
+                // The literal is a required prefix of that match, so it lies
+                // there too, and a scan span reaching one byte past `end`
+                // cannot hide one. Nothing about the needle lengths enters:
+                // it is the MATCH that is bounded, not the literal.
+                let scan_end = end.saturating_add(1).min(text_len);
+                while next_lit <= scan_end {
                     let Some(span) = pref.pf.find(
                         text,
                         Span {
                             start: next_lit,
-                            end: text_len,
+                            end: scan_end,
                         },
                     ) else {
                         break;
