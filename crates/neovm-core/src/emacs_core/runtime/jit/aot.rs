@@ -1049,16 +1049,14 @@ fn prepare_leaf_emit(
     if !mir_is_aot_runnable(&m) {
         return Ok(None);
     }
-    // The MIR tier's baseline-emitter adapter has no AOT parity coverage, and
-    // a MIR loop has no back-edge poll: keep the AOT MIR population exactly
-    // what it was before the adapter — shim-free bodies plus `Call`/`Apply`
-    // (whose shims poll quit). Anything else stays JIT-only here.
+    // The MIR tier's baseline-emitter adapter has no AOT parity coverage:
+    // keep the AOT MIR population at shim-free bodies plus `Call`/`Apply`.
     if uses_mir_adapter(&m) {
         return Ok(None);
     }
-    // NO LOOP WITHOUT A POLL, the same rule the JIT tier gate makes: a MIR
-    // back edge is a bare jump, so a shim-free loop emitted here would run
-    // uninterruptibly and with no GC safe point.
+    // MIR loops now poll in the JIT. Keep AOT loops on the existing baseline
+    // path until the MIR poll/precise-deopt combination is qualified through
+    // a serialized sidecar too.
     let plan = super::compile::lowering::plan_mir_leaf(&m);
     if plan.has_backedge {
         return Ok(None);

@@ -748,9 +748,9 @@ fn mir_probe_a_emits_one_tag_guard_per_iteration() {
     );
     assert_eq!(
         super::lowering::retags_emitted(),
-        3,
-        "the entry edge's fixnum constant and the two back-edge results; more \
-         means a proven param was written back untagged and retagged on an edge"
+        4,
+        "three hot retags (entry constant and two back-edge results), plus \
+         the intermediate accumulator spilled on the cold precise-deopt path"
     );
     for n in [0i64, 1, 7, 1000] {
         let mut eval = Context::new_minimal_vm_harness();
@@ -784,13 +784,11 @@ fn mir_probe_a_emits_one_tag_guard_per_iteration() {
     // remaining guard rather than being shifted as a pointer.
     let mut eval = Context::new_minimal_vm_harness();
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
-    assert!(
-        matches!(
-            mleaf.call(ctx_ptr, &[Value::make_float(3.0), Value::NIL]),
-            NativeRun::Deopt
-        ),
-        "a float n must deopt at the one remaining guard"
-    );
+    let NativeRun::DeoptAt(resume) = mleaf.call(ctx_ptr, &[Value::make_float(3.0), Value::NIL])
+    else {
+        panic!("a float n must deopt precisely at the one remaining guard");
+    };
+    assert_eq!(resume.pc, 4);
 }
 
 /// A value the fixpoint knows is NOT a fixnum keeps its tag guard: the
@@ -1424,6 +1422,11 @@ fn a_compiled_loop_polls_quit_whichever_tier_compiles_it() {
     let ctx_ptr = &mut ev as *mut Context as *mut u8;
     let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
     assert_eq!(
+        leaf.tier,
+        super::leaf::LeafTier::Mir,
+        "the optimizing tier must run the loop and preserve its service polls"
+    );
+    assert_eq!(
         leaf.call(ctx_ptr, &[Value::make_int(1000)]),
         NativeRun::Ok(Value::make_int(0).bits()),
         "the loop runs to completion with no quit pending"
@@ -1470,6 +1473,223 @@ fn a_compiled_loop_polls_quit_whichever_tier_compiles_it() {
         "a consing loop must reach its safe point too"
     );
     assert!(take_pending_flow().is_some(), "quit Flow stashed");
+}
+
+/// Conditional branches must poll only when their backward edge is taken,
+/// and ElsePop must carry the condition in that edge's root/argument stack.
+#[test]
+fn mir_conditional_loops_preserve_poll_cadence_and_quit() {
+    use crate::emacs_core::eval::{
+        Context, bytecode_branch_poll_count, reset_bytecode_branch_poll_count,
+    };
+    use crate::emacs_core::intern::SymId;
+
+    let mut ev = Context::new();
+    let ctx = &mut ev as *mut Context as *mut u8;
+    for (on_nil, else_pop) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut f = ByteCodeFunction::new(LambdaParams {
+            required: vec![SymId(1)],
+            optional: Vec::new(),
+            rest: None,
+        });
+        f.lexical = true;
+        f.constants = vec![Value::make_int(0)].into();
+        f.max_stack = 4;
+        if else_pop {
+            f.ops.extend([Op::Nil, Op::Pop]);
+        }
+        let target = if else_pop { 1 } else { 0 };
+        f.ops.extend([
+            Op::StackRef(0),
+            Op::Sub1,
+            Op::StackSet(1),
+            Op::StackRef(0),
+            Op::Constant(0),
+            if on_nil { Op::Leq } else { Op::Gtr },
+            match (on_nil, else_pop) {
+                (false, false) => Op::GotoIfNotNil(target),
+                (true, false) => Op::GotoIfNil(target),
+                (false, true) => Op::GotoIfNotNilElsePop(target),
+                (true, true) => Op::GotoIfNilElsePop(target),
+            },
+            Op::Return,
+        ]);
+        let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
+        assert_eq!(leaf.tier, super::leaf::LeafTier::Mir);
+        for n in [1, 254, 255, 256, 511] {
+            reset_bytecode_branch_poll_count();
+            assert_eq!(
+                leaf.call(ctx, &[Value::make_int(n)]),
+                NativeRun::Ok(Value::make_int(0).bits()),
+                "on_nil={on_nil} else_pop={else_pop} n={n}"
+            );
+            assert_eq!(bytecode_branch_poll_count(), ((n - 1) / 255) as usize);
+        }
+        ev.set_quit_flag_value(Value::T);
+        let quit = leaf.call(ctx, &[Value::make_int(256)]);
+        ev.set_quit_flag_value(Value::NIL);
+        assert_eq!(quit, NativeRun::Signal);
+        assert!(take_pending_flow().is_some());
+        assert_eq!(ev.jit_root_stack_top, 0, "poll must restore its roots");
+    }
+}
+
+/// The growing list exists only in native registers until a back-edge poll.
+/// Exact GC must see the edge's live stack and preserve every earlier cons.
+#[test]
+fn mir_loop_keeps_native_list_alive_across_exact_gc() {
+    use crate::emacs_core::eval::Context;
+    use crate::emacs_core::intern::SymId;
+
+    let mut ev = Context::new();
+    let mut f = ByteCodeFunction::new(LambdaParams {
+        required: vec![SymId(1)],
+        optional: Vec::new(),
+        rest: None,
+    });
+    f.lexical = true;
+    f.constants = vec![Value::make_int(0)].into();
+    f.max_stack = 4;
+    // (lambda (n) (let (l) (while (> n 0) (setq l (cons n l) n (1- n))) l))
+    f.ops = vec![
+        Op::Nil,
+        Op::StackRef(1),
+        Op::Constant(0),
+        Op::Gtr,
+        Op::GotoIfNil(13),
+        Op::StackRef(1),
+        Op::StackRef(1),
+        Op::Cons,
+        Op::StackSet(1),
+        Op::StackRef(1),
+        Op::Sub1,
+        Op::StackSet(2),
+        Op::Goto(1),
+        Op::Return,
+    ];
+    let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
+    assert_eq!(leaf.tier, super::leaf::LeafTier::Mir);
+    let before = ev.tagged_heap.gc_collections();
+    ev.gc_stress = true;
+    let result = leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(1024)]);
+    ev.gc_stress = false;
+    let NativeRun::Ok(bits) = result else {
+        panic!("list-building loop failed: {result:?}");
+    };
+    assert!(ev.tagged_heap.gc_collections() >= before + 4);
+    assert_eq!(ev.jit_root_stack_top, 0);
+    let mut list = Value::from_bits(bits);
+    for n in 1..=1024 {
+        assert!(list.is_cons(), "missing list cell {n}");
+        assert_eq!(list.cons_car(), Value::make_int(n));
+        list = list.cons_cdr();
+    }
+    assert!(list.is_nil());
+}
+
+/// After a poll, rerunning from entry would replay work across post-gc-hook.
+/// An overflow must retain the loop's progress in its interpreter framestate.
+#[test]
+fn mir_loop_overflow_after_a_poll_deopts_at_the_current_iteration() {
+    use crate::emacs_core::eval::{
+        Context, bytecode_branch_poll_count, reset_bytecode_branch_poll_count,
+    };
+    use crate::emacs_core::intern::SymId;
+
+    let mut ev = Context::new();
+    let mut f = ByteCodeFunction::new(LambdaParams {
+        required: vec![SymId(1), SymId(2)],
+        optional: Vec::new(),
+        rest: None,
+    });
+    f.lexical = true;
+    f.constants = vec![Value::make_int(0)].into();
+    f.max_stack = 4;
+    f.ops = vec![
+        Op::StackRef(1),
+        Op::Constant(0),
+        Op::Gtr,
+        Op::GotoIfNil(11),
+        Op::StackRef(0),
+        Op::Add1,
+        Op::StackSet(1),
+        Op::StackRef(1),
+        Op::Sub1,
+        Op::StackSet(2),
+        Op::Goto(0),
+        Op::Return,
+    ];
+    let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
+    assert_eq!(leaf.tier, super::leaf::LeafTier::Mir);
+    let max = (1_i64 << 61) - 1;
+    reset_bytecode_branch_poll_count();
+    let result = leaf.call(
+        &mut ev as *mut Context as *mut u8,
+        &[Value::make_int(512), Value::make_int(max - 300)],
+    );
+    assert_eq!(bytecode_branch_poll_count(), 1);
+    let NativeRun::DeoptAt(resume) = result else {
+        panic!("loop must deopt precisely after its poll: {result:?}");
+    };
+    assert_eq!(resume.pc, 5);
+    assert_eq!(
+        resume.stack,
+        vec![
+            Value::make_int(212),
+            Value::make_int(max),
+            Value::make_int(max)
+        ]
+    );
+    assert_eq!(ev.jit_root_stack_top, 0);
+}
+
+/// A poll can run Lisp that redefines a callee. Until MIR revalidates inline
+/// dependencies after polls, such loops must keep the baseline's call sites.
+#[test]
+fn mir_loop_does_not_keep_an_inlined_callee_across_a_gc_hook() {
+    use crate::emacs_core::eval::Context;
+    use crate::emacs_core::intern::SymId;
+
+    let mut ev = Context::new();
+    let step = Value::symbol("mir-loop-step");
+    let mut callee = ByteCodeFunction::new(LambdaParams {
+        required: vec![SymId(1)],
+        optional: Vec::new(),
+        rest: None,
+    });
+    callee.lexical = true;
+    callee.max_stack = 2;
+    callee.ops = vec![Op::StackRef(0), Op::Sub1, Op::Return];
+    ev.obarray
+        .set_symbol_function_id(step.as_symbol_id().unwrap(), Value::make_bytecode(callee));
+    let mut f = ByteCodeFunction::new(LambdaParams {
+        required: vec![SymId(1)],
+        optional: Vec::new(),
+        rest: None,
+    });
+    f.lexical = true;
+    f.max_stack = 3;
+    f.constants = vec![Value::make_int(0), step].into();
+    f.ops = vec![
+        Op::StackRef(0),
+        Op::Constant(0),
+        Op::Gtr,
+        Op::GotoIfNil(9),
+        Op::Constant(1),
+        Op::StackRef(1),
+        Op::Call(1),
+        Op::StackSet(1),
+        Op::Goto(0),
+        Op::Return,
+    ];
+    let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
+    assert_eq!(leaf.tier, super::leaf::LeafTier::Baseline);
+    ev.eval_str("(setq post-gc-hook (list (lambda () (fset 'mir-loop-step (lambda (n) -7)))))")
+        .expect("install redefining GC hook");
+    ev.gc_stress = true;
+    let result = leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(1000)]);
+    ev.gc_stress = false;
+    assert_eq!(result, NativeRun::Ok(Value::make_int(-7).bits()));
 }
 
 #[test]
@@ -3218,9 +3438,9 @@ fn redefined_aset_takes_the_rooted_fallback() {
 }
 
 /// The tier gate, through the production compile path. A loop with a
-/// shim-lowered op goes to the baseline (the MIR tier has no back-edge
-/// poll), although the MIR lowering itself accepts it; the same op outside
-/// a loop takes the MIR tier.
+/// shim-lowered op stays on the baseline until adapter-bearing loops are
+/// qualified separately, although MIR lowering accepts it; the same op
+/// outside a loop takes the MIR tier.
 #[test]
 fn tier_gate_sends_a_loop_with_a_shim_op_to_the_baseline() {
     use crate::emacs_core::eval::Context;

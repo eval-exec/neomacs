@@ -1209,9 +1209,10 @@ fn compile_bytecode_function_inner(
         // compile-heavy run). One key per reason:
         //  * float-site: the baseline has the f64 path; MIR would deopt on
         //    every entry (see above).
-        //  * loop-opaque: a loop with a shim-lowered op. The MIR tier has no
-        //    back-edge poll (quit + GC safepoint), so such a loop would be
-        //    uninterruptible. Pure loops keep the tier.
+        //  * loop-opaque: keep adapter-bearing loops on the baseline until
+        //    their performance is qualified independently of pure loops.
+        //  * loop-inline: a back-edge poll can run post-gc-hook, which can
+        //    redefine an inlined callee. Entry-only invalidation is not enough.
         //  * inline-opaque: a body that INLINED a callee and still has a shim-
         //    lowered op. Inlining is guarded by the function epoch only at
         //    ENTRY; an adapter op (`fset`, a builtin, a `setq` whose watcher
@@ -1234,21 +1235,13 @@ fn compile_bytecode_function_inner(
             Some("gate:float-site".to_string())
         } else if has_generic_arith_site {
             Some("gate:generic-arith-site".to_string())
-        } else if plan.has_backedge {
-            // NO LOOP WITHOUT A POLL. The MIR tier lowers a back edge to a
-            // bare jump: no quit check, no GC safe point (the baseline's
-            // `emit_backedge_jump` makes both). The gate used to ask for an
-            // adapter site as well, but a loop can have none and still need
-            // the poll: `(while (> n 0) (setq n (1- n)))` folds its
-            // `StackSet` into the model stack, so it took the tier and could
-            // not be interrupted by C-g, and a loop whose only shim is
-            // `neovm_jit_cons` allocated with no safe point at all. Keyed by
-            // the op that would have kept it out anyway, so the census still
-            // says which lowering to port next.
+        } else if plan.has_backedge && plan.has_opaque {
             Some(format!(
-                "gate:loop-nopoll:{}",
+                "gate:loop-opaque:{}",
                 lowering::mir_loop_adapter_op(&mir)
             ))
+        } else if plan.has_backedge && inline_epoch.is_some() {
+            Some("gate:loop-inline".to_string())
         } else if plan.has_generic_call {
             Some(format!(
                 "gate:generic-call:{}",

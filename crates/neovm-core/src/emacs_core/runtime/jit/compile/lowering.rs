@@ -1878,14 +1878,14 @@ pub(crate) struct MirLeafPlan {
     pub(crate) has_backedge: bool,
     /// Every guard deopts PRECISELY (`STATUS_DEOPT_AT`), never rerun-from-
     /// start: the baseline's own rule for any body with a status-shim site.
-    /// `= has_opaque` — an `Eq`/predicate shim is context-free and never
-    /// signals, so a body with only those still reruns from the start.
+    /// `= has_opaque || has_backedge`: a loop poll can run post-gc-hook, so
+    /// even an otherwise pure loop must not replay its work after a poll.
     pub(crate) precise: bool,
     /// The body needs vmctx + the shim scaffolding (`RtCtx`).
     pub(crate) needs_rt: bool,
     /// Cons scalar replacement (`cons_scalar_repl_targets`): all-`None` in
-    /// any `Opaque`-bearing body, whose framestates and residual roots must
-    /// hold real values.
+    /// any precisely deoptimizing body, whose framestates and residual roots
+    /// must hold real values.
     pub(crate) cons_repl: Vec<Option<(mir::MirValue, mir::MirValue)>>,
     /// Words the call-args scratch slot must hold: the widest operand set any
     /// `Opaque` marshals (the baseline's arms store `needs` words at `i*8`).
@@ -1989,7 +1989,8 @@ pub(crate) fn plan_mir_leaf(m: &mir::MirFunction) -> MirLeafPlan {
         mir::successor_edges(&b.term)
             .any(|(t, _)| m.blocks[t.0 as usize].bytecode_pc <= b.bytecode_pc)
     });
-    let cons_repl = if has_opaque {
+    let precise = has_opaque || has_backedge;
+    let cons_repl = if precise {
         vec![None; m.value_types.len()]
     } else {
         mir::cons_scalar_repl_targets(m)
@@ -2003,7 +2004,16 @@ pub(crate) fn plan_mir_leaf(m: &mir::MirFunction) -> MirLeafPlan {
         })
         .max()
         .unwrap_or(0);
-    let max_depth = insts().map(|i| i.pre_stack.len()).max().unwrap_or(0);
+    let max_depth = insts()
+        .map(|i| i.pre_stack.len())
+        .chain(m.blocks.iter().map(|b| b.params.len()))
+        .chain(
+            m.blocks
+                .iter()
+                .flat_map(|b| mir::successor_edges(&b.term).map(|(_, args)| args.len())),
+        )
+        .max()
+        .unwrap_or(0);
     let rooting_sites = insts()
         .filter(|i| matches!(&i.op, MirOp::Opaque { op, .. } if super::is_rooting_site_op(op)))
         .count();
@@ -2011,8 +2021,8 @@ pub(crate) fn plan_mir_leaf(m: &mir::MirFunction) -> MirLeafPlan {
         has_opaque,
         has_generic_call,
         has_backedge,
-        precise: has_opaque,
-        needs_rt: has_adapter_site || has_escaping_cons,
+        precise,
+        needs_rt: has_adapter_site || has_escaping_cons || has_backedge,
         cons_repl,
         max_call_args,
         max_depth,
@@ -2025,9 +2035,9 @@ pub(crate) fn plan_mir_leaf(m: &mir::MirFunction) -> MirLeafPlan {
 /// `compile_bytecode_function_inner` as the live optimizing tier. A *pure* body
 /// (arithmetic / comparisons / type predicates / car-cdr / stack — no shim-using
 /// ops) needs no vmctx and reruns the interpreter from the start on a failing
-/// guard (sound: no side effect precedes any guard). A call-bearing body threads
-/// vmctx + the runtime shims and routes every guard to a per-site precise deopt
-/// (see below).
+/// guard (sound: no side effect precedes any guard). A looping or call-bearing
+/// body threads vmctx + runtime shims and uses precise deopt: a back-edge poll
+/// can collect and run Lisp hooks, so restarting across it is not sound.
 ///
 /// Uses CLIF **block parameters** as the SSA phis — each MIR block becomes a
 /// CLIF block whose params are its entry operand stack, and terminator edges
@@ -2036,13 +2046,11 @@ pub(crate) fn plan_mir_leaf(m: &mir::MirFunction) -> MirLeafPlan {
 pub(crate) fn lower_mir_pure(m: &mir::MirFunction) -> Result<CompiledLeaf, CompileError> {
     use mir::MirOp;
 
-    // A body with a shim-lowered op (`MirLeafPlan::has_opaque`) threads vmctx +
-    // the runtime shims and routes EVERY guard to a per-site STATUS_DEOPT_AT
-    // (all-precise — it must never rerun-from-start, which would re-execute the
-    // op's side effect). A NON-escaping cons is elided (scalar-replaced, no
-    // allocation); an ESCAPING cons is heap-allocated via the neovm_jit_cons
-    // shim — a GC SAFEPOINT, NOT an observable side effect, so it does not
-    // force precise deopt: rerun-from-start re-allocates a fresh cons.
+    // Loops and shim-lowered ops route EVERY guard to STATUS_DEOPT_AT, so a
+    // deopt never replays work across a call or a poll's Lisp hooks. Scalar
+    // replacement stays limited to straight-line pure bodies: a precise
+    // framestate must contain real Values, not virtual cons pairs. Allocation
+    // itself is not a safe point; the back-edge/call polls perform collection.
     let plan = plan_mir_leaf(m);
 
     // --- JIT-only module prologue (the wrapper). ----------------------------
@@ -2444,9 +2452,8 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
             })
             .collect();
 
-        // Runtime context for calls (vmctx + shims + arg/result slots), built only
-        // when the body has a call. declare_rt_refs declares the full import set;
-        // only the referenced shims (call/apply/gc_*) are resolved at finalize.
+        // Runtime context for polls, calls and allocation. declare_rt_refs
+        // declares the full import set; only referenced shims are resolved.
         let mut rt = if plan.needs_rt {
             // `module` is already `&mut M`; reborrow it for the call. The MIR
             // tier never emits subr-speculated or CBSym-intrinsic calls
@@ -2471,6 +2478,9 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
         } else {
             None
         };
+        let backedge_counter = plan.has_backedge.then(|| {
+            fb.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 8, 3))
+        });
         // The deopt-buffer base addresses (for the JIT `iconst` path). The CLIF
         // `DeoptRefs` (iconst or sidecar-load) is materialized in the entry block
         // below, once it is populated and the sidecar param is available.
@@ -2535,6 +2545,10 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
         fb.append_block_params_for_function_params(entry);
         fb.switch_to_block(entry);
         let vmctx_param = fb.block_params(entry)[0];
+        if let Some(slot) = backedge_counter {
+            let one = fb.ins().iconst(types::I64, 1);
+            fb.ins().stack_store(ptr_ty, one, slot, 0);
+        }
         if let Some(rt) = rt.as_mut() {
             fb.def_var(rt.vmctx_var, vmctx_param);
             // Root-window base + capacity check once per activation instead
@@ -3030,16 +3044,26 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
                     // Force-tag (write-back) rather than plain retag: the
                     // block ends here, and a value repeated in the arg list
                     // then retags ONCE instead of per mention.
-                    let mut a: Vec<BlockArg> = Vec::with_capacity(args.len());
+                    let mut values = Vec::with_capacity(args.len());
                     for v in args {
-                        a.push(BlockArg::Value(mir_force_tagged(
-                            &mut fb,
-                            &mut cval,
-                            &mut cval_raw,
-                            *v,
-                        )?));
+                        values.push(mir_force_tagged(&mut fb, &mut cval, &mut cval_raw, *v)?);
                     }
-                    fb.ins().jump(clif_blocks[target.0 as usize], &a);
+                    let a: Vec<BlockArg> = values.iter().copied().map(BlockArg::Value).collect();
+                    if m.blocks[target.0 as usize].bytecode_pc <= blk.bytecode_pc {
+                        emit_backedge_jump_with_args(
+                            &mut fb,
+                            rt.as_ref().expect("backedge implies rt"),
+                            backedge_counter.expect("backedge implies counter"),
+                            &mut signal_exit,
+                            &values,
+                            clif_blocks[target.0 as usize],
+                            &a,
+                            &[],
+                            &mut Vec::new(),
+                        );
+                    } else {
+                        fb.ins().jump(clif_blocks[target.0 as usize], &a);
+                    }
                 }
                 MirTerm::Branch {
                     cond,
@@ -3080,13 +3104,48 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
                             *v,
                         )?));
                     }
-                    let tb = clif_blocks[taken.0 as usize];
-                    let fbk = clif_blocks[fallthrough.0 as usize];
+                    // Only a taken backward edge counts toward the poll. A
+                    // trampoline carries exactly that edge's tagged stack,
+                    // including ElsePop's retained condition when applicable.
+                    let mut trampolines = Vec::new();
+                    let mut edge_target = |target: mir::MirBlockId| {
+                        let dest = &m.blocks[target.0 as usize];
+                        let cb = clif_blocks[target.0 as usize];
+                        if dest.bytecode_pc > blk.bytecode_pc {
+                            return cb;
+                        }
+                        let tramp = fb.create_block();
+                        for _ in &dest.params {
+                            fb.append_block_param(tramp, types::I64);
+                        }
+                        trampolines.push((tramp, cb));
+                        tramp
+                    };
+                    let tb = edge_target(*taken);
+                    let fbk = edge_target(*fallthrough);
                     // brif takes the `then` block when the condition is true.
                     if *on_nil {
                         fb.ins().brif(is_nil, tb, &ta, fbk, &fa);
                     } else {
                         fb.ins().brif(is_nil, fbk, &fa, tb, &ta);
+                    }
+                    for (tramp, target) in trampolines {
+                        fb.switch_to_block(tramp);
+                        fb.seal_block(tramp);
+                        let values = fb.block_params(tramp).to_vec();
+                        let args: Vec<BlockArg> =
+                            values.iter().copied().map(BlockArg::Value).collect();
+                        emit_backedge_jump_with_args(
+                            &mut fb,
+                            rt.as_ref().expect("backedge implies rt"),
+                            backedge_counter.expect("backedge implies counter"),
+                            &mut signal_exit,
+                            &values,
+                            target,
+                            &args,
+                            &[],
+                            &mut Vec::new(),
+                        );
                     }
                 }
             }
