@@ -6,6 +6,7 @@
 
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_args_range, expect_min_args};
+use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::{SymId, intern, resolve_sym};
 // encoding.rs: sentinel imports removed; using emacs_char + LispString directly
 use crate::buffer::{EmacsBytePos, EmacsByteRange, LispCharPos1, TextPositionAnchor};
@@ -5841,22 +5842,20 @@ fn builtin_char_width_with_display_table(
 }
 
 /// `(string-bytes STRING)` -> integer byte length of STRING.
-pub(crate) fn builtin_string_bytes(args: Vec<Value>) -> EvalResult {
-    expect_args("string-bytes", &args, 1)?;
-    let string = args[0].as_lisp_string().ok_or_else(|| {
+pub(crate) fn builtin_string_bytes_1(_ctx: &mut Context, arg: Value) -> EvalResult {
+    let string = arg.as_lisp_string().ok_or_else(|| {
         signal(
             LispCondition::WrongTypeArgument,
-            vec![Value::symbol("stringp"), args[0]],
+            vec![Value::symbol("stringp"), arg],
         )
     })?;
     Ok(Value::fixnum(string.sbytes() as i64))
 }
 
 /// `(multibyte-string-p STRING)` -> t or nil
-pub(crate) fn builtin_multibyte_string_p(args: Vec<Value>) -> EvalResult {
-    expect_args("multibyte-string-p", &args, 1)?;
-    match args[0].kind() {
-        ValueKind::String => Ok(Value::bool_val(args[0].string_is_multibyte())),
+pub(crate) fn builtin_multibyte_string_p_1(_ctx: &mut Context, arg: Value) -> EvalResult {
+    match arg.kind() {
+        ValueKind::String => Ok(Value::bool_val(arg.string_is_multibyte())),
         _ => Ok(Value::NIL),
     }
 }
@@ -6037,12 +6036,11 @@ pub(crate) fn builtin_decode_coding_string_with_known(
 }
 
 /// `(char-or-string-p OBJ)` -> t or nil
-pub(crate) fn builtin_char_or_string_p(args: Vec<Value>) -> EvalResult {
-    expect_args("char-or-string-p", &args, 1)?;
+pub(crate) fn builtin_char_or_string_p_1(_ctx: &mut Context, arg: Value) -> EvalResult {
     // GNU `Fchar_or_string_p` (`src/data.c`) only accepts fixnums in
     // the valid character code range [0, MAX_CHAR_CODE = 0x3FFFFF].
     // Negative or out-of-range integers must return nil.
-    let is_char_or_string = match args[0].kind() {
+    let is_char_or_string = match arg.kind() {
         ValueKind::Fixnum(n) => (0..=MAX_CHAR_CODE).contains(&n),
         ValueKind::String => true,
         _ => false,

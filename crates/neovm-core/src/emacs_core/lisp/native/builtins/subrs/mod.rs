@@ -7215,15 +7215,15 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(|ctx, args| crate::encoding::builtin_char_width_in_context(ctx, args)),
         SubrArity::new(1, Some(1)),
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed1(
         "string-bytes",
-        NativeFn::ContextVec(|_ctx, args| crate::encoding::builtin_string_bytes(args)),
-        SubrArity::new(1, Some(1)),
+        crate::encoding::builtin_string_bytes_1,
+        FixedMin1::One,
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed1(
         "multibyte-string-p",
-        NativeFn::ContextVec(|_ctx, args| crate::encoding::builtin_multibyte_string_p(args)),
-        SubrArity::new(1, Some(1)),
+        crate::encoding::builtin_multibyte_string_p_1,
+        FixedMin1::One,
     ));
     ctx.register_subr(SubrSpec::new(
         "encode-coding-string",
@@ -7235,10 +7235,10 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(crate::encoding::builtin_decode_coding_string_in_context),
         SubrArity::new(2, Some(4)),
     ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed1(
         "char-or-string-p",
-        NativeFn::ContextVec(|_ctx, args| crate::encoding::builtin_char_or_string_p(args)),
-        SubrArity::new(1, Some(1)),
+        crate::encoding::builtin_char_or_string_p_1,
+        FixedMin1::One,
     ));
     ctx.register_subr(SubrSpec::new(
         "max-char",

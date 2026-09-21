@@ -71,7 +71,8 @@ fn string_width_mixed() {
 #[test]
 fn builtin_string_bytes_counts_utf8_length() {
     crate::test_utils::init_test_tracing();
-    let result = builtin_string_bytes(vec![Value::string("Aé中")]).unwrap();
+    let mut ctx = Context::new();
+    let result = builtin_string_bytes_1(&mut ctx, Value::string("Aé中")).unwrap();
     assert_eq!(result, Value::fixnum(6));
 }
 
@@ -172,24 +173,25 @@ fn builtin_char_width_matches_oracle_control_and_bounds() {
 #[test]
 fn builtin_char_or_string_p_respects_character_bounds() {
     crate::test_utils::init_test_tracing();
+    let mut ctx = Context::new();
     assert_eq!(
-        builtin_char_or_string_p(vec![Value::fixnum(0)]).unwrap(),
+        builtin_char_or_string_p_1(&mut ctx, Value::fixnum(0)).unwrap(),
         Value::T
     );
     assert_eq!(
-        builtin_char_or_string_p(vec![Value::fixnum(0x3F_FFFF)]).unwrap(),
+        builtin_char_or_string_p_1(&mut ctx, Value::fixnum(0x3F_FFFF)).unwrap(),
         Value::T
     );
     assert_eq!(
-        builtin_char_or_string_p(vec![Value::fixnum(-1)]).unwrap(),
+        builtin_char_or_string_p_1(&mut ctx, Value::fixnum(-1)).unwrap(),
         Value::NIL
     );
     assert_eq!(
-        builtin_char_or_string_p(vec![Value::fixnum(0x40_0000)]).unwrap(),
+        builtin_char_or_string_p_1(&mut ctx, Value::fixnum(0x40_0000)).unwrap(),
         Value::NIL
     );
     assert_eq!(
-        builtin_char_or_string_p(vec![Value::symbol("x")]).unwrap(),
+        builtin_char_or_string_p_1(&mut ctx, Value::symbol("x")).unwrap(),
         Value::NIL
     );
 }
@@ -1159,24 +1161,25 @@ fn multibyte_detection_treats_unibyte_storage_as_unibyte() {
 #[test]
 fn builtin_multibyte_string_p_matches_oracle_non_string_and_unibyte_storage() {
     crate::test_utils::init_test_tracing();
+    let mut ctx = Context::new();
     assert_eq!(
-        builtin_multibyte_string_p(vec![Value::string("abc")]).unwrap(),
+        builtin_multibyte_string_p_1(&mut ctx, Value::string("abc")).unwrap(),
         Value::NIL
     );
     assert_eq!(
-        builtin_multibyte_string_p(vec![Value::string("é")]).unwrap(),
+        builtin_multibyte_string_p_1(&mut ctx, Value::string("é")).unwrap(),
         Value::T
     );
 
     let unibyte_val =
         Value::heap_string(crate::heap_types::LispString::from_unibyte(b"abc".to_vec()));
     assert_eq!(
-        builtin_multibyte_string_p(vec![unibyte_val]).unwrap(),
+        builtin_multibyte_string_p_1(&mut ctx, unibyte_val).unwrap(),
         Value::NIL
     );
 
     assert_eq!(
-        builtin_multibyte_string_p(vec![Value::fixnum(1)]).unwrap(),
+        builtin_multibyte_string_p_1(&mut ctx, Value::fixnum(1)).unwrap(),
         Value::NIL
     );
 }
