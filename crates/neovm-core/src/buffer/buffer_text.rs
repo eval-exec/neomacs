@@ -2309,21 +2309,6 @@ impl BufferText {
         }
     }
 
-    pub fn update_marker_insertion_type(&self, marker_id: u64, insertion_type: InsertionType) {
-        let storage = self.storage.borrow();
-        let mut curr = storage.markers_head;
-        // SAFETY: chain walks live chain-owned MarkerObj pointers until null.
-        unsafe {
-            while !curr.is_null() {
-                if (*curr).data.marker_id == Some(marker_id) {
-                    (*curr).data.insertion_type = insertion_type == InsertionType::After;
-                    return;
-                }
-                curr = (*curr).data.next_marker;
-            }
-        }
-    }
-
     /// Return true iff a marker with `marker_id` is currently spliced
     /// into this buffer's chain. Used by BufferManager to pick the
     /// correct buffer when updating insertion type across buffers.

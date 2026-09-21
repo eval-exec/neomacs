@@ -420,3 +420,54 @@ fn set_marker_within_the_same_buffer_leaves_the_marker_chain_alone() {
         *slot.borrow_mut() = Some(ctx);
     });
 }
+
+/// `set-marker-insertion-type` writes one bit on the marker and must not
+/// search for it.
+///
+/// GNU `Fset_marker_insertion_type' (src/marker.c:784) is its whole body:
+///
+/// ```c
+/// XMARKER (marker)->insertion_type = ! NILP (type);
+/// ```
+///
+/// `insertion_type` is a bitfield on `struct Lisp_Marker`, and that struct IS
+/// the chain node, so there is nothing else to update.  Ours is the same: the
+/// `MarkerObj` the Lisp value points at is the pointer spliced into the
+/// buffer's chain.  It nevertheless went on to walk every buffer's chain
+/// looking for the marker by id, to write the same field on the same object
+/// a second time -- 79.8ms for 5,000 calls against a chain of 8,000 markers,
+/// where GNU is a flat 0.7ms.
+///
+/// The insert rows are what make this safe to delete: an insert exactly AT
+/// the marker moves an `After` marker and leaves a `Before` one, and that
+/// behaviour is driven by the bit on the CHAIN node.  If the Lisp-visible
+/// marker and the chain entry were ever different objects, these rows would
+/// catch it.  Pinned to GNU Emacs 31.1.
+#[test]
+fn set_marker_insertion_type_writes_the_bit_the_chain_reads() {
+    crate::test_utils::init_test_tracing();
+    let observed = crate::test_utils::runtime_startup_eval_one(
+        r#"(with-temp-buffer
+             (insert "abcdefghij")
+             (let ((m (copy-marker 5))
+                   (n (copy-marker 5 t))
+                   out)
+               (dolist (ty '(nil t nil t))
+                 (set-marker-insertion-type m ty)
+                 (goto-char 5)
+                 (insert "X")
+                 (push (list ty (marker-insertion-type m) (marker-position m)) out)
+                 (delete-char -1))
+               (push (list 'born-t (marker-insertion-type n) (marker-position n)) out)
+               (set-marker-insertion-type n nil)
+               (push (list 'now-nil (marker-insertion-type n)) out)
+               (let ((d (make-marker)))
+                 (set-marker-insertion-type d t)
+                 (push (list 'detached (marker-insertion-type d) (marker-position d)) out))
+               (nreverse out)))"#,
+    );
+    assert_eq!(
+        observed,
+        "OK ((nil nil 5) (t t 6) (nil nil 5) (t t 6) (born-t t 5) (now-nil nil) (detached t nil))"
+    );
+}

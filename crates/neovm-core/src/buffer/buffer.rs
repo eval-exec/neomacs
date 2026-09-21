@@ -4025,11 +4025,6 @@ impl Buffer {
         self.text.move_marker_ptr_to_anchor(marker_ptr, position);
     }
 
-    pub fn update_marker_insertion_type(&mut self, marker_id: u64, insertion_type: InsertionType) {
-        self.text
-            .update_marker_insertion_type(marker_id, insertion_type);
-    }
-
     // -- Mark ----------------------------------------------------------------
     // GNU: the mark IS a Lisp_Marker (BVAR(buf, mark)).  There are no
     // separate position fields.  The marker tracks its own position
@@ -7321,18 +7316,6 @@ impl BufferManager {
     pub fn remove_marker(&mut self, marker_id: u64) {
         for buf in self.buffers.values_mut() {
             buf.remove_marker_entry(marker_id);
-        }
-    }
-
-    /// Update the insertion type of a registered marker across all buffers.
-    pub fn update_marker_insertion_type(&mut self, marker_id: u64, ins_type: InsertionType) {
-        for buf in self.buffers.values_mut() {
-            // T7: chain presence check replaces the deleted Vec-based
-            // `marker_entry().is_some()`.
-            if buf.has_marker(marker_id) {
-                buf.update_marker_insertion_type(marker_id, ins_type);
-                return;
-            }
         }
     }
 
