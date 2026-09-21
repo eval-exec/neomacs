@@ -303,7 +303,17 @@ fn build_file_attributes(
     // UID / GID. GNU requests accurate Windows security-descriptor ownership
     // specifically for file-attributes (src/dired.c:1070-1080); the platform
     // boundary supplies that without exposing raw SID pointers here.
-    let ownership = file_identity::for_path(&path, &sym_meta);
+    // Ask for names only when `id-format' is `string'. Resolving them goes
+    // through the name service and dominated every other cost here.
+    let ownership = file_identity::for_path(
+        &path,
+        &sym_meta,
+        if id_format.ids_as_strings() {
+            file_identity::IdentityDetail::WithNames
+        } else {
+            file_identity::IdentityDetail::IdsOnly
+        },
+    );
     let (uid_val, gid_val) = if id_format.ids_as_strings() {
         (
             Value::string(

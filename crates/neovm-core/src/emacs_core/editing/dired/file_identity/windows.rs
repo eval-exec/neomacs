@@ -1,4 +1,4 @@
-use super::{Ownership, Principal};
+use super::{IdentityDetail, Ownership, Principal};
 use std::fs;
 use std::path::Path;
 
@@ -15,7 +15,14 @@ fn from_windows(identity: crate::emacs_core::w32::security::Ownership) -> Owners
     }
 }
 
-pub(super) fn query(path: &Path, _metadata: &fs::Metadata) -> Ownership {
+// `_detail` is accepted but not acted on: the security-descriptor query
+// returns the SID and its resolved name together, so there is no cheaper
+// ids-only path to take here.
+pub(super) fn query(
+    path: &Path,
+    _metadata: &fs::Metadata,
+    _detail: IdentityDetail,
+) -> Ownership {
     crate::emacs_core::w32::security::file_ownership(path)
         .or_else(crate::emacs_core::w32::security::current_process_ownership)
         .map(from_windows)

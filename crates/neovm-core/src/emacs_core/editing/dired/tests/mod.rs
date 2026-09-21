@@ -1355,3 +1355,37 @@ fn completion_ignored_extensions_is_special_like_gnu() {
         "OK (t nil (\".bak\"))"
     );
 }
+
+/// `file-attributes` resolves owner and group NAMES only for `id-format'
+/// `string'. Every other format wants the numeric ids, which are already in
+/// the `stat` result.
+///
+/// Resolving a name goes through the system name service, and doing it
+/// unconditionally made `file-attributes` 146x GNU (3044ms vs 21ms over 2000
+/// calls with `id-format' `integer') and `directory-files-and-attributes'
+/// 125x. The shape of GNU's own timings is the tell: GNU is slow ONLY for
+/// `string', because that is the only format for which it pays.
+///
+/// This pins the answers rather than the speed: the ids must be integers for
+/// every non-`string' format, strings for `string', and the two must describe
+/// the same principal -- so skipping the lookup cannot change a result.
+///
+/// Expectations measured under GNU Emacs 31.1 (`tmp/rr/fattr-oracle.el`).
+#[test]
+fn file_attributes_resolves_names_only_for_the_string_id_format_like_gnu() {
+    crate::test_utils::init_test_tracing();
+    let result = crate::test_utils::runtime_startup_eval_one(
+        r#"(let ((f (expand-file-name "lisp/subr.el" source-directory)))
+             (list
+              (let ((a (file-attributes f 'integer))) (list (integerp (nth 2 a)) (integerp (nth 3 a))))
+              (let ((a (file-attributes f 'string)))  (list (stringp (nth 2 a)) (stringp (nth 3 a))))
+              (let ((a (file-attributes f)))          (list (integerp (nth 2 a)) (integerp (nth 3 a))))
+              (let ((a (file-attributes f nil)))      (list (integerp (nth 2 a)) (integerp (nth 3 a))))
+              (equal (nth 2 (file-attributes f 'integer)) (nth 2 (file-attributes f)))
+              (equal (nth 3 (file-attributes f 'integer)) (nth 3 (file-attributes f)))
+              (let ((s (nth 2 (file-attributes f 'string)))
+                    (i (nth 2 (file-attributes f 'integer))))
+                (or (equal s (user-login-name i)) (equal s (number-to-string i))))))"#,
+    );
+    assert_eq!(result, "OK ((t t) (t t) (t t) (t t) t t t)");
+}

@@ -34,6 +34,26 @@ std::cfg_select! {
     }
 }
 
-pub(super) fn for_path(path: &Path, metadata: &fs::Metadata) -> Ownership {
-    query(path, metadata)
+/// What the caller needs from a file's owner and group.
+///
+/// Turning a numeric id into a NAME goes through the system name service --
+/// NSS on Unix, which may consult files, sssd, LDAP or the network -- while
+/// the id itself is already sitting in the `stat` result. The two are not the
+/// same request, and asking for the expensive one by accident is exactly what
+/// happened: `file-attributes` resolved names for EVERY call and then threw
+/// them away unless `id-format' was `string', making it 146x GNU (3044ms vs
+/// 21ms over 2000 calls) and `directory-files-and-attributes' 125x.
+///
+/// Making it an argument rather than a default means a caller has to say which
+/// it wants, and a new backend has to handle both.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum IdentityDetail {
+    /// Numeric ids only, read from metadata already in hand.
+    IdsOnly,
+    /// Ids and their names, resolved through the name service.
+    WithNames,
+}
+
+pub(super) fn for_path(path: &Path, metadata: &fs::Metadata, detail: IdentityDetail) -> Ownership {
+    query(path, metadata, detail)
 }

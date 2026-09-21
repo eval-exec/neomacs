@@ -1,11 +1,15 @@
-use super::{Ownership, Principal};
+use super::{IdentityDetail, Ownership, Principal};
 use crate::emacs_core::runtime_identity::{
     CredentialScope, process_group_id, process_user_id,
 };
 use std::fs;
 use std::path::Path;
 
-pub(super) fn query(_path: &Path, _metadata: &fs::Metadata) -> Ownership {
+pub(super) fn query(
+    _path: &Path,
+    _metadata: &fs::Metadata,
+    _detail: IdentityDetail,
+) -> Ownership {
     Ownership {
         user: Principal {
             id: i64::from(process_user_id(CredentialScope::Effective)),
