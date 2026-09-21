@@ -2511,9 +2511,31 @@ fn clip_char_pos_for_delete(pos: CharPos0, range: CharRange, del_len: CharLen) -
     }
 }
 
+// How many whole interval trees have been copied, for tests.
+//
+// A copy is invisible to every correctness assertion -- the copy holds the
+// same intervals -- so the only way to pin "this primitive reads the tree
+// instead of duplicating it" is to count the duplications.
+#[cfg(test)]
+thread_local! {
+    static TABLE_CLONES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_text_property_table_clones_for_test() {
+    TABLE_CLONES.with(|c| c.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn text_property_table_clones_for_test() -> usize {
+    TABLE_CLONES.with(std::cell::Cell::get)
+}
+
 impl Clone for TextPropertyTable {
     fn clone(&self) -> Self {
         use std::sync::atomic::Ordering;
+        #[cfg(test)]
+        TABLE_CLONES.with(|c| c.set(c.get() + 1));
         Self {
             intervals: self.intervals.clone(),
             property_names: self.property_names.clone(),

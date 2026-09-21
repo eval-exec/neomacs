@@ -372,6 +372,30 @@ pub fn set_string_text_properties_table_for_value(value: Value, table: TextPrope
     });
 }
 
+/// Mutate a string's interval tree IN PLACE.
+///
+/// The read-modify-write shape -- `get_string_text_properties_table_for_value`
+/// (which ends in `table.clone()`), mutate the copy, then
+/// `save_string_props_for_value` it back -- duplicates the WHOLE tree on every
+/// write, so building a propertized string one run at a time is O(runs^2).
+/// GNU mutates the string's interval tree directly (`add_text_properties_1`,
+/// src/textprop.c); it has no copy to make.
+///
+/// The empty-table normalisation of `set_string_text_properties_table_for_value`
+/// is preserved: a mutation that empties the tree nulls the interval pointer,
+/// so the string stays eligible for the concurrent GC's interval-free claim
+/// instead of holding a `Some(empty)` forever.
+pub fn mutate_string_text_properties<R>(
+    value: Value,
+    f: impl FnOnce(&mut TextPropertyTable) -> R,
+) -> Option<R> {
+    let result = mutate::with_string_text_props_mut(value, f)?;
+    if string_text_props(value).is_some_and(TextPropertyTable::is_empty) {
+        clear_string_text_properties_for_value(value);
+    }
+    Some(result)
+}
+
 pub fn clear_string_text_properties_for_value(value: Value) {
     let _ = mutate::with_lisp_string_mut(value, |s| s.clear_intervals());
 }

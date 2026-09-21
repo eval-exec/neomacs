@@ -113,3 +113,51 @@ fn aset_on_a_multibyte_string_does_not_scan_from_the_start() {
         "the write landed on the right character and left the rest alone"
     );
 }
+
+/// Writing a text property onto a string must mutate the string's interval
+/// tree, not duplicate it.
+///
+/// GNU's `add_text_properties_1' (src/textprop.c) edits the intervals the
+/// string already owns.  We read the table out through an accessor that ends
+/// in `table.clone()`, edited the copy, and wrote it back -- so building a
+/// propertized string one run at a time copied the whole tree once per run,
+/// i.e. O(runs^2).
+///
+/// Correctness cannot see this: the copy holds the same intervals and the
+/// write-back restores them.  Counting the copies is the only assertion that
+/// distinguishes the two shapes, which is what the clone counter is for.
+#[test]
+fn putting_a_property_on_a_string_does_not_copy_its_interval_tree() {
+    use crate::buffer::text_props::{
+        reset_text_property_table_clones_for_test, text_property_table_clones_for_test,
+    };
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+
+    let setup = eval.eval_str(r#"(setq s (make-string 3000 ?a))"#);
+    assert_eq!(format_eval_result(&setup).split(' ').next(), Some("OK"));
+
+    reset_text_property_table_clones_for_test();
+    let built = eval.eval_str(
+        // `while`, not `dotimes`: `Context::new()` is bare and `dotimes` is a
+        // subr.el macro.
+        r#"(progn (let ((i 0))
+                    (while (< i 300)
+                      (put-text-property (* i 3) (+ (* i 3) 2) 'face (list :run i) s)
+                      (setq i (1+ i))))
+                  (list (length s)
+                        (get-text-property 0 'face s)
+                        (get-text-property 897 'face s)
+                        (get-text-property 2 'face s)))"#,
+    );
+    assert_eq!(
+        format_eval_result(&built),
+        "OK (3000 (:run 0) (:run 299) nil)",
+        "every run landed where it was written"
+    );
+    assert_eq!(
+        text_property_table_clones_for_test(),
+        0,
+        "300 property writes copied the interval tree instead of editing it"
+    );
+}

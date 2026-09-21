@@ -1831,9 +1831,13 @@ pub(crate) fn builtin_put_text_property_in_buffers(
         let Some(char_range) = validate_string_range(s, beg, end, args[0], args[1])? else {
             return Ok(Value::NIL);
         };
-        let mut table = get_string_text_properties_table_for_value(str_val).unwrap_or_default();
-        table.put_property_for_object_char_len(char_range, string_char_len(s.schars()), prop, val);
-        save_string_props_for_value(str_val, table);
+        // In place: GNU's `add_text_properties_1` mutates the string's own
+        // interval tree. Copying it out, editing the copy and writing it back
+        // made building a propertized string one run at a time O(runs^2).
+        let len = string_char_len(s.schars());
+        crate::emacs_core::value::mutate_string_text_properties(str_val, |table| {
+            table.put_property_for_object_char_len(char_range, len, prop, val);
+        });
         return Ok(Value::NIL);
     }
 
@@ -2438,14 +2442,17 @@ pub(crate) fn builtin_add_text_properties_in_buffers(
         let Some(char_range) = validate_string_range(s, beg, end, args[0], args[1])? else {
             return Ok(Value::NIL);
         };
-        let mut table = get_string_text_properties_table_for_value(str_val).unwrap_or_default();
-        let any_changed = table.apply_property_plist_for_object_char_len(
-            char_range,
-            string_char_len(s.schars()),
-            &pairs,
-            PropertyPlistApplication::AddProperties,
-        );
-        save_string_props_for_value(str_val, table);
+        let len = string_char_len(s.schars());
+        let any_changed =
+            crate::emacs_core::value::mutate_string_text_properties(str_val, |table| {
+                table.apply_property_plist_for_object_char_len(
+                    char_range,
+                    len,
+                    &pairs,
+                    PropertyPlistApplication::AddProperties,
+                )
+            })
+            .unwrap_or(false);
         return Ok(if any_changed { Value::T } else { Value::NIL });
     }
 
@@ -2728,14 +2735,17 @@ pub(crate) fn builtin_remove_text_properties_in_buffers(
         let Some(char_range) = validate_string_range(s, beg, end, args[0], args[1])? else {
             return Ok(Value::NIL);
         };
-        let mut table = get_string_text_properties_table_for_value(str_val).unwrap_or_default();
-        let mut any_removed = false;
-        for name in names {
-            if table.remove_property_in_char_range(char_range, name) {
-                any_removed = true;
-            }
-        }
-        save_string_props_for_value(str_val, table);
+        let any_removed =
+            crate::emacs_core::value::mutate_string_text_properties(str_val, |table| {
+                let mut any_removed = false;
+                for name in names {
+                    if table.remove_property_in_char_range(char_range, name) {
+                        any_removed = true;
+                    }
+                }
+                any_removed
+            })
+            .unwrap_or(false);
         return Ok(if any_removed { Value::T } else { Value::NIL });
     }
 
@@ -2834,9 +2844,10 @@ pub(crate) fn builtin_set_text_properties_in_buffers(
             clear_string_text_properties_for_value(str_val);
             return Ok(Value::T);
         }
-        let mut table = get_string_text_properties_table_for_value(str_val).unwrap_or_default();
-        table.set_properties_for_object_char_len(char_range, string_char_len(s.schars()), pairs);
-        save_string_props_for_value(str_val, table);
+        let len = string_char_len(s.schars());
+        crate::emacs_core::value::mutate_string_text_properties(str_val, |table| {
+            table.set_properties_for_object_char_len(char_range, len, pairs);
+        });
         return Ok(Value::T);
     }
 
@@ -2917,14 +2928,16 @@ pub(crate) fn builtin_remove_list_of_text_properties_in_buffers(
         let Some(char_range) = validate_string_range(s, beg, end, args[0], args[1])? else {
             return Ok(Value::NIL);
         };
-        let mut table = get_string_text_properties_table_for_value(str_val).unwrap_or_default();
-        let mut changed = false;
-        for name in names {
-            if table.remove_property_in_char_range(char_range, name) {
-                changed = true;
+        let changed = crate::emacs_core::value::mutate_string_text_properties(str_val, |table| {
+            let mut changed = false;
+            for name in names {
+                if table.remove_property_in_char_range(char_range, name) {
+                    changed = true;
+                }
             }
-        }
-        save_string_props_for_value(str_val, table);
+            changed
+        })
+        .unwrap_or(false);
         return Ok(if changed { Value::T } else { Value::NIL });
     }
 
