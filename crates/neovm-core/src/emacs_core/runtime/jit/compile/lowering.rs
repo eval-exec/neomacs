@@ -2423,6 +2423,9 @@ pub(crate) fn jit_isa()
     jit_isa_with_opt_level(cranelift_codegen::settings::OptLevel::None)
 }
 
+// ISA construction runs only when compiling a new leaf, not when calling it.
+#[cold]
+#[inline(never)]
 pub(super) fn jit_isa_with_opt_level(
     opt_level: cranelift_codegen::settings::OptLevel,
 ) -> Result<std::sync::Arc<dyn cranelift_codegen::isa::TargetIsa>, CompileError> {
