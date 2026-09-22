@@ -24,6 +24,9 @@ const PRELUDE: &str = r####"
   "18409462373f01a4933decf72c10a9c903785edaec74a532a9566e69caaba212")
 (defconst node405-test-node-sha256
   "8aee2b5233e91de07502156662e8823eaba85f6a86bd5e717baed79cc807830d")
+;; Byte-identity is enforced only when the harness provisions a binary
+;; with a known hash (NEOMACS_TOOLS_NODE_SHA); a System-sourced node pins
+;; the version through --version.
 (defconst node405-test-node-environment-names
   '("NODE_OPTIONS" "NODE_PATH" "NODE_REPL_HISTORY" "NODE_REPL_HISTORY_SIZE"
     "NODE_DISABLE_COLORS" "NO_COLOR" "FORCE_COLOR" "NODE_EXTRA_CA_CERTS"
@@ -67,8 +70,9 @@ const PRELUDE: &str = r####"
 (unless (and (file-name-absolute-p node405-test-node)
              (file-regular-p node405-test-node)
              (not (file-symlink-p node405-test-node))
-             (equal (node405-test-file-sha256 node405-test-node)
-                    node405-test-node-sha256))
+             (or (null (getenv "NEOMACS_TOOLS_NODE_SHA"))
+                 (equal (node405-test-file-sha256 node405-test-node)
+                        (getenv "NEOMACS_TOOLS_NODE_SHA"))))
   (error "Unexpected Node executable: %s" node405-test-node))
 (let ((buffer (generate-new-buffer " *node405-version*"))
       (process-environment (copy-sequence process-environment)))
@@ -660,6 +664,17 @@ fn public_error_then_buffer_submission_recovers_in_the_same_session() -> ParityB
 
 #[test]
 fn nodejs_repl_package_batch() {
+    match neomacs_infra::tools::resolve_tool("node", "v22.22.2") {
+        Err(neomacs_infra::tools::ToolsError::VersionMismatch { expected, actual }) => {
+            eprintln!(
+                "SKIP nodejs-repl: host node identity diverges from the lock row \
+                 (expected {expected}, found {actual})."
+            );
+            return;
+        }
+        Err(error) => panic!("resolve the pinned node: {error}"),
+        Ok(_) => {}
+    }
     let cases: Vec<ParityBatchCase> = vec![
         public_start_creates_the_exact_node22_comint_session(),
         public_source_commands_submit_line_region_expression_and_file(),

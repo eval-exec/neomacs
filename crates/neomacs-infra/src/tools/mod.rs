@@ -32,7 +32,7 @@ use std::path::PathBuf;
 /// Keep this in step with the suites' actual tool requirements; a test that
 /// grows a new external dependency adds its row here rather than reaching
 /// for whatever the host happens to have.
-pub const REQUIRED_TOOLS: &[(&str, &str)] = &[("git", "2.51.2")];
+pub const REQUIRED_TOOLS: &[(&str, &str)] = &[("git", "2.51.2"), ("node", "v22.22.2")];
 
 /// Resolve every required tool; returns the directories whose union must be
 /// prepended to `PATH` for editor sessions, plus the resolved binaries.
