@@ -3046,11 +3046,10 @@ fn emit_backedge_jump_with_args(
     handlers: &[HandlerStatic],
     pending: &mut Vec<PendingDispatch>,
 ) {
-    let c = fb.ins().stack_load(rt.ptr_ty, types::I64, counter_slot, 0);
-    let c1 = lowering::iadd_imm_p(fb, c, 1);
-    let c1m = lowering::band_imm_p(fb, c1, 0xFF);
-    fb.ins().stack_store(rt.ptr_ty, c1m, counter_slot, 0);
-    let wrapped = lowering::icmp_imm_p(fb, IntCC::Equal, c1m, 0);
+    let c = fb.ins().stack_load(rt.ptr_ty, types::I8, counter_slot, 0);
+    let next = fb.ins().iadd_imm_u(c, 1);
+    fb.ins().stack_store(rt.ptr_ty, next, counter_slot, 0);
+    let wrapped = fb.ins().icmp_imm_u(IntCC::Equal, next, 0);
     let poll = fb.create_block();
     fb.ins().brif(wrapped, poll, &[], target_block, target_args);
 
@@ -3062,7 +3061,7 @@ fn emit_backedge_jump_with_args(
     // `lowering::RootWinCarry`). It runs once per 255 backward jumps, so storing
     // afresh costs nothing measurable.
     lowering::rootwin_carry_reset();
-    let one = fb.ins().iconst(types::I64, 1);
+    let one = fb.ins().iconst(types::I8, 1);
     fb.ins().stack_store(rt.ptr_ty, one, counter_slot, 0);
     // Root the target stack across the poll, including a handler-entry
     // snapshot when a baseline loop is inside a protected extent.
@@ -3842,7 +3841,7 @@ fn build_leaf_fn<M: Module>(
         fb.def_var(out_var, out_ptr);
         if let Some(slot) = backedge_counter {
             // The interpreter starts quitcounter at 1.
-            let one = fb.ins().iconst(types::I64, 1);
+            let one = fb.ins().iconst(types::I8, 1);
             fb.ins().stack_store(ptr_ty, one, slot, 0);
         }
         // Entry seeding + jump target. Normal: seed the `arity` args into the

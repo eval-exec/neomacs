@@ -2788,7 +2788,7 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
         fb.switch_to_block(entry);
         let vmctx_param = fb.block_params(entry)[0];
         if let Some(slot) = backedge_counter {
-            let one = fb.ins().iconst(types::I64, 1);
+            let one = fb.ins().iconst(types::I8, 1);
             fb.ins().stack_store(ptr_ty, one, slot, 0);
         }
         if let Some(rt) = rt.as_mut() {
