@@ -13,6 +13,11 @@ use super::scenario::{PackageTuiPair, PackageTuiScenario, PairTimeout, Readiness
 const HELM_PYDOC_TUI_PRELUDE: &str = r####"
 (defun neomacs-helm-pydoc-tui-write (path contents)
   (make-directory (file-name-directory path) t)
+  (let ((dbg (getenv "NEOMACS_HELM_PYDOC_OVERLAY_STATE")))
+    (when (and dbg (string-match-p "helm-overlay" path))
+      (with-temp-file (concat (file-name-directory dbg) "write-calls.log")
+        (let ((prior (condition-case e (with-temp-buffer (insert-file-contents (concat (file-name-directory dbg) "write-calls.log")) (buffer-string)) (error ""))))
+          (erase-buffer) (insert prior) (goto-char (point-max)) (insert (format "WRITE %s\n" path))))))
   (with-temp-file path
     (insert contents))
   path)
@@ -85,37 +90,71 @@ const HELM_PYDOC_TUI_PRELUDE: &str = r####"
     ;; machinery.
     (let ((dump (expand-file-name "helm-overlay-state.txt" root)))
       (setenv "NEOMACS_HELM_PYDOC_OVERLAY_STATE" (expand-file-name "helm-overlay-state.txt" root))
+      (condition-case setup-err
+          (progn
       (defun neomacs-helm-pydoc-overlay-dump ()
+        (condition-case dump-err
         (let ((helm-buf (and (boundp 'helm-buffer)
-                             (get-buffer helm-buffer))))
+                             (get-buffer helm-buffer)))
+              (fired-log (expand-file-name "helm-observer-fired.log" root)))
+          (let ((prior (condition-case e
+                          (with-temp-buffer
+                            (insert-file-contents fired-log)
+                            (buffer-string))
+                          (error ""))))
+            (neomacs-helm-pydoc-tui-write
+             fired-log
+             (concat prior
+                     (format "FIRED at point-max=%S\n"
+                             (buffer-live-p helm-buf)))))
           (when (buffer-live-p helm-buf)
-            (let* ((report
+            (let* ((windows
+                    (mapcar
+                     (lambda (w)
+                       (format
+                        "win buf=%S start=%S point=%S hscroll=%S\n"
+                        (buffer-name (window-buffer w))
+                        (window-start w)
+                        (window-point w)
+                        (window-hscroll w)))
+                     (window-list nil 'no-mini)))
+                   (report
                     (with-current-buffer helm-buf
                       (format
-                       "point=%S point-min=%S point-max=%S selection=%S\n"
+                       "point=%S point-min=%S point-max=%S selection=%S mode=%S read-only=%S\n"
                        (point) (point-min) (point-max)
-                       (and (boundp 'helm-selection-point) helm-selection-point))))
-                   (rows
-                    (mapcar
-                     (lambda (ov)
-                       (format
-                        "ov start=%S end=%S face=%S priority=%S window=%S\n"
-                        (overlay-start ov) (overlay-end ov)
-                        (overlay-get ov 'face) (overlay-get ov 'priority)
-                        (overlay-get ov 'window)))
-                     (with-current-buffer helm-buf
-                       (overlays-in (point-min) (point-max))))))
+                       (and (boundp 'helm-selection-point) helm-selection-point)
+                       major-mode buffer-read-only))))
               (neomacs-helm-pydoc-tui-write
                (getenv "NEOMACS_HELM_PYDOC_OVERLAY_STATE")
-               (concat report (mapconcat #'identity rows "")))))))
+               (concat
+                (mapconcat #'identity windows "")
+                report
+                (mapcar
+                 (lambda (ov)
+                   (format
+                    "ov start=%S end=%S face=%S priority=%S window=%S\n"
+                    (overlay-start ov) (overlay-end ov)
+                    (overlay-get ov 'face) (overlay-get ov 'priority)
+                    (overlay-get ov 'window)))
+                 (with-current-buffer helm-buf
+                   (overlays-in (point-min) (point-max)))))))))
       (add-hook 'helm-move-selection-after-hook #'neomacs-helm-pydoc-overlay-dump)
       (add-hook 'helm-after-update-hook #'neomacs-helm-pydoc-overlay-dump)
       ;; Converge: a fast idle dump so the file reflects the CURRENT state
       ;; (the hooks alone can lag the screen by one update).
       (run-with-idle-timer
        0.25 0.25 #'neomacs-helm-pydoc-overlay-dump))
+        (error (neomacs-helm-pydoc-tui-write
+                (expand-file-name "helm-overlay-dump-error.txt" root)
+                (format "DUMP-ERR: %S" dump-err))))
+      (neomacs-helm-pydoc-tui-write dump "OVERLAY-OBSERVER-INSTALLED"))
+      (setenv "NEOMACS_HELM_PYDOC_OVERLAY_STATE" (expand-file-name "helm-overlay-state.txt" root))
+      (neomacs-helm-pydoc-tui-write
+       (expand-file-name "helm-overlay-setup-error.txt" root)
+       (format "SETUP-ERR: %S" setup-err)))
     (find-file source)
-    (goto-char (point-max))))
+    (goto-char (point-max)))))
 
 (add-hook 'emacs-startup-hook #'neomacs-helm-pydoc-tui-setup 100)
 "####;
