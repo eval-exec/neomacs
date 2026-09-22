@@ -5,7 +5,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use wait_timeout::ChildExt;
 
@@ -78,7 +78,7 @@ impl PathGnuDriver {
                     PathBuf::from(String::from_utf8_lossy(&which.stdout).trim().to_string());
                 if !which.status.success() || !candidate.is_file() {
                     return Err(
-                        "no GNU Emacs for package installs: set NEOMACS_PACKAGES_GNU or put                          `emacs` on PATH"
+                        "no GNU Emacs for package installs: set NEOMACS_PACKAGES_GNU or put `emacs` on PATH"
                             .to_string(),
                     );
                 }
@@ -305,10 +305,24 @@ pub(crate) fn output_with_timeout(
     let status = match child.wait_timeout(timeout) {
         Ok(Some(status)) => status,
         Ok(None) => {
+            // Deadline hit: kill the child, drain whatever output it managed
+            // to produce, and report TimedOut — the `source_lock` install
+            // diagnostics match on this variant for the "timed out after
+            // {timeout:?}" wording, so a deadline must never masquerade as
+            // an ordinary (failed) exit.
             let _ = child.kill();
             let status = child.wait().map_err(InstallCommandError::Launch)?;
-            let _ = Instant::now();
-            status
+            let stdout = stdout_reader.join().map_err(|_| {
+                InstallCommandError::Capture("stdout reader panicked".to_string())
+            })??;
+            let stderr = stderr_reader.join().map_err(|_| {
+                InstallCommandError::Capture("stderr reader panicked".to_string())
+            })??;
+            return Err(InstallCommandError::TimedOut(Output {
+                status,
+                stdout,
+                stderr,
+            }));
         }
         Err(error) => return Err(InstallCommandError::Launch(error)),
     };

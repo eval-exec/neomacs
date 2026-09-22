@@ -1172,25 +1172,24 @@ fn prepare_cached_source_artifact_with_tools(
             .env("NEOMACS_PACKAGE_COMMIT_TIME", commit_time.to_string())
             .args(["--batch", "--quick", "--load"])
             .arg(&build_script);
-        let output =
-            output_with_timeout(&mut command, driver.timeout()).map_err(|error| match error {
-                InstallCommandError::Launch(error) => format!(
-                    "failed to launch {} to build {} from source: {error}",
-                    driver.name(),
-                    source.name
-                ),
-                InstallCommandError::TimedOut(_) => format!(
-                    "{} source build for {} timed out after {:?}",
-                    driver.name(),
-                    source.name,
-                    driver.timeout()
-                ),
-                InstallCommandError::Capture(error) => format!(
-                    "failed to capture {} source build for {}: {error}",
-                    driver.name(),
-                    source.name
-                ),
-            })?;
+        let output = driver.run(&mut command).map_err(|error| match error {
+            InstallCommandError::Launch(error) => format!(
+                "failed to launch {} to build {} from source: {error}",
+                driver.name(),
+                source.name
+            ),
+            InstallCommandError::TimedOut(_) => format!(
+                "{} source build for {} timed out after {:?}",
+                driver.name(),
+                source.name,
+                driver.timeout()
+            ),
+            InstallCommandError::Capture(error) => format!(
+                "failed to capture {} source build for {}: {error}",
+                driver.name(),
+                source.name
+            ),
+        })?;
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         let marker = format!(
@@ -1423,7 +1422,7 @@ pub fn prepare_cached_locked_package_plan(
     let mut command = driver.command();
     configure_process_environment(&mut command, &root, &home, &editor_tmp);
     command.args(["--batch", "--quick", "--eval", &form]);
-    let output = match output_with_timeout(&mut command, driver.timeout()) {
+    let output = match driver.run(&mut command) {
         Ok(output) => output,
         Err(error) => {
             let error = match error {
@@ -1605,9 +1604,9 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn initialize_git_repository(directory: &Path, nonce: &str) -> (String, String) {
+    fn initialize_git_repository(directory: &Path, marker: &str) -> (String, String) {
         fs::create_dir_all(directory).expect("create contract Git repository");
-        fs::write(directory.join("source.el"), format!(";; {nonce}\n"))
+        fs::write(directory.join("source.el"), format!(";; {marker}\n"))
             .expect("write contract Git source");
         assert!(
             Command::new("git")
@@ -1672,13 +1671,13 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let fixture = TestSandbox::new(label).expect("create source cache contract sandbox");
-        let nonce = SystemTime::now()
+        let marker = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system clock is after the Unix epoch")
             .as_nanos()
             .to_string();
         let repository = fixture.root().join("repository");
-        let (repository, revision) = initialize_git_repository(&repository, &nonce);
+        let (repository, revision) = initialize_git_repository(&repository, &marker);
         let invocation_log = fixture.root().join("invocations");
         let runtime_script = fixture.root().join("fake-emacs");
         fs::write(
@@ -1703,7 +1702,7 @@ printf 'NEOMACS-SOURCE-PACKAGE:ready:%s:%s\n' \
         let package_name = format!(
             "neomacs-source-{}-{}",
             if fail { "failure" } else { "success" },
-            nonce
+            marker
         );
         let source = LockedPackageSource {
             name: &package_name,
