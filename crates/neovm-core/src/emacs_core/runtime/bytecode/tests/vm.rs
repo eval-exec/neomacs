@@ -2006,6 +2006,135 @@ fn vm_bytecode_callee_skips_native_string_writeback_classification() {
 }
 
 #[test]
+fn vm_string_builtin_calls_preserve_aliases_redefinition_and_arity() {
+    crate::test_utils::init_test_tracing();
+    // GNU Emacs returns (70 nil) with either compiler binding mode. Exercise
+    // actual Bcall instructions, including the same symbol after repeated fset.
+    let form = r#"(let* ((call (byte-compile
+              '(lambda (function string item)
+                 (let* ((alias string) (result (funcall function string item)))
+                   (list result string alias (eq result string) (eq string alias))))))
+       (wrong-arity (byte-compile '(lambda (function string) (funcall function string))))
+       (fill (symbol-function 'fillarray))
+       (concat-subr (symbol-function 'concat))
+       (count 0) failures)
+  (fset 'vm-wb-direct fill)
+  (fset 'vm-wb-alias 'fillarray)
+  (fset 'vm-wb-chain 'vm-wb-alias)
+  (dolist (original '("abc" "éßø" "漢字文" "😀😃😄" ""))
+    (let ((character (if (> (length original) 0) (aref original 0) ?x)))
+      (dolist (function (list 'fillarray fill 'vm-wb-direct 'vm-wb-alias 'vm-wb-chain))
+        (let* ((string (copy-sequence original))
+               (filled (make-string (length string) character))
+               (actual (funcall call function string character))
+               (expected (list filled filled filled t t)))
+          (setq count (1+ count))
+          (unless (equal actual expected)
+            (push (list 'fill original function actual) failures))))
+      ;; Reuse the same compiled call and symbol across function-epoch changes.
+      (dotimes (_ 3)
+        (fset 'vm-wb-changing concat-subr)
+        (let* ((string (copy-sequence original))
+               (actual (funcall call 'vm-wb-changing string "!")))
+          (setq count (1+ count))
+          (unless (equal actual (list (concat original "!") original original nil t))
+            (push (list 'concat original actual) failures)))
+        (fset 'vm-wb-changing fill)
+        (let* ((string (copy-sequence original))
+               (filled (make-string (length string) character))
+               (actual (funcall call 'vm-wb-changing string character)))
+          (setq count (1+ count))
+          (unless (equal actual (list filled filled filled t t))
+            (push (list 'changed original actual) failures))))
+      (dolist (function (list 'fillarray fill 'vm-wb-alias))
+        (setq count (1+ count))
+        (unless (eq (condition-case err
+                        (funcall wrong-arity function (copy-sequence original))
+                      (error (car err)))
+                    'wrong-number-of-arguments)
+          (push (list 'arity original function) failures)))))
+  (list count (nreverse failures)))"#;
+    for lexical in ["nil", "t"] {
+        assert_eq!(
+            vm_bootstrap_eval_str(&format!("(let ((lexical-binding {lexical})) {form})")),
+            "OK (70 nil)",
+            "lexical-binding={lexical}"
+        );
+    }
+}
+
+fn string_call_retaining_argument(callee: Value, string: Value, item: Value) -> ByteCodeFunction {
+    let mut caller = ByteCodeFunction::new(LambdaParams {
+        required: vec![],
+        optional: vec![],
+        rest: None,
+    });
+    caller.lexical = true;
+    let callee = caller.add_constant(callee);
+    let string = caller.add_constant(string);
+    let item = caller.add_constant(item);
+    caller.ops = vec![
+        Op::Constant(string),
+        Op::Constant(callee),
+        Op::StackRef(1),
+        Op::Constant(item),
+        Op::Call(2),
+        Op::Pop,
+        Op::Return,
+    ];
+    caller.max_stack = 4;
+    caller
+}
+
+#[test]
+fn vm_named_fillarray_keeps_existing_writeback_after_builtin_redefinition() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new_vm_runtime_harness();
+    let concat = eval.eval_str("(symbol-function 'concat)").unwrap();
+    eval.obarray
+        .set_symbol_function_id(intern("fillarray"), concat);
+    let caller = string_call_retaining_argument(
+        Value::from_sym_id(intern("fillarray")),
+        Value::string("abc"),
+        Value::string("!"),
+    );
+    let result = new_vm(&mut eval).execute(&caller, vec![]).unwrap();
+    // Preserve the VM's existing replacement-object behavior for the named
+    // fillarray call, even when its resolved builtin has a different identity.
+    assert_eq!(result.as_utf8_str(), Some("abc!"));
+}
+
+#[test]
+fn vm_string_builtin_call_resolves_again_after_debugger_redefinition() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new_vm_runtime_harness();
+    eval.eval_str(
+        r#"(progn
+             (fset 'vm-wb-debug-target (symbol-function 'concat))
+             (setq debugger
+                   (lambda (&rest args)
+                     (if (eq (car args) 'exit)
+                         (car (cdr args))
+                       (fset 'vm-wb-debug-target (symbol-function 'fillarray))
+                       nil))))"#,
+    )
+    .expect("install debugger redefinition");
+    let caller = string_call_retaining_argument(
+        Value::from_sym_id(intern("vm-wb-debug-target")),
+        Value::string("abc"),
+        Value::fixnum('x' as i64),
+    );
+    eval.set_variable("debug-on-next-call", Value::T);
+    reset_mutating_writeback_classification_count();
+    let result = new_vm(&mut eval).execute(&caller, vec![]).unwrap();
+    assert_eq!(result.as_utf8_str(), Some("xxx"));
+    assert!(
+        mutating_writeback_classification_count() > 0,
+        "an armed debugger must retain the generic classification path"
+    );
+}
+
+#[test]
 fn vm_repeated_symbol_bytecode_calls_reuse_epoch_validated_resolution() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new_minimal_vm_harness();
