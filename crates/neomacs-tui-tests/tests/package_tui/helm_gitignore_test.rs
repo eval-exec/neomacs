@@ -7,9 +7,7 @@ use neomacs_tui_tests::TuiSession;
 
 use crate::{CachedMelpaOracle, HELM_GITIGNORE_MELPA_PIN};
 
-use neomacs_melpa_test_support::{
-    PackageTuiPair, PackageTuiScenario, PairTimeout, ReadinessCheckpoint,
-};
+use crate::scenario::{PackageTuiPair, PackageTuiScenario, PairTimeout, ReadinessCheckpoint};
 
 /// `helm-gitignore' is a thin interactive client, so its public seam is the
 /// complete `M-x helm-gitignore' session.  The package, Helm, Request,

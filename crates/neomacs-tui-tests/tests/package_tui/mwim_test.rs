@@ -7,9 +7,7 @@ use neomacs_tui_tests::TuiSession;
 
 use crate::{CachedMelpaOracle, MWIM_MELPA_PIN};
 
-use neomacs_melpa_test_support::{
-    PackageTuiPair, PackageTuiScenario, PairTimeout, ReadinessCheckpoint,
-};
+use crate::scenario::{PackageTuiPair, PackageTuiScenario, PairTimeout, ReadinessCheckpoint};
 
 const MWIM_VISUAL_TUI_PRELUDE: &str = r####"
 (require 'cl-lib)

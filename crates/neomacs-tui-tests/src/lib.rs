@@ -30,7 +30,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::time::{Duration, Instant};
 
-mod launch;
+pub mod launch;
 mod pty_output;
 mod recording;
 
@@ -2752,3 +2752,5 @@ mod exact_display_tests {
         );
     }
 }
+
+pub mod package_scenario;

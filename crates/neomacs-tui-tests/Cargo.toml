@@ -19,6 +19,13 @@ autotests = false
 name = "tui"
 path = "tests/tui.rs"
 
+[[test]]
+name = "package_tui"
+path = "tests/package_tui.rs"
+
+[dependencies]
+expect-test = "1.5.1"
+
 [target.'cfg(unix)'.dependencies]
 vt100 = "0.16"
 pty-process = "0.5"
@@ -26,4 +33,5 @@ libc = { workspace = true }
 tempfile.workspace = true
 neomacs-display-protocol.workspace = true
 neomacs-infra.workspace = true
+neomacs-melpa-test-support.workspace = true
 serde_json.workspace = true

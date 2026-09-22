@@ -22,9 +22,6 @@ mod package_archive;
 mod prepared_package_set;
 mod source_lock;
 mod tree_sitter_grammar;
-#[cfg(all(unix, feature = "tui"))]
-mod tui_scenario;
-
 pub use package_archive::{GNU_ELPA_ARCHIVE, PackageArchiveSpec, prepare_cached_gnu_elpa_package};
 pub use prepared_package_set::{
     LoadSuffixes, PackageActivation, PreparedPackageSet, package_activation_elisp,
@@ -36,11 +33,6 @@ pub use source_lock::{
 };
 pub use tree_sitter_grammar::{
     prepare_cached_tree_sitter_grammar, prepare_cached_tree_sitter_grammar_from_subdirectory,
-};
-#[cfg(all(unix, feature = "tui"))]
-pub use tui_scenario::{
-    DisplayCheckpoint, PackageTuiPair, PackageTuiScenario, PairTimeout, ReadinessCheckpoint,
-    TerminalProfile,
 };
 
 pub const DEFAULT_PROCESS_TIMEOUT: Duration = Duration::from_secs(300);

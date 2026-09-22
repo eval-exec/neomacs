@@ -3,77 +3,82 @@ use std::time::Duration;
 use expect_test::expect;
 use neomacs_tui_tests::RawTerminalSnapshot;
 
-use crate::{COMPAT_GNU_ELPA_PIN, CachedMelpaOracle, VERTICO_MELPA_PIN};
+use crate::{CachedMelpaOracle, MAGIT_MELPA_PIN};
 
-use neomacs_melpa_test_support::{
-    DisplayCheckpoint, PackageTuiScenario, PairTimeout, ReadinessCheckpoint,
-};
+use crate::scenario::{DisplayCheckpoint, PackageTuiScenario, PairTimeout, ReadinessCheckpoint};
 
-const VERTICO_TUI_PRELUDE: &str = r#"
-(require 'vertico)
-(setq vertico-count 5
-      vertico-cycle t)
-(vertico-mode 1)
-(dolist (fixture '(("project-alpha" . "ALPHA BUFFER\n")
-                   ("project-beta" . "BETA BUFFER\n")
-                   ("project-notes" . "NOTES BUFFER\n")))
-  (with-current-buffer (get-buffer-create (car fixture))
-    (erase-buffer)
-    (insert (cdr fixture))))
+const MAGIT_LOG_TUI_PRELUDE: &str = r#"
+(require 'magit)
+(defun neomacs-magit-tui-display-same-window (buffer)
+  (display-buffer-same-window buffer nil))
+(defun neomacs-magit-tui-stabilize-window ()
+  (setq-local header-line-format nil
+              mode-line-format nil))
+(add-hook 'magit-log-mode-hook #'neomacs-magit-tui-stabilize-window)
+(setq inhibit-message t
+      byte-compile-verbose nil
+      magit-display-buffer-function #'neomacs-magit-tui-display-same-window
+      magit-log-margin
+      '(t "%Y-%m-%d %a %H:%M" magit-log-margin-width t 18))
+(let* ((default-directory (file-name-as-directory default-directory))
+       (file (expand-file-name "tracked.txt" default-directory)))
+  (unless (zerop (call-process "git" nil nil nil "init" "-q" "."))
+    (error "git init failed"))
+  (dolist (setting '(("user.name" "A U Thor")
+                     ("user.email" "a.u.thor@example.com")))
+    (unless (zerop (apply #'call-process "git" nil nil nil "config" setting))
+      (error "git config failed: %S" setting)))
+  (cl-labels
+      ((commit (subject timestamp contents)
+         (with-temp-file file
+           (insert contents))
+         (unless (zerop (call-process "git" nil nil nil "add" "tracked.txt"))
+           (error "git add failed"))
+         (let ((process-environment
+                (append (list (concat "GIT_AUTHOR_DATE=" timestamp)
+                              (concat "GIT_COMMITTER_DATE=" timestamp))
+                        process-environment)))
+           (unless (zerop (call-process "git" nil nil nil "commit" "-q" "-m" subject))
+             (error "git commit failed: %s" subject)))))
+    (commit "short" "2001-02-03T04:05:06+0000" "one\n")
+    (commit "a deliberately much longer subject" "2002-03-04T05:06:07+0000"
+            "one\ntwo\n")
+    (commit "medium subject" "2003-04-05T06:07:08+0000" "one\ntwo\nthree\n"))
+  (find-file file)
+  (magit-log-buffer-file)
+  (when-let* ((warnings (get-buffer "*Warnings*")))
+    (kill-buffer warnings))
+  (delete-other-windows))
 "#;
 
-fn candidate_rows(grid: &[String]) -> Vec<u16> {
-    grid.iter()
-        .enumerate()
-        .filter_map(|(row, contents)| {
-            contents
-                .trim_start()
-                .starts_with("project-")
-                .then_some(row as u16)
-        })
-        .collect()
-}
-
 #[test]
-fn vertico_real_minibuffer_candidates_and_selection_match_gnu_grid() {
-    let oracle = CachedMelpaOracle::new(VERTICO_MELPA_PIN, "vertico.el")
-        .expect("prepare revision-pinned Vertico source")
-        .with_gnu_elpa_dependency(COMPAT_GNU_ELPA_PIN)
-        .expect("prepare exact Compat dependency")
-        .with_prelude(VERTICO_TUI_PRELUDE);
-    let ready = |grid: &[String]| grid.iter().any(|row| row.contains("*scratch*"));
-    let mut pair = PackageTuiScenario::new("vertico-minibuffer", oracle.prepared_packages())
+fn magit_log_buffer_file_margin_columns_match_gnu_full_screen() {
+    let oracle = CachedMelpaOracle::new(MAGIT_MELPA_PIN, "magit.el")
+        .expect("prepare revision-pinned Magit source")
+        .with_prelude(MAGIT_LOG_TUI_PRELUDE);
+    let ready = |grid: &[String]| {
+        grid.iter().any(|row| {
+            row.contains("medium subject") && row.contains("A U Thor") && row.contains("2003-04-05")
+        })
+    };
+    let mut pair = PackageTuiScenario::new("magit-log-margin", oracle.prepared_packages())
         .spawn_when_ready(
             ReadinessCheckpoint::new(
-                "initial scratch buffer",
-                PairTimeout::per_editor(Duration::from_secs(15), Duration::from_secs(20)),
+                "Magit log rows",
+                PairTimeout::per_editor(Duration::from_secs(20), Duration::from_secs(30)),
             ),
             ready,
         )
         .expect("spawn ready package TUI pair");
 
-    pair.send_keys_both("C-x b");
-    for session in [&mut pair.gnu, &mut pair.neo] {
-        session.read_until(Duration::from_secs(8), |grid| {
-            grid.iter().any(|row| row.contains("Switch to buffer"))
-        });
-    }
-    pair.send_both(b"project-");
-    for session in [&mut pair.gnu, &mut pair.neo] {
-        session.read_until(Duration::from_secs(8), |grid| {
-            candidate_rows(grid).len() >= 3
-        });
-    }
-
-    let gnu_rows = candidate_rows(&pair.gnu.text_grid());
-    let neo_rows = candidate_rows(&pair.neo.text_grid());
-    assert_eq!(neo_rows, gnu_rows, "Vertico candidate rows differ from GNU");
     let gnu_snapshot = RawTerminalSnapshot::capture_full_screen(pair.gnu.screen());
 
     let expected_ansi_grid = expect![[r#"
-        [0;3mFile Edit Options Buffers Tools Minibuf Help                                                                                                                    [0m
-        [0;38;2;255;127;36m;; This buffer is for text that is not saved, and for Lisp evaluation. [0m                                                                                         [0m
-        [0;38;2;255;127;36m;; To create a file, visit it with ‘C-x C-f’ and enter text in its buffer. [0m                                                                                     [0m
+        [0;3mFile Edit Options Buffers Tools Magit Help                                                                                                                      [0m
+        [0;1;4;38;2;238;220;130;48;2;51;51;51mCommits in master touching tracked.txt                                                                                                                          [0m
+        [0;38;2;102;102;102;48;2;51;51;51med5bbb1[0;48;2;51;51;51m * [0;38;2;51;51;51;48;2;176;226;255mmaster[0;48;2;51;51;51m medium subject                                                                                          [0;38;2;255;99;71mA U Thor          [0m [0;38;2;204;204;204m2003-04-05 Sat 06:07[0m
+        [0;38;2;102;102;102md7e6cb1[0m * a deliberately much longer subject                                                                             [0;38;2;255;99;71mA U Thor          [0m [0;38;2;204;204;204m2002-03-04 Mon 05:06[0m
+        [0;38;2;102;102;102m807ccad[0m * short                                                                                                          [0;38;2;255;99;71mA U Thor          [0m [0;38;2;204;204;204m2001-02-03 Sat 04:05[0m
                                                                                                                                                                         [0m
                                                                                                                                                                         [0m
                                                                                                                                                                         [0m
@@ -115,20 +120,18 @@ fn vertico_real_minibuffer_candidates_and_selection_match_gnu_grid() {
                                                                                                                                                                         [0m
                                                                                                                                                                         [0m
                                                                                                                                                                         [0m
-        [0;38;2;229;229;229;48;2;51;51;51m-UUU:--- F1  [0;1;38;2;229;229;229;48;2;51;51;51m*scratch*   [0;38;2;229;229;229;48;2;51;51;51m   All   L4     (Lisp Interaction ElDoc) ----------------------------------------------------------------------------------------------[0m
-        [0;38;2;0;205;205m1/3    Switch to buffer (default *Messages*): [0mproject-                                                                                                          [0m
-        [0;38;2;173;216;230;48;2;85;107;47mproject-[0;1;48;2;85;107;47mb[0;48;2;85;107;47meta                                                                                                                                                    [0m
-        [0;38;2;173;216;230mproject-[0;1ma[0mlpha                                                                                                                                                   [0m
-        [0;38;2;173;216;230mproject-[0;1mn[0motes                                                                                                                                                   [0m
                                                                                                                                                                         [0m
+                                                                                                                                                                        [0m
+                                                                                                                                                                        [0m
+        compiling byte-optimize-lapcode...done                                                                                                                          [0m
     "#]];
     expected_ansi_grid.assert_eq(&gnu_snapshot.ansi_grid());
     let expected_plain_grid = expect![[r#"
-         0 |File␠Edit␠Options␠Buffers␠Tools␠Minibuf␠Help␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠|
-         1 |;;␠This␠buffer␠is␠for␠text␠that␠is␠not␠saved,␠and␠for␠Lisp␠evaluation.␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠|
-         2 |;;␠To␠create␠a␠file,␠visit␠it␠with␠‘C-x␠C-f’␠and␠enter␠text␠in␠its␠buffer.␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠|
-         3 |∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅|
-         4 |∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅|
+         0 |File␠Edit␠Options␠Buffers␠Tools␠Magit␠Help␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠|
+         1 |Commits␠in␠master␠touching␠tracked.txt␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠|
+         2 |ed5bbb1␠*␠master␠medium␠subject␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠A␠U␠Thor␠␠␠␠␠␠␠␠␠␠␠2003-04-05␠Sat␠06:07|
+         3 |d7e6cb1␠*␠a␠deliberately␠much␠longer␠subject␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠A␠U␠Thor␠␠␠␠␠␠␠␠␠␠␠2002-03-04␠Mon␠05:06|
+         4 |807ccad␠*␠short␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠A␠U␠Thor␠␠␠␠␠␠␠␠␠␠␠2001-02-03␠Sat␠04:05|
          5 |∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅|
          6 |∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅|
          7 |∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅|
@@ -168,30 +171,19 @@ fn vertico_real_minibuffer_candidates_and_selection_match_gnu_grid() {
         41 |∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅|
         42 |∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅|
         43 |∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅|
-        44 |-UUU:---␠F1␠␠*scratch*␠␠␠␠␠␠All␠␠␠L4␠␠␠␠␠(Lisp␠Interaction␠ElDoc)␠----------------------------------------------------------------------------------------------|
-        45 |1/3␠␠␠␠Switch␠to␠buffer␠(default␠*Messages*):␠project-∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅|
-        46 |project-beta␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠␠|
-        47 |project-alpha∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅|
-        48 |project-notes∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅|
-        49 |∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅|
+        44 |∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅|
+        45 |∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅|
+        46 |∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅|
+        47 |∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅|
+        48 |∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅|
+        49 |compiling␠byte-optimize-lapcode...done∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅∅|
     "#]];
     expected_plain_grid.assert_eq(&gnu_snapshot.plain_grid());
 
-    pair.assert_display(DisplayCheckpoint::new("Vertico full-screen terminal state"));
-
-    pair.send_both(b"beta");
-    pair.send_key_both("RET");
-    for session in [&mut pair.gnu, &mut pair.neo] {
-        session.read_until(Duration::from_secs(8), |grid| {
-            grid.iter().any(|row| row.contains("BETA BUFFER"))
-        });
-        assert!(
-            session
-                .text_grid()
-                .iter()
-                .any(|row| row.contains("BETA BUFFER")),
-            "{} did not select the real project-beta buffer",
-            session.name
-        );
-    }
+    pair.assert_display(DisplayCheckpoint::new(
+        "Magit log full-screen terminal state",
+    ));
+    pair.assert_display(DisplayCheckpoint::raw_terminal(
+        "Magit log full-screen terminal wire state",
+    ));
 }
