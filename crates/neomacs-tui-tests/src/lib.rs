@@ -2754,3 +2754,5 @@ mod exact_display_tests {
 }
 
 pub mod package_scenario;
+#[allow(dead_code)]
+pub mod pair;
