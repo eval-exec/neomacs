@@ -2423,17 +2423,19 @@ pub(crate) fn jit_isa()
     jit_isa_with_opt_level(cranelift_codegen::settings::OptLevel::None)
 }
 
-// ISA construction runs only when compiling a new leaf, not when calling it.
-#[cold]
-#[inline(never)]
 pub(super) fn jit_isa_with_opt_level(
     opt_level: cranelift_codegen::settings::OptLevel,
 ) -> Result<std::sync::Arc<dyn cranelift_codegen::isa::TargetIsa>, CompileError> {
     use cranelift_codegen::settings::{self, Configurable};
     let init_err = |e: String| CompileError::Backend(BackendError::ModuleInit(e));
     let mut flags = settings::builder();
+    let opt_level = match opt_level {
+        settings::OptLevel::None => "none",
+        settings::OptLevel::Speed => "speed",
+        settings::OptLevel::SpeedAndSize => "speed_and_size",
+    };
     flags
-        .set("opt_level", &opt_level.to_string())
+        .set("opt_level", opt_level)
         .map_err(|e| init_err(e.to_string()))?;
     flags
         .set("use_colocated_libcalls", "false")
