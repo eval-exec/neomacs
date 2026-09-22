@@ -5330,8 +5330,19 @@ pub(crate) fn lower_simple_op(
                 stack_raw.push(false);
                 return Ok(());
             }
-            let b = stack_as_raw(fb, dsite, stack, stack_raw, n - 1, known);
-            let a = stack_as_raw(fb, dsite, stack, stack_raw, n - 2, known);
+            let (a, b) = if !stack_raw[n - 2] && !stack_raw[n - 1] {
+                // Fixnum tagging (4*x + 2) preserves signed integer order.
+                // Keep tagged operands when neither came from raw arithmetic;
+                // otherwise retain the existing cross-op unboxed path.
+                let (a, b) = (stack[n - 2], stack[n - 1]);
+                guard_fixnum(fb, dsite, b, known);
+                guard_fixnum(fb, dsite, a, known);
+                (a, b)
+            } else {
+                let b = stack_as_raw(fb, dsite, stack, stack_raw, n - 1, known);
+                let a = stack_as_raw(fb, dsite, stack, stack_raw, n - 2, known);
+                (a, b)
+            };
             stack.truncate(n - 2);
             stack_raw.truncate(n - 2);
             let cc = match op {
@@ -5342,7 +5353,7 @@ pub(crate) fn lower_simple_op(
                 Op::Geq => IntCC::SignedGreaterThanOrEqual,
                 _ => unreachable!("matched comparison ops above"),
             };
-            // Operands raw, result is a tagged t/nil (a sink, not raw).
+            // Operands share a representation; the result is tagged t/nil.
             let cond = fb.ins().icmp(cc, a, b);
             let t = fb.ins().iconst(types::I64, Value::T.bits() as i64);
             let nil = fb.ins().iconst(types::I64, Value::NIL.bits() as i64);

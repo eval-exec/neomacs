@@ -4434,6 +4434,9 @@ mod mir_named_calls_tests;
 mod osr_binding_tests;
 
 #[cfg(test)]
+#[path = "tests/fixnum_comparisons.rs"]
+mod fixnum_comparison_tests;
+#[cfg(test)]
 #[path = "tests/osr_entry_guards.rs"]
 mod osr_entry_guard_tests;
 #[cfg(test)]
