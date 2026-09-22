@@ -141,6 +141,18 @@ const HELM_PYDOC_TUI_PRELUDE: &str = r####"
                    (overlays-in (point-min) (point-max)))))))))
       (add-hook 'helm-move-selection-after-hook #'neomacs-helm-pydoc-overlay-dump)
       (add-hook 'helm-after-update-hook #'neomacs-helm-pydoc-overlay-dump)
+      ;; Fire breadcrumbs: which triggers provably run inside the live helm
+      ;; session?  Each appends to its own log; errors surface in the file.
+      (defun neomacs-helm-pydoc-log-fire (name)
+        (let ((log (expand-file-name "helm-fires.log" (getenv "HOME")))
+              (prior
+               (condition-case e
+                   (with-temp-buffer
+                     (insert-file-contents
+                      (expand-file-name "helm-fires.log" (getenv "HOME")))
+                     (buffer-string))
+                 (error ""))))
+          (neomacs-helm-pydoc-tui-write log (concat prior name "\n"))))
       ;; Converge: a fast idle dump so the file reflects the CURRENT state
       ;; (the hooks alone can lag the screen by one update).
       (run-with-idle-timer
@@ -818,4 +830,131 @@ fn helm_pydoc_real_helm_workflows_match_gnu_terminal_and_filesystem() {
         "Helm Pydoc GNU/Neomacs divergences:\n{}",
         divergences.join("\n\n")
     );
+}
+
+/// Which triggers provably fire inside a LIVE helm session?  Each hook
+/// appends its own breadcrumb to a log file; the session idles afterwards,
+/// so the file reflects every trigger that fired.  This is the reproduce
+/// step for the introspection fire-trigger problem (#425 follow-up).
+#[test]
+fn helm_session_trigger_firing_contract() {
+    let oracle = CachedMelpaOracle::new(HELM_PYDOC_MELPA_PIN, "helm-pydoc.el")
+        .expect("prepare revision-pinned Helm Pydoc source")
+        .with_melpa_dependency(HELM_CORE_MELPA_PIN)
+        .expect("prepare exact Helm Core dependency")
+        .with_prelude(HELM_PYDOC_TUI_PRELUDE);
+    let mut pair = PackageTuiScenario::new("helm-fires-probe", oracle.prepared_packages())
+        .spawn_when_ready(
+            ReadinessCheckpoint::new(
+                "Python module fixture",
+                PairTimeout::same(Duration::from_secs(20)),
+            ),
+            |grid| grid.iter().any(|row| row.contains("candidate-42")),
+        )
+        .expect("spawn ready Helm Pydoc package TUI pair");
+    open_and_filter_module(&mut pair, "deploymentkit");
+    open_action_menu(&mut pair);
+    std::thread::sleep(Duration::from_secs(3));
+    let read_log = |session: &TuiSession, name: &str| {
+        fs::read_to_string(session.home_dir().join(name))
+            .unwrap_or_else(|error| format!("unavailable: {error}"))
+    };
+    let gnu_fired = read_log(&pair.gnu, "helm-fires.log");
+    let neo_fired = read_log(&pair.neo, "helm-fires.log");
+    eprintln!("FIRES-GNU: {gnu_fired}");
+    eprintln!("FIRES-NEO: {neo_fired}");
+    assert!(
+        gnu_fired.contains("post-command"),
+        "post-command-hook must fire inside the live helm session:\n{gnu_fired}"
+    );
+}
+
+/// The live helm ingredient my outside-session probes never replicated:
+/// the MINIBUFFER is active while the overlay renders (helm reads events
+/// from the miniwindow).  This probe arms an overlay in a side window
+/// during minibuffer-setup, holds the minibuffer open, and captures both
+/// engines' screens in that state.
+#[test]
+fn overlay_face_renders_with_the_minibuffer_active() {
+    let oracle = CachedMelpaOracle::new(HELM_PYDOC_MELPA_PIN, "helm-pydoc.el")
+        .expect("prepare revision-pinned Helm Pydoc source")
+        .with_melpa_dependency(HELM_CORE_MELPA_PIN)
+        .expect("prepare exact Helm Core dependency")
+        .with_prelude(HELM_PYDOC_TUI_PRELUDE);
+    let mut pair =
+        PackageTuiScenario::new("helm-minibuf-overlay-probe", oracle.prepared_packages())
+            .spawn_when_ready(
+                ReadinessCheckpoint::new(
+                    "Python module fixture",
+                    PairTimeout::same(Duration::from_secs(20)),
+                ),
+                |grid| grid.iter().any(|row| row.contains("candidate-42")),
+            )
+            .expect("spawn ready Helm Pydoc package TUI pair");
+
+    // Open the side window with the overlay, then enter the minibuffer.
+    // Long expressions go through M-: + bracketed paste (send_keys strips
+    // spaces, which destroys elisp).
+    let setup_form = r#"(progn (switch-to-buffer (get-buffer-create "probe-faces")) (fundamental-mode) (erase-buffer) (insert "SELECTED CANDIDATE") (let ((ov (make-overlay (point-min) (point-max) (current-buffer) t nil))) (overlay-put ov 'face 'probe-helm-shape-face)) (delete-other-windows) (split-window-right) (other-window 1) (set-window-start (selected-window) (point-min) nil t))"#;
+    let mini_form = r#"(minibuffer-with-setup-hook (lambda () (redisplay)) (read-from-minibuffer "MINIPROBE: "))"#;
+    send_to_both(&mut pair, |session| {
+        session.send_key("M-:");
+        session.read_until(Duration::from_secs(8), |grid| {
+            grid.iter().any(|row| row.contains("Eval:"))
+        });
+        session.paste(setup_form);
+        session.send_key("RET");
+    });
+    wait_for_both(&mut pair, Duration::from_secs(10), |grid| {
+        grid.iter().any(|row| row.contains("SELECTED CANDIDATE"))
+    });
+    send_to_both(&mut pair, |session| {
+        session.send_key("M-:");
+        session.read_until(Duration::from_secs(8), |grid| {
+            grid.iter().any(|row| row.contains("Eval:"))
+        });
+        session.paste(mini_form);
+        session.send_key("RET");
+    });
+    let mini_ready = |grid: &[String]| grid.iter().any(|row| row.contains("MINIPROBE"));
+    wait_for_both(&mut pair, Duration::from_secs(10), mini_ready);
+    std::thread::sleep(Duration::from_millis(500));
+    let gnu_grid = pair.gnu.text_grid();
+    let neo_grid = pair.neo.text_grid();
+    // Exact-grid comparison via the raw snapshots the pair already holds.
+
+    // Styled cells: the overlay text lives in the side window; both
+    // engines must paint it with the isearch-inherited colors while the
+    // minibuffer is active.
+    for (label, session) in [("GNU", &mut pair.gnu), ("NEO", &mut pair.neo)] {
+        let screen = session.screen();
+        for row in 0..12 {
+            let line: String = (0..80)
+                .filter_map(|c| screen.cell(row, c))
+                .map(|cell| cell.contents().to_string())
+                .collect();
+            eprintln!("MINIDUMP-{label} row{row}: {line:?}");
+        }
+        let probe_row = (1..screen.size().0)
+            .find(|row| {
+                (0..screen.size().1)
+                    .filter_map(|col| screen.cell(*row, col))
+                    .map(|cell| cell.contents().to_string())
+                    .collect::<String>()
+                    .contains("SELECTED CANDIDATE")
+            })
+            .expect("SELECTED CANDIDATE row");
+        let bg = screen.cell(probe_row, 6).expect("overlay cell").bgcolor();
+        eprintln!("MINIPROBE-{label} row{probe_row} bg={bg:?}");
+    }
+    // Pairwise parity is the contract: GNU and Neomacs must render the
+    // minibuffer-active state identically, whichever faces show (GNU's own
+    // behavior here does not paint the overlay face).
+    let report = neomacs_tui_tests::compare_session_displays(&pair.gnu, &pair.neo);
+    assert!(
+        report.is_satisfied(),
+        "minibuffer-active state must render identically:\n{report:#?}"
+    );
+    let _ = (gnu_grid, neo_grid);
+    send_to_both(&mut pair, |session| session.send_key("RET"));
 }
