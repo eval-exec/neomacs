@@ -7,6 +7,15 @@ use crate::{CachedMelpaOracle, FORGE_MELPA_PIN};
 use super::batch_support::{ParityBatchCase, assert_oracle_batch_cases};
 
 const PRELUDE: &str = r####"
+;; sqlite3.el lazily compiles its native module inside the shared
+;; prepared package tree, and the batch oracle evaluates GNU Emacs and
+;; Neovm concurrently against that same tree.  Serialize the two builds;
+;; make deletes the intermediate sqlite3-api.o after linking, so two
+;; unsynchronized builds race on it and the slower link fails.
+(setenv "SQLITE3_API_BUILD_COMMAND"
+        (format "flock -w 600 %s make all"
+                (expand-file-name "tmp/forge-sqlite3-build.lock"
+                                  (getenv "NEOMACS_TEST_WORKSPACE_ROOT"))))
 (setq forge-add-default-sections nil
       forge-add-default-bindings nil)
 (defvar neomacs-forge-test-original-max-lisp-eval-depth
