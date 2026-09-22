@@ -253,6 +253,10 @@ pub(crate) struct CompiledPattern {
     /// Whether the fastmap is valid (needs recomputation after compile).
     pub fastmap_accurate: bool,
 
+    /// The tiny ASCII candidate set used by memchr, derived on first use.
+    /// Rebuilt with the fastmap, including syntax-table recomputation.
+    sparse_ascii_fastmap: std::cell::OnceCell<Option<SparseAsciiFastmap>>,
+
     /// True if the pattern was compiled for POSIX backtracking.
     pub posix: bool,
 
@@ -391,6 +395,12 @@ pub(crate) struct CompiledPattern {
 const PREFILTER_MIN_BUILD_SPAN: usize = 256;
 
 impl CompiledPattern {
+    fn sparse_ascii_fastmap(&self) -> Option<SparseAsciiFastmap> {
+        *self
+            .sparse_ascii_fastmap
+            .get_or_init(|| sparse_ascii_fastmap(&self.fastmap))
+    }
+
     /// The multi-literal prefilter, built now if it was not yet.
     pub(crate) fn literal_prefilter(&self) -> Option<&LiteralPrefilter> {
         self.prefilter
@@ -597,6 +607,7 @@ impl CompiledPattern {
             fastmap: [false; 256],
             fastmap_translated: [false; 256],
             fastmap_accurate: false,
+            sparse_ascii_fastmap: std::cell::OnceCell::new(),
             posix: false,
             multibyte: true,
             target_multibyte: true,
@@ -7453,6 +7464,9 @@ pub(crate) fn recompute_fastmap(pattern: &mut CompiledPattern, syntax: &dyn Synt
 /// Patterns whose fastmap took that path are flagged `used_syntax` at
 /// compile and must be cache-keyed by syntax table.
 fn compile_fastmap(pattern: &mut CompiledPattern, syntax: &dyn SyntaxLookup) {
+    // A cached skip set describes this exact map, including the active syntax
+    // table. Leave it empty until a search actually needs the ASCII shortcut.
+    pattern.sparse_ascii_fastmap.take();
     let mut folded_multibyte_literal = false;
     compile_fastmap_walk(pattern, syntax, &mut folded_multibyte_literal);
     // `fastmap_translated` is the walk's own map; the byte-indexed `fastmap`
@@ -8080,20 +8094,34 @@ fn fastmap_force_disabled() -> bool {
     false
 }
 
-/// Fastmap byte set when it is small (<= 3 bytes) and pure ASCII — the
-/// cases where `memchr`/`memchr2`/`memchr3` can drive the forward skip
-/// loop.
-fn sparse_ascii_fastmap(fastmap: &[bool; 256]) -> Option<SmallVec<[u8; 3]>> {
-    let mut bytes: SmallVec<[u8; 3]> = SmallVec::new();
+/// A compact, allocation-free candidate set for the memchr skip loop.
+#[derive(Clone, Copy)]
+enum SparseAsciiFastmap {
+    One(u8),
+    Two(u8, u8),
+    Three(u8, u8, u8),
+}
+
+/// Derive a small (1–3 byte), pure ASCII set once per compiled fastmap.
+/// Repeated short searches otherwise scan the same 256 entries on every call.
+fn sparse_ascii_fastmap(fastmap: &[bool; 256]) -> Option<SparseAsciiFastmap> {
+    let mut bytes = [0; 3];
+    let mut len = 0;
     for (byte, &set) in fastmap.iter().enumerate() {
         if set {
-            if byte >= 0x80 || bytes.len() == 3 {
+            if byte >= 0x80 || len == bytes.len() {
                 return None;
             }
-            bytes.push(byte as u8);
+            bytes[len] = byte as u8;
+            len += 1;
         }
     }
-    if bytes.is_empty() { None } else { Some(bytes) }
+    match len {
+        1 => Some(SparseAsciiFastmap::One(bytes[0])),
+        2 => Some(SparseAsciiFastmap::Two(bytes[0], bytes[1])),
+        3 => Some(SparseAsciiFastmap::Three(bytes[0], bytes[1], bytes[2])),
+        _ => None,
+    }
 }
 
 /// Search for a match of the compiled pattern in text.
@@ -8367,7 +8395,7 @@ pub(crate) fn re_search(
                     }
                     pos += 1;
                 }
-            } else if let Some(bytes) = sparse_ascii_fastmap(&pattern.fastmap) {
+            } else if let Some(bytes) = pattern.sparse_ascii_fastmap() {
                 // The candidate first-byte set is tiny and pure ASCII
                 // (e.g. `{'('}` for the font-lock defun matchers):
                 // let memchr's SIMD scan find candidates instead of
@@ -8379,11 +8407,14 @@ pub(crate) fn re_search(
                 let hi = if end < text_len { end + 1 } else { text_len };
                 while pos <= end {
                     if pos < text_len {
-                        let found = match *bytes.as_slice() {
-                            [b0] => memchr::memchr(b0, &text[pos..hi]),
-                            [b0, b1] => memchr::memchr2(b0, b1, &text[pos..hi]),
-                            [b0, b1, b2] => memchr::memchr3(b0, b1, b2, &text[pos..hi]),
-                            _ => unreachable!("sparse_ascii_fastmap yields 1..=3 bytes"),
+                        let found = match bytes {
+                            SparseAsciiFastmap::One(b0) => memchr::memchr(b0, &text[pos..hi]),
+                            SparseAsciiFastmap::Two(b0, b1) => {
+                                memchr::memchr2(b0, b1, &text[pos..hi])
+                            }
+                            SparseAsciiFastmap::Three(b0, b1, b2) => {
+                                memchr::memchr3(b0, b1, b2, &text[pos..hi])
+                            }
                         };
                         match found {
                             Some(idx) => pos += idx,
