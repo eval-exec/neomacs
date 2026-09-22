@@ -14,7 +14,7 @@ use std::path::PathBuf;
 
 use super::install::{
     InstallCommandError, PackageInstallDriver, configure_process_environment, elisp_string,
-    output_with_timeout, package_preparation_run_id, publish_package_preparation_failure,
+    package_preparation_run_id, publish_package_preparation_failure,
 };
 use crate::workspace_root;
 
