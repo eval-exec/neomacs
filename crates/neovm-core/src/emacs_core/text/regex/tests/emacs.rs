@@ -2,6 +2,74 @@ use super::*;
 use crate::fuzz_support::{RegexCase, RegexCheck, RegexDifferential, check_regex_differential};
 
 #[test]
+fn prepared_search_context_preserves_marker_bounds_narrowing_and_zero_counts() {
+    crate::test_utils::init_test_tracing();
+    let observed = crate::test_utils::runtime_startup_eval_one(
+        r#"(progn
+  (require 'syntax)
+  (let (out)
+    (dolist (text '("xabcbcz" "xa中b中bz"))
+      (dolist (narrow '(nil t))
+        (dolist (marker-bound '(nil t))
+          (dolist (case '(("b" 1) ("b" 2) ("b" -1)
+                          ("b" -2) ("" 0) ("z" 1)))
+            (with-temp-buffer
+              (insert text)
+              (when narrow (narrow-to-region 2 7))
+              (let* ((case-fold-search nil)
+                     (count (nth 1 case))
+                     (bound-pos (if (> count 0) (point-max) (point-min)))
+                     (bound (if marker-bound (copy-marker bound-pos) bound-pos)))
+                (goto-char (if (> count 0) (point-min) (point-max)))
+                (set-match-data '(7 9))
+                (push (list (condition-case err
+                                (re-search-forward (car case) bound t count)
+                              (error (car err)))
+                            (point)
+                            (mapcar (lambda (v) (if (bufferp v) 'buffer v))
+                                    (match-data t))) out)))))))
+    ;; Covered properties take a callback-free early return from preparation;
+    ;; the same pattern is also exercised with callback-capable preparation.
+    (dolist (covered '(nil t))
+      (with-temp-buffer
+        (insert "ab cd")
+        (let ((parse-sexp-lookup-properties t)
+              (case-fold-search nil)
+              (calls 0)
+              (bound (copy-marker 6)))
+          (setq-local syntax-propertize-function
+                      (lambda (_start _end)
+                        (setq calls (1+ calls))
+                        (goto-char 4)
+                        (garbage-collect)))
+          (setq-local syntax-propertize--done (if covered 6 1))
+          (goto-char 1)
+          (push (list (re-search-forward "\\w+" bound t) (point) calls
+                      (mapcar (lambda (v) (if (bufferp v) 'buffer v))
+                              (match-data t))) out))))
+    (nreverse out)))"#,
+    );
+    // GNU Emacs 31.1: 48 combinations of text encoding, narrowing, marker
+    // bounds and search count, plus covered/callback-capable syntax setup.
+    assert_eq!(
+        observed,
+        concat!(
+            "OK ((4 4 (3 4 buffer)) (6 6 (5 6 buffer)) (5 5 (5 6 buffer)) (3 3 (3 4 buffer)) (8 8 (8 8 ",
+            "buffer)) (8 8 (7 8 buffer)) (4 4 (3 4 buffer)) (6 6 (5 6 buffer)) (5 5 (5 6 buffer)) (3 3 (3 4 ",
+            "buffer)) (8 8 (8 8 buffer)) (8 8 (7 8 buffer)) (4 4 (3 4 buffer)) (6 6 (5 6 buffer)) (5 5 (5 6 ",
+            "buffer)) (3 3 (3 4 buffer)) (7 7 (7 7 buffer)) (nil 2 (7 9)) (4 4 (3 4 buffer)) (6 6 (5 6 ",
+            "buffer)) (5 5 (5 6 buffer)) (3 3 (3 4 buffer)) (7 7 (7 7 buffer)) (nil 2 (7 9)) (5 5 (4 5 ",
+            "buffer)) (7 7 (6 7 buffer)) (6 6 (6 7 buffer)) (4 4 (4 5 buffer)) (8 8 (8 8 buffer)) (8 8 (7 8 ",
+            "buffer)) (5 5 (4 5 buffer)) (7 7 (6 7 buffer)) (6 6 (6 7 buffer)) (4 4 (4 5 buffer)) (8 8 (8 8 ",
+            "buffer)) (8 8 (7 8 buffer)) (5 5 (4 5 buffer)) (7 7 (6 7 buffer)) (6 6 (6 7 buffer)) (4 4 (4 5 ",
+            "buffer)) (7 7 (7 7 buffer)) (nil 2 (7 9)) (5 5 (4 5 buffer)) (7 7 (6 7 buffer)) (6 6 (6 7 ",
+            "buffer)) (4 4 (4 5 buffer)) (7 7 (7 7 buffer)) (nil 2 (7 9)) (3 3 1 (1 3 buffer)) (3 3 0 (1 3 ",
+            "buffer)))",
+        )
+    );
+}
+
+#[test]
 fn prepared_regexp_scoped_gc_preserves_compiled_and_callback_paths() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::runtime_startup_context();
