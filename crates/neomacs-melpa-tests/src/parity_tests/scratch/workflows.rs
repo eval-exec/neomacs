@@ -14,13 +14,17 @@ fn the_surface_and_mode_mappings() -> ParityBatchCase {
  :hook (boundp 'scratch-create-buffer-hook)
  :mode-list-samples
  (let ((modes (scratch--list-modes)))
-   (list :count (length modes)
+   ;; The count is the EDITOR's own major-mode inventory (each editor's
+   ;; bundled lisp defines a different set), so the raw number cannot
+   ;; agree across engines; what must agree is that the list is real
+   ;; (>> 10 modes) and its shape properties hold.
+   (list :count (if (> (length modes) 10) :many (length modes))
          :has-elisp (and (member "emacs-lisp" modes) t)
          :has-fundamental (and (member "fundamental" modes) t)
          :no-dashes (not (cl-some (lambda (m) (string-match-p "--" m))
                                    modes)))))"####,
         expect![[
-            r#"OK (:source (:upstream-tree "944053221a06cb4ac8c46692e80db3375e025988" :feature t :version "20220319.1705") :command t :mode-alist ((erc-mode . fundamental-mode) (sql-interactive-mode . sql-mode) (shell-mode . sh-mode) (inferior-python-mode . python-mode) (inferior-emacs-lisp-mode . emacs-lisp-mode) (cider-repl-mode . clojure-mode) (inferior-tcl-mode . tcl-mode) (inferior-octave-mode . octave-mode)) :hook t :mode-list-samples (:count 429 :has-elisp t :has-fundamental t :no-dashes t))"#
+            r#"OK (:source (:upstream-tree "944053221a06cb4ac8c46692e80db3375e025988" :feature t :version "20220319.1705") :command t :mode-alist ((erc-mode . fundamental-mode) (sql-interactive-mode . sql-mode) (shell-mode . sh-mode) (inferior-python-mode . python-mode) (inferior-emacs-lisp-mode . emacs-lisp-mode) (cider-repl-mode . clojure-mode) (inferior-tcl-mode . tcl-mode) (inferior-octave-mode . octave-mode)) :hook t :mode-list-samples (:count :many :has-elisp t :has-fundamental t :no-dashes t))"#
         ]],
     )
 }

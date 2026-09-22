@@ -277,6 +277,19 @@ fn built_in_discovery_resolves_real_editor_libraries_and_version_queries() -> Pa
     ParityBatchCase::value(
         "built_in_discovery_resolves_real_editor_libraries_and_version_queries",
         r##"
+;; Built-in discovery reads `package--builtins', which package.el
+;; populates from the GENERATED finder data (lisp/finder-inf.el).  Each
+;; editor bundles its own build-time generation (the oracle's is from its
+;; 2026-09-13 build; this port's lisp tree regenerates fresher), so the
+;; two editors would report different built-in versions for the same
+;; sandbox.  The sandbox pins every other input -- pin this one too:
+;; both editors load the workspace's generated finder data before the
+;; probe, so discovery runs against ONE version database.
+(let ((workspace-finder-inf
+       (expand-file-name "finder-inf.el"
+                         (concat (getenv "NEOMACS_TEST_WORKSPACE_ROOT") "/lisp/"))))
+  (when (file-exists-p workspace-finder-inf)
+    (load workspace-finder-inf nil t)))
 (let* ((built-ins (epl-built-in-packages))
        (built-in-names (mapcar #'epl-package-name built-ins))
        (selected
@@ -313,7 +326,7 @@ fn built_in_discovery_resolves_real_editor_libraries_and_version_queries() -> Pa
         :missing (epl-find-built-in-package 'not-a-real-editor-library)))
 "##,
         expect![[
-            r##"OK (:selected ((:package (:name cl-lib :version (1 0) :version-string "1.0" :summary "Common Lisp extensions for Emacs" :requirements nil) :listed t :directory builtin :built-in t :installed-by-name t :installed-as-object t) (:package (:name seq :version (2 24) :version-string "2.24" :summary "Sequence manipulation functions" :requirements nil) :listed t :directory builtin :built-in t :installed-by-name t :installed-as-object t) (:package (:name project :version (0 11 2) :version-string "0.11.2" :summary "Operations on the current project" :requirements nil) :listed t :directory builtin :built-in t :installed-by-name t :installed-as-object t) (:package (:name package :version (1 1 0) :version-string "1.1.0" :summary "Simple package system for Emacs" :requirements nil) :listed t :directory builtin :built-in t :installed-by-name t :installed-as-object t)) :selected-names-unique t :cl-lib-minimums (("0.1" t) ("1.0" t) ("999.0" nil)) :missing nil)"##
+            r#"OK (:selected ((:package (:name cl-lib :version (1 0) :version-string "1.0" :summary "Common Lisp extensions for Emacs" :requirements nil) :listed t :directory builtin :built-in t :installed-by-name t :installed-as-object t) (:package (:name seq :version (2 24) :version-string "2.24" :summary "Sequence manipulation functions" :requirements nil) :listed t :directory builtin :built-in t :installed-by-name t :installed-as-object t) (:package (:name project :version (0 12 0) :version-string "0.12.0" :summary "Operations on the current project" :requirements nil) :listed t :directory builtin :built-in t :installed-by-name t :installed-as-object t) (:package (:name package :version (1 1 0) :version-string "1.1.0" :summary "Simple package system for Emacs" :requirements nil) :listed t :directory builtin :built-in t :installed-by-name t :installed-as-object t)) :selected-names-unique t :cl-lib-minimums (("0.1" t) ("1.0" t) ("999.0" nil)) :missing nil)"#
         ]],
     )
 }

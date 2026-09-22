@@ -42,33 +42,44 @@ fn auto_indent_mode_disable_removes_primary_hooks_and_preserves_source_quirks() 
                (auto-indent-on-visit-file t)
                (auto-indent-engine nil))
            (auto-indent-mode 1)
+           ;; Membership booleans, not `memq' tails: memq returns the hook
+           ;; SUBLIST starting at the member, which pins every AMBIENT
+           ;; member after it (other packages' hooks are editor-owned
+           ;; environment, not part of this toggle contract).
            (let ((enabled
                   (list
-                   (memq 'auto-indent-file-when-save
-                         write-contents-hooks)
-                   (memq 'auto-indent-file-when-visit
-                         find-file-hook)
-                   (memq 'auto-indent-mode-post-command-hook
-                         post-command-hook)
-                   (memq 'auto-indent-mode-post-command-hook-last
-                         post-command-hook))))
+                   (and (memq 'auto-indent-file-when-save
+                              write-contents-hooks)
+                        t)
+                   (and (memq 'auto-indent-file-when-visit
+                              find-file-hook)
+                        t)
+                   (and (memq 'auto-indent-mode-post-command-hook
+                              post-command-hook)
+                        t)
+                   (and (memq 'auto-indent-mode-post-command-hook-last
+                              post-command-hook)
+                        t))))
              (auto-indent-mode -1)
              (list
               enabled
               auto-indent-mode
-              (memq 'auto-indent-file-when-save
-                    write-contents-hooks)
-              (memq 'auto-indent-file-when-visit
-                    find-file-hook)
-              (memq 'auto-indent-mode-post-command-hook
-                    post-command-hook)
-              (memq 'auto-indent-mode-post-command-hook-last
-                    post-command-hook)
-              (memq 'auto-indent-mode-pre-command-hook
-                    pre-command-hook)))))"##,
-        expect![
-            "OK ((#2=(auto-indent-file-when-save) (auto-indent-file-when-visit url-handlers-set-buffer-mode vc-refresh-state epa-file-find-file-hook) (auto-indent-mode-post-command-hook eldoc-schedule-timer t . #1=(auto-indent-mode-post-command-hook-last)) #1#) nil #2# nil nil #1# nil)"
-        ],
+              (and (memq 'auto-indent-file-when-save
+                         write-contents-hooks)
+                   t)
+              (and (memq 'auto-indent-file-when-visit
+                         find-file-hook)
+                   t)
+              (and (memq 'auto-indent-mode-post-command-hook
+                         post-command-hook)
+                   t)
+              (and (memq 'auto-indent-mode-post-command-hook-last
+                         post-command-hook)
+                   t)
+              (and (memq 'auto-indent-mode-pre-command-hook
+                         pre-command-hook)
+                   t)))))"##,
+        expect!["OK ((t t t t) nil t nil nil t nil)"],
     )
 }
 
