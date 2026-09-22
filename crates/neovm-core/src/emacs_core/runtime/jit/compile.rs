@@ -3262,10 +3262,9 @@ fn mask_dynamic_prefix(constants: &[Value], dynamic_prefix: usize) -> Vec<Value>
 /// JIT-only): when `Some(osr_pc)`, the compiled function's entry seeds the live
 /// operand stack (from the `args` pointer) and jumps to the loop-header block at
 /// `osr_pc`, letting the interpreter transfer a hot loop into native code
-/// mid-execution. Cross-block known-fixnum elision is DISABLED for OSR (the
-/// analysis assumes the normal block-0 entry as the sole root; the OSR entry adds
-/// a predecessor it never saw, so every fixnum op guards — a non-fixnum simply
-/// deopts, always sound).
+/// mid-execution. Entry guards validate the header's normal-entry known-fixnum
+/// facts before any effects, allowing the same cross-block guard elision.
+/// Slots without proven facts retain their per-operation guards.
 pub fn lower_leaf_full_osr(
     ops: &[Op],
     constants: &[Value],
@@ -3340,15 +3339,15 @@ pub fn lower_leaf_full_osr(
     }
     let reloc_data: Box<[Value]> = reloc_vals.into_boxed_slice();
 
-    // Baseline tier runs Cranelift at the default opt_level="none": its job is
-    // FAST compilation (low tier-up latency; the soak compiles every function).
-    // Measured opt_level="speed" (2026-06-13): no runtime win on fib (call-
-    // bound) or the arithmetic loop, because Cranelift sees our tagged Values
-    // as opaque i64 — it can't unbox, drop fixnum guards, or reason about lisp
-    // effects. The real headroom is semantic (unboxing/inlining), which needs
-    // an MIR-level optimizing Tier-2; opt_level="speed" belongs there, not at
-    // this tier where it would only cost compile time.
-    let mut builder = JITBuilder::with_isa(jit_isa()?, default_libcall_names());
+    // Ordinary tier-up keeps low-latency compilation. OSR has already observed
+    // a hot loop within this activation; optimize its guarded IR for execution.
+    // This choice leaves ordinary entry, MIR and AOT compilation unchanged.
+    let isa = if osr_pc.is_some() {
+        jit_isa_with_opt_level(cranelift_codegen::settings::OptLevel::Speed)?
+    } else {
+        jit_isa()?
+    };
+    let mut builder = JITBuilder::with_isa(isa, default_libcall_names());
     // Every shim, from the one table (see `shims::JIT_SHIM_TABLE`).
     shims::register_shims(&mut builder);
     let mut module = JITModule::new(builder);
