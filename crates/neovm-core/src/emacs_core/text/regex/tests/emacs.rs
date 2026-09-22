@@ -2667,3 +2667,49 @@ fn search_entries_preserve_fresh_arguments_across_callback_gc() {
     );
     eprintln!("fixed search scoped stress collections: {collections}");
 }
+
+#[test]
+fn prepared_regexp_zero_count_skips_compilation_after_argument_validation() {
+    crate::test_utils::init_test_tracing();
+    let observed = crate::test_utils::runtime_startup_eval_one(
+        r#"(progn
+(require 'syntax)
+(let (out)
+  (dolist (fn '(re-search-forward re-search-backward posix-search-forward posix-search-backward))
+    (dolist (inhibit '(nil t))
+      (with-temp-buffer
+        (insert "éabc")
+        (narrow-to-region 2 5)
+        (let ((inhibit-changing-match-data inhibit)
+              (parse-sexp-lookup-properties t)
+              (calls 0))
+          (setq-local syntax-propertize-function
+                      (lambda (_start _end) (setq calls (1+ calls))))
+          (setq-local syntax-propertize--done 1)
+          (dolist (args (list (list "[" 2 t 0)
+                              (list "[" (copy-marker 2) t 0)
+                              (list 7 2 t 0)
+                              (list "[" 2 t 'bad)
+                              (list "[" 'bad t 0)
+                              (list "[" 3 t 0)))
+            (goto-char 2)
+            (set-match-data '(17 19))
+            (push (list (condition-case err (apply fn args)
+                          (error (car err)))
+                        (point) calls
+                        (mapcar (lambda (v) (if (bufferp v) 'buffer v)) (match-data t))) out))))))
+  (nreverse out))
+
+)"#,
+    );
+    // GNU Emacs 31.1: all four regexp searches agree, with and without
+    // match-data inhibition. Zero count skips invalid-regexp and callbacks,
+    // but preserves STRING, COUNT and BOUND validation and marker coercion.
+    let per_builtin = concat!(
+        "(2 2 0 (2 2 buffer)) (2 2 0 (2 2 buffer)) (wrong-type-argument 2 0 (17 19)) (wrong-type-ar",
+        "gument 2 0 (17 19)) (wrong-type-argument 2 0 (17 19)) (error 2 0 (17 19)) (2 2 0 (17 19)) ",
+        "(2 2 0 (17 19)) (wrong-type-argument 2 0 (17 19)) (wrong-type-argument 2 0 (17 19)) (wrong",
+        "-type-argument 2 0 (17 19)) (error 2 0 (17 19))",
+    );
+    assert_eq!(observed, format!("OK ({0} {0} {0} {0})", per_builtin));
+}

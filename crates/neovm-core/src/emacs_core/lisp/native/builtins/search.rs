@@ -1203,19 +1203,29 @@ pub(crate) fn builtin_re_search_forward_4(
     // A callback-capable path still reads the cache after preparation, so
     // changes made by syntax-propertize are visible to this search.
     let compiled = match ready.compiled {
-        Some(compiled) => compiled,
+        Some(compiled) => Some(compiled),
+        // Preparation already validated STRING, COUNT and BOUND. GNU's
+        // zero-count path publishes an empty match without compiling REGEXP.
+        None if count.as_fixnum() == Some(0) => None,
         None => {
             let pattern = eval.expect_lisp_string(args[0])?;
             let buf = eval
                 .buffers
                 .current_buffer()
                 .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-            super::regex::buffer_regexp_syntax_dependency_compiled(buf, pattern, case_fold, false)
+            Some(
+                super::regex::buffer_regexp_syntax_dependency_compiled(
+                    buf, pattern, case_fold, false,
+                )
                 .map_err(regex_error_signal)?
-                .1
+                .1,
+            )
         }
     };
-    let word_boundary = if compiled.uses_syntax {
+    let word_boundary = if compiled
+        .as_ref()
+        .is_some_and(|compiled| compiled.uses_syntax)
+    {
         current_word_boundary_lookup(eval)
     } else {
         crate::emacs_core::regex_emacs::WordBoundaryLookup::default()
@@ -1235,7 +1245,7 @@ pub(crate) fn builtin_re_search_forward_4(
         &mut eval.buffers,
         match_data,
         &args,
-        Some(&compiled),
+        compiled.as_deref(),
     );
     // Mirrors GNU `search.c:1247,1291`: poll quit after each search
     // call so a `C-g` that set `tls_quit_pending()` during the match
