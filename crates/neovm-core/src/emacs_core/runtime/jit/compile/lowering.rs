@@ -1901,19 +1901,13 @@ pub(crate) fn raw_fixnum_addsub(
     } else {
         fb.ins().iadd(av, bv)
     };
-    let ge_lo = icmp_imm_p(
-        fb,
-        IntCC::SignedGreaterThanOrEqual,
-        res,
-        Value::MOST_NEGATIVE_FIXNUM,
-    );
-    let le_hi = icmp_imm_p(
-        fb,
-        IntCC::SignedLessThanOrEqual,
-        res,
-        Value::MOST_POSITIVE_FIXNUM,
-    );
-    let in_range = fb.ins().band(ge_lo, le_hi);
+    // A signed 62-bit payload fits iff its upper three bits are all equal:
+    // arithmetic res >> 61 is -1 or 0. Biasing by one makes that a single
+    // unsigned comparison, without loading both fixnum bounds. The result
+    // stays raw for subsequent arithmetic and the existing deopt snapshot.
+    let high = sshr_imm_p(fb, res, (i64::BITS - FIXNUM_SHIFT - 1) as i64);
+    let biased = iadd_imm_p(fb, high, 1);
+    let in_range = icmp_imm_p(fb, IntCC::UnsignedLessThanOrEqual, biased, 1);
     emit_guard(fb, deopt, in_range);
     res
 }
