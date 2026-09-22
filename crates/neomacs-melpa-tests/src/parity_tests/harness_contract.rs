@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use crate::{
     EmacsRuntime, MelpaSandbox, PackageActivation, SHALLOW_GIT_FETCH_ARGS, SourceBuild,
-    locked_melpa_install_plan, locked_melpa_source, locked_melpa_sources, package_activation_elisp,
-    run_elisp_oracle, workspace_root,
+    locked_melpa_install_plan, locked_melpa_source, locked_melpa_sources, neomacs_binary,
+    package_activation_elisp, run_elisp_oracle, workspace_root,
 };
 #[cfg(unix)]
 use crate::{
@@ -916,4 +916,57 @@ printf '%s\n' 'Ran 3 tests, 3 results as expected, 0 unexpected, 1 skipped' >&2
     assert_eq!(report.summary.expected, 3);
     assert_eq!(report.summary.unexpected, 0);
     assert_eq!(report.summary.skipped, 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn invocation_directory_reports_the_invoked_path_not_the_canonical_binary() {
+    // GNU pins `invocation-name' and `invocation-directory' to argv[0] as
+    // invoked (src/emacs.c:509-519: `raw_name = build_unibyte_string
+    // (argv[0])`, no symlink resolution).  Editors reached through a
+    // symlink — a relocated cargo target, a versioned bin dir — must
+    // therefore report the SYMLINK's directory, and a normalizer built on
+    // `invocation-*' must match the paths child-process diagnostics print.
+    let sandbox = MelpaSandbox::new("invocation-directory-contract")
+        .expect("create invocation contract sandbox");
+    let symlinked = sandbox.root().join("bin");
+    fs::create_dir_all(&symlinked).expect("create symlink bin dir");
+
+    let oracle = EmacsRuntime::gnu_emacs();
+    for (label, source) in [
+        ("GNU", oracle.executable.clone()),
+        ("Neomacs", neomacs_binary()),
+    ] {
+        let link_path = symlinked.join(source.file_name().expect("editor binary has a file name"));
+        std::os::unix::fs::symlink(&source, &link_path)
+            .expect("symlink the editor into the contract dir");
+
+        let output = Command::new(&link_path)
+            .args([
+                "--batch",
+                "--quick",
+                "--eval",
+                "(prin1 (list invocation-name invocation-directory) 'external-debugging-output)",
+            ])
+            .env_remove("EMACSLOADPATH")
+            .output()
+            .expect("run the editor through the symlink");
+        // `external-debugging-output' writes to the editor's stderr.
+        let text = String::from_utf8_lossy(&output.stderr).to_string();
+        let invoked_name = link_path
+            .file_name()
+            .expect("symlink has a name")
+            .to_string_lossy()
+            .into_owned();
+        let expected_dir = format!("{}/", symlinked.display());
+        assert!(
+            text.contains(&format!("\"{invoked_name}\"")),
+            "{label}: invocation-name should be the invoked name, got: {text}"
+        );
+        assert!(
+            text.contains(&expected_dir),
+            "{label}: invocation-directory should be the invoked (symlink) \
+             directory {expected_dir}, got: {text}"
+        );
+    }
 }

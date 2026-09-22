@@ -5067,14 +5067,57 @@ fn bootstrap_buffers_with_font(
     }
 }
 
+/// GNU `init_cmdargs` (src/emacs.c:509-519): `invocation-name' is the
+/// non-directory part of argv[0] AS INVOKED — never the canonicalized
+/// binary.  A symlinked invocation (a relocated cargo target, a versioned
+/// bin dir) reports the symlink's name, which is what child-process
+/// diagnostics built on `initial_argv0' print and what normalizers built
+/// on `invocation-*' must match.
 fn invocation_name() -> String {
-    std::env::current_exe()
-        .ok()
-        .and_then(|path| {
-            path.file_name()
+    std::env::args_os()
+        .next()
+        .as_deref()
+        .map(PathBuf::from)
+        .and_then(|raw| {
+            raw.file_name()
                 .map(|name| name.to_string_lossy().into_owned())
         })
         .unwrap_or_else(|| "neomacs".to_string())
+}
+
+/// GNU `init_cmdargs` (src/emacs.c:518-549): `invocation-directory' is the
+/// directory part of argv[0] as invoked; a bare argv[0] (no directory)
+/// falls back to a PATH search; a relative directory is made absolute
+/// against the startup working directory.  Never canonicalized: the
+/// as-invoked path is the observable contract.
+fn invocation_directory_from_argv0() -> PathBuf {
+    let invoked = std::env::args_os().next();
+    let raw = invoked
+        .as_deref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("neomacs"));
+    let directory = match raw.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => {
+            if raw.is_absolute() {
+                Some(parent.to_path_buf())
+            } else {
+                std::env::current_dir().ok().map(|cwd| cwd.join(parent))
+            }
+        }
+        // No directory component: search the PATH for the invoked name,
+        // mirroring GNU's `openp' fallback (src/emacs.c:521-537).
+        _ => {
+            let name = raw
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "neomacs".to_string());
+            let path_var = std::env::var("PATH").unwrap_or_default();
+            std::env::split_paths(&path_var)
+                .find(|dir| dir.join(&name).is_file())
+                .map(PathBuf::from)
+        }
+    };
+    directory.unwrap_or_else(|| PathBuf::from("/"))
 }
 
 fn configure_gnu_startup_state(eval: &mut Context, frame_id: FrameId, startup: &StartupOptions) {
@@ -5111,12 +5154,8 @@ fn configure_gnu_startup_state(eval: &mut Context, frame_id: FrameId, startup: &
         .cloned()
         .map(Value::string)
         .collect::<Vec<_>>();
-    let invocation_directory = std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(|parent| parent.to_path_buf()))
-        .unwrap_or_else(|| PathBuf::from("/"));
     let invocation_name = invocation_name();
-    let invocation_directory = ensure_dir_string(&invocation_directory);
+    let invocation_directory = ensure_dir_string(&invocation_directory_from_argv0());
 
     eval.set_variable("command-line-args", Value::list(argv));
     eval.set_variable("command-line-args-left", Value::list(argv_left));
