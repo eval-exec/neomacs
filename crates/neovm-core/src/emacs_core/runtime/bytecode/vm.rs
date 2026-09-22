@@ -3479,8 +3479,8 @@ impl<'a> Vm<'a> {
 
     /// OSR at a hot back-edge of the frame at `frame_base`: transfer the rest
     /// of the call into native code entered at the loop header `target`, the
-    /// frame's live operand stack (`depth` values, published) as its entry
-    /// state. Out of line: the driver expands its branch macro at several
+    /// frame's published operand stack and current auxiliary bindings as its
+    /// entry state. Out of line: the driver expands its branch macro at several
     /// sites, and this cold path inlined at each of them cost the hot loop
     /// its register allocation.
     ///
@@ -3501,12 +3501,15 @@ impl<'a> Vm<'a> {
         &mut self,
         func: &ByteCodeFunction,
         frame_base: usize,
-        depth: usize,
         target: usize,
-        bind_stack: &mut BindStack,
+        aux_stack: &mut InterpreterFrameAuxStack,
     ) -> OsrOutcome {
         use crate::emacs_core::jit::compile::{DeoptResume, NativeRun, stash_pending_flow};
-        let snapshot: Vec<Value> = self.ctx.bc_buf[frame_base..frame_base + depth].to_vec();
+        // Publishing the active cursor makes the buffer's end authoritative.
+        // Derive its depth and borrow the bindings here, keeping both out of
+        // the branch macro's hot register allocation.
+        let snapshot: Vec<Value> = self.ctx.bc_buf[frame_base..].to_vec();
+        let bind_stack = &mut aux_stack.current_mut().bind_stack;
         let entry_spec_depth = self.ctx.specpdl.len();
         let ctx_ptr: *mut crate::emacs_core::eval::Context = &mut *self.ctx;
         let resume = match crate::emacs_core::jit::cache::try_run_osr(
@@ -3959,15 +3962,8 @@ impl<'a> Vm<'a> {
                                 && crate::emacs_core::jit::jit_runtime_enabled()
                                 && func.jit_runtime().is_hot()
                             {
-                                let depth = cursor.len - frame_base;
                                 cursor.publish(&mut self.ctx);
-                                match self.osr_transfer(
-                                    func,
-                                    frame_base,
-                                    depth,
-                                    target,
-                                    &mut aux_stack.current_mut().bind_stack,
-                                ) {
+                                match self.osr_transfer(func, frame_base, target, aux_stack) {
                                     OsrOutcome::Interpret { pc } => {
                                         // Not transferred, a plain deopt, or a precise
                                         // deopt installed in place: this frame's state
