@@ -3,9 +3,9 @@ use std::time::Duration;
 use expect_test::expect;
 use neomacs_tui_tests::RawTerminalSnapshot;
 
-use crate::{COMPAT_GNU_ELPA_PIN, CachedMelpaOracle, VERTICO_MELPA_PIN};
+use super::{COMPAT_GNU_ELPA_PIN, CachedMelpaOracle, VERTICO_MELPA_PIN};
 
-use crate::scenario::{DisplayCheckpoint, PackageTuiScenario, PairTimeout, ReadinessCheckpoint};
+use super::scenario::{DisplayCheckpoint, PackageTuiScenario, PairTimeout, ReadinessCheckpoint};
 
 const VERTICO_TUI_PRELUDE: &str = r#"
 (require 'vertico)

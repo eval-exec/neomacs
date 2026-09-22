@@ -5,9 +5,9 @@ use std::time::{Duration, Instant};
 use expect_test::expect;
 use neomacs_tui_tests::TuiSession;
 
-use crate::{CachedMelpaOracle, HELM_GITIGNORE_MELPA_PIN};
+use super::{CachedMelpaOracle, HELM_GITIGNORE_MELPA_PIN};
 
-use crate::scenario::{PackageTuiPair, PackageTuiScenario, PairTimeout, ReadinessCheckpoint};
+use super::scenario::{PackageTuiPair, PackageTuiScenario, PairTimeout, ReadinessCheckpoint};
 
 /// `helm-gitignore' is a thin interactive client, so its public seam is the
 /// complete `M-x helm-gitignore' session.  The package, Helm, Request,

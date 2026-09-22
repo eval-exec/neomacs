@@ -7,12 +7,12 @@ use std::time::Duration;
 use expect_test::{Expect, expect};
 use neomacs_tui_tests::{RawTerminalSnapshot, TuiSession};
 
-use crate::{
+use super::{
     COMPAT_GNU_ELPA_PIN, CachedMelpaOracle, GRUVBOX_THEME_MELPA_PIN, ORDERLESS_MELPA_PIN,
     PreparedPackageSet,
 };
 
-use crate::scenario::{
+use super::scenario::{
     PackageTuiPair, PackageTuiScenario, PairTimeout, ReadinessCheckpoint, TerminalProfile,
 };
 

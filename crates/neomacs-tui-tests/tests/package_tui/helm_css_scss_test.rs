@@ -4,9 +4,9 @@ use std::time::Duration;
 use expect_test::expect;
 use neomacs_tui_tests::{RawTerminalSnapshot, TuiSession};
 
-use crate::{CachedMelpaOracle, HELM_CSS_SCSS_MELPA_PIN};
+use super::{CachedMelpaOracle, HELM_CSS_SCSS_MELPA_PIN};
 
-use crate::scenario::{PackageTuiScenario, PairTimeout, ReadinessCheckpoint};
+use super::scenario::{PackageTuiScenario, PairTimeout, ReadinessCheckpoint};
 
 const HELM_CSS_SCSS_DEFAULT_TUI_PRELUDE: &str = r####"
 (require 'cl-lib)

@@ -50,7 +50,7 @@ setup = 'melpa-infra-preflight'
 # The interactive package-TUI suites (moved out of the MELPA jobs) provision
 # pinned packages and boot editor pairs; give them the same preflight.
 [[profile.default.scripts]]
-filter = 'binary_id(neomacs-tui-tests::package_tui)'
+filter = 'test(~package_tui::)'
 platform = { host = "cfg(unix)" }
 setup = 'melpa-infra-preflight'
 
