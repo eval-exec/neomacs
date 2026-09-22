@@ -244,3 +244,61 @@ fn predicate_branches_resume_type_deopt_without_repeating_effects() {
         }
     }
 }
+
+#[test]
+fn predicate_branches_preserve_type_predicates_and_composite_conditions() {
+    let _ctx = Context::new();
+    // Expected Lisp truth values: null, consp, stringp, listp.
+    let cases = [
+        (Value::NIL, [true, false, false, true]),
+        (Value::T, [false, false, false, false]),
+        (Value::make_int(0), [false, false, false, false]),
+        (Value::make_float(0.0), [false, false, false, false]),
+        (Value::string(""), [false, false, true, false]),
+        (
+            Value::cons(Value::NIL, Value::NIL),
+            [false, true, false, true],
+        ),
+    ];
+    let constants = [Value::make_int(111), Value::make_int(222)];
+    for (predicate, column) in [
+        (Op::Null, 0),
+        (Op::Not, 0),
+        (Op::Consp, 1),
+        (Op::Stringp, 2),
+        (Op::Listp, 3),
+    ] {
+        for (on_nil, else_pop) in [(false, false), (true, false), (false, true), (true, true)] {
+            let mut ops = vec![
+                Op::StackRef(0),
+                predicate.clone(),
+                branch(on_nil, else_pop, 5),
+                Op::Constant(0),
+                Op::Return,
+            ];
+            if !else_pop {
+                ops.push(Op::Constant(1));
+            }
+            ops.push(Op::Return);
+            let leaf = lower_leaf(&ops, &constants, 1).unwrap();
+            for (value, expected) in cases {
+                let yes = expected[column];
+                let taken = yes != on_nil;
+                let want = if !taken {
+                    constants[0]
+                } else if !else_pop {
+                    constants[1]
+                } else if yes {
+                    Value::T
+                } else {
+                    Value::NIL
+                };
+                assert_eq!(
+                    leaf.call_for_test(&[value]),
+                    Some(want.bits()),
+                    "{predicate:?} {value:?}, nil={on_nil} else_pop={else_pop}"
+                );
+            }
+        }
+    }
+}

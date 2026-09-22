@@ -4058,9 +4058,6 @@ fn build_leaf_fn<M: Module>(
                     Op::GotoIfNil(t) | Op::GotoIfNotNil(t) => {
                         let cond = stack.pop().ok_or(CompileError::StackUnderflow)?;
                         write_stack_to_vars(&mut fb, &vars, &stack);
-                        let is_nil =
-                            fb.ins()
-                                .icmp_imm_u(IntCC::Equal, cond, Value::NIL.bits() as i64);
                         let tu = *t as usize;
                         let mut target = block_for[&tu];
                         let fallthrough = block_for[&(i + 1)];
@@ -4068,11 +4065,10 @@ fn build_leaf_fn<M: Module>(
                         if let Some(tramp) = backedge {
                             target = tramp;
                         }
-                        // brif takes the `then` block when the condition is true.
                         if matches!(op, Op::GotoIfNil(_)) {
-                            fb.ins().brif(is_nil, target, &[], fallthrough, &[]);
+                            emit_nil_branch(&mut fb, cond, target, fallthrough);
                         } else {
-                            fb.ins().brif(is_nil, fallthrough, &[], target, &[]);
+                            emit_nil_branch(&mut fb, cond, fallthrough, target);
                         }
                         if let Some(tramp) = backedge {
                             // Taken-edge trampoline carrying the back-edge poll.
@@ -4104,9 +4100,6 @@ fn build_leaf_fn<M: Module>(
                         // top slot — implementing the "ElsePop".
                         let cond = *stack.last().ok_or(CompileError::StackUnderflow)?;
                         write_stack_to_vars(&mut fb, &vars, &stack);
-                        let is_nil =
-                            fb.ins()
-                                .icmp_imm_u(IntCC::Equal, cond, Value::NIL.bits() as i64);
                         let tu = *t as usize;
                         let mut target = block_for[&tu];
                         let fallthrough = block_for[&(i + 1)];
@@ -4115,9 +4108,9 @@ fn build_leaf_fn<M: Module>(
                             target = tramp;
                         }
                         if matches!(op, Op::GotoIfNilElsePop(_)) {
-                            fb.ins().brif(is_nil, target, &[], fallthrough, &[]);
+                            emit_nil_branch(&mut fb, cond, target, fallthrough);
                         } else {
-                            fb.ins().brif(is_nil, fallthrough, &[], target, &[]);
+                            emit_nil_branch(&mut fb, cond, fallthrough, target);
                         }
                         if let Some(tramp) = backedge {
                             fb.switch_to_block(tramp);
