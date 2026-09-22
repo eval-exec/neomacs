@@ -2011,3 +2011,109 @@ fn bounded_searches_answer_like_gnu_across_a_bound_sweep() {
     // stopped matching moves the second and third numbers.
     assert_eq!(observed, "OK (240 150 225690)");
 }
+
+#[test]
+fn bounded_bol_search_agrees_with_exhaustive_candidates() {
+    crate::test_utils::init_test_tracing();
+    let syntax = DefaultSyntaxLookup;
+    for text in ["", "aa\nz", "a\n\nz\n", "é中\n日\nz\nZ"] {
+        let positions: Vec<_> = text
+            .char_indices()
+            .map(|(pos, _)| pos)
+            .chain(std::iter::once(text.len()))
+            .collect();
+        for pattern in ["^", "^z", "^\\(\\)", "^\\(z\\)", "^z?", "^$", "^日"] {
+            for case_fold in [false, true] {
+                let compiled = regex_compile(pattern, false, case_fold).expect("compile");
+                for &start in &positions {
+                    for &end in positions.iter().filter(|&&end| end >= start) {
+                        // Use the matcher directly so the oracle does not share
+                        // the searcher's BOL candidate skipping or scan bounds.
+                        let expected = positions
+                            .iter()
+                            .copied()
+                            .filter(|&pos| pos >= start && pos <= end)
+                            .find_map(|pos| {
+                                re_match(&compiled, text.as_bytes(), pos, end, &syntax, start)
+                                    .map(|(_, regs)| (pos, regs.start, regs.end))
+                            });
+                        let actual = re_search(
+                            &compiled,
+                            text.as_bytes(),
+                            start,
+                            (end - start) as isize,
+                            &syntax,
+                            start,
+                        )
+                        .map(|(pos, regs)| (pos, regs.start, regs.end));
+                        assert_eq!(
+                            actual, expected,
+                            "{pattern:?} in {text:?}, {start}..={end}, fold={case_fold}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn bounded_bol_search_preserves_gnu_point_and_match_data() {
+    crate::test_utils::init_test_tracing();
+    let observed = crate::test_utils::runtime_startup_eval_one(
+        r#"(let (out)
+             ;; TEXT PATTERN START BOUND NOERROR BACKWARD CASE-FOLD
+             (dolist (case '(("aa\nz" "^" 2 3 t nil nil)
+                             ("aa\nz" "^" 2 4 t nil nil)
+                             ("aa\nz" "^\\(\\)" 2 4 t nil nil)
+                             ("aa\nz" "^\\(z\\)" 2 4 t nil nil)
+                             ("aa\nz" "^\\(z\\)" 2 5 t nil nil)
+                             ("aa\nz" "^z" 2 3 move nil nil)
+                             ("aa\nz" "^z" 2 3 nil nil nil)
+                             ("aa\nz" "^" 4 4 t nil nil)
+                             ("aa\nz" "^z" 4 4 t nil nil)
+                             ("aa\n" "^" 2 4 t nil nil)
+                             ("" "^" 1 1 t nil nil)
+                             ("z" "^" 1 1 t nil nil)
+                             ("z" "^z" 1 1 t nil nil)
+                             ("é中\nz" "^\\(\\)" 2 4 t nil nil)
+                             ("é中\n日" "^\\(日\\)" 2 5 t nil nil)
+                             ("é中\n日" "^日" 2 4 t nil nil)
+                             ("aa\nZ" "^\\(z\\)" 2 5 t nil t)
+                             ("aa\nZ" "^z" 2 5 t nil nil)
+                             ("aa\nz" "^\\(z\\)" 5 2 t t nil)
+                             ("aa\nz" "^" 5 4 t t nil)
+                             ("aa\nz" "^z" 4 2 t t nil)))
+               (with-temp-buffer
+                 (insert (nth 0 case))
+                 (goto-char (nth 2 case))
+                 (set-match-data '(7 9))
+                 (let* ((case-fold-search (nth 6 case))
+                        (answer (condition-case err
+                                    (funcall (if (nth 5 case)
+                                                 #'re-search-backward
+                                               #'re-search-forward)
+                                             (nth 1 case) (nth 3 case) (nth 4 case))
+                                  (search-failed (car err)))))
+                   (push (list answer (point)
+                               (mapcar (lambda (value)
+                                         (if (bufferp value)
+                                             (eq value (current-buffer)) value))
+                                       (match-data t))) out))))
+             (nreverse out))"#,
+    );
+    // Checked row by row against GNU Emacs 31.1. A trailing t in match data
+    // asserts that the match belongs to the searched buffer.
+    assert_eq!(
+        observed,
+        concat!(
+            "OK ((nil 2 (7 9)) (4 4 (4 4 t)) (4 4 (4 4 4 4 t)) ",
+            "(nil 2 (7 9)) (5 5 (4 5 4 5 t)) (nil 3 (7 9)) ",
+            "(search-failed 2 (7 9)) (4 4 (4 4 t)) (nil 4 (7 9)) ",
+            "(4 4 (4 4 t)) (1 1 (1 1 t)) (1 1 (1 1 t)) (nil 1 (7 9)) ",
+            "(4 4 (4 4 4 4 t)) (5 5 (4 5 4 5 t)) (nil 2 (7 9)) ",
+            "(5 5 (4 5 4 5 t)) (nil 2 (7 9)) (4 4 (4 5 4 5 t)) ",
+            "(4 4 (4 4 t)) (nil 4 (7 9)))"
+        )
+    );
+}
