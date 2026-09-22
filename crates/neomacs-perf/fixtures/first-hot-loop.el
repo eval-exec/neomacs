@@ -34,6 +34,10 @@
     neomacs-perf-first-hot-loop--profile-gate-process))
 
 (defun neomacs-perf-first-hot-loop--sampling-command (command)
+  ;; Correlate optional OSR diagnostics with the first-call workload. These
+  ;; messages are outside its timers and absent from ordinary measurements.
+  (when (getenv "NEOMACS_OSR_DEBUG")
+    (message "NEOMACS_PERF_FIRST_HOT_PHASE_%s" command))
   (let ((process (neomacs-perf-first-hot-loop--profile-gate-connect)))
     (when process
       (setq neomacs-perf-first-hot-loop--profile-gate-response "")
