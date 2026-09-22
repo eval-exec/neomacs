@@ -1637,38 +1637,45 @@ pub extern "C" fn neovm_jit_call_subr_spec(
                 }
             };
         }
-        let saved = save_scratch_gc_roots();
-        // Push the args straight onto bc_buf (GC-traced → rooted across the subr,
-        // and the stack-args dispatcher reads them in place — no LispArgVec). The
-        // callee needs no root: static subr objects are Box::leak'd, never freed.
-        // One reserve (exact size hint) onto bc_buf (GC-traced → rooted across
-        // the subr; the stack-args dispatcher reads them in place), then the
-        // call straight on the Context: no `Vm` (its constructor reads three
-        // process knobs per call) and one frame instead of two. The callee
-        // needs no root: static subr objects are Box::leak'd, never freed.
-        let args_start = ctx.bc_buf.len();
-        // SAFETY: the generated code stored exactly `nargs` argument words at
-        // `args_ptr` (its call-args slot) immediately before this call.
-        // SAFETY: the generated code stored exactly `nargs` argument words at
-        // `args_ptr` (its call-args slot) immediately before this call.
-        ctx.bc_buf
-            .extend((0..nargs).map(|i| Value::from_bits(unsafe { *args_ptr.add(i) } as usize)));
-        let res = ctx.call_spec_subr_from_bc_stack(SymId(sym as u32), target, args_start, nargs);
-        ctx.bc_buf.truncate(args_start);
-        let status = match res {
-            Ok(value) => {
-                // SAFETY: `out` is the generated code's result stack slot.
-                unsafe { *out = value.bits() as i64 };
-                STATUS_OK
-            }
-            Err(flow) => {
-                stash_pending_flow(flow);
-                STATUS_SIGNAL
-            }
-        };
-        restore_scratch_gc_roots(saved);
-        status
+        call_stack_builtin_from_native(ctx, SymId(sym as u32), target, args_ptr, nargs, out)
     })
+}
+
+/// Stack-argument fallback for an armed native subr call. Keep its argument
+/// staging and bytecode-frame temporaries out of the fixed-arity shim's stack
+/// layout. This still runs inside that shim's panic-containment boundary.
+#[inline(never)]
+fn call_stack_builtin_from_native(
+    ctx: &mut Context,
+    sym_id: SymId,
+    target: Value,
+    args_ptr: *const i64,
+    nargs: usize,
+    out: *mut i64,
+) -> i64 {
+    let saved = save_scratch_gc_roots();
+    // The args are GC-rooted on bc_buf and dispatched directly on Context.
+    // Static subr objects are leaked, so the armed target needs no extra root.
+    let args_start = ctx.bc_buf.len();
+    // SAFETY: the calling shim's generated caller stored exactly `nargs`
+    // tagged words at `args_ptr`; that native slot outlives this call.
+    ctx.bc_buf
+        .extend((0..nargs).map(|i| Value::from_bits(unsafe { *args_ptr.add(i) } as usize)));
+    let res = ctx.call_spec_subr_from_bc_stack(sym_id, target, args_start, nargs);
+    ctx.bc_buf.truncate(args_start);
+    let status = match res {
+        Ok(value) => {
+            // SAFETY: `out` is the generated caller's result stack slot.
+            unsafe { *out = value.bits() as i64 };
+            STATUS_OK
+        }
+        Err(flow) => {
+            stash_pending_flow(flow);
+            STATUS_SIGNAL
+        }
+    };
+    restore_scratch_gc_roots(saved);
+    status
 }
 
 /// Speculated PREDICATE call: `recordp` / `symbol-with-pos-p` sites collapse

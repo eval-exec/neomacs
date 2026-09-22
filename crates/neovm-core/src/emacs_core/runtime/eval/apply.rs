@@ -263,11 +263,27 @@ impl Context {
             return self.push_oversized_backtrace_frame_from_bc_stack(function, args_start, nargs);
         };
         let base = self.specpdl.len();
-        self.specpdl.push(SpecBinding::Backtrace {
-            function,
-            args: BacktraceArgs::evaluated_bc_stack(span),
-            debug_on_exit: false,
-        });
+        // As for native frames, reserve before constructing the entry. A
+        // Vec::push kept a temporary whose wide copy stalled on its narrow
+        // field stores in the resolved-builtin call path.
+        if base == self.specpdl.capacity() {
+            self.specpdl.reserve(1);
+        }
+        // SAFETY: the reserved slot is uninitialised spare capacity. Write
+        // the complete entry before publishing it through the vector length.
+        // The descriptor retains indices into bc_buf, so growing specpdl
+        // cannot invalidate the argument span; no Lisp or GC runs here.
+        unsafe {
+            self.specpdl
+                .as_mut_ptr()
+                .add(base)
+                .write(SpecBinding::Backtrace {
+                    function,
+                    args: BacktraceArgs::evaluated_bc_stack(span),
+                    debug_on_exit: false,
+                });
+            self.specpdl.set_len(base + 1);
+        }
         BytecodeBacktraceFrame::new(base, false)
     }
 

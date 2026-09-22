@@ -204,6 +204,14 @@ pub(crate) enum StringDesignator {
 }
 
 impl StringDesignator {
+    // Symbols remain a supported, ordinary input. Keep their name lookup and
+    // the error path out of the already-string check, without marking them cold.
+    #[inline(never)]
+    fn from_non_string_value(eval: &mut eval::Context, value: Value) -> Result<Self, Flow> {
+        let value = eval.unwrap_symbol(value);
+        expect_string_comparison_operand(&value)
+    }
+
     /// Borrow the designated string, for no longer than the designator lives.
     pub(crate) fn text(&self) -> &LispString {
         match self {
@@ -216,9 +224,16 @@ impl StringDesignator {
 }
 
 impl FromValue for StringDesignator {
+    #[inline(always)]
     fn from_value(eval: &mut eval::Context, value: Value) -> Result<Self, Flow> {
-        let value = eval.unwrap_symbol(value);
-        expect_string_comparison_operand(&value)
+        // Inlining this tag check lets typed string comparisons carry their
+        // original operands directly instead of calling the general converter
+        // twice and copying its aggregate results through temporary slots.
+        if value.is_string() {
+            Ok(Self::String(value))
+        } else {
+            Self::from_non_string_value(eval, value)
+        }
     }
 }
 
