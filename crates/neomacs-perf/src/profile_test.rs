@@ -9,9 +9,9 @@ use std::time::Duration;
 
 use super::{
     CaptureRoute, Frontend, NativeProfiler, PerfCallGraph, PerfCapture, PerfCaptureConfiguration,
-    PerfHarness, PerfSamplingEvent, ProfileArtifact, ProfileGate, ProfileRejection, ProfileRequest,
-    ProfileScope, ProfileVerdict, RunArtifact, RunReport, RunVerdict, ScenarioId,
-    perf_data_sample_count, profile_verdict,
+    PerfHarness, PerfSamplingEvent, ProfileArtifact, ProfileGate, ProfileRejection,
+    ProfileReportStyle, ProfileRequest, ProfileScope, ProfileVerdict, RunArtifact, RunReport,
+    RunVerdict, ScenarioId, perf_data_sample_count, profile_verdict,
 };
 
 #[test]
@@ -29,6 +29,7 @@ fn captured_profile_artifact_links_raw_data_report_and_scenario_run_without_timi
         iterations: NonZeroU32::new(40).expect("non-zero literal"),
         profiler: NativeProfiler::Perf,
         scope: ProfileScope::EditLoop,
+        report_style: ProfileReportStyle::SelfTime,
         configuration: PerfCaptureConfiguration {
             event: PerfSamplingEvent::UserCpuClock,
             frequency_hz: NonZeroU32::new(999).expect("non-zero literal"),
@@ -49,11 +50,21 @@ fn captured_profile_artifact_links_raw_data_report_and_scenario_run_without_timi
         serde_json::from_str(&json).expect("deserialize profile artifact");
 
     assert_eq!(decoded, artifact);
-    assert_eq!(decoded.schema_version, 3);
+    assert_eq!(decoded.schema_version, 4);
     assert!(json.contains(r##""event": "user-cpu-clock""##));
     assert!(json.contains(r##""scope": "edit-loop""##));
+    assert!(json.contains(r##""report_style": "self-time""##));
     assert!(json.contains(r##""perf_data_path": "perf.data""##));
     assert!(!json.contains("measurements"));
+
+    // Published schema-3 artifacts predate report selection; they always
+    // rendered a call graph and must retain that interpretation.
+    let mut legacy = serde_json::to_value(&artifact).expect("serialize legacy fixture");
+    legacy["schema_version"] = serde_json::json!(3);
+    legacy.as_object_mut().unwrap().remove("report_style");
+    let decoded: ProfileArtifact = serde_json::from_value(legacy).expect("read schema 3");
+    assert_eq!(decoded.schema_version, 3);
+    assert_eq!(decoded.report_style, ProfileReportStyle::CallGraph);
 }
 
 #[cfg(target_os = "linux")]
@@ -322,7 +333,8 @@ fn unavailable_profile_target_persists_a_rejected_diagnostic_artifact() {
         scratch.path().join("missing-neomacs"),
         NonZeroU32::new(3).expect("non-zero literal"),
         NativeProfiler::Perf,
-    );
+    )
+    .with_report_style(ProfileReportStyle::SelfTime);
 
     let report = PerfHarness::new(scratch.path())
         .profile(&request)
@@ -344,6 +356,7 @@ fn unavailable_profile_target_persists_a_rejected_diagnostic_artifact() {
         RunVerdict::InfrastructureFailure { .. }
     ));
     assert!(report.artifact_path.ends_with("profile.json"));
+    assert_eq!(report.artifact.report_style, ProfileReportStyle::SelfTime);
     assert!(report.run.artifact_path.ends_with("artifact.json"));
     assert!(
         report

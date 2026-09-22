@@ -49,7 +49,8 @@ pub use native_video::{
 };
 pub use profile::{
     NativeProfiler, PerfCallGraph, PerfCaptureConfiguration, PerfSamplingEvent, ProfileArtifact,
-    ProfileRejection, ProfileReport, ProfileRequest, ProfileScope, ProfileVerdict,
+    ProfileRejection, ProfileReport, ProfileReportStyle, ProfileRequest, ProfileScope,
+    ProfileVerdict,
 };
 #[cfg(test)]
 pub(crate) use profile_gate::ProfileGate;

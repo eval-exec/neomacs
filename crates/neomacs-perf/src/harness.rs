@@ -20,8 +20,8 @@ use thiserror::Error;
 use crate::{
     ArtifactFile, ArtifactKind, CorrectnessMismatch, CounterScope, EditorCapabilities, EditorKind,
     EditorProvenance, Frontend, HostProvenance, MachinePolicy, Measurement, MetricName, MetricUnit,
-    PerfCaptureConfiguration, ProfileArtifact, ProfileRejection, ProfileReport, ProfileRequest,
-    ProfileScope, ProfileVerdict, RunArtifact, RunVerdict, ScenarioId,
+    PerfCaptureConfiguration, ProfileArtifact, ProfileRejection, ProfileReport, ProfileReportStyle,
+    ProfileRequest, ProfileScope, ProfileVerdict, RunArtifact, RunVerdict, ScenarioId,
     artifact_store::{unix_time_ms, write_json_atomically},
     counters::PerfStatCapture,
     host::{collect_host_provenance, validate_machine_policy},
@@ -257,7 +257,8 @@ impl PerfHarness {
                 request.profiler.capture_configuration(),
                 request.scope,
                 request.timeout,
-            );
+            )
+            .with_report_style(request.report_style);
             self.run_prepared_scenario(&run_request, context, Some(&mut capture))?
         };
         self.publish_profile(request, run, platform_rejection)
@@ -283,6 +284,7 @@ impl PerfHarness {
             iterations: request.iterations,
             profiler: request.profiler,
             scope: request.scope,
+            report_style: request.report_style,
             configuration: request.profiler.capture_configuration(),
             run_artifact_path: PathBuf::from("artifact.json"),
             verdict,
@@ -722,6 +724,7 @@ pub(crate) struct PerfCapture {
     data: PathBuf,
     report: PathBuf,
     scope: ProfileScope,
+    report_style: ProfileReportStyle,
     timeout: Duration,
     gate: Option<ProfileGate>,
 }
@@ -738,9 +741,15 @@ impl PerfCapture {
             data: directory.join("perf.data"),
             report: directory.join("perf-report.txt"),
             scope,
+            report_style: ProfileReportStyle::default(),
             timeout,
             gate: None,
         }
+    }
+
+    fn with_report_style(mut self, report_style: ProfileReportStyle) -> Self {
+        self.report_style = report_style;
+        self
     }
 
     pub(crate) fn wrap(
@@ -835,7 +844,7 @@ impl PerfCapture {
             path: relative_artifact_path(&self.data),
         }];
         let output = Command::new("perf")
-            .args(PerfCaptureConfiguration::report_arguments(&self.data))
+            .args(self.report_style.report_arguments(&self.data))
             .env("LC_ALL", "C")
             .env("PERF_PAGER", "cat")
             .output()

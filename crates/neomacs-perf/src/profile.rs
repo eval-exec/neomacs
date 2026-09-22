@@ -24,6 +24,17 @@ pub enum ProfileScope {
     WholeProcess,
 }
 
+/// How to render sampled data. Both styles retain the same raw stacks.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProfileReportStyle {
+    /// Unwind stacks and render call graphs.
+    #[default]
+    CallGraph,
+    /// Attribute samples to their current symbol without unwinding stacks.
+    SelfTime,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProfileRequest {
     pub(crate) scenario: ScenarioId,
@@ -31,6 +42,7 @@ pub struct ProfileRequest {
     pub(crate) iterations: NonZeroU32,
     pub(crate) profiler: NativeProfiler,
     pub(crate) scope: ProfileScope,
+    pub(crate) report_style: ProfileReportStyle,
     pub(crate) frontend: Option<Frontend>,
     pub(crate) timeout: Duration,
     pub(crate) machine: MachinePolicy,
@@ -51,6 +63,7 @@ impl ProfileRequest {
             iterations,
             profiler,
             scope: ProfileScope::EditLoop,
+            report_style: ProfileReportStyle::default(),
             frontend: None,
             timeout: Duration::from_secs(300),
             machine: MachinePolicy::default(),
@@ -71,6 +84,11 @@ impl ProfileRequest {
 
     pub fn with_scope(mut self, scope: ProfileScope) -> Self {
         self.scope = scope;
+        self
+    }
+
+    pub fn with_report_style(mut self, report_style: ProfileReportStyle) -> Self {
+        self.report_style = report_style;
         self
     }
 
@@ -180,9 +198,11 @@ impl PerfCaptureConfiguration {
             ),
         ]
     }
+}
 
-    pub(crate) fn report_arguments(input: &Path) -> Vec<OsString> {
-        vec![
+impl ProfileReportStyle {
+    pub(crate) fn report_arguments(self, input: &Path) -> Vec<OsString> {
+        let mut arguments = vec![
             OsString::from("report"),
             OsString::from("--stdio"),
             OsString::from("--input"),
@@ -191,8 +211,15 @@ impl PerfCaptureConfiguration {
             OsString::from("--percent-limit"),
             OsString::from("0.5"),
             OsString::from("--call-graph"),
-            OsString::from("fractal,0.5"),
-        ]
+            OsString::from(match self {
+                Self::CallGraph => "fractal,0.5",
+                Self::SelfTime => "none",
+            }),
+        ];
+        if self == Self::SelfTime {
+            arguments.extend([OsString::from("--sort"), OsString::from("symbol")]);
+        }
+        arguments
     }
 }
 
@@ -256,13 +283,16 @@ pub struct ProfileArtifact {
     pub iterations: NonZeroU32,
     pub profiler: NativeProfiler,
     pub scope: ProfileScope,
+    /// Absent in schema 3, which always rendered a call graph.
+    #[serde(default)]
+    pub report_style: ProfileReportStyle,
     pub configuration: PerfCaptureConfiguration,
     pub run_artifact_path: PathBuf,
     pub verdict: ProfileVerdict,
 }
 
 impl ProfileArtifact {
-    pub const SCHEMA_VERSION: u32 = 3;
+    pub const SCHEMA_VERSION: u32 = 4;
 }
 
 #[derive(Clone, Debug, PartialEq)]
