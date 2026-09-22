@@ -1328,6 +1328,9 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     "GST_PLUGIN_SCANNER_1_0",
     "SYSTEMROOT",
     "WINDIR",
+    // The master JIT switch has no trailing underscore, so it is not covered
+    // by the diagnostic prefix below. Record and forward interpreter controls.
+    "NEOVM_JIT",
     // Measurement knobs the fixtures read. The environment is cleared before
     // the editor runs, so a knob absent from this list is silently ignored --
     // the experiment then compares a binary against itself and reads as "no
