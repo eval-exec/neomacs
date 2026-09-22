@@ -7,7 +7,7 @@ use super::{CrossEditorParityMetric, Frontend, MetricName, ScenarioId, scenario,
 #[test]
 fn catalog_exposes_the_rust_lsp_typing_workload_as_a_typed_scenario() {
     let scenarios = scenarios();
-    assert_eq!(scenarios.len(), 23);
+    assert_eq!(scenarios.len(), 27);
 
     // The heavy row exists so the light one keeps its baseline: same workload,
     // a whole-file diagnostic set instead of four on adjacent lines.
@@ -274,6 +274,26 @@ fn the_byte_code_rows_mirror_the_source_rows_they_correct() {
             ScenarioId::from_str(&compiled.to_string()),
             Ok(compiled),
             "{compiled} must round-trip through its name"
+        );
+    }
+}
+
+#[test]
+fn bounded_search_diagnostics_are_portable_and_stay_out_of_the_editor_score() {
+    for id in [
+        ScenarioId::BoundedSearchEditSmall,
+        ScenarioId::BoundedSearchEditLarge,
+        ScenarioId::BoundedSearchEditOnly,
+        ScenarioId::BoundedSearchNoEdit,
+    ] {
+        assert_eq!(ScenarioId::from_str(id.as_str()), Ok(id));
+        assert_eq!(scenario(id).id, id);
+        assert_eq!(scenario(id).default_frontend, Frontend::Batch);
+        assert!(
+            !crate::suite::SuiteId::Standard
+                .scenarios()
+                .iter()
+                .any(|entry| entry.scenario == id)
         );
     }
 }

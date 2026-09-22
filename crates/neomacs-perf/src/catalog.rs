@@ -54,6 +54,12 @@ pub enum ScenarioId {
     LargeFileEditing,
     Indentation,
     RegexSearch,
+    /// Focused search-view diagnostics; excluded from the whole-editor suite.
+    BoundedSearchEditSmall,
+    BoundedSearchEditLarge,
+    BoundedSearchEditOnly,
+    BoundedSearchNoEdit,
+
     SustainedNativeVideo,
     /// `magit-status` with the package loaded as byte-code, which is what a
     /// user's session does.  The plain row forces `load-suffixes '(".el")`,
@@ -150,6 +156,11 @@ impl ScenarioId {
             Self::LargeFileEditing => "large-file-editing",
             Self::Indentation => "indentation",
             Self::RegexSearch => "regex-search",
+            Self::BoundedSearchEditSmall => "bounded-search-edit-small",
+            Self::BoundedSearchEditLarge => "bounded-search-edit-large",
+            Self::BoundedSearchEditOnly => "bounded-search-edit-only",
+            Self::BoundedSearchNoEdit => "bounded-search-no-edit",
+
             Self::SustainedNativeVideo => "sustained-native-video",
             Self::MagitStatusCompiled => "magit-status-compiled",
             Self::OrgJournalOpenCompiled => "org-journal-open-compiled",
@@ -199,6 +210,11 @@ impl FromStr for ScenarioId {
             "large-file-editing" => Ok(Self::LargeFileEditing),
             "indentation" => Ok(Self::Indentation),
             "regex-search" => Ok(Self::RegexSearch),
+            "bounded-search-edit-small" => Ok(Self::BoundedSearchEditSmall),
+            "bounded-search-edit-large" => Ok(Self::BoundedSearchEditLarge),
+            "bounded-search-edit-only" => Ok(Self::BoundedSearchEditOnly),
+            "bounded-search-no-edit" => Ok(Self::BoundedSearchNoEdit),
+
             "sustained-native-video" => Ok(Self::SustainedNativeVideo),
             "magit-status-compiled" => Ok(Self::MagitStatusCompiled),
             "org-journal-open-compiled" => Ok(Self::OrgJournalOpenCompiled),
@@ -455,6 +471,38 @@ const SCENARIOS: &[ScenarioSpec] = &[
         primary_metric: MetricName::PerOperationWallTime,
         cross_editor_parity_metrics: &[],
     },
+    ScenarioSpec {
+        id: ScenarioId::BoundedSearchEditSmall,
+        description: "Bounded search after distant edits in a 1 KiB multibyte buffer",
+        default_frontend: Frontend::Batch,
+        default_iterations: NonZeroU32::new(10_000).expect("non-zero scenario default"),
+        primary_metric: MetricName::PerOperationWallTime,
+        cross_editor_parity_metrics: &[],
+    },
+    ScenarioSpec {
+        id: ScenarioId::BoundedSearchEditLarge,
+        description: "Bounded search after distant edits in an 8 MiB multibyte buffer",
+        default_frontend: Frontend::Batch,
+        default_iterations: NonZeroU32::new(10_000).expect("non-zero scenario default"),
+        primary_metric: MetricName::PerOperationWallTime,
+        cross_editor_parity_metrics: &[],
+    },
+    ScenarioSpec {
+        id: ScenarioId::BoundedSearchEditOnly,
+        description: "Distant edit control in an 8 MiB multibyte buffer",
+        default_frontend: Frontend::Batch,
+        default_iterations: NonZeroU32::new(10_000).expect("non-zero scenario default"),
+        primary_metric: MetricName::PerOperationWallTime,
+        cross_editor_parity_metrics: &[],
+    },
+    ScenarioSpec {
+        id: ScenarioId::BoundedSearchNoEdit,
+        description: "Bounded search without edits in an 8 MiB multibyte buffer",
+        default_frontend: Frontend::Batch,
+        default_iterations: NonZeroU32::new(10_000).expect("non-zero scenario default"),
+        primary_metric: MetricName::PerOperationWallTime,
+        cross_editor_parity_metrics: &[],
+    },
 ];
 
 pub fn scenarios() -> &'static [ScenarioSpec] {
@@ -481,6 +529,11 @@ pub const fn scenario(id: ScenarioId) -> &'static ScenarioSpec {
         ScenarioId::LargeFileEditing => &SCENARIOS[10],
         ScenarioId::Indentation => &SCENARIOS[11],
         ScenarioId::RegexSearch => &SCENARIOS[12],
+        ScenarioId::BoundedSearchEditSmall => &SCENARIOS[23],
+        ScenarioId::BoundedSearchEditLarge => &SCENARIOS[24],
+        ScenarioId::BoundedSearchEditOnly => &SCENARIOS[25],
+        ScenarioId::BoundedSearchNoEdit => &SCENARIOS[26],
+
         ScenarioId::SustainedNativeVideo => &SCENARIOS[13],
         ScenarioId::MagitStatusCompiled => &SCENARIOS[14],
         ScenarioId::OrgJournalOpenCompiled => &SCENARIOS[15],

@@ -39,6 +39,7 @@ fn harness_stays_an_engine_after_the_scenario_split() {
 fn scenario_modules_stay_family_sized() {
     const CEILING: usize = 900;
     for module in [
+        "bounded_search",
         "bytecode",
         "editor_workload",
         "mx_tab",
@@ -56,7 +57,7 @@ fn scenario_modules_stay_family_sized() {
     }
 }
 
-/// The registry stays closed: exactly these six families, so adding a
+/// The registry stays closed: exactly these families, so adding a
 /// scenario is a deliberate act that also touches the catalog, the dispatch,
 /// and this pin.
 #[test]
@@ -69,6 +70,7 @@ fn scenario_module_registry_is_pinned() {
     assert_eq!(
         registered,
         [
+            "bounded_search",
             "bytecode",
             "editor_workload",
             "elisp_benchmarks",

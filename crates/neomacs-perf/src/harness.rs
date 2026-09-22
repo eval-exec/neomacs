@@ -496,6 +496,12 @@ impl PerfHarness {
             ScenarioId::MxTabCompletion => {
                 scenarios::mx_tab::prepare(&self.workspace_root, request, run_directory)
             }
+            ScenarioId::BoundedSearchEditSmall
+            | ScenarioId::BoundedSearchEditLarge
+            | ScenarioId::BoundedSearchEditOnly
+            | ScenarioId::BoundedSearchNoEdit => {
+                scenarios::bounded_search::prepare(&self.workspace_root, request, run_directory)
+            }
             ScenarioId::BytecodeCallLoop => {
                 scenarios::bytecode::prepare(&self.workspace_root, request, run_directory)
             }
@@ -896,6 +902,7 @@ enum PreparedWorkload {
     },
     MxTabCompletion,
     BytecodeCallLoop,
+    BoundedSearch(scenarios::bounded_search::Settings),
     ElispBenchmarks {
         package_dir: PathBuf,
         report: PathBuf,
@@ -1071,6 +1078,15 @@ impl PreparedScenario {
     }
 
     fn add_workload_environment(&self, command: &mut Command) {
+        if let PreparedWorkload::BoundedSearch(settings) = &self.workload {
+            command
+                .env("NEOMACS_PERF_BUFFER_SIZE", settings.buffer_size.to_string())
+                .env("NEOMACS_PERF_EDIT", if settings.edit { "1" } else { "0" })
+                .env(
+                    "NEOMACS_PERF_SEARCH",
+                    if settings.search { "1" } else { "0" },
+                );
+        }
         if matches!(&self.workload, PreparedWorkload::BytecodeCallLoop) {
             command.env("NEOVM_JIT", "0");
         }
@@ -1536,6 +1552,7 @@ enum ScenarioResult {
     RustLspTyping(scenarios::rust_lsp::RustLspTypingResult),
     MxTabCompletion(scenarios::mx_tab::MxTabCompletionResult),
     BytecodeCallLoop(scenarios::bytecode::BytecodeCallLoopResult),
+    BoundedSearch(scenarios::bounded_search::BoundedSearchResult),
     ElispBenchmarks(scenarios::elisp_benchmarks::ElispBenchmarksResult),
     EditorWorkload(scenarios::editor_workload::EditorWorkloadResult),
     OrgJournalOpen(scenarios::org_journal_open::OrgJournalOpenResult),
@@ -1556,6 +1573,7 @@ impl ScenarioResult {
             Self::RustLspTyping(result) => result.elapsed_us,
             Self::MxTabCompletion(result) => result.elapsed_us,
             Self::BytecodeCallLoop(result) => result.elapsed_us,
+            Self::BoundedSearch(result) => result.elapsed_us(),
             Self::ElispBenchmarks(result) => result.elapsed_us,
             Self::EditorWorkload(result) => result.elapsed_us,
             Self::OrgJournalOpen(result) => result.elapsed_us,
@@ -1574,6 +1592,12 @@ fn parse_scenario_result(
         }
         ScenarioId::MxTabCompletion => {
             serde_json::from_str(raw).map(ScenarioResult::MxTabCompletion)
+        }
+        ScenarioId::BoundedSearchEditSmall
+        | ScenarioId::BoundedSearchEditLarge
+        | ScenarioId::BoundedSearchEditOnly
+        | ScenarioId::BoundedSearchNoEdit => {
+            serde_json::from_str(raw).map(ScenarioResult::BoundedSearch)
         }
         ScenarioId::BytecodeCallLoop => {
             serde_json::from_str(raw).map(ScenarioResult::BytecodeCallLoop)
@@ -1795,6 +1819,9 @@ fn result_verdict(
     process_wall_us: u128,
 ) -> RunVerdict {
     let mismatches = match result {
+        ScenarioResult::BoundedSearch(result) => {
+            scenarios::bounded_search::validate_bounded_search_result(request, result)
+        }
         ScenarioResult::RustLspTyping(result) => {
             scenarios::rust_lsp::validate_rust_lsp_typing_result(request, result)
         }
@@ -1843,6 +1870,9 @@ where
 
 fn valid_measurements(result: &ScenarioResult, wall_elapsed_us: u128) -> Vec<Measurement> {
     match result {
+        ScenarioResult::BoundedSearch(result) => {
+            scenarios::bounded_search::valid_bounded_search_measurements(result, wall_elapsed_us)
+        }
         ScenarioResult::RustLspTyping(result) => {
             scenarios::rust_lsp::valid_rust_lsp_typing_measurements(result, wall_elapsed_us)
         }
