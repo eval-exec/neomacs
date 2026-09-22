@@ -2,6 +2,213 @@ use super::*;
 use crate::fuzz_support::{RegexCase, RegexCheck, RegexDifferential, check_regex_differential};
 
 #[test]
+fn bounded_search_view_preserves_gnu_boundaries() {
+    crate::test_utils::init_test_tracing();
+    let observed = crate::test_utils::runtime_startup_eval_one(
+        r#"(let (out)
+  ;; TEXT PATTERN START BOUND FOLD NARROW POSIX
+  (dolist (case '(("aaTAIL" "a$" 1 3 nil nil nil)
+                  ("aa\nTAIL" "a$" 1 3 nil nil nil)
+                  ("aaTAIL" "a\\'" 1 3 nil nil nil)
+                  ("aaTAIL" "a\\b" 1 3 nil nil nil)
+                  ("aaTAIL" "a\\B" 1 3 nil nil nil)
+                  ("aa TAIL" "a\\b" 1 3 nil nil nil)
+                  ("aa_TAIL" "a\\_>" 1 3 nil nil nil)
+                  ("aa TAIL" "a\\_>" 1 3 nil nil nil)
+                  ("aaTAIL" "a\\>" 1 3 nil nil nil)
+                  ("aa TAIL" "a\\>" 1 3 nil nil nil)
+                  ("aaTAIL" "\\b" 3 3 nil nil nil)
+                  ("aaTAIL" "\\B" 3 3 nil nil nil)
+                  ("aa\nTAIL" "^\\(\\)" 2 4 nil nil nil)
+                  ("aa\nTAIL" "^T" 2 4 nil nil nil)
+                  ("aa\nTAIL" "^T" 2 5 nil nil nil)
+                  ("é中日tail" "中\\b" 1 3 nil nil nil)
+                  ("é中日tail" "中\\'" 1 3 nil nil nil)
+                  ("é中日tail" "中$" 1 3 nil nil nil)
+                  ("é中\ntail" "中$" 1 3 nil nil nil)
+                  ("é中 tail" "中\\b" 1 3 nil nil nil)
+                  ("é中 tail" "\\(é中\\)" 1 3 nil nil nil)
+                  ("é中 tail" "\\(é中\\)" 1 2 nil nil nil)
+                  ("AaTAIL" "^aa" 1 3 t nil nil)
+                  ("AaTAIL" "^aa$" 1 3 t nil nil)
+                  ("aaTAIL" "\\(a\\)\\1" 1 3 nil nil nil)
+                  ("aaTAIL" "\\(a\\)\\1$" 1 3 nil nil nil)
+                  ("aaTAIL" "\\(a\\|aa\\)" 1 3 nil nil t)
+                  ("aaTAIL" "\\(a\\|aa\\)" 1 2 nil nil t)
+                  ("aaTAIL" "a\\'" 1 3 nil (1 3) nil)
+                  ("aaTAIL" "a$" 1 3 nil (1 3) nil)
+                  ("aaTAIL" "a\\b" 1 3 nil (1 3) nil)
+                  ("aaTAIL" "a\\B" 1 3 nil (1 3) nil)
+                  ("xxaaTAIL" "\\`aa" 3 5 nil (3 8) nil)
+                  ("xxaaTAIL" "aa\\'" 3 5 nil (3 5) nil)
+                  ("xxaaTAIL" "aa\\'" 3 5 nil (3 8) nil)
+                  ("" "\\'" 1 1 nil nil nil)))
+    (with-temp-buffer
+      (insert (nth 0 case))
+      ;; Park the gap after the tested prefix, before applying narrowing.
+      (goto-char (max 1 (- (point-max) 2)))
+      (insert "x") (delete-char -1)
+      (when (nth 5 case) (apply #'narrow-to-region (nth 5 case)))
+      (goto-char (nth 2 case))
+      (set-match-data '(7 9))
+      (let* ((case-fold-search (nth 4 case))
+             (answer (funcall (if (nth 6 case) #'posix-search-forward
+                               #'re-search-forward)
+                              (nth 1 case) (nth 3 case) t)))
+        (push (list answer (point)
+                    (mapcar (lambda (value) (if (bufferp value) 'buffer value))
+                            (match-data t))) out))))
+  (nreverse out))"#,
+    );
+    // Checked row by row against GNU Emacs 31.1.
+    assert_eq!(
+        observed,
+        concat!(
+            "OK ((nil 1 (7 9)) (3 3 (2 3 buffer)) (nil 1 (7 9)) (nil 1 (7 9)) (2 2 (1 2 buffer)) (3 3 (2 3 ",
+            "buffer)) (nil 1 (7 9)) (3 3 (2 3 buffer)) (nil 1 (7 9)) (3 3 (2 3 buffer)) (nil 3 (7 9)) (3 3 (3 3 ",
+            "buffer)) (4 4 (4 4 4 4 buffer)) (nil 2 (7 9)) (5 5 (4 5 buffer)) (nil 1 (7 9)) (nil 1 (7 9)) (nil 1 ",
+            "(7 9)) (3 3 (2 3 buffer)) (3 3 (2 3 buffer)) (3 3 (1 3 1 3 buffer)) (nil 1 (7 9)) (3 3 (1 3 buffer))",
+            " (nil 1 (7 9)) (3 3 (1 3 1 2 buffer)) (nil 1 (7 9)) (3 3 (1 3 1 3 buffer)) (2 2 (1 2 1 2 buffer)) (3",
+            " 3 (2 3 buffer)) (3 3 (2 3 buffer)) (3 3 (2 3 buffer)) (2 2 (1 2 buffer)) (5 5 (3 5 buffer)) (5 5 (3",
+            " 5 buffer)) (nil 3 (7 9)) (1 1 (1 1 buffer)))",
+        )
+    );
+}
+
+#[test]
+fn bounded_search_view_preserves_gnu_raw_bytes_and_syntax() {
+    crate::test_utils::init_test_tracing();
+    let observed = crate::test_utils::runtime_startup_eval_one(
+        r#"(let (out)
+  (dolist (multibyte '(nil t))
+    (with-temp-buffer
+      (set-buffer-multibyte multibyte)
+      (set-syntax-table (copy-syntax-table))
+      (modify-syntax-entry 128 ".")
+      (modify-syntax-entry #x3fff80 ".")
+      (insert (unibyte-string ?a 128 ?b ?T ?A ?I ?L))
+      (dolist (pattern (list "a$" "a\\'" "a\\b" "a\\B" "a." ".\\'"
+                            (concat "a" (unibyte-string 128))))
+        (dolist (bound '(2 3))
+          (goto-char 6) (insert "x") (delete-char -1)
+          (goto-char 1)
+          (set-match-data '(7 9))
+          (let* ((case-fold-search nil)
+                 (answer (re-search-forward pattern bound t)))
+            (push (list answer (point) (match-beginning 0) (match-end 0)) out))))))
+  (with-temp-buffer
+    (set-syntax-table (copy-syntax-table))
+    (modify-syntax-entry #x200000 "w")
+    (insert (string ?a #x200000 ?b ?T ?A ?I ?L))
+    (dolist (pattern '("a$" "a\\'" "a." "a.\\'" "a\\b" "a\\B"))
+      (dolist (bound '(2 3))
+        (goto-char 6) (insert "x") (delete-char -1)
+        (goto-char 1)
+        (set-match-data '(7 9))
+        (let* ((case-fold-search nil)
+               (answer (re-search-forward pattern bound t)))
+          (push (list answer (point) (match-beginning 0) (match-end 0)) out)))))
+  (with-temp-buffer
+    (insert "aXTAIL")
+    (put-text-property 2 3 'syntax-table (string-to-syntax "."))
+    (dolist (lookup '(nil t))
+      (dolist (pattern '("a\\b" "a\\B" "a\\>" "a\\_>"))
+        (goto-char 5) (insert "x") (delete-char -1)
+        (goto-char 1)
+        (set-match-data '(7 9))
+        (let* ((case-fold-search nil)
+               (parse-sexp-lookup-properties lookup)
+               (answer (re-search-forward pattern 2 t)))
+          (push (list answer (point) (match-beginning 0) (match-end 0)) out)))))
+  (nreverse out))"#,
+    );
+    // Checked row by row against GNU Emacs 31.1.
+    assert_eq!(
+        observed,
+        concat!(
+            "OK ((nil 1 7 9) (nil 1 7 9) (nil 1 7 9) (nil 1 7 9) (2 2 1 2) (2 2 1 2) (nil 1 7 9) (nil 1 7 9) (nil",
+            " 1 7 9) (3 3 1 3) (nil 1 7 9) (nil 1 7 9) (nil 1 7 9) (3 3 1 3) (nil 1 7 9) (nil 1 7 9) (nil 1 7 9) ",
+            "(nil 1 7 9) (2 2 1 2) (2 2 1 2) (nil 1 7 9) (nil 1 7 9) (nil 1 7 9) (3 3 1 3) (nil 1 7 9) (nil 1 7 ",
+            "9) (nil 1 7 9) (3 3 1 3) (nil 1 7 9) (nil 1 7 9) (nil 1 7 9) (nil 1 7 9) (nil 1 7 9) (3 3 1 3) (nil ",
+            "1 7 9) (nil 1 7 9) (2 2 1 2) (2 2 1 2) (nil 1 7 9) (nil 1 7 9) (nil 1 7 9) (2 2 1 2) (nil 1 7 9) ",
+            "(nil 1 7 9) (2 2 1 2) (nil 1 7 9) (2 2 1 2) (2 2 1 2))",
+        )
+    );
+}
+
+#[test]
+fn bounded_search_view_one_character_context_agrees_with_full_text() {
+    crate::test_utils::init_test_tracing();
+    let syntax = DefaultSyntaxLookup;
+    for text in ["", "aaTAIL", "aa TAIL", "a_a\nTAIL", "a\n\nz\n", "é中日\nZ"] {
+        let positions: Vec<_> = text
+            .char_indices()
+            .map(|(pos, _)| pos)
+            .chain(std::iter::once(text.len()))
+            .collect();
+        for pattern in [
+            "",
+            "a",
+            "a$",
+            "a\\'",
+            "\\`",
+            "\\'",
+            "^",
+            "$",
+            "\\b",
+            "\\B",
+            "\\<",
+            "\\>",
+            "\\_<",
+            "\\_>",
+            "a.*",
+            "a.*?",
+            "a?",
+            ".*a$",
+            "\\(a\\)\\1",
+            "\\(a\\|aa\\)",
+            "\\(.*\\)$",
+            "中\\b",
+            "[[:word:]]+",
+        ] {
+            for case_fold in [false, true] {
+                for posix in [false, true] {
+                    let compiled = regex_compile(pattern, posix, case_fold).expect("compile");
+                    for &start in &positions {
+                        for &end in positions.iter().filter(|&&end| end >= start) {
+                            // The full text is the independent oracle. The view
+                            // keeps the next complete character so assertions at
+                            // END see its syntax and do not see a false EOF.
+                            let context_end = positions
+                                .iter()
+                                .copied()
+                                .find(|&pos| pos > end)
+                                .unwrap_or(text.len());
+                            let search = |bytes| {
+                                re_search(
+                                    &compiled,
+                                    bytes,
+                                    start,
+                                    (end - start) as isize,
+                                    &syntax,
+                                    start,
+                                )
+                                .map(|(pos, regs)| (pos, regs.start, regs.end))
+                            };
+                            assert_eq!(
+                                search(&text.as_bytes()[..context_end]),
+                                search(text.as_bytes()),
+                                "{pattern:?} in {text:?}, {start}..={end}, fold={case_fold}, posix={posix}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn test_simple_literal() {
     crate::test_utils::init_test_tracing();
     let syn = DefaultSyntaxLookup;
