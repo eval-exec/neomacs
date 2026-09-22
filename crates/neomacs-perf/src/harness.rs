@@ -545,7 +545,12 @@ impl PerfHarness {
             | ScenarioId::BoundedSearchNoEdit => {
                 scenarios::bounded_search::prepare(&self.workspace_root, request, run_directory)
             }
-            ScenarioId::LexicalLoop | ScenarioId::DynamicBindingLoop | ScenarioId::FirstHotLoop => {
+            ScenarioId::LexicalLoop
+            | ScenarioId::DynamicBindingLoop
+            | ScenarioId::FirstHotLoop
+            | ScenarioId::FirstHotLoop8K
+            | ScenarioId::FirstHotLoop16K
+            | ScenarioId::FirstHotLoop32K => {
                 scenarios::vm_loop::prepare(&self.workspace_root, request, run_directory)
             }
             ScenarioId::BuiltinCallPoint
@@ -1715,7 +1720,12 @@ fn parse_scenario_result(
         | ScenarioId::SearchPosixBackward => {
             serde_json::from_str(raw).map(ScenarioResult::SearchShape)
         }
-        ScenarioId::FirstHotLoop => serde_json::from_str(raw).map(ScenarioResult::FirstHotLoop),
+        ScenarioId::FirstHotLoop
+        | ScenarioId::FirstHotLoop8K
+        | ScenarioId::FirstHotLoop16K
+        | ScenarioId::FirstHotLoop32K => {
+            serde_json::from_str(raw).map(ScenarioResult::FirstHotLoop)
+        }
         ScenarioId::LexicalLoop | ScenarioId::DynamicBindingLoop => {
             serde_json::from_str(raw).map(ScenarioResult::VmLoop)
         }

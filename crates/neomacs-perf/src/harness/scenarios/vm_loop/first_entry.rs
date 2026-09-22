@@ -2,8 +2,6 @@
 
 use super::*;
 
-const INNER_ITERATIONS: u32 = 65_536;
-
 #[derive(Debug, Deserialize)]
 #[serde(try_from = "FirstHotLoopResultWire")]
 pub(crate) struct FirstHotLoopResult {
@@ -64,6 +62,10 @@ pub(crate) fn validate(
         &ScenarioOutcome::Ok,
         &result.outcome,
     );
+    let inner_iterations = request
+        .scenario
+        .first_hot_loop_iterations()
+        .expect("first-call result requires a first-call scenario");
     let count = request.iterations.get();
     mismatch(&mut mismatches, "iterations", count, r.iterations);
     mismatch(
@@ -87,7 +89,7 @@ pub(crate) fn validate(
     mismatch(
         &mut mismatches,
         "inner-iterations",
-        INNER_ITERATIONS,
+        inner_iterations,
         r.inner_iterations,
     );
     mismatch(
@@ -100,13 +102,13 @@ pub(crate) fn validate(
         mismatch(
             &mut mismatches,
             &format!("function-{index}-iterations"),
-            i64::from(INNER_ITERATIONS),
+            i64::from(inner_iterations),
             values[0],
         );
         mismatch(
             &mut mismatches,
             &format!("function-{index}-sum"),
-            expected_sum(INNER_ITERATIONS),
+            expected_sum(inner_iterations),
             values[1],
         );
         mismatch(

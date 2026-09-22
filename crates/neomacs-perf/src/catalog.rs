@@ -40,6 +40,13 @@ pub enum ScenarioId {
     DynamicBindingLoop,
     /// First call of fresh functions, including heat-up and OSR compilation.
     FirstHotLoop,
+    /// Short first-call controls for native compilation cost.
+    #[serde(rename = "first-hot-loop-8k")]
+    FirstHotLoop8K,
+    #[serde(rename = "first-hot-loop-16k")]
+    FirstHotLoop16K,
+    #[serde(rename = "first-hot-loop-32k")]
+    FirstHotLoop32K,
     /// Warmed builtin calls from bytecode; excluded from the whole-editor score.
     BuiltinCallPoint,
     BuiltinCallStringBytes,
@@ -160,6 +167,18 @@ impl ScenarioId {
         }
     }
 
+    /// Number of inner iterations in a fresh function's first call.
+    /// Other scenarios have a different operation contract.
+    pub(crate) const fn first_hot_loop_iterations(self) -> Option<u32> {
+        match self {
+            Self::FirstHotLoop => Some(65_536),
+            Self::FirstHotLoop8K => Some(8_192),
+            Self::FirstHotLoop16K => Some(16_384),
+            Self::FirstHotLoop32K => Some(32_768),
+            _ => None,
+        }
+    }
+
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::RustLspTyping => "rust-lsp-typing",
@@ -169,6 +188,9 @@ impl ScenarioId {
             Self::LexicalLoop => "lexical-loop",
             Self::DynamicBindingLoop => "dynamic-binding-loop",
             Self::FirstHotLoop => "first-hot-loop",
+            Self::FirstHotLoop8K => "first-hot-loop-8k",
+            Self::FirstHotLoop16K => "first-hot-loop-16k",
+            Self::FirstHotLoop32K => "first-hot-loop-32k",
             Self::BuiltinCallPoint => "builtin-call-point",
             Self::BuiltinCallStringBytes => "builtin-call-string-bytes",
             Self::BuiltinCallStringLessp => "builtin-call-string-lessp",
@@ -240,6 +262,9 @@ impl FromStr for ScenarioId {
             "lexical-loop" => Ok(Self::LexicalLoop),
             "dynamic-binding-loop" => Ok(Self::DynamicBindingLoop),
             "first-hot-loop" => Ok(Self::FirstHotLoop),
+            "first-hot-loop-8k" => Ok(Self::FirstHotLoop8K),
+            "first-hot-loop-16k" => Ok(Self::FirstHotLoop16K),
+            "first-hot-loop-32k" => Ok(Self::FirstHotLoop32K),
             "builtin-call-point" => Ok(Self::BuiltinCallPoint),
             "builtin-call-string-bytes" => Ok(Self::BuiltinCallStringBytes),
             "builtin-call-string-lessp" => Ok(Self::BuiltinCallStringLessp),
@@ -686,6 +711,30 @@ const SCENARIOS: &[ScenarioSpec] = &[
         primary_metric: MetricName::PerOperationWallTime,
         cross_editor_parity_metrics: &[],
     },
+    ScenarioSpec {
+        id: ScenarioId::FirstHotLoop8K,
+        description: "First call of fresh bytecode functions, each looping 8,192 times, including heat-up and native compilation",
+        default_frontend: Frontend::Batch,
+        default_iterations: NonZeroU32::new(100).expect("non-zero scenario default"),
+        primary_metric: MetricName::PerOperationWallTime,
+        cross_editor_parity_metrics: &[],
+    },
+    ScenarioSpec {
+        id: ScenarioId::FirstHotLoop16K,
+        description: "First call of fresh bytecode functions, each looping 16,384 times, including heat-up and native compilation",
+        default_frontend: Frontend::Batch,
+        default_iterations: NonZeroU32::new(100).expect("non-zero scenario default"),
+        primary_metric: MetricName::PerOperationWallTime,
+        cross_editor_parity_metrics: &[],
+    },
+    ScenarioSpec {
+        id: ScenarioId::FirstHotLoop32K,
+        description: "First call of fresh bytecode functions, each looping 32,768 times, including heat-up and native compilation",
+        default_frontend: Frontend::Batch,
+        default_iterations: NonZeroU32::new(100).expect("non-zero scenario default"),
+        primary_metric: MetricName::PerOperationWallTime,
+        cross_editor_parity_metrics: &[],
+    },
 ];
 
 pub fn scenarios() -> &'static [ScenarioSpec] {
@@ -705,6 +754,9 @@ pub const fn scenario(id: ScenarioId) -> &'static ScenarioSpec {
         ScenarioId::LexicalLoop => &SCENARIOS[27],
         ScenarioId::DynamicBindingLoop => &SCENARIOS[28],
         ScenarioId::FirstHotLoop => &SCENARIOS[29],
+        ScenarioId::FirstHotLoop8K => &SCENARIOS[43],
+        ScenarioId::FirstHotLoop16K => &SCENARIOS[44],
+        ScenarioId::FirstHotLoop32K => &SCENARIOS[45],
         ScenarioId::BuiltinCallPoint => &SCENARIOS[30],
         ScenarioId::BuiltinCallStringBytes => &SCENARIOS[31],
         ScenarioId::BuiltinCallStringLessp => &SCENARIOS[32],

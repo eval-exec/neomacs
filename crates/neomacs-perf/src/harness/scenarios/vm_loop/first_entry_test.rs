@@ -140,3 +140,73 @@ fn first_hot_loop_requires_complete_unambiguous_results() {
         reject(result);
     }
 }
+
+#[test]
+fn first_hot_loop_lengths_require_the_requested_work_for_every_function() {
+    let workspace = workspace();
+    let harness = PerfHarness::new(workspace.path());
+    let cases = [
+        (ScenarioId::FirstHotLoop8K, 8192, 33_550_336_i64),
+        (ScenarioId::FirstHotLoop16K, 16384, 134_209_536_i64),
+        (ScenarioId::FirstHotLoop32K, 32768, 536_854_528_i64),
+        (ScenarioId::FirstHotLoop, 65536, 2_147_450_880_i64),
+    ];
+    for (id, inner, sum) in cases {
+        assert_eq!(serde_json::to_value(id).unwrap(), json!(id.as_str()));
+        let request = RunRequest::new(id, "/unused/editor", NonZeroU32::new(3).unwrap());
+        let mut result = valid_result();
+        result["scenario"] = json!(id.as_str());
+        result["inner_iterations"] = json!(inner);
+        result["results"] = json!([[inner, sum, 0], [inner, sum, 1], [inner, sum, 2]]);
+        let verdict = |result: &Value| {
+            harness
+                .record_fixture_result(&request, &result.to_string())
+                .unwrap()
+                .artifact
+                .verdict
+        };
+        let RunVerdict::Valid { measurements } = verdict(&result) else {
+            panic!("valid first-call length rejected: {id}");
+        };
+        assert_eq!(
+            measurements
+                .iter()
+                .find(|m| m.name == MetricName::PerOperationWallTime)
+                .unwrap()
+                .value,
+            300.0
+        );
+        for (other_id, other_inner, other_sum) in cases {
+            if other_id == id {
+                continue;
+            }
+            let mut wrong_id = result.clone();
+            wrong_id["scenario"] = json!(other_id.as_str());
+            assert!(matches!(
+                verdict(&wrong_id),
+                RunVerdict::CorrectnessMismatch { .. }
+            ));
+            // Relabeling a shorter or longer complete result does not let it
+            // enter this workload's time series, even if its own sum is valid.
+            let mut wrong_work = result.clone();
+            wrong_work["inner_iterations"] = json!(other_inner);
+            wrong_work["results"] = json!([
+                [other_inner, other_sum, 0],
+                [other_inner, other_sum, 1],
+                [other_inner, other_sum, 2],
+            ]);
+            assert!(matches!(
+                verdict(&wrong_work),
+                RunVerdict::CorrectnessMismatch { .. }
+            ));
+        }
+        for index in 0..3 {
+            let mut wrong = result.clone();
+            wrong["results"][index][1] = json!(sum - 1);
+            assert!(matches!(
+                verdict(&wrong),
+                RunVerdict::CorrectnessMismatch { .. }
+            ));
+        }
+    }
+}

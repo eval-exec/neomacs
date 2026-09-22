@@ -26,7 +26,7 @@ pub(crate) fn prepare(
 ) -> Result<PreparedScenario, String> {
     let sandbox = MelpaSandbox::new(&format!("perf-{}", request.scenario))?;
     let editor = collect_editor_provenance(request.editor(), &sandbox)?;
-    let workload_source = if request.scenario == ScenarioId::FirstHotLoop {
+    let workload_source = if request.scenario.first_hot_loop_iterations().is_some() {
         "crates/neomacs-perf/fixtures/first-hot-loop.el"
     } else {
         "crates/neomacs-perf/fixtures/vm-loop.el"
@@ -51,6 +51,7 @@ pub(crate) fn prepare(
         editor,
         host: collect_host_provenance(request.machine_policy()),
         workload_source,
+        first_call_inner_iterations: request.scenario.first_hot_loop_iterations(),
         workload_source_sha256: sha256_file(&fixture_source)?,
         execution_policy: "editor-default-with-recorded-overrides",
         environment_policy: "closed-v1",
@@ -87,6 +88,8 @@ struct VmLoopInputProvenanceManifest<'a> {
     editor: EditorProvenance,
     host: HostProvenance,
     workload_source: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    first_call_inner_iterations: Option<u32>,
     workload_source_sha256: String,
     execution_policy: &'a str,
     environment_policy: &'a str,

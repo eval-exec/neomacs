@@ -5,7 +5,11 @@
 ;; One operation is a fresh function's first call. Byte compilation and GC are
 ;; setup; interpreter heat-up, OSR compilation, execution and result collection
 ;; are timed together. No function is called during preparation.
-(defconst neomacs-perf-first-hot-loop--inner-iterations 65536)
+(defconst neomacs-perf-first-hot-loop--iteration-counts
+  '(("first-hot-loop" . 65536)
+    ("first-hot-loop-8k" . 8192)
+    ("first-hot-loop-16k" . 16384)
+    ("first-hot-loop-32k" . 32768)))
 
 (defvar neomacs-perf-first-hot-loop--profile-gate-process nil)
 (defvar neomacs-perf-first-hot-loop--profile-gate-response "")
@@ -70,13 +74,15 @@
 
 (defun neomacs-perf-first-hot-loop--run ()
   (let* ((scenario (getenv "NEOMACS_PERF_WORKLOAD"))
+         (inner-iterations
+          (or (cdr (assoc scenario neomacs-perf-first-hot-loop--iteration-counts)) 0))
          (iterations (string-to-number (or (getenv "NEOMACS_PERF_ITERATIONS") "0")))
          (functions nil) (results nil) (index 0) (compiled t)
          (prepared 0) (completed 0) (elapsed-us 0) (wall-us 0)
          (status "error") (error-message nil) (exit-code 2))
     (condition-case err
         (progn
-          (unless (and (> iterations 0) (equal scenario "first-hot-loop"))
+          (unless (and (> iterations 0) (> inner-iterations 0))
             (error "Invalid first-hot-loop input"))
           (while (< index iterations)
             ;; Fresh compiler outputs and distinct constants prevent accidental
@@ -100,7 +106,7 @@
               (let ((cpu-start (car (current-cpu-time)))
                     (wall-start (float-time)))
                 (dolist (function functions)
-                  (push (funcall function neomacs-perf-first-hot-loop--inner-iterations)
+                  (push (funcall function inner-iterations)
                         results))
                 (setq elapsed-us (- (car (current-cpu-time)) cpu-start)
                       wall-us (round (* 1000000 (- (float-time) wall-start)))))
@@ -115,7 +121,7 @@
        (json-serialize
         `((schema_version . 1) (scenario . ,scenario) (status . ,status)
           (iterations . ,iterations)
-          (inner_iterations . ,neomacs-perf-first-hot-loop--inner-iterations)
+          (inner_iterations . ,inner-iterations)
           (prepared_functions . ,prepared)
           (bytecode_compiled . ,(if compiled t :json-false))
           (completed_operations . ,completed)

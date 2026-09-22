@@ -680,7 +680,10 @@ pub(crate) fn validate_editor_workload_result(
         | ScenarioId::SearchRegexpBackward
         | ScenarioId::SearchPosixForward
         | ScenarioId::SearchPosixBackward
-        | ScenarioId::FirstHotLoop => {
+        | ScenarioId::FirstHotLoop
+        | ScenarioId::FirstHotLoop8K
+        | ScenarioId::FirstHotLoop16K
+        | ScenarioId::FirstHotLoop32K => {
             unreachable!("dedicated scenario results do not use the editor workload validator")
         }
     }
