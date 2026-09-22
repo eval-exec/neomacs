@@ -92,69 +92,97 @@ const HELM_PYDOC_TUI_PRELUDE: &str = r####"
       (setenv "NEOMACS_HELM_PYDOC_OVERLAY_STATE" (expand-file-name "helm-overlay-state.txt" root))
       (condition-case setup-err
           (progn
-      (defun neomacs-helm-pydoc-overlay-dump ()
-        (condition-case dump-err
-        (let ((helm-buf (and (boundp 'helm-buffer)
-                             (get-buffer helm-buffer)))
-              (fired-log (expand-file-name "helm-observer-fired.log" root)))
-          (let ((prior (condition-case e
-                          (with-temp-buffer
-                            (insert-file-contents fired-log)
-                            (buffer-string))
-                          (error ""))))
-            (neomacs-helm-pydoc-tui-write
-             fired-log
-             (concat prior
-                     (format "FIRED at point-max=%S\n"
-                             (buffer-live-p helm-buf)))))
-          (when (buffer-live-p helm-buf)
-            (let* ((windows
-                    (mapcar
-                     (lambda (w)
-                       (format
-                        "win buf=%S start=%S point=%S hscroll=%S\n"
-                        (buffer-name (window-buffer w))
-                        (window-start w)
-                        (window-point w)
-                        (window-hscroll w)))
-                     (window-list nil 'no-mini)))
-                   (report
-                    (with-current-buffer helm-buf
-                      (format
-                       "point=%S point-min=%S point-max=%S selection=%S mode=%S read-only=%S\n"
-                       (point) (point-min) (point-max)
-                       (and (boundp 'helm-selection-point) helm-selection-point)
-                       major-mode buffer-read-only))))
-              (neomacs-helm-pydoc-tui-write
-               (getenv "NEOMACS_HELM_PYDOC_OVERLAY_STATE")
-               (concat
-                (mapconcat #'identity windows "")
-                report
-                (mapcar
-                 (lambda (ov)
-                   (format
-                    "ov start=%S end=%S face=%S priority=%S window=%S\n"
-                    (overlay-start ov) (overlay-end ov)
-                    (overlay-get ov 'face) (overlay-get ov 'priority)
-                    (overlay-get ov 'window)))
-                 (with-current-buffer helm-buf
-                   (overlays-in (point-min) (point-max)))))))))
-      (add-hook 'helm-move-selection-after-hook #'neomacs-helm-pydoc-overlay-dump)
-      (add-hook 'helm-after-update-hook #'neomacs-helm-pydoc-overlay-dump)
-      ;; Converge: a fast idle dump so the file reflects the CURRENT state
-      ;; (the hooks alone can lag the screen by one update).
-      (run-with-idle-timer
-       0.25 0.25 #'neomacs-helm-pydoc-overlay-dump))
+            (defun neomacs-helm-pydoc-overlay-dump ()
+              (condition-case dump-err
+                  (let ((helm-buf (and (boundp 'helm-buffer)
+                                       (get-buffer helm-buffer)))
+                        (fired-log (expand-file-name "helm-observer-fired.log"
+                                                     (getenv "HOME"))))
+                    (let ((prior (condition-case e
+                                    (with-temp-buffer
+                                      (insert-file-contents fired-log)
+                                      (buffer-string))
+                                  (error ""))))
+                      (neomacs-helm-pydoc-tui-write
+                       fired-log
+                       (concat prior
+                               (format "FIRED at point-max=%S\n"
+                                       (buffer-live-p helm-buf)))))
+                    (when (buffer-live-p helm-buf)
+                      (let* ((windows
+                              (mapcar
+                               (lambda (w)
+                                 (format
+                                  "win buf=%S start=%S point=%S hscroll=%S\n"
+                                  (buffer-name (window-buffer w))
+                                  (window-start w)
+                                  (window-point w)
+                                  (window-hscroll w)))
+                               (window-list nil 'no-mini)))
+                             (report
+                              (with-current-buffer helm-buf
+                                (format
+                                 "point=%S point-min=%S point-max=%S selection=%S mode=%S read-only=%S\n"
+                                 (point) (point-min) (point-max)
+                                 (and (boundp 'helm-selection-point) helm-selection-point)
+                                 major-mode buffer-read-only))))
+                        (neomacs-helm-pydoc-tui-write
+                         (getenv "NEOMACS_HELM_PYDOC_OVERLAY_STATE")
+                         (concat
+                          (mapconcat #'identity windows "")
+                          report
+                          (mapconcat
+                           (lambda (ov)
+                             (format
+                              "ov start=%S end=%S face=%S priority=%S window=%S\n"
+                              (overlay-start ov) (overlay-end ov)
+                              (overlay-get ov 'face) (overlay-get ov 'priority)
+                              (overlay-get ov 'window)))
+                           (with-current-buffer helm-buf
+                             (overlays-in (point-min) (point-max)))
+                           "")))
+                        ;; Every window's buffer, not just helm's: the action
+                        ;; selection screen highlights a row in the ACTIONS
+                        ;; window, and the helm-buffer introspection above
+                        ;; would not see that state at all.
+                        (neomacs-helm-pydoc-tui-write
+                         (expand-file-name "helm-window-overlays.txt" (getenv "HOME"))
+                         (mapconcat
+                          (lambda (w)
+                            (with-current-buffer (window-buffer w)
+                              (concat
+                               (format
+                                "WIN buf=%S mode=%S point=%S\n"
+                                (buffer-name) major-mode (point))
+                               (mapconcat
+                                (lambda (ov)
+                                  (format
+                                   "  ov start=%S end=%S face=%S priority=%S window=%S text=%S\n"
+                                   (overlay-start ov) (overlay-end ov)
+                                   (overlay-get ov 'face) (overlay-get ov 'priority)
+                                   (overlay-get ov 'window)
+                                   (and (overlay-start ov) (overlay-end ov)
+                                        (buffer-substring-no-properties
+                                         (overlay-start ov) (overlay-end ov)))))
+                                (overlays-in (point-min) (point-max))
+                                ""))))
+                          (window-list nil 'no-mini)
+                          "")))))
+                (error (neomacs-helm-pydoc-tui-write
+                        (expand-file-name "helm-overlay-dump-error.txt" (getenv "HOME"))
+                        (format "DUMP-ERR: %S" dump-err)))))
+            (add-hook 'helm-move-selection-after-hook #'neomacs-helm-pydoc-overlay-dump)
+            (add-hook 'helm-after-update-hook #'neomacs-helm-pydoc-overlay-dump)
+            ;; Converge: a fast idle dump so the file reflects the CURRENT
+            ;; state (the hooks alone can lag the screen by one update).
+            (run-with-idle-timer
+             0.25 0.25 #'neomacs-helm-pydoc-overlay-dump))
         (error (neomacs-helm-pydoc-tui-write
-                (expand-file-name "helm-overlay-dump-error.txt" root)
-                (format "DUMP-ERR: %S" dump-err))))
+                (expand-file-name "helm-overlay-setup-error.txt" root)
+                (format "SETUP-ERR: %S" setup-err))))
       (neomacs-helm-pydoc-tui-write dump "OVERLAY-OBSERVER-INSTALLED"))
-      (setenv "NEOMACS_HELM_PYDOC_OVERLAY_STATE" (expand-file-name "helm-overlay-state.txt" root))
-      (neomacs-helm-pydoc-tui-write
-       (expand-file-name "helm-overlay-setup-error.txt" root)
-       (format "SETUP-ERR: %S" setup-err)))
     (find-file source)
-    (goto-char (point-max)))))
+    (goto-char (point-max))))
 
 (add-hook 'emacs-startup-hook #'neomacs-helm-pydoc-tui-setup 100)
 "####;
@@ -306,6 +334,19 @@ fn assert_stage(
         if gnu_snapshot != neo_snapshot {
             // plain_grid() hides faces; a raw-row mismatch is almost always
             // a face divergence, so spell the differing cells out.
+            for (gnu_row, neo_row) in gnu_snapshot.rows.iter().zip(&neo_snapshot.rows) {
+                for col in 0..25usize {
+                    if let (Some(g), Some(n)) = (gnu_row.cells.get(col), neo_row.cells.get(col)) {
+                        eprintln!(
+                            "ROW{row}-COL{col}: GNU fg={:?} bg={:?} | NEO fg={:?} bg={:?}",
+                            g.fgcolor(),
+                            g.bgcolor(),
+                            n.fgcolor(),
+                            n.bgcolor()
+                        );
+                    }
+                }
+            }
             let mut style_diffs = String::new();
             for (gnu_row, neo_row) in gnu_snapshot.rows.iter().zip(&neo_snapshot.rows) {
                 for (col, (gnu_cell, neo_cell)) in
@@ -348,6 +389,12 @@ fn assert_overlay_introspection(pair: &PackageTuiPair, stage: &str, divergences:
     };
     let gnu = read(&pair.gnu);
     let neo = read(&pair.neo);
+    let read_window_dump = |session: &TuiSession| {
+        let path = session.home_dir().join("helm-window-overlays.txt");
+        fs::read_to_string(&path).unwrap_or_else(|error| format!("unavailable: {error}"))
+    };
+    eprintln!("WINDOW-OVERLAYS-GNU:\n{}", read_window_dump(&pair.gnu));
+    eprintln!("WINDOW-OVERLAYS-NEO:\n{}", read_window_dump(&pair.neo));
     eprintln!("OVERLAY-STATE-GNU: {gnu}");
     eprintln!("OVERLAY-STATE-NEO: {neo}");
     if gnu != neo {
