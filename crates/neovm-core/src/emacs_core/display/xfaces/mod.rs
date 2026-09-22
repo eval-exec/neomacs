@@ -4237,6 +4237,12 @@ pub(crate) fn builtin_color_distance(
 }
 
 fn parse_hex_color_16bit(hex: &str) -> Option<(i64, i64, i64)> {
+    // Validate before slicing at byte offsets: a non-ASCII color spec can
+    // otherwise split a UTF-8 character and panic.  Checking hex digits also
+    // rejects the leading '+' accepted by from_str_radix for a channel.
+    if !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
     match hex.len() {
         3 => {
             let r = i64::from(hex[0..1].chars().next()?.to_digit(16)? as u16);

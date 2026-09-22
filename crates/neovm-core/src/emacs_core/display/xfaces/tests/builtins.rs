@@ -2858,6 +2858,29 @@ fn color_values_from_color_spec_semantics() {
 }
 
 #[test]
+fn color_values_from_color_spec_rejects_non_hex_bytes_without_panicking() {
+    crate::test_utils::init_test_tracing();
+    // Include two-, three-, and four-byte characters at slicing boundaries.
+    for spec in [
+        "#あ",
+        "#éa",
+        "#中",
+        "#中文",
+        "#한",
+        "#😀ab",
+        "#あい",
+        "#日abc",
+        "#123あ123456",
+        "#1234567あ12",
+        "#12+345",
+        "#+00100000000",
+    ] {
+        let result = builtin_color_values_from_color_spec(vec![Value::string(spec)]).unwrap();
+        assert!(result.is_nil(), "invalid color spec: {spec}");
+    }
+}
+
+#[test]
 fn color_gray_and_supported_semantics() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();
