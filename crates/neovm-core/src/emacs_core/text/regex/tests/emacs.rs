@@ -2,6 +2,93 @@ use super::*;
 use crate::fuzz_support::{RegexCase, RegexCheck, RegexDifferential, check_regex_differential};
 
 #[test]
+fn sparse_fastmap_search_agrees_with_exhaustive_candidates() {
+    crate::test_utils::init_test_tracing();
+    let syntax = DefaultSyntaxLookup;
+    for pattern in [
+        "a",
+        "[ab]",
+        "[abc]",
+        "[abcd]",
+        "[^ab]",
+        "é",
+        "[aé]",
+        ".",
+        "\\(a\\|b\\|c\\)",
+        "\\(a\\|b\\|c\\|d\\)",
+        "[abc]$",
+        "[ab]?",
+        "[ab]*c",
+        "\\(a\\)\\1",
+        "[ab]\\{1,2\\}",
+        "\\b[abc]",
+        "^a",
+        "",
+        "\0",
+        "\u{7f}",
+    ] {
+        for case_fold in [false, true] {
+            for posix in [false, true] {
+                let compiled = regex_compile(pattern, posix, case_fold).expect("compile");
+                for text in ["", "a", "zzz", "abca\nd", " éaB中c", "\0a\u{7f}b"] {
+                    let positions: Vec<_> = text
+                        .char_indices()
+                        .map(|(pos, _)| pos)
+                        .chain(std::iter::once(text.len()))
+                        .collect();
+                    for &start in &positions {
+                        for &limit in &positions {
+                            let search = || {
+                                re_search(
+                                    &compiled,
+                                    text.as_bytes(),
+                                    start,
+                                    limit as isize - start as isize,
+                                    &syntax,
+                                    start,
+                                )
+                                .map(|(pos, regs)| (pos, regs.start, regs.end))
+                            };
+                            let expected = with_fastmap_disabled(search);
+                            // Reuse the same compiled pattern over changing text,
+                            // directions and bounds, exercising cached decisions.
+                            assert_eq!(
+                                search(),
+                                expected,
+                                "{pattern:?}, {text:?}, {start} -> {limit}, fold={case_fold}, posix={posix}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn sparse_fastmap_rebuild_does_not_reuse_an_old_skip_byte() {
+    crate::test_utils::init_test_tracing();
+    let syntax = DefaultSyntaxLookup;
+    let mut compiled = regex_compile("a", false, false).expect("compile");
+    let search = |pattern: &CompiledPattern, text: &[u8]| {
+        re_search(pattern, text, 0, text.len() as isize, &syntax, 0)
+            .map(|(pos, regs)| (pos, regs.end[0]))
+    };
+    assert_eq!(search(&compiled, b"xa"), Some((1, 2)));
+    let original = compiled.clone();
+    // Recompute is the compiler's public seam for rebuilding a fastmap.
+    // Change the literal operand without changing bytecode boundaries or
+    // match registers, so any stale skip decision would miss the new byte.
+    assert_eq!(&compiled.buffer[..3], &[RegexOp::Exactn as u8, 1, b'a']);
+    compiled.buffer[2] = b'b';
+    recompute_fastmap(&mut compiled, &syntax);
+    assert_eq!(search(&compiled, b"xb"), Some((1, 2)));
+    assert_eq!(search(&compiled, b"xa"), None);
+    assert_eq!(search(&original, b"xa"), Some((1, 2)));
+    assert_eq!(search(&original, b"xb"), None);
+}
+
+#[test]
 fn bounded_search_view_preserves_gnu_boundaries() {
     crate::test_utils::init_test_tracing();
     let observed = crate::test_utils::runtime_startup_eval_one(
