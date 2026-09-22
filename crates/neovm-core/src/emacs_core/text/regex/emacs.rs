@@ -8230,7 +8230,11 @@ pub(crate) fn re_search(
                     }
                 }
                 let search_from = pos.min(text_len);
-                match memchr::memchr(b'\n', &text[search_from..text_len]) {
+                // Only newlines before `end` can yield a candidate at or
+                // before the bound. Include `end - 1`: a zero-width match
+                // may start at `end`. A short bounded failure must not scan
+                // the remaining buffer when it contains no nearby newline.
+                match memchr::memchr(b'\n', &text[search_from..end]) {
                     Some(idx) => pos = search_from + idx + 1,
                     None => return None,
                 }
