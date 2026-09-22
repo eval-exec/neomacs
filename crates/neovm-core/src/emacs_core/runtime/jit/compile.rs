@@ -1244,17 +1244,13 @@ fn compile_bytecode_function_inner(
         // Inlined calls in loops or shim-bearing bodies validate their
         // dependency epoch and call-observability state at each original
         // call boundary. A mismatch resumes that call precisely.
-        //  * generic-call: a `Call`/`Apply` or unspecialized `CallBuiltinSym`
-        //    left in the body after inlining. Ordinary calls still lack the
-        //    baseline's native-to-native speculation. Named builtins use the
-        //    same specialization and fallback emitter in both tiers. This used to be waived
-        //    when the body inlined SOMETHING, on the theory that cross-
-        //    boundary unboxing wins; measured, it does not: a dhrystone body
-        //    that inlined one callee and kept a speculated call ran the
-        //    generic `neovm_jit_call` at 1.4% of the benchmark's samples and
-        //    cost +1.25% instructions. A body that inlined ALL its calls has
-        //    no generic call left and keeps the tier.
-        let plan = lowering::plan_mir_leaf(&mir);
+        //  * generic-call: a call without a qualified shared specialization.
+        //    Ordinary bytecode/subr calls now use the baseline's guarded shims
+        //    and rooted fallback. Apply, unclassified calls and inline bitwise
+        //    arithmetic retain baseline lowering. Call-dominated wrappers also
+        //    keep their existing profitability deferral unless MIR inlined a
+        //    callee. Sharing dispatch must not silently broaden tier-up policy.
+        let plan = lowering::plan_mir_leaf_for_jit(&mir, ops, obarray);
         let reject = if has_float_site {
             Some("gate:float-site".to_string())
         } else if has_generic_arith_site {
@@ -1275,7 +1271,7 @@ fn compile_bytecode_function_inner(
         if let Some(key) = reject {
             super::stats::record_mir_bail(key);
             super::stats::record_mir(super::stats::MirFunnel::TierRejected);
-        } else if let Ok(mut leaf) = lower_mir_pure(&mir).inspect_err(|e| {
+        } else if let Ok(mut leaf) = lowering::lower_mir_with_plan(&mir, plan).inspect_err(|e| {
             super::stats::record_mir(super::stats::MirFunnel::LowerFailed);
             super::stats::record_mir_bail(format!("lower:{e:?}"));
         }) {
@@ -4398,6 +4394,9 @@ mod array_shim_tests;
 #[cfg(test)]
 #[path = "tests/inline.rs"]
 mod inline_tests;
+#[cfg(test)]
+#[path = "tests/mir_calls.rs"]
+mod mir_calls;
 #[cfg(test)]
 #[path = "tests/mir_cons_deopt.rs"]
 mod mir_cons_deopt_tests;

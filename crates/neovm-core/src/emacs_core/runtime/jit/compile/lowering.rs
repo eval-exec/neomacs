@@ -1,4 +1,4 @@
-//! Bytecode-to-CLIF lowering: fixnum guard/retag helpers, the fixnum/predicate/car-cdr op lowerings, MIR lowering (lower_mir_pure) and its runtime-context and deopt emission, the ISA config, and the per-op baseline lowering (lower_simple_op).
+//! Bytecode-to-CLIF lowering: fixnum guard/retag helpers, the fixnum/predicate/car-cdr op lowerings, MIR lowering (lower_mir_with_plan) and its runtime-context and deopt emission, the ISA config, and the per-op baseline lowering (lower_simple_op).
 //!
 //! Moved out of `compile.rs` unchanged; a child module so it keeps the
 //! parent's view of its private items (`use super::*`).
@@ -1560,8 +1560,9 @@ fn op_variant_name(op: &Op) -> String {
 ///   INLINED predicate (whose `pre_stack` is the call site's) reads the right
 ///   operand.
 ///
-/// No adapter-reachable arm queues a deopt or a handler dispatch (asserted):
-/// Only slotless named-builtin specialization is supported; a MIR leaf has no handlers.
+/// No adapter-reachable arm queues a deopt or a handler dispatch (asserted).
+/// Ordinary call sites share the baseline's guarded shims; inline arithmetic
+/// remains outside this adapter. A MIR leaf has no handlers.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn lower_mir_inst_via_baseline(
     fb: &mut FunctionBuilder,
@@ -1578,6 +1579,7 @@ pub(crate) fn lower_mir_inst_via_baseline(
     reloc_index: &std::collections::HashMap<usize, u32>,
     aot: bool,
     max_call_args: usize,
+    spec: Option<(u32, u64, i64, usize, SpecCalleeKind)>,
 ) -> Result<(), CompileError> {
     use mir::MirOp;
     let bail = |key: String| {
@@ -1586,6 +1588,11 @@ pub(crate) fn lower_mir_inst_via_baseline(
     };
     if !mir_opaque_enabled() {
         return bail(format!("opaque:{}", op_variant_name(op)));
+    }
+    if spec.is_some_and(|(_, _, _, _, kind)| {
+        aot || matches!(kind, SpecCalleeKind::ArithIntrinsic { .. })
+    }) {
+        return bail("adapter:unqualified-call-spec".to_string());
     }
     // A bind/unwind frame needs `has_binds` on the leaf and the native entry's
     // bind-frame arming (`invoke_native`); the MIR leaf has neither.
@@ -1672,10 +1679,12 @@ pub(crate) fn lower_mir_inst_via_baseline(
         Some(rt),
         &[],
         &mut dispatch,
-        super::named_builtin_call(op).map(|call| {
-            // CBSym uses only the kind and the op's symbol. No epoch slot or
-            // expected callee is needed, identically to the baseline/AOT path.
-            (0, 0, 0, 0, call.kind)
+        spec.or_else(|| {
+            super::named_builtin_call(op).map(|call| {
+                // CBSym uses only the kind and the op's symbol. No epoch slot or
+                // expected callee is needed, identically to the baseline/AOT path.
+                (0, 0, 0, 0, call.kind)
+            })
         }),
         op,
         &HashSet::new(),
@@ -2009,7 +2018,7 @@ pub(crate) fn raw_fixnum_maxmin(
 }
 
 /// What a MIR leaf needs from the lowering, decided once from the MIR and
-/// shared by the JIT wrapper ([`lower_mir_pure`]), the AOT wrapper
+/// shared by the JIT wrapper ([`lower_mir_with_plan`]), the AOT wrapper
 /// (`aot::define_leaf_into_module`) and the tier gate — one set of facts, so
 /// the descriptor a `.so` carries, the deopt buffers a leaf is given and the
 /// code emitted for it can never disagree.
@@ -2018,14 +2027,18 @@ pub(crate) struct MirLeafPlan {
     /// shim-calling emitters (a call, a variable op, a builtin, ...).
     #[cfg(test)]
     pub(crate) has_opaque: bool,
-    /// An ordinary call, or a named builtin without shared specialization.
-    /// Such bodies keep the baseline's call machinery until MIR has parity.
+    /// A call without a qualified shared specialization. These bodies retain
+    /// the baseline tier; Apply and inline arithmetic remain unqualified.
     pub(crate) has_generic_call: bool,
-    /// An opaque op without a qualified read-only named-builtin fast path.
-    /// Its presence keeps loop admission conservative while each family is
-    /// measured. Even qualified reads retain full fallback effects.
+    /// An opaque op without a shared ordinary-call or read-only named-builtin
+    /// fast path. Other adapter families retain conservative loop admission.
+    /// Ordinary calls and all generic fallbacks retain their full effects.
     pub(crate) has_unqualified_adapter: bool,
     pub(crate) has_named_builtin: bool,
+    /// Stable JIT-only call state. The plan owns slots while code is emitted;
+    /// the leaf takes ownership before any baked pointer can be executed.
+    spec_sites: HashMap<usize, super::SpecSite>,
+    spec_slots: Box<[super::SpecSlot]>,
     /// A loop (an edge to a block at or before its source).
     pub(crate) has_backedge: bool,
     /// Every guard deopts PRECISELY (`STATUS_DEOPT_AT`), never rerun-from-
@@ -2114,13 +2127,70 @@ pub(crate) fn mir_loop_adapter_op(m: &mir::MirFunction) -> String {
 
 /// Decide a MIR leaf's [`MirLeafPlan`].
 pub(crate) fn plan_mir_leaf(m: &mir::MirFunction) -> MirLeafPlan {
+    plan_mir_leaf_with_spec(m, HashMap::new(), Box::from([]))
+}
+
+/// Reuse the baseline's site selection on the original bytecode. Inlining
+/// only splices pure callees, so every remaining Opaque Call keeps its original
+/// pc. The emitter still independently proves/checks the actual callee value.
+pub(super) fn plan_mir_leaf_for_jit(
+    m: &mir::MirFunction,
+    ops: &[Op],
+    obarray: Option<&Obarray>,
+) -> MirLeafPlan {
+    let calls: HashSet<usize> = m
+        .blocks
+        .iter()
+        .flat_map(|b| &b.insts)
+        .filter_map(|i| {
+            matches!(
+                i.op,
+                mir::MirOp::Opaque {
+                    op: Op::Call(_),
+                    ..
+                }
+            )
+            .then_some(i.pc)
+        })
+        .collect();
+    let Some(ob) = obarray.filter(|_| !calls.is_empty()) else {
+        return plan_mir_leaf(m);
+    };
+    // Sharing dispatch alone does not make a call-dominated wrapper profitable.
+    // Preserve the existing deferral unless MIR already eliminated a callee.
+    if m.inline_epoch.is_none() && !super::body_is_jit_profitable(ops, &m.constants) {
+        return plan_mir_leaf(m);
+    }
+    let leaders: Vec<_> = m.blocks.iter().map(|b| b.bytecode_pc).collect();
+    let mut sites = super::find_spec_sites(ops, &m.constants, &leaders, ob, true);
+    sites.retain(|pc, site| {
+        calls.contains(pc) && !matches!(site.kind, SpecCalleeKind::ArithIntrinsic { .. })
+    });
+    // Filtering out inlined calls, named sites and arithmetic leaves holes in
+    // the baseline's slot numbering. Assign dense indices before taking addresses.
+    for (slot, site) in sites.values_mut().enumerate() {
+        site.slot = slot;
+    }
+    let slots = (0..sites.len())
+        .map(|_| super::SpecSlot::at_epoch(ob.function_epoch()))
+        .collect();
+    plan_mir_leaf_with_spec(m, sites, slots)
+}
+
+fn plan_mir_leaf_with_spec(
+    m: &mir::MirFunction,
+    spec_sites: HashMap<usize, super::SpecSite>,
+    spec_slots: Box<[super::SpecSlot]>,
+) -> MirLeafPlan {
     use mir::{MirOp, PredKind as MP};
     let insts = || m.blocks.iter().flat_map(|b| b.insts.iter());
     let has_opaque = insts().any(|i| matches!(i.op, MirOp::Opaque { .. }));
     let has_generic_call = insts().any(|i| match &i.op {
         MirOp::Opaque {
-            op: Op::Call(_) | Op::Apply(_),
-            ..
+            op: Op::Call(_), ..
+        } => !spec_sites.contains_key(&i.pc),
+        MirOp::Opaque {
+            op: Op::Apply(_), ..
         } => true,
         MirOp::Opaque {
             op: op @ Op::CallBuiltinSym(..),
@@ -2135,7 +2205,7 @@ pub(crate) fn plan_mir_leaf(m: &mir::MirFunction) -> MirLeafPlan {
     });
     let has_unqualified_adapter = insts().any(|i| {
         matches!(
-            &i.op, MirOp::Opaque { op, .. } if !super::named_builtin_call(op)
+            &i.op, MirOp::Opaque { op, .. } if !spec_sites.contains_key(&i.pc) && !super::named_builtin_call(op)
                 .is_some_and(|call| call.fast_effects.is_read_only())
         )
     });
@@ -2183,6 +2253,8 @@ pub(crate) fn plan_mir_leaf(m: &mir::MirFunction) -> MirLeafPlan {
         has_generic_call,
         has_unqualified_adapter,
         has_named_builtin,
+        spec_sites,
+        spec_slots,
         has_backedge,
         precise,
         needs_rt: has_adapter_site || has_escaping_cons || has_backedge,
@@ -2206,7 +2278,15 @@ pub(crate) fn plan_mir_leaf(m: &mir::MirFunction) -> MirLeafPlan {
 /// CLIF block whose params are its entry operand stack, and terminator edges
 /// pass the live stack as block arguments. Validated by differential tests
 /// against the interpreter and the force-deopt gate.
+#[cfg(test)]
 pub(crate) fn lower_mir_pure(m: &mir::MirFunction) -> Result<CompiledLeaf, CompileError> {
+    lower_mir_with_plan(m, plan_mir_leaf(m))
+}
+
+pub(super) fn lower_mir_with_plan(
+    m: &mir::MirFunction,
+    plan: MirLeafPlan,
+) -> Result<CompiledLeaf, CompileError> {
     use mir::MirOp;
 
     // Loops and shim-lowered ops route EVERY guard to STATUS_DEOPT_AT, so a
@@ -2214,7 +2294,6 @@ pub(crate) fn lower_mir_pure(m: &mir::MirFunction) -> Result<CompiledLeaf, Compi
     // conses are reconstructed on cold exits, preserving frame aliases. They
     // cannot cross a safepoint or outgoing edge. Cons allocation itself never
     // collects, so reconstruction needs no intermediate GC root publication.
-    let plan = plan_mir_leaf(m);
 
     // --- JIT-only module prologue (the wrapper). ----------------------------
     // The three ObjectModule-incompatible seams that stay here (and out of the
@@ -2314,7 +2393,7 @@ pub(crate) fn lower_mir_pure(m: &mir::MirFunction) -> Result<CompiledLeaf, Compi
         // Baseline default; compile_bytecode_function_inner overrides with the
         // actual inlined-callee SymIds after the inline pass.
         inline_deps: Box::from([]),
-        spec_slots: Box::from([]),
+        spec_slots: plan.spec_slots,
         spec_expected: Box::from([]),
         deopt_spill,
         deopt_meta,
@@ -2519,7 +2598,7 @@ pub(crate) fn const_relocs_for_aot(v: Value) -> bool {
     v.is_heap_object() || (v.is_symbol() && v != Value::NIL && v != Value::T)
 }
 
-/// Module-generic build seam for [`lower_mir_pure`]: sets up the leaf ABI
+/// Module-generic build seam for [`lower_mir_with_plan`]: sets up the leaf ABI
 /// signature, lowers the MIR through a `FunctionBuilder`, then declares +
 /// defines the function into `module`, returning its `FuncId`. CLIF output is
 /// byte-identical to the previous in-line lowering — this is a pure extraction.
@@ -2531,7 +2610,7 @@ pub(crate) fn const_relocs_for_aot(v: Value) -> bool {
 /// ownership to move them into the `CompiledLeaf`.
 ///
 /// This fn deliberately contains NONE of the three ObjectModule-incompatible
-/// JIT seams, which stay in the [`lower_mir_pure`] wrapper:
+/// JIT seams, which stay in the [`lower_mir_with_plan`] wrapper:
 ///   * `builder.symbol(...)`    — AOT: `Linkage::Import` resolved via dlopen.
 ///   * `finalize_definitions()` — AOT: `ObjectModule::finish()`.
 ///   * `get_finalized_function` — AOT: `dlsym` of the exported entry symbol.
@@ -2618,14 +2697,14 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
         // Runtime context for polls, calls and allocation. declare_rt_refs
         // declares the full import set; only referenced shims are resolved.
         let mut rt = if plan.needs_rt {
-            // Named builtins share the baseline/AOT specialization emitter.
-            // Ordinary function calls still use the generic MIR call path.
+            // Qualified ordinary calls and named builtins share the baseline
+            // emitter. AOT plans have no ordinary call slots yet.
             let refs = declare_rt_refs(
                 &mut *module,
                 fb.func,
                 call_conv,
                 ptr_ty,
-                false,
+                plan.spec_sites.values().any(|s| s.kind.is_round1_subr()),
                 plan.has_named_builtin,
             )?;
             let vmctx_var = fb.declare_var(ptr_ty);
@@ -3013,6 +3092,7 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
                                     reloc_index,
                                     aot,
                                     plan.max_call_args,
+                                    None,
                                 )?;
                                 continue;
                             }
@@ -3060,11 +3140,14 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
                     // A CALL: a GC safepoint + a side effect. Force-tag every value
                     // that survives it (a raw fixnum cannot cross the safepoint —
                     // the GC would trace the untagged i64 as a pointer), root the
-                    // live-across-call residual, dispatch the GENERIC shim (no spec
-                    // plumbing in the MIR tier), propagate a signal, and on STATUS_OK
+                    // live-across-call residual, dispatch the generic shim for an
+                    // unclassified or AOT call, propagate a signal, and on STATUS_OK
                     // push the tagged result. The body's guards are all precise
                     // (`precise == has_call`), so no rerun-from-start re-runs this.
-                    MirOp::Opaque { op, args } if matches!(op, Op::Call(_) | Op::Apply(_)) => {
+                    MirOp::Opaque { op, args }
+                        if matches!(op, Op::Call(_) | Op::Apply(_))
+                            && !plan.spec_sites.contains_key(&inst.pc) =>
+                    {
                         let rt = rt
                             .as_ref()
                             .ok_or(CompileError::UnsupportedOp("mir-call-no-rt"))?;
@@ -3219,6 +3302,15 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
                             reloc_index,
                             aot,
                             plan.max_call_args,
+                            plan.spec_sites.get(&inst.pc).map(|site| {
+                                (
+                                    site.sym,
+                                    site.expected_bits,
+                                    &plan.spec_slots[site.slot] as *const super::SpecSlot as i64,
+                                    site.slot,
+                                    site.kind,
+                                )
+                            }),
                         )?;
                     }
                 }

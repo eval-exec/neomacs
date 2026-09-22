@@ -1166,15 +1166,12 @@ fn mir_call_lowering_runs_a_non_inlined_call() {
 }
 
 #[test]
-fn inline_plus_residual_call_takes_the_baseline() {
+fn inline_plus_residual_call_keeps_shared_speculation_in_mir() {
     use crate::emacs_core::eval::Context;
     use crate::emacs_core::intern::SymId;
-    // F = (g (sq a)): sq = (* x x) [inlinable pure single-block]; g = a 2-block
-    // (if y (1+ y) 0) [non-inlinable]. The inliner splices sq, but a residual
-    // Call(g) remains — a site the baseline speculates and the MIR tier would
-    // lower through the generic shim. Measured on dhrystone, inlining one
-    // callee did not pay for that (+1.25% instructions), so the tier gate
-    // (`gate:generic-call`) sends F to the baseline. Production path end to end.
+    // F = (g (sq a)): sq inlines, while the multi-block g remains a call.
+    // MIR must keep the baseline's speculated call rather than degrade to the
+    // generic shim. Its inline entry guard still protects the spliced sq.
     // The baseline's profitability gate (calls > arithmetic) would refuse F
     // outright; this test is about the tier choice, so switch it off.
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
@@ -1238,13 +1235,12 @@ fn inline_plus_residual_call_takes_the_baseline() {
     let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("F compiles");
     assert_eq!(
         leaf.tier,
-        super::leaf::LeafTier::Baseline,
-        "a residual generic call keeps F on the baseline"
+        super::leaf::LeafTier::Mir,
+        "a residual specialized call now stays in MIR"
     );
-    assert!(
-        leaf.inline_epoch().is_none(),
-        "the baseline inlines nothing"
-    );
+    assert!(leaf.inline_epoch().is_some(), "the caller still inlines sq");
+    assert_eq!(leaf.spec_slots.len(), 1);
+    let _ = ev.debug_on_next_call_is_armed();
     // F(3) = g(sq(3)) = g(9) = 1+9 = 10.
     match leaf.call(ctx as *mut u8, &[Value::make_int(3)]) {
         NativeRun::Ok(bits) => {
@@ -4320,7 +4316,7 @@ fn a_cross_block_call_site_speculates_behind_a_callee_check() {
 #[test]
 fn a_missed_callee_check_does_not_elide_the_speculated_path_stores() {
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
-    let (ev, sym_val) = harness_with_inc_callee("spec-cross-block-carry");
+    let (mut ev, sym_val) = harness_with_inc_callee("spec-cross-block-carry");
     let mut f = ByteCodeFunction::new(LambdaParams {
         required: vec![
             crate::emacs_core::intern::SymId(1),
@@ -4355,40 +4351,55 @@ fn a_missed_callee_check_does_not_elide_the_speculated_path_stores() {
     ]
     .into();
     f.max_stack = 16;
-    let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
-    assert_eq!(leaf.tier, super::leaf::LeafTier::Baseline);
-    assert_eq!(
-        super::lowering::rootwin_counters(),
-        (6, 0),
-        "a+b, the speculated path's c+b (the call is at a join, which forgets the \
+    for baseline in [true, false] {
+        let compile = || {
+            if baseline {
+                lower_leaf_full(&f.ops, &f.constants, 2, None, Some(&ev.obarray), 0)
+            } else {
+                compile_bytecode_function_with(&f, Some(&ev.obarray))
+            }
+        };
+        let leaf = compile().expect("compiles");
+        assert_eq!(
+            leaf.tier,
+            if baseline {
+                super::leaf::LeafTier::Baseline
+            } else {
+                super::leaf::LeafTier::Mir
+            }
+        );
+        assert_eq!(
+            super::lowering::rootwin_counters(),
+            (6, 0),
+            "a+b, the speculated path's c+b (the call is at a join, which forgets the \
          record), the miss path's c+b; (4, 2) means the miss path trusted stores \
          only the speculated path made"
-    );
-    // The call is the guarded kind: with its check forced to miss, it runs
-    // unspeculated.
-    super::lowering::force_spec_guard_miss_for_test(true);
-    let missing = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
-    super::lowering::force_spec_guard_miss_for_test(false);
-    let mut ev = ev;
-    let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
-    let before = super::shims::SPEC_CALL_COUNT.load(std::sync::atomic::Ordering::Relaxed);
-    let args = [Value::make_int(1), Value::make_int(2)];
-    assert_eq!(
-        missing.call(ctx_ptr, &args),
-        NativeRun::Ok(Value::make_int(2).bits())
-    );
-    assert_eq!(
-        super::shims::SPEC_CALL_COUNT.load(std::sync::atomic::Ordering::Relaxed),
-        before
-    );
-    assert_eq!(
-        leaf.call(ctx_ptr, &args),
-        NativeRun::Ok(Value::make_int(2).bits())
-    );
-    assert_eq!(
-        super::shims::SPEC_CALL_COUNT.load(std::sync::atomic::Ordering::Relaxed),
-        before + 1
-    );
+        );
+        // The call is the guarded kind: with its check forced to miss, it runs
+        // unspeculated.
+        super::lowering::force_spec_guard_miss_for_test(true);
+        let missing = compile().expect("compiles");
+        super::lowering::force_spec_guard_miss_for_test(false);
+        let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
+        let before = super::shims::SPEC_CALL_COUNT.load(std::sync::atomic::Ordering::Relaxed);
+        let args = [Value::make_int(1), Value::make_int(2)];
+        assert_eq!(
+            missing.call(ctx_ptr, &args),
+            NativeRun::Ok(Value::make_int(2).bits())
+        );
+        assert_eq!(
+            super::shims::SPEC_CALL_COUNT.load(std::sync::atomic::Ordering::Relaxed),
+            before
+        );
+        assert_eq!(
+            leaf.call(ctx_ptr, &args),
+            NativeRun::Ok(Value::make_int(2).bits())
+        );
+        assert_eq!(
+            super::shims::SPEC_CALL_COUNT.load(std::sync::atomic::Ordering::Relaxed),
+            before + 1
+        );
+    }
 }
 
 #[test]

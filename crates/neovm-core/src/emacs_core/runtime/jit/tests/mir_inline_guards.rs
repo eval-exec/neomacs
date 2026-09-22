@@ -248,7 +248,8 @@ fn mir_inline_keeps_a_callees_non_fixnum_feedback_on_the_native_call_path() {
             2,
         );
         let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).unwrap();
-        assert_eq!(leaf.tier, leaf::LeafTier::Baseline, "{feedback:?}");
+        assert_eq!(leaf.tier, leaf::LeafTier::Mir, "{feedback:?}");
+        assert_eq!(leaf.spec_slots.len(), 1, "retain the ordinary native call");
         assert!(leaf.inline_epoch().is_none());
         let result = leaf.call(
             &mut ev as *mut Context as *mut u8,
