@@ -17,7 +17,7 @@ use crate::{
     scenario,
 };
 
-pub(crate) const COMPARISON_ARTIFACT_SCHEMA_VERSION: u32 = 7;
+pub(crate) const COMPARISON_ARTIFACT_SCHEMA_VERSION: u32 = 8;
 static COMPARISON_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Immutable parameters shared by every run in one comparison.
@@ -35,6 +35,8 @@ pub struct ComparisonInput {
     pub counters: Option<crate::CounterScope>,
     pub video_file: Option<PathBuf>,
     pub journal_file: Option<PathBuf>,
+    pub baseline_execution_overrides: crate::ExecutionOverrides,
+    pub candidate_execution_overrides: crate::ExecutionOverrides,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -57,6 +59,7 @@ pub struct ComparisonRun {
     pub editor: PathBuf,
     pub iterations: u32,
     pub editor_provenance: Option<EditorProvenance>,
+    pub execution_environment: Option<BTreeMap<String, String>>,
     pub native_video_input: Option<NativeVideoComparisonIdentity>,
     pub native_video_execution: Option<NativeVideoExecutionIdentity>,
     pub outcome: ComparisonRunOutcome,
@@ -197,6 +200,9 @@ pub struct ComparisonRequest {
     counters: Option<crate::CounterScope>,
     video_file: Option<PathBuf>,
     journal_file: Option<PathBuf>,
+    baseline_execution_overrides: crate::ExecutionOverrides,
+    candidate_execution_overrides: crate::ExecutionOverrides,
+    inherited_environment: BTreeMap<String, std::ffi::OsString>,
 }
 
 impl ComparisonRequest {
@@ -219,6 +225,11 @@ impl ComparisonRequest {
             counters: None,
             video_file: None,
             journal_file: None,
+            baseline_execution_overrides: crate::ExecutionOverrides::default(),
+            candidate_execution_overrides: crate::ExecutionOverrides::default(),
+            inherited_environment: crate::harness::benchmark_passthrough_environment()
+                .into_iter()
+                .collect(),
         }
     }
 
@@ -249,6 +260,16 @@ impl ComparisonRequest {
 
     pub fn with_journal_file(mut self, journal_file: Option<PathBuf>) -> Self {
         self.journal_file = journal_file;
+        self
+    }
+
+    pub fn with_execution_overrides(
+        mut self,
+        baseline: crate::ExecutionOverrides,
+        candidate: crate::ExecutionOverrides,
+    ) -> Self {
+        self.baseline_execution_overrides = baseline;
+        self.candidate_execution_overrides = candidate;
         self
     }
 
@@ -310,6 +331,12 @@ pub enum ComparisonRejection {
         run_id: String,
         expected: u32,
         actual: u32,
+    },
+    ExecutionEnvironmentMismatch {
+        role: ComparisonRunRole,
+        sample_index: u32,
+        run_id: String,
+        reason: String,
     },
     MissingEditorProvenance {
         role: ComparisonRunRole,
@@ -473,6 +500,7 @@ pub(crate) fn evaluate_comparison(
     let mut candidate_provenance: Option<EditorProvenance> = None;
     let mut native_video_input: Option<NativeVideoComparisonIdentity> = None;
     let mut native_video_execution: Option<NativeVideoExecutionIdentity> = None;
+    let mut execution_environments = BTreeMap::new();
     let mut samples = Vec::with_capacity(observations.len());
     let expected_unit = input.primary_metric.canonical_unit();
     for observation in observations {
@@ -525,6 +553,33 @@ pub(crate) fn evaluate_comparison(
                 run_id: run.run_id.clone(),
                 expected: input.iterations.get(),
                 actual: run.iterations,
+            });
+        }
+        let overrides = match run.role {
+            ComparisonRunRole::Baseline => &input.baseline_execution_overrides,
+            ComparisonRunRole::Candidate => &input.candidate_execution_overrides,
+        };
+        let environment_check = match &run.execution_environment {
+            None => Err("missing execution environment provenance".to_owned()),
+            Some(actual) => overrides.validate_recorded(actual).and_then(|()| {
+                match execution_environments.get(&run.role) {
+                    Some(expected) if expected != actual => {
+                        Err("execution settings changed between samples of the same arm".to_owned())
+                    }
+                    Some(_) => Ok(()),
+                    None => {
+                        execution_environments.insert(run.role, actual.clone());
+                        Ok(())
+                    }
+                }
+            }),
+        };
+        if let Err(reason) = environment_check {
+            reasons.push(ComparisonRejection::ExecutionEnvironmentMismatch {
+                role: run.role,
+                sample_index: run.sample_index,
+                run_id: run.run_id.clone(),
+                reason,
             });
         }
         match &run.editor_provenance {
@@ -820,6 +875,8 @@ impl PerfHarness {
             counters: request.counters,
             video_file: request.video_file.clone(),
             journal_file: request.journal_file.clone(),
+            baseline_execution_overrides: request.baseline_execution_overrides.clone(),
+            candidate_execution_overrides: request.candidate_execution_overrides.clone(),
         };
         let mut observations = Vec::with_capacity(request.samples_per_side.get() as usize * 2);
         for (role, sample_index) in comparison_schedule(request.samples_per_side) {
@@ -827,7 +884,13 @@ impl PerfHarness {
                 ComparisonRunRole::Baseline => &request.baseline_editor,
                 ComparisonRunRole::Candidate => &request.candidate_editor,
             };
+            let overrides = match role {
+                ComparisonRunRole::Baseline => &request.baseline_execution_overrides,
+                ComparisonRunRole::Candidate => &request.candidate_execution_overrides,
+            };
             let run_request = RunRequest::new(request.scenario, editor, request.iterations)
+                .with_inherited_environment(request.inherited_environment.clone())
+                .with_execution_overrides(overrides.clone())
                 .with_frontend(frontend)
                 .with_timeout(request.timeout)
                 .with_machine_policy(request.machine.clone())
@@ -851,6 +914,24 @@ impl PerfHarness {
                     editor_provenance: child_provenance
                         .as_ref()
                         .map(|provenance| provenance.editor.clone()),
+                    execution_environment: child_provenance
+                        .as_ref()
+                        .and_then(|p| p.passthrough_environment.as_ref())
+                        .map(|environment| {
+                            environment
+                                .iter()
+                                .filter(|(name, _)| {
+                                    matches!(
+                                        name.as_str(),
+                                        "NEOVM_JIT"
+                                            | "NEOVM_JIT_OSR"
+                                            | "NEOVM_JIT_THRESHOLD"
+                                            | "NEOVM_JIT_LOOP_HEAT"
+                                    )
+                                })
+                                .map(|(name, value)| (name.clone(), value.clone()))
+                                .collect()
+                        }),
                     native_video_input: child_provenance
                         .and_then(|provenance| provenance.comparison_identity),
                     native_video_execution: child.native_video_execution,
@@ -885,6 +966,8 @@ impl PerfHarness {
 #[derive(Deserialize)]
 struct ComparisonInputProvenance {
     editor: EditorProvenance,
+    #[serde(default)]
+    passthrough_environment: Option<BTreeMap<String, String>>,
     #[serde(default)]
     comparison_identity: Option<NativeVideoComparisonIdentity>,
 }

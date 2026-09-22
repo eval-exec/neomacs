@@ -134,6 +134,11 @@ pub(crate) fn prepare(
     let provenance_manifest = NativeVideoInputProvenanceManifest {
         editor,
         editor_build_profile: build_profile,
+        passthrough_environment: request
+            .benchmark_environment()
+            .into_iter()
+            .map(|(name, value)| (name, value.to_string_lossy().into_owned()))
+            .collect(),
         host: collect_host_provenance(request.machine_policy()),
         harness,
         video_file: video_file.to_string_lossy().into_owned(),
@@ -422,6 +427,7 @@ impl TryFrom<SustainedNativeVideoResultWire> for SustainedNativeVideoResult {
 struct NativeVideoInputProvenanceManifest {
     editor: EditorProvenance,
     editor_build_profile: NativeVideoBuildProfile,
+    passthrough_environment: BTreeMap<String, String>,
     host: HostProvenance,
     harness: HarnessProvenance,
     video_file: String,

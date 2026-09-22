@@ -5,6 +5,7 @@ mod catalog;
 mod cli;
 mod comparison;
 mod counters;
+mod execution_policy;
 mod harness;
 mod host;
 mod native_video;
@@ -33,6 +34,7 @@ pub use comparison::{
     ComparisonRunRole, ComparisonSampleCount, ComparisonVerdict, comparison_schedule,
 };
 pub use counters::{CounterScope, parse_perf_stat_csv};
+pub use execution_policy::{ExecutionOverride, ExecutionOverrides};
 #[cfg(test)]
 pub(crate) use harness::{
     ARTIFACT_SCHEMA_VERSION, PerfCapture, collect_editor_provenance,

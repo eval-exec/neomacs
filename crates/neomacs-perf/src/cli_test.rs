@@ -51,6 +51,7 @@ fn run_command_parses_into_a_typed_workload_request() {
             counters: Some(CounterScope::WholeProcess),
             video_file: None,
             journal_file: None,
+            execution_overrides: crate::ExecutionOverrides::default(),
         }
     );
 }
@@ -140,6 +141,8 @@ fn compare_command_requires_two_editors_and_parses_repetition_controls() {
             counters: None,
             video_file: None,
             journal_file: None,
+            baseline_execution_overrides: crate::ExecutionOverrides::default(),
+            candidate_execution_overrides: crate::ExecutionOverrides::default(),
         }
     );
 }
@@ -210,6 +213,7 @@ fn profile_command_selects_native_sampling_without_becoming_a_comparison() {
             machine: MachinePolicy::default(),
             video_file: None,
             journal_file: None,
+            execution_overrides: crate::ExecutionOverrides::default(),
         }
     );
 
@@ -305,5 +309,81 @@ fn suite_command_parses_regression_and_history_controls() {
             counters: Some(CounterScope::EditLoop),
             previous_suite: Some(PathBuf::from("tmp/perf-suites/previous/suite.json")),
         }
+    );
+}
+
+#[test]
+fn comparison_execution_flags_distinguish_inherit_unset_and_zero() {
+    let PerfCommand::Compare {
+        baseline_execution_overrides,
+        candidate_execution_overrides,
+        ..
+    } = parse(&[
+        "compare",
+        "first-hot-loop",
+        "--baseline-editor",
+        "editor",
+        "--candidate-editor",
+        "editor",
+        "--baseline-env",
+        "NEOVM_JIT_OSR",
+        "--candidate-env",
+        "NEOVM_JIT_LOOP_HEAT=0",
+    ])
+    .unwrap()
+    else {
+        panic!("expected compare");
+    };
+    assert_eq!(
+        serde_json::to_value(baseline_execution_overrides).unwrap(),
+        serde_json::json!(["NEOVM_JIT_OSR"])
+    );
+    assert_eq!(
+        serde_json::to_value(candidate_execution_overrides).unwrap(),
+        serde_json::json!(["NEOVM_JIT_LOOP_HEAT=0"])
+    );
+    for command in ["run", "profile"] {
+        assert!(parse(&[command, "first-hot-loop", "--env", "NEOVM_JIT_OSR=off"]).is_ok());
+        assert!(
+            parse(&[
+                command,
+                "first-hot-loop",
+                "--env",
+                "NEOVM_JIT_OSR=off",
+                "--env",
+                "NEOVM_JIT_OSR"
+            ])
+            .is_err()
+        );
+    }
+    for setting in ["PATH=x", "NEOVM_JIT_THRESHOLD=0", "NEOVM_JIT=maybe"] {
+        assert!(
+            parse(&[
+                "compare",
+                "first-hot-loop",
+                "--baseline-editor",
+                "editor",
+                "--candidate-editor",
+                "editor",
+                "--candidate-env",
+                setting
+            ])
+            .is_err()
+        );
+    }
+    assert!(
+        parse(&[
+            "compare",
+            "first-hot-loop",
+            "--baseline-editor",
+            "editor",
+            "--candidate-editor",
+            "editor",
+            "--baseline-env",
+            "NEOVM_JIT=0",
+            "--baseline-env",
+            "NEOVM_JIT=1"
+        ])
+        .is_err()
     );
 }

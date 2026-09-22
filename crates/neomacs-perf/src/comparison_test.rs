@@ -62,6 +62,7 @@ fn valid_observation(
             editor: editor(role),
             iterations: 10,
             editor_provenance: Some(provenance(role)),
+            execution_environment: Some(Default::default()),
             native_video_input: None,
             native_video_execution: None,
             outcome: ComparisonRunOutcome::Valid,
@@ -196,6 +197,8 @@ fn input() -> ComparisonInput {
         counters: None,
         video_file: None,
         journal_file: None,
+        baseline_execution_overrides: crate::ExecutionOverrides::default(),
+        candidate_execution_overrides: crate::ExecutionOverrides::default(),
     }
 }
 
@@ -684,4 +687,79 @@ fn paired_comparison_samples_follow_indexes_despite_observation_order() {
     assert_eq!(summary.paired_samples.len(), 3);
     // Pair diagnostics do not replace the established ratio-of-medians.
     assert_eq!(summary.percent_change, -40.0);
+}
+
+fn execution_policy(settings: &[&str]) -> crate::ExecutionOverrides {
+    settings
+        .iter()
+        .map(|s| s.parse::<crate::ExecutionOverride>().unwrap())
+        .collect::<Vec<_>>()
+        .try_into()
+        .unwrap()
+}
+
+#[test]
+fn same_editor_can_compare_distinct_recorded_execution_policies() {
+    let mut input = input();
+    input.candidate_editor = input.baseline_editor.clone();
+    input.baseline_execution_overrides = execution_policy(&["NEOVM_JIT_OSR"]);
+    input.candidate_execution_overrides = execution_policy(&["NEOVM_JIT_OSR=0"]);
+    let mut observations = valid_observations();
+    for observation in &mut observations {
+        observation.run.editor = input.baseline_editor.clone();
+        observation.run.editor_provenance = Some(provenance(ComparisonRunRole::Baseline));
+        let environment = observation.run.execution_environment.as_mut().unwrap();
+        if observation.run.role == ComparisonRunRole::Candidate {
+            environment.insert("NEOVM_JIT_OSR".to_owned(), "0".to_owned());
+        }
+    }
+    assert!(matches!(
+        evaluate_comparison(&input, &observations),
+        ComparisonVerdict::Valid { .. }
+    ));
+    observations[1]
+        .run
+        .execution_environment
+        .as_mut()
+        .unwrap()
+        .clear();
+    let ComparisonVerdict::Rejected { reasons } = evaluate_comparison(&input, &observations) else {
+        panic!("a child that ignored its override must not receive a summary");
+    };
+    assert!(
+        reasons
+            .iter()
+            .any(|r| matches!(r, ComparisonRejection::ExecutionEnvironmentMismatch { .. }))
+    );
+}
+
+#[test]
+fn comparisons_reject_missing_or_changing_execution_environment() {
+    for missing in [false, true] {
+        let mut observations = valid_observations();
+        if missing {
+            observations[4].run.execution_environment = None;
+        } else {
+            observations[4]
+                .run
+                .execution_environment
+                .as_mut()
+                .unwrap()
+                .insert("NEOVM_JIT_THRESHOLD".to_owned(), "2".to_owned());
+        }
+        let verdict = evaluate_comparison(&input(), &observations);
+        let ComparisonVerdict::Rejected { reasons } = &verdict else {
+            panic!("unstable or missing execution provenance must fail closed");
+        };
+        assert!(
+            reasons
+                .iter()
+                .any(|r| matches!(r, ComparisonRejection::ExecutionEnvironmentMismatch { .. }))
+        );
+        assert!(
+            !serde_json::to_string(&verdict)
+                .unwrap()
+                .contains("paired_samples")
+        );
+    }
 }

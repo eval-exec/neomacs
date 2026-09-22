@@ -19,9 +19,9 @@ use serde::{Deserialize, Serialize};
 use crate::harness::{
     CorrectnessMismatch, EditorProvenance, HostProvenance, Measurement, MetricName, MetricUnit,
     PreparedScenario, PreparedWorkload, RunRequest, SCENARIO_RESULT_SCHEMA_VERSION, ScenarioId,
-    ScenarioOutcome, ScenarioStatus, benchmark_passthrough_environment, collect_editor_provenance,
-    collect_host_provenance, deserialize_optional_error, mismatch, prepare_gui_runtime_directory,
-    scenario_outcome, sha256_file,
+    ScenarioOutcome, ScenarioStatus, collect_editor_provenance, collect_host_provenance,
+    deserialize_optional_error, mismatch, prepare_gui_runtime_directory, scenario_outcome,
+    sha256_file,
 };
 
 /// The pinned release. Note that GNU ELPA serves only an UNVERSIONED
@@ -77,7 +77,8 @@ pub(crate) fn prepare(
         package_version: ELISP_BENCHMARKS_PIN.1,
         package_archive: "https://elpa.gnu.org/packages/",
         environment_policy: "closed-v1",
-        passthrough_environment: benchmark_passthrough_environment()
+        passthrough_environment: request
+            .benchmark_environment()
             .into_iter()
             .map(|(name, value)| (name.to_string(), value.to_string_lossy().into_owned()))
             .collect(),

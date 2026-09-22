@@ -12,9 +12,9 @@ use serde::{Deserialize, Serialize};
 use crate::harness::{
     CorrectnessMismatch, EditorProvenance, HostProvenance, Measurement, MetricName, MetricUnit,
     PreparedScenario, PreparedWorkload, RunRequest, SCENARIO_RESULT_SCHEMA_VERSION, ScenarioId,
-    ScenarioOutcome, ScenarioStatus, benchmark_passthrough_environment, collect_editor_provenance,
-    collect_host_provenance, deserialize_optional_error, mismatch, prepare_gui_runtime_directory,
-    scenario_outcome, sha256_file,
+    ScenarioOutcome, ScenarioStatus, collect_editor_provenance, collect_host_provenance,
+    deserialize_optional_error, mismatch, prepare_gui_runtime_directory, scenario_outcome,
+    sha256_file,
 };
 use crate::harness::{GrammarProvenance, PackageProvenance, prepare_cached_tree_sitter_grammar};
 use neomacs_melpa_test_support::{EmacsRuntime, PreparedPackageSet, locked_melpa_sources};
@@ -122,7 +122,8 @@ pub(crate) fn prepare(
         workload_source: "crates/neomacs-perf/fixtures/rust-lsp-typing.rs",
         workload_source_sha256: sha256_file(&source_source)?,
         environment_policy: "closed-v1",
-        passthrough_environment: benchmark_passthrough_environment()
+        passthrough_environment: request
+            .benchmark_environment()
             .into_iter()
             .map(|(name, value)| (name.to_string(), value.to_string_lossy().into_owned()))
             .collect(),

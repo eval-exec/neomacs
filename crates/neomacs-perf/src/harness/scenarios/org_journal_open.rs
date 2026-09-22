@@ -18,9 +18,8 @@ use crate::harness::{
     CorrectnessMismatch, EditorProvenance, HostProvenance, Measurement, MetricName, MetricUnit,
     PackageProvenance, PreparedScenario, PreparedWorkload, RunRequest,
     SCENARIO_RESULT_SCHEMA_VERSION, ScenarioId, ScenarioOutcome, ScenarioStatus,
-    benchmark_passthrough_environment, collect_editor_provenance, collect_host_provenance,
-    deserialize_optional_error, mismatch, prepare_gui_runtime_directory, require_positive_phase,
-    scenario_outcome, sha256_file,
+    collect_editor_provenance, collect_host_provenance, deserialize_optional_error, mismatch,
+    prepare_gui_runtime_directory, require_positive_phase, scenario_outcome, sha256_file,
 };
 
 pub(crate) fn prepare(
@@ -91,7 +90,8 @@ pub(crate) fn prepare(
             .collect(),
         journal: journal_input,
         environment_policy: "closed-v1",
-        passthrough_environment: benchmark_passthrough_environment()
+        passthrough_environment: request
+            .benchmark_environment()
             .into_iter()
             .map(|(name, value)| (name.to_string(), value.to_string_lossy().into_owned()))
             .collect(),

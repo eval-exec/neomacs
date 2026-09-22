@@ -48,6 +48,7 @@ pub struct ProfileRequest {
     pub(crate) machine: MachinePolicy,
     pub(crate) video_file: Option<PathBuf>,
     pub(crate) journal_file: Option<PathBuf>,
+    pub(crate) execution_overrides: crate::ExecutionOverrides,
 }
 
 impl ProfileRequest {
@@ -69,6 +70,7 @@ impl ProfileRequest {
             machine: MachinePolicy::default(),
             video_file: None,
             journal_file: None,
+            execution_overrides: crate::ExecutionOverrides::default(),
         }
     }
 
@@ -104,6 +106,11 @@ impl ProfileRequest {
 
     pub fn with_journal_file(mut self, journal_file: Option<PathBuf>) -> Self {
         self.journal_file = journal_file;
+        self
+    }
+
+    pub fn with_execution_overrides(mut self, overrides: crate::ExecutionOverrides) -> Self {
+        self.execution_overrides = overrides;
         self
     }
 

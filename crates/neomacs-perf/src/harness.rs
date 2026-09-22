@@ -48,6 +48,8 @@ pub struct RunRequest {
     counters: Option<CounterScope>,
     video_file: Option<PathBuf>,
     journal_file: Option<PathBuf>,
+    execution_overrides: crate::ExecutionOverrides,
+    inherited_environment: BTreeMap<String, std::ffi::OsString>,
 }
 
 impl RunRequest {
@@ -62,6 +64,8 @@ impl RunRequest {
             counters: None,
             video_file: None,
             journal_file: None,
+            execution_overrides: crate::ExecutionOverrides::default(),
+            inherited_environment: benchmark_passthrough_environment().into_iter().collect(),
         }
     }
 
@@ -93,6 +97,29 @@ impl RunRequest {
     pub fn with_journal_file(mut self, journal_file: Option<PathBuf>) -> Self {
         self.journal_file = journal_file;
         self
+    }
+
+    pub fn with_execution_overrides(mut self, overrides: crate::ExecutionOverrides) -> Self {
+        self.execution_overrides = overrides;
+        self
+    }
+
+    pub(crate) fn with_inherited_environment(
+        mut self,
+        environment: BTreeMap<String, std::ffi::OsString>,
+    ) -> Self {
+        self.inherited_environment = environment;
+        self
+    }
+
+    /// One request-owned environment supplies both execution and provenance.
+    pub(crate) fn benchmark_environment(&self) -> BTreeMap<String, std::ffi::OsString> {
+        let mut environment = self.inherited_environment.clone();
+        self.execution_overrides.apply_to(&mut environment);
+        if self.scenario == ScenarioId::BytecodeCallLoop {
+            environment.insert("NEOVM_JIT".to_owned(), "0".into());
+        }
+        environment
     }
 
     pub const fn scenario(&self) -> ScenarioId {
@@ -133,6 +160,9 @@ impl RunRequest {
     }
 
     fn validate_scenario_input(&self) -> Result<(), String> {
+        if self.scenario == ScenarioId::BytecodeCallLoop {
+            self.execution_overrides.validate_forced_interpreter()?;
+        }
         match (self.scenario, self.video_file.as_ref()) {
             (ScenarioId::SustainedNativeVideo, None) => Err(
                 "sustained-native-video requires --video-file pointing to a readable video"
@@ -228,6 +258,7 @@ impl PerfHarness {
 
     pub fn profile(&self, request: &ProfileRequest) -> Result<ProfileReport, PerfError> {
         let run_request = RunRequest::new(request.scenario, &request.editor, request.iterations)
+            .with_execution_overrides(request.execution_overrides.clone())
             .with_frontend(request.frontend())
             .with_timeout(request.timeout)
             .with_machine_policy(request.machine.clone())
@@ -1129,9 +1160,6 @@ impl PreparedScenario {
                     if settings.search { "1" } else { "0" },
                 );
         }
-        if matches!(&self.workload, PreparedWorkload::BytecodeCallLoop) {
-            command.env("NEOVM_JIT", "0");
-        }
         if let PreparedWorkload::ElispBenchmarks {
             package_dir,
             report,
@@ -1277,7 +1305,11 @@ fn frontend_command(
             command
         }
     };
-    configure_benchmark_environment(&mut command, &prepared.sandbox);
+    configure_benchmark_environment_from(
+        &mut command,
+        &prepared.sandbox,
+        request.benchmark_environment(),
+    );
     match frontend {
         Frontend::Batch => {}
         Frontend::Tui { rows, columns } => {
@@ -1363,8 +1395,16 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
 ];
 
 pub(crate) fn configure_benchmark_environment(command: &mut Command, sandbox: &MelpaSandbox) {
+    configure_benchmark_environment_from(command, sandbox, benchmark_passthrough_environment());
+}
+
+fn configure_benchmark_environment_from(
+    command: &mut Command,
+    sandbox: &MelpaSandbox,
+    environment: impl IntoIterator<Item = (String, std::ffi::OsString)>,
+) {
     command.env_clear();
-    command.envs(benchmark_passthrough_environment());
+    command.envs(environment);
     command.envs(sandbox.process_environment());
 }
 

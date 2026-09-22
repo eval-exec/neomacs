@@ -30,6 +30,7 @@ pub enum PerfCommand {
         counters: Option<CounterScope>,
         video_file: Option<PathBuf>,
         journal_file: Option<PathBuf>,
+        execution_overrides: crate::ExecutionOverrides,
     },
     Compare {
         scenario: ScenarioId,
@@ -43,6 +44,8 @@ pub enum PerfCommand {
         counters: Option<CounterScope>,
         video_file: Option<PathBuf>,
         journal_file: Option<PathBuf>,
+        baseline_execution_overrides: crate::ExecutionOverrides,
+        candidate_execution_overrides: crate::ExecutionOverrides,
     },
     Profile {
         scenario: ScenarioId,
@@ -56,6 +59,7 @@ pub enum PerfCommand {
         machine: MachinePolicy,
         video_file: Option<PathBuf>,
         journal_file: Option<PathBuf>,
+        execution_overrides: crate::ExecutionOverrides,
     },
     Suite {
         suite: SuiteId,
@@ -99,6 +103,9 @@ enum PerfSubcommand {
 
 #[derive(Debug, Args)]
 struct RunArgs {
+    /// JIT setting: NAME=VALUE sets; NAME alone removes an inherited setting. Repeatable.
+    #[arg(long = "env", value_name = "NAME[=VALUE]")]
+    execution_overrides: Vec<crate::ExecutionOverride>,
     /// Registered scenario to execute.
     scenario: ScenarioId,
     /// Editor executable (defaults to target/release/neomacs).
@@ -112,6 +119,12 @@ struct RunArgs {
 
 #[derive(Debug, Args)]
 struct CompareArgs {
+    /// JIT setting: NAME=VALUE sets; NAME alone removes an inherited setting. Repeatable.
+    #[arg(long = "baseline-env", value_name = "NAME[=VALUE]")]
+    baseline_execution_overrides: Vec<crate::ExecutionOverride>,
+    /// JIT setting: NAME=VALUE sets; NAME alone removes an inherited setting. Repeatable.
+    #[arg(long = "candidate-env", value_name = "NAME[=VALUE]")]
+    candidate_execution_overrides: Vec<crate::ExecutionOverride>,
     /// Registered scenario to execute.
     scenario: ScenarioId,
     /// Baseline editor executable.
@@ -131,6 +144,9 @@ struct CompareArgs {
 
 #[derive(Debug, Args)]
 struct ProfileArgs {
+    /// JIT setting: NAME=VALUE sets; NAME alone removes an inherited setting. Repeatable.
+    #[arg(long = "env", value_name = "NAME[=VALUE]")]
+    execution_overrides: Vec<crate::ExecutionOverride>,
     /// Registered scenario to execute.
     scenario: ScenarioId,
     /// Native sampling backend.
@@ -349,7 +365,7 @@ pub fn parse_perf_command(
 ) -> Result<PerfCommand, PerfCliError> {
     let arguments = std::iter::once(OsString::from("cargo xtask perf")).chain(args);
     match PerfCli::try_parse_from(arguments) {
-        Ok(cli) => Ok(cli.command.into()),
+        Ok(cli) => cli.command.try_into(),
         Err(error)
             if matches!(
                 error.kind(),
@@ -366,11 +382,16 @@ pub fn parse_perf_command(
     }
 }
 
-impl From<PerfSubcommand> for PerfCommand {
-    fn from(command: PerfSubcommand) -> Self {
-        match command {
+impl TryFrom<PerfSubcommand> for PerfCommand {
+    type Error = PerfCliError;
+    fn try_from(command: PerfSubcommand) -> Result<Self, Self::Error> {
+        Ok(match command {
             PerfSubcommand::List => Self::List,
             PerfSubcommand::Run(arguments) => {
+                let execution_overrides = arguments
+                    .execution_overrides
+                    .try_into()
+                    .map_err(|message| PerfCliError::Usage { message })?;
                 let counters = arguments.counters.scope();
                 let (iterations, frontend, timeout, machine, video_file, journal_file) =
                     arguments.workload.into_semantic(arguments.scenario);
@@ -384,9 +405,18 @@ impl From<PerfSubcommand> for PerfCommand {
                     counters,
                     video_file,
                     journal_file,
+                    execution_overrides,
                 }
             }
             PerfSubcommand::Compare(arguments) => {
+                let baseline_execution_overrides = arguments
+                    .baseline_execution_overrides
+                    .try_into()
+                    .map_err(|message| PerfCliError::Usage { message })?;
+                let candidate_execution_overrides = arguments
+                    .candidate_execution_overrides
+                    .try_into()
+                    .map_err(|message| PerfCliError::Usage { message })?;
                 let counters = arguments.counters.scope();
                 let (iterations, frontend, timeout, machine, video_file, journal_file) =
                     arguments.workload.into_semantic(arguments.scenario);
@@ -402,9 +432,15 @@ impl From<PerfSubcommand> for PerfCommand {
                     counters,
                     video_file,
                     journal_file,
+                    baseline_execution_overrides,
+                    candidate_execution_overrides,
                 }
             }
             PerfSubcommand::Profile(arguments) => {
+                let execution_overrides = arguments
+                    .execution_overrides
+                    .try_into()
+                    .map_err(|message| PerfCliError::Usage { message })?;
                 let (iterations, frontend, timeout, machine, video_file, journal_file) =
                     arguments.workload.into_semantic(arguments.scenario);
                 Self::Profile {
@@ -419,6 +455,7 @@ impl From<PerfSubcommand> for PerfCommand {
                     machine,
                     video_file,
                     journal_file,
+                    execution_overrides,
                 }
             }
             PerfSubcommand::Suite(arguments) => Self::Suite {
@@ -434,7 +471,7 @@ impl From<PerfSubcommand> for PerfCommand {
                 counters: arguments.counters.scope(),
                 previous_suite: arguments.previous_suite,
             },
-        }
+        })
     }
 }
 
@@ -464,6 +501,7 @@ pub fn run_cli(
             counters,
             video_file,
             journal_file,
+            execution_overrides,
         } => {
             let editor = editor.unwrap_or_else(|| workspace_root.join("target/release/neomacs"));
             let mut request = RunRequest::new(scenario, editor, iterations)
@@ -471,7 +509,8 @@ pub fn run_cli(
                 .with_machine_policy(machine)
                 .with_counters(counters)
                 .with_video_file(video_file)
-                .with_journal_file(journal_file);
+                .with_journal_file(journal_file)
+                .with_execution_overrides(execution_overrides);
             if let Some(frontend) = frontend {
                 request = request.with_frontend(frontend);
             }
@@ -499,6 +538,8 @@ pub fn run_cli(
             counters,
             video_file,
             journal_file,
+            baseline_execution_overrides,
+            candidate_execution_overrides,
         } => {
             let mut request = ComparisonRequest::new(
                 scenario,
@@ -511,7 +552,8 @@ pub fn run_cli(
             .with_machine_policy(machine)
             .with_counters(counters)
             .with_video_file(video_file)
-            .with_journal_file(journal_file);
+            .with_journal_file(journal_file)
+            .with_execution_overrides(baseline_execution_overrides, candidate_execution_overrides);
             if let Some(frontend) = frontend {
                 request = request.with_frontend(frontend);
             }
@@ -565,6 +607,7 @@ pub fn run_cli(
             machine,
             video_file,
             journal_file,
+            execution_overrides,
         } => {
             let editor = editor.unwrap_or_else(|| workspace_root.join("target/profiling/neomacs"));
             let mut request = ProfileRequest::new(scenario, editor, iterations, profiler)
@@ -573,7 +616,8 @@ pub fn run_cli(
                 .with_timeout(timeout)
                 .with_machine_policy(machine)
                 .with_video_file(video_file)
-                .with_journal_file(journal_file);
+                .with_journal_file(journal_file)
+                .with_execution_overrides(execution_overrides);
             if let Some(frontend) = frontend {
                 request = request.with_frontend(frontend);
             }
