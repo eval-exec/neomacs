@@ -514,6 +514,9 @@ impl PerfHarness {
             | ScenarioId::BoundedSearchNoEdit => {
                 scenarios::bounded_search::prepare(&self.workspace_root, request, run_directory)
             }
+            ScenarioId::LexicalLoop | ScenarioId::DynamicBindingLoop => {
+                scenarios::vm_loop::prepare(&self.workspace_root, request, run_directory)
+            }
             ScenarioId::BytecodeCallLoop => {
                 scenarios::bytecode::prepare(&self.workspace_root, request, run_directory)
             }
@@ -921,6 +924,7 @@ enum PreparedWorkload {
     },
     MxTabCompletion,
     BytecodeCallLoop,
+    VmLoop,
     BoundedSearch(scenarios::bounded_search::Settings),
     ElispBenchmarks {
         package_dir: PathBuf,
@@ -1577,6 +1581,7 @@ enum ScenarioResult {
     RustLspTyping(scenarios::rust_lsp::RustLspTypingResult),
     MxTabCompletion(scenarios::mx_tab::MxTabCompletionResult),
     BytecodeCallLoop(scenarios::bytecode::BytecodeCallLoopResult),
+    VmLoop(scenarios::vm_loop::VmLoopResult),
     BoundedSearch(scenarios::bounded_search::BoundedSearchResult),
     ElispBenchmarks(scenarios::elisp_benchmarks::ElispBenchmarksResult),
     EditorWorkload(scenarios::editor_workload::EditorWorkloadResult),
@@ -1598,6 +1603,7 @@ impl ScenarioResult {
             Self::RustLspTyping(result) => result.elapsed_us,
             Self::MxTabCompletion(result) => result.elapsed_us,
             Self::BytecodeCallLoop(result) => result.elapsed_us,
+            Self::VmLoop(result) => result.elapsed_us(),
             Self::BoundedSearch(result) => result.elapsed_us(),
             Self::ElispBenchmarks(result) => result.elapsed_us,
             Self::EditorWorkload(result) => result.elapsed_us,
@@ -1623,6 +1629,9 @@ fn parse_scenario_result(
         | ScenarioId::BoundedSearchEditOnly
         | ScenarioId::BoundedSearchNoEdit => {
             serde_json::from_str(raw).map(ScenarioResult::BoundedSearch)
+        }
+        ScenarioId::LexicalLoop | ScenarioId::DynamicBindingLoop => {
+            serde_json::from_str(raw).map(ScenarioResult::VmLoop)
         }
         ScenarioId::BytecodeCallLoop => {
             serde_json::from_str(raw).map(ScenarioResult::BytecodeCallLoop)
@@ -1844,6 +1853,9 @@ fn result_verdict(
     process_wall_us: u128,
 ) -> RunVerdict {
     let mismatches = match result {
+        ScenarioResult::VmLoop(result) => {
+            scenarios::vm_loop::validate_vm_loop_result(request, result)
+        }
         ScenarioResult::BoundedSearch(result) => {
             scenarios::bounded_search::validate_bounded_search_result(request, result)
         }
@@ -1895,6 +1907,9 @@ where
 
 fn valid_measurements(result: &ScenarioResult, wall_elapsed_us: u128) -> Vec<Measurement> {
     match result {
+        ScenarioResult::VmLoop(result) => {
+            scenarios::vm_loop::valid_vm_loop_measurements(result, wall_elapsed_us)
+        }
         ScenarioResult::BoundedSearch(result) => {
             scenarios::bounded_search::valid_bounded_search_measurements(result, wall_elapsed_us)
         }

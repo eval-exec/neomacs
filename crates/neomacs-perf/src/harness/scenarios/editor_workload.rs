@@ -663,7 +663,9 @@ pub(crate) fn validate_editor_workload_result(
         | ScenarioId::RustLspTyping
         | ScenarioId::RustLspTypingHeavy
         | ScenarioId::MxTabCompletion
-        | ScenarioId::BytecodeCallLoop => {
+        | ScenarioId::BytecodeCallLoop
+        | ScenarioId::LexicalLoop
+        | ScenarioId::DynamicBindingLoop => {
             unreachable!("dedicated scenario results do not use the editor workload validator")
         }
     }

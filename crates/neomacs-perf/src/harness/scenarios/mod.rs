@@ -9,3 +9,4 @@ pub(crate) mod mx_tab;
 pub(crate) mod org_journal_open;
 pub(crate) mod rust_lsp;
 pub(crate) mod sustained_native_video;
+pub(crate) mod vm_loop;

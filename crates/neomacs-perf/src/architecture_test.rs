@@ -46,6 +46,7 @@ fn scenario_modules_stay_family_sized() {
         "org_journal_open",
         "rust_lsp",
         "sustained_native_video",
+        "vm_loop",
     ] {
         let relative = format!("src/harness/scenarios/{module}.rs");
         let lines = count_lines(&relative);
@@ -78,6 +79,7 @@ fn scenario_module_registry_is_pinned() {
             "org_journal_open",
             "rust_lsp",
             "sustained_native_video",
+            "vm_loop",
         ],
         "update this pin when registering a scenario family"
     );
