@@ -46,6 +46,7 @@ fn scenario_modules_stay_family_sized() {
         "mx_tab",
         "org_journal_open",
         "rust_lsp",
+        "search_shape",
         "sustained_native_video",
         "vm_loop",
     ] {
@@ -80,6 +81,7 @@ fn scenario_module_registry_is_pinned() {
             "mx_tab",
             "org_journal_open",
             "rust_lsp",
+            "search_shape",
             "sustained_native_video",
             "vm_loop",
         ],

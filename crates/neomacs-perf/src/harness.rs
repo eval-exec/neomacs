@@ -526,6 +526,14 @@ impl PerfHarness {
             | ScenarioId::BuiltinCallMaxChar => {
                 scenarios::builtin_call::prepare(&self.workspace_root, request, run_directory)
             }
+            ScenarioId::SearchLiteralForward
+            | ScenarioId::SearchLiteralBackward
+            | ScenarioId::SearchRegexpForward
+            | ScenarioId::SearchRegexpBackward
+            | ScenarioId::SearchPosixForward
+            | ScenarioId::SearchPosixBackward => {
+                scenarios::search_shape::prepare(&self.workspace_root, request, run_directory)
+            }
             ScenarioId::BytecodeCallLoop => {
                 scenarios::bytecode::prepare(&self.workspace_root, request, run_directory)
             }
@@ -935,6 +943,7 @@ enum PreparedWorkload {
     BytecodeCallLoop,
     VmLoop,
     BuiltinCall,
+    SearchShape,
     BoundedSearch(scenarios::bounded_search::Settings),
     ElispBenchmarks {
         package_dir: PathBuf,
@@ -1596,6 +1605,7 @@ enum ScenarioResult {
     BytecodeCallLoop(scenarios::bytecode::BytecodeCallLoopResult),
     VmLoop(scenarios::vm_loop::VmLoopResult),
     BuiltinCall(scenarios::builtin_call::BuiltinCallResult),
+    SearchShape(scenarios::search_shape::SearchShapeResult),
     FirstHotLoop(scenarios::vm_loop::first_entry::FirstHotLoopResult),
     BoundedSearch(scenarios::bounded_search::BoundedSearchResult),
     ElispBenchmarks(scenarios::elisp_benchmarks::ElispBenchmarksResult),
@@ -1620,6 +1630,7 @@ impl ScenarioResult {
             Self::BytecodeCallLoop(result) => result.elapsed_us,
             Self::VmLoop(result) => result.elapsed_us(),
             Self::BuiltinCall(result) => result.elapsed_us(),
+            Self::SearchShape(result) => result.elapsed_us(),
             Self::FirstHotLoop(result) => result.elapsed_us(),
             Self::BoundedSearch(result) => result.elapsed_us(),
             Self::ElispBenchmarks(result) => result.elapsed_us,
@@ -1655,6 +1666,14 @@ fn parse_scenario_result(
         | ScenarioId::BuiltinCallCharOrStringP
         | ScenarioId::BuiltinCallMaxChar => {
             serde_json::from_str(raw).map(ScenarioResult::BuiltinCall)
+        }
+        ScenarioId::SearchLiteralForward
+        | ScenarioId::SearchLiteralBackward
+        | ScenarioId::SearchRegexpForward
+        | ScenarioId::SearchRegexpBackward
+        | ScenarioId::SearchPosixForward
+        | ScenarioId::SearchPosixBackward => {
+            serde_json::from_str(raw).map(ScenarioResult::SearchShape)
         }
         ScenarioId::FirstHotLoop => serde_json::from_str(raw).map(ScenarioResult::FirstHotLoop),
         ScenarioId::LexicalLoop | ScenarioId::DynamicBindingLoop => {
@@ -1881,6 +1900,7 @@ fn result_verdict(
 ) -> RunVerdict {
     let mismatches = match result {
         ScenarioResult::BuiltinCall(result) => scenarios::builtin_call::validate(request, result),
+        ScenarioResult::SearchShape(result) => scenarios::search_shape::validate(request, result),
         ScenarioResult::FirstHotLoop(result) => {
             scenarios::vm_loop::first_entry::validate(request, result)
         }
@@ -1940,6 +1960,9 @@ fn valid_measurements(result: &ScenarioResult, wall_elapsed_us: u128) -> Vec<Mea
     match result {
         ScenarioResult::BuiltinCall(result) => {
             scenarios::builtin_call::measurements(result, wall_elapsed_us)
+        }
+        ScenarioResult::SearchShape(result) => {
+            scenarios::search_shape::measurements(result, wall_elapsed_us)
         }
         ScenarioResult::FirstHotLoop(result) => {
             scenarios::vm_loop::first_entry::measurements(result, wall_elapsed_us)
