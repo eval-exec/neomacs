@@ -71,15 +71,9 @@ impl RuntimeDirectory {
         #[cfg(unix)]
         {
             // GNU Emacs appends `emacs/<server-name>` to XDG_RUNTIME_DIR
-            // before binding an AF_UNIX socket.  Keep that namespace outside
-            // the arbitrarily deep checkout path while every persistent test
-            // artifact remains below CASE_ROOT.
-            let system_tmp = Path::new("/tmp");
-            let base = if system_tmp.is_dir() {
-                system_tmp.to_path_buf()
-            } else {
-                std::env::temp_dir()
-            };
+            // before binding an AF_UNIX socket. Avoid the deeper CASE_ROOT
+            // path, while honoring the caller's TMPDIR scratch location.
+            let base = std::env::temp_dir();
             let directory = tempfile::Builder::new()
                 .prefix("nmr-")
                 .tempdir_in(&base)
