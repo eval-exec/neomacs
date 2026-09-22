@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::num::NonZeroU32;
@@ -17,7 +17,7 @@ use crate::{
     scenario,
 };
 
-pub(crate) const COMPARISON_ARTIFACT_SCHEMA_VERSION: u32 = 6;
+pub(crate) const COMPARISON_ARTIFACT_SCHEMA_VERSION: u32 = 7;
 static COMPARISON_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Immutable parameters shared by every run in one comparison.
@@ -89,6 +89,18 @@ pub(crate) struct ComparisonObservation {
     pub(crate) verdict: RunVerdict,
 }
 
+/// Descriptive primary-metric values paired by the scheduled sample index.
+/// These retain pairing when the marginal sample arrays below are sorted.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ComparisonPairedSample {
+    pub sample_index: u32,
+    pub baseline: f64,
+    pub candidate: f64,
+    pub candidate_to_baseline_ratio: f64,
+    pub percent_change: f64,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ComparisonMetricSummary {
@@ -96,6 +108,7 @@ pub struct ComparisonMetricSummary {
     pub unit: MetricUnit,
     pub baseline_samples: Vec<f64>,
     pub candidate_samples: Vec<f64>,
+    pub paired_samples: Vec<ComparisonPairedSample>,
     pub baseline_median: f64,
     pub candidate_median: f64,
     pub baseline_median_absolute_deviation: f64,
@@ -657,7 +670,7 @@ pub(crate) fn evaluate_comparison(
         if measurement.unit != expected_unit {
             continue;
         }
-        samples.push((run.role, measurement.value));
+        samples.push((run.role, run.sample_index, measurement.value));
     }
 
     if let (Some(baseline), Some(candidate)) = (&baseline_provenance, &candidate_provenance) {
@@ -695,13 +708,38 @@ pub(crate) fn evaluate_comparison(
         return ComparisonVerdict::Rejected { reasons };
     }
 
+    let mut paired_values = BTreeMap::new();
+    for &(role, sample_index, value) in &samples {
+        let pair = paired_values.entry(sample_index).or_insert([None, None]);
+        pair[match role {
+            ComparisonRunRole::Baseline => 0,
+            ComparisonRunRole::Candidate => 1,
+        }] = Some(value);
+    }
+    let paired_samples = paired_values
+        .into_iter()
+        .map(|(sample_index, pair)| {
+            let [Some(baseline), Some(candidate)] = pair else {
+                unreachable!("validated comparison has both roles at every sample index")
+            };
+            let ratio = candidate / baseline;
+            ComparisonPairedSample {
+                sample_index,
+                baseline,
+                candidate,
+                candidate_to_baseline_ratio: ratio,
+                percent_change: (ratio - 1.0) * 100.0,
+            }
+        })
+        .collect();
+
     let mut baseline_samples = samples
         .iter()
-        .filter_map(|(role, value)| (*role == ComparisonRunRole::Baseline).then_some(*value))
+        .filter_map(|(role, _, value)| (*role == ComparisonRunRole::Baseline).then_some(*value))
         .collect::<Vec<_>>();
     let mut candidate_samples = samples
         .iter()
-        .filter_map(|(role, value)| (*role == ComparisonRunRole::Candidate).then_some(*value))
+        .filter_map(|(role, _, value)| (*role == ComparisonRunRole::Candidate).then_some(*value))
         .collect::<Vec<_>>();
     baseline_samples.sort_by(f64::total_cmp);
     candidate_samples.sort_by(f64::total_cmp);
@@ -716,6 +754,7 @@ pub(crate) fn evaluate_comparison(
             unit: expected_unit,
             baseline_samples,
             candidate_samples,
+            paired_samples,
             baseline_median,
             candidate_median,
             baseline_median_absolute_deviation: baseline_mad,

@@ -275,6 +275,18 @@ fn valid_repetitions_produce_medians_and_candidate_ratio() {
                 unit: MetricUnit::MicrosecondsPerEdit,
                 baseline_samples: vec![10.0, 20.0, 30.0],
                 candidate_samples: vec![9.0, 12.0, 15.0],
+                paired_samples: [(0, 10.0, 9.0), (1, 30.0, 12.0), (2, 20.0, 15.0)]
+                    .into_iter()
+                    .map(
+                        |(sample_index, baseline, candidate)| super::ComparisonPairedSample {
+                            sample_index,
+                            baseline,
+                            candidate,
+                            candidate_to_baseline_ratio: candidate / baseline,
+                            percent_change: (candidate / baseline - 1.0) * 100.0,
+                        }
+                    )
+                    .collect(),
                 baseline_median: 20.0,
                 candidate_median: 12.0,
                 baseline_median_absolute_deviation: 10.0,
@@ -649,4 +661,27 @@ fn native_video_identity_is_content_based_not_path_based() {
         native_video_identity("same-content"),
         native_video_identity("same-content")
     );
+}
+
+#[test]
+fn paired_comparison_samples_follow_indexes_despite_observation_order() {
+    let mut observations = valid_observations();
+    observations.reverse();
+    let ComparisonVerdict::Valid { summary } = evaluate_comparison(&input(), &observations) else {
+        panic!("valid runs remain valid in a different observation order");
+    };
+    for (pair, (index, baseline, candidate, change)) in summary.paired_samples.iter().zip([
+        (0, 10.0, 9.0, -10.0),
+        (1, 30.0, 12.0, -60.0),
+        (2, 20.0, 15.0, -25.0),
+    ]) {
+        assert_eq!(
+            (pair.sample_index, pair.baseline, pair.candidate),
+            (index, baseline, candidate)
+        );
+        assert!((pair.percent_change - change).abs() < 1e-10);
+    }
+    assert_eq!(summary.paired_samples.len(), 3);
+    // Pair diagnostics do not replace the established ratio-of-medians.
+    assert_eq!(summary.percent_change, -40.0);
 }

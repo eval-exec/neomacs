@@ -28,9 +28,9 @@ pub(crate) use comparison::{
     COMPARISON_ARTIFACT_SCHEMA_VERSION, ComparisonObservation, evaluate_comparison,
 };
 pub use comparison::{
-    ComparisonArtifact, ComparisonInput, ComparisonMetricSummary, ComparisonRejection,
-    ComparisonReport, ComparisonRequest, ComparisonRun, ComparisonRunOutcome, ComparisonRunRole,
-    ComparisonSampleCount, ComparisonVerdict, comparison_schedule,
+    ComparisonArtifact, ComparisonInput, ComparisonMetricSummary, ComparisonPairedSample,
+    ComparisonRejection, ComparisonReport, ComparisonRequest, ComparisonRun, ComparisonRunOutcome,
+    ComparisonRunRole, ComparisonSampleCount, ComparisonVerdict, comparison_schedule,
 };
 pub use counters::{CounterScope, parse_perf_stat_csv};
 #[cfg(test)]

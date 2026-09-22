@@ -533,6 +533,18 @@ pub fn run_cli(
                         summary.unit
                     );
                     println!("change     = {:+.2}%", summary.percent_change);
+                    println!(
+                        "pairs      = {}",
+                        summary
+                            .paired_samples
+                            .iter()
+                            .map(|pair| format!(
+                                "{}:{:+.2}%",
+                                pair.sample_index, pair.percent_change
+                            ))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
                     Ok(())
                 }
                 ComparisonVerdict::Rejected { reasons } => Err(PerfCliError::ComparisonRejected {
