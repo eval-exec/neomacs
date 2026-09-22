@@ -2862,8 +2862,8 @@ fn apply_known_fixnum_op(
 }
 
 /// **Cross-block redundant-guard elimination — the analysis.** Wired into
-/// `lower_leaf_full` (and disabled under OSR); the "UNWIRED" this doc once
-/// carried was stale.
+/// `lower_leaf_full`; an OSR entry guards the header's proven slots before
+/// adding its new predecessor edge to the same fixed point.
 ///
 /// Forward dataflow fixpoint over the CFG: for each block leader, the operand-
 /// stack SLOTS provably fixnum at block entry. A slot is known-fixnum at entry
@@ -2873,10 +2873,10 @@ fn apply_known_fixnum_op(
 /// narrowed by predecessors; the entry block starts all-`false` (args untyped).
 ///
 /// Conservative: returns an EMPTY map (no elision anywhere) for any function
-/// containing an op this analysis does not model precisely (Switch, catch/
-/// condition-case handlers, ...). NOT yet wired into `lower_leaf_full`; the
-/// integration that consumes this is a follow-up. `cfg` must come from
-/// [`analyze_cfg`] on the same `ops`.
+/// containing an op this analysis does not model precisely (catch/
+/// condition-case handlers, ...). `cfg` must come from [`analyze_cfg`] on the
+/// same `ops`. Numeric feedback and the masked dynamic constant prefix must
+/// match the view used by instruction lowering.
 fn compute_known_fixnum_slots(
     ops: &[Op],
     constants: &[Value],
@@ -3288,12 +3288,10 @@ pub fn lower_leaf_full_osr(
     let cfg = analyze_cfg(ops, constants, offset_map, arity)?;
     // Cross-block redundant-guard elimination: per-block-entry known-fixnum slots
     // (empty if the function has an op the analysis doesn't model -> no elision).
-    // Disabled under OSR (see the doc): the OSR entry is an unanalyzed predecessor.
-    let known_fixnum_slots = if osr_pc.is_some() {
-        HashMap::new()
-    } else {
-        compute_known_fixnum_slots(ops, constants, &cfg)
-    };
+    // OSR adds an entry predecessor that guards the header's proven slots.
+    // Once those checks pass, the same must-analysis facts remain valid on
+    // every reachable edge; untyped slots still retain their per-op guards.
+    let known_fixnum_slots = compute_known_fixnum_slots(ops, constants, &cfg);
     let n = ops.len();
     // Direct-call speculation sites + their armed-epoch slots. The Box's heap
     // storage is address-stable: slot pointers are baked into the generated
@@ -3864,7 +3862,30 @@ fn build_leaf_fn<M: Module>(
             );
             fb.def_var(*var, v);
         }
+        // A live OSR snapshot is an additional predecessor of the header.
+        // Check exactly the type facts that normal entry established before
+        // using them to elide guards in the body. Rejection captures the whole
+        // unchanged tagged snapshot at the header, before any bytecode effect.
+        let mut entry_deopts = Vec::new();
+        if let Some(pc) = osr_pc
+            && let Some(slots) = known_fixnum_slots.get(&pc)
+            && slots.iter().any(|&known| known)
+        {
+            let stack: Vec<ClifValue> = vars[..seed_count]
+                .iter()
+                .map(|&var| fb.use_var(var))
+                .collect();
+            let raw = vec![false; seed_count];
+            let deopt = deopt_site(&mut fb, pc, 0, &stack, &raw, &mut entry_deopts);
+            let unknown = HashSet::new();
+            for (&value, &known) in stack.iter().zip(slots) {
+                if known {
+                    guard_fixnum(&mut fb, deopt, value, &unknown);
+                }
+            }
+        }
         fb.ins().jump(jump_target, &[]);
+        emit_pending_deopts(&mut fb, deopt_refs, &mut entry_deopts);
 
         let next_leader = |idx: usize| cfg.leaders.iter().copied().find(|&l| l > idx).unwrap_or(n);
 
@@ -4411,6 +4432,10 @@ mod mir_named_calls_tests;
 #[cfg(test)]
 #[path = "tests/osr_bindings.rs"]
 mod osr_binding_tests;
+
+#[cfg(test)]
+#[path = "tests/osr_entry_guards.rs"]
+mod osr_entry_guard_tests;
 #[cfg(test)]
 #[path = "tests/compile.rs"]
 mod tests;
