@@ -108,9 +108,7 @@ impl Inventory {
                 Some(rest[..end].to_owned())
             };
             let path = get("path").ok_or("inventory line missing path")?;
-            let size: u64 = get("size")
-                .and_then(|s| s.parse().ok())
-                .ok_or("inventory line missing size")?;
+            let size: u64 = get_number(line, "size").ok_or("inventory line missing size")?;
             let sha256 = get("sha256").ok_or("inventory line missing sha256")?;
             entries.push(Entry { path, size, sha256 });
         }
@@ -118,8 +116,17 @@ impl Inventory {
     }
 }
 
+/// Read an unquoted numeric field from a JSON-lines entry.
+fn get_number(line: &str, key: &str) -> Option<u64> {
+    let marker = format!("\"{key}\":");
+    let i = line.find(&marker)?;
+    let rest = line[i + marker.len()..].trim_start();
+    let end = rest.find(',')?;
+    rest[..end].trim().parse().ok()
+}
+
 /// Differences between the inventory and the tree as it exists now.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Drift {
     pub missing: Vec<String>,
     pub modified: Vec<String>,

@@ -15,6 +15,7 @@
 use neomacs_gui_tests::{
     DisplayHarness, GuiBackend, GuiRunOptions, GuiScenario, GuiTestPlan, ProcessGuiCommandRunner,
 };
+use neomacs_infra::packages;
 use std::{fs, path::PathBuf, time::Duration};
 
 #[test]
@@ -32,6 +33,13 @@ fn minibuffer_line_renders_in_the_graphical_miniwindow() {
     let program = std::env::var_os("NEOMACS_GUI_TEST_BINARY")
         .map(PathBuf::from)
         .unwrap_or_else(|| root.join("target/release/neomacs"));
+    // Provision the package source through the shared cache so this suite
+    // exercises the same pinned bytes as the TUI parity tests.
+    let source =
+        std::fs::read_to_string(root.join("crates/neomacs-gui-tests/fixtures/minibuffer-line.el"))
+            .expect("read GNU ELPA minibuffer-line source");
+    let provisioned = packages::source_file("minibuffer-line", &source)
+        .expect("provision minibuffer-line source");
     let mut plan = GuiTestPlan::new(
         backend,
         &root,
@@ -42,6 +50,10 @@ fn minibuffer_line_renders_in_the_graphical_miniwindow() {
         ),
     )
     .with_program(program)
+    .with_env(
+        "NEOMACS_PACKAGE_SOURCE",
+        provisioned.path().to_string_lossy(),
+    )
     .with_env("RUST_LOG", "warn");
     for (key, value) in session.env() {
         plan = plan.with_env(key, value);

@@ -1,9 +1,7 @@
 ;;; minibuffer-line-gui.el --- GUI repro for issue #414 (minibuffer-line) -*- lexical-binding: t; -*-
-;; Load the GNU ELPA package source from this fixture's own directory
-;; (`require' cannot see it: the fixtures directory is not on `load-path').
-(load (expand-file-name
-        "minibuffer-line.el"
-        (file-name-directory (or load-file-name default-directory))))
+;; Load the package source from neomacs-infra's shared content-addressed
+;; cache; the Rust test resolves the path and passes it in the environment.
+(load (getenv "NEOMACS_PACKAGE_SOURCE") nil t t)
 
 (run-at-time
  1 nil

@@ -795,7 +795,7 @@ fn every_exact_package_has_a_complete_acyclic_source_plan() {
 fn git_source_acquisition_is_shallow_and_never_reads_a_package_catalog() {
     let source_harness = include_str!(concat!(
         env!("CARGO_WORKSPACE_DIR"),
-        "/crates/neomacs-melpa-test-support/src/source_lock.rs"
+        "/crates/neomacs-infra/src/packages/source_lock.rs"
     ));
 
     assert_eq!(SHALLOW_GIT_FETCH_ARGS, ["fetch", "--depth=1", "--no-tags"]);

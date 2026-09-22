@@ -12,6 +12,7 @@ tui = ["dep:neomacs-tui-tests"]
 [dependencies]
 command-group.workspace = true
 fs4.workspace = true
+neomacs-infra.workspace = true
 neomacs-parity-reference.workspace = true
 sha2.workspace = true
 tempfile.workspace = true

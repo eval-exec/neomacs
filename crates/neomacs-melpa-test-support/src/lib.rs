@@ -205,10 +205,6 @@ impl MelpaSandbox {
 
 /// Apply the deterministic environment used by package preparation and test
 /// processes.
-pub fn configure_process_environment(command: &mut Command, root: &Path, home: &Path, tmp: &Path) {
-    configure_process_environment_with_runtime(command, root, home, tmp, &root.join("xdg/runtime"));
-}
-
 fn configure_process_environment_with_runtime(
     command: &mut Command,
     root: &Path,
@@ -220,63 +216,6 @@ fn configure_process_environment_with_runtime(
         .current_dir(root)
         .envs(deterministic_process_environment(root, home, tmp, runtime))
         .env_remove("EMACSLOADPATH");
-}
-
-fn deterministic_process_environment(
-    root: &Path,
-    home: &Path,
-    tmp: &Path,
-    runtime: &Path,
-) -> Vec<PackageEnvironmentEntry> {
-    vec![
-        (OsString::from("HOME"), os_string(home.as_os_str())),
-        (OsString::from("TMPDIR"), os_string(tmp.as_os_str())),
-        (OsString::from("TMP"), os_string(tmp.as_os_str())),
-        (OsString::from("TEMP"), os_string(tmp.as_os_str())),
-        (
-            OsString::from("XDG_CONFIG_HOME"),
-            os_string(root.join("xdg/config").as_os_str()),
-        ),
-        (
-            OsString::from("XDG_CACHE_HOME"),
-            os_string(root.join("xdg/cache").as_os_str()),
-        ),
-        (
-            OsString::from("XDG_DATA_HOME"),
-            os_string(root.join("xdg/data").as_os_str()),
-        ),
-        (
-            OsString::from("XDG_STATE_HOME"),
-            os_string(root.join("xdg/state").as_os_str()),
-        ),
-        (
-            OsString::from("XDG_RUNTIME_DIR"),
-            os_string(runtime.as_os_str()),
-        ),
-        (OsString::from("LANG"), OsString::from("C.UTF-8")),
-        (OsString::from("LC_ALL"), OsString::from("C.UTF-8")),
-        (OsString::from("TZ"), OsString::from("UTC")),
-        (OsString::from("USER"), OsString::from("melpa-test")),
-        (OsString::from("LOGNAME"), OsString::from("melpa-test")),
-        (OsString::from("HOSTNAME"), OsString::from("melpa-host")),
-        (
-            OsString::from("EMAIL"),
-            OsString::from("melpa-test@melpa-host"),
-        ),
-        (OsString::from("TERM"), OsString::from("dumb")),
-        (
-            OsString::from("NEOMACS_TEST_SANDBOX_ROOT"),
-            os_string(root.as_os_str()),
-        ),
-        (
-            OsString::from("NEOMACS_TEST_WORKSPACE_ROOT"),
-            os_string(workspace_root().as_os_str()),
-        ),
-        (
-            OsString::from("GIT_CEILING_DIRECTORIES"),
-            os_string(workspace_root().as_os_str()),
-        ),
-    ]
 }
 
 pub fn sanitize_label(label: &str) -> String {
@@ -589,32 +528,11 @@ fn read_pipe(mut pipe: impl Read) -> std::io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-pub fn package_preparation_run_id() -> String {
-    std::env::var("NEXTEST_RUN_ID").unwrap_or_else(|_| format!("process-{}", std::process::id()))
-}
-
-pub fn publish_package_preparation_failure(
-    failed_marker: &Path,
-    failure_prefix: &str,
-    error: String,
-) -> String {
-    let marker_tmp = failed_marker.with_extension(format!("{}.tmp", std::process::id()));
-    let contents = format!("{failure_prefix}{error}");
-    if let Err(cache_error) =
-        fs::write(&marker_tmp, contents).and_then(|()| fs::rename(&marker_tmp, failed_marker))
-    {
-        return format!(
-            "{error}\nfailed to publish shared package preparation failure {}: {cache_error}",
-            failed_marker.display()
-        );
-    }
-    error
-}
-
-pub fn elisp_string(value: &str) -> String {
-    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
-}
-
+pub use neomacs_infra::packages::elisp_string;
+pub use neomacs_infra::packages::install::{
+    configure_process_environment, deterministic_process_environment, package_preparation_run_id,
+    publish_package_preparation_failure,
+};
 /// The path to the `neomacs` binary (override with `NEOMACS_BIN`).
 pub fn neomacs_binary() -> PathBuf {
     std::env::var_os("NEOMACS_BIN")

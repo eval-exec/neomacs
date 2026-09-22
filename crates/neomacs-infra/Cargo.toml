@@ -18,5 +18,10 @@ publish = false
 # instead of silently dirtying the fixture for every other test.
 
 [dependencies]
+fs4.workspace = true
 getrandom.workspace = true
 sha2.workspace = true
+wait-timeout.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
