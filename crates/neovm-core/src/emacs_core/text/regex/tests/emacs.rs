@@ -2,6 +2,50 @@ use super::*;
 use crate::fuzz_support::{RegexCase, RegexCheck, RegexDifferential, check_regex_differential};
 
 #[test]
+fn prepared_regexp_scoped_gc_preserves_compiled_and_callback_paths() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::runtime_startup_context();
+    // Load syntax support and exercise autoloads before stress: collecting
+    // at every allocation during charprop.el loading tests bootstrap cost,
+    // not the lifetime of a pattern passed through search preparation.
+    eval.gc_stress = false;
+    let warm = eval.eval_str(
+        r#"(progn
+  (require 'syntax)
+  (defun prepared-regexp-scoped-gc ()
+    (let (out)
+      (dolist (lookup '(nil t))
+        (with-temp-buffer
+          (insert "ab cd")
+          (let ((parse-sexp-lookup-properties lookup)
+                (case-fold-search nil)
+                (calls 0))
+            (setq-local syntax-propertize-function
+                        (lambda (_start _end)
+                          (setq calls (1+ calls))
+                          (put-text-property 1 3 'syntax-table (string-to-syntax "."))
+                          (garbage-collect)))
+            (setq-local syntax-propertize--done 1)
+            (goto-char 1)
+            (push (list (re-search-forward "b" 6 t) (> calls 0)) out)
+            (goto-char 1)
+            (push (list (re-search-forward "\\w" 6 t) (> calls 0)) out))))
+      (nreverse out)))
+  (prepared-regexp-scoped-gc))"#,
+    );
+    let expected = "OK ((3 nil) (2 nil) (3 nil) (5 t))";
+    assert_eq!(crate::emacs_core::format_eval_result(&warm), expected);
+    eval.gc_stress = true;
+    let before = eval.gc_count;
+    let result = eval.eval_str("(prepared-regexp-scoped-gc)");
+    let collections = eval.gc_count - before;
+    assert_eq!(crate::emacs_core::format_eval_result(&result), expected);
+    // One explicit callback collection alone must not satisfy the test.
+    assert!(collections > 1, "expected automatic stress collections");
+    eprintln!("prepared-regexp scoped stress collections: {collections}");
+}
+
+#[test]
 fn prepared_regexp_preserves_options_and_gc_during_syntax_propertize() {
     crate::test_utils::init_test_tracing();
     let observed = crate::test_utils::runtime_startup_eval_one(
