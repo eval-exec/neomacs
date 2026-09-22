@@ -182,30 +182,27 @@ pub(crate) fn callee_is_symbol_const(
     }
 }
 
-/// True if `v` is provably a fixnum at this point — a fixnum constant
-/// ([`is_fixnum_const`]) OR the output of [`retag_fixnum`], i.e.
-/// `bor_imm(ishl_imm(_, k>=FIXNUM_SHIFT), FIXNUM_CHECK_VALUE)`, whose low tag
-/// bits are exactly `0b10`. In either case a fixnum guard on `v` would always
-/// pass, so it can be elided. The retag case extends redundant-guard elimination
-/// to chained arithmetic WITHIN a block: the range-checked, retagged inner result
-/// of `(+ (+ a b) c)` / `(< (1+ i) n)` is re-guarded for nothing. (Sound even if
-/// some non-retag op produced the same bit pattern — any value with low bits
-/// `0b10` passes the guard. opt_level=none keeps the instruction sequence stable.)
+/// True if `v` is a fixnum constant or a shifted integer with the fixnum tag
+/// added or ORed into its cleared low bits. The shift count is masked just as
+/// Cranelift masks an I64 shift: a literal count of 64 clears no bits.
 pub(crate) fn is_known_fixnum(fb: &FunctionBuilder, v: ClifValue) -> bool {
     use cranelift_codegen::ir::Opcode;
+    if fb.func.dfg.value_type(v) != types::I64 {
+        return false;
+    }
     if is_fixnum_const(fb, v) {
         return true;
     }
-    let Some((shifted, tag)) = binary_value_and_iconst(fb, v, Opcode::Bor) else {
+    let Some((shifted, tag)) = binary_value_and_iconst(fb, v, Opcode::Bor)
+        .or_else(|| binary_value_and_iconst(fb, v, Opcode::Iadd))
+    else {
         return false;
     };
     if tag != FIXNUM_CHECK_VALUE as i64 {
         return false;
     }
-    // The bor operand must clear the low FIXNUM_SHIFT bits (a left shift by at
-    // least FIXNUM_SHIFT), so `v`'s low two bits are exactly the fixnum tag.
     binary_value_and_iconst(fb, shifted, Opcode::Ishl)
-        .is_some_and(|(_, shift)| shift >= FIXNUM_SHIFT as i64)
+        .is_some_and(|(_, shift)| (shift as u64 & 63) >= FIXNUM_SHIFT as u64)
 }
 
 /// Guard that `v` is a fixnum (`(v & 0b11) == 0b10`), deopting otherwise.
@@ -470,11 +467,12 @@ pub(crate) fn guard_fixnum(
     emit_guard(fb, deopt, is_fix);
 }
 
-/// Retag an untagged i64 `n` as a fixnum `Value`: `(n << 2) | 2`.
+/// Retag a raw i64 using `(n << 2) + 2`. The cleared tag bits make addition
+/// equivalent to OR, while exposing a scaled-address form to the backend.
 pub(crate) fn retag_fixnum(fb: &mut FunctionBuilder, n: ClifValue) -> ClifValue {
     RETAG_COUNT.with(|c| c.set(c.get() + 1));
     let shifted = ishl_imm_p(fb, n, FIXNUM_SHIFT as i64);
-    bor_imm_p(fb, shifted, FIXNUM_CHECK_VALUE as i64)
+    iadd_imm_p(fb, shifted, FIXNUM_CHECK_VALUE as i64)
 }
 
 /// Lower a fixnum-fast-path binary op (`Add`/`Sub`) with the exact parity the
