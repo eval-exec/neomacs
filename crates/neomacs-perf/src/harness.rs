@@ -517,6 +517,15 @@ impl PerfHarness {
             ScenarioId::LexicalLoop | ScenarioId::DynamicBindingLoop | ScenarioId::FirstHotLoop => {
                 scenarios::vm_loop::prepare(&self.workspace_root, request, run_directory)
             }
+            ScenarioId::BuiltinCallPoint
+            | ScenarioId::BuiltinCallStringBytes
+            | ScenarioId::BuiltinCallStringLessp
+            | ScenarioId::BuiltinCallGetTextProperty
+            | ScenarioId::BuiltinCallMultibyteStringP
+            | ScenarioId::BuiltinCallCharOrStringP
+            | ScenarioId::BuiltinCallMaxChar => {
+                scenarios::builtin_call::prepare(&self.workspace_root, request, run_directory)
+            }
             ScenarioId::BytecodeCallLoop => {
                 scenarios::bytecode::prepare(&self.workspace_root, request, run_directory)
             }
@@ -925,6 +934,7 @@ enum PreparedWorkload {
     MxTabCompletion,
     BytecodeCallLoop,
     VmLoop,
+    BuiltinCall,
     BoundedSearch(scenarios::bounded_search::Settings),
     ElispBenchmarks {
         package_dir: PathBuf,
@@ -1582,6 +1592,7 @@ enum ScenarioResult {
     MxTabCompletion(scenarios::mx_tab::MxTabCompletionResult),
     BytecodeCallLoop(scenarios::bytecode::BytecodeCallLoopResult),
     VmLoop(scenarios::vm_loop::VmLoopResult),
+    BuiltinCall(scenarios::builtin_call::BuiltinCallResult),
     FirstHotLoop(scenarios::vm_loop::first_entry::FirstHotLoopResult),
     BoundedSearch(scenarios::bounded_search::BoundedSearchResult),
     ElispBenchmarks(scenarios::elisp_benchmarks::ElispBenchmarksResult),
@@ -1605,6 +1616,7 @@ impl ScenarioResult {
             Self::MxTabCompletion(result) => result.elapsed_us,
             Self::BytecodeCallLoop(result) => result.elapsed_us,
             Self::VmLoop(result) => result.elapsed_us(),
+            Self::BuiltinCall(result) => result.elapsed_us(),
             Self::FirstHotLoop(result) => result.elapsed_us(),
             Self::BoundedSearch(result) => result.elapsed_us(),
             Self::ElispBenchmarks(result) => result.elapsed_us,
@@ -1631,6 +1643,15 @@ fn parse_scenario_result(
         | ScenarioId::BoundedSearchEditOnly
         | ScenarioId::BoundedSearchNoEdit => {
             serde_json::from_str(raw).map(ScenarioResult::BoundedSearch)
+        }
+        ScenarioId::BuiltinCallPoint
+        | ScenarioId::BuiltinCallStringBytes
+        | ScenarioId::BuiltinCallStringLessp
+        | ScenarioId::BuiltinCallGetTextProperty
+        | ScenarioId::BuiltinCallMultibyteStringP
+        | ScenarioId::BuiltinCallCharOrStringP
+        | ScenarioId::BuiltinCallMaxChar => {
+            serde_json::from_str(raw).map(ScenarioResult::BuiltinCall)
         }
         ScenarioId::FirstHotLoop => serde_json::from_str(raw).map(ScenarioResult::FirstHotLoop),
         ScenarioId::LexicalLoop | ScenarioId::DynamicBindingLoop => {
@@ -1856,6 +1877,7 @@ fn result_verdict(
     process_wall_us: u128,
 ) -> RunVerdict {
     let mismatches = match result {
+        ScenarioResult::BuiltinCall(result) => scenarios::builtin_call::validate(request, result),
         ScenarioResult::FirstHotLoop(result) => {
             scenarios::vm_loop::first_entry::validate(request, result)
         }
@@ -1913,6 +1935,9 @@ where
 
 fn valid_measurements(result: &ScenarioResult, wall_elapsed_us: u128) -> Vec<Measurement> {
     match result {
+        ScenarioResult::BuiltinCall(result) => {
+            scenarios::builtin_call::measurements(result, wall_elapsed_us)
+        }
         ScenarioResult::FirstHotLoop(result) => {
             scenarios::vm_loop::first_entry::measurements(result, wall_elapsed_us)
         }

@@ -2,6 +2,7 @@
 //! preparation, result schema, invariants, and measurements.
 
 pub(crate) mod bounded_search;
+pub(crate) mod builtin_call;
 pub(crate) mod bytecode;
 pub(crate) mod editor_workload;
 pub(crate) mod elisp_benchmarks;

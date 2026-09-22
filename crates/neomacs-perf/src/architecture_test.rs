@@ -40,6 +40,7 @@ fn scenario_modules_stay_family_sized() {
     const CEILING: usize = 900;
     for module in [
         "bounded_search",
+        "builtin_call",
         "bytecode",
         "editor_workload",
         "mx_tab",
@@ -72,6 +73,7 @@ fn scenario_module_registry_is_pinned() {
         registered,
         [
             "bounded_search",
+            "builtin_call",
             "bytecode",
             "editor_workload",
             "elisp_benchmarks",

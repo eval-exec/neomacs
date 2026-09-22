@@ -7,7 +7,7 @@ use super::{CrossEditorParityMetric, Frontend, MetricName, ScenarioId, scenario,
 #[test]
 fn catalog_exposes_the_rust_lsp_typing_workload_as_a_typed_scenario() {
     let scenarios = scenarios();
-    assert_eq!(scenarios.len(), 30);
+    assert_eq!(scenarios.len(), 37);
 
     // The heavy row exists so the light one keeps its baseline: same workload,
     // a whole-file diagnostic set instead of four on adjacent lines.
@@ -323,6 +323,31 @@ fn rare_call_loop_diagnostics_stay_out_of_editor_score() {
                 .scenarios()
                 .iter()
                 .any(|entry| entry.scenario == id)
+        );
+    }
+}
+
+#[test]
+fn builtin_call_diagnostics_are_portable_and_excluded_from_the_editor_score() {
+    for id in [
+        ScenarioId::BuiltinCallPoint,
+        ScenarioId::BuiltinCallStringBytes,
+        ScenarioId::BuiltinCallStringLessp,
+        ScenarioId::BuiltinCallGetTextProperty,
+        ScenarioId::BuiltinCallMultibyteStringP,
+        ScenarioId::BuiltinCallCharOrStringP,
+        ScenarioId::BuiltinCallMaxChar,
+    ] {
+        let spec = scenario(id);
+        assert_eq!(id.as_str().parse(), Ok(id));
+        assert_eq!(spec.default_frontend, Frontend::Batch);
+        assert_eq!(spec.default_iterations.get(), 500_000);
+        assert_eq!(spec.primary_metric, MetricName::PerOperationWallTime);
+        assert!(
+            !crate::SuiteId::Standard
+                .scenarios()
+                .iter()
+                .any(|row| row.scenario == id)
         );
     }
 }

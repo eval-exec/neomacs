@@ -666,6 +666,13 @@ pub(crate) fn validate_editor_workload_result(
         | ScenarioId::BytecodeCallLoop
         | ScenarioId::LexicalLoop
         | ScenarioId::DynamicBindingLoop
+        | ScenarioId::BuiltinCallPoint
+        | ScenarioId::BuiltinCallStringBytes
+        | ScenarioId::BuiltinCallStringLessp
+        | ScenarioId::BuiltinCallGetTextProperty
+        | ScenarioId::BuiltinCallMultibyteStringP
+        | ScenarioId::BuiltinCallCharOrStringP
+        | ScenarioId::BuiltinCallMaxChar
         | ScenarioId::FirstHotLoop => {
             unreachable!("dedicated scenario results do not use the editor workload validator")
         }
