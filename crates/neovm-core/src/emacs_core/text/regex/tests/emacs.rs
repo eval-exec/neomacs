@@ -2,6 +2,70 @@ use super::*;
 use crate::fuzz_support::{RegexCase, RegexCheck, RegexDifferential, check_regex_differential};
 
 #[test]
+fn prepared_regexp_preserves_options_and_gc_during_syntax_propertize() {
+    crate::test_utils::init_test_tracing();
+    let observed = crate::test_utils::runtime_startup_eval_one(
+        r#"(progn
+  (require 'syntax)
+(let (out)
+  (dolist (lookup '(nil t))
+    (dolist (case '(("b" 1 6 1 nil)
+                    ("B" 1 6 1 t)
+                    ("[bc]" 1 6 1 nil)
+                    ("\\w" 1 6 1 nil)
+                    ("\\w+" 1 6 1 nil)
+                    ("\\(\\w\\)" 6 1 -1 nil)
+                    ("\\w" 3 6 0 nil)
+                    ("\\w" 3 3 0 nil)
+                    ("z" 1 5 1 nil)))
+      (dolist (noerror '(nil t move))
+        (with-temp-buffer
+          (insert "ab cd")
+          (let ((parse-sexp-lookup-properties lookup)
+                (case-fold-search (nth 4 case))
+                (calls 0))
+            (setq-local syntax-propertize-function
+                        (lambda (start end)
+                          (setq calls (1+ calls))
+                          (put-text-property 1 3 'syntax-table (string-to-syntax "."))
+                          (garbage-collect)))
+            (setq-local syntax-propertize--done 1)
+            (goto-char (nth 1 case))
+            (set-match-data '(7 9))
+            (let ((answer
+                   (condition-case error
+                       (re-search-forward (car case) (nth 2 case) noerror (nth 3 case))
+                     (error (car error)))))
+              (push (list answer (point) (> calls 0)
+                          (mapcar (lambda (value) (if (bufferp value) 'buffer value))
+                                  (match-data t))) out)))))))
+  (nreverse out)))"#,
+    );
+    // GNU Emacs 31.1: plain/translated/captured searches, reverse counts,
+    // zero counts, all noerror modes and syntax properties on/off. The
+    // propertize callback allocates and collects, so prepared patterns must
+    // not bypass the callback or retain a borrowed Lisp string across it.
+    assert_eq!(
+        observed,
+        concat!(
+            "OK ((3 3 nil (2 3 buffer)) (3 3 nil (2 3 buffer)) (3 3 nil (2 3 buffer)) (3 3 nil (2 3 buffer)) (3 3",
+            " nil (2 3 buffer)) (3 3 nil (2 3 buffer)) (3 3 nil (2 3 buffer)) (3 3 nil (2 3 buffer)) (3 3 nil (2 ",
+            "3 buffer)) (2 2 nil (1 2 buffer)) (2 2 nil (1 2 buffer)) (2 2 nil (1 2 buffer)) (3 3 nil (1 3 buffer",
+            ")) (3 3 nil (1 3 buffer)) (3 3 nil (1 3 buffer)) (5 5 nil (5 6 5 6 buffer)) (5 5 nil (5 6 5 6 buffer",
+            ")) (5 5 nil (5 6 5 6 buffer)) (error 3 nil (7 9)) (error 3 nil (7 9)) (error 3 nil (7 9)) (3 3 nil (",
+            "3 3 buffer)) (3 3 nil (3 3 buffer)) (3 3 nil (3 3 buffer)) (search-failed 1 nil (7 9)) (nil 1 nil (7",
+            " 9)) (nil 5 nil (7 9)) (3 3 nil (2 3 buffer)) (3 3 nil (2 3 buffer)) (3 3 nil (2 3 buffer)) (3 3 nil",
+            " (2 3 buffer)) (3 3 nil (2 3 buffer)) (3 3 nil (2 3 buffer)) (3 3 nil (2 3 buffer)) (3 3 nil (2 3 bu",
+            "ffer)) (3 3 nil (2 3 buffer)) (5 5 t (4 5 buffer)) (5 5 t (4 5 buffer)) (5 5 t (4 5 buffer)) (6 6 t ",
+            "(4 6 buffer)) (6 6 t (4 6 buffer)) (6 6 t (4 6 buffer)) (5 5 t (5 6 5 6 buffer)) (5 5 t (5 6 5 6 buf",
+            "fer)) (5 5 t (5 6 5 6 buffer)) (error 3 nil (7 9)) (error 3 nil (7 9)) (error 3 nil (7 9)) (3 3 nil ",
+            "(3 3 buffer)) (3 3 nil (3 3 buffer)) (3 3 nil (3 3 buffer)) (search-failed 1 nil (7 9)) (nil 1 nil (",
+            "7 9)) (nil 5 nil (7 9)))",
+        )
+    );
+}
+
+#[test]
 fn sparse_fastmap_search_agrees_with_exhaustive_candidates() {
     crate::test_utils::init_test_tracing();
     let syntax = DefaultSyntaxLookup;
