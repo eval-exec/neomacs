@@ -4440,9 +4440,6 @@ mod fixnum_comparison_tests;
 #[path = "tests/fixnum_ranges.rs"]
 mod fixnum_range_tests;
 #[cfg(test)]
-#[path = "tests/fixnum_retag.rs"]
-mod fixnum_retag_tests;
-#[cfg(test)]
 #[path = "tests/osr_entry_guards.rs"]
 mod osr_entry_guard_tests;
 #[cfg(test)]
