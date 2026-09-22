@@ -665,7 +665,8 @@ pub(crate) fn validate_editor_workload_result(
         | ScenarioId::MxTabCompletion
         | ScenarioId::BytecodeCallLoop
         | ScenarioId::LexicalLoop
-        | ScenarioId::DynamicBindingLoop => {
+        | ScenarioId::DynamicBindingLoop
+        | ScenarioId::FirstHotLoop => {
             unreachable!("dedicated scenario results do not use the editor workload validator")
         }
     }

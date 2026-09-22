@@ -38,6 +38,8 @@ pub enum ScenarioId {
     /// Rare-call tier-entry diagnostics, excluded from the whole-editor suite.
     LexicalLoop,
     DynamicBindingLoop,
+    /// First call of fresh functions, including heat-up and OSR compilation.
+    FirstHotLoop,
     EditingSimulation,
     Startup,
     SustainedEditing,
@@ -150,6 +152,7 @@ impl ScenarioId {
             Self::BytecodeCallLoop => "bytecode-call-loop",
             Self::LexicalLoop => "lexical-loop",
             Self::DynamicBindingLoop => "dynamic-binding-loop",
+            Self::FirstHotLoop => "first-hot-loop",
             Self::EditingSimulation => "editing-simulation",
             Self::Startup => "startup",
             Self::SustainedEditing => "sustained-editing",
@@ -206,6 +209,7 @@ impl FromStr for ScenarioId {
             "bytecode-call-loop" => Ok(Self::BytecodeCallLoop),
             "lexical-loop" => Ok(Self::LexicalLoop),
             "dynamic-binding-loop" => Ok(Self::DynamicBindingLoop),
+            "first-hot-loop" => Ok(Self::FirstHotLoop),
             "editing-simulation" => Ok(Self::EditingSimulation),
             "startup" => Ok(Self::Startup),
             "sustained-editing" => Ok(Self::SustainedEditing),
@@ -526,6 +530,14 @@ const SCENARIOS: &[ScenarioSpec] = &[
         primary_metric: MetricName::PerOperationWallTime,
         cross_editor_parity_metrics: &[],
     },
+    ScenarioSpec {
+        id: ScenarioId::FirstHotLoop,
+        description: "First call of fresh bytecode functions, each looping 65,536 times under the editor default tier policy",
+        default_frontend: Frontend::Batch,
+        default_iterations: NonZeroU32::new(100).expect("non-zero scenario default"),
+        primary_metric: MetricName::PerOperationWallTime,
+        cross_editor_parity_metrics: &[],
+    },
 ];
 
 pub fn scenarios() -> &'static [ScenarioSpec] {
@@ -544,6 +556,7 @@ pub const fn scenario(id: ScenarioId) -> &'static ScenarioSpec {
         ScenarioId::BytecodeCallLoop => &SCENARIOS[2],
         ScenarioId::LexicalLoop => &SCENARIOS[27],
         ScenarioId::DynamicBindingLoop => &SCENARIOS[28],
+        ScenarioId::FirstHotLoop => &SCENARIOS[29],
         ScenarioId::EditingSimulation => &SCENARIOS[3],
         ScenarioId::Startup => &SCENARIOS[4],
         ScenarioId::SustainedEditing => &SCENARIOS[5],

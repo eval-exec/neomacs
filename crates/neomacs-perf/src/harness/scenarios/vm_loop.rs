@@ -1,5 +1,8 @@
 //! Rarely called, long-running bytecode loops under the editor's normal tier policy.
 //! The paired scenarios differ by a live special binding across the hot loop.
+//! First-entry diagnostics share preparation but validate every fresh function.
+
+pub(crate) mod first_entry;
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -23,14 +26,19 @@ pub(crate) fn prepare(
 ) -> Result<PreparedScenario, String> {
     let sandbox = MelpaSandbox::new(&format!("perf-{}", request.scenario))?;
     let editor = collect_editor_provenance(request.editor(), &sandbox)?;
-    let fixture_source = workspace_root.join("crates/neomacs-perf/fixtures/vm-loop.el");
+    let workload_source = if request.scenario == ScenarioId::FirstHotLoop {
+        "crates/neomacs-perf/fixtures/first-hot-loop.el"
+    } else {
+        "crates/neomacs-perf/fixtures/vm-loop.el"
+    };
+    let fixture_source = workspace_root.join(workload_source);
     if !fixture_source.is_file() {
         return Err(format!(
             "missing committed performance fixture {}",
             fixture_source.display()
         ));
     }
-    let fixture = run_directory.join("vm-loop.el");
+    let fixture = run_directory.join(fixture_source.file_name().expect("fixture filename"));
     fs::copy(&fixture_source, &fixture).map_err(|error| {
         format!(
             "failed to copy performance fixture {} to {}: {error}",
@@ -42,7 +50,7 @@ pub(crate) fn prepare(
     let provenance_manifest = VmLoopInputProvenanceManifest {
         editor,
         host: collect_host_provenance(request.machine_policy()),
-        workload_source: "crates/neomacs-perf/fixtures/vm-loop.el",
+        workload_source,
         workload_source_sha256: sha256_file(&fixture_source)?,
         execution_policy: "editor-default-with-recorded-overrides",
         environment_policy: "closed-v1",
@@ -226,23 +234,36 @@ pub(crate) fn valid_vm_loop_measurements(
     wall_elapsed_us: u128,
 ) -> Vec<Measurement> {
     let r = &result.wire;
+    loop_measurements(
+        r.iterations,
+        r.completed_operations,
+        r.elapsed_us,
+        r.elapsed_wall_us,
+        wall_elapsed_us,
+    )
+}
+
+fn loop_measurements(
+    iterations: u32,
+    completed: u32,
+    cpu_us: u64,
+    wall_us: u64,
+    process_us: u128,
+) -> Vec<Measurement> {
     [
-        (MetricName::ProcessWallTime, wall_elapsed_us as f64),
-        (MetricName::WorkloadCpuTime, r.elapsed_us as f64),
-        (MetricName::WorkloadWallTime, r.elapsed_wall_us as f64),
+        (MetricName::ProcessWallTime, process_us as f64),
+        (MetricName::WorkloadCpuTime, cpu_us as f64),
+        (MetricName::WorkloadWallTime, wall_us as f64),
         (
             MetricName::PerOperationCpuTime,
-            r.elapsed_us as f64 / f64::from(r.iterations),
+            cpu_us as f64 / f64::from(iterations),
         ),
         (
             MetricName::PerOperationWallTime,
-            r.elapsed_wall_us as f64 / f64::from(r.iterations),
+            wall_us as f64 / f64::from(iterations),
         ),
-        (
-            MetricName::OperationCount,
-            f64::from(r.completed_operations),
-        ),
-        (MetricName::Iterations, f64::from(r.iterations)),
+        (MetricName::OperationCount, f64::from(completed)),
+        (MetricName::Iterations, f64::from(iterations)),
     ]
     .into_iter()
     .map(|(name, value)| Measurement {

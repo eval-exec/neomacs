@@ -514,7 +514,7 @@ impl PerfHarness {
             | ScenarioId::BoundedSearchNoEdit => {
                 scenarios::bounded_search::prepare(&self.workspace_root, request, run_directory)
             }
-            ScenarioId::LexicalLoop | ScenarioId::DynamicBindingLoop => {
+            ScenarioId::LexicalLoop | ScenarioId::DynamicBindingLoop | ScenarioId::FirstHotLoop => {
                 scenarios::vm_loop::prepare(&self.workspace_root, request, run_directory)
             }
             ScenarioId::BytecodeCallLoop => {
@@ -1582,6 +1582,7 @@ enum ScenarioResult {
     MxTabCompletion(scenarios::mx_tab::MxTabCompletionResult),
     BytecodeCallLoop(scenarios::bytecode::BytecodeCallLoopResult),
     VmLoop(scenarios::vm_loop::VmLoopResult),
+    FirstHotLoop(scenarios::vm_loop::first_entry::FirstHotLoopResult),
     BoundedSearch(scenarios::bounded_search::BoundedSearchResult),
     ElispBenchmarks(scenarios::elisp_benchmarks::ElispBenchmarksResult),
     EditorWorkload(scenarios::editor_workload::EditorWorkloadResult),
@@ -1604,6 +1605,7 @@ impl ScenarioResult {
             Self::MxTabCompletion(result) => result.elapsed_us,
             Self::BytecodeCallLoop(result) => result.elapsed_us,
             Self::VmLoop(result) => result.elapsed_us(),
+            Self::FirstHotLoop(result) => result.elapsed_us(),
             Self::BoundedSearch(result) => result.elapsed_us(),
             Self::ElispBenchmarks(result) => result.elapsed_us,
             Self::EditorWorkload(result) => result.elapsed_us,
@@ -1630,6 +1632,7 @@ fn parse_scenario_result(
         | ScenarioId::BoundedSearchNoEdit => {
             serde_json::from_str(raw).map(ScenarioResult::BoundedSearch)
         }
+        ScenarioId::FirstHotLoop => serde_json::from_str(raw).map(ScenarioResult::FirstHotLoop),
         ScenarioId::LexicalLoop | ScenarioId::DynamicBindingLoop => {
             serde_json::from_str(raw).map(ScenarioResult::VmLoop)
         }
@@ -1853,6 +1856,9 @@ fn result_verdict(
     process_wall_us: u128,
 ) -> RunVerdict {
     let mismatches = match result {
+        ScenarioResult::FirstHotLoop(result) => {
+            scenarios::vm_loop::first_entry::validate(request, result)
+        }
         ScenarioResult::VmLoop(result) => {
             scenarios::vm_loop::validate_vm_loop_result(request, result)
         }
@@ -1907,6 +1913,9 @@ where
 
 fn valid_measurements(result: &ScenarioResult, wall_elapsed_us: u128) -> Vec<Measurement> {
     match result {
+        ScenarioResult::FirstHotLoop(result) => {
+            scenarios::vm_loop::first_entry::measurements(result, wall_elapsed_us)
+        }
         ScenarioResult::VmLoop(result) => {
             scenarios::vm_loop::valid_vm_loop_measurements(result, wall_elapsed_us)
         }
