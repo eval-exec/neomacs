@@ -934,10 +934,10 @@ impl EngineMatchData {
     fn set_single_group(&mut self, group: MatchGroup) {
         self.groups.clear();
         self.groups.push(Some(group.emacs_byte_range()));
-        // Keep a distinct instantiation from the regexp converter's
-        // generic Clone-based padding helper.
+        // Supply the complete padding length to SmallVec's bulk extension,
+        // with a distinct iterator from the regexp converter's Clone helper.
         self.groups
-            .resize_with(GNU_SEARCH_REGS_BASE_CAPACITY, || None);
+            .extend(std::iter::repeat_with(|| None).take(GNU_SEARCH_REGS_BASE_CAPACITY - 1));
     }
 
     fn new(groups: MatchGroupVec) -> Self {
