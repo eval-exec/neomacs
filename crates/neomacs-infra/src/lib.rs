@@ -19,6 +19,7 @@ pub mod config_env;
 pub mod display;
 pub mod inventory;
 pub mod packages;
+pub mod tools;
 
 pub use config_env::{
     ConfigEnvironment, DoomEnvironment, DoomSource, SpacemacsEnvironment, SpacemacsSource,
