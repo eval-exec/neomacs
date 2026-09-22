@@ -822,12 +822,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         ),
     );
     ctx.register_subr(
-        SubrSpec::new(
-            "search-backward",
-            NativeFn::ContextVec(builtin_search_backward),
-            SubrArity::new(1, Some(4)),
-        )
-        .interactive(
+        SubrSpec::fixed4("search-backward", builtin_search_backward_4, FixedMin4::One).interactive(
             crate::emacs_core::interactive::BuiltinInteractiveSpec::String("MSearch backward: "),
         ),
     );
@@ -842,10 +837,10 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         ),
     );
     ctx.register_subr(
-        SubrSpec::new(
+        SubrSpec::fixed4(
             "re-search-backward",
-            NativeFn::ContextVec(builtin_re_search_backward),
-            SubrArity::new(1, Some(4)),
+            builtin_re_search_backward_4,
+            FixedMin4::One,
         )
         .interactive(
             crate::emacs_core::interactive::BuiltinInteractiveSpec::String("sRE search backward: "),
@@ -3591,22 +3586,20 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         .requires_eval_state(),
     );
     ctx.register_subr(
-        SubrSpec::new(
+        SubrSpec::fixed4(
             "posix-search-forward",
-            NativeFn::ContextVec(crate::emacs_core::builtins::search::builtin_posix_search_forward),
-            SubrArity::new(1, Some(4)),
+            crate::emacs_core::builtins::search::builtin_posix_search_forward_4,
+            FixedMin4::One,
         )
         .interactive(
             crate::emacs_core::interactive::BuiltinInteractiveSpec::String("sPosix search: "),
         ),
     );
     ctx.register_subr(
-        SubrSpec::new(
+        SubrSpec::fixed4(
             "posix-search-backward",
-            NativeFn::ContextVec(
-                crate::emacs_core::builtins::search::builtin_posix_search_backward,
-            ),
-            SubrArity::new(1, Some(4)),
+            crate::emacs_core::builtins::search::builtin_posix_search_backward_4,
+            FixedMin4::One,
         )
         .interactive(
             crate::emacs_core::interactive::BuiltinInteractiveSpec::String(

@@ -2605,3 +2605,65 @@ fn bounded_bol_search_preserves_gnu_point_and_match_data() {
         )
     );
 }
+
+#[test]
+fn fixed_search_entries_preserve_fresh_arguments_across_callback_gc() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::runtime_startup_context();
+    eval.gc_stress = false;
+    let warm = eval.eval_str(
+        r#"(progn
+  (require 'syntax)
+  (require 'bytecomp)
+  (dolist (name '(re-search-forward re-search-backward
+                 posix-search-forward posix-search-backward))
+    (let* ((alias (intern (concat "fixed-search-gc-alias-" (symbol-name name))))
+           (wrapper (intern (concat "fixed-search-gc-call-" (symbol-name name))))
+           (lexical-binding t))
+      (fset alias (symbol-function name))
+      (fset wrapper (byte-compile
+                    `(lambda (pattern bound noerror count)
+                       (,alias pattern bound noerror count))))))
+  (defun fixed-search-scoped-gc ()
+    (let (out)
+      (dolist (name '(re-search-forward re-search-backward
+                     posix-search-forward posix-search-backward))
+        (with-temp-buffer
+          (insert "ab cd")
+          (let* ((backward (string-match-p "backward" (symbol-name name)))
+                 (wrapper (intern (concat "fixed-search-gc-call-" (symbol-name name))))
+                 (parse-sexp-lookup-properties t)
+                 (case-fold-search nil)
+                 (calls 0))
+            (setq-local syntax-propertize-function
+                        (lambda (_start _end)
+                          (setq calls (1+ calls))
+                          (put-text-property 1 3 'syntax-table (string-to-syntax "."))
+                          (garbage-collect)))
+            (setq-local syntax-propertize--done 1)
+            (goto-char (if backward 6 1))
+            (let ((answer (funcall wrapper (concat "\\" "w")
+                                   (copy-marker (if backward 1 6)) t 1)))
+              (push (list answer (point) (> calls 0)
+                          (mapcar (lambda (v) (if (bufferp v) 'buffer v))
+                                  (match-data t))) out)))))
+      (nreverse out)))
+  (fixed-search-scoped-gc))"#,
+    );
+    // GNU Emacs 31.1: all four regex entries retain fresh pattern/marker arguments.
+    let expected = concat!(
+        "OK ((5 5 t (4 5 buffer)) (5 5 t (5 6 buffer)) ",
+        "(5 5 t (4 5 buffer)) (5 5 t (5 6 buffer)))",
+    );
+    assert_eq!(crate::emacs_core::format_eval_result(&warm), expected);
+    eval.gc_stress = true;
+    let before = eval.gc_count;
+    let result = eval.eval_str("(fixed-search-scoped-gc)");
+    let collections = eval.gc_count - before;
+    assert_eq!(crate::emacs_core::format_eval_result(&result), expected);
+    assert!(
+        collections > 4,
+        "expected automatic collections beyond four callbacks"
+    );
+    eprintln!("fixed search scoped stress collections: {collections}");
+}
