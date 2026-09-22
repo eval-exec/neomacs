@@ -1773,7 +1773,7 @@ fn helm_css_scss_named_display_adapter_drives_real_single_buffer_helm() {
         21 |  color: black;
         22 |}
         23 |
-        24 |-UU-:--- F1  tui-fixture.scss   All   L10    (SCSS ElDoc) ------------------------------------------------------------------------------------------------------
+        24 |-UU-:--- F1  tui-fixture.scss   All L10    (SCSS) --------------------------------------------------------------------------------------------------------------
         25 | helm-css-scss
         26 |tui-fixture.scss
         27 |6: .dashboard, .dashboard--compact
@@ -1826,7 +1826,7 @@ fn helm_css_scss_named_display_adapter_drives_real_single_buffer_helm() {
         21 |
         22 |
         23 |
-        24 |-UU-:--- F1  tui-fixture.scss   Bot   L20    (SCSS ElDoc) ------------------------------------------------------------------------------------------------------
+        24 |-UU-:--- F1  tui-fixture.scss   Bot L20    (SCSS) --------------------------------------------------------------------------------------------------------------
         25 | helm-css-scss
         26 |tui-fixture.scss
         27 |20: .footer
@@ -1879,7 +1879,7 @@ fn helm_css_scss_named_display_adapter_drives_real_single_buffer_helm() {
         21 |  color: black;
         22 |}
         23 |
-        24 |-UU-:--- F1  tui-fixture.scss   All   L10    (SCSS ElDoc) ------------------------------------------------------------------------------------------------------
+        24 |-UU-:--- F1  tui-fixture.scss   All L10    (SCSS) --------------------------------------------------------------------------------------------------------------
         25 | C-j: DoNothing (keeping session)                                              | helm-css-scss
         26 |Actions                                                                        |tui-fixture.scss
         27 |[f1]  Goto open brace                                                          |6: .dashboard, .dashboard--compact
@@ -1932,7 +1932,7 @@ fn helm_css_scss_named_display_adapter_drives_real_single_buffer_helm() {
         21 |
         22 |
         23 |
-        24 |-UU-:--- F1  tui-fixture.scss   Bot   L20    (SCSS ElDoc) ------------------------------------------------------------------------------------------------------
+        24 |-UU-:--- F1  tui-fixture.scss   Bot L20    (SCSS) --------------------------------------------------------------------------------------------------------------
         25 | helm-css-scss
         26 |tui-fixture.scss
         27 |20: .footer
@@ -1985,7 +1985,7 @@ fn helm_css_scss_named_display_adapter_drives_real_single_buffer_helm() {
         21 |
         22 |
         23 |
-        24 |-UU-:--- F1  tui-fixture.scss   Bot   L20    (SCSS ElDoc) ------------------------------------------------------------------------------------------------------
+        24 |-UU-:--- F1  tui-fixture.scss   Bot L20    (SCSS) --------------------------------------------------------------------------------------------------------------
         25 | helm-css-scss
         26 |tui-fixture.scss
         27 |20: .footer
@@ -2239,7 +2239,7 @@ fn helm_css_scss_named_display_adapter_drives_real_multi_buffer_helm() {
         21 |  color: black;
         22 |}
         23 |
-        24 |-UU-:--- F1  tui-fixture.scss   All   L11    (SCSS ElDoc) ------------------------------------------------------------------------------------------------------
+        24 |-UU-:--- F1  tui-fixture.scss   All L11    (SCSS) --------------------------------------------------------------------------------------------------------------
         25 | helm-css-scss-multi
         26 |tui-fixture.scss
         27 |6: .dashboard, .dashboard--compact
@@ -2292,7 +2292,7 @@ fn helm_css_scss_named_display_adapter_drives_real_multi_buffer_helm() {
         21 |
         22 |
         23 |
-        24 |-UU-:--- F1  component.css   All   L5     (CSS ElDoc) ----------------------------------------------------------------------------------------------------------
+        24 |-UU-:--- F1  component.css   All L5     (CSS) ------------------------------------------------------------------------------------------------------------------
         25 | helm-css-scss-multi
         26 |tui-fixture.scss
         27 |6: .dashboard, .dashboard--compact

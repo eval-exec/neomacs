@@ -227,8 +227,33 @@ fn assert_stage(
         let gnu_snapshot = RawTerminalSnapshot::capture_rows(pair.gnu.screen(), row..row + 1);
         let neo_snapshot = RawTerminalSnapshot::capture_rows(pair.neo.screen(), row..row + 1);
         if gnu_snapshot != neo_snapshot {
+            // plain_grid() hides faces; a raw-row mismatch is almost always
+            // a face divergence, so spell the differing cells out.
+            let mut style_diffs = String::new();
+            for (gnu_row, neo_row) in gnu_snapshot.rows.iter().zip(&neo_snapshot.rows) {
+                for (col, (gnu_cell, neo_cell)) in
+                    gnu_row.cells.iter().zip(&neo_row.cells).enumerate()
+                {
+                    if gnu_cell != neo_cell {
+                        style_diffs.push_str(&format!(
+                            "col {col}: GNU fg={:?} bg={:?} bold={} underline={} inverse={} \
+                             | NEO fg={:?} bg={:?} bold={} underline={} inverse={}\n",
+                            gnu_cell.fgcolor(),
+                            gnu_cell.bgcolor(),
+                            gnu_cell.bold(),
+                            gnu_cell.underline(),
+                            gnu_cell.inverse(),
+                            neo_cell.fgcolor(),
+                            neo_cell.bgcolor(),
+                            neo_cell.bold(),
+                            neo_cell.underline(),
+                            neo_cell.inverse(),
+                        ));
+                    }
+                }
+            }
             divergences.push(format!(
-                "{stage} raw terminal row {row} differs:\nGNU:\n{}Neomacs:\n{}",
+                "{stage} raw terminal row {row} differs:\n{style_diffs}GNU:\n{}Neomacs:\n{}",
                 gnu_snapshot.plain_grid(),
                 neo_snapshot.plain_grid()
             ));
@@ -422,7 +447,7 @@ fn helm_pydoc_real_helm_workflows_match_gnu_terminal_and_filesystem() {
             04 |                                                                               |    deploymentkit - Release deployment helpers.
             07 |                                                                               |    promote(release, region="prod")
             08 |                                                                               |        Promote one release after policy validation.
-            48 |-UU-:--- F1  release_console.py   All   L6     (Python ElDoc) -----------------|-UUU:%*- F1  *Pydoc deploymentkit*   All   L1     (Fundamental View) -----------
+            48 |-UU-:--- F1  release_console.py   All L6     (Python ElDoc) -------------------|-UUU:%*- F1  *Pydoc deploymentkit*   All L1     (Fundamental View) -------------
         "#]],
         &mut divergences,
     );
@@ -499,7 +524,7 @@ fn helm_pydoc_real_helm_workflows_match_gnu_terminal_and_filesystem() {
             03 |from os import path                                                            |def promote(release, region="prod"):
             04 |                                                                               |    """Promote one release after policy validation."""
             05 |release = {"id": "candidate-42"}                                               |    return release, region
-            48 |-UU-:--- F1  release_console.py   All   L6     (Python ElDoc) -----------------|-UU-:%%- F1  deploymentkit.py   All   L1     (Python ElDoc) --------------------
+            48 |-UU-:--- F1  release_console.py   All L6     (Python ElDoc) -------------------|-UU-:%%- F1  deploymentkit.py   All L1     (Python ElDoc) ----------------------
         "#]],
         &mut divergences,
     );
