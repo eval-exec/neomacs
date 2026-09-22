@@ -2607,7 +2607,7 @@ fn bounded_bol_search_preserves_gnu_point_and_match_data() {
 }
 
 #[test]
-fn fixed_search_entries_preserve_fresh_arguments_across_callback_gc() {
+fn search_entries_preserve_fresh_arguments_across_callback_gc() {
     crate::test_utils::init_test_tracing();
     let mut eval = crate::test_utils::runtime_startup_context();
     eval.gc_stress = false;

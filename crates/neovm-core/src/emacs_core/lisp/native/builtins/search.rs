@@ -1089,15 +1089,10 @@ fn propertize_window_for_forward_regexp(
     }
 }
 
-/// Fixed-arity entry: omitted optional arguments arrive as nil.
-pub(crate) fn builtin_search_backward_4(
+pub(crate) fn builtin_search_backward(
     eval: &mut super::eval::Context,
-    string: Value,
-    bound: Value,
-    noerror: Value,
-    count: Value,
+    args: Vec<Value>,
 ) -> EvalResult {
-    let args = [string, bound, noerror, count];
     let case_fold = dynamic_or_global_symbol_value(eval, SearchStateVariable::CaseFoldSearch)
         .map(|v| !v.is_nil())
         .unwrap_or(true);
@@ -1354,15 +1349,11 @@ fn re_search_forward_with_state_posix_and_syntax_properties(
     buffer_byte_to_char_result_in_manager(buffers, current_id, end)
 }
 
-/// Fixed-arity entry: omitted optional arguments arrive as nil.
-pub(crate) fn builtin_re_search_backward_4(
+pub(crate) fn builtin_re_search_backward(
     eval: &mut super::eval::Context,
-    string: Value,
-    bound: Value,
-    noerror: Value,
-    count: Value,
+    args: Vec<Value>,
 ) -> EvalResult {
-    let args = [string, bound, noerror, count];
+    expect_args_range("re-search-backward", &args, 1, 4)?;
     let case_fold = dynamic_or_global_symbol_value(eval, SearchStateVariable::CaseFoldSearch)
         .map(|v| !v.is_nil())
         .unwrap_or(true);
@@ -1481,15 +1472,11 @@ fn re_search_backward_with_state_posix_and_syntax_properties(
     buffer_byte_to_char_result_in_manager(buffers, current_id, end)
 }
 
-/// Fixed-arity entry: omitted optional arguments arrive as nil.
-pub(crate) fn builtin_posix_search_forward_4(
+pub(crate) fn builtin_posix_search_forward(
     eval: &mut super::eval::Context,
-    string: Value,
-    bound: Value,
-    noerror: Value,
-    count: Value,
+    args: Vec<Value>,
 ) -> EvalResult {
-    let args = [string, bound, noerror, count];
+    expect_args_range("posix-search-forward", &args, 1, 4)?;
     let case_fold = dynamic_or_global_symbol_value(eval, SearchStateVariable::CaseFoldSearch)
         .map(|v| !v.is_nil())
         .unwrap_or(true);
@@ -1516,15 +1503,11 @@ pub(crate) fn builtin_posix_search_forward_4(
     )
 }
 
-/// Fixed-arity entry: omitted optional arguments arrive as nil.
-pub(crate) fn builtin_posix_search_backward_4(
+pub(crate) fn builtin_posix_search_backward(
     eval: &mut super::eval::Context,
-    string: Value,
-    bound: Value,
-    noerror: Value,
-    count: Value,
+    args: Vec<Value>,
 ) -> EvalResult {
-    let args = [string, bound, noerror, count];
+    expect_args_range("posix-search-backward", &args, 1, 4)?;
     let case_fold = dynamic_or_global_symbol_value(eval, SearchStateVariable::CaseFoldSearch)
         .map(|v| !v.is_nil())
         .unwrap_or(true);
