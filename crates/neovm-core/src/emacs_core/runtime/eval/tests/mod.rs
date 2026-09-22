@@ -25313,6 +25313,73 @@ fn bytecode_backtraces_reference_the_live_caller_stack_for_every_arity() {
 }
 
 #[test]
+fn bytecode_backtrace_push_preserves_live_span_across_growth_and_gc() {
+    for grow in [false, true] {
+        for nargs in [0, 1, 2, 3, 8] {
+            let mut ev = Context::new();
+            ev.gc_collect_exact();
+            assert!(ev.specpdl.is_empty());
+            ev.specpdl = Vec::with_capacity(if grow { 1 } else { 2 });
+            ev.push_specpdl_root(Value::T);
+            assert_eq!(ev.specpdl.len() == ev.specpdl.capacity(), grow);
+            ev.bc_buf.extend([Value::fixnum(91), Value::fixnum(92)]);
+            let args_start = ev.bc_buf.len();
+            for i in 0..nargs {
+                ev.bc_buf.push(Value::string(&format!("bytecode arg {i}")));
+            }
+            let function = Value::string("bytecode frame function");
+            let frame = ev.push_backtrace_frame_from_bc_stack(function, args_start, nargs);
+            assert_eq!(frame.word_for_test(), 1);
+            assert_eq!(ev.specpdl.len(), 2);
+
+            // The descriptor must keep live indices, even when a callee grows
+            // the caller stack and replaces an argument before a collection.
+            let old_capacity = ev.bc_buf.capacity();
+            ev.bc_buf.reserve(old_capacity + 1);
+            assert!(ev.bc_buf.capacity() > old_capacity);
+            if nargs > 0 {
+                ev.bc_buf[args_start] = Value::string("updated bytecode arg");
+            }
+            ev.gc_collect_exact();
+            let (actual_function, args, debug, unevalled) = ev
+                .backtrace_entry_values(&ev.specpdl[1])
+                .expect("bytecode frame is inspectable");
+            assert_eq!(actual_function, function);
+            assert_eq!(
+                actual_function.as_utf8_str(),
+                Some("bytecode frame function")
+            );
+            assert_eq!(args.as_slice(), &ev.bc_buf[args_start..]);
+            assert!(!debug && !unevalled);
+            for value in std::iter::once(function).chain(args.iter().copied()) {
+                assert!(ev.tagged_heap.owns_heap_value_for_test(value));
+            }
+            for (i, arg) in args.iter().enumerate() {
+                let expected = if i == 0 {
+                    "updated bytecode arg".to_string()
+                } else {
+                    format!("bytecode arg {i}")
+                };
+                assert_eq!(arg.as_utf8_str(), Some(expected.as_str()));
+            }
+            assert!(ev.backtrace_args_stack.is_empty());
+            assert!(ev.set_backtrace_debug_on_exit(1, true));
+            let frame = match ev.pop_fast_bytecode_backtrace_frame(frame) {
+                FastBytecodePop::OwesDebugOnExit(frame) => frame,
+                FastBytecodePop::Popped => panic!("a flagged frame owes the exit debugger"),
+            };
+            assert_eq!(ev.specpdl.len(), 2);
+            assert!(ev.set_backtrace_debug_on_exit(1, false));
+            assert!(matches!(
+                ev.pop_fast_bytecode_backtrace_frame(frame),
+                FastBytecodePop::Popped
+            ));
+            assert_eq!(ev.specpdl.len(), 1);
+        }
+    }
+}
+
+#[test]
 fn generic_backtraces_keep_one_and_two_arguments_inline() {
     let mut ev = Context::new();
     let owned_base = ev.backtrace_args_stack.len();
