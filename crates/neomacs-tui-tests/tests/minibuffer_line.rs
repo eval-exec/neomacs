@@ -10,84 +10,40 @@
 //! all `minibuffer-line--update' does — must become visible in the
 //! miniwindow's grid.
 //!
-//! These tests load the real package source and set a deterministic
-//! `minibuffer-line-format' (a fixed marker string, no system-name or
-//! wall-clock constructs) so both editors must render the same text in the
-//! same screen row.
+//! The package source is provisioned through `neomacs-infra`'s shared
+//! content-addressed cache (`packages::source_file`), so both engines load
+//! the same pinned bytes and no suite embeds its own copy.
 
 use crate::support;
+use neomacs_infra::packages;
 use neomacs_tui_tests::*;
 use std::time::Duration;
 use support::*;
 
 /// The package source, verbatim from GNU ELPA (minibuffer-line 0.1).
-const MINIBUFFER_LINE_SOURCE: &str = r#"
-;;; minibuffer-line.el --- Display status info in the minibuffer window  -*- lexical-binding: t; -*-
+const MINIBUFFER_LINE_SOURCE: &str = include_str!("minibuffer_line_package.el");
 
-(defgroup minibuffer-line ()
-  "Use the idle minibuffer window to display status information."
-  :group 'mode-line)
-
-(defcustom minibuffer-line-format
-  '("" (:eval system-name) " | " (:eval (format-time-string "%F %R")))
-  "Specification of the contents of the minibuffer-line.
-Uses the same format as `mode-line-format'."
-  :type 'sexp)
-
-(defface minibuffer-line
-  '((t :inherit mode-line-inactive))
-  "Face to use for the minibuffer-line.")
-
-(defcustom minibuffer-line-refresh-interval 60
-  "The frequency at which the minibuffer-line is updated, in seconds."
-  :type 'integer)
-
-(defconst minibuffer-line--buffer " *Minibuf-0*")
-
-(defvar minibuffer-line--timer nil)
-
-(define-minor-mode minibuffer-line-mode
-  "Display status info in the minibuffer window."
-  :global t
-  (with-current-buffer minibuffer-line--buffer
-    (erase-buffer))
-  (when minibuffer-line--timer
-    (cancel-timer minibuffer-line--timer)
-    (setq minibuffer-line--timer nil))
-  (when minibuffer-line-mode
-    (setq minibuffer-line--timer
-          (run-with-timer t minibuffer-line-refresh-interval
-                          #'minibuffer-line--update))
-    (minibuffer-line--update)))
-
-(defun minibuffer-line--update ()
-  (with-current-buffer minibuffer-line--buffer
-    (erase-buffer)
-    (insert (format-mode-line minibuffer-line-format 'minibuffer-line))))
-
-(provide 'minibuffer-line)
-;;; minibuffer-line.el ends here
-"#;
-
-/// Enable `minibuffer-line-mode' in both sessions with a deterministic
-/// `(:eval ...)' format (the construct class the package's default format
-/// uses), so the marker — not the hostname or wall clock — is what must
-/// appear in the miniwindow.
-fn enable_minibuffer_line_with_marker(gnu: &mut TuiSession, neo: &mut TuiSession, marker: &str) {
-    let package = write_shared_temp_file("minibuffer-line.el", MINIBUFFER_LINE_SOURCE);
-    let expression = format!(
-        "(progn (load-file {:?})\
- (setq minibuffer-line-format '(\"\" (:eval (concat \"{marker}\" \"-MARKER\"))))\
- (minibuffer-line-mode 1))",
-        package.path()
-    );
-    eval_expression(gnu, neo, &expression);
+/// Provision the package once and mount it into both sessions through the
+/// shared cache path (`-l` with an activation file).
+fn mount_minibuffer_line() -> neomacs_infra::packages::ProvisionedSourceFile {
+    let provisioned = packages::source_file("minibuffer-line", MINIBUFFER_LINE_SOURCE)
+        .expect("provision minibuffer-line source");
+    provisioned
 }
 
 #[test]
 fn minibuffer_line_mode_displays_the_format_in_the_miniwindow() {
-    let (mut gnu, mut neo) = boot_pair("");
-    enable_minibuffer_line_with_marker(&mut gnu, &mut neo, "MBL-STATUS");
+    let provisioned = mount_minibuffer_line();
+    let (mut gnu, mut neo) = boot_pair(&format!("-l {}", provisioned.path().display()));
+    // Deterministic format: the package default embeds the hostname and
+    // wall clock, which cannot match across machines or runs.  `(:eval …)`
+    // is the construct class the default format uses.
+    eval_expression(
+        &mut gnu,
+        &mut neo,
+        "(setq minibuffer-line-format '(\"\" (:eval (concat \"MBL-STATUS\" \"-MARKER\"))))",
+    );
+    eval_expression(&mut gnu, &mut neo, "(minibuffer-line-mode 1)");
 
     // `minibuffer-line-mode' calls `minibuffer-line--update' once at enable
     // time (no waiting for the 60s refresh timer), so the marker must appear
@@ -106,20 +62,19 @@ fn minibuffer_line_mode_displays_the_format_in_the_miniwindow() {
 
 #[test]
 fn minibuffer_line_updates_on_its_refresh_timer() {
-    let (mut gnu, mut neo) = boot_pair("");
+    let provisioned = mount_minibuffer_line();
+    let (mut gnu, mut neo) = boot_pair(&format!("-l {}", provisioned.path().display()));
     // A 1s refresh interval with a counting marker proves the refresh timer
     // re-renders the miniwindow (erase + re-insert), not just the first draw.
     // The counter lives in a single well-formed `(:eval ...)' form.
-    let package = write_shared_temp_file("minibuffer-line.el", MINIBUFFER_LINE_SOURCE);
-    let expression = format!(
-        "(progn (load-file {:?})\
- (defvar mbl-tick 0)\
+    eval_expression(
+        &mut gnu,
+        &mut neo,
+        "(progn (defvar mbl-tick 0) \
  (setq minibuffer-line-refresh-interval 1 \
- minibuffer-line-format '((:eval (concat \"TICK\" (number-to-string (setq mbl-tick (1+ mbl-tick)))))))\
- (minibuffer-line-mode 1))",
-        package.path()
+ minibuffer-line-format '((:eval (concat \"TICK\" (number-to-string (setq mbl-tick (1+ mbl-tick))))))))",
     );
-    eval_expression(&mut gnu, &mut neo, &expression);
+    eval_expression(&mut gnu, &mut neo, "(minibuffer-line-mode 1)");
 
     // The first update runs at enable time (TICK1); the refresh timer must
     // push the count upward without any user input.
@@ -141,9 +96,9 @@ fn minibuffer_line_updates_on_its_refresh_timer() {
     eval_expression(
         &mut gnu,
         &mut neo,
-        "(progn (cancel-timer minibuffer-line--timer)\
+        "(progn (cancel-timer minibuffer-line--timer) \
  (setq minibuffer-line--timer nil \
- minibuffer-line-format '(\"MBL-SETTLED-MARKER\"))\
+ minibuffer-line-format '(\"MBL-SETTLED-MARKER\")) \
  (minibuffer-line--update))",
     );
     let settled_ready = |grid: &[String]| grid.iter().any(|row| row.contains("MBL-SETTLED-MARKER"));

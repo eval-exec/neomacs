@@ -8,7 +8,7 @@
 
 pub mod common;
 pub mod doom;
-pub mod inventory;
+pub use crate::inventory;
 pub mod spacemacs;
 
 pub use doom::{DoomEnvironment, DoomSource};

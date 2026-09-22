@@ -3865,8 +3865,11 @@ dependencies = [
 name = "neomacs-infra"
 version = "0.0.19"
 dependencies = [
+ "fs4",
  "getrandom 0.4.3",
  "sha2",
+ "tempfile",
+ "wait-timeout",
 ]
 
 [[package]]
@@ -3905,6 +3908,7 @@ version = "0.0.19"
 dependencies = [
  "command-group",
  "fs4",
+ "neomacs-infra",
  "neomacs-parity-reference",
  "neomacs-tui-tests",
  "sha2",
