@@ -3343,7 +3343,9 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
                         emit_backedge_jump_with_args(
                             &mut fb,
                             rt.as_ref().expect("backedge implies rt"),
-                            backedge_counter.expect("backedge implies counter"),
+                            BackedgeCounter::Stack(
+                                backedge_counter.expect("backedge implies counter"),
+                            ),
                             &mut signal_exit,
                             &values,
                             clif_blocks[target.0 as usize],
@@ -3428,7 +3430,9 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
                         emit_backedge_jump_with_args(
                             &mut fb,
                             rt.as_ref().expect("backedge implies rt"),
-                            backedge_counter.expect("backedge implies counter"),
+                            BackedgeCounter::Stack(
+                                backedge_counter.expect("backedge implies counter"),
+                            ),
                             &mut signal_exit,
                             &values,
                             target,
