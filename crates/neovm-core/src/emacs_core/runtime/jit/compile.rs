@@ -2999,33 +2999,6 @@ fn write_stack_to_vars(fb: &mut FunctionBuilder, vars: &[Variable], stack: &[Cli
     }
 }
 
-/// Storage choice for the activation's shared quit counter. OSR carries it
-/// through SSA joins so the allocator can keep it in a register across loop
-/// iterations. Ordinary baseline/AOT and MIR retain their stack counter.
-#[derive(Clone, Copy)]
-enum BackedgeCounter {
-    Stack(StackSlot),
-    Ssa(Variable),
-}
-
-impl BackedgeCounter {
-    fn load(self, fb: &mut FunctionBuilder, ptr_ty: Type) -> ClifValue {
-        match self {
-            Self::Stack(slot) => fb.ins().stack_load(ptr_ty, types::I64, slot, 0),
-            Self::Ssa(var) => fb.use_var(var),
-        }
-    }
-
-    fn store(self, fb: &mut FunctionBuilder, ptr_ty: Type, value: ClifValue) {
-        match self {
-            Self::Stack(slot) => {
-                fb.ins().stack_store(ptr_ty, value, slot, 0);
-            }
-            Self::Ssa(var) => fb.def_var(var, value),
-        }
-    }
-}
-
 /// Emit a backward jump with the interpreter's `branch_to!` parity: bump the
 /// u8 quit counter; on every wrap (each 255th backward jump — counter resets to
 /// 1, exactly like the interpreter) root the live operand stack and call the
@@ -3036,7 +3009,7 @@ impl BackedgeCounter {
 fn emit_backedge_jump(
     fb: &mut FunctionBuilder,
     rt: &RtCtx,
-    counter: BackedgeCounter,
+    counter_slot: StackSlot,
     signal_exit: &mut Option<Block>,
     vars: &[Variable],
     target_depth: usize,
@@ -3048,7 +3021,7 @@ fn emit_backedge_jump(
     emit_backedge_jump_with_args(
         fb,
         rt,
-        counter,
+        counter_slot,
         signal_exit,
         &vals,
         target_block,
@@ -3065,7 +3038,7 @@ fn emit_backedge_jump(
 fn emit_backedge_jump_with_args(
     fb: &mut FunctionBuilder,
     rt: &RtCtx,
-    counter: BackedgeCounter,
+    counter_slot: StackSlot,
     signal_exit: &mut Option<Block>,
     vals: &[ClifValue],
     target_block: Block,
@@ -3073,10 +3046,10 @@ fn emit_backedge_jump_with_args(
     handlers: &[HandlerStatic],
     pending: &mut Vec<PendingDispatch>,
 ) {
-    let c = counter.load(fb, rt.ptr_ty);
+    let c = fb.ins().stack_load(rt.ptr_ty, types::I64, counter_slot, 0);
     let c1 = lowering::iadd_imm_p(fb, c, 1);
     let c1m = lowering::band_imm_p(fb, c1, 0xFF);
-    counter.store(fb, rt.ptr_ty, c1m);
+    fb.ins().stack_store(rt.ptr_ty, c1m, counter_slot, 0);
     let wrapped = lowering::icmp_imm_p(fb, IntCC::Equal, c1m, 0);
     let poll = fb.create_block();
     fb.ins().brif(wrapped, poll, &[], target_block, target_args);
@@ -3090,7 +3063,7 @@ fn emit_backedge_jump_with_args(
     // afresh costs nothing measurable.
     lowering::rootwin_carry_reset();
     let one = fb.ins().iconst(types::I64, 1);
-    counter.store(fb, rt.ptr_ty, one);
+    fb.ins().stack_store(rt.ptr_ty, one, counter_slot, 0);
     // Root the target stack across the poll, including a handler-entry
     // snapshot when a baseline loop is inside a protected extent.
     let saved = if vals.is_empty() {
@@ -3755,19 +3728,10 @@ fn build_leaf_fn<M: Module>(
         // Shared signal-propagation block (returns STATUS_SIGNAL), created
         // lazily by the first `Call` lowering.
         let mut signal_exit: Option<Block> = None;
-        // One counter per native activation, shared by all backward edges.
-        // OSR seeds an SSA variable at its entry; joins carry it independently
-        // of the tagged operand stack and precise-deopt snapshots.
-        let backedge_counter = has_backedge.then(|| {
-            if osr_pc.is_some() {
-                BackedgeCounter::Ssa(fb.declare_var(types::I64))
-            } else {
-                BackedgeCounter::Stack(fb.create_sized_stack_slot(StackSlotData::new(
-                    StackSlotKind::ExplicitSlot,
-                    8,
-                    3,
-                )))
-            }
+        // Backward-jump quit counter (the interpreter's u8 `quitcounter`), kept
+        // in a stack slot so every block can bump it.
+        let backedge_counter: Option<StackSlot> = has_backedge.then(|| {
+            fb.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 8, 3))
         });
 
         // Function-entry block: stash vmctx + the out pointer, load args into
@@ -3876,10 +3840,10 @@ fn build_leaf_fn<M: Module>(
             }
         }
         fb.def_var(out_var, out_ptr);
-        if let Some(counter) = backedge_counter {
+        if let Some(slot) = backedge_counter {
             // The interpreter starts quitcounter at 1.
             let one = fb.ins().iconst(types::I64, 1);
-            counter.store(&mut fb, ptr_ty, one);
+            fb.ins().stack_store(ptr_ty, one, slot, 0);
         }
         // Entry seeding + jump target. Normal: seed the `arity` args into the
         // bottom slots and jump to bytecode block 0. OSR: the `args` pointer holds
