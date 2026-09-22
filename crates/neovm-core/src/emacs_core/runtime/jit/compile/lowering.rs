@@ -2410,9 +2410,8 @@ pub(super) fn lower_mir_with_plan(
 
 /// The host ISA for JIT modules, with cranelift-jit's own flag defaults
 /// (`use_colocated_libcalls=false`, `is_pic=false` — mirrored by the AOT
-/// module builder, which flips only `is_pic`). Ordinary entry and MIR keep
-/// the default optimization level; OSR selects its level explicitly. The
-/// Cranelift IR **verifier** runs only in debug builds. Cranelift enables
+/// module builder, which flips only `is_pic`) plus ONE deliberate change:
+/// the Cranelift IR **verifier** runs only in debug builds. Cranelift enables
 /// it by default and `JITBuilder::new` inherited that, so every production
 /// tier-up paid a full IR verification pass (~12% of the compile Ir on the
 /// fontify sim's 352-op font-lock body). The verifier exists to catch
@@ -2420,23 +2419,9 @@ pub(super) fn lower_mir_with_plan(
 /// trusted the same way a shipped compiler's are.
 pub(crate) fn jit_isa()
 -> Result<std::sync::Arc<dyn cranelift_codegen::isa::TargetIsa>, CompileError> {
-    jit_isa_with_opt_level(cranelift_codegen::settings::OptLevel::None)
-}
-
-pub(super) fn jit_isa_with_opt_level(
-    opt_level: cranelift_codegen::settings::OptLevel,
-) -> Result<std::sync::Arc<dyn cranelift_codegen::isa::TargetIsa>, CompileError> {
     use cranelift_codegen::settings::{self, Configurable};
     let init_err = |e: String| CompileError::Backend(BackendError::ModuleInit(e));
     let mut flags = settings::builder();
-    let opt_level = match opt_level {
-        settings::OptLevel::None => "none",
-        settings::OptLevel::Speed => "speed",
-        settings::OptLevel::SpeedAndSize => "speed_and_size",
-    };
-    flags
-        .set("opt_level", opt_level)
-        .map_err(|e| init_err(e.to_string()))?;
     flags
         .set("use_colocated_libcalls", "false")
         .map_err(|e| init_err(e.to_string()))?;
