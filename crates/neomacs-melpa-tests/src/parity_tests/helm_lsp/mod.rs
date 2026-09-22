@@ -13,7 +13,6 @@ const HELM_LSP_TEST_TIMEOUT: Duration = Duration::from_secs(240);
 const HELM_LSP_TEST_PRELUDE: &str = r####"
 (require 'cl-lib)
 (require 'helm-lsp)
-
 (defvar neomacs-helm-lsp-test-request-log nil)
 (defvar neomacs-helm-lsp-test-display nil)
 (defvar neomacs-helm-lsp-test-display-log nil)

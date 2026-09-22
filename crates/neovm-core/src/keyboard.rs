@@ -4354,7 +4354,17 @@ impl crate::emacs_core::eval::Context {
 
         let (keys, binding) = self.read_key_sequence_with_options(options)?;
         if keys.is_empty() && binding.is_nil() {
-            Ok(CommandKeySequenceRead::End(CommandKeySequenceEnd::Input))
+            // The zero-length result is a macro-iteration boundary when the
+            // macro is (still) exhausted -- GNU's `at_end_of_macro_p` check
+            // ran mid-read -- and an ordinary EOF from command input
+            // otherwise.  Keeping the typed distinction lets `command_loop_1`
+            // end the iteration instead of dispatching an undefined sequence.
+            let end = if self.command_input_kbd_macro_iteration_is_exhausted() {
+                CommandKeySequenceEnd::KeyboardMacroIteration
+            } else {
+                CommandKeySequenceEnd::Input
+            };
+            Ok(CommandKeySequenceRead::End(end))
         } else {
             Ok(CommandKeySequenceRead::Command { keys, binding })
         }
@@ -4460,6 +4470,22 @@ impl crate::emacs_core::eval::Context {
                 replay_current_sequence = false;
                 tracing::debug!("read_key_sequence: replaying buffered sequence");
             } else {
+                // GNU `read_key_sequence` (keyboard.c:11204-11212): at the end
+                // of a macro iteration with no requeued events pending, return
+                // zero instead of reading.  `executing-kbd-macro` bound to t
+                // is the documented "force an early exit" value
+                // (macros.c:403), which is how the batch helm probes drive a
+                // session to completion; without this check the reader blocks
+                // on terminal input the harness never sends.  The requeued
+                // events are drained first, so this fires only once the queue
+                // is empty.
+                if self.command_input_kbd_macro_iteration_is_exhausted() {
+                    self.restore_delayed_selection_event(&mut delayed_selection_event);
+                    self.restore_key_sequence_current_buffer(&mut saved_current_buffer);
+                    self.command_loop
+                        .set_command_key_sequences(Vec::new(), Vec::new());
+                    return Ok((Vec::new(), Value::NIL));
+                }
                 let read_event = match self.read_char_event_with_timeout_for_key_sequence() {
                     Ok(Some(event)) => event,
                     Ok(None) => {
@@ -5657,7 +5683,26 @@ impl crate::emacs_core::eval::Context {
                 // handler throws out of the read. Wait out the earliest
                 // pending timer and service it (a thrown Flow propagates);
                 // report EOF only when no timer can ever fire.
-                if let Some(timer_timeout) = self.next_ordinary_gnu_timer_timeout_before(None) {
+                //
+                // IDLE timers count too: GNU `read_char` starts the idle epoch
+                // before it waits for an unbounded read (keyboard.c:2869-2875)
+                // and services `timer-idle-list` from the same `timer_check`
+                // pass, so `(run-with-idle-timer 0 nil F)` runs F while the
+                // read blocks.  Helm's `helm--reset-update-flag` clears its
+                // update flag from a zero-delay idle timer, so a read that
+                // reported EOF here without servicing idle timers stalled the
+                // whole helm session.
+                if timeout.is_none() {
+                    self.timer_start_idle();
+                }
+                let next_timer_timeout = [
+                    self.next_ordinary_gnu_timer_timeout_before(None),
+                    self.next_idle_gnu_timer_timeout(),
+                ]
+                .into_iter()
+                .flatten()
+                .min();
+                if let Some(timer_timeout) = next_timer_timeout {
                     if !timer_timeout.is_zero() {
                         std::thread::sleep(timer_timeout.min(std::time::Duration::from_millis(50)));
                     }

@@ -3488,6 +3488,46 @@ fn read_key_sequence_function_translation_receives_prompt() {
     assert_eq!(prompt, Value::string("Prompt> "));
 }
 
+/// GNU `read_key_sequence` stops at the end of a macro iteration even
+/// mid-sequence: `at_end_of_macro_p` plus no requeued events returns zero
+/// (keyboard.c:11204-11212), and `executing-kbd-macro` bound to t is the
+/// documented "force an early exit" value (macros.c:403).  A prefix key with
+/// nothing queued behind it must therefore end the read as a macro boundary
+/// instead of the reader waiting for a keystroke the harness never sends
+/// (the helm-lsp and ac_helm batch probes bind exactly this way).
+#[test]
+fn read_key_sequence_stops_at_an_exhausted_kbd_macro_boundary() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new();
+    let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
+    install_global_map_for_test(&mut ev, global_map);
+    let prefix_map = ev.eval_str("(make-sparse-keymap)").expect("prefix map");
+    crate::emacs_core::keymap::list_keymap_define_seq(
+        global_map,
+        &[Value::fixnum('x' as i64)],
+        prefix_map,
+    )
+    .expect("define prefix key");
+    // The probes' contract: the Lisp-visible macro value forces the exit.
+    ev.assign("executing-kbd-macro", Value::T);
+    ev.command_loop
+        .keyboard
+        .kboard
+        .unread_events
+        .push_back(Value::fixnum('x' as i64));
+
+    let read = ev
+        .read_command_key_sequence_with_options(crate::keyboard::ReadKeySequenceOptions::default())
+        .expect("key sequence read");
+    assert_eq!(
+        read,
+        crate::keyboard::CommandKeySequenceRead::End(
+            crate::keyboard::CommandKeySequenceEnd::KeyboardMacroIteration
+        ),
+        "an exhausted macro must end the key read, not wait for input"
+    );
+}
+
 /// GNU keeps `read_key_sequence`'s PROMPT as the original Lisp string in the
 /// kboard's `echo_prompt`.  In particular, `help--help-screen` relies on the
 /// prompt's `face` intervals surviving while it waits for the next help key.

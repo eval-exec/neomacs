@@ -4141,6 +4141,69 @@ fn due_gnu_timer(callback: &str) -> Value {
     ])
 }
 
+/// An idle timer whose delay has elapsed is due as soon as the read makes
+/// Emacs idle.  GNU `read_char` starts the idle epoch before it waits
+/// (keyboard.c:2869-2875) and services `timer-idle-list` from the same
+/// `timer_check` pass, so `(run-with-idle-timer 0 nil F)` runs F while an
+/// unbounded read blocks.  Helm depends on this (`helm--reset-update-flag`
+/// clears its update flag from a zero-delay idle timer); a read that treats
+/// "no input source" as EOF without considering pending idle timers stalls
+/// the whole helm session.
+#[test]
+fn read_key_sequence_noninteractive_no_input_waits_for_idle_timers() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new();
+    ev.eval_str(
+        r#"(progn
+             (fset 'timer-event-handler
+                   (lambda (timer)
+                     (setq timer-idle-list (delq timer timer-idle-list))
+                     (condition-case nil
+                         (apply (aref timer 5) (aref timer 6))
+                       (error nil))))
+             (fset 'read-key-sequence-idle-timeout
+                   (lambda () (throw 'read-key-sequence-idle-timeout-tag 'idle-timed-out))))"#,
+    )
+    .expect("install timer-event-handler and idle timeout callback");
+    ev.set_variable(
+        "timer-idle-list",
+        Value::list(vec![due_gnu_idle_timer("read-key-sequence-idle-timeout")]),
+    );
+
+    let result = ev.eval_str(
+        r#"(catch 'read-key-sequence-idle-timeout-tag
+             (read-key-sequence "key: ")
+             'read-returned)"#,
+    );
+
+    assert_eq!(
+        crate::emacs_core::format_eval_result(&result),
+        "OK idle-timed-out"
+    );
+}
+
+/// An idle timer that is ripe as soon as Emacs is idle.
+///
+/// Idle timers store their deadline as an IDLE DURATION, compared against
+/// `idleness_now` (GNU `timer_check_2`, keyboard.c:4820), not a wall-clock
+/// timestamp like ordinary timers; a zero deadline is therefore due on the
+/// first idle check.  Slot 0 is the timer's own `fired` flag (nil while
+/// pending) and slot 7 carries the idle flag.
+fn due_gnu_idle_timer(callback: &str) -> Value {
+    Value::vector(vec![
+        Value::NIL,
+        Value::fixnum(0),
+        Value::fixnum(0),
+        Value::fixnum(0),
+        Value::NIL,
+        Value::symbol(callback),
+        Value::NIL,
+        Value::T,
+        Value::fixnum(0),
+        Value::NIL,
+    ])
+}
+
 #[test]
 fn read_event_noninteractive_no_input_waits_for_timers() {
     crate::test_utils::init_test_tracing();
