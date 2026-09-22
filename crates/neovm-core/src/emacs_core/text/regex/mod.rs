@@ -2641,6 +2641,38 @@ fn forward_search_slice_start(
     }
 }
 
+/// A forward match cannot consume beyond LIMIT, but assertions there still
+/// inspect the following character. Keep that complete character so `$',
+/// `\b' and `\'' see the same context as the full accessible region.
+///
+/// Requesting the whole suffix moves a distant gap into a bounded search;
+/// alternating edits and short searches then move unrelated text every time.
+/// Limiting both ends also bounds the copy fallback for chunked backends.
+fn forward_search_slice_range(
+    buf: &Buffer,
+    accessible: EmacsByteRange,
+    start: EmacsBytePos,
+    limit: EmacsBytePos,
+) -> EmacsByteRange {
+    let mut context_end = accessible.end();
+    if limit < context_end {
+        let context_len = if buf.get_multibyte() {
+            buf.emacs_byte_at_pos(limit)
+                // Lisp bounds are character positions. Keep the full suffix
+                // if a raw byte-position caller supplies a non-character bound.
+                .filter(|&head| crate::emacs_core::emacs_char::char_head_p(head) && head <= 0xf8)
+                .map(crate::emacs_core::emacs_char::bytes_by_char_head)
+        } else {
+            Some(1)
+        };
+        if let Some(len) = context_len {
+            context_end = EmacsBytePos::new(limit.get().saturating_add(len)).min(context_end);
+        }
+    }
+    let context = EmacsByteRange::new(accessible.start(), context_end);
+    EmacsByteRange::new(forward_search_slice_start(buf, context, start), context_end)
+}
+
 /// Apply a Lisp-originated regexp to UTF-8 text as a boolean predicate.
 ///
 /// This is the compatibility seam for Lisp-facing APIs that receive an Emacs
@@ -2977,10 +3009,8 @@ pub(crate) fn re_search_forward_with_posix(
         ));
     }
 
-    // Read from the character before START instead of from the region
-    // start, so that an edit loop stops moving the gap (see
-    // `forward_search_slice_start').
-    let region_start = forward_search_slice_start(buf, accessible.range(), start);
+    let search_range = forward_search_slice_range(buf, accessible.range(), start, limit);
+    let region_start = search_range.start();
     let start_rel = start.get() - region_start.get();
     let limit_rel = limit.get() - region_start.get();
     let multibyte = buf.get_multibyte();
@@ -2988,26 +3018,20 @@ pub(crate) fn re_search_forward_with_posix(
     let compiled =
         compile_search_pattern_with_posix(&pattern_for_compile(pattern), case_fold, posix, &syn)?;
 
-    let md_opt = with_buffer_emacs_bytes_for_search(
-        buf,
-        EmacsByteRange::new(region_start, accessible.end()),
-        |text| match &compiled {
-            CompiledSearchPattern::Literal(literal) => {
-                literal_find_emacs_bytes(&text[start_rel..limit_rel], literal, multibyte, case_fold)
-                    .map(|matched| {
-                        EngineMatchData::new(gnu_single_group_vec(Some(matched.shift(start.get()))))
-                    })
-            }
-            CompiledSearchPattern::Emacs(cp) => {
-                let range = (limit_rel - start_rel) as isize;
-                regex_emacs::re_search(cp.as_ref(), text, start_rel, range, &syn, start_rel).map(
-                    |(_pos, regs)| {
-                        buffer_engine_match_data_from_registers(&regs, region_start.get())
-                    },
-                )
-            }
-        },
-    );
+    let md_opt = with_buffer_emacs_bytes_for_search(buf, search_range, |text| match &compiled {
+        CompiledSearchPattern::Literal(literal) => {
+            literal_find_emacs_bytes(&text[start_rel..limit_rel], literal, multibyte, case_fold)
+                .map(|matched| {
+                    EngineMatchData::new(gnu_single_group_vec(Some(matched.shift(start.get()))))
+                })
+        }
+        CompiledSearchPattern::Emacs(cp) => {
+            let range = (limit_rel - start_rel) as isize;
+            regex_emacs::re_search(cp.as_ref(), text, start_rel, range, &syn, start_rel).map(
+                |(_pos, regs)| buffer_engine_match_data_from_registers(&regs, region_start.get()),
+            )
+        }
+    });
 
     if md_opt.is_none()
         && matches!(compiled, CompiledSearchPattern::Emacs(_))
@@ -3220,10 +3244,8 @@ pub(crate) fn re_search_forward_lisp_with_posix_into(
         return Err("Search failed".to_string());
     }
 
-    // Read from the character before START instead of from the region
-    // start, so that an edit loop stops moving the gap (see
-    // `forward_search_slice_start').
-    let region_start = forward_search_slice_start(buf, accessible.range(), start);
+    let search_range = forward_search_slice_range(buf, accessible.range(), start, limit);
+    let region_start = search_range.start();
     let start_rel = start.get() - region_start.get();
     let limit_rel = limit.get() - region_start.get();
     let syn = buffer_regexp_syntax_lookup(buf, region_start, match_context);
@@ -3236,20 +3258,16 @@ pub(crate) fn re_search_forward_lisp_with_posix_into(
         &syn,
     )?;
 
-    let search_result = with_buffer_emacs_bytes_for_search(
-        buf,
-        EmacsByteRange::new(region_start, accessible.end()),
-        |text| {
-            regex_emacs::re_search(
-                compiled.as_ref(),
-                text,
-                start_rel,
-                (limit_rel - start_rel) as isize,
-                &syn,
-                start_rel,
-            )
-        },
-    );
+    let search_result = with_buffer_emacs_bytes_for_search(buf, search_range, |text| {
+        regex_emacs::re_search(
+            compiled.as_ref(),
+            text,
+            start_rel,
+            (limit_rel - start_rel) as isize,
+            &syn,
+            start_rel,
+        )
+    });
     if search_result.is_none() && regex_emacs::take_matcher_overflow() {
         return Err(regex_emacs::MATCHER_OVERFLOW_MESSAGE.to_string());
     }
@@ -3294,28 +3312,22 @@ pub(crate) fn re_search_forward_compiled_into(
         return Err("Search failed".to_string());
     }
 
-    // Read from the character before START instead of from the region
-    // start, so that an edit loop stops moving the gap (see
-    // `forward_search_slice_start').
-    let region_start = forward_search_slice_start(buf, accessible.range(), start);
+    let search_range = forward_search_slice_range(buf, accessible.range(), start, limit);
+    let region_start = search_range.start();
     let start_rel = start.get() - region_start.get();
     let limit_rel = limit.get() - region_start.get();
     let syn = buffer_regexp_syntax_lookup(buf, region_start, match_context);
 
-    let search_result = with_buffer_emacs_bytes_for_search(
-        buf,
-        EmacsByteRange::new(region_start, accessible.end()),
-        |text| {
-            regex_emacs::re_search(
-                compiled,
-                text,
-                start_rel,
-                (limit_rel - start_rel) as isize,
-                &syn,
-                start_rel,
-            )
-        },
-    );
+    let search_result = with_buffer_emacs_bytes_for_search(buf, search_range, |text| {
+        regex_emacs::re_search(
+            compiled,
+            text,
+            start_rel,
+            (limit_rel - start_rel) as isize,
+            &syn,
+            start_rel,
+        )
+    });
     if search_result.is_none() && regex_emacs::take_matcher_overflow() {
         return Err(regex_emacs::MATCHER_OVERFLOW_MESSAGE.to_string());
     }

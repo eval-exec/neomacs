@@ -1787,6 +1787,50 @@ fn implemented_text_backends() -> impl Iterator<Item = BufferTextBackendKind> {
     BufferTextBackendKind::implemented_variants()
 }
 
+#[test]
+fn bounded_search_view_agrees_across_fragmented_backends() {
+    crate::test_utils::init_test_tracing();
+    let text = "aaé中\naa TAIL";
+    let positions: Vec<_> = text
+        .char_indices()
+        .map(|(pos, _)| pos)
+        .chain(std::iter::once(text.len()))
+        .collect();
+    for pattern in ["a", "a$", "a\\b", "\\(é中\\)", "^\\(a*\\)"] {
+        for &start in &positions {
+            for &bound in positions.iter().filter(|&&pos| pos >= start) {
+                let search = |buf: &mut Buffer| {
+                    buf.goto_emacs_byte_pos(EmacsBytePos::new(start));
+                    let mut md = None;
+                    let result = re_search_forward(
+                        buf,
+                        &lisp_pat(pattern),
+                        Some(bound),
+                        true,
+                        false,
+                        &mut md,
+                    );
+                    buffer_search_snapshot(result, buf, &md)
+                };
+                let expected = search(&mut make_test_buffer(text));
+                for kind in implemented_text_backends() {
+                    for &gap in &positions {
+                        let mut buf = make_test_buffer_with_backend(text, kind);
+                        buf.goto_emacs_byte_pos(EmacsBytePos::new(gap));
+                        buf.insert("x");
+                        buf.delete_emacs_byte_range(EmacsByteRange::from_usize(gap, gap + 1));
+                        assert_eq!(
+                            search(&mut buf),
+                            expected,
+                            "{kind:?}, {pattern:?}, gap={gap}, {start}..={bound}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn make_fragmented_search_buffer(kind: BufferTextBackendKind) -> Buffer {
     let mut buf = make_test_buffer_with_backend("α foo\nBeta 123\nγ foo42\nomega", kind);
 

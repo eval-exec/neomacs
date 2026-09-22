@@ -209,6 +209,24 @@ fn bounded_search_view_one_character_context_agrees_with_full_text() {
 }
 
 #[test]
+fn bounded_search_view_leaves_a_distant_gap_in_place() {
+    crate::test_utils::init_test_tracing();
+    let observed = crate::test_utils::runtime_startup_eval_one(
+        r#"(with-temp-buffer
+             (insert (make-string 4000 ?a))
+             (goto-char 2001) (insert "x") (delete-char -1)
+             (goto-char 1)
+             (let* ((case-fold-search nil)
+                    (before (gap-position))
+                    (answer (re-search-forward "z" 9 t)))
+               (list before answer (gap-position) (point))))"#,
+    );
+    // GNU keeps the gap outside the short search span. This also checks
+    // movement cost without depending on a timing threshold.
+    assert_eq!(observed, "OK (2001 nil 2001 1)");
+}
+
+#[test]
 fn test_simple_literal() {
     crate::test_utils::init_test_tracing();
     let syn = DefaultSyntaxLookup;
