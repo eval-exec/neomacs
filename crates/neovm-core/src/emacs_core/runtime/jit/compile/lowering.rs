@@ -4316,6 +4316,9 @@ pub(crate) fn deopt_site(
     pending: &mut Vec<PendingDeopt>,
 ) -> Block {
     let block = fb.create_block();
+    // Failed speculation leaves native execution. Keep its spill/return
+    // sequence out of the normal path through the generated code.
+    fb.set_cold_block(block);
     let region = ACTIVE_REGION.with(|r| r.borrow().clone());
     // `pc` indexes the ops being LOWERED, which after inlining is the fused
     // body — but a deopt resumes the interpreter in the original one, so an
