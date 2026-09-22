@@ -76,6 +76,44 @@ const HELM_PYDOC_TUI_PRELUDE: &str = r####"
     (setq helm-pydoc-virtualenv "venv"
           helm-input-idle-delay 0
           helm-candidate-number-limit 20)
+    ;; Overlay introspection: helm hooks write the helm buffer's overlay
+    ;; state (start/end/face/priority per overlay, plus the selection
+    ;; point) to a per-engine file on every selection move and buffer
+    ;; update.  The harness compares the reports after the action menu
+    ;; opens; identical state with differing rendering means the RENDERER
+    ;; dropped the face, while differing state points at helm's elisp
+    ;; machinery.
+    (let ((dump (expand-file-name "helm-overlay-state.txt" root)))
+      (setenv "NEOMACS_HELM_PYDOC_OVERLAY_STATE" (expand-file-name "helm-overlay-state.txt" root))
+      (defun neomacs-helm-pydoc-overlay-dump ()
+        (let ((helm-buf (and (boundp 'helm-buffer)
+                             (get-buffer helm-buffer))))
+          (when (buffer-live-p helm-buf)
+            (let* ((report
+                    (with-current-buffer helm-buf
+                      (format
+                       "point=%S point-min=%S point-max=%S selection=%S\n"
+                       (point) (point-min) (point-max)
+                       (and (boundp 'helm-selection-point) helm-selection-point))))
+                   (rows
+                    (mapcar
+                     (lambda (ov)
+                       (format
+                        "ov start=%S end=%S face=%S priority=%S window=%S\n"
+                        (overlay-start ov) (overlay-end ov)
+                        (overlay-get ov 'face) (overlay-get ov 'priority)
+                        (overlay-get ov 'window)))
+                     (with-current-buffer helm-buf
+                       (overlays-in (point-min) (point-max))))))
+              (neomacs-helm-pydoc-tui-write
+               (getenv "NEOMACS_HELM_PYDOC_OVERLAY_STATE")
+               (concat report (mapconcat #'identity rows "")))))))
+      (add-hook 'helm-move-selection-after-hook #'neomacs-helm-pydoc-overlay-dump)
+      (add-hook 'helm-after-update-hook #'neomacs-helm-pydoc-overlay-dump)
+      ;; Converge: a fast idle dump so the file reflects the CURRENT state
+      ;; (the hooks alone can lag the screen by one update).
+      (run-with-idle-timer
+       0.25 0.25 #'neomacs-helm-pydoc-overlay-dump))
     (find-file source)
     (goto-char (point-max))))
 
@@ -258,6 +296,25 @@ fn assert_stage(
                 neo_snapshot.plain_grid()
             ));
         }
+    }
+}
+
+/// Compare the two engines' live helm-buffer overlay-state dumps (written
+/// by the prelude's repeating timer while the session is idle).
+fn assert_overlay_introspection(pair: &PackageTuiPair, stage: &str, divergences: &mut Vec<String>) {
+    std::thread::sleep(Duration::from_secs(3));
+    let read = |session: &TuiSession| {
+        let path = session.home_dir().join("helm-overlay-state.txt");
+        fs::read_to_string(&path).unwrap_or_else(|error| format!("unavailable: {error}"))
+    };
+    let gnu = read(&pair.gnu);
+    let neo = read(&pair.neo);
+    eprintln!("OVERLAY-STATE-GNU: {gnu}");
+    eprintln!("OVERLAY-STATE-NEO: {neo}");
+    if gnu != neo {
+        divergences.push(format!(
+            "{stage} overlay introspection differs:\nGNU:\n{gnu}\nNeomacs:\n{neo}"
+        ));
     }
 }
 
@@ -479,6 +536,7 @@ fn helm_pydoc_real_helm_workflows_match_gnu_terminal_and_filesystem() {
 
     open_and_filter_module(&mut pair, "deploymentkit");
     open_action_menu(&mut pair);
+    assert_overlay_introspection(&pair, "action selection", &mut divergences);
     assert_stage(
         &pair,
         "action selection",
