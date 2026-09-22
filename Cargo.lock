@@ -3910,7 +3910,6 @@ dependencies = [
  "fs4",
  "neomacs-infra",
  "neomacs-parity-reference",
- "neomacs-tui-tests",
  "sha2",
  "tempfile",
  "wait-timeout",
@@ -4022,9 +4021,11 @@ version = "0.0.19"
 name = "neomacs-tui-tests"
 version = "0.0.19"
 dependencies = [
+ "expect-test",
  "libc",
  "neomacs-display-protocol",
  "neomacs-infra",
+ "neomacs-melpa-test-support",
  "pty-process",
  "serde_json",
  "tempfile",

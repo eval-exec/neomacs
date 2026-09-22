@@ -4,12 +4,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use neomacs_tui_tests::{
+use crate::{
     QUIET_NATIVE_COMP_EVAL, RawTerminalSnapshot, TuiLaunch, TuiRecordingScope, TuiSession,
     assert_raw_terminal_snapshots_eq, compare_session_displays,
 };
 
-use crate::{EmacsRuntime, MelpaSandbox, PreparedPackageSet};
+use neomacs_melpa_test_support::{EmacsRuntime, MelpaSandbox, PreparedPackageSet};
 
 /// Terminal color capability shared by both editors in a package parity pair.
 ///
@@ -418,7 +418,7 @@ mod tests {
     use std::path::Path;
 
     #[cfg(unix)]
-    use crate::MelpaSandbox;
+    use neomacs_melpa_test_support::MelpaSandbox;
 
     use super::{
         DisplayCheckpoint, PackageDisplayContract, PairTimeout, SymmetricDisplayEnvironment,

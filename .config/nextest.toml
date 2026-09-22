@@ -47,6 +47,13 @@ filter = 'package(neomacs-melpa-tests) and not (test(~parity_tests::harness_cont
 platform = { host = "cfg(unix)" }
 setup = 'melpa-infra-preflight'
 
+# The interactive package-TUI suites (moved out of the MELPA jobs) provision
+# pinned packages and boot editor pairs; give them the same preflight.
+[[profile.default.scripts]]
+filter = 'binary_id(neomacs-tui-tests::package_tui)'
+platform = { host = "cfg(unix)" }
+setup = 'melpa-infra-preflight'
+
 # Minimax oracle cases intentionally evaluate game trees in both Neomacs
 # and GNU Emacs.  The exhaustive tic-tac-toe forms can legitimately exceed
 # the package-wide 60s watchdog during a full parallel run, so run this

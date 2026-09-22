@@ -5,7 +5,7 @@ use neomacs_tui_tests::RawTerminalSnapshot;
 
 use crate::{COMPAT_GNU_ELPA_PIN, CORFU_MELPA_PIN, CachedMelpaOracle};
 
-use neomacs_melpa_test_support::{PackageTuiScenario, PairTimeout, ReadinessCheckpoint};
+use crate::scenario::{PackageTuiScenario, PairTimeout, ReadinessCheckpoint};
 
 const CORFU_TUI_PRELUDE: &str = r#"
 (require 'corfu)

@@ -8,9 +8,7 @@ use neomacs_tui_tests::{RawTerminalSnapshot, TuiSession};
 
 use crate::{CachedMelpaOracle, HELM_CORE_MELPA_PIN, HELM_PYDOC_MELPA_PIN};
 
-use neomacs_melpa_test_support::{
-    PackageTuiPair, PackageTuiScenario, PairTimeout, ReadinessCheckpoint,
-};
+use crate::scenario::{PackageTuiPair, PackageTuiScenario, PairTimeout, ReadinessCheckpoint};
 
 const HELM_PYDOC_TUI_PRELUDE: &str = r####"
 (defun neomacs-helm-pydoc-tui-write (path contents)

@@ -6,7 +6,7 @@ use neomacs_tui_tests::{RawTerminalSnapshot, TuiSession};
 
 use crate::{CachedMelpaOracle, HELM_CSS_SCSS_MELPA_PIN};
 
-use neomacs_melpa_test_support::{PackageTuiScenario, PairTimeout, ReadinessCheckpoint};
+use crate::scenario::{PackageTuiScenario, PairTimeout, ReadinessCheckpoint};
 
 const HELM_CSS_SCSS_DEFAULT_TUI_PRELUDE: &str = r####"
 (require 'cl-lib)

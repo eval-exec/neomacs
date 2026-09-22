@@ -5,9 +5,7 @@ use neomacs_tui_tests::{RawTerminalSnapshot, TuiSession};
 
 use crate::{CachedMelpaOracle, LEUVEN_THEME_MELPA_PIN};
 
-use neomacs_melpa_test_support::{
-    PackageTuiPair, PackageTuiScenario, PairTimeout, ReadinessCheckpoint,
-};
+use crate::scenario::{PackageTuiPair, PackageTuiScenario, PairTimeout, ReadinessCheckpoint};
 
 const LEUVEN_TUI_PRELUDE: &str = r####"
 (require 'cl-lib)

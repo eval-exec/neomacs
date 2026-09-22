@@ -12,7 +12,7 @@ use crate::{
     PreparedPackageSet,
 };
 
-use neomacs_melpa_test_support::{
+use crate::scenario::{
     PackageTuiPair, PackageTuiScenario, PairTimeout, ReadinessCheckpoint, TerminalProfile,
 };
 

@@ -1,9 +1,7 @@
 //! Real ace-window workflows on a PTY. No graphical assumptions and no
 //! replacement of terminal-name: both editors use their actual TTY terminal.
+use crate::scenario::{PackageTuiPair, PackageTuiScenario, PairTimeout, ReadinessCheckpoint};
 use crate::{ACE_WINDOW_MELPA_PIN, CachedMelpaOracle};
-use neomacs_melpa_test_support::{
-    PackageTuiPair, PackageTuiScenario, PairTimeout, ReadinessCheckpoint,
-};
 use std::time::Duration;
 
 const PRELUDE: &str = r#"
