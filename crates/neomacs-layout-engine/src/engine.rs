@@ -1973,6 +1973,19 @@ impl LayoutEngine {
                             is_edit: false,
                         };
                     }
+                    // The mini-window is probe-excluded from retention: its
+                    // layout runs `resize_mini_window` measurement passes whose
+                    // results must not become a reusable matrix, and it is one
+                    // or two rows tall, so the fast paths buy nothing.  It is
+                    // re-walked every frame (the phase tests assert exactly this
+                    // by counting the content window's classification).
+                    if params.is_minibuffer() {
+                        return IncrementalWindowPlan {
+                            cursor_only: None,
+                            scroll: None,
+                            is_edit: false,
+                        };
+                    }
                     let cursor_only = self.build_cursor_only_replay(params, *layout_box, evaluator);
                     let mut is_edit = false;
                     let scroll = if cursor_only.is_none() {

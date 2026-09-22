@@ -3402,6 +3402,26 @@ fn measure_incremental_relayout(
     }
 }
 
+/// Bind a hand-built frame's mini-window to the permanently-inactive
+/// `" *Minibuf-0*"`, as GNU does for every frame (`minibuf.c:821`).
+///
+/// `FrameManager::create_frame` primes the mini leaf with the ROOT buffer as a
+/// placeholder; a test that leaves it there makes the idle mini-window walk and
+/// render the root buffer -- evaluating its `display (when ...)` properties a
+/// second time and relaying its rows, which skews both the evaluation counts
+/// and the layout row statistics these tests assert.
+fn bind_minibuffer_buffer(eval: &mut Context, frame_id: neovm_core::window::FrameId) {
+    let minibuffer = eval
+        .buffers
+        .find_buffer_by_name(" *Minibuf-0*")
+        .unwrap_or_else(|| eval.buffers.create_buffer(" *Minibuf-0*"));
+    if let Some(frame) = eval.frame_manager_mut().get_mut(frame_id)
+        && let Some(leaf) = frame.minibuffer_leaf.as_mut()
+    {
+        leaf.set_buffer(minibuffer);
+    }
+}
+
 /// Fresh editing context with `text` in the current buffer (gap backend, point
 /// at beginning), plus a GUI frame whose selected window starts at BOB. Returns
 /// the frame id, buffer id, and selected window id for perturbation.
@@ -3430,6 +3450,7 @@ fn incr_editing_frame(
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("incr-bench", width, height, buf_id);
+    bind_minibuffer_buffer(&mut eval, frame_id);
     let selected_window = eval
         .frame_manager()
         .get(frame_id)
