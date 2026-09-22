@@ -709,9 +709,24 @@ const FIND_FILE_IN_PROJECT_TEST_PRELUDE: &str = r####"
                              (and (eq (timer--function timer)
                                       'undo-auto--boundary-timer)
                                   ffip356-test-owned-buffers)
+                             ;; GNU's minibuffer completion machinery schedules
+                             ;; an idle `completions--background-update' timer
+                             ;; with (FORCE-EAGER-UPDATE BUFFER) arguments while
+                             ;; the minibuffer is active (minibuffer.el
+                             ;; `completions--start-background-update').  Batch
+                             ;; input can end the workflow before an idle moment
+                             ;; consumes it, so cancel the editor's own timer and
+                             ;; forget it, leaving no stale timer variable behind
+                             ;; for the next shared-process workflow.
                              (and (eq (timer--function timer)
                                       'completions--background-update)
-                                  (equal arguments '(t)))
+                                  (progn
+                                    (setq completions--background-update-timer nil)
+                                    t)
+                                  (or (equal arguments '(t))
+                                      (and (consp arguments)
+                                           (car arguments)
+                                           (bufferp (car (cdr arguments))))))
                              (seq-some
                               (lambda (argument)
                                 (and (bufferp argument)
@@ -721,8 +736,8 @@ const FIND_FILE_IN_PROJECT_TEST_PRELUDE: &str = r####"
                        (error "refusing to cancel unowned timer: function=%S args=%S idle=%S"
                               (timer--function timer) arguments
                               (memq timer timer-idle-list))))
-                   (cl-pushnew timer owned-timers :test #'eq)
-                   (cancel-timer timer)))))
+                     (cl-pushnew timer owned-timers :test #'eq)
+                     (cancel-timer timer)))))
              (kill-buffers
               (phase)
               (let ((candidates
