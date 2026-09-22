@@ -798,24 +798,11 @@ struct PreparedInterpreterCall {
 /// aliases, autoloads, advice and compiler overrides remain on `Generic`.
 #[derive(Clone, Copy)]
 enum ResolvedStackCallTarget {
-    Interpreter {
-        call: PreparedInterpreterCall,
-    },
-    ByteCode {
-        callee: ResolvedByteCodeCallee,
-    },
-    /// Neither the original call name nor its resolved subr is fillarray.
-    Builtin {
-        callee: ResolvedBuiltinCallee,
-    },
-    BuiltinWithStringWriteback {
-        callee: ResolvedBuiltinCallee,
-    },
+    Interpreter { call: PreparedInterpreterCall },
+    ByteCode { callee: ResolvedByteCodeCallee },
+    Builtin { callee: ResolvedBuiltinCallee },
     Generic,
 }
-
-const _: () =
-    assert!(std::mem::size_of::<ResolvedStackCallTarget>() <= 4 * std::mem::size_of::<Value>());
 
 #[derive(Clone, Copy)]
 struct InterpreterFrameCleanup {
@@ -1635,28 +1622,6 @@ const _: () =
     assert!(std::mem::size_of::<PreparedInterpreterCall>() == 3 * std::mem::size_of::<Value>());
 
 impl ResolvedBuiltinCallee {
-    /// Compute at resolution time, then preserve the decision in the target
-    /// and cache tags. Repeating even this predicate on each Bcall cost more
-    /// instructions than the function-cell lookup it replaced.
-    fn requires_string_writeback(self, called: Value) -> bool {
-        let fillarray = fillarray_sym_id();
-        called == Value::from_sym_id(fillarray)
-            || self
-                .0
-                .as_symbol_id()
-                .or_else(|| self.0.as_subr_id())
-                .expect("resolved builtin retains its symbol identity")
-                == fillarray
-    }
-
-    fn stack_target(self, called: Value) -> ResolvedStackCallTarget {
-        if self.requires_string_writeback(called) {
-            ResolvedStackCallTarget::BuiltinWithStringWriteback { callee: self }
-        } else {
-            ResolvedStackCallTarget::Builtin { callee: self }
-        }
-    }
-
     #[inline]
     fn from_static_symbol(sym_id: SymId) -> Option<Self> {
         lookup_global_subr_entry(sym_id)
@@ -1812,7 +1777,6 @@ enum CachedStackCallee {
     Empty,
     ByteCode(Value),
     Builtin(ResolvedBuiltinCallee),
-    BuiltinWithStringWriteback(ResolvedBuiltinCallee),
 }
 #[derive(Clone, Copy)]
 struct SymbolByteCodeCallCacheEntry {
@@ -1916,9 +1880,6 @@ impl SymbolByteCodeCallCache {
                 callee: ResolvedByteCodeCallee(value),
             }),
             CachedStackCallee::Builtin(callee) => Some(ResolvedStackCallTarget::Builtin { callee }),
-            CachedStackCallee::BuiltinWithStringWriteback(callee) => {
-                Some(ResolvedStackCallTarget::BuiltinWithStringWriteback { callee })
-            }
             CachedStackCallee::Empty => None,
         }
     }
@@ -1941,20 +1902,8 @@ impl SymbolByteCodeCallCache {
         symbol: SymId,
         function_epoch: u64,
         callee: ResolvedBuiltinCallee,
-    ) -> ResolvedStackCallTarget {
-        let (cached, target) = if callee.requires_string_writeback(Value::from_sym_id(symbol)) {
-            (
-                CachedStackCallee::BuiltinWithStringWriteback(callee),
-                ResolvedStackCallTarget::BuiltinWithStringWriteback { callee },
-            )
-        } else {
-            (
-                CachedStackCallee::Builtin(callee),
-                ResolvedStackCallTarget::Builtin { callee },
-            )
-        };
-        self.store(symbol, function_epoch, cached);
-        target
+    ) {
+        self.store(symbol, function_epoch, CachedStackCallee::Builtin(callee));
     }
     #[inline(always)]
     fn store(&mut self, symbol: SymId, function_epoch: u64, callee: CachedStackCallee) {
@@ -3485,8 +3434,7 @@ impl<'a> Vm<'a> {
                     }
                 }
             }
-            ResolvedStackCallTarget::Builtin { callee }
-            | ResolvedStackCallTarget::BuiltinWithStringWriteback { callee } => {
+            ResolvedStackCallTarget::Builtin { callee } => {
                 InterpreterStackCall::Complete(Self::call_resolved_builtin_from_stack_args(
                     self.ctx, func_val, args_start, nargs, callee,
                 ))
@@ -4486,18 +4434,21 @@ impl<'a> Vm<'a> {
                             callers.enter_callee(callee_frame);
                             continue 'frame;
                         }
-                        let writeback_names = match target {
+                        let writeback_names = if matches!(
+                            target,
                             ResolvedStackCallTarget::Interpreter { .. }
-                            | ResolvedStackCallTarget::ByteCode { .. } => None,
-                            // Resolution already excluded native string
-                            // writeback, including the original call name.
-                            // A debugger can redefine the callee before entry,
-                            // so an armed call still uses the generic check.
-                            ResolvedStackCallTarget::Builtin { .. } if !debug_armed => None,
-                            _ if n > 0 && stk!()[args_start].is_string() => {
-                                self.writeback_mutating_callable_names(&func_val)
-                            }
-                            _ => None,
+                                | ResolvedStackCallTarget::ByteCode { .. }
+                        ) {
+                            // The closed target proof excludes GNU's native
+                            // aset/fillarray implementations.  Bytecode may
+                            // mutate a string through an explicit primitive,
+                            // but the ordinary call itself needs no host-side
+                            // replacement-object writeback.
+                            None
+                        } else if n > 0 && stk!()[args_start].is_string() {
+                            self.writeback_mutating_callable_names(&func_val)
+                        } else {
+                            None
                         };
                         let writeback_args = writeback_names
                             .as_ref()
@@ -7601,8 +7552,7 @@ impl<'a> Vm<'a> {
     ) -> EvalResult {
         if allow_direct_builtin_subr {
             match self.resolve_stack_call_target(func_val) {
-                ResolvedStackCallTarget::Builtin { callee }
-                | ResolvedStackCallTarget::BuiltinWithStringWriteback { callee } => {
+                ResolvedStackCallTarget::Builtin { callee } => {
                     return Self::call_resolved_builtin_from_stack_args(
                         self.ctx, func_val, args_start, nargs, callee,
                     );
@@ -8434,10 +8384,14 @@ impl<'a> Vm<'a> {
                                 ValueKind::Subr(_) | ValueKind::Veclike(VecLikeType::Subr)
                             ) {
                                 match ResolvedBuiltinCallee::from_subr_value(value) {
-                                    Some(callee) => self
-                                        .ctx
-                                        .symbol_bytecode_call_cache
-                                        .insert_builtin(sym_id, function_epoch, callee),
+                                    Some(callee) => {
+                                        self.ctx.symbol_bytecode_call_cache.insert_builtin(
+                                            sym_id,
+                                            function_epoch,
+                                            callee,
+                                        );
+                                        ResolvedStackCallTarget::Builtin { callee }
+                                    }
                                     None => ResolvedStackCallTarget::Generic,
                                 }
                             } else {
@@ -8456,11 +8410,14 @@ impl<'a> Vm<'a> {
                     // same resolved subr object here instead of consulting the
                     // static table again on the hot path.
                     None => match ResolvedBuiltinCallee::from_static_symbol(sym_id) {
-                        Some(callee) => self.ctx.symbol_bytecode_call_cache.insert_builtin(
-                            sym_id,
-                            function_epoch,
-                            callee,
-                        ),
+                        Some(callee) => {
+                            self.ctx.symbol_bytecode_call_cache.insert_builtin(
+                                sym_id,
+                                function_epoch,
+                                callee,
+                            );
+                            ResolvedStackCallTarget::Builtin { callee }
+                        }
                         None => ResolvedStackCallTarget::Generic,
                     },
                 }
@@ -8468,7 +8425,7 @@ impl<'a> Vm<'a> {
             ValueKind::Veclike(VecLikeType::Subr) | ValueKind::Subr(_) => {
                 ResolvedBuiltinCallee::from_subr_value(func_val)
                     .map_or(ResolvedStackCallTarget::Generic, |callee| {
-                        callee.stack_target(func_val)
+                        ResolvedStackCallTarget::Builtin { callee }
                     })
             }
             _ => ResolvedStackCallTarget::Generic,
