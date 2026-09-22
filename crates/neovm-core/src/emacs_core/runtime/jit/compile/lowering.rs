@@ -82,33 +82,6 @@ pub(crate) fn iconst_bits(fb: &FunctionBuilder, v: ClifValue) -> Option<i64> {
     }
 }
 
-/// Branch on a tagged Lisp value, reusing a predicate with exact T/NIL arms.
-/// Swap destinations to preserve its polarity without materializing a negated
-/// boolean. Other consumers, including ElsePop successors, keep the tagged value.
-pub(crate) fn emit_nil_branch(
-    fb: &mut FunctionBuilder,
-    value: ClifValue,
-    if_nil: Block,
-    if_non_nil: Block,
-) {
-    use cranelift_codegen::ir::{InstructionData, Opcode, ValueDef};
-    if let ValueDef::Result(inst, _) = fb.func.dfg.value_def(value)
-        && let InstructionData::Ternary {
-            opcode: Opcode::Select,
-            args,
-        } = fb.func.dfg.insts[inst]
-        && iconst_bits(fb, args[1]) == Some(Value::T.bits() as i64)
-        && iconst_bits(fb, args[2]) == Some(Value::NIL.bits() as i64)
-    {
-        fb.ins().brif(args[0], if_non_nil, &[], if_nil, &[]);
-    } else {
-        let is_nil = fb
-            .ins()
-            .icmp_imm_u(IntCC::Equal, value, Value::NIL.bits() as i64);
-        fb.ins().brif(is_nil, if_nil, &[], if_non_nil, &[]);
-    }
-}
-
 /// Return `(value, immediate)` for a binary instruction whose right operand is
 /// an `iconst`. This is the 0.134 IR shape produced by helpers such as
 /// `bor_imm_u` and `ishl_imm_u`.
