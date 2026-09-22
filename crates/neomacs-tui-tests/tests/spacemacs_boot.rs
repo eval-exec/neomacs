@@ -18,7 +18,6 @@
 use crate::support;
 use neomacs_infra::config_env::ConfigEnvironment as _;
 use neomacs_tui_tests::{TuiLaunch, TuiSession, TuiTempDirectory};
-use std::ffi::OsString;
 use std::time::Duration;
 use support::*;
 

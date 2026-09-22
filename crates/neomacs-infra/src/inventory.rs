@@ -9,7 +9,7 @@
 
 use sha2::{Digest, Sha256};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// One file's recorded identity, relative to the fixture root.
 #[derive(Debug, Clone, PartialEq, Eq)]

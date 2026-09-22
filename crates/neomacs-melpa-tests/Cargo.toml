@@ -32,5 +32,3 @@ neomacs-melpa-test-support.workspace = true
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 neomacs-gui-tests.workspace = true
 
-[target.'cfg(unix)'.dev-dependencies]
-neomacs-tui-tests.workspace = true
