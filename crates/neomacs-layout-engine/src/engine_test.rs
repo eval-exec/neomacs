@@ -7638,17 +7638,14 @@ fn line_break_extend_fill_reaches_tty_reserved_right_column() {
 /// newline must produce the stretch fill out to the LEFT window's edge even
 /// though another window shares the frame.
 ///
-/// IGNORED: the body walk plans and applies the fill (verified: the
-/// `ResolvedLineEndPlan` mutation takes the action row 18 -> 20 glyphs), but
-/// the FINAL matrix for the split window holds uniformly padded rows
-/// (every enabled Text row, empty ones included, has `ncols - 1` glyphs) and
-/// no stretch glyph.  The same buffer/face in a full-width window keeps the
-/// 3-glyph row with its stretch, so something materializes the split window's
-/// rows to the text width after the body walk -- likely in the
-/// output-grid/retained-matrix install path for the selected window of a
-/// multi-window frame.
+/// The fill must stop before the terminal border column: GNU leaves room for
+/// the border glyph by subtracting one column from `it->last_visible_x` for a
+/// non-rightmost TTY window (`!FRAME_WINDOW_P (f) && !WINDOW_RIGHTMOST_P (w)`,
+/// src/xdisp.c:3524-3527), and `extend_face_to_end_of_line` fills to that
+/// edge.  Without the reservation the fill is one column too wide, and the
+/// right-border chrome trims it away and re-pads with the window default
+/// face, erasing the highlight.
 #[test]
-#[ignore = "layout engine: split-window rows are padded to ncols-1, dropping the :extend stretch"]
 fn split_window_line_break_extend_fill_reaches_right_column() {
     let mut eval = Context::new();
     convert_current_buffer_text_backend(&mut eval, BufferTextBackendKind::GapBuffer);
@@ -7666,9 +7663,13 @@ fn split_window_line_break_extend_fill_reaches_right_column() {
         // "Actions\n" is 8 chars; the action line + newline spans [8, 27).
         assert!(buffer.put_text_property(8, 27, Value::symbol("face"), extend_face_value()));
     }
+    // 352px = 44 columns at the default 8px cell, so each half of the split
+    // is exactly 22 columns: TTY windows always have integral column widths,
+    // and a fractional width would make the fill's cell quantization, not the
+    // border reservation, the deciding factor.
     let frame_id = eval
         .frame_manager_mut()
-        .create_frame("split-extend-fill", 360, 180, buf_id);
+        .create_frame("split-extend-fill", 352, 180, buf_id);
     let left_window = eval
         .frame_manager()
         .get(frame_id)

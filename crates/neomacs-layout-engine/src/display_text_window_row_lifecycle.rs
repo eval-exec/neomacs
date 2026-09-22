@@ -86,6 +86,20 @@ impl TextWindowRightEdgeReservation {
             Self::EdgeMarkerAndTerminalBorder => 2,
         }
     }
+
+    /// Does the reservation cover the vertical border glyph's column?
+    ///
+    /// GNU leaves room for that glyph on a terminal frame by subtracting one
+    /// column from `it->last_visible_x` for every window that is not the
+    /// rightmost (`!FRAME_WINDOW_P (f) && !WINDOW_RIGHTMOST_P (w)`,
+    /// src/xdisp.c:3524-3527), and `extend_face_to_end_of_line` fills exactly
+    /// to that edge.
+    const fn leaves_border_column(self) -> bool {
+        matches!(
+            self,
+            Self::TerminalBorder | Self::EdgeMarkerAndTerminalBorder
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -146,12 +160,18 @@ impl<'a> TextWindowAppendSurfaceRequest<'a> {
 
     pub(crate) fn into_surface(self) -> DisplayRowAppendSurface {
         let right_edge_marker_column = self.right_edge_marker_column();
+        let line_end_border_width = if self.right_edge_reservation.leaves_border_column() {
+            self.char_width
+        } else {
+            0.0
+        };
         DisplayRowAppendSurface::new(
             DisplayRowAppendArea::new(
                 self.content_x,
                 self.append_width(),
                 self.text_width,
                 self.line_number_width,
+                line_end_border_width,
             ),
             DisplayTabPolicy::from_tab_width_and_stops(
                 self.content_x,

@@ -50,15 +50,27 @@ pub(crate) struct DisplayRowAppendArea {
     width: f32,
     text_width: f32,
     line_number_width: f32,
+    /// Width of the terminal vertical-border column this window leaves for
+    /// the border glyph (`reserve_terminal_right_border_col`).  GNU subtracts
+    /// it from `it->last_visible_x` for a non-rightmost TTY window
+    /// (src/xdisp.c:3524-3527); the `:extend` line fill stops before it.
+    line_end_border_width: f32,
 }
 
 impl DisplayRowAppendArea {
-    pub(crate) fn new(content_x: f32, width: f32, text_width: f32, line_number_width: f32) -> Self {
+    pub(crate) fn new(
+        content_x: f32,
+        width: f32,
+        text_width: f32,
+        line_number_width: f32,
+        line_end_border_width: f32,
+    ) -> Self {
         Self {
             content_x,
             width,
             text_width,
             line_number_width,
+            line_end_border_width,
         }
     }
 
@@ -98,6 +110,14 @@ impl DisplayRowAppendArea {
             width: (self.text_width() - self.line_number_width()).max(0.0),
             ..self
         }
+    }
+
+    /// GNU `it->last_visible_x` for the text area: the full text width minus
+    /// the terminal border column the window reserves for the border glyph.
+    /// `extend_face_to_end_of_line` fills exactly to this edge, so the fill
+    /// stops before the vertical border cell instead of running under it.
+    fn line_end_fill_width(self) -> f32 {
+        (self.text_width() - self.line_number_width() - self.line_end_border_width).max(0.0)
     }
 }
 
@@ -251,6 +271,13 @@ impl DisplayRowAppendSurface {
 
     pub(crate) fn full_text_right_edge(&self) -> f32 {
         self.area.full_text_width().right_edge()
+    }
+
+    /// Right edge of GNU's `it->last_visible_x`: the full text width minus the
+    /// terminal border column (`full_text_right_edge` deliberately spans every
+    /// reservation).  Every `:extend` line fill stops here.
+    pub(crate) fn line_end_fill_right_edge(&self) -> f32 {
+        self.area.content_x() + self.area.line_end_fill_width()
     }
 
     #[cfg(test)]
@@ -810,6 +837,12 @@ impl DisplayRowAppendFrame {
         self.content_x() + (self.text_width() - self.line_number_width()).max(0.0)
     }
 
+    /// GNU `it->last_visible_x` for the text area: the full text width minus
+    /// the terminal border column the window leaves for the border glyph.
+    fn line_end_fill_right_edge(&self) -> f32 {
+        self.area.content_x() + self.area.line_end_fill_width()
+    }
+
     fn from_parts(
         placement: DisplayRowAppendPlacement,
         area: DisplayRowAppendArea,
@@ -885,7 +918,7 @@ impl DisplayRowAppendFrame {
             kind.max_x(self),
             self.text_area_origin(),
         ))
-        .with_line_end_right_edge_x(self.text_right_edge_excluding_line_number())
+        .with_line_end_right_edge_x(self.line_end_fill_right_edge())
     }
 
     fn source_render_geometry(&self, kind: DisplayRowAppendKind) -> DisplayRowGeometry {

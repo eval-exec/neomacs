@@ -1781,7 +1781,7 @@ impl<'a> BufferSourceLineBreakRenderRequest<'a> {
                 measurement_mode: source_render.measurement_mode(),
                 pen_x: progress.row_progress().x(),
                 pen_col: progress.row_progress().col() as i64,
-                right_edge_x: context.append_surface.full_text_right_edge(),
+                right_edge_x: context.append_surface.line_end_fill_right_edge(),
                 char_width: metrics.char_width(),
                 indicator: (context.fill_column_indicator >= 0).then_some(LineEndIndicator {
                     col: context.fill_column_indicator,
@@ -1971,7 +1971,7 @@ impl<'a> BufferSourceLineBreakRenderRequest<'a> {
                 measurement_mode: source_render.measurement_mode(),
                 pen_x: progress.row_progress().x(),
                 pen_col: progress.row_progress().col() as i64,
-                right_edge_x: context.append_surface.full_text_right_edge(),
+                right_edge_x: context.append_surface.line_end_fill_right_edge(),
                 char_width: metrics.char_width(),
                 indicator: (context.fill_column_indicator >= 0).then_some(LineEndIndicator {
                     col: context.fill_column_indicator,

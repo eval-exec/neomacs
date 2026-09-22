@@ -364,14 +364,12 @@ fn overlay_face_renders_below_a_scrolled_window_start() {
 /// state was proven identical in both engines; only the rendering
 /// differed).
 ///
-/// IGNORED: neomacs does not paint the `:extend` tail when the buffer's
-/// window is half of a side-by-side split (GNU fills cols 19..edge with
-/// the overlay face; neomacs stops at the line's last text cell).  The
-/// same buffer/overlay in a full-width window renders correctly, so the
-/// bug is in the layout engine's extend-fill activation for split
-/// windows, not in face resolution.
+/// GNU fills to `it->last_visible_x`, which a TTY window that is not
+/// rightmost reduces by one column for the vertical border glyph
+/// (src/xdisp.c:3524-3527), so the `:extend` tail stops before the border
+/// cell.  The engine twin of this probe is
+/// `split_window_line_break_extend_fill_reaches_right_column`.
 #[test]
-#[ignore = "neomacs layout engine: :extend tail not painted in a side-by-side window"]
 fn overlay_extend_face_paints_the_rest_of_the_line() {
     let (mut gnu, mut neo) = run_face_probe();
     eval_expression(
