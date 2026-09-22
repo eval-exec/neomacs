@@ -81,7 +81,7 @@ pub fn resolve_tool(name: &str, version: &str) -> Result<ResolvedTool, ToolsErro
     // nix-provisioned builds are the local upgrade path when the host PATH
     // diverges.
     match name {
-        "git" => resolve_system(name, version),
+        "git" | "node" => resolve_system(name, version),
         other => Err(ToolsError::Failed(format!(
             "no resolution strategy for tool `{other}`"
         ))),
@@ -90,7 +90,7 @@ pub fn resolve_tool(name: &str, version: &str) -> Result<ResolvedTool, ToolsErro
 
 fn version_of(binary: &PathBuf, name: &str) -> Result<String, ToolsError> {
     let flag = match name {
-        "git" => "--version",
+        "git" | "node" => "--version",
         other => {
             return Err(ToolsError::Failed(format!(
                 "no version probe for tool `{other}`"

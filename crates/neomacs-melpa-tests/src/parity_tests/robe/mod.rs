@@ -20,8 +20,6 @@ const ROBE_RUNTIME_CACHE_VERSION: &str = "ruby-3.3.10-pry-0.14.2-v2";
 const ROBE_RUNTIME_COMMAND_TIMEOUT: Duration = Duration::from_secs(240);
 const ROBE_RUBY_VERSION: &str = "3.3.10";
 const ROBE_NIXPKGS_REVISION: &str = "6368eda62c9775c38ef7f714b2555a741c20c72d";
-const WORKSPACE_FLAKE_LOCK: &str =
-    include_str!(concat!(env!("CARGO_WORKSPACE_DIR"), "/flake.lock"));
 
 struct PinnedGem {
     name: &'static str,
@@ -129,21 +127,18 @@ fn select_pinned_ruby_runtime(
     let mut candidates = Vec::new();
     let mut rejected = Vec::new();
     if command_succeeds("nix", &["--version"]) {
-        if !WORKSPACE_FLAKE_LOCK.contains(ROBE_NIXPKGS_REVISION) {
-            return Err(format!(
-                "workspace flake.lock no longer pins the reviewed Robe nixpkgs revision {ROBE_NIXPKGS_REVISION}"
-            ));
-        }
-        let workspace = workspace_root().to_string_lossy().into_owned();
+        // Realize the reviewed ruby from the PINNED revision by URL: the
+        // workspace flake.lock floats (nixpkgs updates flow in), so the
+        // Robe boundary must not depend on it.  Building by explicit
+        // revision keeps the reviewed ruby/Pry environment reproducible on
+        // any nix machine, independent of workspace drift.
         let realize = vec![
             "nix".to_string(),
             "--no-warn-dirty".to_string(),
             "build".to_string(),
             "--no-link".to_string(),
             "--print-out-paths".to_string(),
-            "--inputs-from".to_string(),
-            workspace,
-            "nixpkgs#ruby_3_3".to_string(),
+            format!("github:nixos/nixpkgs/{ROBE_NIXPKGS_REVISION}#ruby_3_3"),
         ];
         match run_runtime_command(&realize, &[], gem_home, scratch, working_directory) {
             Ok(path) => {

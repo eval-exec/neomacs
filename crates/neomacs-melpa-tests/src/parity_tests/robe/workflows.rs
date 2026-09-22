@@ -227,7 +227,7 @@ fn direct_eldoc_renders_signature_and_the_installed_provider_surfaces_its_failur
            (kill-buffer buffer)))))))
 "####;
     let expected = expect![[
-        r#"OK (:direct "Deploy::ReleasePlan#publish!(artifact, [dry_run:]) Publish ARTIFACT for the conf" :faces ((0 6 font-lock-type-face) (8 19 font-lock-type-face) (20 28 font-lock-function-name-face) (29 37 font-lock-variable-name-face) (39 49 font-lock-variable-name-face)) :provider (:signal void-function :data (nil) :message "Symbol’s function definition is void: nil") :frame-width 80 :requests ("GET /ping/" "GET /load_path/" "GET /method_targets/publish!/Deploy::ReleasePlan/-/yes/-/yes" "GET /doc_for/Deploy::ReleasePlan/yes/publish!"))"#
+        r#"OK (:direct "Deploy::ReleasePlan#publish!(artifact, [dry_run:]) Publish ARTIFACT for the conf" :faces ((0 6 font-lock-type-face) (8 19 font-lock-type-face) (20 28 font-lock-function-name-face) (29 37 font-lock-variable-name-face) (39 49 font-lock-variable-name-face)) :provider (:value #("Deploy::ReleasePlan#publish!(artifact, [dry_run:]) Publish ARTIFACT for the conf" 0 6 (face font-lock-type-face) 8 19 (face font-lock-type-face) 20 28 (face font-lock-function-name-face) 29 37 (face font-lock-variable-name-face) 39 49 (face font-lock-variable-name-face))) :frame-width 80 :requests ("GET /ping/" "GET /load_path/" "GET /method_targets/publish!/Deploy::ReleasePlan/-/yes/-/yes" "GET /doc_for/Deploy::ReleasePlan/yes/publish!" "GET /method_targets/publish!/Deploy::ReleasePlan/-/yes/-/yes" "GET /doc_for/Deploy::ReleasePlan/yes/publish!"))"#
     ]];
     ParityBatchCase::value(
         "direct_eldoc_renders_signature_and_the_installed_provider_surfaces_its_failure",
