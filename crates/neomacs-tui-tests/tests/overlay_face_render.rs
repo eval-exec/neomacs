@@ -76,8 +76,9 @@ fn dump_row(label: &str, session: &TuiSession) -> String {
         .filter_map(|c| screen.cell(probe_row, c))
         .map(|cell| cell.contents().to_string())
         .collect();
-    // Segment starts inside the row: TTY|(10) ANONDEF|(8) HELMSHAPE|(11)
-    // EXTONLY|(8) INHONLY|(8) ANONLIST|(9).
+    // Segment starts (cumulative cols): TTY| 0, ANONDEF| 4, HELMSHAPE| 12,
+    // EXTONLY| 23, INHONLY| 31, ANONLIST| 39.  The bg() probes below sample
+    // a mid-segment cell of each.
     let bg = |col: u16| screen.cell(probe_row, col).expect("probe cell").bgcolor();
     let report = format!(
         "row{probe_row} text={row_text:?} tty={:?} anondef={:?} helmshape={:?} extonly={:?} inhonly={:?} anonlist={:?}",

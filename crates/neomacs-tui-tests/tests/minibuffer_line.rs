@@ -17,7 +17,6 @@
 
 use crate::support;
 use neomacs_infra::packages;
-use neomacs_tui_tests::*;
 use std::time::Duration;
 use support::*;
 
