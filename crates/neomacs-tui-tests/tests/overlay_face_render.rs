@@ -278,3 +278,76 @@ fn overlay_face_follows_text_through_insertions_above_it() {
         );
     }
 }
+
+/// helm's select-action screen: the ACTIONS buffer in one window and the
+/// helm-buffer window (holding the selected candidate, its overlay ending
+/// at point-max) SIDE BY SIDE — the failed screen row spans both.  The
+/// face must render in the right window even while another window shows a
+/// different buffer.
+#[test]
+fn overlay_face_renders_in_a_second_window_beside_another_buffer() {
+    let (mut gnu, mut neo) = run_face_probe();
+    eval_expression(
+        &mut gnu,
+        &mut neo,
+        "(progn\
+ (switch-to-buffer (get-buffer-create \"probe-actions\"))\
+ (fundamental-mode)\
+ (erase-buffer)\
+ (insert \"[f1]  First action\\n[f2]  Second action\\n[f3]  Third action\")\
+ (let* ((helm-window\
+ (progn (delete-other-windows)\
+ (split-window-right)\\
+ (other-window 1)))\
+ (ov (with-current-buffer \"probe-faces\"\
+ (if (get-text-property (point-min) 'probe-shape) nil\
+ (make-overlay (point-min) (point-max) (current-buffer) t nil))))\\
+ _set (progn (overlay-put ov 'face 'probe-helm-shape-face)\\
+ (with-current-buffer \"probe-faces\"\
+ (set-text-properties (point-min) (point-max) '(probe-shape t)))))))\
+ (redisplay))",
+    );
+    read_both(&mut gnu, &mut neo, Duration::from_millis(400));
+    assert_pair_exact_display(
+        "overlay_face_renders_in_a_second_window_beside_another_buffer",
+        &gnu,
+        &neo,
+    );
+}
+
+/// Same side-by-side shape, but the overlay-covered window's START is
+/// scrolled mid-buffer (helm sets the candidate window's start so the
+/// selected line is visible) — the overlay lies BELOW the window start.
+#[test]
+fn overlay_face_renders_below_a_scrolled_window_start() {
+    let (mut gnu, mut neo) = run_face_probe();
+    eval_expression(
+        &mut gnu,
+        &mut neo,
+        "(progn\
+ (switch-to-buffer (get-buffer-create \"probe-actions\"))\
+ (fundamental-mode)\
+ (erase-buffer)\
+ (insert \"[f1]  First action\\n[f2]  Second action\\n[f3]  Third action\")\\
+ (let* ((helm-window\
+ (progn (delete-other-windows)\
+ (split-window-right)\\
+ (other-window 1)))\
+ (ov (with-current-buffer \"probe-faces\"\
+ (make-overlay (point-min) (point-max) (current-buffer) t nil))))\
+ (overlay-put ov 'face 'probe-helm-shape-face)\\
+ (with-current-buffer \"probe-faces\"\
+ (insert \"HEADERLINE\\n\"))\\
+ (with-current-buffer \"probe-faces\"\
+ (goto-char (point-min)) (forward-line 1))\\
+ (set-window-start helm-window (with-current-buffer \"probe-faces\" (point)))\\
+ (with-current-buffer \"probe-faces\" (goto-char (point-max)))\\
+ (redisplay))",
+    );
+    read_both(&mut gnu, &mut neo, Duration::from_millis(400));
+    assert_pair_exact_display(
+        "overlay_face_renders_below_a_scrolled_window_start",
+        &gnu,
+        &neo,
+    );
+}
