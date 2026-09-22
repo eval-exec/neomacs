@@ -2087,31 +2087,6 @@ fn string_call_retaining_argument(callee: Value, string: Value, item: Value) -> 
 }
 
 #[test]
-fn vm_resolved_builtin_skips_redundant_string_writeback_classification() {
-    crate::test_utils::init_test_tracing();
-    let mut eval = Context::new_vm_runtime_harness();
-    let concat = eval.eval_str("(symbol-function 'concat)").unwrap();
-    let alias = intern("vm-wb-concat-subr");
-    eval.obarray.set_symbol_function_id(alias, concat);
-    for callee in [
-        Value::from_sym_id(intern("concat")),
-        concat,
-        Value::from_sym_id(alias),
-    ] {
-        let caller =
-            string_call_retaining_argument(callee, Value::string("abc"), Value::string("!"));
-        reset_mutating_writeback_classification_count();
-        let result = new_vm(&mut eval).execute(&caller, vec![]).unwrap();
-        assert_eq!(result.as_utf8_str(), Some("abc"));
-        assert_eq!(
-            mutating_writeback_classification_count(),
-            0,
-            "a resolved concat builtin cannot require string writeback"
-        );
-    }
-}
-
-#[test]
 fn vm_named_fillarray_keeps_existing_writeback_after_builtin_redefinition() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new_vm_runtime_harness();

@@ -1622,21 +1622,6 @@ const _: () =
     assert!(std::mem::size_of::<PreparedInterpreterCall>() == 3 * std::mem::size_of::<Value>());
 
 impl ResolvedBuiltinCallee {
-    /// Both the call name and the resolved subr matter: a redefined
-    /// `fillarray` still uses the VM's replacement-object writeback path.
-    /// Other builtins cannot need it, without another function-cell lookup.
-    #[inline]
-    fn excludes_string_writeback(self, called: Value) -> bool {
-        let fillarray = fillarray_sym_id();
-        called != Value::from_sym_id(fillarray)
-            && self
-                .0
-                .as_symbol_id()
-                .or_else(|| self.0.as_subr_id())
-                .expect("resolved builtin retains its symbol identity")
-                != fillarray
-    }
-
     #[inline]
     fn from_static_symbol(sym_id: SymId) -> Option<Self> {
         lookup_global_subr_entry(sym_id)
@@ -4461,14 +4446,7 @@ impl<'a> Vm<'a> {
                             // replacement-object writeback.
                             None
                         } else if n > 0 && stk!()[args_start].is_string() {
-                            if !debug_armed
-                                && let ResolvedStackCallTarget::Builtin { callee } = target
-                                && callee.excludes_string_writeback(func_val)
-                            {
-                                None
-                            } else {
-                                self.writeback_mutating_callable_names(&func_val)
-                            }
+                            self.writeback_mutating_callable_names(&func_val)
                         } else {
                             None
                         };
