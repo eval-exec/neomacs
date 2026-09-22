@@ -82,10 +82,15 @@ pub(crate) fn iconst_bits(fb: &FunctionBuilder, v: ClifValue) -> Option<i64> {
     }
 }
 
-/// Test a tagged Lisp value for nil, reusing a materialized predicate when
-/// its exact true/false arms are T and NIL. Other uses keep the tagged value;
-/// a branch that consumes it can let the backend discard the unused select.
-pub(crate) fn lower_is_nil(fb: &mut FunctionBuilder, value: ClifValue) -> ClifValue {
+/// Branch on a tagged Lisp value, reusing a predicate with exact T/NIL arms.
+/// Swap destinations to preserve its polarity without materializing a negated
+/// boolean. Other consumers, including ElsePop successors, keep the tagged value.
+pub(crate) fn emit_nil_branch(
+    fb: &mut FunctionBuilder,
+    value: ClifValue,
+    if_nil: Block,
+    if_non_nil: Block,
+) {
     use cranelift_codegen::ir::{InstructionData, Opcode, ValueDef};
     if let ValueDef::Result(inst, _) = fb.func.dfg.value_def(value)
         && let InstructionData::Ternary {
@@ -95,10 +100,13 @@ pub(crate) fn lower_is_nil(fb: &mut FunctionBuilder, value: ClifValue) -> ClifVa
         && iconst_bits(fb, args[1]) == Some(Value::T.bits() as i64)
         && iconst_bits(fb, args[2]) == Some(Value::NIL.bits() as i64)
     {
-        return fb.ins().icmp_imm_u(IntCC::Equal, args[0], 0);
+        fb.ins().brif(args[0], if_non_nil, &[], if_nil, &[]);
+    } else {
+        let is_nil = fb
+            .ins()
+            .icmp_imm_u(IntCC::Equal, value, Value::NIL.bits() as i64);
+        fb.ins().brif(is_nil, if_nil, &[], if_non_nil, &[]);
     }
-    fb.ins()
-        .icmp_imm_u(IntCC::Equal, value, Value::NIL.bits() as i64)
 }
 
 /// Return `(value, immediate)` for a binary instruction whose right operand is
