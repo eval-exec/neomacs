@@ -1433,9 +1433,82 @@ pub(crate) fn unintern_canonical_id(id: SymId) -> bool {
 /// (s1)`.
 #[inline]
 pub(crate) fn resolve_lisp_visible_symbol_name(id: SymId) -> LispVisibleSymbolName {
-    global_symbol_registry()
-        .read()
-        .resolve_lisp_visible_name(id)
+    let heap_id = crate::tagged::gc::current_tagged_heap_identity().map(SymbolNameHeapId);
+    let epoch = SYMBOL_NAME_MATERIALIZATION_EPOCH.load(Ordering::Acquire);
+    let cached = VISIBLE_SYMBOL_NAME_CACHE
+        .try_with(|cache| {
+            let cache = cache.borrow();
+            if cache.heap_id != heap_id {
+                return None;
+            }
+            cache.names.get(&id).copied()
+        })
+        .ok()
+        .flatten();
+    if let Some(cached) = cached
+        && cached.epoch == epoch
+    {
+        return cached.name;
+    }
+    resolve_lisp_visible_symbol_name_uncached(id, heap_id)
+}
+
+#[derive(Clone, Copy)]
+struct VisibleSymbolNameCacheEntry {
+    epoch: u64,
+    name: LispVisibleSymbolName,
+}
+
+// Cache only names read on the current heap, without allocating a dense array
+// up to the largest process-global symbol ID. A fixed-slot cache made repeated
+// scans larger than its capacity slower by taking the miss path on every read.
+// Retain the working set instead, releasing its storage when the heap changes.
+// Store typed values, never borrowed heap strings: mutation stays live on hits.
+#[derive(Default)]
+struct VisibleSymbolNameCache {
+    heap_id: Option<SymbolNameHeapId>,
+    names: FxHashMap<SymId, VisibleSymbolNameCacheEntry>,
+}
+
+thread_local! {
+    static VISIBLE_SYMBOL_NAME_CACHE: RefCell<VisibleSymbolNameCache> =
+        RefCell::new(VisibleSymbolNameCache::default());
+}
+
+// The only transition of an existing (heap, symbol) name is Atom -> LispObject.
+// Exact names are installed when a fresh symbol ID is allocated; unintern and
+// dump restoration never replace an existing ID's name. Publishing a lazy name
+// object invalidates atom views on every thread before releasing the write lock.
+// Heap IDs are unique across heap lifetimes. Object views are already rooted by
+// the registry's per-heap index and the collector does not move their objects.
+static SYMBOL_NAME_MATERIALIZATION_EPOCH: AtomicU64 = AtomicU64::new(0);
+
+#[inline(never)]
+fn resolve_lisp_visible_symbol_name_uncached(
+    id: SymId,
+    heap_id: Option<SymbolNameHeapId>,
+) -> LispVisibleSymbolName {
+    let registry = global_symbol_registry().read();
+    let name = registry.resolve_lisp_visible_name(id);
+    // Pair the epoch with the resolved view under the same lock. Reading it
+    // after unlocking could label an old atom with a newly materialized epoch.
+    let epoch = SYMBOL_NAME_MATERIALIZATION_EPOCH.load(Ordering::Acquire);
+    drop(registry);
+    // Diagnostics can resolve names after this cache's thread-local destructor
+    // has run. The registry remains available, so caching is optional there.
+    let _ = VISIBLE_SYMBOL_NAME_CACHE.try_with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if cache.heap_id != heap_id {
+            *cache = VisibleSymbolNameCache {
+                heap_id,
+                names: FxHashMap::default(),
+            };
+        }
+        cache
+            .names
+            .insert(id, VisibleSymbolNameCacheEntry { epoch, name });
+    });
+    name
 }
 
 /// Return the one Lisp name object for `id` in the current tagged heap.
@@ -1478,6 +1551,7 @@ pub(crate) fn materialize_symbol_name_value(id: SymId) -> TaggedValue {
         value: materialized,
         heap_id,
     });
+    SYMBOL_NAME_MATERIALIZATION_EPOCH.fetch_add(1, Ordering::Release);
     materialized
 }
 

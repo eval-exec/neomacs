@@ -185,6 +185,73 @@ fn visible_symbol_name_reads_follow_materialization_mutation_and_gc() {
 }
 
 #[test]
+fn visible_symbol_name_reads_reuse_registry_lookup_until_materialization() {
+    let mut heap = crate::tagged::gc::TaggedHeap::new();
+    crate::tagged::gc::set_tagged_heap(&mut heap);
+    let symbol = intern("visible-name-registry-read-probe");
+    reset_symbol_name_value_probes();
+    for _ in 0..64 {
+        std::hint::black_box(resolve_lisp_visible_symbol_name(symbol));
+    }
+    assert_eq!(symbol_name_value_probes(), (0, 1));
+
+    let name = materialize_symbol_name_value(symbol);
+    reset_symbol_name_value_probes();
+    for _ in 0..64 {
+        assert!(matches!(
+            resolve_lisp_visible_symbol_name(symbol),
+            LispVisibleSymbolName::LispObject(value) if value.bits() == name.bits()
+        ));
+    }
+    assert_eq!(symbol_name_value_probes(), (0, 1));
+
+    let exact_name = TaggedValue::string("visible-name-exact-registry-read-probe");
+    let exact_symbol = make_uninterned_symbol_with_name_value(exact_name);
+    reset_symbol_name_value_probes();
+    for _ in 0..64 {
+        assert!(matches!(
+            resolve_lisp_visible_symbol_name(exact_symbol),
+            LispVisibleSymbolName::LispObject(value) if value.bits() == exact_name.bits()
+        ));
+    }
+    assert_eq!(symbol_name_value_probes(), (1, 0));
+}
+
+#[test]
+fn visible_symbol_name_reads_reuse_a_large_working_set() {
+    let mut heap = crate::tagged::gc::TaggedHeap::new();
+    crate::tagged::gc::set_tagged_heap(&mut heap);
+    let symbols: Vec<_> = (0..1024)
+        .map(|i| {
+            let spelling = format!("visible-name-replacement-{i}");
+            let symbol = intern_uninterned(&spelling);
+            if i % 2 == 0 {
+                materialize_symbol_name_value(symbol);
+            }
+            (symbol, spelling)
+        })
+        .collect();
+    for pass in 0..2 {
+        reset_symbol_name_value_probes();
+        for (symbol, spelling) in &symbols {
+            assert_eq!(
+                resolve_lisp_visible_symbol_name(*symbol)
+                    .text()
+                    .as_utf8_str(),
+                Some(spelling.as_str())
+            );
+        }
+        if pass == 1 {
+            assert_eq!(
+                symbol_name_value_probes(),
+                (0, 0),
+                "a warmed scan must not thrash a fixed number of cache slots"
+            );
+        }
+    }
+}
+
+#[test]
 fn visible_symbol_name_reads_follow_heap_switch_and_drop() {
     let mut first_heap = Box::new(crate::tagged::gc::TaggedHeap::new());
     crate::tagged::gc::set_tagged_heap(&mut first_heap);
@@ -224,6 +291,49 @@ fn visible_symbol_name_reads_follow_heap_switch_and_drop() {
         resolve_lisp_visible_symbol_name(symbol),
         LispVisibleSymbolName::LispObject(value) if value.bits() == second_name.bits()
     ));
+}
+
+#[test]
+fn visible_symbol_name_reads_survive_thread_cache_destruction() {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    struct ReadNameOnDrop {
+        symbol: SymId,
+        checked: Arc<AtomicBool>,
+    }
+    impl Drop for ReadNameOnDrop {
+        fn drop(&mut self) {
+            assert_eq!(
+                resolve_lisp_visible_symbol_name(self.symbol)
+                    .text()
+                    .as_utf8_str(),
+                Some("visible-name-thread-exit-probe")
+            );
+            self.checked.store(true, Ordering::Relaxed);
+        }
+    }
+    thread_local! {
+        static READ_ON_DROP: RefCell<Option<ReadNameOnDrop>> = const { RefCell::new(None) };
+    }
+
+    let checked = Arc::new(AtomicBool::new(false));
+    let on_thread = Arc::clone(&checked);
+    std::thread::spawn(move || {
+        let symbol = intern_uninterned("visible-name-thread-exit-probe");
+        // TLS destructors run in reverse initialization order. Register the
+        // diagnostic first so its read runs after the name cache is destroyed.
+        READ_ON_DROP.with(|slot| {
+            *slot.borrow_mut() = Some(ReadNameOnDrop {
+                symbol,
+                checked: on_thread,
+            });
+        });
+        std::hint::black_box(resolve_lisp_visible_symbol_name(symbol));
+    })
+    .join()
+    .unwrap();
+    assert!(checked.load(Ordering::Relaxed));
 }
 
 #[test]
