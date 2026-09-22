@@ -150,6 +150,113 @@ fn atom_only_symbol_name_resolution_skips_the_rare_exact_object_table() {
 }
 
 #[test]
+fn visible_symbol_name_reads_follow_materialization_mutation_and_gc() {
+    let mut heap = crate::tagged::gc::TaggedHeap::new();
+    crate::tagged::gc::set_tagged_heap(&mut heap);
+    let heap_id = crate::tagged::gc::current_tagged_heap_identity().unwrap();
+    let symbol = intern("visible-name-materialization-probe");
+    for _ in 0..3 {
+        assert!(matches!(
+            resolve_lisp_visible_symbol_name(symbol),
+            LispVisibleSymbolName::Atom { .. }
+        ));
+    }
+
+    let name = materialize_symbol_name_value(symbol);
+    for replacement in ['X', 'Y'] {
+        assert!(matches!(
+            resolve_lisp_visible_symbol_name(symbol),
+            LispVisibleSymbolName::LispObject(value) if value.bits() == name.bits()
+        ));
+        crate::emacs_core::builtins::collections::builtin_aset(vec![
+            name,
+            TaggedValue::fixnum(0),
+            TaggedValue::fixnum(replacement as i64),
+        ])
+        .unwrap();
+        let mut roots = Vec::new();
+        collect_symbol_name_gc_roots(&mut roots, heap_id);
+        heap.collect_exact(roots.into_iter());
+        assert_eq!(
+            resolve_lisp_visible_symbol_name(symbol).text().as_bytes()[0],
+            replacement as u8
+        );
+    }
+}
+
+#[test]
+fn visible_symbol_name_reads_follow_heap_switch_and_drop() {
+    let mut first_heap = Box::new(crate::tagged::gc::TaggedHeap::new());
+    crate::tagged::gc::set_tagged_heap(&mut first_heap);
+    let name = TaggedValue::string("visible-name-heap-switch-probe");
+    let symbol = make_uninterned_symbol_with_name_value(name);
+    assert!(matches!(
+        resolve_lisp_visible_symbol_name(symbol),
+        LispVisibleSymbolName::LispObject(value) if value.bits() == name.bits()
+    ));
+
+    let mut second_heap = crate::tagged::gc::TaggedHeap::new();
+    crate::tagged::gc::set_tagged_heap(&mut second_heap);
+    assert!(matches!(
+        resolve_lisp_visible_symbol_name(symbol),
+        LispVisibleSymbolName::Atom { .. }
+    ));
+    let second_name = materialize_symbol_name_value(symbol);
+    assert_ne!(second_name.bits(), name.bits());
+    assert!(matches!(
+        resolve_lisp_visible_symbol_name(symbol),
+        LispVisibleSymbolName::LispObject(value) if value.bits() == second_name.bits()
+    ));
+
+    crate::tagged::gc::set_tagged_heap(&mut first_heap);
+    assert!(matches!(
+        resolve_lisp_visible_symbol_name(symbol),
+        LispVisibleSymbolName::LispObject(value) if value.bits() == name.bits()
+    ));
+    drop(first_heap);
+    assert!(crate::tagged::gc::current_tagged_heap_identity().is_none());
+    assert!(matches!(
+        resolve_lisp_visible_symbol_name(symbol),
+        LispVisibleSymbolName::Atom { .. }
+    ));
+    crate::tagged::gc::set_tagged_heap(&mut second_heap);
+    assert!(matches!(
+        resolve_lisp_visible_symbol_name(symbol),
+        LispVisibleSymbolName::LispObject(value) if value.bits() == second_name.bits()
+    ));
+}
+
+#[test]
+fn visible_symbol_name_reads_preserve_identity_after_unintern_and_restore() {
+    let mut heap = crate::tagged::gc::TaggedHeap::new();
+    crate::tagged::gc::set_tagged_heap(&mut heap);
+    let spelling = "visible-name-unintern-restore-probe";
+    let name = TaggedValue::string(spelling);
+    let symbol = intern_lisp_value(name);
+    for _ in 0..3 {
+        assert!(matches!(
+            resolve_lisp_visible_symbol_name(symbol),
+            LispVisibleSymbolName::LispObject(value) if value.bits() == name.bits()
+        ));
+    }
+    assert!(unintern_canonical_id(symbol));
+    let replacement = intern(spelling);
+    assert_ne!(symbol, replacement);
+    let restored =
+        restore_runtime_interner(&[unibyte_name(spelling.as_bytes())], &[0], Some(&[true]))
+            .unwrap();
+    assert_eq!(restored.symbols, vec![replacement]);
+    assert!(matches!(
+        resolve_lisp_visible_symbol_name(symbol),
+        LispVisibleSymbolName::LispObject(value) if value.bits() == name.bits()
+    ));
+    assert!(matches!(
+        resolve_lisp_visible_symbol_name(replacement),
+        LispVisibleSymbolName::Atom { .. }
+    ));
+}
+
+#[test]
 fn lisp_object_symbol_name_resolution_uses_its_declared_storage_first() {
     crate::test_utils::init_test_tracing();
     let _eval = crate::emacs_core::eval::Context::new();
