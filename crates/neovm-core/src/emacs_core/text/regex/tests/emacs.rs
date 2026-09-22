@@ -2713,3 +2713,56 @@ fn prepared_regexp_zero_count_skips_compilation_after_argument_validation() {
     );
     assert_eq!(observed, format!("OK ({0} {0} {0} {0})", per_builtin));
 }
+
+#[test]
+fn prepared_regexp_reuse_preserves_reverse_counts_posix_and_captures() {
+    crate::test_utils::init_test_tracing();
+    let observed = crate::test_utils::runtime_startup_eval_one(
+        r#"(progn
+(defun prepared-regexp-direction-captures ()
+  (let (out)
+    (dolist (fn '(re-search-forward re-search-backward posix-search-forward posix-search-backward))
+      (dolist (count '(-2 -1 1 2))
+        (dolist (case '(("b" nil) ("B" t) ("\\(a\\|ab\\)" nil) ("\\(a\\)\\(b\\)?" nil)))
+          (with-temp-buffer
+            (insert "xαab ab中bz")
+            (narrow-to-region 2 10)
+            (let* ((backward (string-match-p "backward" (symbol-name fn)))
+                   (reverse (if (< count 0) (not backward) backward))
+                   (start (if reverse (point-max) (point-min)))
+                   (bound (copy-marker (if reverse (point-min) (point-max))))
+                   (case-fold-search (nth 1 case))
+                   (parse-sexp-lookup-properties nil))
+              (goto-char start)
+              (set-match-data '(17 19))
+              (push (list (funcall fn (car case) bound t count) (point)
+                          (mapcar (lambda (v) (if (bufferp v) 'buffer v)) (match-data t))) out))))))
+    (nreverse out)))
+(prepared-regexp-direction-captures)
+)"#,
+    );
+    // GNU 31.1: four entry points, both directions and repeated matches,
+    // marker bounds in a narrowed multibyte buffer, translated literals,
+    // POSIX longest-match alternatives and captured optional groups.
+    assert_eq!(
+        observed,
+        concat!(
+            "OK ((7 7 (7 8 buffer)) (7 7 (7 8 buffer)) (3 3 (3 4 3 4 buffer)) (3 3 (3 5 3 4 4 5 buffer)",
+            ") (9 9 (9 10 buffer)) (9 9 (9 10 buffer)) (6 6 (6 7 6 7 buffer)) (6 6 (6 8 6 7 7 8 buffer)",
+            ") (5 5 (4 5 buffer)) (5 5 (4 5 buffer)) (4 4 (3 4 3 4 buffer)) (5 5 (3 5 3 4 4 5 buffer)) ",
+            "(8 8 (7 8 buffer)) (8 8 (7 8 buffer)) (7 7 (6 7 6 7 buffer)) (8 8 (6 8 6 7 7 8 buffer)) (8",
+            " 8 (7 8 buffer)) (8 8 (7 8 buffer)) (7 7 (6 7 6 7 buffer)) (8 8 (6 8 6 7 7 8 buffer)) (5 5",
+            " (4 5 buffer)) (5 5 (4 5 buffer)) (4 4 (3 4 3 4 buffer)) (5 5 (3 5 3 4 4 5 buffer)) (9 9 (",
+            "9 10 buffer)) (9 9 (9 10 buffer)) (6 6 (6 7 6 7 buffer)) (6 6 (6 8 6 7 7 8 buffer)) (7 7 (",
+            "7 8 buffer)) (7 7 (7 8 buffer)) (3 3 (3 4 3 4 buffer)) (3 3 (3 5 3 4 4 5 buffer)) (7 7 (7 ",
+            "8 buffer)) (7 7 (7 8 buffer)) (3 3 (3 5 3 5 buffer)) (3 3 (3 5 3 4 4 5 buffer)) (9 9 (9 10",
+            " buffer)) (9 9 (9 10 buffer)) (6 6 (6 8 6 8 buffer)) (6 6 (6 8 6 7 7 8 buffer)) (5 5 (4 5 ",
+            "buffer)) (5 5 (4 5 buffer)) (5 5 (3 5 3 5 buffer)) (5 5 (3 5 3 4 4 5 buffer)) (8 8 (7 8 bu",
+            "ffer)) (8 8 (7 8 buffer)) (8 8 (6 8 6 8 buffer)) (8 8 (6 8 6 7 7 8 buffer)) (8 8 (7 8 buff",
+            "er)) (8 8 (7 8 buffer)) (8 8 (6 8 6 8 buffer)) (8 8 (6 8 6 7 7 8 buffer)) (5 5 (4 5 buffer",
+            ")) (5 5 (4 5 buffer)) (5 5 (3 5 3 5 buffer)) (5 5 (3 5 3 4 4 5 buffer)) (9 9 (9 10 buffer)",
+            ") (9 9 (9 10 buffer)) (6 6 (6 8 6 8 buffer)) (6 6 (6 8 6 7 7 8 buffer)) (7 7 (7 8 buffer))",
+            " (7 7 (7 8 buffer)) (3 3 (3 5 3 5 buffer)) (3 3 (3 5 3 4 4 5 buffer)))",
+        )
+    );
+}

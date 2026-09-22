@@ -3411,6 +3411,63 @@ pub(crate) fn re_search_backward_lisp_with_posix_into(
     }
 }
 
+/// Backward search with an already prepared pattern; no second cache probe.
+pub(crate) fn re_search_backward_compiled_into(
+    buf: &mut Buffer,
+    compiled: &CompiledPattern,
+    bound: Option<usize>,
+    noerror: bool,
+    match_context: BufferRegexpMatchContext<'_>,
+    out: &mut SearchRegisters,
+) -> Result<Option<EmacsBytePos>, String> {
+    // GNU `re-search-backward` likewise uses buffer byte positions
+    // throughout, not character positions.
+    let end = buf.point_emacs_byte_pos();
+    let accessible = buf.accessible_emacs_byte_region();
+    let limit = bound
+        .map(EmacsBytePos::new)
+        .unwrap_or(accessible.start())
+        .max(accessible.start());
+
+    if end < limit {
+        if noerror {
+            return Ok(None);
+        }
+        return Err("Search failed".to_string());
+    }
+
+    let region_start = accessible.start();
+    let start_rel = end.get() - region_start.get();
+    let limit_rel = limit.get() - region_start.get();
+    let syn = buffer_regexp_syntax_lookup(buf, region_start, match_context);
+
+    let search_result = with_buffer_emacs_bytes_for_search(buf, accessible.range(), |text| {
+        regex_emacs::re_search(
+            compiled,
+            text,
+            start_rel,
+            -((start_rel - limit_rel) as isize),
+            &syn,
+            start_rel,
+        )
+    });
+    if search_result.is_none() && regex_emacs::take_matcher_overflow() {
+        return Err(regex_emacs::MATCHER_OVERFLOW_MESSAGE.to_string());
+    }
+    if let Some((_pos, regs)) = search_result {
+        let engine_match = buffer_engine_match_data_from_registers(&regs, region_start.get());
+        let point = EmacsBytePos::new(engine_match.group(0).unwrap().start());
+        {
+            out.0 = engine_match;
+            Ok(Some(point))
+        }
+    } else if noerror {
+        Ok(None)
+    } else {
+        Err("Search failed".to_string())
+    }
+}
+
 /// Test if text after point matches PATTERN (without moving point).
 ///
 /// Returns `true` if the regex matches starting exactly at point, and
