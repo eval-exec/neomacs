@@ -11,12 +11,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     EditorProvenance, Frontend, MetricName, MetricUnit, NativeVideoComparisonIdentity,
-    NativeVideoExecutionIdentity, PerfError, PerfHarness, RunRequest, RunVerdict, ScenarioId,
+    NativeVideoExecutionIdentity, PerfError, PerfHarness, PortableDumpProvenance, RunRequest,
+    RunVerdict, ScenarioId,
     artifact_store::{unix_time_ms, write_json_atomically},
     scenario,
 };
 
-pub(crate) const COMPARISON_ARTIFACT_SCHEMA_VERSION: u32 = 5;
+pub(crate) const COMPARISON_ARTIFACT_SCHEMA_VERSION: u32 = 6;
 static COMPARISON_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Immutable parameters shared by every run in one comparison.
@@ -309,6 +310,15 @@ pub enum ComparisonRejection {
         expected: EditorProvenance,
         actual: EditorProvenance,
     },
+    MissingPortableDumpProvenance {
+        role: ComparisonRunRole,
+        sample_index: u32,
+        run_id: String,
+    },
+    PortableDumpStateMismatch {
+        baseline: PortableDumpProvenance,
+        candidate: PortableDumpProvenance,
+    },
     MissingNativeVideoInput {
         role: ComparisonRunRole,
         sample_index: u32,
@@ -511,6 +521,13 @@ pub(crate) fn evaluate_comparison(
                 run_id: run.run_id.clone(),
             }),
             Some(actual) => {
+                if actual.portable_dump == PortableDumpProvenance::Unknown {
+                    reasons.push(ComparisonRejection::MissingPortableDumpProvenance {
+                        role: run.role,
+                        sample_index: run.sample_index,
+                        run_id: run.run_id.clone(),
+                    });
+                }
                 let expected = match run.role {
                     ComparisonRunRole::Baseline => &mut baseline_provenance,
                     ComparisonRunRole::Candidate => &mut candidate_provenance,
@@ -641,6 +658,20 @@ pub(crate) fn evaluate_comparison(
             continue;
         }
         samples.push((run.role, measurement.value));
+    }
+
+    if let (Some(baseline), Some(candidate)) = (&baseline_provenance, &candidate_provenance) {
+        if baseline.portable_dump != PortableDumpProvenance::Unknown
+            && candidate.portable_dump != PortableDumpProvenance::Unknown
+            && !baseline
+                .portable_dump
+                .same_load_state(&candidate.portable_dump)
+        {
+            reasons.push(ComparisonRejection::PortableDumpStateMismatch {
+                baseline: baseline.portable_dump.clone(),
+                candidate: candidate.portable_dump.clone(),
+            });
+        }
     }
 
     for parity_metric in scenario(input.scenario).cross_editor_parity_metrics {

@@ -8,13 +8,15 @@ mod counters;
 mod harness;
 mod host;
 mod native_video;
+mod portable_dump;
 mod profile;
 mod profile_gate;
 mod suite;
 
 pub use artifact::{
     ArtifactFile, ArtifactKind, CorrectnessMismatch, EditorCapabilities, EditorKind,
-    EditorProvenance, Measurement, MetricName, MetricUnit, RunArtifact, RunVerdict,
+    EditorProvenance, Measurement, MetricName, MetricUnit, PortableDumpProvenance, RunArtifact,
+    RunVerdict,
 };
 pub(crate) use capture::CaptureRoute;
 pub use catalog::{
@@ -88,6 +90,8 @@ mod counters_test;
 mod harness_test;
 #[cfg(test)]
 mod host_test;
+#[cfg(test)]
+mod portable_dump_test;
 #[cfg(test)]
 mod profile_test;
 #[cfg(test)]

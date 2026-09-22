@@ -216,17 +216,47 @@ pub struct Measurement {
     pub unit: MetricUnit,
 }
 
-/// Immutable identity of the executable and matching portable dump used by a run.
+/// Identity of the executable and portable dump observed for a run.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EditorProvenance {
     pub path: String,
     pub executable_sha256: String,
     pub executable_size_bytes: u64,
+    /// Build compatibility identifier; this alone does not prove a dump loaded.
     pub pdump_fingerprint: String,
+    #[serde(default)]
+    pub portable_dump: PortableDumpProvenance,
     pub version: String,
     pub kind: EditorKind,
     pub capabilities: EditorCapabilities,
+}
+
+/// Actual `pdumper-stats` state, with loaded file bytes hashed before and after
+/// the workload. Legacy artifacts deserialize as unknown, never as undumped.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum PortableDumpProvenance {
+    #[default]
+    Unknown,
+    Unavailable,
+    NotLoaded,
+    Loaded {
+        path: String,
+        sha256: String,
+        size_bytes: u64,
+    },
+}
+
+impl PortableDumpProvenance {
+    pub(crate) fn same_load_state(&self, other: &Self) -> bool {
+        matches!(
+            (self, other),
+            (Self::Loaded { .. }, Self::Loaded { .. })
+                | (Self::NotLoaded, Self::NotLoaded)
+                | (Self::Unavailable, Self::Unavailable)
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -263,6 +293,7 @@ pub enum ArtifactKind {
     FrontendLog,
     CompositorLog,
     InputProvenance,
+    PortableDumpStatus,
     NativeProfileData,
     NativeProfileReport,
     HardwareCounters,

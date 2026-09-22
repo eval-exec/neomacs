@@ -33,7 +33,7 @@ use crate::{
 pub(crate) mod scenarios;
 use scenarios::org_journal_open::{ExternalJournalInput, journal_file_in_directory};
 
-pub(crate) const ARTIFACT_SCHEMA_VERSION: u32 = 5;
+pub(crate) const ARTIFACT_SCHEMA_VERSION: u32 = 6;
 const SCENARIO_RESULT_SCHEMA_VERSION: u32 = 1;
 static RUN_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -401,6 +401,13 @@ impl PerfHarness {
         let process_wall_us = process_started.elapsed().as_micros();
         files.extend(write_process_output(&context.directory, &output)?);
         files.extend(frontend_artifacts_if_present(&prepared));
+        let dump_status = crate::portable_dump::status_path(&prepared.provenance);
+        if dump_status.is_file() {
+            files.push(ArtifactFile {
+                kind: ArtifactKind::PortableDumpStatus,
+                path: relative_artifact_path(&dump_status),
+            });
+        }
         if let Some(profile) = profile {
             if let Err(message) = profile.finish_gate() {
                 return context.infrastructure_failure(message, files);
@@ -440,6 +447,9 @@ impl PerfHarness {
             );
         }
         if let Err(message) = prepared.verify_inputs_unchanged() {
+            return context.infrastructure_failure(message, files);
+        }
+        if let Err(message) = crate::portable_dump::verify_run(&prepared.provenance) {
             return context.infrastructure_failure(message, files);
         }
         if let Err(message) = prepared.verify_external_journal_unchanged() {
@@ -1274,6 +1284,7 @@ fn frontend_command(
             }
         }
     }
+    crate::portable_dump::configure_capture(&mut command, &prepared.provenance);
     prepared.add_workload_arguments(&mut command);
     command.current_dir(workspace_root);
     command
@@ -1378,6 +1389,7 @@ pub(crate) fn collect_editor_provenance(
         executable_sha256: sha256_file(editor)?,
         executable_size_bytes: metadata.len(),
         pdump_fingerprint: editor_identity_value(editor, "--fingerprint", sandbox)?,
+        portable_dump: crate::portable_dump::probe(editor, sandbox)?,
         version,
         kind,
         capabilities,
@@ -1467,7 +1479,7 @@ fn editor_identity_value(
     Ok(value.to_string())
 }
 
-fn sha256_file(path: &Path) -> Result<String, String> {
+pub(crate) fn sha256_file(path: &Path) -> Result<String, String> {
     let mut file = fs::File::open(path)
         .map_err(|error| format!("failed to hash {}: {error}", path.display()))?;
     let mut hasher = Sha256::new();

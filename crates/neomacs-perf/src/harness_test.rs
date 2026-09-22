@@ -960,7 +960,11 @@ fn editor_provenance_uses_content_and_pdump_fingerprints() {
 case "$1" in
   --fingerprint) printf '%s\n' 'PDUMP-FINGERPRINT' ;;
   --version) printf '%s\n' 'Neomacs test-build' ;;
-  --batch) printf '%s' '0,1,1,1,0,1' ;;
+  --batch)
+    case "$4" in
+      *pdumper-stats*) printf 'not-loaded\n' ;;
+      *) printf '%s' '0,1,1,1,0,1' ;;
+    esac ;;
   *) exit 64 ;;
 esac
 "##,
@@ -973,6 +977,10 @@ esac
 
     let before = collect_editor_provenance(&editor, &sandbox).expect("collect editor identity");
     assert_eq!(before.pdump_fingerprint, "PDUMP-FINGERPRINT");
+    assert_eq!(
+        before.portable_dump,
+        crate::PortableDumpProvenance::NotLoaded
+    );
     assert_eq!(before.version, "Neomacs test-build");
     assert_eq!(before.kind, crate::EditorKind::Neomacs);
     assert_eq!(

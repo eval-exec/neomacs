@@ -28,6 +28,11 @@ fn provenance(role: ComparisonRunRole) -> EditorProvenance {
         executable_sha256: format!("{role:?}-sha256"),
         executable_size_bytes: 42,
         pdump_fingerprint: format!("{role:?}-pdump"),
+        portable_dump: crate::PortableDumpProvenance::Loaded {
+            path: format!("/repo/{role:?}/neomacs.pdump"),
+            sha256: format!("{role:?}-dump-sha256"),
+            size_bytes: 123,
+        },
         version: "Neomacs test-build".to_string(),
         kind: crate::EditorKind::Neomacs,
         capabilities: crate::EditorCapabilities {
@@ -484,6 +489,91 @@ fn one_editor_build_cannot_change_between_samples() {
             ..
         }
     )));
+}
+
+#[test]
+fn loaded_and_undumped_editors_cannot_silently_compare() {
+    let mut observations = valid_observations();
+    for observation in &mut observations {
+        if observation.run.role == ComparisonRunRole::Baseline {
+            observation
+                .run
+                .editor_provenance
+                .as_mut()
+                .unwrap()
+                .portable_dump = crate::PortableDumpProvenance::NotLoaded;
+        }
+    }
+    let ComparisonVerdict::Rejected { reasons } = evaluate_comparison(&input(), &observations)
+    else {
+        panic!("incompletely staged baseline was accepted")
+    };
+    assert!(reasons.iter().any(|reason| matches!(
+        reason,
+        ComparisonRejection::PortableDumpStateMismatch {
+            baseline: crate::PortableDumpProvenance::NotLoaded,
+            candidate: crate::PortableDumpProvenance::Loaded { .. },
+        }
+    )));
+}
+
+#[test]
+fn dump_bytes_cannot_change_between_samples_of_the_same_editor() {
+    let mut observations = valid_observations();
+    let crate::PortableDumpProvenance::Loaded { sha256, .. } = &mut observations[3]
+        .run
+        .editor_provenance
+        .as_mut()
+        .unwrap()
+        .portable_dump
+    else {
+        panic!("fixture has no loaded dump")
+    };
+    *sha256 = "replaced-dump".to_string();
+    let ComparisonVerdict::Rejected { reasons } = evaluate_comparison(&input(), &observations)
+    else {
+        panic!("changing dump bytes was accepted")
+    };
+    assert!(
+        reasons
+            .iter()
+            .any(|reason| matches!(reason, ComparisonRejection::EditorProvenanceMismatch { .. }))
+    );
+}
+
+#[test]
+fn legacy_dump_metadata_is_readable_but_cannot_validate_a_new_comparison() {
+    let mut legacy = serde_json::to_value(provenance(ComparisonRunRole::Baseline)).unwrap();
+    legacy.as_object_mut().unwrap().remove("portable_dump");
+    let legacy: EditorProvenance = serde_json::from_value(legacy).unwrap();
+    assert_eq!(legacy.portable_dump, crate::PortableDumpProvenance::Unknown);
+    let mut observations = valid_observations();
+    observations[0].run.editor_provenance = Some(legacy);
+    let ComparisonVerdict::Rejected { reasons } = evaluate_comparison(&input(), &observations)
+    else {
+        panic!("missing dump metadata was accepted")
+    };
+    assert!(reasons.iter().any(|reason| matches!(
+        reason,
+        ComparisonRejection::MissingPortableDumpProvenance { .. }
+    )));
+}
+
+#[test]
+fn deliberately_undumped_editors_can_compare_with_each_other() {
+    let mut observations = valid_observations();
+    for observation in &mut observations {
+        observation
+            .run
+            .editor_provenance
+            .as_mut()
+            .unwrap()
+            .portable_dump = crate::PortableDumpProvenance::NotLoaded;
+    }
+    assert!(matches!(
+        evaluate_comparison(&input(), &observations),
+        ComparisonVerdict::Valid { .. }
+    ));
 }
 
 #[test]
