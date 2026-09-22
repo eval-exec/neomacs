@@ -4361,3 +4361,110 @@ fn a_zero_count_search_matches_the_empty_string_at_point_like_gnu() {
         "OK ((5 5 (5 5 buf)) (8 8 (8 8 buf)) (18 18 (18 18 buf)) (18 18 (18 18 buf)) (7 7 (2 3 2 3)))"
     );
 }
+
+#[test]
+fn literal_register_reuse_discards_captures_and_publishes_character_positions() {
+    crate::test_utils::init_test_tracing();
+    for kind in implemented_text_backends() {
+        for text in ["xab ab", "éab 中ab"] {
+            for backward in [false, true] {
+                let mut buf = make_test_buffer_with_backend(text, kind);
+                // A prior result with enough captures to spill inline storage.
+                let mut regs = SearchRegisters(EngineMatchData::new(
+                    std::iter::repeat_n(Some(MatchGroup::new(0, 1)), 12).collect(),
+                ));
+                let mut published = Some(regs.0.publish_buffer(&buf));
+                for pattern in ["ab", "b", "", "absent"] {
+                    let start = if backward { text.len() } else { 0 };
+                    buf.goto_emacs_byte_pos(crate::buffer::EmacsBytePos::new(start));
+                    let old = match_data_snapshot(&published);
+                    let result = if backward {
+                        super::search_backward_into(
+                            &mut buf,
+                            &lisp_pat(pattern),
+                            None,
+                            true,
+                            false,
+                            &mut regs,
+                        )
+                    } else {
+                        super::search_forward_into(
+                            &mut buf,
+                            &lisp_pat(pattern),
+                            None,
+                            true,
+                            false,
+                            &mut regs,
+                        )
+                    }
+                    .unwrap();
+                    let expected_start = if backward {
+                        text.rfind(pattern)
+                    } else {
+                        text.find(pattern)
+                    };
+                    match (result, expected_start) {
+                        (Some(point), Some(byte_start)) => {
+                            let byte_end = byte_start + pattern.len();
+                            assert_eq!(point.get(), if backward { byte_start } else { byte_end });
+                            regs.publish_buffer_into(&buf, &mut published);
+                            let data = published.as_ref().unwrap();
+                            assert_eq!(data.source(), MatchDataSource::Buffer(buf.id));
+                            assert_eq!(
+                                data.group(0),
+                                Some(MatchGroup::new(
+                                    text[..byte_start].chars().count() + 1,
+                                    text[..byte_end].chars().count() + 1,
+                                ))
+                            );
+                            let groups = data.groups_snapshot();
+                            assert_eq!(groups.len(), GNU_SEARCH_REGS_BASE_CAPACITY);
+                            assert!(groups[1..].iter().all(Option::is_none));
+                        }
+                        (None, None) => assert_eq!(match_data_snapshot(&published), old),
+                        other => panic!("literal result disagrees: {other:?}"),
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn literal_register_reuse_preserves_raw_unibyte_coordinates() {
+    crate::test_utils::init_test_tracing();
+    let mut buf = Buffer::new(
+        BufferId(1),
+        Value::string("raw-registers"),
+        crate::buffer::shared::SavedPointBeforeCommand::new_editor_global(),
+    );
+    buf.set_multibyte_value(false);
+    buf.insert_lisp_string(&LispString::from_unibyte(vec![0xff, b'a', b'b']));
+    let mut regs = SearchRegisters::default();
+    let mut published = None;
+    for backward in [false, true] {
+        buf.goto_emacs_byte_pos(crate::buffer::EmacsBytePos::new(if backward {
+            3
+        } else {
+            0
+        }));
+        let pattern = LispString::from_unibyte(vec![b'a', b'b']);
+        let result = if backward {
+            super::search_backward_into(&mut buf, &pattern, None, false, false, &mut regs)
+        } else {
+            super::search_forward_into(&mut buf, &pattern, None, false, false, &mut regs)
+        }
+        .unwrap()
+        .unwrap();
+        assert_eq!(result.get(), if backward { 1 } else { 3 });
+        regs.publish_buffer_into(&buf, &mut published);
+        assert_eq!(
+            published.as_ref().unwrap().group(0),
+            Some(MatchGroup::new(2, 4))
+        );
+        assert_eq!(
+            published.as_ref().unwrap().groups_snapshot().len(),
+            GNU_SEARCH_REGS_BASE_CAPACITY
+        );
+    }
+}

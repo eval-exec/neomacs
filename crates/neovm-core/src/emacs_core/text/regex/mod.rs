@@ -928,6 +928,15 @@ impl MatchData {
 }
 
 impl EngineMatchData {
+    /// Fill a literal result directly into the caller's register storage.
+    /// Keep GNU's padded register count and clear all captures from a prior
+    /// result; avoid a MatchGroupVec -> EngineMatchData by-value conversion.
+    fn set_single_group(&mut self, group: MatchGroup) {
+        self.groups.clear();
+        self.groups.push(Some(group.emacs_byte_range()));
+        self.groups.resize(GNU_SEARCH_REGS_BASE_CAPACITY, None);
+    }
+
     fn new(groups: MatchGroupVec) -> Self {
         Self {
             groups: groups
@@ -2841,11 +2850,8 @@ pub(crate) fn search_forward_into(
     if let Some(found) = found {
         let matched = found.shift(start.get());
         let match_end = matched.end();
-        let engine_match = EngineMatchData::new(gnu_single_group_vec(Some(matched)));
-        {
-            out.0 = engine_match;
-            Ok(Some(EmacsBytePos::new(match_end)))
-        }
+        out.0.set_single_group(matched);
+        Ok(Some(EmacsBytePos::new(match_end)))
     } else if noerror {
         // When noerror is t, don't move point.
         // When noerror is a value, move point to bound.
@@ -2918,11 +2924,8 @@ pub(crate) fn search_backward_into(
     if let Some(found) = found {
         let matched = found.shift(limit.get());
         let point = matched.start();
-        let engine_match = EngineMatchData::new(gnu_single_group_vec(Some(matched)));
-        {
-            out.0 = engine_match;
-            Ok(Some(EmacsBytePos::new(point)))
-        }
+        out.0.set_single_group(matched);
+        Ok(Some(EmacsBytePos::new(point)))
     } else if noerror {
         Ok(None)
     } else {
