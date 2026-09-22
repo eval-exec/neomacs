@@ -346,7 +346,7 @@ fn auto_complete_clang_async_real_synchronous_process_parses_useful_candidates_o
                              (failure
                               "cat >/dev/null; printf 'diagnostic before completion\\nCOMPLETION: format : [#int#]format(<#const char *fmt#>)\\n'; exit 7")))"##,
         expect![[
-            r#"OK ((success (("fork" "[#void#]fork()" nil) ("format" "[#int#]format(<#const char *fmt#>)" nil)) nil) (failure (("format" "[#int#]format(<#const char *fmt#>)" nil)) (t 25 141)))"#
+            r#"OK ((success (("fork" "[#void#]fork()" nil) ("format" "[#int#]format(<#const char *fmt#>)" nil)) nil) (failure (("format" "[#int#]format(<#const char *fmt#>)" nil)) (t 25 154)))"#
         ]],
     )
 }

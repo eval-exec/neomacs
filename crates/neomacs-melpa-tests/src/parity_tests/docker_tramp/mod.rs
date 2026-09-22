@@ -453,7 +453,7 @@ fn compat_is_noop_on_modern_tramp() -> ParityBatchCase {
              (and file (string-match-p "tramp-sh" file) t))))))
 "####,
         expect![[
-            r#"OK (:source (:tree "7a4ed29d397f25c6355ba9c8cf213c3041aa5957" :manifest (("docker-tramp-compat.el" . "e715925d5da0f7fa12b7a6b67e4d48398be9b1f78544c6bd5338df77bf7ba1c1") ("docker-tramp-pkg.el" . "99775794db5da3ba692d547632214354b3722cbe2dad728a44da925b83f0cbad") ("docker-tramp.el" . "42e969b26488183528a4459f2608e31e8fb343e16cb6c311a6c1233fded4ddae")) :feature t :version "20230809.511") :result (:feature docker-tramp-compat :tramp-version "2.8.2-pre" :old-tramp nil :escape-const nil :wait-was-autoload nil :wait-from-tramp-sh t) :cleanup (:source-unchanged t :new-buffers nil :new-processes 0 :new-timers 0 :new-frames 0 :root-exists nil :buffer-restored t :window-restored t :methods-restored t :cache-restored t :body-error nil :cleanup-errors nil))"#
+            r#"OK (:source (:tree "7a4ed29d397f25c6355ba9c8cf213c3041aa5957" :manifest (("docker-tramp-compat.el" . "e715925d5da0f7fa12b7a6b67e4d48398be9b1f78544c6bd5338df77bf7ba1c1") ("docker-tramp-pkg.el" . "99775794db5da3ba692d547632214354b3722cbe2dad728a44da925b83f0cbad") ("docker-tramp.el" . "42e969b26488183528a4459f2608e31e8fb343e16cb6c311a6c1233fded4ddae")) :feature t :version "20230809.511") :result (:feature docker-tramp-compat :tramp-version "2.8.2.31.1" :old-tramp nil :escape-const nil :wait-was-autoload nil :wait-from-tramp-sh t) :cleanup (:source-unchanged t :new-buffers nil :new-processes 0 :new-timers 0 :new-frames 0 :root-exists nil :buffer-restored t :window-restored t :methods-restored t :cache-restored t :body-error nil :cleanup-errors nil))"#
         ]],
     )
 }
