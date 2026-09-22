@@ -19,9 +19,6 @@ autotests = false
 name = "tui"
 path = "tests/tui.rs"
 
-[[test]]
-name = "package_tui"
-path = "tests/package_tui.rs"
 
 [dependencies]
 expect-test = "1.5.1"

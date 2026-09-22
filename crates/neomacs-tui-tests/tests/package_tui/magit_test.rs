@@ -3,9 +3,9 @@ use std::time::Duration;
 use expect_test::expect;
 use neomacs_tui_tests::RawTerminalSnapshot;
 
-use crate::{CachedMelpaOracle, MAGIT_MELPA_PIN};
+use super::{CachedMelpaOracle, MAGIT_MELPA_PIN};
 
-use crate::scenario::{DisplayCheckpoint, PackageTuiScenario, PairTimeout, ReadinessCheckpoint};
+use super::scenario::{DisplayCheckpoint, PackageTuiScenario, PairTimeout, ReadinessCheckpoint};
 
 const MAGIT_LOG_TUI_PRELUDE: &str = r#"
 (require 'magit)

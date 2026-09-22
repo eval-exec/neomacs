@@ -8,6 +8,9 @@
 
 mod support;
 
+#[path = "package_tui.rs"]
+mod package_tui;
+
 #[path = "basic.rs"]
 mod basic;
 #[path = "buffers.rs"]

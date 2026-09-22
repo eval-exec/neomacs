@@ -3,9 +3,9 @@ use std::time::Duration;
 use expect_test::expect;
 use neomacs_tui_tests::RawTerminalSnapshot;
 
-use crate::{COMPAT_GNU_ELPA_PIN, CORFU_MELPA_PIN, CachedMelpaOracle};
+use super::{COMPAT_GNU_ELPA_PIN, CORFU_MELPA_PIN, CachedMelpaOracle};
 
-use crate::scenario::{PackageTuiScenario, PairTimeout, ReadinessCheckpoint};
+use super::scenario::{PackageTuiScenario, PairTimeout, ReadinessCheckpoint};
 
 const CORFU_TUI_PRELUDE: &str = r#"
 (require 'corfu)

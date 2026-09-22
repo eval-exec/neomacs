@@ -5,9 +5,9 @@ use std::time::{Duration, Instant};
 use expect_test::{Expect, expect};
 use neomacs_tui_tests::{RawTerminalSnapshot, TuiSession};
 
-use crate::{BEACON_MELPA_PIN, CachedMelpaOracle};
+use super::{BEACON_MELPA_PIN, CachedMelpaOracle};
 
-use crate::scenario::{
+use super::scenario::{
     PackageTuiPair, PackageTuiScenario, PairTimeout, ReadinessCheckpoint, TerminalProfile,
 };
 

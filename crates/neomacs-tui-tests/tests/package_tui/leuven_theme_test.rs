@@ -3,9 +3,9 @@ use std::time::Duration;
 use expect_test::expect;
 use neomacs_tui_tests::{RawTerminalSnapshot, TuiSession};
 
-use crate::{CachedMelpaOracle, LEUVEN_THEME_MELPA_PIN};
+use super::{CachedMelpaOracle, LEUVEN_THEME_MELPA_PIN};
 
-use crate::scenario::{PackageTuiPair, PackageTuiScenario, PairTimeout, ReadinessCheckpoint};
+use super::scenario::{PackageTuiPair, PackageTuiScenario, PairTimeout, ReadinessCheckpoint};
 
 const LEUVEN_TUI_PRELUDE: &str = r####"
 (require 'cl-lib)
