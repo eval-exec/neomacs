@@ -7582,6 +7582,19 @@ fn line_break_extend_fill_reaches_tty_reserved_right_column() {
         .last_frame_display_state
         .as_ref()
         .expect("display state");
+    for entry in &state.window_matrices {
+        let text_rows: Vec<usize> = entry
+            .matrix
+            .rows
+            .iter()
+            .filter(|row| row.enabled && row.role == GlyphRowRole::Text)
+            .map(|row| row.glyphs[GlyphArea::Text.index()].len())
+            .collect();
+        eprintln!(
+            "MATRIX-SINGLE window={:?} ncols={} text_row_glyph_counts={:?}",
+            entry.window_id, entry.matrix.ncols, text_rows
+        );
+    }
     let entry = state
         .window_matrices
         .iter()
@@ -7616,6 +7629,117 @@ fn line_break_extend_fill_reaches_tty_reserved_right_column() {
         u16::try_from(entry.matrix.ncols - 2).expect("matrix width fits u16"),
         "the :extend fill plus the appended newline space must cover through \
          the full text area, including the TTY-reserved right column"
+    );
+}
+
+/// The TUI probe `overlay_extend_face_paints_the_rest_of_the_line` fails in
+/// a side-by-side split while single-window layouts fill correctly.  Same
+/// shape here at the engine level: an `:extend` face covering a line AND its
+/// newline must produce the stretch fill out to the LEFT window's edge even
+/// though another window shares the frame.
+///
+/// IGNORED: the body walk plans and applies the fill (verified: the
+/// `ResolvedLineEndPlan` mutation takes the action row 18 -> 20 glyphs), but
+/// the FINAL matrix for the split window holds uniformly padded rows
+/// (every enabled Text row, empty ones included, has `ncols - 1` glyphs) and
+/// no stretch glyph.  The same buffer/face in a full-width window keeps the
+/// 3-glyph row with its stretch, so something materializes the split window's
+/// rows to the text width after the body walk -- likely in the
+/// output-grid/retained-matrix install path for the selected window of a
+/// multi-window frame.
+#[test]
+#[ignore = "layout engine: split-window rows are padded to ncols-1, dropping the :extend stretch"]
+fn split_window_line_break_extend_fill_reaches_right_column() {
+    let mut eval = Context::new();
+    convert_current_buffer_text_backend(&mut eval, BufferTextBackendKind::GapBuffer);
+    let buf_id = eval
+        .buffer_manager()
+        .current_buffer()
+        .expect("current buffer")
+        .id();
+    {
+        insert_fragmented_current_buffer_text(
+            &mut eval,
+            "Actions\n[f1]  Pydoc Module\n[f2]  Second action\n",
+        );
+        let buffer = eval.buffer_manager_mut().get_mut(buf_id).expect("buffer");
+        // "Actions\n" is 8 chars; the action line + newline spans [8, 27).
+        assert!(buffer.put_text_property(8, 27, Value::symbol("face"), extend_face_value()));
+    }
+    let frame_id = eval
+        .frame_manager_mut()
+        .create_frame("split-extend-fill", 360, 180, buf_id);
+    let left_window = eval
+        .frame_manager()
+        .get(frame_id)
+        .expect("frame")
+        .selected_window;
+    let candidates_buf = eval.buffer_manager_mut().create_buffer(" *candidates*");
+    {
+        let buffer = eval
+            .buffer_manager_mut()
+            .get_mut(candidates_buf)
+            .expect("candidates buffer");
+        buffer.insert("deploymentkit\n");
+    }
+    let right_window = eval
+        .frame_manager_mut()
+        .split_window(
+            frame_id,
+            left_window,
+            neovm_core::window::SplitDirection::Horizontal,
+            candidates_buf,
+            None,
+            neovm_core::window::SplitPlacement::AfterTarget,
+        )
+        .expect("split window beside the action buffer");
+
+    let mut engine = LayoutEngine::new();
+    engine.layout_frame_rust(&mut eval, frame_id);
+    let state = engine
+        .last_frame_display_state
+        .as_ref()
+        .expect("display state");
+    let entry = state
+        .window_matrices
+        .iter()
+        .find(|entry| entry.window_id.get() == left_window.0 as i64)
+        .expect("left window matrix");
+    let row = entry
+        .matrix
+        .rows
+        .iter()
+        .find(|row| {
+            row.enabled
+                && row.role == GlyphRowRole::Text
+                && matches!(
+                    row.glyphs[GlyphArea::Text.index()]
+                        .first()
+                        .map(|glyph| &glyph.glyph_type),
+                    Some(GlyphType::Char { ch: '[' })
+                )
+        })
+        .expect("action line row in the left window");
+    let text_glyphs = &row.glyphs[GlyphArea::Text.index()];
+    let stretch_cols = text_glyphs
+        .iter()
+        .rev()
+        .find_map(|glyph| match glyph.glyph_type {
+            GlyphType::Stretch { width_cols } => Some(width_cols),
+            _ => None,
+        });
+    let right_cols = entry.matrix.ncols - 1;
+    assert!(
+        stretch_cols.is_some_and(|cols| usize::from(cols) >= right_cols - 20),
+        "the :extend fill must reach the left window's right edge (ncols={}, \
+         row glyphs={:?}); got stretch {:?} (right window {:?})",
+        entry.matrix.ncols,
+        text_glyphs
+            .iter()
+            .map(|glyph| format!("{:?}", glyph.glyph_type))
+            .collect::<Vec<_>>(),
+        stretch_cols,
+        right_window,
     );
 }
 
