@@ -934,7 +934,10 @@ impl EngineMatchData {
     fn set_single_group(&mut self, group: MatchGroup) {
         self.groups.clear();
         self.groups.push(Some(group.emacs_byte_range()));
-        self.groups.resize(GNU_SEARCH_REGS_BASE_CAPACITY, None);
+        // Keep a distinct instantiation from the regexp converter's
+        // generic Clone-based padding helper.
+        self.groups
+            .resize_with(GNU_SEARCH_REGS_BASE_CAPACITY, || None);
     }
 
     fn new(groups: MatchGroupVec) -> Self {
