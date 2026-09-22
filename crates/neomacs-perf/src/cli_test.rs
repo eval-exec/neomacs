@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use super::{
     ComparisonSampleCount, CounterScope, Frontend, MachinePolicy, NativeProfiler, PerfCommand,
-    ProfileScope, ScenarioId, SuiteId, parse_perf_command,
+    ProfileReportStyle, ProfileScope, ScenarioId, SuiteId, parse_perf_command,
 };
 
 fn parse(args: &[&str]) -> Result<PerfCommand, super::PerfCliError> {
@@ -199,6 +199,7 @@ fn profile_command_selects_native_sampling_without_becoming_a_comparison() {
             scenario: ScenarioId::RustLspTyping,
             profiler: NativeProfiler::Perf,
             scope: ProfileScope::EditLoop,
+            report_style: ProfileReportStyle::CallGraph,
             editor: Some(PathBuf::from("target/profiling/neomacs")),
             iterations: NonZeroU32::new(40).expect("non-zero literal"),
             frontend: Some(Frontend::Tui {
@@ -222,6 +223,37 @@ fn profile_command_selects_native_sampling_without_becoming_a_comparison() {
 }
 
 #[test]
+fn profile_command_selects_self_time_and_rejects_unknown_report_styles() {
+    let PerfCommand::Profile {
+        report_style,
+        scope,
+        profiler,
+        ..
+    } = parse(&[
+        "profile",
+        "bounded-search-no-edit",
+        "--report-style",
+        "self-time",
+    ])
+    .expect("parse self-time profile")
+    else {
+        panic!("profile command must remain typed")
+    };
+    assert_eq!(report_style, ProfileReportStyle::SelfTime);
+    assert_eq!(scope, ProfileScope::EditLoop);
+    assert_eq!(profiler, NativeProfiler::Perf);
+    assert!(
+        parse(&[
+            "profile",
+            "bounded-search-no-edit",
+            "--report-style",
+            "unknown",
+        ])
+        .is_err()
+    );
+}
+
+#[test]
 fn list_and_help_are_explicit_commands() {
     assert_eq!(parse(&["list"]).expect("parse list"), PerfCommand::List);
     let PerfCommand::Help { rendered } = parse(&["--help"]).expect("parse root help") else {
@@ -236,6 +268,7 @@ fn list_and_help_are_explicit_commands() {
     assert!(rendered.contains("Usage: cargo xtask perf profile [OPTIONS] <SCENARIO>"));
     assert!(rendered.contains("--profiler <PROFILER>"));
     assert!(rendered.contains("--scope <SCOPE>"));
+    assert!(rendered.contains("--report-style <REPORT_STYLE>"));
 }
 
 #[test]

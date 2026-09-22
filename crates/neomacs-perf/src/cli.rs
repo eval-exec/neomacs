@@ -8,8 +8,9 @@ use thiserror::Error;
 
 use crate::{
     ComparisonRequest, ComparisonSampleCount, ComparisonVerdict, CounterScope, Frontend,
-    MachinePolicy, NativeProfiler, PerfError, PerfHarness, ProfileRequest, ProfileScope,
-    ProfileVerdict, RunRequest, ScenarioId, SuiteId, SuiteRequest, SuiteVerdict, scenarios,
+    MachinePolicy, NativeProfiler, PerfError, PerfHarness, ProfileReportStyle, ProfileRequest,
+    ProfileScope, ProfileVerdict, RunRequest, ScenarioId, SuiteId, SuiteRequest, SuiteVerdict,
+    scenarios,
 };
 
 const DEFAULT_SAMPLES: ComparisonSampleCount =
@@ -47,6 +48,7 @@ pub enum PerfCommand {
         scenario: ScenarioId,
         profiler: NativeProfiler,
         scope: ProfileScope,
+        report_style: ProfileReportStyle,
         editor: Option<PathBuf>,
         iterations: NonZeroU32,
         frontend: Option<Frontend>,
@@ -137,6 +139,9 @@ struct ProfileArgs {
     /// Portion of the scenario sampled by the native profiler.
     #[arg(long, value_enum, default_value_t = ProfileScopeArg::EditLoop)]
     scope: ProfileScopeArg,
+    /// Self-time skips stack unwinding for a faster report; raw stacks are retained.
+    #[arg(long, value_enum, default_value_t = ProfileReportStyleArg::CallGraph)]
+    report_style: ProfileReportStyleArg,
     /// Editor executable (defaults to target/profiling/neomacs).
     #[arg(long)]
     editor: Option<PathBuf>,
@@ -291,6 +296,21 @@ enum ProfileScopeArg {
     WholeProcess,
 }
 
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum ProfileReportStyleArg {
+    CallGraph,
+    SelfTime,
+}
+
+impl From<ProfileReportStyleArg> for ProfileReportStyle {
+    fn from(style: ProfileReportStyleArg) -> Self {
+        match style {
+            ProfileReportStyleArg::CallGraph => Self::CallGraph,
+            ProfileReportStyleArg::SelfTime => Self::SelfTime,
+        }
+    }
+}
+
 impl From<ProfileScopeArg> for ProfileScope {
     fn from(scope: ProfileScopeArg) -> Self {
         match scope {
@@ -391,6 +411,7 @@ impl From<PerfSubcommand> for PerfCommand {
                     scenario: arguments.scenario,
                     profiler: arguments.profiler.into(),
                     scope: arguments.scope.into(),
+                    report_style: arguments.report_style.into(),
                     editor: arguments.editor,
                     iterations,
                     frontend,
@@ -524,6 +545,7 @@ pub fn run_cli(
             scenario,
             profiler,
             scope,
+            report_style,
             editor,
             iterations,
             frontend,
@@ -535,6 +557,7 @@ pub fn run_cli(
             let editor = editor.unwrap_or_else(|| workspace_root.join("target/profiling/neomacs"));
             let mut request = ProfileRequest::new(scenario, editor, iterations, profiler)
                 .with_scope(scope)
+                .with_report_style(report_style)
                 .with_timeout(timeout)
                 .with_machine_policy(machine)
                 .with_video_file(video_file)
