@@ -748,11 +748,39 @@ impl CompiledLeaf {
     /// outcome — precise-deopt capture (no frame unwind, ownership transfers to
     /// the resumed interpreter frame) or the `cleanup_bytecode_frame`-parity
     /// frame unwind on a normal/signal exit.
+    #[inline(always)]
     pub(crate) fn invoke_native(
         &self,
         vmctx: *mut u8,
         args_ptr: *const i64,
         consts: *const Value,
+    ) -> NativeRun {
+        self.invoke_native_frame::<false>(vmctx, args_ptr, consts, None)
+    }
+
+    /// Enter at an OSR header with an interpreter-owned binding segment already
+    /// appended to `jit_bind_stack`. The suspended VM retains final frame cleanup;
+    /// native exit cleans only to the transfer's specpdl depth. Precise deopt
+    /// returns the evolved segment without unwinding it.
+    #[inline]
+    pub(crate) fn invoke_osr(
+        &self,
+        vmctx: *mut u8,
+        args_ptr: *const i64,
+        consts: *const Value,
+        bind_frame: Option<(usize, usize)>,
+    ) -> NativeRun {
+        self.invoke_native_frame::<true>(vmctx, args_ptr, consts, bind_frame)
+    }
+
+    // Separate specializations keep OSR frame selection out of ordinary native
+    // calls. Only the cold OSR entry supplies a borrowed binding segment.
+    fn invoke_native_frame<const OSR: bool>(
+        &self,
+        vmctx: *mut u8,
+        args_ptr: *const i64,
+        consts: *const Value,
+        osr_bind_frame: Option<(usize, usize)>,
     ) -> NativeRun {
         debug_assert!(
             self.dynamic_prefix == 0 || !consts.is_null(),
@@ -769,10 +797,13 @@ impl CompiledLeaf {
         // call shim under its own documented contract.
         // Frame-unwind bookkeeping for dynamic bindings: record the entry
         // specpdl depth and this frame's bind-stack segment base, and restore
-        // both on every exit — exactly cleanup_bytecode_frame's unconditional
-        // unbind_to(specpdl_base). On a deopt this is a no-op by construction
-        // (varbind poisons, so no binding can precede a deopt).
-        let bind_frame = if self.has_binds {
+        // both on normal/signal exit. Precise deopt instead returns the live
+        // segment without unwinding. OSR supplies the segment base from BEFORE
+        // borrowing interpreter bindings, retaining the transfer's specpdl depth
+        // as the cleanup limit; the suspended VM owns final frame cleanup.
+        let bind_frame = if OSR {
+            osr_bind_frame
+        } else if self.has_binds {
             debug_assert!(!vmctx.is_null(), "binding bodies require a Context");
             // SAFETY: the vmctx contract (dormant seam-provided Context); only
             // a length read here.

@@ -149,6 +149,13 @@ fn bump_leaf_slot_epoch() {
     LEAF_SLOT_EPOCH.fetch_add(1, Ordering::Relaxed);
 }
 
+#[derive(Clone)]
+struct OsrEntry {
+    leaf: Rc<CompiledLeaf>,
+    stack_depth: usize,
+    bind_depth: usize,
+}
+
 thread_local! {
     /// `compiled_id` -> compiled state, owned by and private to this thread.
     static COMPILED: RefCell<DenseCache> = RefCell::new(DenseCache::default());
@@ -179,14 +186,14 @@ thread_local! {
     static COMPILED_HEAP: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
 
     /// OSR (on-stack replacement) leaves, keyed by `(compiled_id, osr_pc)`. The
-    /// value is `Some((leaf, entry_depth))` when the function is OSR-eligible +
+    /// value is `Some(OsrEntry)` when the function is OSR-eligible +
     /// compiled at that loop header, `None` when it is ineligible/uncompilable (a
     /// negative cache, so a hot loop that can't OSR is probed only once). Same
     /// thread/scope as COMPILED; cleared alongside it (heap-identity + `clear`).
     // The nested shape is private and directly documents positive/negative OSR
-    // cache entries plus their entry depth.
+    // cache entries plus their operand and binding depths.
     #[allow(clippy::type_complexity)]
-    static OSR_CACHE: RefCell<HashMap<(u64, usize), Option<(Rc<CompiledLeaf>, usize)>>> =
+    static OSR_CACHE: RefCell<HashMap<(u64, usize), Option<OsrEntry>>> =
         RefCell::new(HashMap::default());
 }
 
@@ -235,19 +242,15 @@ impl Drop for NativeDepthGuard {
     }
 }
 
-/// Whether `func`'s body carries any op that establishes dynamic state the OSR
-/// entry cannot reconstruct (it skips the prologue): dynamic bindings, save
-/// records, unwind-protect, and condition/catch handler frames. OSR is restricted
-/// to bodies WITHOUT these — pure lexical compute loops — so the transfer needs
-/// only the operand stack, no specpdl/handler state.
-fn osr_body_has_dynamic_state(func: &ByteCodeFunction) -> bool {
+/// Save records, unwind-protect and handler frames are not transferred by OSR.
+/// Lexical bodies may use VarBind/Unbind: the entry validates and borrows the VM's
+/// live binding stack, and a precise deopt returns its evolved state.
+fn osr_body_has_unsupported_state(func: &ByteCodeFunction) -> bool {
     use crate::emacs_core::bytecode::Op;
     func.executable_ops().iter().any(|op| {
         matches!(
             op,
-            Op::VarBind(_)
-                | Op::Unbind(_)
-                | Op::SaveExcursion
+            Op::SaveExcursion
                 | Op::SaveRestriction
                 | Op::SaveCurrentBuffer
                 | Op::SaveWindowExcursion
@@ -261,22 +264,17 @@ fn osr_body_has_dynamic_state(func: &ByteCodeFunction) -> bool {
 
 /// Compile (once) the OSR variant of `func` entered at `osr_pc`, or `None` when
 /// `func` is not OSR-eligible or the body doesn't compile. Eligibility: lexical
-/// (params on the operand stack, so the seeded snapshot carries them), no dynamic
-/// bind/handler/save ops, and the loop header has a well-defined entry depth with
-/// no active handlers. Returns `(leaf, entry_depth)` — `entry_depth` is the exact
-/// operand-stack size the native entry seeds, checked against the live snapshot.
-fn compile_osr_leaf(
-    obarray: &Obarray,
-    func: &ByteCodeFunction,
-    osr_pc: usize,
-) -> Option<(Rc<CompiledLeaf>, usize)> {
+/// (params on the operand stack, so the seeded snapshot carries them), no
+/// handler/save ops, and the loop header has well-defined operand and binding
+/// depths with no active handlers. Both depths are checked against the live VM.
+fn compile_osr_leaf(obarray: &Obarray, func: &ByteCodeFunction, osr_pc: usize) -> Option<OsrEntry> {
     let dbg = std::env::var_os("NEOMACS_OSR_DEBUG").is_some();
-    if !func.lexical || osr_body_has_dynamic_state(func) {
+    if !func.lexical || osr_body_has_unsupported_state(func) {
         if dbg {
             eprintln!(
                 "OSR_DEBUG reject pre: lexical={} dynstate={}",
                 func.lexical,
-                osr_body_has_dynamic_state(func)
+                osr_body_has_unsupported_state(func)
             );
         }
         return None;
@@ -303,6 +301,7 @@ fn compile_osr_leaf(
         }
         return None;
     };
+    let &bind_depth = cfg.entry_binds.get(&osr_pc)?;
     if !cfg.entry_handlers.get(&osr_pc).is_none_or(|h| h.is_empty()) {
         if dbg {
             eprintln!("OSR_DEBUG reject: handlers live at pc {osr_pc}");
@@ -337,16 +336,20 @@ fn compile_osr_leaf(
         }
     };
     if dbg {
-        eprintln!("OSR_DEBUG compiled: pc={osr_pc} depth={entry_depth}");
+        eprintln!("OSR_DEBUG compiled: pc={osr_pc} depth={entry_depth} binds={bind_depth}");
     }
-    Some((Rc::new(leaf), entry_depth))
+    Some(OsrEntry {
+        leaf: Rc::new(leaf),
+        stack_depth: entry_depth,
+        bind_depth,
+    })
 }
 
 /// OSR (on-stack replacement) dispatch: transfer a hot loop in `func` into native
 /// code at loop-header `osr_pc`, given the live operand-stack snapshot `stack`
 /// (bottom = the frame base). Returns `None` when OSR does not apply — ineligible
-/// function, uncompilable body, or a snapshot whose depth ≠ the compiled entry
-/// depth (a non-balanced back-edge; never transfer then). Otherwise the
+/// function, uncompilable body, or operand/binding depths that differ from the
+/// compiled entry (a non-balanced back-edge; never transfer then). Otherwise the
 /// [`NativeRun`] from the native OSR entry: `Ok(bits)` = the function completed
 /// (its result); `Signal`/`Deopt*` = the interpreter handles the outcome. The OSR
 /// variant is compiled once and cached (positively or negatively) per
@@ -360,6 +363,7 @@ pub(crate) fn try_run_osr(
     func: &ByteCodeFunction,
     osr_pc: usize,
     stack: &[Value],
+    binds: &[usize],
 ) -> Option<NativeRun> {
     if ctx.is_null() {
         return None;
@@ -374,21 +378,53 @@ pub(crate) fn try_run_osr(
             .or_insert_with(|| compile_osr_leaf(obarray, func, osr_pc))
             .clone()
     });
-    let (leaf, entry_depth) = cached?;
+    let OsrEntry {
+        leaf,
+        stack_depth: entry_depth,
+        bind_depth,
+    } = cached?;
     // Only transfer when the live snapshot is exactly the header's entry stack.
-    if stack.len() != entry_depth {
+    if stack.len() != entry_depth || binds.len() != bind_depth {
         if std::env::var_os("NEOMACS_OSR_DEBUG").is_some() {
             eprintln!(
-                "OSR_DEBUG no-transfer: pc={osr_pc} snapshot depth {} != entry {entry_depth}",
-                stack.len()
+                "OSR_DEBUG no-transfer: pc={osr_pc} snapshot depth {} / binds {} != entry {entry_depth} / {bind_depth}",
+                stack.len(),
+                binds.len()
             );
         }
         return None;
     }
     let arg_bits: Vec<i64> = stack.iter().map(|v| v.bits() as i64).collect();
+    // Lend a COPY of the live interpreter binding stack. Its outer JIT prefix
+    // belongs to suspended native callers and must survive this entire transfer.
+    // No Lisp or GC can run between this seed and the native entry.
+    let bind_frame = if leaf.has_binds {
+        // SAFETY: dormant seam-provided Context; length reads and Vec writes only.
+        let ctx = unsafe { &mut *ctx };
+        let spec_base = ctx.specpdl.len();
+        if binds.last().is_some_and(|&base| base >= spec_base)
+            || binds.windows(2).any(|pair| pair[0] >= pair[1])
+        {
+            return None;
+        }
+        let stack_base = ctx.jit_bind_stack.len();
+        ctx.jit_bind_stack.extend_from_slice(binds);
+        Some((spec_base, stack_base))
+    } else {
+        debug_assert!(binds.is_empty());
+        None
+    };
     OSR_TRANSFER_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let run =
-        leaf.call_premarshaled_consts(ctx as *mut u8, func.constants.as_ptr(), arg_bits.as_ptr());
+    let run = leaf.invoke_osr(
+        ctx as *mut u8,
+        arg_bits.as_ptr(),
+        func.constants.as_ptr(),
+        bind_frame,
+    );
+    if let Some((_, stack_base)) = bind_frame {
+        // SAFETY: native execution has returned; only a dormant Context length read.
+        debug_assert_eq!(unsafe { (*ctx).jit_bind_stack.len() }, stack_base);
+    }
     if std::env::var_os("NEOMACS_OSR_DEBUG").is_some() {
         let tag = match &run {
             NativeRun::Ok(_) => "ok",
@@ -748,8 +784,8 @@ pub(crate) fn collect_jit_reloc_gc_roots(roots: &mut Vec<Value>) {
     // OSR leaves also bake heap-constant reloc vectors — root them too, else a GC
     // between an OSR compile and its next run could free the leaf's constants.
     OSR_CACHE.with(|c| {
-        for (leaf, _) in c.borrow().values().flatten() {
-            roots.extend_from_slice(leaf.reloc_values());
+        for entry in c.borrow().values().flatten() {
+            roots.extend_from_slice(entry.leaf.reloc_values());
         }
     });
 }

@@ -2317,12 +2317,13 @@ fn switch_static_targets(
 }
 
 /// Basic-block analysis: sorted block leaders, the operand-stack depth at each
-/// block's entry, the active-handler stack at each block's entry, the resolved
-/// static target sets of every `Op::Switch`, and the max depth seen at any
-/// block boundary.
+/// block's entry, its outstanding binding count and active-handler stack, the
+/// resolved static target sets of every `Op::Switch`, and the max depth seen at
+/// any block boundary.
 pub(crate) struct Cfg {
     pub(crate) leaders: Vec<usize>,
     pub(crate) entry_depth: HashMap<usize, usize>,
+    pub(crate) entry_binds: HashMap<usize, usize>,
     pub(crate) entry_handlers: HashMap<usize, Vec<HandlerStatic>>,
     pub(crate) switch_targets: HashMap<usize, Vec<(i64, usize)>>,
     pub(crate) max_depth: usize,
@@ -2702,6 +2703,7 @@ pub(crate) fn analyze_cfg(
     Ok(Cfg {
         leaders,
         entry_depth,
+        entry_binds,
         entry_handlers,
         switch_targets,
         max_depth,
@@ -4406,6 +4408,9 @@ mod mir_inline_guards;
 #[cfg(test)]
 #[path = "tests/mir_named_calls.rs"]
 mod mir_named_calls_tests;
+#[cfg(test)]
+#[path = "tests/osr_bindings.rs"]
+mod osr_binding_tests;
 #[cfg(test)]
 #[path = "tests/compile.rs"]
 mod tests;

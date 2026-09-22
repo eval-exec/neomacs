@@ -643,8 +643,8 @@ pub fn call_feedback_collection_enabled() -> bool {
 /// workload −25% wall; the shimmed-builtin overhead previously ate the
 /// transfer's gain — the reason this started life opt-in). Kill switch:
 /// `NEOVM_JIT_OSR=off` (same spelling family as `NEOVM_JIT`); the interpreter
-/// marshals its live operand stack into a native OSR entry, restricted to
-/// functions with no dynamic bind/handler/save ops (nothing to transfer).
+/// marshals its live operand and binding stacks into a native OSR entry.
+/// Handler/save operations and nonlexical functions remain ineligible.
 /// Off ⇒ the back-edge stays a pure interpreter loop, zero added cost.
 pub fn jit_osr_on() -> bool {
     #[cfg(test)]

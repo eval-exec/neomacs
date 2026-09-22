@@ -2188,7 +2188,7 @@ impl<'a> Vm<'a> {
     }
 
     #[cfg(all(test, feature = "jit"))]
-    fn force_interpreter_only_for_test(&mut self) {
+    pub(crate) fn force_interpreter_only_for_test(&mut self) {
         self.bytecode_tier_policy = BytecodeTierPolicy::InterpreterOnly;
     }
 
@@ -3487,11 +3487,11 @@ impl<'a> Vm<'a> {
     /// A precise deopt means a guard failed after the native loop had run
     /// iterations -- buffer edits, variable stores, calls -- so the frame's
     /// pre-transfer stack is stale and interpreting on from it would run those
-    /// iterations again. OSR only takes bodies with no dynamic state (see
-    /// `osr_body_has_dynamic_state`), so the captured state is an operand
-    /// stack and a pc of this frame: it is installed in place, and the driver
-    /// continues at the pc on the Rust stack it already uses. State it could
-    /// not adopt (unreachable while OSR refuses such bodies) finishes the
+    /// iterations again. OSR captures the operand stack, binding stack and pc
+    /// of this frame: both stacks are installed in place, and the driver
+    /// continues at the pc on the Rust stack it already uses. The suspended
+    /// interpreter frame retains final cleanup ownership. State it could
+    /// not adopt (unreachable with the current eligibility gate) finishes the
     /// function in a resumed frame instead -- latched against another
     /// transfer, on a guarded stack.
     #[cfg(feature = "jit")]
@@ -3503,17 +3503,20 @@ impl<'a> Vm<'a> {
         frame_base: usize,
         depth: usize,
         target: usize,
+        bind_stack: &mut BindStack,
     ) -> OsrOutcome {
         use crate::emacs_core::jit::compile::{DeoptResume, NativeRun, stash_pending_flow};
         let snapshot: Vec<Value> = self.ctx.bc_buf[frame_base..frame_base + depth].to_vec();
+        let entry_spec_depth = self.ctx.specpdl.len();
         let ctx_ptr: *mut crate::emacs_core::eval::Context = &mut *self.ctx;
-        let resume =
-            match crate::emacs_core::jit::cache::try_run_osr(ctx_ptr, func, target, &snapshot) {
-                Some(NativeRun::Ok(bits)) => return OsrOutcome::Returned(Value::from_bits(bits)),
-                Some(NativeRun::Signal) => return OsrOutcome::Exited,
-                Some(NativeRun::DeoptAt(resume)) => resume,
-                Some(NativeRun::Deopt) | None => return OsrOutcome::Interpret { pc: target },
-            };
+        let resume = match crate::emacs_core::jit::cache::try_run_osr(
+            ctx_ptr, func, target, &snapshot, bind_stack,
+        ) {
+            Some(NativeRun::Ok(bits)) => return OsrOutcome::Returned(Value::from_bits(bits)),
+            Some(NativeRun::Signal) => return OsrOutcome::Exited,
+            Some(NativeRun::DeoptAt(resume)) => resume,
+            Some(NativeRun::Deopt) | None => return OsrOutcome::Interpret { pc: target },
+        };
         let DeoptResume {
             pc,
             stack,
@@ -3523,13 +3526,14 @@ impl<'a> Vm<'a> {
             cond_base,
         } = *resume;
         if handlers == 0
-            && binds.is_empty()
-            && spec_base == self.ctx.specpdl.len()
+            && spec_base == entry_spec_depth
             && cond_base == self.ctx.condition_stack_len()
             && stack.len() <= func.max_stack as usize
         {
             self.ctx.bc_buf.truncate(frame_base);
             self.ctx.bc_buf.extend_from_slice(&stack);
+            bind_stack.clear();
+            bind_stack.extend_from_slice(&binds);
             return OsrOutcome::Interpret { pc };
         }
         match self.ctx.grow_eval_stack(|ctx| {
@@ -3957,7 +3961,13 @@ impl<'a> Vm<'a> {
                             {
                                 let depth = cursor.len - frame_base;
                                 cursor.publish(&mut self.ctx);
-                                match self.osr_transfer(func, frame_base, depth, target) {
+                                match self.osr_transfer(
+                                    func,
+                                    frame_base,
+                                    depth,
+                                    target,
+                                    &mut aux_stack.current_mut().bind_stack,
+                                ) {
                                     OsrOutcome::Interpret { pc } => {
                                         // Not transferred, a plain deopt, or a precise
                                         // deopt installed in place: this frame's state
