@@ -16,6 +16,8 @@
 //! [`EmacsRuntime`]: https://docs.rs/neomacs-melpa-test-support/struct.EmacsRuntime.html
 
 pub mod activation;
+pub mod elpa_archive;
+pub mod elpa_lock;
 pub mod install;
 pub mod seal;
 pub mod source_lock;
@@ -23,6 +25,7 @@ pub mod source_lock;
 pub(crate) mod test_support;
 
 pub use activation::{LoadSuffixes, PackageActivation, package_activation_elisp};
+pub use elpa_archive::{GNU_ELPA_ARCHIVE, prepare_cached_gnu_elpa_package};
 pub use install::{
     InstallCommandError, PackageInstallDriver, PathGnuDriver, configure_process_environment,
     deterministic_process_environment, elisp_string, package_preparation_run_id,
@@ -258,7 +261,19 @@ pub fn provision(
     pinned: &PinnedPackage,
     driver: &dyn PackageInstallDriver,
 ) -> Result<ProvisionedPackage, String> {
-    let package_dir = prepare_cached_locked_melpa_package(driver, pinned.as_pair())?;
+    // Dispatch by which manifest pins the package: a MELPA row installs from
+    // the locked source checkout, an ELPA row through the archive.  Neither
+    // path vendors package source in this repository.
+    let package_dir = match elpa_lock::locked_elpa_source(&pinned.name, &pinned.version) {
+        Ok(row) => {
+            let _ = row;
+            elpa_archive::prepare_cached_gnu_elpa_package(driver, pinned.as_pair())?
+        }
+        Err(elpa_miss) => match prepare_cached_locked_melpa_package(driver, pinned.as_pair()) {
+            Ok(directory) => directory,
+            Err(melpa_error) => return Err(format!("{melpa_error}; {elpa_miss}")),
+        },
+    };
     let provisioned = ProvisionedPackage::new(pinned.clone(), package_dir);
     seal::seal_provisioned(&provisioned)?;
     Ok(provisioned)

@@ -10,9 +10,10 @@
 //! all `minibuffer-line--update' does — must become visible in the
 //! miniwindow's grid.
 //!
-//! The package source is provisioned through `neomacs-infra`'s shared
-//! content-addressed cache (`packages::source_file`), so both engines load
-//! the same pinned bytes and no suite embeds its own copy.
+//! The package is provisioned through `neomacs-infra`'s ELPA lock row
+//! (`packages::provision`): the repository pins name + version + commit and
+//! GNU installs the release into the shared cache — no package source is
+//! vendored here.
 
 use crate::support;
 use neomacs_infra::packages;
@@ -20,21 +21,19 @@ use neomacs_tui_tests::*;
 use std::time::Duration;
 use support::*;
 
-/// The package source, verbatim from GNU ELPA (minibuffer-line 0.1).
-const MINIBUFFER_LINE_SOURCE: &str = include_str!("minibuffer_line_package.el");
-
-/// Provision the package once and mount it into both sessions through the
-/// shared cache path (`-l` with an activation file).
-fn mount_minibuffer_line() -> neomacs_infra::packages::ProvisionedSourceFile {
-    let provisioned = packages::source_file("minibuffer-line", MINIBUFFER_LINE_SOURCE)
-        .expect("provision minibuffer-line source");
-    provisioned
+/// Provision the package once from the ELPA lock row into the shared cache.
+fn mount_minibuffer_line(
+    driver: &packages::PathGnuDriver,
+) -> neomacs_infra::packages::ProvisionedPackage {
+    packages::provision(&packages::pin("minibuffer-line", "0.1"), driver)
+        .expect("provision minibuffer-line from GNU ELPA")
 }
 
 #[test]
 fn minibuffer_line_mode_displays_the_format_in_the_miniwindow() {
-    let provisioned = mount_minibuffer_line();
-    let (mut gnu, mut neo) = boot_pair(&format!("-l {}", provisioned.path().display()));
+    let driver = packages::PathGnuDriver::resolve().expect("resolve the install editor");
+    let provisioned = mount_minibuffer_line(&driver);
+    let (mut gnu, mut neo) = boot_pair(&format!("-l {}", provisioned.source_file().display()));
     // Deterministic format: the package default embeds the hostname and
     // wall clock, which cannot match across machines or runs.  `(:eval …)`
     // is the construct class the default format uses.
@@ -62,8 +61,9 @@ fn minibuffer_line_mode_displays_the_format_in_the_miniwindow() {
 
 #[test]
 fn minibuffer_line_updates_on_its_refresh_timer() {
-    let provisioned = mount_minibuffer_line();
-    let (mut gnu, mut neo) = boot_pair(&format!("-l {}", provisioned.path().display()));
+    let driver = packages::PathGnuDriver::resolve().expect("resolve the install editor");
+    let provisioned = mount_minibuffer_line(&driver);
+    let (mut gnu, mut neo) = boot_pair(&format!("-l {}", provisioned.source_file().display()));
     // A 1s refresh interval with a counting marker proves the refresh timer
     // re-renders the miniwindow (erase + re-insert), not just the first draw.
     // The counter lives in a single well-formed `(:eval ...)' form.

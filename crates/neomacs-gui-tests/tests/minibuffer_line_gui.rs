@@ -33,13 +33,13 @@ fn minibuffer_line_renders_in_the_graphical_miniwindow() {
     let program = std::env::var_os("NEOMACS_GUI_TEST_BINARY")
         .map(PathBuf::from)
         .unwrap_or_else(|| root.join("target/release/neomacs"));
-    // Provision the package source through the shared cache so this suite
-    // exercises the same pinned bytes as the TUI parity tests.
-    let source =
-        std::fs::read_to_string(root.join("crates/neomacs-gui-tests/fixtures/minibuffer-line.el"))
-            .expect("read GNU ELPA minibuffer-line source");
-    let provisioned = packages::source_file("minibuffer-line", &source)
-        .expect("provision minibuffer-line source");
+    // Provision through the ELPA lock row (name + version + commit; no
+    // package source is vendored) into the shared cache.
+    let provisioned = packages::provision(
+        &packages::pin("minibuffer-line", "0.1"),
+        &packages::PathGnuDriver::resolve().expect("resolve the install editor"),
+    )
+    .expect("provision minibuffer-line from GNU ELPA");
     let mut plan = GuiTestPlan::new(
         backend,
         &root,
@@ -52,7 +52,7 @@ fn minibuffer_line_renders_in_the_graphical_miniwindow() {
     .with_program(program)
     .with_env(
         "NEOMACS_PACKAGE_SOURCE",
-        provisioned.path().to_string_lossy(),
+        provisioned.source_file().to_string_lossy(),
     )
     .with_env("RUST_LOG", "warn");
     for (key, value) in session.env() {
