@@ -82,6 +82,25 @@ pub(crate) fn iconst_bits(fb: &FunctionBuilder, v: ClifValue) -> Option<i64> {
     }
 }
 
+/// Test a tagged Lisp value for nil, reusing a materialized predicate when
+/// its exact true/false arms are T and NIL. Other uses keep the tagged value;
+/// a branch that consumes it can let the backend discard the unused select.
+pub(crate) fn lower_is_nil(fb: &mut FunctionBuilder, value: ClifValue) -> ClifValue {
+    use cranelift_codegen::ir::{InstructionData, Opcode, ValueDef};
+    if let ValueDef::Result(inst, _) = fb.func.dfg.value_def(value)
+        && let InstructionData::Ternary {
+            opcode: Opcode::Select,
+            args,
+        } = fb.func.dfg.insts[inst]
+        && iconst_bits(fb, args[1]) == Some(Value::T.bits() as i64)
+        && iconst_bits(fb, args[2]) == Some(Value::NIL.bits() as i64)
+    {
+        return fb.ins().icmp_imm_u(IntCC::Equal, args[0], 0);
+    }
+    fb.ins()
+        .icmp_imm_u(IntCC::Equal, value, Value::NIL.bits() as i64)
+}
+
 /// Return `(value, immediate)` for a binary instruction whose right operand is
 /// an `iconst`. This is the 0.134 IR shape produced by helpers such as
 /// `bor_imm_u` and `ishl_imm_u`.

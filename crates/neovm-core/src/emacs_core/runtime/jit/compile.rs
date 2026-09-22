@@ -4058,9 +4058,7 @@ fn build_leaf_fn<M: Module>(
                     Op::GotoIfNil(t) | Op::GotoIfNotNil(t) => {
                         let cond = stack.pop().ok_or(CompileError::StackUnderflow)?;
                         write_stack_to_vars(&mut fb, &vars, &stack);
-                        let is_nil =
-                            fb.ins()
-                                .icmp_imm_u(IntCC::Equal, cond, Value::NIL.bits() as i64);
+                        let is_nil = lower_is_nil(&mut fb, cond);
                         let tu = *t as usize;
                         let mut target = block_for[&tu];
                         let fallthrough = block_for[&(i + 1)];
@@ -4104,9 +4102,7 @@ fn build_leaf_fn<M: Module>(
                         // top slot — implementing the "ElsePop".
                         let cond = *stack.last().ok_or(CompileError::StackUnderflow)?;
                         write_stack_to_vars(&mut fb, &vars, &stack);
-                        let is_nil =
-                            fb.ins()
-                                .icmp_imm_u(IntCC::Equal, cond, Value::NIL.bits() as i64);
+                        let is_nil = lower_is_nil(&mut fb, cond);
                         let tu = *t as usize;
                         let mut target = block_for[&tu];
                         let fallthrough = block_for[&(i + 1)];
@@ -4445,6 +4441,9 @@ mod osr_entry_guard_tests;
 #[cfg(test)]
 #[path = "tests/osr_poll.rs"]
 mod osr_poll_tests;
+#[cfg(test)]
+#[path = "tests/predicate_branches.rs"]
+mod predicate_branch_tests;
 #[cfg(test)]
 #[path = "tests/compile.rs"]
 mod tests;
