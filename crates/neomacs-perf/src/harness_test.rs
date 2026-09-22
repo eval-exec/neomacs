@@ -1031,7 +1031,7 @@ fn harness_built_from_dirty_tracked_sources_cannot_be_acceptance_evidence() {
 }
 
 /// The editor child gets the allowlisted host variables plus any operator-set
-/// `NEOVM_JIT_*` diagnostic knob, and nothing else.
+/// `NEOVM_JIT_*` diagnostic knob or explicit OSR trace, and nothing else.
 #[test]
 fn benchmark_environment_forwards_the_allowlist_and_jit_knobs_only() {
     use std::ffi::OsString;
@@ -1039,8 +1039,10 @@ fn benchmark_environment_forwards_the_allowlist_and_jit_knobs_only() {
     let vars = vec![
         (os("PATH"), os("/bin")),
         (os("HOME"), os("/home/nobody")),
-        (os("NEOVM_JIT_PROFILE"), os("/tmp/census.csv")),
+        (os("NEOVM_JIT_PROFILE"), os("./tmp/census.csv")),
         (os("NEOVM_JIT_THRESHOLD"), os("1")),
+        (os("NEOMACS_OSR_DEBUG"), os("1")),
+        (os("NEOMACS_OSR_UNRELATED"), os("1")),
         (os("NEOVM_GC_TRACE"), os("1")),
         (os("RUST_LOG"), os("debug")),
     ];
@@ -1051,7 +1053,12 @@ fn benchmark_environment_forwards_the_allowlist_and_jit_knobs_only() {
     forwarded.sort();
     assert_eq!(
         forwarded,
-        ["NEOVM_JIT_PROFILE", "NEOVM_JIT_THRESHOLD", "PATH"]
+        [
+            "NEOMACS_OSR_DEBUG",
+            "NEOVM_JIT_PROFILE",
+            "NEOVM_JIT_THRESHOLD",
+            "PATH"
+        ]
     );
 }
 

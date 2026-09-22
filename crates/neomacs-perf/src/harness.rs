@@ -1330,6 +1330,10 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     // heap. 0 leaves GNU's `gc-cons-threshold`/`gc-cons-percentage` contract
     // exactly; the built-in default is 50.
     "NEOVM_GC_LIVE_GROWTH_PERCENT",
+    // OSR can reject a hot loop before compilation starts, so the JIT's
+    // compilation census alone cannot explain why that loop stays interpreted.
+    // Capture the opt-in rejection trace in the editor's stderr artifact.
+    "NEOMACS_OSR_DEBUG",
 ];
 
 pub(crate) fn configure_benchmark_environment(command: &mut Command, sandbox: &MelpaSandbox) {
