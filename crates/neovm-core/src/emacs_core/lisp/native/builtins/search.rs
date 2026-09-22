@@ -358,8 +358,12 @@ pub(crate) fn builtin_search_forward_with_state(
 ) -> EvalResult {
     expect_args_range("search-forward", args, 1, 4)?;
     let pattern = expect_lisp_string(&args[0])?;
-    let (current_id, opts, start_pt, start_char) =
-        current_search_context_in_manager(buffers, args, SearchKind::ForwardLiteral)?;
+    let CurrentSearchContext {
+        current_id,
+        opts,
+        start_pt,
+        start_char,
+    } = current_search_context_in_manager(buffers, args, SearchKind::ForwardLiteral)?;
     if opts.steps == 0 {
         commit_zero_count_search(buffers, current_id, start_pt, match_data);
         return Ok(Value::fixnum(start_char));
@@ -553,11 +557,21 @@ fn parse_search_options_in_manager(
     })
 }
 
+/// Parsed search options and positions. Reusable only across preparation
+/// that cannot invoke Lisp; callbacks may change buffers or marker bounds.
+#[derive(Clone, Copy)]
+struct CurrentSearchContext {
+    current_id: crate::buffer::BufferId,
+    opts: SearchOptions,
+    start_pt: EmacsBytePos,
+    start_char: i64,
+}
+
 fn current_search_context_in_manager(
     buffers: &crate::buffer::BufferManager,
     args: &[Value],
     kind: SearchKind,
-) -> Result<(crate::buffer::BufferId, SearchOptions, EmacsBytePos, i64), Flow> {
+) -> Result<CurrentSearchContext, Flow> {
     let current_id = buffers
         .current_buffer_id()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
@@ -567,7 +581,12 @@ fn current_search_context_in_manager(
     let opts = parse_search_options_in_manager(buffers, buf, args, kind)?;
     let start_pt = buf.point_emacs_byte_pos();
     let start_char = buffer_byte_to_lisp_char(buf, start_pt);
-    Ok((current_id, opts, start_pt, start_char))
+    Ok(CurrentSearchContext {
+        current_id,
+        opts,
+        start_pt,
+        start_char,
+    })
 }
 
 fn buffer_byte_to_char_result_in_manager(
@@ -800,12 +819,13 @@ impl AnchoredPropertize {
     }
 }
 
-/// Preparation may hand off a compiled pattern only when no Lisp callback
-/// could have changed its inputs since compilation. Otherwise the caller
-/// must look it up again after syntax propertization.
+/// Preparation may hand off parsed context and a compiled pattern only when
+/// no Lisp callback could have changed their inputs. Otherwise execution
+/// resolves them again after syntax propertization.
 struct ReadyRegexpSearch {
     syntax_properties: BufferRegexpSyntaxProperties,
     compiled: Option<std::rc::Rc<crate::emacs_core::regex_emacs::CompiledPattern>>,
+    context: Option<CurrentSearchContext>,
 }
 
 /// How a buffer regexp search should obtain its syntax-table properties.
@@ -838,7 +858,10 @@ fn prepare_buffer_regexp_search(
     // would do nothing. Keep that order without carrying the borrow past the
     // `syntax-propertize` below: `let _ =` drops it on this line.
     let _ = eval.expect_lisp_string(args[0])?;
-    let (_, opts, _, start_char) = current_search_context_in_manager(&eval.buffers, args, kind)?;
+    let context = current_search_context_in_manager(&eval.buffers, args, kind)?;
+    let CurrentSearchContext {
+        opts, start_char, ..
+    } = context;
     if opts.steps == 0 {
         return Ok(RegexpSearchPrep::Ready(ReadyRegexpSearch {
             syntax_properties: if crate::emacs_core::syntax::parse_sexp_lookup_properties_enabled(
@@ -849,6 +872,7 @@ fn prepare_buffer_regexp_search(
                 BufferRegexpSyntaxProperties::Ignore
             },
             compiled: None,
+            context: Some(context),
         }));
     }
 
@@ -902,6 +926,7 @@ fn prepare_buffer_regexp_search(
             return Ok(RegexpSearchPrep::Ready(ReadyRegexpSearch {
                 syntax_properties: BufferRegexpSyntaxProperties::Honor,
                 compiled: None,
+                context: Some(context),
             }));
         }
         let windowed = {
@@ -952,6 +977,7 @@ fn prepare_buffer_regexp_search(
             // its subsequent cache lookup so changed tables, strings or
             // current buffers are observed by the committed search.
             compiled: (!lazy_relevant).then_some(compiled),
+            context: (!lazy_relevant).then_some(context),
         })
     })
 }
@@ -988,6 +1014,7 @@ fn resolve_regexp_search_prep(
             Ok(ReadyRegexpSearch {
                 syntax_properties,
                 compiled: None,
+                context: None,
             })
         }
     }
@@ -1109,8 +1136,12 @@ pub(crate) fn builtin_search_backward_with_state(
 ) -> EvalResult {
     expect_args_range("search-backward", args, 1, 4)?;
     let pattern = expect_lisp_string(&args[0])?;
-    let (current_id, opts, start_pt, start_char) =
-        current_search_context_in_manager(buffers, args, SearchKind::BackwardLiteral)?;
+    let CurrentSearchContext {
+        current_id,
+        opts,
+        start_pt,
+        start_char,
+    } = current_search_context_in_manager(buffers, args, SearchKind::BackwardLiteral)?;
     if opts.steps == 0 {
         commit_zero_count_search(buffers, current_id, start_pt, match_data);
         return Ok(Value::fixnum(start_char));
@@ -1236,6 +1267,7 @@ pub(crate) fn builtin_re_search_forward_4(
         match_data,
         &args,
         Some(&compiled),
+        ready.context,
     );
     // Mirrors GNU `search.c:1247,1291`: poll quit after each search
     // call so a `C-g` that set `tls_quit_pending()` during the match
@@ -1259,6 +1291,7 @@ fn re_search_forward_with_state_posix_and_syntax_properties(
     mut match_data: Option<&mut Option<super::regex::MatchData>>,
     args: &[Value],
     compiled: Option<&crate::emacs_core::regex_emacs::CompiledPattern>,
+    prepared_context: Option<CurrentSearchContext>,
 ) -> EvalResult {
     let name = if posix {
         "posix-search-forward"
@@ -1267,8 +1300,15 @@ fn re_search_forward_with_state_posix_and_syntax_properties(
     };
     expect_args_range(name, args, 1, 4)?;
     let pattern = expect_lisp_string(&args[0])?;
-    let (current_id, opts, start_pt, start_char) =
-        current_search_context_in_manager(buffers, args, SearchKind::ForwardRegexp)?;
+    let CurrentSearchContext {
+        current_id,
+        opts,
+        start_pt,
+        start_char,
+    } = match prepared_context {
+        Some(context) => context,
+        None => current_search_context_in_manager(buffers, args, SearchKind::ForwardRegexp)?,
+    };
     if opts.steps == 0 {
         commit_zero_count_search(buffers, current_id, start_pt, match_data);
         return Ok(Value::fixnum(start_char));
@@ -1400,8 +1440,12 @@ fn re_search_backward_with_state_posix_and_syntax_properties(
     };
     expect_args_range(name, args, 1, 4)?;
     let pattern = expect_lisp_string(&args[0])?;
-    let (current_id, opts, start_pt, start_char) =
-        current_search_context_in_manager(buffers, args, SearchKind::BackwardRegexp)?;
+    let CurrentSearchContext {
+        current_id,
+        opts,
+        start_pt,
+        start_char,
+    } = current_search_context_in_manager(buffers, args, SearchKind::BackwardRegexp)?;
     if opts.steps == 0 {
         commit_zero_count_search(buffers, current_id, start_pt, match_data);
         return Ok(Value::fixnum(start_char));
@@ -1499,6 +1543,7 @@ pub(crate) fn builtin_posix_search_forward(
         &mut eval.buffers,
         match_data,
         &args,
+        None,
         None,
     )
 }
