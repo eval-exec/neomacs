@@ -182,9 +182,29 @@ pub fn source_file(name: &str, contents: &str) -> Result<ProvisionedSourceFile, 
     })?;
     let path = directory.join(format!("{name}.el"));
     if !path.is_file() {
-        std::fs::write(&path, contents).map_err(|error| {
+        // Atomic publish: concurrent suites resolve the SAME content-
+        // addressed path on a cold cache (identical bytes → identical
+        // sha256), so a reader (`emacs -l <path>` at boot) must never
+        // observe a truncated write.  Stage to a sibling temp file and
+        // rename — rename is atomic within a directory.
+        let staged = tempfile::Builder::new()
+            .prefix(format!("{name}.partial-").as_str())
+            .tempfile_in(&directory)
+            .map_err(|error| {
+                format!(
+                    "failed to stage cached source file below {}: {error}",
+                    directory.display()
+                )
+            })?;
+        std::fs::write(staged.path(), contents).map_err(|error| {
             format!(
-                "failed to write cached source file {}: {error}",
+                "failed to write staged source file for {}: {error}",
+                path.display()
+            )
+        })?;
+        staged.persist(&path).map_err(|error| {
+            format!(
+                "failed to publish cached source file {}: {error}",
                 path.display()
             )
         })?;
