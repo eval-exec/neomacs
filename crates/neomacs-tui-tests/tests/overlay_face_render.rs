@@ -172,9 +172,59 @@ fn move_overlay_moves_the_rendered_face() {
     assert_pair_exact_display("move_overlay_moves_the_rendered_face", &gnu, &neo);
 }
 
-/// Helm rebuilds its candidate buffer on every update WHILE the selection
-/// overlay lives in it, relying on overlay positions adjusting under the
-/// insertions: the face must follow its text, not its old offsets.
+/// The helm-pydoc shape exactly: the selection overlay ENDS at point-max
+/// (the buffer's final position — the selected line is the last line) with
+/// a `:extend t :inherit` face.  GNU paints the overlay text AND the
+/// trailing cells; this probe was built after the in-session introspection
+/// proved both engines hold identical overlay state there.
+#[test]
+fn overlay_ending_at_point_max_extends_its_face() {
+    let (mut gnu, mut neo) = run_face_probe();
+    eval_expression(
+        &mut gnu,
+        &mut neo,
+        "(progn\
+ (switch-to-buffer (get-buffer-create \"probe-eom\"))\
+ (fundamental-mode)\
+ (erase-buffer)\
+ (insert \"ACTIONLINE\")\
+ (let* ((bol (point-min))\
+ (ov (make-overlay bol (point-max) (current-buffer) t nil)))\
+ (overlay-put ov 'face 'probe-helm-shape-face))\
+ (goto-char (point-min))\
+ (redisplay))",
+    );
+    read_both(&mut gnu, &mut neo, Duration::from_millis(400));
+    assert_pair_exact_display("overlay_ending_at_point_max_extends_its_face", &gnu, &neo);
+
+    for (label, session) in [("GNU", &mut gnu), ("NEO", &mut neo)] {
+        let screen = session.screen();
+        let probe_row = (1..screen.size().0)
+            .find(|row| {
+                (0..screen.size().1)
+                    .filter_map(|col| screen.cell(*row, col))
+                    .map(|cell| cell.contents().to_string())
+                    .collect::<String>()
+                    .starts_with("ACTIONLINE")
+            })
+            .expect("ACTIONLINE row");
+        let text_cell = screen
+            .cell(probe_row, 5)
+            .expect("overlay text cell")
+            .bgcolor();
+        let trailing = screen.cell(probe_row, 15).expect("trailing cell").bgcolor();
+        eprintln!("DUMP-{label} row{probe_row} text_bg={text_cell:?} trailing_bg={trailing:?}");
+        // GNU does not extend an overlay face past EOL here (the trailing
+        // cells stay default even with :extend t) -- the assert targets the
+        // overlay's own text region, which is what the helm-pydoc divergence
+        // showed missing on neomacs.
+        assert_eq!(
+            text_cell,
+            vt100::Color::Rgb(238, 121, 159),
+            "{label}: face missing on overlay text at point-max"
+        );
+    }
+}
 #[test]
 fn overlay_face_follows_text_through_insertions_above_it() {
     let (mut gnu, mut neo) = run_face_probe();
