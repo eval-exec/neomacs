@@ -3890,11 +3890,9 @@ fn graphic_color_target_frame_id(
 
 fn parse_color_16bit_any(color_name: &str) -> Option<(i64, i64, i64)> {
     let lower = color_name.trim().to_lowercase();
-    if let Some(hex) = lower.strip_prefix('#') {
-        parse_hex_color_16bit(hex)
-    } else {
-        parse_named_color_16bit(&lower)
-    }
+    // GNU resolves a numeric spec first (`parse_color_spec`: #hex, rgb:, rgbi:)
+    // and only then looks the name up as a terminal color.
+    parse_color_spec(lower.as_bytes()).or_else(|| parse_named_color_16bit(&lower))
 }
 
 /// `(color-defined-p COLOR &optional FRAME)` -- nil if unknown; otherwise truthy
@@ -3951,11 +3949,7 @@ pub(crate) fn builtin_color_values(args: Vec<Value>) -> EvalResult {
         _ => return Ok(Value::NIL),
     };
     let lower = color_name.trim().to_lowercase();
-    let resolved = if let Some(hex) = lower.strip_prefix('#') {
-        parse_hex_color_16bit(hex)
-    } else {
-        parse_named_color_16bit(&lower)
-    };
+    let resolved = parse_color_spec(lower.as_bytes()).or_else(|| parse_named_color_16bit(&lower));
     let Some((r, g, b)) = resolved.map(approximate_tty_color) else {
         return Ok(Value::NIL);
     };
@@ -4000,11 +3994,7 @@ pub(crate) fn builtin_xw_color_values_ctx(
 pub(crate) fn builtin_color_values_from_color_spec(args: Vec<Value>) -> EvalResult {
     expect_args("color-values-from-color-spec", &args, 1)?;
     let color_spec = expect_color_string(&args[0])?;
-    let lower = color_spec.trim().to_lowercase();
-    let Some(hex) = lower.strip_prefix('#') else {
-        return Ok(Value::NIL);
-    };
-    let Some((r, g, b)) = parse_hex_color_16bit(hex) else {
+    let Some((r, g, b)) = parse_color_spec(color_spec.as_bytes()) else {
         return Ok(Value::NIL);
     };
     Ok(Value::list(vec![
@@ -4236,36 +4226,95 @@ pub(crate) fn builtin_color_distance(
     Ok(Value::fixnum(color_distance_metric(lhs, rhs)))
 }
 
-fn parse_hex_color_16bit(hex: &str) -> Option<(i64, i64, i64)> {
-    // Validate before slicing at byte offsets: a non-ASCII color spec can
-    // otherwise split a UTF-8 character and panic.  Checking hex digits also
-    // rejects the leading '+' accepted by from_str_radix for a channel.
-    if !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+/// `#`-prefixed hex payload split into three equal-length components:
+/// GNU's `(len - 1) % 3 == 0` arm of `parse_color_spec` (src/xfaces.c:984).
+fn parse_hex_color_payload(payload: &[u8]) -> Option<(i64, i64, i64)> {
+    if payload.is_empty() || payload.len() % 3 != 0 {
         return None;
     }
-    match hex.len() {
-        3 => {
-            let r = i64::from(hex[0..1].chars().next()?.to_digit(16)? as u16);
-            let g = i64::from(hex[1..2].chars().next()?.to_digit(16)? as u16);
-            let b = i64::from(hex[2..3].chars().next()?.to_digit(16)? as u16);
-            Some((
-                r | (r << 4) | (r << 8) | (r << 12),
-                g | (g << 4) | (g << 8) | (g << 12),
-                b | (b << 4) | (b << 8) | (b << 12),
-            ))
-        }
-        6 => Some((
-            i64::from(u16::from_str_radix(&hex[0..2], 16).ok()?) * 257,
-            i64::from(u16::from_str_radix(&hex[2..4], 16).ok()?) * 257,
-            i64::from(u16::from_str_radix(&hex[4..6], 16).ok()?) * 257,
-        )),
-        12 => Some((
-            i64::from(u16::from_str_radix(&hex[0..4], 16).ok()?),
-            i64::from(u16::from_str_radix(&hex[4..8], 16).ok()?),
-            i64::from(u16::from_str_radix(&hex[8..12], 16).ok()?),
-        )),
-        _ => None,
+    let component_len = payload.len() / 3;
+    let red = parse_hex_color_comp(&payload[..component_len])?;
+    let green = parse_hex_color_comp(&payload[component_len..2 * component_len])?;
+    let blue = parse_hex_color_comp(&payload[2 * component_len..])?;
+    Some((i64::from(red), i64::from(green), i64::from(blue)))
+}
+
+/// One hex color component of 1-4 digits, normalized so the maximum value for
+/// that digit count becomes 65535.
+///
+/// Mirrors GNU `parse_hex_color_comp` (src/xfaces.c:928): it walks the spec's
+/// BYTES and fails on any non-hex byte, so a multi-byte character (whose UTF-8
+/// bytes are all non-hex) is rejected rather than sliced.
+fn parse_hex_color_comp(component: &[u8]) -> Option<u16> {
+    let digits = component.len();
+    if digits == 0 || digits > 4 {
+        return None;
     }
+    let mut value: u32 = 0;
+    for &byte in component {
+        let digit = match byte {
+            b'0'..=b'9' => byte - b'0',
+            b'A'..=b'F' => byte - b'A' + 10,
+            b'a'..=b'f' => byte - b'a' + 10,
+            _ => return None,
+        };
+        value = (value << 4) | u32::from(digit);
+    }
+    let max_value = (1u32 << (digits * 4)) - 1;
+    Some((value * 65535 / max_value) as u16)
+}
+
+/// Decimal float component in [0,1], scaled to 16 bits.
+///
+/// Mirrors GNU `parse_float_color_comp` (src/xfaces.c:955): only decimal
+/// literals without whitespace are accepted; an EMPTY component is `strtod`'s
+/// 0.0 with `end == s == e`, so it parses as 0; and the scale uses `lrint`'s
+/// round-half-to-even.
+fn parse_float_color_comp(component: &[u8]) -> Option<u16> {
+    if !component
+        .iter()
+        .all(|byte| matches!(byte, b'0'..=b'9' | b'.' | b'+' | b'-' | b'e' | b'E'))
+    {
+        return None;
+    }
+    let value: f64 = if component.is_empty() {
+        0.0
+    } else {
+        // Every accepted byte is ASCII, so the UTF-8 conversion cannot fail,
+        // and `parse` consumes the whole component like GNU's `end == e`.
+        std::str::from_utf8(component).ok()?.parse().ok()?
+    };
+    if (0.0..=1.0).contains(&value) {
+        Some((value * 65535.0).round_ties_even() as u16)
+    } else {
+        None
+    }
+}
+
+/// GNU `parse_color_spec` (src/xfaces.c:976): the three numeric color forms
+/// `#RGB`, `rgb:R/G/B` and `rgbi:R/G/B`, each component 1-4 hex digits (or a
+/// float in [0,1] for `rgbi`).
+fn parse_color_spec(spec: &[u8]) -> Option<(i64, i64, i64)> {
+    if let Some(payload) = spec.strip_prefix(b"#") {
+        return parse_hex_color_payload(payload);
+    }
+    if let Some(rest) = spec.strip_prefix(b"rgb:") {
+        let mut components = rest.splitn(3, |&byte| byte == b'/');
+        let red = parse_hex_color_comp(components.next()?)?;
+        let green = parse_hex_color_comp(components.next()?)?;
+        // GNU measures the last component to the end of the string, so a
+        // further '/' stays inside it and fails the hex validation.
+        let blue = parse_hex_color_comp(components.next()?)?;
+        return Some((i64::from(red), i64::from(green), i64::from(blue)));
+    }
+    if let Some(rest) = spec.strip_prefix(b"rgbi:") {
+        let mut components = rest.splitn(3, |&byte| byte == b'/');
+        let red = parse_float_color_comp(components.next()?)?;
+        let green = parse_float_color_comp(components.next()?)?;
+        let blue = parse_float_color_comp(components.next()?)?;
+        return Some((i64::from(red), i64::from(green), i64::from(blue)));
+    }
+    None
 }
 
 fn parse_named_color_16bit(name: &str) -> Option<(i64, i64, i64)> {

@@ -2880,6 +2880,73 @@ fn color_values_from_color_spec_rejects_non_hex_bytes_without_panicking() {
     }
 }
 
+/// GNU `parse_color_spec` (src/xfaces.c:976) recognizes `#RGB`, `rgb:R/G/B`
+/// and `rgbi:R/G/B`, with 1-4 hex digits per component (or a float in [0,1]
+/// for `rgbi`), normalizing each channel to [0,65535].  Anything else is nil.
+/// A multi-byte character must not panic: GNU walks the spec's BYTES and
+/// rejects non-hex ones (issue #431).
+#[test]
+fn color_values_from_color_spec_matches_gnu_numeric_specs() {
+    crate::test_utils::init_test_tracing();
+    let parse = |spec: &str| {
+        let result = builtin_color_values_from_color_spec(vec![Value::string(spec)]).unwrap();
+        if result.is_nil() {
+            return None;
+        }
+        list_to_vec(&result).map(|values| {
+            values
+                .iter()
+                .map(|value| value.as_int().expect("fixnum channel"))
+                .collect::<Vec<_>>()
+        })
+    };
+    let expect = |spec: &str, channels: [i64; 3]| {
+        assert_eq!(parse(spec), Some(channels.to_vec()), "spec {spec:?}");
+    };
+
+    // The issue reproduction: a non-ASCII payload returns nil, never panics.
+    assert_eq!(parse("#あ"), None, "non-ASCII hex payload is not a color");
+    assert_eq!(
+        parse("rgb:あ/0/0"),
+        None,
+        "non-ASCII rgb component is not a color"
+    );
+
+    // Each format, and every 1-4 digit component length.
+    expect("#abc", [43690, 48059, 52428]);
+    expect("#aabbcc", [43690, 48059, 52428]);
+    expect("#fff000000fff", [65520, 0, 4095]);
+    expect("rgb:f/0/0", [65535, 0, 0]);
+    expect("rgb:abc/def/012", [43978, 57085, 288]);
+    expect("rgb:ffff/0000/0000", [65535, 0, 0]);
+    expect("rgbi:1/0/0", [65535, 0, 0]);
+    expect("rgbi:0.5/0/0", [32768, 0, 0]);
+    // GNU lrint rounds ties to even: 0.3 * 65535 = 19660.5 -> 19660.
+    expect("rgbi:0.1/0.2/0.3", [6554, 13107, 19660]);
+    // strtod("") yields 0.0 with end == e, so an empty component is 0.
+    expect("rgbi:/0/0", [0, 0, 0]);
+
+    // Malformed specs.
+    assert_eq!(
+        parse("#ab"),
+        None,
+        "two hex digits do not divide into three components"
+    );
+    assert_eq!(parse("rgb:f/0"), None, "a missing component is not a color");
+    assert_eq!(
+        parse("rgb:f/0/0/0"),
+        None,
+        "a fourth component is not a color"
+    );
+    assert_eq!(
+        parse("rgbi:2/0/0"),
+        None,
+        "components outside [0,1] are not colors"
+    );
+    assert_eq!(parse("#ggg"), None, "non-hex digits are not colors");
+    assert_eq!(parse("#"), None, "a bare # is not a color");
+}
+
 #[test]
 fn color_gray_and_supported_semantics() {
     crate::test_utils::init_test_tracing();
