@@ -82,43 +82,6 @@ pub(crate) fn iconst_bits(fb: &FunctionBuilder, v: ClifValue) -> Option<i64> {
     }
 }
 
-/// Branch on a tagged Lisp value, reusing an integer predicate with T/NIL arms.
-/// Complement the comparison to preserve nil/non-nil successor ordering without
-/// materializing the Lisp boolean. Other consumers retain the tagged value.
-/// The caller opts in only for bodies without explicit Lisp-call bytecodes.
-pub(crate) fn emit_nil_branch(
-    fb: &mut FunctionBuilder,
-    value: ClifValue,
-    fuse_predicate: bool,
-    if_nil: Block,
-    if_non_nil: Block,
-) {
-    use cranelift_codegen::ir::{InstructionData, Opcode, ValueDef, condcodes::CondCode};
-    if fuse_predicate
-        && let ValueDef::Result(inst, _) = fb.func.dfg.value_def(value)
-        && let InstructionData::Ternary {
-            opcode: Opcode::Select,
-            args,
-        } = fb.func.dfg.insts[inst]
-        && iconst_bits(fb, args[1]) == Some(Value::T.bits() as i64)
-        && iconst_bits(fb, args[2]) == Some(Value::NIL.bits() as i64)
-        && let ValueDef::Result(predicate, _) = fb.func.dfg.value_def(args[0])
-        && let InstructionData::IntCompare {
-            opcode: Opcode::Icmp,
-            args,
-            cond,
-        } = fb.func.dfg.insts[predicate]
-    {
-        let is_nil = fb.ins().icmp(cond.complement(), args[0], args[1]);
-        fb.ins().brif(is_nil, if_nil, &[], if_non_nil, &[]);
-    } else {
-        let is_nil = fb
-            .ins()
-            .icmp_imm_u(IntCC::Equal, value, Value::NIL.bits() as i64);
-        fb.ins().brif(is_nil, if_nil, &[], if_non_nil, &[]);
-    }
-}
-
 /// Return `(value, immediate)` for a binary instruction whose right operand is
 /// an `iconst`. This is the 0.134 IR shape produced by helpers such as
 /// `bor_imm_u` and `ishl_imm_u`.

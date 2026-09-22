@@ -3620,15 +3620,6 @@ fn build_leaf_fn<M: Module>(
     // param instead of baking. 0 = plain function / AOT.
     dynamic_prefix: usize,
 ) -> Result<cranelift_module::FuncId, CompileError> {
-    // Predicate fusion improves arithmetic loops, but measured call-containing
-    // bodies can regress under the altered branch form. Keep their established
-    // lowering until that tradeoff is resolved independently.
-    let fuse_integer_predicates = !ops.iter().any(|op| {
-        matches!(
-            op,
-            Op::Call(_) | Op::Apply(_) | Op::CallBuiltin(..) | Op::CallBuiltinSym(..)
-        )
-    });
     lowering::imm_pool_reset();
     LAST_IR_STATS.with(|c| c.set((0, 0, 0, 0)));
     let frontend_config = module.target_config();
@@ -4067,6 +4058,9 @@ fn build_leaf_fn<M: Module>(
                     Op::GotoIfNil(t) | Op::GotoIfNotNil(t) => {
                         let cond = stack.pop().ok_or(CompileError::StackUnderflow)?;
                         write_stack_to_vars(&mut fb, &vars, &stack);
+                        let is_nil =
+                            fb.ins()
+                                .icmp_imm_u(IntCC::Equal, cond, Value::NIL.bits() as i64);
                         let tu = *t as usize;
                         let mut target = block_for[&tu];
                         let fallthrough = block_for[&(i + 1)];
@@ -4074,22 +4068,11 @@ fn build_leaf_fn<M: Module>(
                         if let Some(tramp) = backedge {
                             target = tramp;
                         }
+                        // brif takes the `then` block when the condition is true.
                         if matches!(op, Op::GotoIfNil(_)) {
-                            emit_nil_branch(
-                                &mut fb,
-                                cond,
-                                fuse_integer_predicates,
-                                target,
-                                fallthrough,
-                            );
+                            fb.ins().brif(is_nil, target, &[], fallthrough, &[]);
                         } else {
-                            emit_nil_branch(
-                                &mut fb,
-                                cond,
-                                fuse_integer_predicates,
-                                fallthrough,
-                                target,
-                            );
+                            fb.ins().brif(is_nil, fallthrough, &[], target, &[]);
                         }
                         if let Some(tramp) = backedge {
                             // Taken-edge trampoline carrying the back-edge poll.
@@ -4121,6 +4104,9 @@ fn build_leaf_fn<M: Module>(
                         // top slot — implementing the "ElsePop".
                         let cond = *stack.last().ok_or(CompileError::StackUnderflow)?;
                         write_stack_to_vars(&mut fb, &vars, &stack);
+                        let is_nil =
+                            fb.ins()
+                                .icmp_imm_u(IntCC::Equal, cond, Value::NIL.bits() as i64);
                         let tu = *t as usize;
                         let mut target = block_for[&tu];
                         let fallthrough = block_for[&(i + 1)];
@@ -4129,21 +4115,9 @@ fn build_leaf_fn<M: Module>(
                             target = tramp;
                         }
                         if matches!(op, Op::GotoIfNilElsePop(_)) {
-                            emit_nil_branch(
-                                &mut fb,
-                                cond,
-                                fuse_integer_predicates,
-                                target,
-                                fallthrough,
-                            );
+                            fb.ins().brif(is_nil, target, &[], fallthrough, &[]);
                         } else {
-                            emit_nil_branch(
-                                &mut fb,
-                                cond,
-                                fuse_integer_predicates,
-                                fallthrough,
-                                target,
-                            );
+                            fb.ins().brif(is_nil, fallthrough, &[], target, &[]);
                         }
                         if let Some(tramp) = backedge {
                             fb.switch_to_block(tramp);
