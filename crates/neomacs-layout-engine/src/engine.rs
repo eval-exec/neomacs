@@ -115,45 +115,9 @@ const MAX_WINDOW_VISIBILITY_RETRIES: usize = 128;
 /// The viewport retry budget must consume *iterations*, not Rust stack.
 /// Production builds never reference this module.
 #[cfg(test)]
-mod viewport_retry_depth_probe {
-    use std::cell::Cell;
+#[path = "engine/tests/viewport_retry_depth_probe_test.rs"]
+mod viewport_retry_depth_probe;
 
-    thread_local! {
-        static DEPTH: Cell<usize> = const { Cell::new(0) };
-        static MAX_DEPTH: Cell<usize> = const { Cell::new(0) };
-    }
-
-    pub(super) struct Guard;
-
-    impl Guard {
-        pub(super) fn enter() -> Self {
-            DEPTH.with(|depth| {
-                let next = depth.get() + 1;
-                depth.set(next);
-                MAX_DEPTH.with(|max| {
-                    if next > max.get() {
-                        max.set(next);
-                    }
-                });
-            });
-            Guard
-        }
-    }
-
-    impl Drop for Guard {
-        fn drop(&mut self) {
-            DEPTH.with(|depth| depth.set(depth.get() - 1));
-        }
-    }
-
-    pub(super) fn reset() {
-        MAX_DEPTH.with(|max| max.set(0));
-    }
-
-    pub(super) fn max_depth() -> usize {
-        MAX_DEPTH.with(|max| max.get())
-    }
-}
 /// Bound intrinsic chrome convergence so oscillating status-line Lisp can
 /// never publish mismatched geometry or spin forever.
 const MAX_FRAME_LAYOUT_RETRIES: usize = 12;
