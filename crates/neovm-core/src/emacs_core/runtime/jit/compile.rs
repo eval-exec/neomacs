@@ -2885,34 +2885,15 @@ fn compute_known_fixnum_slots(
     constants: &[Value],
     cfg: &Cfg,
 ) -> HashMap<usize, Vec<bool>> {
-    compute_known_fixnum_slots_from(ops, constants, cfg, None)
-}
-
-fn compute_known_fixnum_slots_from(
-    ops: &[Op],
-    constants: &[Value],
-    cfg: &Cfg,
-    root: Option<(usize, &[bool])>,
-) -> HashMap<usize, Vec<bool>> {
     let n = ops.len();
     let empty = HashMap::new();
 
-    // Normal entry starts untyped, with other blocks at TOP for the AND
-    // fixpoint. An OSR root starts with guarded facts; other blocks become
-    // reachable when their first predecessor supplies an entry state.
+    // in[leader] = known-fixnum bits at block entry. Entry (0) is all-false;
+    // every other block starts at TOP for the AND fixpoint.
     let mut in_sets: HashMap<usize, Vec<bool>> = HashMap::new();
-    if let Some((header, seed)) = root {
-        if cfg.entry_depth.get(&header).copied() != Some(seed.len())
-            || cfg.leaders.binary_search(&header).is_err()
-        {
-            return empty;
-        }
-        in_sets.insert(header, seed.to_vec());
-    } else {
-        for &l in &cfg.leaders {
-            let d = cfg.entry_depth.get(&l).copied().unwrap_or(0);
-            in_sets.insert(l, vec![l != 0; d]);
-        }
+    for &l in &cfg.leaders {
+        let d = cfg.entry_depth.get(&l).copied().unwrap_or(0);
+        in_sets.insert(l, vec![l != 0; d]);
     }
 
     // AND a predecessor contribution into a successor's in-set; report narrowing.
@@ -2931,10 +2912,7 @@ fn compute_known_fixnum_slots_from(
     while iterate {
         iterate = false;
         for (leader_index, &l) in cfg.leaders.iter().enumerate() {
-            let Some(mut k) = in_sets.get(&l).cloned() else {
-                // In rooted mode absence means not reached from the guarded entry.
-                continue;
-            };
+            let mut k = in_sets[&l].clone();
             let end = cfg.leaders.get(leader_index + 1).copied().unwrap_or(n);
             let mut edges: Vec<(usize, Vec<bool>)> = Vec::new();
             let mut terminated = false;
@@ -3004,98 +2982,15 @@ fn compute_known_fixnum_slots_from(
                 edges.push((end, k.clone()));
             }
             for (t, contrib) in &edges {
-                if root.is_some() && cfg.entry_depth.get(t).copied() != Some(contrib.len()) {
-                    return empty;
-                }
-                if let Some(into) = in_sets.get_mut(t) {
-                    if meet(into, contrib) {
-                        iterate = true;
-                    }
-                } else if root.is_some() {
-                    // The first reachable predecessor initializes a successor;
-                    // later predecessors only narrow it. An earlier leader
-                    // discovered here must be visited in the next pass.
-                    in_sets.insert(*t, contrib.clone());
+                if let Some(into) = in_sets.get_mut(t)
+                    && meet(into, contrib)
+                {
                     iterate = true;
                 }
             }
         }
     }
     in_sets
-}
-
-/// Add observed types only where an entry guard can replace a comparison
-/// guard before any bytecode effect. Recheck induction through every reachable
-/// backedge, retaining the old header guards and leaving payload slots untyped.
-fn compute_observed_header_fixnums(
-    ops: &[Op],
-    constants: &[Value],
-    cfg: &Cfg,
-    normal: HashMap<usize, Vec<bool>>,
-    header: usize,
-    observed: &[bool],
-) -> HashMap<usize, Vec<bool>> {
-    let Some(normal_entry) = normal.get(&header) else {
-        return normal;
-    };
-    if observed.len() != normal_entry.len() {
-        return normal;
-    }
-    let Some(prefix) = ops.get(header..header.saturating_add(4)) else {
-        return normal;
-    };
-    let [
-        Op::StackRef(first),
-        Op::StackRef(second),
-        comparison,
-        branch,
-    ] = prefix
-    else {
-        return normal;
-    };
-    if (1..4).any(|offset| cfg.leaders.binary_search(&(header + offset)).is_ok())
-        || !matches!(comparison, Op::Lss | Op::Leq | Op::Gtr | Op::Geq)
-        || !matches!(branch, Op::GotoIfNil(_) | Op::GotoIfNotNil(_))
-        || active_numeric_feedback(header + 2)
-            != crate::emacs_core::jit::NumericFeedback::FixnumOnly
-    {
-        return normal;
-    }
-    let depth = normal_entry.len();
-    let Some(first) = depth.checked_sub(*first as usize + 1) else {
-        return normal;
-    };
-    let Some(second) = depth.checked_sub(*second as usize) else {
-        return normal;
-    };
-    // The second StackRef sees the first copied value on top of the stack.
-    let second = if second == depth { first } else { second };
-    let mut seed = normal_entry.clone();
-    for slot in [first, second] {
-        seed[slot] |= observed[slot];
-    }
-    if &seed == normal_entry {
-        return normal;
-    }
-    let rooted = compute_known_fixnum_slots_from(ops, constants, cfg, Some((header, &seed)));
-    let Some(rooted_entry) = rooted.get(&header) else {
-        return normal;
-    };
-    // Preserve the old entry-guard contract, and avoid changing lowering if no
-    // useful new fact survives assignments on the reachable backedges.
-    if rooted_entry.len() != normal_entry.len()
-        || normal_entry
-            .iter()
-            .zip(rooted_entry)
-            .any(|(&old, &new)| old && !new)
-        || !normal_entry
-            .iter()
-            .zip(rooted_entry)
-            .any(|(&old, &new)| !old && new)
-    {
-        return normal;
-    }
-    rooted
 }
 
 /// Write the live operand `stack` back into the slot variables so a successor
@@ -3365,9 +3260,14 @@ fn mask_dynamic_prefix(constants: &[Value], dynamic_prefix: usize) -> Vec<Value>
         .collect()
 }
 
-/// Lower an optional OSR entry, guarding its normal-entry type facts on every
-/// transfer before the loop body can use them. The public seam does not assume
-/// any type facts from a particular live interpreter snapshot.
+/// [`lower_leaf_full`] plus an optional OSR entry pc (on-stack replacement,
+/// JIT-only): when `Some(osr_pc)`, the compiled function's entry seeds the live
+/// operand stack (from the `args` pointer) and jumps to the loop-header block at
+/// `osr_pc`, letting the interpreter transfer a hot loop into native code
+/// mid-execution. Cross-block known-fixnum elision is DISABLED for OSR (the
+/// analysis assumes the normal block-0 entry as the sole root; the OSR entry adds
+/// a predecessor it never saw, so every fixnum op guards — a non-fixnum simply
+/// deopts, always sound).
 pub fn lower_leaf_full_osr(
     ops: &[Op],
     constants: &[Value],
@@ -3376,54 +3276,6 @@ pub fn lower_leaf_full_osr(
     obarray: Option<&Obarray>,
     osr_pc: Option<usize>,
     dynamic_prefix: usize,
-) -> Result<CompiledLeaf, CompileError> {
-    lower_leaf_full_osr_observed(
-        ops,
-        constants,
-        arity,
-        offset_map,
-        obarray,
-        osr_pc,
-        dynamic_prefix,
-        None,
-    )
-}
-
-/// Cache-only seam: the mask comes from a depth-checked interpreter snapshot.
-/// The leaf retains guarded type facts, never snapshot values or heap objects.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn lower_osr_with_observed_fixnums(
-    ops: &[Op],
-    constants: &[Value],
-    arity: usize,
-    offset_map: Option<&[GnuByteOffsetMapEntry]>,
-    obarray: &Obarray,
-    osr_pc: usize,
-    dynamic_prefix: usize,
-    observed_fixnums: &[bool],
-) -> Result<CompiledLeaf, CompileError> {
-    lower_leaf_full_osr_observed(
-        ops,
-        constants,
-        arity,
-        offset_map,
-        Some(obarray),
-        Some(osr_pc),
-        dynamic_prefix,
-        Some(observed_fixnums),
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn lower_leaf_full_osr_observed(
-    ops: &[Op],
-    constants: &[Value],
-    arity: usize,
-    offset_map: Option<&[GnuByteOffsetMapEntry]>,
-    obarray: Option<&Obarray>,
-    osr_pc: Option<usize>,
-    dynamic_prefix: usize,
-    observed_fixnums: Option<&[bool]>,
 ) -> Result<CompiledLeaf, CompileError> {
     // Every analysis and the reloc collection below see the MASKED view; only
     // the emitter's `Op::Constant` arm knows the prefix (it loads those slots
@@ -3442,17 +3294,6 @@ fn lower_leaf_full_osr_observed(
     // Once those checks pass, the same must-analysis facts remain valid on
     // every reachable edge; untyped slots still retain their per-op guards.
     let known_fixnum_slots = compute_known_fixnum_slots(ops, constants, &cfg);
-    let known_fixnum_slots = match (osr_pc, observed_fixnums) {
-        (Some(header), Some(observed)) => compute_observed_header_fixnums(
-            ops,
-            constants,
-            &cfg,
-            known_fixnum_slots,
-            header,
-            observed,
-        ),
-        _ => known_fixnum_slots,
-    };
     let n = ops.len();
     // Direct-call speculation sites + their armed-epoch slots. The Box's heap
     // storage is address-stable: slot pointers are baked into the generated
@@ -4024,7 +3865,7 @@ fn build_leaf_fn<M: Module>(
             fb.def_var(*var, v);
         }
         // A live OSR snapshot is an additional predecessor of the header.
-        // Check exactly the type facts selected for this header before
+        // Check exactly the type facts that normal entry established before
         // using them to elide guards in the body. Rejection captures the whole
         // unchanged tagged snapshot at the header, before any bytecode effect.
         let mut entry_deopts = Vec::new();
@@ -4601,10 +4442,6 @@ mod fixnum_range_tests;
 #[cfg(test)]
 #[path = "tests/osr_entry_guards.rs"]
 mod osr_entry_guard_tests;
-
-#[cfg(test)]
-#[path = "tests/osr_observed.rs"]
-mod osr_observed_tests;
 #[cfg(test)]
 #[path = "tests/osr_poll.rs"]
 mod osr_poll_tests;
