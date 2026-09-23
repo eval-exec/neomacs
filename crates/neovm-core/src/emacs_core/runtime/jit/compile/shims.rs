@@ -917,14 +917,9 @@ pub(crate) static JIT_SHIM_TABLE: [(&str, ShimAddr); 51] = [
 /// tiers' builders call this, so a shim that exists is a shim the JIT can
 /// resolve — in the production binary and in a test binary alike.
 pub(crate) fn register_shims(builder: &mut cranelift_jit::JITBuilder) {
-    // A module usually references only a few shims. Let Cranelift cache those
-    // resolutions instead of allocating every shim name for every compilation.
-    builder.symbol_lookup_fn(Box::new(|name| {
-        JIT_SHIM_TABLE
-            .iter()
-            .find(|(candidate, _)| *candidate == name)
-            .map(|(_, addr)| addr.0 as *const u8)
-    }));
+    for (name, addr) in &JIT_SHIM_TABLE {
+        builder.symbol(*name, addr.0 as *const u8);
+    }
 }
 
 #[cfg(test)]
