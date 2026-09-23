@@ -2994,6 +2994,7 @@ fn compute_known_fixnum_slots(
 }
 
 fn uniform_raw_osr_slots(
+    ops: &[Op],
     cfg: &Cfg,
     facts: &HashMap<usize, Vec<bool>>,
     osr_pc: Option<usize>,
@@ -3006,7 +3007,8 @@ fn uniform_raw_osr_slots(
     // This candidate uses the existing normal-entry must-analysis. Every
     // statically reachable leader needs a fact vector; missing means unknown.
     let mut seen = vec![false; cfg.max_depth];
-    for &leader in &cfg.leaders {
+    let mut written = vec![false; cfg.max_depth];
+    for (leader_index, &leader) in cfg.leaders.iter().enumerate() {
         let Some(&depth) = cfg.entry_depth.get(&leader) else {
             continue; // statically unreachable normal-entry leader
         };
@@ -3024,6 +3026,38 @@ fn uniform_raw_osr_slots(
             };
             seen[slot] = true;
         }
+        // Representation selection, separate from the type proof above:
+        // leave untouched bindings tagged. Untagging those cold values adds
+        // reconstruction uses and can displace an active loop operand.
+        let end = cfg
+            .leaders
+            .get(leader_index + 1)
+            .copied()
+            .unwrap_or(ops.len());
+        let mut depth = depth;
+        for op in &ops[leader..end] {
+            let Ok((needs, delta)) = simple_effect(op) else {
+                break; // terminator; successors have their own entry depths
+            };
+            if depth < needs {
+                return vec![false; cfg.max_depth];
+            }
+            let destination = match op {
+                Op::StackSet(n) if *n > 0 => Some(depth - 1 - *n as usize),
+                Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Rem | Op::Max | Op::Min => {
+                    Some(depth - 2)
+                }
+                Op::Add1 | Op::Sub1 | Op::Negate => Some(depth - 1),
+                _ => None,
+            };
+            if let Some(slot) = destination {
+                written[slot] = true;
+            }
+            depth = (depth as i64 + delta) as usize;
+        }
+    }
+    for (raw, written) in raw.iter_mut().zip(written) {
+        *raw &= written;
     }
     raw
 }
@@ -3690,7 +3724,7 @@ fn build_leaf_fn<M: Module>(
     // param instead of baking. 0 = plain function / AOT.
     dynamic_prefix: usize,
 ) -> Result<cranelift_module::FuncId, CompileError> {
-    let variable_raw = uniform_raw_osr_slots(cfg, known_fixnum_slots, osr_pc);
+    let variable_raw = uniform_raw_osr_slots(ops, cfg, known_fixnum_slots, osr_pc);
     lowering::imm_pool_reset();
     LAST_IR_STATS.with(|c| c.set((0, 0, 0, 0)));
     let frontend_config = module.target_config();

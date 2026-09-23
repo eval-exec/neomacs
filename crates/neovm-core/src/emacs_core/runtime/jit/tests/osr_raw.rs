@@ -54,7 +54,7 @@ fn osr_raw_zero_is_truthy_for_plain_and_else_pop_branches() {
         let f = raw_loop(ops);
         let cfg = analyze_cfg(&f.ops, &f.constants, None, 0).unwrap();
         let facts = compute_known_fixnum_slots(&f.ops, &f.constants, &cfg);
-        assert!(uniform_raw_osr_slots(&cfg, &facts, Some(1))[0]);
+        assert!(uniform_raw_osr_slots(&f.ops, &cfg, &facts, Some(1))[0]);
         let mut ctx = Context::new();
         let snapshot = [Value::make_int(0)];
         ctx.bc_buf.extend_from_slice(&snapshot);
@@ -69,7 +69,7 @@ fn osr_raw_zero_is_truthy_for_plain_and_else_pop_branches() {
 
 #[test]
 fn osr_raw_condition_is_popped_before_normalizing_a_reused_temporary_slot() {
-    // Slot 1 is a proven integer at leader 7, but it temporarily holds the
+    // Slot 1 is a proven integer at leader 8, but it temporarily holds the
     // boolean comparison at pc 4. The edge conversion must pop that condition
     // before converting surviving slots to their uniform representation.
     let f = raw_loop(vec![
@@ -77,9 +77,10 @@ fn osr_raw_condition_is_popped_before_normalizing_a_reused_temporary_slot() {
         Op::StackRef(0),
         Op::Constant(1),
         Op::Lss,
-        Op::GotoIfNil(13),
+        Op::GotoIfNil(14),
         Op::Constant(2),
-        Op::Goto(7),
+        Op::Add1,
+        Op::Goto(8),
         Op::Pop,
         Op::StackRef(0),
         Op::Add1,
@@ -90,7 +91,7 @@ fn osr_raw_condition_is_popped_before_normalizing_a_reused_temporary_slot() {
     ]);
     let cfg = analyze_cfg(&f.ops, &f.constants, None, 0).unwrap();
     let facts = compute_known_fixnum_slots(&f.ops, &f.constants, &cfg);
-    let raw = uniform_raw_osr_slots(&cfg, &facts, Some(1));
+    let raw = uniform_raw_osr_slots(&f.ops, &cfg, &facts, Some(1));
     assert!(raw[0] && raw[1]);
     let mut ctx = Context::new();
     let snapshot = [Value::make_int(0)];
@@ -154,7 +155,7 @@ fn osr_raw_switch_backedges_root_heap_payloads_and_preserve_quit_cadence() {
     f.seal_hand_assembled_ops();
     let cfg = analyze_cfg(&f.ops, &f.constants, None, 0).unwrap();
     let facts = compute_known_fixnum_slots(&f.ops, &f.constants, &cfg);
-    let raw = uniform_raw_osr_slots(&cfg, &facts, Some(2));
+    let raw = uniform_raw_osr_slots(&f.ops, &cfg, &facts, Some(2));
     assert!(raw[0] && !raw[1]);
     for n in [1, 255, 256, 511, 1024] {
         let snapshot = [Value::make_int(n), Value::NIL];
@@ -190,4 +191,33 @@ fn osr_raw_switch_backedges_root_heap_payloads_and_preserve_quit_cadence() {
     assert_eq!(result, Some(NativeRun::Signal));
     assert_eq!(bytecode_branch_poll_count(), 1);
     assert_eq!(ctx.jit_root_stack_top, 0);
+}
+
+#[test]
+fn osr_raw_leaves_untouched_integer_bindings_tagged() {
+    let f = raw_loop(vec![
+        Op::Constant(0),
+        Op::Constant(2),
+        Op::Constant(0),
+        Op::StackRef(0),
+        Op::Add1,
+        Op::StackSet(1),
+        Op::StackRef(0),
+        Op::Constant(1),
+        Op::Lss,
+        Op::GotoIfNotNil(3),
+        Op::Pop,
+        Op::Return,
+    ]);
+    let cfg = analyze_cfg(&f.ops, &f.constants, None, 0).unwrap();
+    let facts = compute_known_fixnum_slots(&f.ops, &f.constants, &cfg);
+    let raw = uniform_raw_osr_slots(&f.ops, &cfg, &facts, Some(3));
+    assert_eq!(&raw[..3], &[false, false, true]);
+    let snapshot = [Value::make_int(0), Value::make_int(99), Value::make_int(0)];
+    let mut ctx = Context::new();
+    ctx.bc_buf.extend_from_slice(&snapshot);
+    assert_eq!(
+        cache::try_run_osr(&mut ctx, &f, 3, &snapshot, &[]),
+        Some(NativeRun::Ok(Value::make_int(99).bits()))
+    );
 }
