@@ -13,12 +13,19 @@ fn observed_loop_template() -> ByteCodeFunction {
         rest: None,
     });
     f.lexical = true;
+    f.constants = vec![Value::make_int(1024)].into();
     f.ops = vec![
         Op::Goto(1),
         Op::StackRef(0), // header: copy i
         Op::StackRef(2), // then limit (the copied i changed the depth)
         Op::Lss,
-        Op::GotoIfNil(9),
+        Op::GotoIfNil(13),
+        // A missing type guard must fail this test without looping toward a
+        // misinterpreted heap address. This still permits the 700-step GC case.
+        Op::StackRef(0),
+        Op::Constant(0),
+        Op::Geq,
+        Op::GotoIfNotNil(13),
         Op::StackRef(0),
         Op::Add1,
         Op::StackSet(1),
@@ -130,13 +137,17 @@ fn osr_observed_backedge_assignment_can_remove_an_observed_type_fact() {
     let mut ctx = Context::new();
     let mut f = observed_loop_template();
     let changed_limit = Value::make_float(5.5);
-    f.constants = vec![changed_limit].into();
+    f.constants = vec![changed_limit, Value::make_int(2)].into();
     f.ops = vec![
         Op::Goto(1),
         Op::StackRef(0),
         Op::StackRef(2),
         Op::Lss,
-        Op::GotoIfNil(11),
+        Op::GotoIfNil(15),
+        Op::StackRef(0),
+        Op::Constant(1),
+        Op::Geq,
+        Op::GotoIfNotNil(15),
         Op::Constant(0),
         Op::StackSet(2), // limit becomes a float
         Op::StackRef(0),
