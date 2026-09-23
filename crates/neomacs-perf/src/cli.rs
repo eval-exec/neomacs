@@ -689,3 +689,6 @@ pub fn run_cli(
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

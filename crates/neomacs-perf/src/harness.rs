@@ -2086,3 +2086,6 @@ fn next_run_id(scenario: ScenarioId, unix_ms: u128) -> String {
         std::process::id()
     )
 }
+
+#[cfg(test)]
+mod tests;

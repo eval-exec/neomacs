@@ -4,7 +4,7 @@ use std::num::NonZeroU32;
 
 use strum::EnumCount;
 
-use super::{CrossEditorParityMetric, Frontend, MetricName, ScenarioId, scenario, scenarios};
+use crate::{CrossEditorParityMetric, Frontend, MetricName, ScenarioId, scenario, scenarios};
 
 #[test]
 fn catalog_exposes_the_rust_lsp_typing_workload_as_a_typed_scenario() {

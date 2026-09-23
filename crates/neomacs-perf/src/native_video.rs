@@ -306,5 +306,4 @@ pub(crate) fn discover_media_metadata(_path: &Path) -> Result<NativeVideoMediaMe
 }
 
 #[cfg(test)]
-#[path = "native_video_test.rs"]
 mod tests;

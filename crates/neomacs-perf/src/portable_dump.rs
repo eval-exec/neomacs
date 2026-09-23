@@ -112,3 +112,6 @@ pub(crate) fn verify_run(provenance: &Path) -> Result<(), String> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

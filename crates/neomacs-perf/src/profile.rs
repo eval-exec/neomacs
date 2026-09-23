@@ -308,3 +308,6 @@ pub struct ProfileReport {
     pub artifact_path: PathBuf,
     pub run: RunReport,
 }
+
+#[cfg(test)]
+mod tests;

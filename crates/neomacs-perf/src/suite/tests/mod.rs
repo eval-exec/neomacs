@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use super::{
+use crate::{
     ComparisonSampleCount, MachinePolicy, PerfError, SUITE_ARTIFACT_SCHEMA_VERSION, ScenarioId,
     SuiteArtifact, SuiteId, SuiteScenarioResult, SuiteVerdict, evaluate_suite, read_history_link,
 };

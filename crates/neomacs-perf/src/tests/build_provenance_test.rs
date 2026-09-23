@@ -1,9 +1,8 @@
 use std::fs;
-use std::path::PathBuf;
 use std::process::Command;
 
 #[allow(dead_code)]
-#[path = "../build.rs"]
+#[path = "../../build.rs"]
 mod perf_build_script;
 
 fn git(directory: &std::path::Path, arguments: &[&str]) {

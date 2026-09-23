@@ -350,5 +350,4 @@ fn loop_measurements(
 }
 
 #[cfg(test)]
-#[path = "vm_loop_test.rs"]
 mod tests;

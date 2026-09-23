@@ -7,7 +7,7 @@ use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
-use super::{
+use crate::{
     CaptureRoute, Frontend, NativeProfiler, PerfCallGraph, PerfCapture, PerfCaptureConfiguration,
     PerfHarness, PerfSamplingEvent, ProfileArtifact, ProfileGate, ProfileRejection,
     ProfileReportStyle, ProfileRequest, ProfileScope, ProfileVerdict, RunArtifact, RunReport,

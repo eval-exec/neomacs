@@ -992,3 +992,6 @@ fn median(values: impl Iterator<Item = f64>) -> f64 {
 fn median_absolute_deviation(values: &[f64], center: f64) -> f64 {
     median(values.iter().map(|value| (value - center).abs()))
 }
+
+#[cfg(test)]
+mod tests;

@@ -325,3 +325,6 @@ pub struct RunArtifact {
     pub verdict: RunVerdict,
     pub files: Vec<ArtifactFile>,
 }
+
+#[cfg(test)]
+mod tests;

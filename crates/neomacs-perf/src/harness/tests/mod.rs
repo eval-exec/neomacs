@@ -3,7 +3,7 @@ use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::process::Command;
 
-use super::{
+use crate::{
     Frontend, MetricName, PerfError, PerfHarness, RunRequest, RunVerdict, ScenarioId,
     collect_editor_provenance, configure_benchmark_environment, validate_harness_build,
     validate_harness_revision,
@@ -159,12 +159,12 @@ fn mx_tab_result_is_valid_only_when_the_real_completion_window_lifecycle_complet
     };
     let per_completion = measurements
         .iter()
-        .find(|measurement| measurement.name == super::MetricName::PerCompletionCpuTime)
+        .find(|measurement| measurement.name == crate::MetricName::PerCompletionCpuTime)
         .expect("per-completion metric");
     assert_eq!(per_completion.value, 500.0);
     assert_eq!(
         per_completion.unit,
-        super::MetricUnit::MicrosecondsPerCompletion
+        crate::MetricUnit::MicrosecondsPerCompletion
     );
 }
 
@@ -265,12 +265,12 @@ fn bytecode_call_loop_accepts_only_the_full_interpreted_call_count() {
     };
     let per_call = measurements
         .iter()
-        .find(|measurement| measurement.name == super::MetricName::PerBytecodeCallCpuTime)
+        .find(|measurement| measurement.name == crate::MetricName::PerBytecodeCallCpuTime)
         .expect("per-bytecode-call metric");
     assert_eq!(per_call.value, 0.5);
     assert_eq!(
         per_call.unit,
-        super::MetricUnit::MicrosecondsPerBytecodeCall
+        crate::MetricUnit::MicrosecondsPerBytecodeCall
     );
 }
 
@@ -1048,7 +1048,7 @@ fn benchmark_environment_forwards_the_allowlist_and_jit_knobs_only() {
         (os("NEOVM_GC_TRACE"), os("1")),
         (os("RUST_LOG"), os("debug")),
     ];
-    let mut forwarded: Vec<String> = super::harness::passthrough_from(vars)
+    let mut forwarded: Vec<String> = crate::harness::passthrough_from(vars)
         .into_iter()
         .map(|(name, _)| name)
         .collect();
@@ -1242,7 +1242,7 @@ fn org_journal_open_relaxes_creation_invariants_for_an_external_journal() {
 
 #[test]
 fn synthetic_journal_generator_is_deterministic_and_heavier_than_the_real_workload() {
-    use super::harness::scenarios::org_journal_open::generate_synthetic_journal;
+    use crate::harness::scenarios::org_journal_open::generate_synthetic_journal;
 
     // Cross-machine reproduction hinges on the constant seed: the same
     // elapsed-day count must always produce a byte-identical journal.
@@ -1275,7 +1275,7 @@ fn synthetic_journal_generator_is_deterministic_and_heavier_than_the_real_worklo
 
 #[test]
 fn civil_date_helpers_round_trip_across_the_scenario_year() {
-    use super::harness::scenarios::org_journal_open::{civil_from_days, days_from_civil};
+    use crate::harness::scenarios::org_journal_open::{civil_from_days, days_from_civil};
 
     assert_eq!(civil_from_days(0), (1970, 1, 1));
     for days in [

@@ -251,5 +251,4 @@ fn call_measurements(
 }
 
 #[cfg(test)]
-#[path = "builtin_call_test.rs"]
 mod tests;

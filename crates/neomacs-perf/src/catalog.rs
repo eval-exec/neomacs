@@ -804,3 +804,6 @@ pub const fn scenario(id: ScenarioId) -> &'static ScenarioSpec {
         ScenarioId::OrgEditingHeavy => &SCENARIOS[17],
     }
 }
+
+#[cfg(test)]
+mod tests;

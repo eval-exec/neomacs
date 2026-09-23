@@ -3,12 +3,12 @@ use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use super::{
+use crate::{
     ComparisonSampleCount, CounterScope, Frontend, MachinePolicy, NativeProfiler, PerfCommand,
     ProfileReportStyle, ProfileScope, ScenarioId, SuiteId, parse_perf_command,
 };
 
-fn parse(args: &[&str]) -> Result<PerfCommand, super::PerfCliError> {
+fn parse(args: &[&str]) -> Result<PerfCommand, crate::PerfCliError> {
     parse_perf_command(args.iter().map(OsString::from))
 }
 

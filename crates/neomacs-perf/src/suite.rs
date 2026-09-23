@@ -457,3 +457,6 @@ fn read_history(path: &Path) -> Result<(SuiteHistoryLink, Vec<u8>), PerfError> {
         bytes,
     ))
 }
+
+#[cfg(test)]
+mod tests;

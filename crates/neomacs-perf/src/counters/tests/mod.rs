@@ -1,4 +1,4 @@
-use super::{MetricName, MetricUnit, parse_perf_stat_csv};
+use crate::{MetricName, MetricUnit, parse_perf_stat_csv};
 
 #[test]
 fn perf_stat_csv_becomes_typed_canonical_measurements() {

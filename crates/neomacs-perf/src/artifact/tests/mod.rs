@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use super::{
+use crate::{
     ARTIFACT_SCHEMA_VERSION, ArtifactFile, ArtifactKind, CorrectnessMismatch, Frontend,
     HostProvenance, RunArtifact, RunVerdict, ScenarioId,
 };

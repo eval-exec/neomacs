@@ -2,17 +2,17 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 
-use super::{
+use crate::native_video::{
+    NativeVideoDecoderKind, NativeVideoExecutionIdentity, NativeVideoFrameFormat,
+    NativeVideoFrameRate, NativeVideoGpuTimingStatus, NativeVideoGraphicsBackend,
+    NativeVideoMediaMetadata,
+};
+use crate::{
     COMPARISON_ARTIFACT_SCHEMA_VERSION, ComparisonArtifact, ComparisonInput, ComparisonObservation,
     ComparisonRejection, ComparisonRun, ComparisonRunOutcome, ComparisonRunRole,
     ComparisonSampleCount, ComparisonVerdict, CorrectnessMismatch, EditorProvenance, Frontend,
     Measurement, MetricName, MetricUnit, NativeVideoComparisonIdentity, RunVerdict, ScenarioId,
     comparison_schedule, evaluate_comparison,
-};
-use crate::native_video::{
-    NativeVideoDecoderKind, NativeVideoExecutionIdentity, NativeVideoFrameFormat,
-    NativeVideoFrameRate, NativeVideoGpuTimingStatus, NativeVideoGraphicsBackend,
-    NativeVideoMediaMetadata,
 };
 
 fn editor(role: ComparisonRunRole) -> PathBuf {
@@ -273,7 +273,7 @@ fn valid_repetitions_produce_medians_and_candidate_ratio() {
     assert_eq!(
         verdict,
         ComparisonVerdict::Valid {
-            summary: super::ComparisonMetricSummary {
+            summary: crate::ComparisonMetricSummary {
                 metric: MetricName::PerEditCpuTime,
                 unit: MetricUnit::MicrosecondsPerEdit,
                 baseline_samples: vec![10.0, 20.0, 30.0],
@@ -281,7 +281,7 @@ fn valid_repetitions_produce_medians_and_candidate_ratio() {
                 paired_samples: [(0, 10.0, 9.0), (1, 30.0, 12.0), (2, 20.0, 15.0)]
                     .into_iter()
                     .map(
-                        |(sample_index, baseline, candidate)| super::ComparisonPairedSample {
+                        |(sample_index, baseline, candidate)| crate::ComparisonPairedSample {
                             sample_index,
                             baseline,
                             candidate,

@@ -75,26 +75,4 @@ pub fn workspace_root() -> std::path::PathBuf {
 }
 
 #[cfg(test)]
-mod architecture_test;
-#[cfg(test)]
-mod artifact_test;
-#[cfg(test)]
-mod build_provenance_test;
-#[cfg(test)]
-mod catalog_test;
-#[cfg(test)]
-mod cli_test;
-#[cfg(test)]
-mod comparison_test;
-#[cfg(test)]
-mod counters_test;
-#[cfg(test)]
-mod harness_test;
-#[cfg(test)]
-mod host_test;
-#[cfg(test)]
-mod portable_dump_test;
-#[cfg(test)]
-mod profile_test;
-#[cfg(test)]
-mod suite_test;
+mod tests;

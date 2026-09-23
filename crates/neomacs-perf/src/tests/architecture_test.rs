@@ -65,7 +65,7 @@ fn scenario_modules_stay_family_sized() {
 /// and this pin.
 #[test]
 fn scenario_module_registry_is_pinned() {
-    let registered: Vec<&str> = include_str!("harness/scenarios/mod.rs")
+    let registered: Vec<&str> = include_str!("../harness/scenarios/mod.rs")
         .lines()
         .filter_map(|line| line.strip_prefix("pub(crate) mod "))
         .map(|rest| rest.trim_end_matches(';'))

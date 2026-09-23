@@ -245,3 +245,6 @@ impl PerfStatCapture {
         ))
     }
 }
+
+#[cfg(test)]
+mod tests;

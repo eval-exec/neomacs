@@ -273,5 +273,4 @@ fn search_measurements(
 }
 
 #[cfg(test)]
-#[path = "search_shape_test.rs"]
 mod tests;

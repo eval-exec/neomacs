@@ -117,3 +117,6 @@ fn command_line(program: &str, arguments: &[&str]) -> Option<String> {
     let value = value.trim();
     (!value.is_empty()).then(|| value.to_string())
 }
+
+#[cfg(test)]
+mod tests;

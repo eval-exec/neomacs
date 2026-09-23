@@ -1,4 +1,4 @@
-use super::{HostProvenance, MachinePolicy, cpu_list_contains, validate_machine_policy};
+use crate::{HostProvenance, MachinePolicy, cpu_list_contains, validate_machine_policy};
 
 fn host() -> HostProvenance {
     HostProvenance {
