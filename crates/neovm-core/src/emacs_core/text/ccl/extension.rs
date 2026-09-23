@@ -162,6 +162,7 @@ pub(super) fn execute_extension(
                 value_register,
                 map_id,
                 *instruction,
+                instruction.saturating_sub(1),
             )
         }
         ExtendedCommand::IterateMultipleMap => iterate_multiple_map(
@@ -265,6 +266,7 @@ fn map_single(
     value_register: usize,
     map_id: i64,
     resume_at: usize,
+    call_error_at: usize,
 ) -> Result<ExtensionStep, Flow> {
     let Some(map) = code_conversion_map(map_id) else {
         registers[status_register] = -1;
@@ -287,6 +289,7 @@ fn map_single(
         status_register,
         value_register,
         resume_at,
+        call_error_at,
     )
 }
 
@@ -331,12 +334,21 @@ fn iterate_multiple_map(
             // A symbol calls that CCL program and resumes after this map list,
             // not back at the iterate instruction.
             MapHit::Call(symbol) => {
-                if let Some(program) = program_words_by_symbol(symbol) {
-                    return Ok(ExtensionStep::Call {
-                        words: program,
-                        resume_at: end,
-                    });
-                }
+                return match resolve_map_call(symbol) {
+                    MapCallResolution::Called(program) => {
+                        *instruction = end;
+                        Ok(ExtensionStep::Call {
+                            words: program,
+                            resume_at: end,
+                        })
+                    }
+                    // GNU has already consumed the map-id word when the call
+                    // fails, so the error names `start + offset + 1` as the
+                    // instruction counter.
+                    MapCallResolution::Invalid => {
+                        Err(invalid_ccl_program_at(start + offset as usize))
+                    }
+                };
             }
             MapHit::Miss => {}
         }
@@ -475,16 +487,24 @@ fn map_multiple(
                         return Err(invalid_ccl_program_at(error_at));
                     }
                     let saved_value = ccl_reg(registers, value_register);
-                    state.stack.push((rest as i32, saved_value));
-                    state.stack.push((rest as i32, op as i32));
-                    state.call_mark = call_depth + 1;
-                    registers[status_register] = index;
-                    if let Some(program) = program_words_by_symbol(symbol) {
-                        return Ok(ExtensionStep::Call {
-                            words: program,
-                            resume_at: error_at,
-                        });
-                    }
+                    return match resolve_map_call(symbol) {
+                        MapCallResolution::Called(program) => {
+                            state.stack.push((rest as i32, saved_value));
+                            state.stack.push((rest as i32, op as i32));
+                            state.call_mark = call_depth + 1;
+                            registers[status_register] = index;
+                            Ok(ExtensionStep::Call {
+                                words: program,
+                                resume_at: error_at,
+                            })
+                        }
+                        // GNU reports this with the instruction counter left
+                        // at the start of the map list: the point word has
+                        // not been consumed when the call fails.
+                        MapCallResolution::Invalid => {
+                            Err(invalid_ccl_program_at(list_at.saturating_sub(1)))
+                        }
+                    };
                 }
             }
         }
@@ -519,6 +539,23 @@ enum MapHit {
     Miss,
     Lambda,
     Call(crate::emacs_core::SymId),
+}
+
+/// Resolution of a map entry's symbol program.
+///
+/// GNU `CCL_CALL_FOR_MAP_INSTRUCTION` rejects an unresolvable symbol; every
+/// map call site must surface `Invalid` as an invalid command, never as a
+/// mapping miss. An exhaustive `match` makes that state impossible to forget.
+enum MapCallResolution {
+    Called(Vec<i64>),
+    Invalid,
+}
+
+fn resolve_map_call(symbol: crate::emacs_core::SymId) -> MapCallResolution {
+    match program_words_by_symbol(symbol) {
+        Some(words) => MapCallResolution::Called(words),
+        None => MapCallResolution::Invalid,
+    }
 }
 
 fn lookup_map_slot(map_id: i64, value: i64) -> MapHit {
@@ -567,6 +604,7 @@ fn apply_map_content(
     status_register: usize,
     value_register: usize,
     resume_at: usize,
+    call_error_at: usize,
 ) -> Result<ExtensionStep, Flow> {
     match content {
         ValueSlot::Nil => {
@@ -582,12 +620,9 @@ fn apply_map_content(
             registers[status_register] = 0;
             Ok(ExtensionStep::Continue)
         }
-        ValueSlot::Symbol(symbol) => match program_words_by_symbol(*symbol) {
-            Some(words) => Ok(ExtensionStep::Call { words, resume_at }),
-            None => {
-                registers[status_register] = -1;
-                Ok(ExtensionStep::Continue)
-            }
+        ValueSlot::Symbol(symbol) => match resolve_map_call(*symbol) {
+            MapCallResolution::Called(words) => Ok(ExtensionStep::Call { words, resume_at }),
+            MapCallResolution::Invalid => Err(invalid_ccl_program_at(call_error_at)),
         },
         ValueSlot::Lambda | ValueSlot::Other => {
             registers[status_register] = -1;

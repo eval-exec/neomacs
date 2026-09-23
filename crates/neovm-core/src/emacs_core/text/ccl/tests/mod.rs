@@ -1487,6 +1487,55 @@ fn assert_ccl_error_at_index(err: crate::emacs_core::error::EvalError, nth: usiz
     }
 }
 
+#[test]
+fn ccl_execute_map_single_rejects_a_missing_called_program() {
+    crate::test_utils::init_test_tracing();
+    // GNU `CCL_CALL_FOR_MAP_INSTRUCTION` signals an invalid command when
+    // `setup_ccl_program` fails on the map entry's symbol. It does not fall
+    // back to a miss. The instruction counter is past both words.
+    let mut eval = crate::test_utils::runtime_startup_context();
+    let err = eval
+        .eval_str(
+            r#"(let ((reg (vector 0 0 0 0 0 0 0 0)))
+                 (register-code-conversion-map 'm1 (vector 0 'nope-program))
+                 (ccl-execute [0 4 294943 0 22] reg))"#,
+        )
+        .expect_err("map-single with a missing program is an invalid command");
+    assert_ccl_error_at_index(err, 4);
+}
+
+#[test]
+fn ccl_execute_iterate_multiple_map_rejects_a_missing_called_program() {
+    crate::test_utils::init_test_tracing();
+    // GNU consumes the map-id word before the call, so the error names the
+    // 5th code. The Rust code treated the failure as a miss and moved on.
+    let mut eval = crate::test_utils::runtime_startup_context();
+    let err = eval
+        .eval_str(
+            r#"(let ((reg (vector 0 0 0 0 0 0 0 0)))
+                 (register-code-conversion-map 'm1 (vector 0 'nope-program))
+                 (ccl-execute [0 4 262431 1 0 22] reg))"#,
+        )
+        .expect_err("iterate-multiple-map with a missing program is an invalid command");
+    assert_ccl_error_at_index(err, 5);
+}
+
+#[test]
+fn ccl_execute_map_multiple_rejects_a_missing_called_program() {
+    crate::test_utils::init_test_tracing();
+    // GNU reports the 4th code: the point word is not consumed before the
+    // symbol call. The old code pushed map stack entries and kept going.
+    let mut eval = crate::test_utils::runtime_startup_context();
+    let err = eval
+        .eval_str(
+            r#"(let ((reg (vector 0 0 0 0 0 0 0 0)))
+                 (register-code-conversion-map 'm1 (vector 0 'nope-program))
+                 (ccl-execute [0 4 278815 1 0 22] reg))"#,
+        )
+        .expect_err("map-multiple with a missing program is an invalid command");
+    assert_ccl_error_at_index(err, 4);
+}
+
 fn assert_ccl_error_at_fourth(err: crate::emacs_core::error::EvalError) {
     match err {
         crate::emacs_core::error::EvalError::Signal { data, .. } => {
