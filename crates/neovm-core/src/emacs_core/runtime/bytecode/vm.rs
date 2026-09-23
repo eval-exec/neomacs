@@ -6084,6 +6084,28 @@ impl<'a> Vm<'a> {
                 return Ok(val);
             }
         }
+        // Most aliases end at one ordinary value cell. The current target can
+        // answer directly in both the interpreter and JIT fallback; dedicated
+        // buffer state, chains, cycles and void targets keep full resolution
+        // with the original name for signals. The full reader also consults
+        // identity-based buffer state under the original name. Never cache
+        // the resolved target.
+        if sym.redirect() == crate::emacs_core::symbol::SymbolRedirect::Varalias
+            && crate::buffer::buffer::DedicatedBufferLocal::from_sym_id(name_id).is_none()
+            && crate::buffer::buffer::lookup_buffer_slot_by_sym_id(name_id).is_none()
+        {
+            let target = sym.alias_target();
+            if crate::buffer::buffer::DedicatedBufferLocal::from_sym_id(target).is_none()
+                && let Some(target_sym) = ob.get_by_id(target)
+                && target_sym.redirect() == crate::emacs_core::symbol::SymbolRedirect::Plainval
+            {
+                // SAFETY: the target's redirect selects its plain value cell.
+                let value = unsafe { target_sym.val.plain };
+                if !value.is_unbound() {
+                    return Ok(value);
+                }
+            }
+        }
         // A forwarder whose storage IS the descriptor needs no buffer context,
         // so the read is one indirection instead of `lookup_var_id`'s
         // resolve-alias + gather-buffer-slots-and-defaults path.  This is the

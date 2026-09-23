@@ -476,3 +476,30 @@ fn reused_alias_reader_observes_retargeting_and_contextual_values() {
         "signal cyclic-variable-indirection [\"vri-alias-reused\"]",
     );
 }
+
+#[test]
+fn aliases_of_buffer_identities_keep_original_name_context() {
+    let mut eval = Context::new();
+    eval_ok(
+        &mut eval,
+        "(progn (defvar vri-identity-target 7)
+                (make-local-variable 'fill-column)
+                (setq fill-column 88)
+                (setq buffer-undo-list '(3 4)))",
+    );
+    let target = crate::emacs_core::intern::intern("vri-identity-target");
+    // Public defvaralias rejects slot-backed builtins. The low-level alias
+    // state still exercises the full reader's original-name buffer lookup;
+    // a target-cell shortcut must not bypass that existing behavior.
+    for (name, expected) in [("fill-column", "88"), ("buffer-undo-list", "(3 4)")] {
+        let f = reader(Value::symbol(name));
+        let leaf = compile_bytecode_function(&f).expect("compiles");
+        eval.obarray
+            .make_alias(crate::emacs_core::intern::intern(name), target);
+        assert_eq!(interpret(&mut eval, &f), expected);
+        match leaf.call(&mut eval as *mut Context as *mut u8, &[]) {
+            NativeRun::Ok(bits) => assert_eq!(print_value(&Value::from_bits(bits)), expected),
+            other => panic!("contextual alias read: {other:?}"),
+        }
+    }
+}
