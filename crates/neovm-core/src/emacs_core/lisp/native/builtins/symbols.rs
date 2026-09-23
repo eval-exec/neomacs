@@ -1059,9 +1059,11 @@ pub(super) fn builtin_ccl_execute(eval: &mut super::eval::Context, args: Vec<Val
     {
         let mut forced = args.clone();
         forced[0] = Value::fixnum(0);
-        return super::ccl::builtin_ccl_execute_impl(forced);
+        return super::ccl::with_ccl_obarray(obarray, || {
+            super::ccl::builtin_ccl_execute_impl(forced)
+        });
     }
-    super::ccl::builtin_ccl_execute_impl(args)
+    super::ccl::with_ccl_obarray(obarray, || super::ccl::builtin_ccl_execute_impl(args))
 }
 
 pub(super) fn builtin_ccl_execute_on_string(
@@ -1074,9 +1076,13 @@ pub(super) fn builtin_ccl_execute_on_string(
     {
         let mut forced = args.clone();
         forced[0] = Value::fixnum(0);
-        return super::ccl::builtin_ccl_execute_on_string_impl(forced);
+        return super::ccl::with_ccl_obarray(obarray, || {
+            super::ccl::builtin_ccl_execute_on_string_impl(forced)
+        });
     }
-    super::ccl::builtin_ccl_execute_on_string_impl(args)
+    super::ccl::with_ccl_obarray(obarray, || {
+        super::ccl::builtin_ccl_execute_on_string_impl(args)
+    })
 }
 
 pub(super) fn builtin_register_ccl_program(

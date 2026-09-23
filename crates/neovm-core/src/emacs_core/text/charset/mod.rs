@@ -1274,6 +1274,22 @@ pub(crate) fn charset_encode_char(charset: SymId, ch: i64) -> Option<i64> {
     CHARSET_REGISTRY.with(|slot| slot.borrow().encode_char(charset, ch))
 }
 
+/// Internal id of a charset symbol, if it is registered.
+pub(crate) fn charset_id_of(name: SymId) -> Option<i64> {
+    CHARSET_REGISTRY.with(|slot| slot.borrow().id(name))
+}
+
+/// Charset symbol whose internal id is `id`, if one is registered.
+pub(crate) fn charset_sym_by_id(id: i64) -> Option<SymId> {
+    CHARSET_REGISTRY.with(|slot| {
+        slot.borrow()
+            .charsets
+            .iter()
+            .find(|(_, info)| info.id == id)
+            .map(|(name, _)| *name)
+    })
+}
+
 /// Decode a raw code point in `charset` to an Emacs character code, or `None`.
 pub(crate) fn charset_decode_char(charset: SymId, code: i64) -> Option<i64> {
     CHARSET_REGISTRY.with(|slot| slot.borrow().decode_char(charset, code))

@@ -15,14 +15,17 @@
 
 mod command;
 mod expr;
+mod extension;
 
 use self::command::CclCommand;
 use self::expr::{eval_expr_self, eval_set_expr};
+use self::extension::{ExtensionStep, execute_extension};
 use super::error::{EvalResult, Flow, signal};
 use super::value::*;
 use crate::emacs_core::SymId;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
+use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -40,7 +43,7 @@ fn is_valid_ccl_program(program: &Value) -> bool {
         return false;
     }
 
-    if !program.iter().all(is_integer) {
+    if !program.iter().all(ccl_word_shape) {
         return false;
     }
 
@@ -53,6 +56,10 @@ fn is_valid_ccl_program(program: &Value) -> bool {
 struct CclRegistry {
     programs: HashMap<SymId, (i64, Value)>,
     code_conversion_maps: HashMap<SymId, (i64, Value)>,
+    /// Integer-to-integer tables for `lookup-integer` / `lookup-character`
+    /// when a test registers them directly. Lisp execution prefers the
+    /// `translation-hash-table-vector` variable.
+    translation_hashes: Vec<HashMap<i64, i64>>,
     next_program_id: i64,
     next_code_conversion_map_id: i64,
 }
@@ -62,6 +69,7 @@ impl CclRegistry {
         Self {
             programs: HashMap::new(),
             code_conversion_maps: HashMap::new(),
+            translation_hashes: Vec::new(),
             next_program_id: 1,
             next_code_conversion_map_id: 0,
         }
@@ -92,6 +100,50 @@ impl CclRegistry {
         self.code_conversion_maps.insert(name, (id, value));
         id
     }
+
+    fn program_by_id(&self, id: i64) -> Option<Value> {
+        self.programs
+            .values()
+            .find(|(program_id, _)| *program_id == id)
+            .map(|(_, program)| *program)
+    }
+
+    fn program_id(&self, name: SymId) -> Option<i64> {
+        self.programs.get(&name).map(|(id, _)| *id)
+    }
+
+    fn map_by_id(&self, id: i64) -> Option<Value> {
+        self.code_conversion_maps
+            .values()
+            .find(|(map_id, _)| *map_id == id)
+            .map(|(_, map)| *map)
+    }
+
+    fn map_id(&self, name: SymId) -> Option<i64> {
+        self.code_conversion_maps.get(&name).map(|(id, _)| *id)
+    }
+
+    fn add_translation_hash(&mut self, entries: HashMap<i64, i64>) -> i64 {
+        let id = self.translation_hashes.len() as i64;
+        self.translation_hashes.push(entries);
+        id
+    }
+}
+
+thread_local! {
+    static CCL_OBARRAY: Cell<*const super::symbol::Obarray> = const { Cell::new(std::ptr::null()) };
+}
+
+/// Run `body` while CCL symbol resolution can see this obarray's plists and
+/// the translation vectors `define-translation-hash-table` fills.
+pub(crate) fn with_ccl_obarray<R>(obarray: &super::symbol::Obarray, body: impl FnOnce() -> R) -> R {
+    CCL_OBARRAY.with(|cell| {
+        let previous = cell.get();
+        cell.set(obarray as *const super::symbol::Obarray);
+        let result = body();
+        cell.set(previous);
+        result
+    })
 }
 
 thread_local! {
@@ -152,6 +204,72 @@ fn invalid_ccl_program_at(index: usize) -> Flow {
     )
 }
 
+fn ccl_word_shape(word: &Value) -> bool {
+    if word.as_int().is_some() || word.as_symbol_id().is_some() {
+        return true;
+    }
+    word.is_cons()
+        && word.cons_car().as_symbol_id().is_some()
+        && word.cons_cdr().as_symbol_id().is_some()
+}
+
+fn property_symbol(name: &str) -> Option<SymId> {
+    Value::symbol(name).as_symbol_id()
+}
+
+fn symbol_property_integer(symbol: SymId, property: SymId) -> Option<i64> {
+    let obarray = CCL_OBARRAY.with(|cell| cell.get());
+    if obarray.is_null() {
+        return None;
+    }
+    let plist = unsafe { &*obarray }.symbol_plist_id(symbol);
+    super::plist::plist_get(plist, &Value::from_sym_id(property))
+        .and_then(|value| value.as_int())
+        .filter(|id| *id >= 0)
+}
+
+fn resolved_symbol_id(symbol: SymId, property: SymId) -> Option<i64> {
+    if let Some(id) = symbol_property_integer(symbol, property) {
+        return Some(id);
+    }
+    let program = property_symbol("ccl-program-idx")?;
+    let map = property_symbol("code-conversion-map-id")?;
+    with_ccl_registry(|registry| {
+        if property == program {
+            registry.program_id(symbol)
+        } else if property == map {
+            registry.map_id(symbol)
+        } else {
+            None
+        }
+    })
+}
+
+fn resolve_ccl_word(word: Value) -> Result<i64, Flow> {
+    if let Some(number) = word.as_int() {
+        return Ok(number);
+    }
+    let invalid = || signal("error", vec![Value::string("Invalid CCL program")]);
+    if word.is_cons() {
+        let symbol = word.cons_car().as_symbol_id().ok_or_else(invalid)?;
+        let property = word.cons_cdr().as_symbol_id().ok_or_else(invalid)?;
+        return resolved_symbol_id(symbol, property).ok_or_else(invalid);
+    }
+    let symbol = word.as_symbol_id().ok_or_else(invalid)?;
+    for name in [
+        "translation-table-id",
+        "code-conversion-map-id",
+        "ccl-program-idx",
+    ] {
+        if let Some(property) = property_symbol(name)
+            && let Some(id) = resolved_symbol_id(symbol, property)
+        {
+            return Ok(id);
+        }
+    }
+    Err(invalid())
+}
+
 fn compiled_ccl_words(designator: Value) -> Result<Vec<i64>, Flow> {
     let Some(program) = resolve_ccl_program_designator(&designator) else {
         return Err(signal("error", vec![Value::string("Invalid CCL program")]));
@@ -163,11 +281,105 @@ fn compiled_ccl_words(designator: Value) -> Result<Vec<i64>, Flow> {
         .as_vector_data()
         .expect("validated CCL program is a vector")
         .iter()
-        .map(|word| {
-            word.as_int()
-                .ok_or_else(|| signal("error", vec![Value::string("Invalid CCL program")]))
-        })
+        .copied()
+        .map(resolve_ccl_word)
         .collect()
+}
+
+pub(super) fn code_conversion_map(id: i64) -> Option<Value> {
+    with_ccl_registry(|registry| registry.map_by_id(id))
+}
+
+pub(super) fn program_words(id: i64) -> Option<Vec<i64>> {
+    let program = with_ccl_registry(|registry| registry.program_by_id(id))?;
+    compiled_ccl_words(program).ok()
+}
+
+pub(super) fn program_words_by_symbol(symbol: SymId) -> Option<Vec<i64>> {
+    let id = with_ccl_registry(|registry| registry.program_id(symbol))?;
+    program_words(id)
+}
+
+pub(super) fn install_translation_hash(entries: HashMap<i64, i64>) -> i64 {
+    with_ccl_registry_mut(|registry| registry.add_translation_hash(entries))
+}
+
+pub(super) fn translation_hash_lookup(id: i64, key: i64) -> Option<i64> {
+    if let Some(value) = lisp_translation_hash_lookup(id, key) {
+        return Some(value);
+    }
+    with_ccl_registry(|registry| {
+        registry
+            .translation_hashes
+            .get(usize::try_from(id).ok()?)
+            .and_then(|table| table.get(&key).copied())
+    })
+}
+
+pub(super) fn translation_table(id: i64) -> Option<Value> {
+    lisp_vector_slot("translation-table-vector", id).map(|slot| {
+        if slot.is_cons() {
+            slot.cons_cdr()
+        } else {
+            slot
+        }
+    })
+}
+
+fn lisp_vector_slot(name: &str, id: i64) -> Option<Value> {
+    let obarray = CCL_OBARRAY.with(|cell| cell.get());
+    if obarray.is_null() {
+        return None;
+    }
+    let vector = unsafe { &*obarray }.symbol_value(name).copied()?;
+    let data = vector.as_vector_data()?;
+    let index = usize::try_from(id).ok()?;
+    data.get(index).copied()
+}
+
+fn lisp_translation_hash_lookup(id: i64, key: i64) -> Option<i64> {
+    let slot = lisp_vector_slot("translation-hash-table-vector", id)?;
+    let table = if slot.is_cons() {
+        slot.cons_cdr()
+    } else {
+        slot
+    };
+    let table = table.as_hash_table()?;
+    table
+        .data
+        .lookup(Value::fixnum(key), table.test, false)
+        .and_then(|value| value.as_int())
+}
+
+fn write_embedded_characters(
+    words: &[i64],
+    at: usize,
+    length: usize,
+    error_at: usize,
+    write_character: &mut dyn FnMut(i64) -> Result<(), Flow>,
+) -> Result<(), Flow> {
+    let first = *words
+        .get(at)
+        .ok_or_else(|| invalid_ccl_program_at(error_at))?;
+    if first & 0x1000000 != 0 {
+        let characters = words
+            .get(at..at + length)
+            .ok_or_else(|| invalid_ccl_program_at(error_at))?;
+        for word in characters {
+            write_character(word & 0x00ff_ffff)?;
+        }
+    } else {
+        let packed_words = length.saturating_add(2) / 3;
+        let packed = words
+            .get(at..at + packed_words)
+            .ok_or_else(|| invalid_ccl_program_at(error_at))?;
+        for character_index in 0..length {
+            let word = packed[character_index / 3];
+            let shift = (2 - (character_index % 3)) * 8;
+            write_character((word >> shift) & 0xff)?;
+        }
+    }
+    Ok(())
 }
 
 fn ccl_relative_instruction(instruction: usize, offset: i64) -> Option<usize> {
@@ -299,11 +511,12 @@ fn execute_compiled_ccl_with_state(
     const HEADER_MAIN: usize = 2;
     const MAX_STEPS_PER_WORD: usize = 4096;
 
-    let words = compiled_ccl_words(designator)?;
-    let eof_instruction = usize::try_from(words[1])
+    let mut words = compiled_ccl_words(designator)?;
+    let mut eof_instruction = usize::try_from(words[1])
         .ok()
         .filter(|instruction| *instruction < words.len())
         .ok_or_else(|| invalid_ccl_program_at(1))?;
+    let mut call_stack: Vec<(Vec<i64>, usize, usize)> = Vec::new();
     let mut source = 0usize;
     let mut output = Vec::with_capacity(input.len());
     let mut instruction = initial_instruction
@@ -364,6 +577,29 @@ fn execute_compiled_ccl_with_state(
                     .get(instruction)
                     .ok_or_else(|| invalid_ccl_program_at(this_instruction))?;
                 instruction += 1;
+            }
+            // GNU `CCL_SetArray`: `reg[rrr] = ELEMENT[reg[RRR]]` when the
+            // index is inside the table, then skip the table either way.
+            CclCommand::SetArray => {
+                let length = field1 >> 3;
+                let index = ccl_reg(&registers, other_register);
+                if index >= 0 && i64::from(index) < length {
+                    let slot = instruction
+                        .checked_add(usize::try_from(index).unwrap_or(usize::MAX))
+                        .ok_or_else(|| invalid_ccl_program_at(this_instruction))?;
+                    registers[register] = i64::from(
+                        *words
+                            .get(slot)
+                            .ok_or_else(|| invalid_ccl_program_at(this_instruction))?
+                            as i32,
+                    );
+                }
+                let skip = usize::try_from(length)
+                    .ok()
+                    .ok_or_else(|| invalid_ccl_program_at(this_instruction))?;
+                instruction = instruction
+                    .checked_add(skip)
+                    .ok_or_else(|| invalid_ccl_program_at(this_instruction))?;
             }
             CclCommand::Jump => {
                 instruction = ccl_relative_instruction(instruction, field1)
@@ -561,11 +797,17 @@ fn execute_compiled_ccl_with_state(
             // GNU leaves IC pointing at the End instruction so a completed
             // STATUS cannot accidentally resume beyond the vector.
             CclCommand::End => {
-                return Ok(CclExecution {
-                    output,
-                    registers,
-                    instruction: this_instruction,
-                });
+                if let Some((caller, return_at, caller_eof)) = call_stack.pop() {
+                    words = caller;
+                    instruction = return_at;
+                    eof_instruction = caller_eof;
+                } else {
+                    return Ok(CclExecution {
+                        output,
+                        registers,
+                        instruction: this_instruction,
+                    });
+                }
             }
             CclCommand::WriteExprConst => {
                 let left = ccl_reg(&registers, other_register);
@@ -701,14 +943,159 @@ fn execute_compiled_ccl_with_state(
                     this_instruction,
                 )?;
             }
-            CclCommand::SetArray
-            | CclCommand::WriteConstReadJump
-            | CclCommand::WriteStringJump
-            | CclCommand::WriteArrayReadJump
-            | CclCommand::Call
-            | CclCommand::WriteArray
-            | CclCommand::Extension => {
-                return Err(invalid_ccl_program_at(this_instruction));
+            // GNU `CCL_WriteArray`: write `ELEMENT[reg]` when the index is
+            // inside the table, then skip the table either way.
+            CclCommand::WriteArray => {
+                let length = field1;
+                let index = ccl_reg(&registers, register);
+                if index >= 0 && i64::from(index) < length {
+                    let slot = instruction
+                        .checked_add(usize::try_from(index).unwrap_or(usize::MAX))
+                        .ok_or_else(|| invalid_ccl_program_at(this_instruction))?;
+                    write_character(i64::from(
+                        *words
+                            .get(slot)
+                            .ok_or_else(|| invalid_ccl_program_at(this_instruction))?
+                            as i32,
+                    ))?;
+                }
+                let skip = usize::try_from(length)
+                    .ok()
+                    .ok_or_else(|| invalid_ccl_program_at(this_instruction))?;
+                instruction = instruction
+                    .checked_add(skip)
+                    .ok_or_else(|| invalid_ccl_program_at(this_instruction))?;
+            }
+            CclCommand::WriteConstReadJump => {
+                let constant = i64::from(next_ccl_i32(&words, &mut instruction, this_instruction)?);
+                write_character(constant)?;
+                let read_at = instruction;
+                match read_character(&mut registers[register])? {
+                    Some(true) => instruction = eof_instruction,
+                    Some(false) => {
+                        instruction = ccl_relative_instruction(read_at, field1 - 1)
+                            .ok_or_else(|| invalid_ccl_program_at(this_instruction))?;
+                    }
+                    None => {
+                        return Ok(CclExecution {
+                            output,
+                            registers,
+                            instruction: read_at,
+                        });
+                    }
+                }
+            }
+            CclCommand::WriteStringJump => {
+                let length =
+                    usize::try_from(next_ccl_i32(&words, &mut instruction, this_instruction)?)
+                        .map_err(|_| invalid_ccl_program_at(this_instruction))?;
+                let string_at = instruction;
+                write_embedded_characters(
+                    &words,
+                    string_at,
+                    length,
+                    this_instruction,
+                    &mut write_character,
+                )?;
+                instruction = ccl_relative_instruction(string_at, field1 - 1)
+                    .ok_or_else(|| invalid_ccl_program_at(this_instruction))?;
+            }
+            CclCommand::WriteArrayReadJump => {
+                // `instruction` still names the length word. GNU writes
+                // `ELEMENT[reg]` from the following words, skips the length,
+                // the array, and the paired read-jump, then reads.
+                let length_at = instruction;
+                let length = i64::from(next_ccl_i32(&words, &mut instruction, this_instruction)?);
+                let index = ccl_reg(&registers, register);
+                if index >= 0 && i64::from(index) < length {
+                    let slot = usize::try_from(index)
+                        .ok()
+                        .and_then(|index| length_at.checked_add(1)?.checked_add(index))
+                        .ok_or_else(|| invalid_ccl_program_at(this_instruction))?;
+                    write_character(i64::from(
+                        *words
+                            .get(slot)
+                            .ok_or_else(|| invalid_ccl_program_at(this_instruction))?
+                            as i32,
+                    ))?;
+                }
+                let after = length_at
+                    .checked_add(usize::try_from(length + 2).unwrap_or(usize::MAX))
+                    .ok_or_else(|| invalid_ccl_program_at(this_instruction))?;
+                match read_character(&mut registers[register])? {
+                    Some(true) => instruction = eof_instruction,
+                    Some(false) => {
+                        instruction = ccl_relative_instruction(after, field1 - (length + 2))
+                            .ok_or_else(|| invalid_ccl_program_at(this_instruction))?;
+                    }
+                    None => {
+                        return Ok(CclExecution {
+                            output,
+                            registers,
+                            instruction: after.saturating_sub(1),
+                        });
+                    }
+                }
+            }
+            CclCommand::Call => {
+                if call_stack.len() >= 256 {
+                    return Err(invalid_ccl_program_at(this_instruction));
+                }
+                let program_id = if register != 0 {
+                    i64::from(next_ccl_i32(&words, &mut instruction, this_instruction)?)
+                } else {
+                    field1
+                };
+                let Some(callee) = program_words(program_id) else {
+                    return Err(invalid_ccl_program_at(this_instruction));
+                };
+                let callee_eof = usize::try_from(callee.get(1).copied().unwrap_or(-1))
+                    .ok()
+                    .filter(|eof| *eof < callee.len())
+                    .ok_or_else(|| invalid_ccl_program_at(this_instruction))?;
+                let caller = std::mem::replace(&mut words, callee);
+                call_stack.push((caller, instruction, eof_instruction));
+                instruction = 2;
+                eof_instruction = callee_eof;
+            }
+            CclCommand::Extension => {
+                match execute_extension(
+                    &words,
+                    &mut instruction,
+                    &mut registers,
+                    field1,
+                    register,
+                    other_register,
+                    this_instruction,
+                    &mut read_character,
+                    &mut write_character,
+                )? {
+                    ExtensionStep::Continue => {}
+                    ExtensionStep::Eof => instruction = eof_instruction,
+                    ExtensionStep::Suspend => {
+                        return Ok(CclExecution {
+                            output,
+                            registers,
+                            instruction: this_instruction,
+                        });
+                    }
+                    ExtensionStep::Call {
+                        words: callee,
+                        resume_at,
+                    } => {
+                        if call_stack.len() >= 256 {
+                            return Err(invalid_ccl_program_at(this_instruction));
+                        }
+                        let callee_eof = usize::try_from(callee.get(1).copied().unwrap_or(-1))
+                            .ok()
+                            .filter(|eof| *eof < callee.len())
+                            .ok_or_else(|| invalid_ccl_program_at(this_instruction))?;
+                        let caller = std::mem::replace(&mut words, callee);
+                        call_stack.push((caller, resume_at, eof_instruction));
+                        instruction = 2;
+                        eof_instruction = callee_eof;
+                    }
+                }
             }
         }
     }

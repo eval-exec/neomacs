@@ -754,6 +754,213 @@ fn ccl_execute_on_string_writes_a_multibyte_constant_character() {
 }
 
 #[test]
+fn ccl_execute_on_string_decodes_midi_running_status() {
+    crate::test_utils::init_test_tracing();
+    // GNU `ccl-compile` of `midikbd-decoder` from midi-kbd-0.2, the vector
+    // checked in as `prog-midi-code` in test/lisp/international/ccl-tests.el.
+    // Note-on writes 0, channel, note, velocity. Velocity 0 becomes note-off
+    // (leading 1). A second note without a status byte uses running status.
+    let program = [
+        2, 72, 4893, 16, 128, 1133, 5, 6, 9, 12, 16, -2556, 32, 1024, 6660, 32, 865, -4092, 64,
+        609, 1024, 4868, 795, 20, 248, 3844, 3099, 16, 240, 128, 82169, 224, 1275, 18, 192, 353,
+        260, 609, -9468, 97, -9980, 82169, 240, 4091, 18, 144, 1371, 18, 0, 16407, 16, 1796, 81943,
+        15, 20, 529, 305, 81, -14588, 82169, 240, 2555, 18, 128, 81943, 15, 276, 529, 305, 81,
+        -17660, -17916, 22,
+    ];
+    for (input, expected) in [
+        (&[144, 60, 100][..], &[0, 0, 60, 100][..]),
+        (&[128, 60, 0][..], &[1, 0, 60, 0][..]),
+        (
+            &[144, 60, 100, 62, 80][..],
+            &[0, 0, 60, 100, 0, 0, 62, 80][..],
+        ),
+        (&[144, 60, 0][..], &[1, 0, 60, 0][..]),
+    ] {
+        let (output, _) = execute_ccl_on_string(&program, [0; 8], input, true);
+        assert_eq!(output, expected);
+    }
+}
+
+#[test]
+fn ccl_execute_set_array_reads_the_indexed_element() {
+    crate::test_utils::init_test_tracing();
+    // GNU `ccl-compile` of (1 ((r0 = r1 [65 66 67]))) with r1 = 1.
+    let program = Value::vector(
+        [1, 6, 6403, 65, 66, 67, 22]
+            .into_iter()
+            .map(Value::fixnum)
+            .collect(),
+    );
+    let registers = Value::vector(vec![
+        Value::fixnum(0),
+        Value::fixnum(1),
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+    ]);
+    builtin_ccl_execute_impl(vec![program, registers]).expect("set-array should run");
+    assert_eq!(registers.as_vector_data().unwrap()[0], Value::fixnum(66));
+    assert_eq!(registers.as_vector_data().unwrap()[1], Value::fixnum(1));
+}
+
+#[test]
+fn ccl_execute_on_string_write_array_uses_the_register_or_skips() {
+    crate::test_utils::init_test_tracing();
+    // GNU `ccl-compile` of (1 ((write r0 [65 66 67]))).
+    let program = [1, 6, 789, 65, 66, 67, 22];
+    let mut selected = [0; 8];
+    selected[0] = 2;
+    let (output, _) = execute_ccl_on_string(&program, selected, b"", true);
+    assert_eq!(output, &[67]);
+    let mut out_of_range = [0; 8];
+    out_of_range[0] = 9;
+    let (output, _) = execute_ccl_on_string(&program, out_of_range, b"", true);
+    assert_eq!(output, b"");
+}
+
+#[test]
+fn ccl_execute_on_string_write_const_read_jump_writes_then_reads() {
+    crate::test_utils::init_test_tracing();
+    // Hand-built `CCL_WriteConstReadJump` checked on GNU Emacs: write 65,
+    // read the next input byte into r0, then land on End.
+    let (output, status) = execute_ccl_on_string(&[1, 5, 521, 65, 12, 22], [0; 8], b"ab", true);
+    assert_eq!(output, &[65]);
+    assert_eq!(status[0], Value::fixnum(97));
+    assert_eq!(status[8], Value::fixnum(5));
+}
+
+#[test]
+fn ccl_execute_on_string_write_array_read_jump_writes_the_indexed_element() {
+    crate::test_utils::init_test_tracing();
+    // Hand-built `CCL_WriteArrayReadJump` checked on GNU Emacs. r0 = 1
+    // selects 66, then the next input byte is read into r0.
+    let mut registers = [0; 8];
+    registers[0] = 1;
+    let (output, status) =
+        execute_ccl_on_string(&[1, 8, 1291, 3, 65, 66, 67, 12, 22], registers, b"ab", true);
+    assert_eq!(output, &[66]);
+    assert_eq!(status[0], Value::fixnum(97));
+    assert_eq!(status[8], Value::fixnum(8));
+}
+
+#[test]
+fn ccl_execute_on_string_write_string_jump_writes_the_embedded_text() {
+    crate::test_utils::init_test_tracing();
+    // One `CCL_WriteStringJump` of "A" whose relative address lands on End.
+    let (output, status) = execute_ccl_on_string(&[1, 5, 522, 1, 4_259_840, 22], [0; 8], b"", true);
+    assert_eq!(output, b"A");
+    assert_eq!(status[8], Value::fixnum(5));
+}
+
+#[test]
+fn ccl_execute_call_runs_the_registered_program_and_returns() {
+    crate::test_utils::init_test_tracing();
+    let callee = Value::vector([0, 3, 1793, 22].into_iter().map(Value::fixnum).collect());
+    let id = builtin_register_ccl_program_impl(vec![Value::symbol("ccl-call-callee"), callee])
+        .expect("callee should register")
+        .as_int()
+        .unwrap();
+    // Opcode 0x13 with register field 1: the following word is the program id.
+    // Then (r1 = 3), which is the word 801 GNU emits after `call`.
+    let caller = Value::vector(
+        [0, 5, 51, id, 801, 22]
+            .into_iter()
+            .map(Value::fixnum)
+            .collect(),
+    );
+    let registers = Value::vector(vec![Value::NIL; 8]);
+    builtin_ccl_execute_impl(vec![caller, registers]).expect("call should return");
+    assert_eq!(registers.as_vector_data().unwrap()[0], Value::fixnum(7));
+    assert_eq!(registers.as_vector_data().unwrap()[1], Value::fixnum(3));
+}
+
+#[test]
+fn ccl_execute_call_resolves_an_embedded_program_symbol() {
+    crate::test_utils::init_test_tracing();
+    let callee = Value::vector([0, 3, 1793, 22].into_iter().map(Value::fixnum).collect());
+    builtin_register_ccl_program_impl(vec![Value::symbol("ccl-call-named"), callee])
+        .expect("named callee should register");
+    let caller = Value::vector(vec![
+        Value::fixnum(0),
+        Value::fixnum(4),
+        Value::fixnum(51),
+        Value::cons(
+            Value::symbol("ccl-call-named"),
+            Value::symbol("ccl-program-idx"),
+        ),
+        Value::fixnum(22),
+    ]);
+    let registers = Value::vector(vec![Value::NIL; 8]);
+    builtin_ccl_execute_impl(vec![caller, registers]).expect("symbol call should resolve");
+    assert_eq!(registers.as_vector_data().unwrap()[0], Value::fixnum(7));
+}
+
+#[test]
+fn ccl_execute_map_single_reads_the_code_conversion_map() {
+    crate::test_utils::init_test_tracing();
+    let map = Value::vector([0, 10, 20, 30].into_iter().map(Value::fixnum).collect());
+    let id = builtin_register_code_conversion_map_impl(vec![Value::symbol("ccl-map-single"), map])
+        .expect("map should register")
+        .as_int()
+        .unwrap();
+    // `map-single` with the value in r0 and the status in r1.
+    let program = Value::vector(
+        [0, 4, 295_199, id, 22]
+            .into_iter()
+            .map(Value::fixnum)
+            .collect(),
+    );
+    let registers = Value::vector(vec![
+        Value::fixnum(2),
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+    ]);
+    builtin_ccl_execute_impl(vec![program, registers]).expect("map-single should run");
+    assert_eq!(registers.as_vector_data().unwrap()[0], Value::fixnum(30));
+    assert_eq!(registers.as_vector_data().unwrap()[1], Value::fixnum(0));
+}
+
+#[test]
+fn ccl_execute_lookup_integer_sets_unicode_and_the_value() {
+    crate::test_utils::init_test_tracing();
+    let mut entries = std::collections::HashMap::new();
+    entries.insert(16, 17);
+    entries.insert(17, 16);
+    let id = super::install_translation_hash(entries);
+    // `lookup-integer` key in r0, value in r1. GNU stores charset id 2
+    // (`unicode`) and sets r7 on success.
+    let program = Value::vector(
+        [0, 4, 311_359, id, 22]
+            .into_iter()
+            .map(Value::fixnum)
+            .collect(),
+    );
+    let registers = Value::vector(vec![
+        Value::fixnum(17),
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+    ]);
+    builtin_ccl_execute_impl(vec![program, registers]).expect("lookup-integer should run");
+    let slots = registers.as_vector_data().unwrap();
+    assert_eq!(slots[0], Value::fixnum(2));
+    assert_eq!(slots[1], Value::fixnum(16));
+    assert_eq!(slots[7], Value::fixnum(1));
+}
+
+#[test]
 fn ccl_execute_on_string_runs_pgg_crc24() {
     crate::test_utils::init_test_tracing();
     // GNU `pgg-parse-crc24` vector and initial registers from
