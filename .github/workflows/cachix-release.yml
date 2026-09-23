@@ -46,8 +46,9 @@ jobs:
             runner: ubuntu-24.04-arm
           - system: aarch64-darwin
             runner: macos-15
-          - system: x86_64-darwin
-            runner: macos-15-intel
+          # No x86_64-darwin: the flake no longer advertises it (Nixpkgs 26.11
+          # dropped the system).  Intel-mac binaries still ship from the
+          # release.yml Cargo build on macos-15-intel.
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 240
     env:
