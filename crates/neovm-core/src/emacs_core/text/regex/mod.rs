@@ -1025,29 +1025,30 @@ impl EngineMatchData {
     ) {
         #[cfg(debug_assertions)]
         match_stats::count_publish(&self.groups);
-        groups.reserve(self.groups.len());
+        // The sized iterator lets SmallVec reserve once and append directly,
+        // without repeating its inline/heap storage lookup for each register.
         // GNU `search_buffer_re` converts each register with `BYTE_TO_CHAR`,
         // whose first test is `Z == Z_BYTE`. That test is made once for the
         // whole set here: where every character is one byte, a register's
         // Lisp position is its clamped byte position plus one.
         if let Some(end) = buf.text_single_byte_chars_end() {
             let lisp = |pos: EmacsBytePos| LispMatchPosition::new(pos.min(end).get() + 1);
-            for range in &self.groups {
-                groups.push(range.map(|range| LispCharMatchRange {
+            groups.extend(self.groups.iter().map(|range| {
+                range.map(|range| LispCharMatchRange {
                     start: lisp(range.start()),
                     end: lisp(range.end()),
-                }));
-            }
+                })
+            }));
         } else {
             let lisp = |pos: EmacsBytePos| {
                 LispMatchPosition::from_buffer_position(buf.emacs_byte_pos_to_lisp_char_pos(pos))
             };
-            for range in &self.groups {
-                groups.push(range.map(|range| LispCharMatchRange {
+            groups.extend(self.groups.iter().map(|range| {
+                range.map(|range| LispCharMatchRange {
                     start: lisp(range.start()),
                     end: lisp(range.end()),
-                }));
-            }
+                })
+            }));
         }
     }
 }
