@@ -337,3 +337,83 @@ fn osr_raw_varref_preserves_loop_slots_on_inline_and_fallback_reads() {
         assert_eq!(ctx.jit_root_stack_top, 0);
     }
 }
+
+#[test]
+fn osr_raw_varref_type_change_retags_live_slots_for_precise_resume() {
+    use crate::emacs_core::bytecode::vm::Vm;
+    let mut ctx = Context::new();
+    ctx.eval_str("(defvar raw-osr-float-read 0.5)").unwrap();
+    let mut f = ByteCodeFunction::new(LambdaParams {
+        required: vec![],
+        optional: vec![],
+        rest: None,
+    });
+    f.lexical = true;
+    f.constants = vec![
+        Value::make_int(0),
+        Value::symbol("raw-osr-float-read"),
+        Value::make_int(3),
+    ]
+    .into();
+    f.ops = vec![
+        Op::Constant(2),
+        Op::Constant(0),
+        Op::StackRef(1),
+        Op::Constant(0),
+        Op::Gtr,
+        Op::GotoIfNil(14),
+        Op::StackRef(0),
+        Op::VarRef(1),
+        Op::Add,
+        Op::StackSet(1),
+        Op::StackRef(1),
+        Op::Sub1,
+        Op::StackSet(2),
+        Op::Goto(2),
+        Op::List(2),
+        Op::Return,
+    ];
+    f.max_stack = 8;
+    f.seal_hand_assembled_ops();
+    let cfg = analyze_cfg(&f.ops, &f.constants, None, 0).unwrap();
+    let facts = compute_known_fixnum_slots(&f.ops, &f.constants, &cfg);
+    let raw = uniform_raw_osr_slots(&cfg, &facts, Some(2));
+    assert!(raw[0] && raw[1]);
+    let snapshot = [Value::make_int(3), Value::make_int(0)];
+    ctx.bc_buf.extend_from_slice(&snapshot);
+    let Some(NativeRun::DeoptAt(resume)) = cache::try_run_osr(&mut ctx, &f, 2, &snapshot, &[])
+    else {
+        panic!("the arithmetic after the float read must precisely deopt");
+    };
+    assert_eq!(resume.pc, 8);
+    assert_eq!(resume.stack.len(), 4);
+    assert_eq!(&resume.stack[..3], &[snapshot[0], snapshot[1], snapshot[1]]);
+    assert_eq!(resume.stack[3].as_float(), Some(0.5));
+    assert_eq!(&ctx.bc_buf[..], &snapshot);
+    assert_eq!(ctx.jit_root_stack_top, 0);
+    let DeoptResume {
+        pc,
+        stack,
+        handlers,
+        binds,
+        spec_base,
+        cond_base,
+    } = *resume;
+    ctx.bc_buf.clear();
+    let result = Vm::from_context(&mut ctx)
+        .run_resumed_frame_latched(
+            &f,
+            Value::NIL,
+            pc,
+            &stack,
+            handlers,
+            &binds,
+            spec_base,
+            cond_base,
+            true,
+        )
+        .unwrap();
+    assert_eq!(crate::emacs_core::print::print_value(&result), "(0 1.5)");
+    assert!(ctx.bc_buf.is_empty());
+    assert_eq!(ctx.jit_root_stack_top, 0);
+}
