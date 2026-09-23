@@ -1164,6 +1164,46 @@ fn ccl_execute_iterate_multiple_map_calls_a_program_then_continues() {
 }
 
 #[test]
+fn ccl_execute_lookup_integer_rejects_a_non_character_value() {
+    crate::test_utils::init_test_tracing();
+    // GNU Emacs: hash key 1 maps to -1, which is not a character.
+    // `ccl-execute` signals "Error in CCL program at 4th code" and leaves
+    // the register vector unchanged.
+    let mut entries = std::collections::HashMap::new();
+    entries.insert(1, -1);
+    let id = super::install_translation_hash(entries);
+    let program = Value::vector(
+        [0, 4, 311_359, id, 22]
+            .into_iter()
+            .map(Value::fixnum)
+            .collect(),
+    );
+    let registers = Value::vector(vec![
+        Value::fixnum(1),
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+    ]);
+    let err = builtin_ccl_execute_impl(vec![program, registers])
+        .expect_err("a non-character hash value is an invalid CCL command");
+    match err {
+        Flow::Signal(sig) => {
+            assert_eq!(
+                sig.data[0],
+                Value::string("Error in CCL program at 4th code")
+            );
+        }
+        other => panic!("expected error signal, got {other:?}"),
+    }
+    assert_eq!(registers.as_vector_data().unwrap()[0], Value::fixnum(1));
+    assert_eq!(registers.as_vector_data().unwrap()[1], Value::NIL);
+}
+
+#[test]
 fn ccl_execute_lookup_integer_sets_unicode_and_the_value() {
     crate::test_utils::init_test_tracing();
     let mut entries = std::collections::HashMap::new();

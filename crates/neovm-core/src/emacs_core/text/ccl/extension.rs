@@ -14,6 +14,12 @@ use super::{
 
 const UNICODE_CHARSET_ID: i32 = 2;
 
+fn is_emacs_character(value: i64) -> bool {
+    u32::try_from(value)
+        .ok()
+        .is_some_and(|code| code <= crate::emacs_core::emacs_char::MAX_CHAR)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, strum::FromRepr)]
 #[repr(u8)]
 enum ExtendedCommand {
@@ -116,6 +122,12 @@ pub(super) fn execute_extension(
             let key = ccl_reg(registers, status_register);
             match translation_hash_lookup(table_id, i64::from(key)) {
                 Some(value) => {
+                    // GNU requires the hash value to be a character. The
+                    // instruction counter has already moved past the table id,
+                    // which is the index reported in the error.
+                    if !is_emacs_character(value) {
+                        return Err(invalid_ccl_program_at(instruction.saturating_sub(1)));
+                    }
                     registers[status_register] = i64::from(UNICODE_CHARSET_ID);
                     registers[value_register] = value;
                     registers[7] = 1;
