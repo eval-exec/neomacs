@@ -3528,6 +3528,38 @@ fn read_key_sequence_stops_at_an_exhausted_kbd_macro_boundary() {
     );
 }
 
+/// GNU's macro-end deferral covers only REQUEUED events --
+/// `requeued_events_pending_p` (keyboard.c:10847) is `unread_command_events`
+/// plus the two input-method queues.  A low-level special event still sitting
+/// in the keyboard buffer (dbus, file-notify, selection) must NOT pin an
+/// exhausted macro iteration open: nothing consumes such an event in a batch
+/// session, so the read would wait forever for a key that never comes.
+#[test]
+fn read_key_sequence_macro_boundary_ignores_queued_special_events() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new();
+    let global_map = crate::emacs_core::keymap::make_sparse_list_keymap();
+    install_global_map_for_test(&mut ev, global_map);
+    ev.assign("executing-kbd-macro", Value::T);
+    // A special event no special-event-map handler will consume.
+    ev.command_loop.keyboard.unread_event(Value::list(vec![
+        Value::symbol("dbus-event"),
+        Value::symbol(":session"),
+        Value::fixnum(2),
+    ]));
+
+    let read = ev
+        .read_command_key_sequence_with_options(crate::keyboard::ReadKeySequenceOptions::default())
+        .expect("key sequence read");
+    assert_eq!(
+        read,
+        crate::keyboard::CommandKeySequenceRead::End(
+            crate::keyboard::CommandKeySequenceEnd::KeyboardMacroIteration
+        ),
+        "a queued special event must not defer the exhausted-macro boundary"
+    );
+}
+
 /// GNU keeps `read_key_sequence`'s PROMPT as the original Lisp string in the
 /// kboard's `echo_prompt`.  In particular, `help--help-screen` relies on the
 /// prompt's `face` intervals surviving while it waits for the next help key.
