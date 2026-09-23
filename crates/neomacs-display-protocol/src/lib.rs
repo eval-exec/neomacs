@@ -66,7 +66,6 @@ pub use popup_placement::*;
 pub use present_mapping::*;
 pub use window_chrome::*;
 
-#[cfg(test)]
 pub use presented_frame::*;
 pub use presented_pointer::*;
 pub use scene::*;
@@ -81,30 +80,6 @@ pub use ui_types::*;
 pub use visual_config::*;
 pub use xterm_palette::xterm_256_rgb;
 pub use xwidget_extent::*;
-
-#[cfg(test)]
-
-#[cfg(test)]
-
-#[cfg(test)]
-
-#[cfg(test)]
-
-#[cfg(test)]
-
-#[cfg(test)]
-
-#[cfg(test)]
-
-#[cfg(test)]
-
-#[cfg(test)]
-
-#[cfg(test)]
-
-#[cfg(test)]
-
-#[cfg(test)]
 
 #[cfg(test)]
 mod tests;

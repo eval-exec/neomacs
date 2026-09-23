@@ -1,0 +1,165 @@
+use std::num::NonZeroU32;
+
+use crate::{
+    DeviceScale, DeviceSurfacePoint, DrawableSurface, GeometrySize, LogicalPixels, PresentMapping,
+    PresentationExtent, PresentationId, PresentedFramePoint, RootSurfaceSpace, SurfaceState,
+};
+
+fn assert_close(actual: f32, expected: f32) {
+    assert!(
+        (actual - expected).abs() < 0.001,
+        "expected {expected}, got {actual}"
+    );
+}
+
+fn drawable(width: u32, height: u32, scale: f32) -> DrawableSurface {
+    DrawableSurface::new(
+        NonZeroU32::new(width).unwrap(),
+        NonZeroU32::new(height).unwrap(),
+        DeviceScale::new(scale).unwrap(),
+    )
+    .unwrap()
+}
+
+fn content(id: u64, width: f32, height: f32) -> PresentationExtent {
+    PresentationExtent::new(
+        PresentationId::new(id),
+        GeometrySize::<LogicalPixels>::from_px(width, height).unwrap(),
+    )
+}
+
+#[test]
+fn present_mapping_clips_stale_maximize_presentation_without_stretching_it() {
+    let mapping =
+        PresentMapping::top_left_clip(drawable(3456, 2125, 1.75), content(5, 664.0, 682.0));
+
+    assert_eq!(mapping.presentation(), PresentationId::new(5));
+    assert_close(mapping.surface_logical_size().width(), 1974.8572);
+    assert_close(mapping.surface_logical_size().height(), 1214.2858);
+
+    let visible = mapping.visible_content_rect().unwrap();
+    assert_close(visible.x(), 0.0);
+    assert_close(visible.y(), 0.0);
+    assert_close(visible.width(), 664.0);
+    assert_close(visible.height(), 682.0);
+
+    let device = mapping
+        .device_from_frame(PresentedFramePoint::from_px(664.0, 682.0).unwrap())
+        .unwrap();
+    assert_close(device.x(), 1162.0);
+    assert_close(device.y(), 1193.5);
+
+    let inside = mapping
+        .frame_from_device(DeviceSurfacePoint::from_px(1000.0, 100.0).unwrap())
+        .unwrap();
+    assert_close(inside.x(), 571.4286);
+    assert_close(inside.y(), 57.1429);
+    assert!(
+        mapping
+            .frame_from_device(DeviceSurfacePoint::from_px(2000.0, 100.0).unwrap())
+            .is_none()
+    );
+}
+
+#[test]
+fn surface_state_makes_zero_sized_suspension_distinct_from_drawable_geometry() {
+    let scale = DeviceScale::new(1.75).unwrap();
+    assert_eq!(
+        SurfaceState::from_device_size(0, 2125, scale).unwrap(),
+        SurfaceState::Suspended
+    );
+    assert_eq!(
+        SurfaceState::from_device_size(3456, 0, scale).unwrap(),
+        SurfaceState::Suspended
+    );
+    assert!(matches!(
+        SurfaceState::from_device_size(3456, 2125, scale).unwrap(),
+        SurfaceState::Drawable(_)
+    ));
+}
+
+#[test]
+fn grid_rounding_clips_instead_of_changing_the_world_transform() {
+    let mapping =
+        PresentMapping::top_left_clip(drawable(1162, 1194, 1.75), content(9, 672.0, 700.0));
+
+    assert_close(mapping.surface_logical_size().width(), 664.0);
+    assert_close(mapping.surface_logical_size().height(), 682.2857);
+    let visible = mapping.visible_content_rect().unwrap();
+    assert_close(visible.width(), 664.0);
+    assert_close(visible.height(), 682.2857);
+}
+
+#[test]
+fn empty_presentation_has_no_visible_content() {
+    let mapping = PresentMapping::top_left_clip(drawable(800, 600, 1.0), content(11, 0.0, 0.0));
+
+    assert!(mapping.visible_content_rect().is_none());
+    assert!(
+        mapping
+            .frame_from_device(DeviceSurfacePoint::from_px(0.0, 0.0).unwrap())
+            .is_none()
+    );
+}
+
+#[test]
+fn mapping_types_keep_frame_device_and_root_surface_spaces_distinct() {
+    let mapping = PresentMapping::top_left_clip(drawable(800, 600, 2.0), content(12, 400.0, 300.0));
+    let _: crate::GeometryRect<RootSurfaceSpace, LogicalPixels> =
+        mapping.visible_content_rect().unwrap();
+}
+
+#[test]
+fn native_titlebar_reserves_surface_space_without_scaling_editor_coordinates() {
+    let insets = crate::ContentInsets::new(0, 56, 0, 0);
+    let requested = insets.surface_size(1600, 1200);
+    assert_eq!(requested, (1600, 1256));
+    // Recreating from the observed content must not add the titlebar twice.
+    assert_eq!(insets.content_size(requested.0, requested.1), (1600, 1200));
+    let surface =
+        drawable(1600, 1200, 2.0).with_content_insets(crate::ContentInsets::new(0, 56, 0, 0));
+    let mapping = PresentMapping::top_left_clip(surface, content(13, 800.0, 600.0));
+    let visible = mapping.visible_content_rect().unwrap();
+    assert_eq!(
+        (visible.x(), visible.y(), visible.width(), visible.height()),
+        (0.0, 28.0, 800.0, 572.0)
+    );
+    let point = mapping
+        .device_from_frame(PresentedFramePoint::from_px(10.0, 20.0).unwrap())
+        .unwrap();
+    assert_eq!((point.x(), point.y()), (20.0, 96.0));
+    let round_trip = mapping.frame_from_device(point).unwrap();
+    assert_eq!((round_trip.x(), round_trip.y()), (10.0, 20.0));
+    assert!(
+        mapping
+            .frame_from_device(DeviceSurfacePoint::from_px(20.0, 40.0).unwrap())
+            .is_none()
+    );
+}
+
+#[test]
+fn native_content_viewport_handles_fullscreen_and_oversized_insets() {
+    let content = content(15, 800.0, 600.0);
+    let surface = drawable(1600, 1200, 2.0);
+    let covered = surface.with_content_insets(crate::ContentInsets::new(0, u32::MAX, 0, 0));
+    assert!(covered.content_surface().is_none());
+    assert!(
+        PresentMapping::top_left_clip(covered, content)
+            .visible_content_rect()
+            .is_none()
+    );
+    let fullscreen = PresentMapping::top_left_clip(surface, content);
+    assert_eq!(fullscreen.visible_content_rect().unwrap().height(), 600.0);
+}
+
+#[test]
+fn native_viewport_maps_popup_and_ime_origins_using_the_same_transform() {
+    let surface =
+        drawable(1000, 800, 1.25).with_content_insets(crate::ContentInsets::new(5, 35, 0, 0));
+    let mapping = PresentMapping::top_left_clip(surface, content(16, 700.0, 600.0));
+    let frame = PresentedFramePoint::from_px(80.0, 100.0).unwrap();
+    let root = mapping.surface_from_frame(frame).unwrap();
+    assert_eq!((root.x(), root.y()), (84.0, 128.0));
+    let ime = mapping.device_from_frame(frame).unwrap();
+    assert_eq!((ime.x(), ime.y()), (105.0, 160.0));
+}
