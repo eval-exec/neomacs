@@ -3332,10 +3332,9 @@ fn mask_dynamic_prefix(constants: &[Value], dynamic_prefix: usize) -> Vec<Value>
 /// JIT-only): when `Some(osr_pc)`, the compiled function's entry seeds the live
 /// operand stack (from the `args` pointer) and jumps to the loop-header block at
 /// `osr_pc`, letting the interpreter transfer a hot loop into native code
-/// mid-execution. Cross-block known-fixnum elision is DISABLED for OSR (the
-/// analysis assumes the normal block-0 entry as the sole root; the OSR entry adds
-/// a predecessor it never saw, so every fixnum op guards — a non-fixnum simply
-/// deopts, always sound).
+/// mid-execution. The OSR entry checks the header's known-fixnum facts against
+/// the original tagged snapshot before reusing those facts or untagging slot
+/// variables. A failed entry guard resumes at the header without bytecode effects.
 pub fn lower_leaf_full_osr(
     ops: &[Op],
     constants: &[Value],
@@ -3691,6 +3690,7 @@ fn build_leaf_fn<M: Module>(
     dynamic_prefix: usize,
 ) -> Result<cranelift_module::FuncId, CompileError> {
     let variable_raw = uniform_raw_osr_slots(cfg, known_fixnum_slots, osr_pc);
+    let has_raw_slots = variable_raw.iter().any(|&raw| raw);
     lowering::imm_pool_reset();
     LAST_IR_STATS.with(|c| c.set((0, 0, 0, 0)));
     let frontend_config = module.target_config();
@@ -3963,6 +3963,11 @@ fn build_leaf_fn<M: Module>(
             }
         }
         fb.ins().jump(jump_target, &[]);
+        if has_raw_slots {
+            for site in &entry_deopts {
+                fb.set_cold_block(site.block);
+            }
+        }
         emit_pending_deopts(&mut fb, deopt_refs, &mut entry_deopts);
 
         for (leader_index, &l) in cfg.leaders.iter().enumerate() {
@@ -4424,6 +4429,14 @@ fn build_leaf_fn<M: Module>(
                 // Fall through with the uniform variable representations.
                 write_edge_stack_to_vars(&mut fb, &vars, &stack, &stack_raw, &variable_raw);
                 fb.ins().jump(block_for[&end], &[]);
+            }
+            // Raw-slot reconstruction belongs to failed-guard exits. Mark
+            // those paths cold so their tagging uses do not compete with
+            // frequently used loop operands during register allocation.
+            if has_raw_slots {
+                for site in &pending_deopt {
+                    fb.set_cold_block(site.block);
+                }
             }
             // Fill the precise-deopt exit blocks queued by this block's guards.
             emit_pending_deopts(&mut fb, deopt_refs, &mut pending_deopt);
