@@ -7070,6 +7070,7 @@ fn layout_frame_rust_keeps_ordinary_prefix_advances_inside_mixed_emoji_run() {
         frame.device_scale_factor = 1.75;
     }
     realize_test_gui_frame(&mut eval, frame_id);
+    bind_minibuffer_buffer(&mut eval, frame_id);
 
     let mut engine = LayoutEngine::new();
     engine.layout_frame_rust(&mut eval, frame_id);
@@ -14885,6 +14886,7 @@ fn layout_frame_rust_emits_inline_image_glyphs_for_display_image_specs() {
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("layout-inline-image", 320, 120, buf_id);
+    bind_minibuffer_buffer(&mut eval, frame_id);
     // Media replacement is meaningful only on a graphical frame.
     eval.frame_manager_mut()
         .get_mut(frame_id)
@@ -15199,6 +15201,7 @@ fn layout_frame_rust_emits_inline_video_glyphs_for_display_video_specs() {
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("layout-inline-video", 320, 120, buf_id);
+    bind_minibuffer_buffer(&mut eval, frame_id);
     // Media replacement is meaningful only on a graphical frame.
     eval.frame_manager_mut()
         .get_mut(frame_id)
@@ -15278,6 +15281,7 @@ fn layout_frame_rust_emits_inline_webkit_glyphs_for_display_webkit_specs() {
     let frame_id = eval
         .frame_manager_mut()
         .create_frame("layout-inline-webkit", 320, 120, buf_id);
+    bind_minibuffer_buffer(&mut eval, frame_id);
     // Media replacement is meaningful only on a graphical frame.
     eval.frame_manager_mut()
         .get_mut(frame_id)

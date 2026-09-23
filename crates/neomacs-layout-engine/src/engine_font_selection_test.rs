@@ -8,6 +8,7 @@ fn circle_fixture() -> (Context, neovm_core::window::FrameId, LayoutEngine) {
         .frame_manager_mut()
         .create_frame("org-circle-font", 640, 160, buffer_id);
     realize_test_gui_frame(&mut eval, frame_id);
+    bind_minibuffer_buffer(&mut eval, frame_id);
     eval.eval_str(
         r#"(progn
           (internal-set-lisp-face-attribute 'default :family
