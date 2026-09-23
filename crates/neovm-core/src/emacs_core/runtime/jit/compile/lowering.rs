@@ -2671,7 +2671,7 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
     sig.returns.push(AbiParam::new(types::I64));
 
     let mut func = Function::with_name_signature(UserFuncName::user(0, 0), sig.clone());
-    let mut fbctx = FunctionBuilderContext::new();
+    let mut fbctx = frontend_context::take();
     {
         let mut fb = FunctionBuilder::new(&mut func, &mut fbctx);
 
@@ -3459,6 +3459,7 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
         fb.seal_all_blocks();
         fb.finalize(frontend_config);
     }
+    frontend_context::recycle(fbctx);
     LAST_IR_STATS.with(|c| {
         let (_, _, sites, slots) = c.get();
         c.set((
