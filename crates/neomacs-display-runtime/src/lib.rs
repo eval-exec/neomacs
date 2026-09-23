@@ -68,7 +68,6 @@ pub use render_thread::frame_stats::{
     DEMAND_REASON_NAMES, FRAME_TIME_BUCKET_UPPER_US, FrameSchedSnapshot, WindowFrameSnapshot,
 };
 
-
 /// Read the current process-global frame-scheduling counters.
 ///
 /// Safe to call from any thread — the counters are relaxed atomics — so the

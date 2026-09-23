@@ -1,5 +1,5 @@
-use crate::*;
 use crate::production_capabilities::CargoCapability;
+use crate::*;
 use flate2::{Compression, write::GzEncoder};
 
 /// `perf` and `pin-reference` are launched, not linked, and the launch must

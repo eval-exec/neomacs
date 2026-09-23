@@ -37,7 +37,6 @@ pub use tree_sitter_grammar::{
 
 pub const DEFAULT_PROCESS_TIMEOUT: Duration = Duration::from_secs(300);
 
-
 /// Resolve the checkout used by a normal Cargo run or an extracted Nextest
 /// archive.
 pub fn workspace_root() -> PathBuf {

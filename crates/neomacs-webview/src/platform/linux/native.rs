@@ -457,12 +457,5 @@ pub(super) unsafe fn set_render_buffer_callback(
 }
 
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn native_vfunc_panics_are_contained_at_the_abi_boundary() {
-        assert_eq!(
-            super::guard_native_vfunc("test", 41_u32, || panic!("contained")),
-            41
-        );
-    }
-}
+#[path = "native/tests/native_test.rs"]
+mod tests;

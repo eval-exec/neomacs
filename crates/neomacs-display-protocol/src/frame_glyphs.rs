@@ -1632,8 +1632,13 @@ impl FrameGlyphBuffer {
             frame_id,
             self.presentation_id,
             (parent_id.get() != 0).then_some(parent_id),
-            crate::presented_frame::ParentFrameRect::new(parent_x, parent_y, self.width, self.height)
-                .expect("frame identity placement is valid"),
+            crate::presented_frame::ParentFrameRect::new(
+                parent_x,
+                parent_y,
+                self.width,
+                self.height,
+            )
+            .expect("frame identity placement is valid"),
             z_order,
         );
         self.undecorated = undecorated;

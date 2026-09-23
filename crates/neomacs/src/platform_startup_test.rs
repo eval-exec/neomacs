@@ -93,7 +93,10 @@ fn check_in_isolated_catalog(case: CatalogCase) {
         .args([
             "--ignored",
             "--exact",
-            "startup::tests::platform_fonts::isolated_startup_font_probe",
+            // The probe's path in the test binary: the crate root's inline
+            // `mod tests` lives in `src/tests/main_test.rs` now, so the
+            // `#[path]`-loaded probe hangs one level deeper than it used to.
+            "startup::tests::main_test::platform_fonts::isolated_startup_font_probe",
             "--nocapture",
         ])
         .env("FONTCONFIG_FILE", config_path)
