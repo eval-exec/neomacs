@@ -765,5 +765,4 @@ impl FontFileCache {
 }
 
 #[cfg(test)]
-#[path = "fontdb_test.rs"]
 mod tests;

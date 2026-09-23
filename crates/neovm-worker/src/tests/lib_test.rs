@@ -1,4 +1,4 @@
-use super::*;
+use crate::*;
 
 #[test]
 fn queue_state_prioritizes_interactive() {

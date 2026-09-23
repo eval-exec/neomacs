@@ -6,7 +6,6 @@ use std::time::Instant;
 use neomacs_display_protocol::types::VideoId;
 
 #[cfg(test)]
-#[path = "lib_test.rs"]
 mod tests;
 
 /// Typed replacement for the legacy `-1`/`0`/positive loop count.

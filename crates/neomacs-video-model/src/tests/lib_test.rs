@@ -1,4 +1,4 @@
-use super::{
+use crate::{
     FrameImportPolicy, VideoCompositorImport, VideoDecodeBackend, VideoDecodeResidency,
     VideoDiagnostics, VideoEvent, VideoFramePath, VideoImportCounts, VideoPresentationPath,
     VideoServiceRequest, VideoServiceTiming, VideoSessionDiagnostics, VideoSessionState,
@@ -131,9 +131,9 @@ fn diagnostic_identity_remapping_drops_stale_native_sessions() {
         backpressured_frames: 0,
         output_reconfigurations: 0,
         import_counts: VideoImportCounts::default(),
-        presentation_counts: super::VideoPresentationCounts::default(),
-        presentation_timing: super::VideoPresentationTiming::default(),
-        gpu_timing: super::VideoGpuTiming::default(),
+        presentation_counts: crate::VideoPresentationCounts::default(),
+        presentation_timing: crate::VideoPresentationTiming::default(),
+        gpu_timing: crate::VideoGpuTiming::default(),
         terminal_error: None,
     };
     let diagnostics = VideoDiagnostics {

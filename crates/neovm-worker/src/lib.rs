@@ -1078,5 +1078,4 @@ impl TaskScheduler for WorkerRuntime {
 }
 
 #[cfg(test)]
-#[path = "lib_test.rs"]
 mod tests;
