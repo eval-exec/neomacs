@@ -28,6 +28,17 @@ enum ExtendedCommand {
     LookupCharacter = 0x14,
 }
 
+/// GNU's `mapping_stack` and `stack_idx_of_map_multiple`.
+///
+/// A map entry that calls another CCL program returns to the same
+/// `map-multiple` instruction. The stack stays put across that call so
+/// the resume can tell a returned -1, -2, or -3 from a real mapping.
+#[derive(Clone, Debug, Default)]
+pub(super) struct MapMultipleState {
+    stack: Vec<(i32, i32)>,
+    call_mark: i32,
+}
+
 pub(super) enum ExtensionStep {
     Continue,
     Eof,
@@ -47,6 +58,8 @@ pub(super) fn execute_extension(
     value_register: usize,
     status_register: usize,
     error_at: usize,
+    call_depth: i32,
+    map_state: &mut MapMultipleState,
     read_character: &mut dyn FnMut(&mut i64) -> Result<Option<bool>, Flow>,
     write_character: &mut dyn FnMut(i64) -> Result<(), Flow>,
 ) -> Result<ExtensionStep, Flow> {
@@ -148,6 +161,8 @@ pub(super) fn execute_extension(
             status_register,
             value_register,
             error_at,
+            call_depth,
+            map_state,
         ),
     }
 }
@@ -276,50 +291,162 @@ fn map_multiple(
     status_register: usize,
     value_register: usize,
     error_at: usize,
+    call_depth: i32,
+    state: &mut MapMultipleState,
 ) -> Result<ExtensionStep, Flow> {
+    if state.call_mark > 0 {
+        if state.call_mark <= call_depth {
+            state.call_mark = 0;
+            state.stack.clear();
+            return Err(invalid_ccl_program_at(error_at));
+        }
+    } else {
+        state.stack.clear();
+    }
+    state.call_mark = 0;
+
     let count = i64::from(next_ccl_i32(words, instruction, error_at)?);
-    let start = *instruction;
-    let end = start
+    let list_at = *instruction;
+    let end = list_at
         .checked_add(usize::try_from(count).unwrap_or(usize::MAX))
         .ok_or_else(|| invalid_ccl_program_at(error_at))?;
     if end > words.len() {
         return Err(invalid_ccl_program_at(error_at));
     }
-    let from = ccl_reg(registers, status_register);
-    if i64::from(from) >= count || from < 0 {
+    let mut op = i64::from(ccl_reg(registers, value_register));
+    let mut index = i64::from(ccl_reg(registers, status_register));
+    let mut rest = count;
+    let mut cursor = list_at as i64;
+    if count > index && index >= 0 {
+        cursor += index;
+        rest -= index;
+    } else {
         registers[status_register] = -1;
+        state.stack.clear();
         *instruction = end;
         return Ok(ExtensionStep::Continue);
     }
-    let mut value = i64::from(ccl_reg(registers, value_register));
-    let mut index = i64::from(from);
-    while index < count {
-        let word = words[start + index as usize];
-        if word < 0 {
-            index += 1;
-            continue;
-        }
-        match lookup_map_slot(word, value) {
-            MapHit::Number(mapped) => {
-                value = mapped;
-                registers[status_register] = index;
+
+    if state.stack.len() <= 1 {
+        state.stack.clear();
+        state.stack.push((0, op as i32));
+        registers[status_register] = -1;
+    } else {
+        let Some((rest_a, orig_op)) = state.stack.pop() else {
+            return Err(invalid_ccl_program_at(error_at));
+        };
+        let Some((rest_b, saved_value)) = state.stack.pop() else {
+            return Err(invalid_ccl_program_at(error_at));
+        };
+        rest = i64::from(rest_b);
+        registers[value_register] = i64::from(saved_value);
+        match op {
+            -1 => {
+                op = i64::from(orig_op);
+                index += 1;
+                cursor += 1;
+                rest -= 1;
             }
-            MapHit::Identity | MapHit::Miss => {}
-            MapHit::Lambda => break,
-            MapHit::Call(symbol) => {
-                if let Some(program) = program_words_by_symbol(symbol) {
-                    registers[value_register] = value;
-                    *instruction = error_at;
-                    return Ok(ExtensionStep::Call {
-                        words: program,
-                        resume_at: error_at,
-                    });
+            -2 => {
+                op = i64::from(saved_value);
+                index += 1;
+                cursor += 1;
+                rest -= 1;
+            }
+            -3 => {
+                op = i64::from(orig_op);
+                index += rest;
+                cursor += rest;
+                rest = 0;
+            }
+            _ => {
+                index += rest;
+                cursor += rest;
+                if let Some((rest_c, saved)) = state.stack.pop() {
+                    rest = i64::from(rest_c);
+                    registers[value_register] = i64::from(saved);
+                }
+            }
+        }
+    }
+
+    while rest > 0 {
+        let point = *words
+            .get(usize::try_from(cursor).unwrap_or(usize::MAX))
+            .ok_or_else(|| invalid_ccl_program_at(error_at))?;
+        if point < 0 {
+            let span = -point + 1;
+            if state.stack.len() >= 30 {
+                return Err(invalid_ccl_program_at(error_at));
+            }
+            state.stack.push((
+                rest as i32 - span as i32,
+                ccl_reg(registers, value_register),
+            ));
+            rest = span;
+            registers[value_register] = op;
+        } else {
+            match lookup_map_slot(point, op) {
+                MapHit::Miss => {}
+                MapHit::Number(mapped) => {
+                    registers[status_register] = index;
+                    op = mapped;
+                    index += rest - 1;
+                    cursor += rest - 1;
+                    if let Some((popped_rest, saved)) = state.stack.pop() {
+                        rest = i64::from(popped_rest);
+                        registers[value_register] = i64::from(saved);
+                    }
+                    rest += 1;
+                }
+                MapHit::Identity => {
+                    registers[status_register] = index;
+                    op = i64::from(ccl_reg(registers, value_register));
+                }
+                MapHit::Lambda => {
+                    index += rest;
+                    cursor += rest;
+                    break;
+                }
+                MapHit::Call(symbol) => {
+                    if state.stack.len() >= 30 {
+                        return Err(invalid_ccl_program_at(error_at));
+                    }
+                    let saved_value = ccl_reg(registers, value_register);
+                    state.stack.push((rest as i32, saved_value));
+                    state.stack.push((rest as i32, op as i32));
+                    state.call_mark = call_depth + 1;
+                    registers[status_register] = index;
+                    if let Some(program) = program_words_by_symbol(symbol) {
+                        return Ok(ExtensionStep::Call {
+                            words: program,
+                            resume_at: error_at,
+                        });
+                    }
                 }
             }
         }
         index += 1;
+        cursor += 1;
+        rest -= 1;
     }
-    registers[value_register] = value;
+    while state.stack.len() > 1 {
+        let Some((popped_rest, saved)) = state.stack.pop() else {
+            break;
+        };
+        rest = i64::from(popped_rest);
+        registers[value_register] = i64::from(saved);
+        index += rest;
+        cursor += rest;
+        if state.stack.len() <= 1 {
+            break;
+        }
+        if let Some((popped_rest, saved)) = state.stack.pop() {
+            rest = i64::from(popped_rest);
+            registers[value_register] = i64::from(saved);
+        }
+    }
+    registers[value_register] = op;
     *instruction = end;
     Ok(ExtensionStep::Continue)
 }

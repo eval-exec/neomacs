@@ -929,6 +929,76 @@ fn ccl_execute_map_single_reads_the_code_conversion_map() {
 }
 
 #[test]
+fn ccl_execute_map_multiple_restores_the_value_when_the_called_program_returns_minus_one() {
+    crate::test_utils::init_test_tracing();
+    // GNU: a map element that is a CCL program is called. If that program
+    // leaves the value register at -1, map-multiple treats it as nil and
+    // restores the value from before the call. r1 becomes -1.
+    let callee = Value::vector([0, 3, -255, 22].into_iter().map(Value::fixnum).collect());
+    builtin_register_ccl_program_impl(vec![Value::symbol("ccl-map-nil"), callee])
+        .expect("mapper should register");
+    let map = Value::vector(vec![Value::fixnum(0), Value::symbol("ccl-map-nil")]);
+    let map_id =
+        builtin_register_code_conversion_map_impl(vec![Value::symbol("ccl-map-nil-table"), map])
+            .expect("map should register")
+            .as_int()
+            .unwrap();
+    let program = Value::vector(
+        [0, 5, 278_815, 1, map_id, 22]
+            .into_iter()
+            .map(Value::fixnum)
+            .collect(),
+    );
+    let registers = Value::vector(vec![
+        Value::fixnum(4),
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+    ]);
+    builtin_ccl_execute_impl(vec![program, registers]).expect("map-multiple should resume");
+    let slots = registers.as_vector_data().unwrap();
+    assert_eq!(slots[0], Value::fixnum(4));
+    assert_eq!(slots[1], Value::fixnum(-1));
+}
+
+#[test]
+fn ccl_execute_map_multiple_keeps_a_normal_call_result_and_skips_the_rest() {
+    crate::test_utils::init_test_tracing();
+    // GNU skips the maps after a called program that returns an ordinary
+    // value. The following map would turn 0 into 3, but it does not run.
+    let callee = Value::vector([0, 3, 1_793, 22].into_iter().map(Value::fixnum).collect());
+    builtin_register_ccl_program_impl(vec![Value::symbol("ccl-map-seven"), callee])
+        .expect("mapper should register");
+    let calling = Value::vector(vec![Value::fixnum(0), Value::symbol("ccl-map-seven")]);
+    let calling_id =
+        builtin_register_code_conversion_map_impl(vec![Value::symbol("ccl-map-call"), calling])
+            .expect("calling map should register")
+            .as_int()
+            .unwrap();
+    let after = Value::vector([0, 3].into_iter().map(Value::fixnum).collect());
+    let after_id =
+        builtin_register_code_conversion_map_impl(vec![Value::symbol("ccl-map-after"), after])
+            .expect("following map should register")
+            .as_int()
+            .unwrap();
+    let program = Value::vector(
+        [0, 6, 278_815, 2, calling_id, after_id, 22]
+            .into_iter()
+            .map(Value::fixnum)
+            .collect(),
+    );
+    let registers = Value::vector(vec![Value::NIL; 8]);
+    builtin_ccl_execute_impl(vec![program, registers]).expect("map-multiple should resume");
+    let slots = registers.as_vector_data().unwrap();
+    assert_eq!(slots[0], Value::fixnum(7));
+    assert_eq!(slots[1], Value::fixnum(0));
+}
+
+#[test]
 fn ccl_execute_lookup_integer_sets_unicode_and_the_value() {
     crate::test_utils::init_test_tracing();
     let mut entries = std::collections::HashMap::new();

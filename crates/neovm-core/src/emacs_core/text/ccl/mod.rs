@@ -19,7 +19,7 @@ mod extension;
 
 use self::command::CclCommand;
 use self::expr::{eval_expr_self, eval_set_expr};
-use self::extension::{ExtensionStep, execute_extension};
+use self::extension::{ExtensionStep, MapMultipleState, execute_extension};
 use super::error::{EvalResult, Flow, signal};
 use super::value::*;
 use crate::emacs_core::SymId;
@@ -517,6 +517,7 @@ fn execute_compiled_ccl_with_state(
         .filter(|instruction| *instruction < words.len())
         .ok_or_else(|| invalid_ccl_program_at(1))?;
     let mut call_stack: Vec<(Vec<i64>, usize, usize)> = Vec::new();
+    let mut map_state = MapMultipleState::default();
     let mut source = 0usize;
     let mut output = Vec::with_capacity(input.len());
     let mut instruction = initial_instruction
@@ -1067,6 +1068,8 @@ fn execute_compiled_ccl_with_state(
                     register,
                     other_register,
                     this_instruction,
+                    call_stack.len() as i32,
+                    &mut map_state,
                     &mut read_character,
                     &mut write_character,
                 )? {
