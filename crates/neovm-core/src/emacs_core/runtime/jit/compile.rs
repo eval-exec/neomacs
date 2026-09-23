@@ -2442,7 +2442,10 @@ pub(crate) fn analyze_cfg(
         }
     }
     let leaders: Vec<usize> = leader_set.into_iter().collect();
-    let next_leader = |idx: usize| leaders.iter().copied().find(|&l| l > idx).unwrap_or(n);
+    let next_leader = |idx: usize| {
+        let next = leaders.partition_point(|&leader| leader <= idx);
+        leaders.get(next).copied().unwrap_or(n)
+    };
 
     // 2. Propagate entry depths over the CFG (worklist). Guards deopt at a
     // PRECISE pc (the interpreter resumes mid-function with the live state),
@@ -2883,7 +2886,6 @@ fn compute_known_fixnum_slots(
     cfg: &Cfg,
 ) -> HashMap<usize, Vec<bool>> {
     let n = ops.len();
-    let next_leader = |idx: usize| cfg.leaders.iter().copied().find(|&l| l > idx).unwrap_or(n);
     let empty = HashMap::new();
 
     // in[leader] = known-fixnum bits at block entry. Entry (0) is all-false;
@@ -2909,9 +2911,9 @@ fn compute_known_fixnum_slots(
     let mut iterate = true;
     while iterate {
         iterate = false;
-        for &l in &cfg.leaders {
+        for (leader_index, &l) in cfg.leaders.iter().enumerate() {
             let mut k = in_sets[&l].clone();
-            let end = next_leader(l);
+            let end = cfg.leaders.get(leader_index + 1).copied().unwrap_or(n);
             let mut edges: Vec<(usize, Vec<bool>)> = Vec::new();
             let mut terminated = false;
             for (off, op) in ops[l..end].iter().enumerate() {
@@ -3887,9 +3889,7 @@ fn build_leaf_fn<M: Module>(
         fb.ins().jump(jump_target, &[]);
         emit_pending_deopts(&mut fb, deopt_refs, &mut entry_deopts);
 
-        let next_leader = |idx: usize| cfg.leaders.iter().copied().find(|&l| l > idx).unwrap_or(n);
-
-        for &l in &cfg.leaders {
+        for (leader_index, &l) in cfg.leaders.iter().enumerate() {
             let blk = block_for[&l];
             fb.switch_to_block(blk);
             // A leader may be reached from any store history: drop the
@@ -3937,7 +3937,7 @@ fn build_leaf_fn<M: Module>(
             let mut pending: Vec<PendingDispatch> = Vec::new();
             let mut pending_deopt: Vec<PendingDeopt> = Vec::new();
 
-            let end = next_leader(l);
+            let end = cfg.leaders.get(leader_index + 1).copied().unwrap_or(n);
             let mut terminated = false;
             for (off, op) in ops[l..end].iter().enumerate() {
                 let i = l + off;

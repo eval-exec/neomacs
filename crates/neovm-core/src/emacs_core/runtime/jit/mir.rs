@@ -411,11 +411,9 @@ pub fn build_mir_with_feedback(
         block_params.insert(leader, params);
     }
 
-    let next_leader = |idx: usize| cfg.leaders.iter().copied().find(|&l| l > idx).unwrap_or(n);
-
     let mut blocks: Vec<MirBlockData> = Vec::with_capacity(cfg.leaders.len());
 
-    for &leader in &cfg.leaders {
+    for (leader_index, &leader) in cfg.leaders.iter().enumerate() {
         let params = block_params[&leader].clone();
         let mut stack: Vec<MirValue> = params.clone();
         let mut insts: Vec<MirInst> = Vec::new();
@@ -436,7 +434,7 @@ pub fn build_mir_with_feedback(
             }
         }
 
-        let end = next_leader(leader);
+        let end = cfg.leaders.get(leader_index + 1).copied().unwrap_or(n);
         let mut term: Option<MirTerm> = None;
 
         for (off, op) in ops[leader..end].iter().enumerate() {
