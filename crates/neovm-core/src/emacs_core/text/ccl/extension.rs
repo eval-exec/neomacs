@@ -51,13 +51,13 @@ pub(super) enum ExtensionStep {
     Suspend,
     /// Run `words` and then resume at `resume_at` in the caller.
     Call {
-        words: Vec<i64>,
+        words: Vec<i32>,
         resume_at: usize,
     },
 }
 
 pub(super) fn execute_extension(
-    words: &[i64],
+    words: &[i32],
     instruction: &mut usize,
     registers: &mut [i64; 8],
     field1: i64,
@@ -294,7 +294,7 @@ fn map_single(
 }
 
 fn iterate_multiple_map(
-    words: &[i64],
+    words: &[i32],
     instruction: &mut usize,
     registers: &mut [i64; 8],
     status_register: usize,
@@ -317,7 +317,7 @@ fn iterate_multiple_map(
     }
     let value = i64::from(ccl_reg(registers, value_register));
     for offset in i64::from(from)..count {
-        let map_id = words[start + offset as usize];
+        let map_id = i64::from(words[start + offset as usize]);
         match lookup_map_slot(map_id, value) {
             MapHit::Number(mapped) => {
                 registers[status_register] = offset;
@@ -359,7 +359,7 @@ fn iterate_multiple_map(
 }
 
 fn map_multiple(
-    words: &[i64],
+    words: &[i32],
     instruction: &mut usize,
     registers: &mut [i64; 8],
     status_register: usize,
@@ -445,9 +445,11 @@ fn map_multiple(
     }
 
     while rest > 0 {
-        let point = *words
-            .get(usize::try_from(cursor).unwrap_or(usize::MAX))
-            .ok_or_else(|| invalid_ccl_program_at(error_at))?;
+        let point = i64::from(
+            *words
+                .get(usize::try_from(cursor).unwrap_or(usize::MAX))
+                .ok_or_else(|| invalid_ccl_program_at(error_at))?,
+        );
         if point < 0 {
             let span = -point + 1;
             if state.stack.len() >= 30 {
@@ -547,7 +549,7 @@ enum MapHit {
 /// map call site must surface `Invalid` as an invalid command, never as a
 /// mapping miss. An exhaustive `match` makes that state impossible to forget.
 enum MapCallResolution {
-    Called(Vec<i64>),
+    Called(Vec<i32>),
     Invalid,
 }
 

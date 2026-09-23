@@ -1794,10 +1794,12 @@ fn ccl_execute_runs_a_tight_loop_way_past_any_step_budget() {
     // with `Error in CCL program` instead. Infinite loops hang GNU too; the
     // only launched interruption is a pending quit.
     let program = Value::vector(
-        [2, 11, 51_200_001, 16_407, 1, 795, 17, 0, -1532, 295_161, 0, 22]
-            .into_iter()
-            .map(Value::fixnum)
-            .collect(),
+        [
+            2, 11, 51_200_001, 16_407, 1, 795, 17, 0, -1532, 295_161, 0, 22,
+        ]
+        .into_iter()
+        .map(Value::fixnum)
+        .collect(),
     );
     let registers = Value::vector(vec![Value::NIL; 8]);
     match builtin_ccl_execute_impl(vec![program, registers]) {
@@ -1808,9 +1810,7 @@ fn ccl_execute_runs_a_tight_loop_way_past_any_step_budget() {
                 other => panic!("unexpected flow: {other:?}"),
             };
             let message = match signal.data[0].as_lisp_string() {
-                Some(string) => {
-                    String::from_utf8_lossy(string.as_bytes()).into_owned()
-                }
+                Some(string) => String::from_utf8_lossy(string.as_bytes()).into_owned(),
                 None => format!("{:?}", signal.data),
             };
             panic!("CCL errored: {message}");
@@ -1819,4 +1819,72 @@ fn ccl_execute_runs_a_tight_loop_way_past_any_step_budget() {
     let regs = registers.as_vector_data().unwrap();
     assert_eq!(regs[0], Value::fixnum(0));
     assert_eq!(regs[7], Value::fixnum(1));
+}
+
+#[test]
+fn ccl_execute_rejects_a_word_outside_the_int_range_at_resolve_time() {
+    crate::test_utils::init_test_tracing();
+    // GNU `resolve_symbol_ccl_program` requires every word to be a C int
+    // (`TYPE_RANGED_FIXNUMP (int, ...)`); a word past INT_MAX makes the whole
+    // program invalid before execution. `Error in CCL program` is the
+    // equivalent registered-program message used by `register-ccl-program`.
+    let program = Value::vector(
+        [0, 4, 2, 4_294_967_296, 22]
+            .into_iter()
+            .map(Value::fixnum)
+            .collect(),
+    );
+    let registers = Value::vector(vec![Value::NIL; 8]);
+    let err = builtin_ccl_execute_impl(vec![program, registers])
+        .expect_err("a word past INT_MAX invalidates the program");
+    assert_invalid_program(err);
+}
+
+#[test]
+fn ccl_execute_rejects_a_word_outside_the_28bit_code_range_at_fetch() {
+    crate::test_utils::init_test_tracing();
+    // GNU `GET_CCL_CODE` validates each fetched word against
+    // CCL_CODE_MIN..CCL_CODE_MAX. 2^27 is past the max; the instruction
+    // counter at error time is past the opcode word.
+    let program = Value::vector(
+        [0, 4, 268_435_456, 0, 22]
+            .into_iter()
+            .map(Value::fixnum)
+            .collect(),
+    );
+    let registers = Value::vector(vec![Value::NIL; 8]);
+    let err = builtin_ccl_execute_impl(vec![program, registers])
+        .expect_err("a word past CCL_CODE_MAX is an invalid command");
+    assert_error_at(err, 3);
+
+    let low = Value::vector(
+        [0, 4, -134_217_729, 0, 22]
+            .into_iter()
+            .map(Value::fixnum)
+            .collect(),
+    );
+    let err = builtin_ccl_execute_impl(vec![low, registers])
+        .expect_err("a word below CCL_CODE_MIN is an invalid command");
+    assert_error_at(err, 3);
+}
+
+pub(crate) fn assert_error_at(err: super::Flow, nth: usize) {
+    match err {
+        super::Flow::Signal(sig) => {
+            assert_eq!(
+                sig.data[0],
+                Value::string(format!("Error in CCL program at {nth}th code"))
+            );
+        }
+        other => panic!("expected error signal, got {other:?}"),
+    }
+}
+
+pub(crate) fn assert_invalid_program(err: super::Flow) {
+    match err {
+        super::Flow::Signal(sig) => {
+            assert_eq!(sig.data[0], Value::string("Invalid CCL program"));
+        }
+        other => panic!("expected error signal, got {other:?}"),
+    }
 }

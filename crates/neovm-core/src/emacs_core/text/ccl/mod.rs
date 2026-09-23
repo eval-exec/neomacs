@@ -320,7 +320,7 @@ fn resolve_ccl_word(word: Value) -> Result<i64, Flow> {
     Err(invalid())
 }
 
-fn compiled_ccl_words(designator: Value) -> Result<Vec<i64>, Flow> {
+fn compiled_ccl_words(designator: Value) -> Result<Vec<i32>, Flow> {
     let Some(program) = resolve_ccl_program_designator(&designator) else {
         return Err(signal("error", vec![Value::string("Invalid CCL program")]));
     };
@@ -333,6 +333,15 @@ fn compiled_ccl_words(designator: Value) -> Result<Vec<i64>, Flow> {
         .iter()
         .copied()
         .map(resolve_ccl_word)
+        .map(|resolved| {
+            // GNU `resolve_symbol_ccl_program` requires every word to be a C
+            // int (`TYPE_RANGED_FIXNUMP (int, ...)`); anything else invalidates
+            // the whole program before execution.
+            resolved.and_then(|value| {
+                i32::try_from(value)
+                    .map_err(|_| signal("error", vec![Value::string("Invalid CCL program")]))
+            })
+        })
         .collect()
 }
 
@@ -340,12 +349,12 @@ pub(super) fn code_conversion_map(id: i64) -> Option<Value> {
     with_ccl_registry(|registry| registry.map_by_id(id))
 }
 
-pub(super) fn program_words(id: i64) -> Option<Vec<i64>> {
+pub(super) fn program_words(id: i64) -> Option<Vec<i32>> {
     let program = with_ccl_registry(|registry| registry.program_by_id(id))?;
     compiled_ccl_words(program).ok()
 }
 
-pub(super) fn program_words_by_symbol(symbol: SymId) -> Option<Vec<i64>> {
+pub(super) fn program_words_by_symbol(symbol: SymId) -> Option<Vec<i32>> {
     let id = with_ccl_registry(|registry| registry.program_id(symbol))?;
     program_words(id)
 }
@@ -454,7 +463,7 @@ fn lisp_vector_slot(name: &str, id: i64) -> Option<Value> {
 }
 
 fn write_embedded_characters(
-    words: &[i64],
+    words: &[i32],
     at: usize,
     length: usize,
     error_at: usize,
@@ -468,7 +477,7 @@ fn write_embedded_characters(
             .get(at..at + length)
             .ok_or_else(|| invalid_ccl_program_at(error_at))?;
         for word in characters {
-            write_character(word & 0x00ff_ffff)?;
+            write_character(i64::from(*word & 0x00ff_ffff))?;
         }
     } else {
         let packed_words = length.saturating_add(2) / 3;
@@ -478,7 +487,7 @@ fn write_embedded_characters(
         for character_index in 0..length {
             let word = packed[character_index / 3];
             let shift = (2 - (character_index % 3)) * 8;
-            write_character((word >> shift) & 0xff)?;
+            write_character(i64::from((word >> shift) & 0xff))?;
         }
     }
     Ok(())
@@ -493,7 +502,7 @@ fn ccl_relative_instruction(instruction: usize, offset: i64) -> Option<usize> {
 /// `length` table entries are followed by one out-of-range entry. Each entry
 /// is a raw relative offset from `table_head`, not a packed command.
 fn ccl_branch_target(
-    words: &[i64],
+    words: &[i32],
     table_head: usize,
     length: i64,
     selector: i64,
@@ -508,9 +517,11 @@ fn ccl_branch_target(
     let entry = table_head
         .checked_add(slot)
         .ok_or_else(|| invalid_ccl_program_at(error_at))?;
-    let offset = *words
-        .get(entry)
-        .ok_or_else(|| invalid_ccl_program_at(error_at))?;
+    let offset = i64::from(
+        *words
+            .get(entry)
+            .ok_or_else(|| invalid_ccl_program_at(error_at))?,
+    );
     ccl_relative_instruction(table_head, offset).ok_or_else(|| invalid_ccl_program_at(error_at))
 }
 
@@ -524,19 +535,19 @@ fn ccl_reg(registers: &[i64; 8], index: usize) -> i32 {
     registers[index] as i32
 }
 
-fn next_ccl_i32(words: &[i64], instruction: &mut usize, error_at: usize) -> Result<i32, Flow> {
+fn next_ccl_i32(words: &[i32], instruction: &mut usize, error_at: usize) -> Result<i32, Flow> {
     let word = *words
         .get(*instruction)
         .ok_or_else(|| invalid_ccl_program_at(error_at))?;
     *instruction += 1;
-    Ok(word as i32)
+    Ok(word)
 }
 
 /// GNU `CCL_JumpCondExprConst` / `CCL_JumpCondExprReg` after the optional read.
 /// A zero result in `r7` takes `jump_target`; otherwise execution continues
 /// after the operator words.
 fn eval_jump_cond_const(
-    words: &[i64],
+    words: &[i32],
     registers: &mut [i64; 8],
     mut instruction: usize,
     field1: i64,
@@ -559,7 +570,7 @@ fn eval_jump_cond_const(
 }
 
 fn eval_jump_cond_reg(
-    words: &[i64],
+    words: &[i32],
     registers: &mut [i64; 8],
     mut instruction: usize,
     field1: i64,
@@ -620,7 +631,7 @@ fn execute_compiled_ccl_with_state(
         .ok()
         .filter(|instruction| *instruction < words.len())
         .ok_or_else(|| invalid_ccl_program_at(1))?;
-    let mut call_stack: Vec<(Vec<i64>, usize, usize)> = Vec::new();
+    let mut call_stack: Vec<(Vec<i32>, usize, usize)> = Vec::new();
     let mut map_state = MapMultipleState::default();
     let mut source = 0usize;
     let mut output = Vec::with_capacity(input.len());
@@ -642,7 +653,13 @@ fn execute_compiled_ccl_with_state(
             .get(instruction)
             .ok_or_else(|| invalid_ccl_program_at(this_instruction))?;
         instruction += 1;
-        let field1 = code >> 8;
+        // GNU `GET_CCL_CODE`: every fetched word must sit inside
+        // CCL_CODE_MIN..=CCL_CODE_MAX or the command is invalid, with the
+        // counter already past the opcode word.
+        if !(-134_217_728..=134_217_727).contains(&code) {
+            return Err(invalid_ccl_program_at(this_instruction));
+        }
+        let field1 = i64::from(code) >> 8;
         let register = usize::try_from((code & 0xff) >> 5)
             .ok()
             .filter(|register| *register < registers.len())
@@ -681,8 +698,9 @@ fn execute_compiled_ccl_with_state(
             CclCommand::SetRegister => registers[register] = registers[other_register],
             CclCommand::SetShortConst => registers[register] = field1,
             CclCommand::SetConst => {
-                registers[register] = *words
+                registers[register] = words
                     .get(instruction)
+                    .map(|word| i64::from(*word))
                     .ok_or_else(|| invalid_ccl_program_at(this_instruction))?;
                 instruction += 1;
             }
@@ -695,12 +713,10 @@ fn execute_compiled_ccl_with_state(
                     let slot = instruction
                         .checked_add(usize::try_from(index).unwrap_or(usize::MAX))
                         .ok_or_else(|| invalid_ccl_program_at(this_instruction))?;
-                    registers[register] = i64::from(
-                        *words
-                            .get(slot)
-                            .ok_or_else(|| invalid_ccl_program_at(this_instruction))?
-                            as i32,
-                    );
+                    registers[register] = words
+                        .get(slot)
+                        .map(|word| i64::from(*word))
+                        .ok_or_else(|| invalid_ccl_program_at(this_instruction))?;
                 }
                 let skip = usize::try_from(length)
                     .ok()
@@ -747,11 +763,11 @@ fn execute_compiled_ccl_with_state(
                 }
             }
             CclCommand::WriteConstJump => {
-                write_character(
+                write_character(i64::from(
                     *words
                         .get(instruction)
                         .ok_or_else(|| invalid_ccl_program_at(this_instruction))?,
-                )?;
+                ))?;
                 instruction = ccl_relative_instruction(instruction, field1)
                     .ok_or_else(|| invalid_ccl_program_at(this_instruction))?;
             }
@@ -834,7 +850,7 @@ fn execute_compiled_ccl_with_state(
                         .get(instruction)
                         .ok_or_else(|| invalid_ccl_program_at(this_instruction))?;
                     instruction += 1;
-                    read_field = operand >> 8;
+                    read_field = i64::from(operand) >> 8;
                     read_register = usize::try_from((operand & 0xff) >> 5)
                         .ok()
                         .filter(|register| *register < registers.len())
@@ -853,7 +869,7 @@ fn execute_compiled_ccl_with_state(
                         .get(instruction)
                         .ok_or_else(|| invalid_ccl_program_at(this_instruction))?;
                     instruction += 1;
-                    write_field = operand >> 8;
+                    write_field = i64::from(operand) >> 8;
                     write_register = usize::try_from((operand & 0xff) >> 5)
                         .ok()
                         .filter(|register| *register < registers.len())
@@ -881,7 +897,7 @@ fn execute_compiled_ccl_with_state(
                         .get(instruction..end)
                         .ok_or_else(|| invalid_ccl_program_at(this_instruction))?;
                     for word in characters {
-                        write_character(word & 0x00ff_ffff)?;
+                        write_character(i64::from(word & 0x00ff_ffff))?;
                     }
                     instruction = instruction
                         .checked_add(length.saturating_add(2) / 3)
@@ -897,7 +913,7 @@ fn execute_compiled_ccl_with_state(
                     for character_index in 0..length {
                         let word = packed[character_index / 3];
                         let shift = (2 - (character_index % 3)) * 8;
-                        write_character((word >> shift) & 0xff)?;
+                        write_character(i64::from((word >> shift) & 0xff))?;
                     }
                     instruction = end;
                 }
@@ -1060,12 +1076,12 @@ fn execute_compiled_ccl_with_state(
                     let slot = instruction
                         .checked_add(usize::try_from(index).unwrap_or(usize::MAX))
                         .ok_or_else(|| invalid_ccl_program_at(this_instruction))?;
-                    write_character(i64::from(
-                        *words
+                    write_character(
+                        words
                             .get(slot)
-                            .ok_or_else(|| invalid_ccl_program_at(this_instruction))?
-                            as i32,
-                    ))?;
+                            .map(|word| i64::from(*word))
+                            .ok_or_else(|| invalid_ccl_program_at(this_instruction))?,
+                    )?;
                 }
                 let skip = usize::try_from(length)
                     .ok()
@@ -1120,12 +1136,12 @@ fn execute_compiled_ccl_with_state(
                         .ok()
                         .and_then(|index| length_at.checked_add(1)?.checked_add(index))
                         .ok_or_else(|| invalid_ccl_program_at(this_instruction))?;
-                    write_character(i64::from(
-                        *words
+                    write_character(
+                        words
                             .get(slot)
-                            .ok_or_else(|| invalid_ccl_program_at(this_instruction))?
-                            as i32,
-                    ))?;
+                            .map(|word| i64::from(*word))
+                            .ok_or_else(|| invalid_ccl_program_at(this_instruction))?,
+                    )?;
                 }
                 let after = length_at
                     .checked_add(usize::try_from(length + 2).unwrap_or(usize::MAX))
