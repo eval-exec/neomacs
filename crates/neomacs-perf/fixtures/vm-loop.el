@@ -16,8 +16,24 @@
       (setq sum (+ sum i) i (1+ i)))
     (list i sum neomacs-perf-vm-loop--special)))
 
+(defun neomacs-perf-vm-loop--dynamic-read (iterations)
+  (let ((neomacs-perf-vm-loop--special 7) (i 0) (sum 0))
+    (while (< i iterations)
+      (setq sum (+ sum neomacs-perf-vm-loop--special) i (1+ i)))
+    (list i sum neomacs-perf-vm-loop--special)))
+
+(defun neomacs-perf-vm-loop--dynamic-rebind (iterations)
+  (let ((neomacs-perf-vm-loop--special 7) (i 0) (sum 0))
+    (while (< i iterations)
+      (let ((neomacs-perf-vm-loop--special i))
+        (setq sum (+ sum neomacs-perf-vm-loop--special)))
+      (setq i (1+ i)))
+    (list i sum neomacs-perf-vm-loop--special)))
+
 (byte-compile 'neomacs-perf-vm-loop--lexical)
 (byte-compile 'neomacs-perf-vm-loop--dynamic)
+(byte-compile 'neomacs-perf-vm-loop--dynamic-read)
+(byte-compile 'neomacs-perf-vm-loop--dynamic-rebind)
 
 (defvar neomacs-perf-vm-loop--profile-gate-process nil)
 (defvar neomacs-perf-vm-loop--profile-gate-response "")
@@ -79,9 +95,15 @@
 (defun neomacs-perf-vm-loop--run ()
   (let* ((scenario (getenv "NEOMACS_PERF_WORKLOAD"))
          (iterations (string-to-number (or (getenv "NEOMACS_PERF_ITERATIONS") "0")))
-         (dynamic (equal scenario "dynamic-binding-loop"))
-         (function (if dynamic #'neomacs-perf-vm-loop--dynamic
-                     #'neomacs-perf-vm-loop--lexical))
+         (dynamic (member scenario '("dynamic-binding-loop"
+                                     "dynamic-variable-read-loop"
+                                     "dynamic-rebinding-loop")))
+         (function (cond ((equal scenario "dynamic-variable-read-loop")
+                          #'neomacs-perf-vm-loop--dynamic-read)
+                         ((equal scenario "dynamic-rebinding-loop")
+                          #'neomacs-perf-vm-loop--dynamic-rebind)
+                         (dynamic #'neomacs-perf-vm-loop--dynamic)
+                         (t #'neomacs-perf-vm-loop--lexical)))
          (compiled (byte-code-function-p (symbol-function function)))
          (outer-before neomacs-perf-vm-loop--special)
          (outer-after 0) (warmup-outer 0) (warmup [0 0 0])
@@ -90,7 +112,8 @@
     (condition-case err
         (progn
           (unless (and (> iterations 0) compiled
-                       (member scenario '("lexical-loop" "dynamic-binding-loop")))
+                       (member scenario '("lexical-loop" "dynamic-binding-loop"
+                                          "dynamic-variable-read-loop" "dynamic-rebinding-loop")))
             (error "Invalid VM loop input or uncompiled loop"))
           ;; One short call warms startup paths without forcing native entry.
           ;; The timed call must get hot from its own backward branches.

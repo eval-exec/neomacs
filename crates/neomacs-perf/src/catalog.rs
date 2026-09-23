@@ -38,6 +38,8 @@ pub enum ScenarioId {
     /// Rare-call tier-entry diagnostics, excluded from the whole-editor suite.
     LexicalLoop,
     DynamicBindingLoop,
+    DynamicVariableReadLoop,
+    DynamicRebindingLoop,
     /// First call of fresh functions, including heat-up and OSR compilation.
     FirstHotLoop,
     /// Short first-call controls for native compilation cost.
@@ -202,6 +204,8 @@ impl ScenarioId {
             Self::BytecodeCallLoop => "bytecode-call-loop",
             Self::LexicalLoop => "lexical-loop",
             Self::DynamicBindingLoop => "dynamic-binding-loop",
+            Self::DynamicVariableReadLoop => "dynamic-variable-read-loop",
+            Self::DynamicRebindingLoop => "dynamic-rebinding-loop",
             Self::FirstHotLoop => "first-hot-loop",
             Self::FirstHotLoop8K => "first-hot-loop-8k",
             Self::FirstHotLoop16K => "first-hot-loop-16k",
@@ -278,6 +282,8 @@ impl FromStr for ScenarioId {
             "bytecode-call-loop" => Ok(Self::BytecodeCallLoop),
             "lexical-loop" => Ok(Self::LexicalLoop),
             "dynamic-binding-loop" => Ok(Self::DynamicBindingLoop),
+            "dynamic-variable-read-loop" => Ok(Self::DynamicVariableReadLoop),
+            "dynamic-rebinding-loop" => Ok(Self::DynamicRebindingLoop),
             "first-hot-loop" => Ok(Self::FirstHotLoop),
             "first-hot-loop-8k" => Ok(Self::FirstHotLoop8K),
             "first-hot-loop-16k" => Ok(Self::FirstHotLoop16K),
@@ -770,6 +776,22 @@ const SCENARIOS: &[ScenarioSpec] = &[
         primary_metric: MetricName::PerOperationWallTime,
         cross_editor_parity_metrics: &[],
     },
+    ScenarioSpec {
+        id: ScenarioId::DynamicVariableReadLoop,
+        description: "Read a dynamically bound special variable on every loop iteration under the editor default tier policy",
+        default_frontend: Frontend::Batch,
+        default_iterations: NonZeroU32::new(1_000_000).expect("non-zero scenario default"),
+        primary_metric: MetricName::PerOperationWallTime,
+        cross_editor_parity_metrics: &[],
+    },
+    ScenarioSpec {
+        id: ScenarioId::DynamicRebindingLoop,
+        description: "Bind, read and unwind a special variable on every loop iteration under the editor default tier policy",
+        default_frontend: Frontend::Batch,
+        default_iterations: NonZeroU32::new(1_000_000).expect("non-zero scenario default"),
+        primary_metric: MetricName::PerOperationWallTime,
+        cross_editor_parity_metrics: &[],
+    },
 ];
 
 pub fn scenarios() -> &'static [ScenarioSpec] {
@@ -788,6 +810,8 @@ pub const fn scenario(id: ScenarioId) -> &'static ScenarioSpec {
         ScenarioId::BytecodeCallLoop => &SCENARIOS[2],
         ScenarioId::LexicalLoop => &SCENARIOS[27],
         ScenarioId::DynamicBindingLoop => &SCENARIOS[28],
+        ScenarioId::DynamicVariableReadLoop => &SCENARIOS[48],
+        ScenarioId::DynamicRebindingLoop => &SCENARIOS[49],
         ScenarioId::FirstHotLoop => &SCENARIOS[29],
         ScenarioId::FirstHotLoop8K => &SCENARIOS[43],
         ScenarioId::FirstHotLoop16K => &SCENARIOS[44],

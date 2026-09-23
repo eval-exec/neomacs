@@ -1,5 +1,5 @@
 //! Rarely called, long-running bytecode loops under the editor's normal tier policy.
-//! The paired scenarios differ by a live special binding across the hot loop.
+//! Separate arithmetic under a live binding from per-iteration reads and rebinding.
 //! First-entry diagnostics share preparation but validate every fresh function.
 
 pub(crate) mod first_entry;
@@ -150,6 +150,14 @@ fn expected_sum(iterations: u32) -> i64 {
     (n * n.saturating_sub(1) / 2) as i64
 }
 
+fn expected_loop_sum(scenario: ScenarioId, iterations: u32) -> i64 {
+    if scenario == ScenarioId::DynamicVariableReadLoop {
+        i64::from(iterations) * 7
+    } else {
+        expected_sum(iterations)
+    }
+}
+
 pub(crate) fn validate_vm_loop_result(
     request: &RunRequest,
     result: &VmLoopResult,
@@ -184,7 +192,7 @@ pub(crate) fn validate_vm_loop_result(
     mismatch(
         &mut mismatches,
         "sum",
-        expected_sum(request.iterations.get()),
+        expected_loop_sum(request.scenario, request.iterations.get()),
         r.result_sum,
     );
     mismatch(&mut mismatches, "held-value", 7, r.held_value);
@@ -209,7 +217,7 @@ pub(crate) fn validate_vm_loop_result(
     mismatch(
         &mut mismatches,
         "warmup-sum",
-        expected_sum(100),
+        expected_loop_sum(request.scenario, 100),
         r.warmup_result[1],
     );
     mismatch(&mut mismatches, "warmup-held-value", 7, r.warmup_result[2]);
@@ -222,7 +230,12 @@ pub(crate) fn validate_vm_loop_result(
     mismatch(
         &mut mismatches,
         "dynamic-binding",
-        request.scenario == ScenarioId::DynamicBindingLoop,
+        matches!(
+            request.scenario,
+            ScenarioId::DynamicBindingLoop
+                | ScenarioId::DynamicVariableReadLoop
+                | ScenarioId::DynamicRebindingLoop
+        ),
         r.dynamic_binding,
     );
     mismatch(

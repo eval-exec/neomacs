@@ -7,10 +7,10 @@ fn valid_result(scenario: ScenarioId) -> Value {
     json!({
         "schema_version": 1, "scenario": scenario, "status": "ok", "error": null,
         "iterations": 10, "elapsed_us": 20, "elapsed_wall_us": 25,
-        "completed_operations": 10, "result_sum": 45, "held_value": 7,
+        "completed_operations": 10, "result_sum": if scenario == ScenarioId::DynamicVariableReadLoop { 70 } else { 45 }, "held_value": 7,
         "outer_value_before": 17, "outer_value_after": 17,
-        "warmup_result": [100, 4950, 7], "warmup_outer_value": 17,
-        "dynamic_binding": scenario == ScenarioId::DynamicBindingLoop,
+        "warmup_result": [100, if scenario == ScenarioId::DynamicVariableReadLoop { 700 } else { 4950 }, 7], "warmup_outer_value": 17,
+        "dynamic_binding": scenario != ScenarioId::LexicalLoop,
         "bytecode_compiled": true,
     })
 }
@@ -25,10 +25,15 @@ fn workspace() -> tempfile::TempDir {
 }
 
 #[test]
-fn vm_loop_accepts_both_checked_results_and_per_iteration_measurements() {
+fn vm_loop_accepts_checked_results_and_per_iteration_measurements() {
     let workspace = workspace();
     let harness = PerfHarness::new(workspace.path());
-    for scenario in [ScenarioId::LexicalLoop, ScenarioId::DynamicBindingLoop] {
+    for scenario in [
+        ScenarioId::LexicalLoop,
+        ScenarioId::DynamicBindingLoop,
+        ScenarioId::DynamicVariableReadLoop,
+        ScenarioId::DynamicRebindingLoop,
+    ] {
         let request = RunRequest::new(scenario, "/unused/editor", NonZeroU32::new(10).unwrap());
         let report = harness
             .record_fixture_result(&request, &valid_result(scenario).to_string())
@@ -52,8 +57,18 @@ fn vm_loop_accepts_both_checked_results_and_per_iteration_measurements() {
 fn vm_loop_rejects_wrong_work_and_binding_restoration_before_publishing_timings() {
     let workspace = workspace();
     let harness = PerfHarness::new(workspace.path());
-    for scenario in [ScenarioId::LexicalLoop, ScenarioId::DynamicBindingLoop] {
+    for scenario in [
+        ScenarioId::LexicalLoop,
+        ScenarioId::DynamicBindingLoop,
+        ScenarioId::DynamicVariableReadLoop,
+        ScenarioId::DynamicRebindingLoop,
+    ] {
         let request = RunRequest::new(scenario, "/unused/editor", NonZeroU32::new(10).unwrap());
+        let warmup_sum = if scenario == ScenarioId::DynamicVariableReadLoop {
+            700
+        } else {
+            4950
+        };
         for (key, wrong) in [
             ("iterations", json!(9)),
             ("completed_operations", json!(9)),
@@ -61,13 +76,13 @@ fn vm_loop_rejects_wrong_work_and_binding_restoration_before_publishing_timings(
             ("held_value", json!(17)),
             ("outer_value_before", json!(7)),
             ("outer_value_after", json!(7)),
-            ("warmup_result", json!([99, 4950, 7])),
-            ("warmup_result", json!([100, 4949, 7])),
-            ("warmup_result", json!([100, 4950, 17])),
+            ("warmup_result", json!([99, warmup_sum, 7])),
+            ("warmup_result", json!([100, warmup_sum - 1, 7])),
+            ("warmup_result", json!([100, warmup_sum, 17])),
             ("warmup_outer_value", json!(7)),
             (
                 "dynamic_binding",
-                json!(scenario != ScenarioId::DynamicBindingLoop),
+                json!(scenario == ScenarioId::LexicalLoop),
             ),
             ("bytecode_compiled", json!(false)),
             ("elapsed_us", json!(0)),
@@ -92,7 +107,11 @@ fn vm_loop_rejects_wrong_work_and_binding_restoration_before_publishing_timings(
         let mut result = valid_result(scenario);
         result["iterations"] = json!(9);
         result["completed_operations"] = json!(9);
-        result["result_sum"] = json!(36);
+        result["result_sum"] = json!(if scenario == ScenarioId::DynamicVariableReadLoop {
+            63
+        } else {
+            36
+        });
         let report = harness
             .record_fixture_result(&request, &result.to_string())
             .unwrap();

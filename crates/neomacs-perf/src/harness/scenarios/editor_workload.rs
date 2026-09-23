@@ -667,6 +667,8 @@ pub(crate) fn validate_editor_workload_result(
         | ScenarioId::BytecodeCallLoop
         | ScenarioId::LexicalLoop
         | ScenarioId::DynamicBindingLoop
+        | ScenarioId::DynamicVariableReadLoop
+        | ScenarioId::DynamicRebindingLoop
         | ScenarioId::BuiltinCallPoint
         | ScenarioId::BuiltinCallStringBytes
         | ScenarioId::BuiltinCallStringLessp
