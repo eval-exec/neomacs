@@ -2993,11 +2993,58 @@ fn compute_known_fixnum_slots(
     in_sets
 }
 
-/// Write the live operand `stack` back into the slot variables so a successor
-/// block can read it (the variable/SSA machinery inserts the needed phis).
-fn write_stack_to_vars(fb: &mut FunctionBuilder, vars: &[Variable], stack: &[ClifValue]) {
-    for (k, &v) in stack.iter().enumerate() {
-        fb.def_var(vars[k], v);
+fn uniform_raw_osr_slots(
+    cfg: &Cfg,
+    facts: &HashMap<usize, Vec<bool>>,
+    osr_pc: Option<usize>,
+) -> Vec<bool> {
+    let mut raw = vec![false; cfg.max_depth];
+    let Some(header) = osr_pc else { return raw };
+    if !facts.contains_key(&header) {
+        return raw;
+    }
+    // This candidate uses the existing normal-entry must-analysis. Every
+    // statically reachable leader needs a fact vector; missing means unknown.
+    let mut seen = vec![false; cfg.max_depth];
+    for &leader in &cfg.leaders {
+        let Some(&depth) = cfg.entry_depth.get(&leader) else {
+            continue; // statically unreachable normal-entry leader
+        };
+        let Some(bits) = facts.get(&leader) else {
+            return vec![false; cfg.max_depth];
+        };
+        if bits.len() != depth || depth > raw.len() {
+            return vec![false; cfg.max_depth];
+        }
+        for (slot, &known) in bits.iter().enumerate() {
+            raw[slot] = if seen[slot] {
+                raw[slot] && known
+            } else {
+                known
+            };
+            seen[slot] = true;
+        }
+    }
+    raw
+}
+
+// Each raw destination has a must-analysis proof at every live successor.
+// Keep the caller's stack representation intact for signal/deopt snapshots.
+fn write_edge_stack_to_vars(
+    fb: &mut FunctionBuilder,
+    vars: &[Variable],
+    stack: &[ClifValue],
+    stack_raw: &[bool],
+    variable_raw: &[bool],
+) {
+    debug_assert_eq!(stack.len(), stack_raw.len());
+    for (slot, (&value, &raw)) in stack.iter().zip(stack_raw).enumerate() {
+        let value = match (raw, variable_raw[slot]) {
+            (true, false) => retag_fixnum(fb, value),
+            (false, true) => lowering::sshr_imm_p(fb, value, FIXNUM_SHIFT as i64),
+            _ => value,
+        };
+        fb.def_var(vars[slot], value);
     }
 }
 
@@ -3014,6 +3061,7 @@ fn emit_backedge_jump(
     counter_slot: StackSlot,
     signal_exit: &mut Option<Block>,
     vars: &[Variable],
+    variable_raw: &[bool],
     target_depth: usize,
     target_block: Block,
     handlers: &[HandlerStatic],
@@ -3026,6 +3074,7 @@ fn emit_backedge_jump(
         counter_slot,
         signal_exit,
         &vals,
+        Some(&variable_raw[..target_depth]),
         target_block,
         &[],
         handlers,
@@ -3034,8 +3083,8 @@ fn emit_backedge_jump(
 }
 
 /// Shared poll for the baseline's slot variables and MIR's explicit edge
-/// arguments. `vals` is the tagged live stack at the target; `target_args`
-/// carries it into MIR block parameters (empty for the baseline).
+/// arguments. Baseline `vals` follow `raw_slots`; MIR passes tagged values
+/// with no mask. `target_args` carries MIR values into block parameters.
 #[allow(clippy::too_many_arguments)]
 fn emit_backedge_jump_with_args(
     fb: &mut FunctionBuilder,
@@ -3043,6 +3092,7 @@ fn emit_backedge_jump_with_args(
     counter_slot: StackSlot,
     signal_exit: &mut Option<Block>,
     vals: &[ClifValue],
+    raw_slots: Option<&[bool]>,
     target_block: Block,
     target_args: &[BlockArg],
     handlers: &[HandlerStatic],
@@ -3066,6 +3116,24 @@ fn emit_backedge_jump_with_args(
     lowering::rootwin_carry_reset();
     let one = fb.ins().iconst(types::I64, 1);
     fb.ins().stack_store(rt.ptr_ty, one, counter_slot, 0);
+    // Materialize tagged roots only after entering the rare poll path.
+    // The successor variables and MIR edge arguments keep their representations.
+    let tagged_vals;
+    let vals = if let Some(raw) = raw_slots {
+        debug_assert_eq!(raw.len(), vals.len());
+        tagged_vals = vals
+            .iter()
+            .zip(raw)
+            .map(
+                |(&value, &raw)| {
+                    if raw { retag_fixnum(fb, value) } else { value }
+                },
+            )
+            .collect::<Vec<_>>();
+        &tagged_vals[..]
+    } else {
+        vals
+    };
     // Root the target stack across the poll, including a handler-entry
     // snapshot when a baseline loop is inside a protected extent.
     let saved = if vals.is_empty() {
@@ -3622,6 +3690,7 @@ fn build_leaf_fn<M: Module>(
     // param instead of baking. 0 = plain function / AOT.
     dynamic_prefix: usize,
 ) -> Result<cranelift_module::FuncId, CompileError> {
+    let variable_raw = uniform_raw_osr_slots(cfg, known_fixnum_slots, osr_pc);
     lowering::imm_pool_reset();
     LAST_IR_STATS.with(|c| c.set((0, 0, 0, 0)));
     let frontend_config = module.target_config();
@@ -3886,6 +3955,13 @@ fn build_leaf_fn<M: Module>(
                 }
             }
         }
+        for (slot, &var) in vars.iter().take(seed_count).enumerate() {
+            if variable_raw[slot] {
+                let tagged = fb.use_var(var);
+                let raw = lowering::sshr_imm_p(&mut fb, tagged, FIXNUM_SHIFT as i64);
+                fb.def_var(var, raw);
+            }
+        }
         fb.ins().jump(jump_target, &[]);
         emit_pending_deopts(&mut fb, deopt_refs, &mut entry_deopts);
 
@@ -3909,10 +3985,8 @@ fn build_leaf_fn<M: Module>(
                 continue;
             };
             let mut stack: Vec<ClifValue> = (0..depth).map(|k| fb.use_var(vars[k])).collect();
-            // Cross-op unboxing: incoming slots are tagged (loaded from vars). Raw
-            // (untagged) fixnums live only WITHIN a block; the mask resets to
-            // all-tagged at each block entry (no cross-block raw in this increment).
-            let mut stack_raw: Vec<bool> = vec![false; depth];
+            // OSR slot representations are uniform at all reachable leaders.
+            let mut stack_raw = variable_raw[..depth].to_vec();
             // Cross-block known-fixnum operands at this block's entry: each slot
             // the dataflow analysis proved fixnum maps to its just-materialized
             // ClifValue. StackRef/Dup keep the same ClifValue, so the set stays
@@ -3924,7 +3998,9 @@ fn build_leaf_fn<M: Module>(
                         .iter()
                         .enumerate()
                         .filter_map(|(k, &is_fix)| {
-                            (is_fix).then(|| stack.get(k).copied()).flatten()
+                            (is_fix && !variable_raw[k])
+                                .then(|| stack.get(k).copied())
+                                .flatten()
                         })
                         .collect()
                 })
@@ -3986,11 +4062,6 @@ fn build_leaf_fn<M: Module>(
                     op,
                     Op::Return
                         | Op::Throw
-                        | Op::Goto(_)
-                        | Op::GotoIfNil(_)
-                        | Op::GotoIfNotNil(_)
-                        | Op::GotoIfNilElsePop(_)
-                        | Op::GotoIfNotNilElsePop(_)
                         | Op::Switch
                         | Op::PushConditionCase(_)
                         | Op::PushConditionCaseRaw(_)
@@ -4029,7 +4100,7 @@ fn build_leaf_fn<M: Module>(
                         break;
                     }
                     Op::Goto(t) => {
-                        write_stack_to_vars(&mut fb, &vars, &stack);
+                        write_edge_stack_to_vars(&mut fb, &vars, &stack, &stack_raw, &variable_raw);
                         let tu = *t as usize;
                         if tu <= i {
                             // Backward jump: bump the quit counter and poll on
@@ -4044,6 +4115,7 @@ fn build_leaf_fn<M: Module>(
                                 slot,
                                 &mut signal_exit,
                                 &vars,
+                                &variable_raw,
                                 cfg.entry_depth[&tu],
                                 block_for[&tu],
                                 &handlers,
@@ -4057,7 +4129,13 @@ fn build_leaf_fn<M: Module>(
                     }
                     Op::GotoIfNil(t) | Op::GotoIfNotNil(t) => {
                         let cond = stack.pop().ok_or(CompileError::StackUnderflow)?;
-                        write_stack_to_vars(&mut fb, &vars, &stack);
+                        let raw = stack_raw.pop().ok_or(CompileError::StackUnderflow)?;
+                        let cond = if raw {
+                            retag_fixnum(&mut fb, cond)
+                        } else {
+                            cond
+                        };
+                        write_edge_stack_to_vars(&mut fb, &vars, &stack, &stack_raw, &variable_raw);
                         let is_nil =
                             fb.ins()
                                 .icmp_imm_u(IntCC::Equal, cond, Value::NIL.bits() as i64);
@@ -4088,6 +4166,7 @@ fn build_leaf_fn<M: Module>(
                                 slot,
                                 &mut signal_exit,
                                 &vars,
+                                &variable_raw,
                                 cfg.entry_depth[&tu],
                                 block_for[&tu],
                                 &handlers,
@@ -4103,7 +4182,13 @@ fn build_leaf_fn<M: Module>(
                         // all (depth D); the fall-through (depth D-1) ignores the
                         // top slot — implementing the "ElsePop".
                         let cond = *stack.last().ok_or(CompileError::StackUnderflow)?;
-                        write_stack_to_vars(&mut fb, &vars, &stack);
+                        let raw = *stack_raw.last().ok_or(CompileError::StackUnderflow)?;
+                        let cond = if raw {
+                            retag_fixnum(&mut fb, cond)
+                        } else {
+                            cond
+                        };
+                        write_edge_stack_to_vars(&mut fb, &vars, &stack, &stack_raw, &variable_raw);
                         let is_nil =
                             fb.ins()
                                 .icmp_imm_u(IntCC::Equal, cond, Value::NIL.bits() as i64);
@@ -4132,6 +4217,7 @@ fn build_leaf_fn<M: Module>(
                                 slot,
                                 &mut signal_exit,
                                 &vars,
+                                &variable_raw,
                                 cfg.entry_depth[&tu],
                                 block_for[&tu],
                                 &handlers,
@@ -4151,7 +4237,8 @@ fn build_leaf_fn<M: Module>(
                         let rt_ref = rt.as_ref().ok_or(CompileError::UnsupportedOp("switch"))?;
                         let table = stack.pop().ok_or(CompileError::StackUnderflow)?;
                         let dispatch = stack.pop().ok_or(CompileError::StackUnderflow)?;
-                        write_stack_to_vars(&mut fb, &vars, &stack);
+                        stack_raw.truncate(stack.len());
+                        write_edge_stack_to_vars(&mut fb, &vars, &stack, &stack_raw, &variable_raw);
                         let vmctx = fb.use_var(rt_ref.vmctx_var);
                         let call = fb
                             .ins()
@@ -4200,6 +4287,7 @@ fn build_leaf_fn<M: Module>(
                                     slot,
                                     &mut signal_exit,
                                     &vars,
+                                    &variable_raw,
                                     cfg.entry_depth[&target],
                                     block_for[&target],
                                     &handlers,
@@ -4261,7 +4349,8 @@ fn build_leaf_fn<M: Module>(
                             }
                             _ => unreachable!("matched Push* above"),
                         }
-                        write_stack_to_vars(&mut fb, &vars, &stack);
+                        stack_raw.truncate(stack.len());
+                        write_edge_stack_to_vars(&mut fb, &vars, &stack, &stack_raw, &variable_raw);
                         // Placeholder error-value slot for the never-taken
                         // anchor edge (real entries define it from the shim).
                         let nil = fb.ins().iconst(types::I64, Value::NIL.bits() as i64);
@@ -4332,10 +4421,8 @@ fn build_leaf_fn<M: Module>(
                 }
             }
             if !terminated {
-                // Fall through into the next leader block (analyze guaranteed it
-                // exists and is < n). vars carry tagged Values across the edge.
-                retag_all_raw(&mut fb, &mut stack, &mut stack_raw);
-                write_stack_to_vars(&mut fb, &vars, &stack);
+                // Fall through with the uniform variable representations.
+                write_edge_stack_to_vars(&mut fb, &vars, &stack, &stack_raw, &variable_raw);
                 fb.ins().jump(block_for[&end], &[]);
             }
             // Fill the precise-deopt exit blocks queued by this block's guards.
@@ -4442,6 +4529,10 @@ mod fixnum_range_tests;
 #[cfg(test)]
 #[path = "tests/osr_entry_guards.rs"]
 mod osr_entry_guard_tests;
+#[cfg(test)]
+#[path = "tests/osr_raw.rs"]
+mod osr_raw_tests;
+
 #[cfg(test)]
 #[path = "tests/osr_poll.rs"]
 mod osr_poll_tests;
