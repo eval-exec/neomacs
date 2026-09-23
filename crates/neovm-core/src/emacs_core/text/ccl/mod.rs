@@ -194,6 +194,56 @@ fn resolve_ccl_program_designator(value: &Value) -> Option<Value> {
     with_ccl_registry(|registry| registry.lookup_program(name))
 }
 
+fn ccl_quit_pending() -> bool {
+    if !crate::emacs_core::eval::tls_quit_pending() {
+        return false;
+    }
+    let obarray = CCL_OBARRAY.with(|cell| cell.get());
+    if obarray.is_null() {
+        return true;
+    }
+    let inhibited = unsafe { &*obarray }
+        .symbol_value("inhibit-quit")
+        .copied()
+        .is_some_and(|value| !value.is_nil());
+    !inhibited
+}
+
+fn ccl_quit(instruction: usize) -> Flow {
+    signal(
+        "ccl-quit",
+        vec![Value::fixnum(
+            i64::try_from(instruction).unwrap_or(i64::MAX),
+        )],
+    )
+}
+
+fn surface_ccl_quit(flow: Flow, on_string: bool) -> Flow {
+    let Flow::Signal(sig) = &flow else {
+        return flow;
+    };
+    let Some(marker) = Value::symbol("ccl-quit").as_symbol_id() else {
+        return flow;
+    };
+    if sig.symbol != marker {
+        return flow;
+    }
+    if on_string {
+        let instruction = sig
+            .data
+            .first()
+            .and_then(|value| value.as_int())
+            .unwrap_or(0);
+        return signal(
+            "error",
+            vec![Value::string(format!(
+                "CCL program interrupted at {instruction}th code"
+            ))],
+        );
+    }
+    signal(crate::emacs_core::error::LispCondition::Quit, vec![])
+}
+
 fn invalid_ccl_program_at(index: usize) -> Flow {
     signal(
         "error",
@@ -533,6 +583,11 @@ fn execute_compiled_ccl_with_state(
         .saturating_mul(MAX_STEPS_PER_WORD);
 
     for _ in 0..step_limit {
+        // GNU polls `Vquit_flag` before fetching. The counter in the
+        // interrupt message is that index, and the flag is left set.
+        if ccl_quit_pending() {
+            return Err(ccl_quit(instruction));
+        }
         let this_instruction = instruction;
         let code = *words
             .get(instruction)
@@ -1184,7 +1239,8 @@ pub(crate) fn builtin_ccl_execute_impl(args: Vec<Value>) -> EvalResult {
             *register = integer;
         }
     }
-    let execution = execute_compiled_ccl_with_state(args[0], &[], true, false, registers, None)?;
+    let execution = execute_compiled_ccl_with_state(args[0], &[], true, false, registers, None)
+        .map_err(|flow| surface_ccl_quit(flow, false))?;
     for (index, register) in execution.registers.into_iter().enumerate() {
         let updated = args[1].set_vector_slot(index, Value::fixnum(register));
         debug_assert!(updated, "validated REGISTERS vector remains mutable");
@@ -1292,7 +1348,8 @@ pub(crate) fn builtin_ccl_execute_on_string_impl(args: Vec<Value>) -> EvalResult
         true,
         registers,
         initial_instruction,
-    )?;
+    )
+    .map_err(|flow| surface_ccl_quit(flow, true))?;
 
     for (index, register) in execution.registers.into_iter().enumerate() {
         let updated = args[1].set_vector_slot(index, Value::fixnum(register));

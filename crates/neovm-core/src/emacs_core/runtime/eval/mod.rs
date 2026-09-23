@@ -507,6 +507,22 @@ pub(crate) fn tls_quit_pending() -> bool {
     })
 }
 
+/// Install a quit-request flag for the current thread. CCL polls this the
+/// way GNU's driver polls `Vquit_flag`. The flag is not cleared by CCL.
+#[cfg(test)]
+pub(crate) fn install_quit_requested_for_test(
+    pending: bool,
+) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+    let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(pending));
+    QUIT_REQUESTED_TLS.with(|cell| *cell.borrow_mut() = Some(std::sync::Arc::clone(&flag)));
+    flag
+}
+
+#[cfg(test)]
+pub(crate) fn clear_quit_requested_for_test() {
+    QUIT_REQUESTED_TLS.with(|cell| *cell.borrow_mut() = None);
+}
+
 /// One bit per `SymId` (the first million): "registered with
 /// `dispatch_kind == Builtin`". A lock-free mirror of `GLOBAL_SUBR_TABLE`
 /// for the JIT's pure-read shim (`neovm_jit_cbsym_read`, ~34K reads per org

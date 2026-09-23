@@ -1029,7 +1029,10 @@ fn ccl_execute_map_multiple_chains_nested_separator_sets() {
 #[test]
 fn ccl_execute_map_single_reads_a_pair_value() {
     crate::test_utils::init_test_tracing();
-    let map = Value::vector(vec![Value::fixnum(0), Value::cons(Value::fixnum(1), Value::fixnum(55))]);
+    let map = Value::vector(vec![
+        Value::fixnum(0),
+        Value::cons(Value::fixnum(1), Value::fixnum(55)),
+    ]);
     let id = builtin_register_code_conversion_map_impl(vec![Value::symbol("ccl-pair-map"), map])
         .expect("pair map")
         .as_int()
@@ -1108,19 +1111,17 @@ fn ccl_execute_on_string_rejects_io_when_magnification_is_zero() {
     // GNU sets the output pointer to null when buffer magnification is 0,
     // so a write is an invalid command. 16660 is `(write 65)`.
     let err = builtin_ccl_execute_on_string_impl(vec![
-        Value::vector(
-            [0, 3, 16_660, 22]
-                .into_iter()
-                .map(Value::fixnum)
-                .collect(),
-        ),
+        Value::vector([0, 3, 16_660, 22].into_iter().map(Value::fixnum).collect()),
         Value::vector(vec![Value::NIL; 9]),
         Value::heap_string(crate::heap_types::LispString::from_unibyte(Vec::new())),
     ])
     .expect_err("magnification 0 cannot write");
     match err {
         Flow::Signal(sig) => {
-            assert_eq!(sig.data[0], Value::string("Error in CCL program at 3th code"));
+            assert_eq!(
+                sig.data[0],
+                Value::string("Error in CCL program at 3th code")
+            );
         }
         other => panic!("expected error signal, got {other:?}"),
     }
@@ -1140,10 +1141,7 @@ fn ccl_execute_iterate_multiple_map_calls_a_program_then_continues() {
     );
     builtin_register_ccl_program_impl(vec![Value::symbol("ccl-iter-mapper"), callee])
         .expect("mapper should register");
-    let map = Value::vector(vec![
-        Value::fixnum(0),
-        Value::symbol("ccl-iter-mapper"),
-    ]);
+    let map = Value::vector(vec![Value::fixnum(0), Value::symbol("ccl-iter-mapper")]);
     let map_id =
         builtin_register_code_conversion_map_impl(vec![Value::symbol("ccl-iter-map"), map])
             .expect("map should register")
@@ -1207,7 +1205,12 @@ fn ccl_execute_map_multiple_treats_minus_two_as_continue() {
     crate::test_utils::init_test_tracing();
     // GNU regards a returned -2 as t. The original value 4 is kept and the
     // next map, which sends 4 to 99, still runs. Status is that map's index.
-    let slots = map_multiple_return(-511, "ccl-map-minus-two", "ccl-call-minus-two", "ccl-after-minus-two");
+    let slots = map_multiple_return(
+        -511,
+        "ccl-map-minus-two",
+        "ccl-call-minus-two",
+        "ccl-after-minus-two",
+    );
     assert_eq!(slots[0], Value::fixnum(99));
     assert_eq!(slots[1], Value::fixnum(1));
 }
@@ -1217,9 +1220,69 @@ fn ccl_execute_map_multiple_treats_minus_three_as_lambda() {
     crate::test_utils::init_test_tracing();
     // GNU regards a returned -3 as lambda and skips the rest of the map set.
     // The following map would turn 4 into 99, but the value stays 4.
-    let slots = map_multiple_return(-767, "ccl-map-minus-three", "ccl-call-minus-three", "ccl-after-minus-three");
+    let slots = map_multiple_return(
+        -767,
+        "ccl-map-minus-three",
+        "ccl-call-minus-three",
+        "ccl-after-minus-three",
+    );
     assert_eq!(slots[0], Value::fixnum(4));
     assert_eq!(slots[1], Value::fixnum(0));
+}
+
+#[test]
+fn ccl_execute_quit_signals_quit() {
+    crate::test_utils::init_test_tracing();
+    // GNU `ccl-execute` stops for `Vquit_flag`, then `maybe_quit` signals
+    // `quit` rather than the interrupted-program error.
+    let _flag = crate::emacs_core::eval::install_quit_requested_for_test(true);
+    let registers = Value::vector(vec![Value::NIL; 8]);
+    let err = builtin_ccl_execute_impl(vec![
+        Value::vector([1, 3, 1793, 22].into_iter().map(Value::fixnum).collect()),
+        registers,
+    ]);
+    crate::emacs_core::eval::clear_quit_requested_for_test();
+    let err = err.expect_err("ccl-execute promotes a pending quit");
+    match err {
+        Flow::Signal(sig) => {
+            assert_eq!(sig.symbol, Value::symbol("quit").as_symbol_id().unwrap());
+        }
+        other => panic!("expected quit signal, got {other:?}"),
+    }
+}
+
+#[test]
+fn ccl_execute_on_string_quit_interrupts_before_the_first_instruction() {
+    crate::test_utils::init_test_tracing();
+    // GNU checks `Vquit_flag` before fetching an instruction. At the start
+    // the counter is 2, so the message is "at 2th code". The status vector
+    // is not updated, and the quit flag stays set.
+    let flag = crate::emacs_core::eval::install_quit_requested_for_test(true);
+    let status = Value::vector(vec![Value::NIL; 9]);
+    let err = builtin_ccl_execute_on_string_impl(vec![
+        Value::vector([1, 3, 1793, 22].into_iter().map(Value::fixnum).collect()),
+        status,
+        Value::heap_string(crate::heap_types::LispString::from_unibyte(Vec::new())),
+    ]);
+    crate::emacs_core::eval::clear_quit_requested_for_test();
+    let err = err.expect_err("a pending quit interrupts CCL");
+    match err {
+        Flow::Signal(sig) => {
+            assert_eq!(
+                sig.data[0],
+                Value::string("CCL program interrupted at 2th code")
+            );
+        }
+        other => panic!("expected error signal, got {other:?}"),
+    }
+    assert!(
+        status
+            .as_vector_data()
+            .unwrap()
+            .iter()
+            .all(|slot| slot.is_nil())
+    );
+    assert!(flag.load(std::sync::atomic::Ordering::Relaxed));
 }
 
 #[test]
