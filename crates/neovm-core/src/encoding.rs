@@ -6097,5 +6097,4 @@ pub(crate) fn builtin_max_char(args: Vec<Value>) -> EvalResult {
 // ===========================================================================
 
 #[cfg(test)]
-#[path = "encoding_test.rs"]
 mod tests;

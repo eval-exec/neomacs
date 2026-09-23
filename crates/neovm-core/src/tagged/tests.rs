@@ -812,3 +812,5 @@ fn gc_root_stays_a_facade_after_the_domain_split() {
          module for its domain instead of growing the root"
     );
 }
+
+mod integration_test;

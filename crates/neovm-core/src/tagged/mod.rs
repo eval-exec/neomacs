@@ -14,9 +14,3 @@ pub mod value;
 
 #[cfg(test)]
 mod tests;
-
-#[cfg(test)]
-mod symbol_marks_test;
-
-#[cfg(test)]
-mod integration_test;

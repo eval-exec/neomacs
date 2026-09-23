@@ -80,5 +80,4 @@ pub trait TaskScheduler {
 }
 
 #[cfg(test)]
-#[path = "lib_test.rs"]
 mod tests;

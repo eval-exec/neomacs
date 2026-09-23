@@ -52,3 +52,6 @@ impl SymbolMarkBits {
         self.words.iter().map(|w| w.count_ones() as usize).sum()
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -1,4 +1,4 @@
-use super::*;
+use super::super::*;
 use neovm_host_abi::ChannelId;
 
 /// Minimal in-crate TaskScheduler implementation proving the trait

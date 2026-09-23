@@ -509,5 +509,4 @@ where
 }
 
 #[cfg(test)]
-#[path = "overlay_order_test.rs"]
 mod tests;

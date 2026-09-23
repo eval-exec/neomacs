@@ -1,4 +1,4 @@
-use super::symbol_marks::SymbolMarkBits;
+use super::super::symbol_marks::SymbolMarkBits;
 use crate::emacs_core::intern::SymId;
 
 #[test]

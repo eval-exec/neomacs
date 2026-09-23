@@ -28,7 +28,6 @@ enum Work {
 }
 
 #[cfg(test)]
-#[path = "image_identity_test.rs"]
 mod tests;
 
 impl ImageSpecIdentity {

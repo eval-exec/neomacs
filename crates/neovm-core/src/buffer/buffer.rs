@@ -7571,5 +7571,4 @@ impl GcTrace for BufferManager {
 // ===========================================================================
 
 #[cfg(test)]
-#[path = "buffer_test.rs"]
 mod tests;

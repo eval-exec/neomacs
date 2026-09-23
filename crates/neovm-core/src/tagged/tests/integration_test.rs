@@ -3,9 +3,9 @@
 //!
 //! Each test shows the OLD pattern (commented) and the NEW pattern.
 
-use super::gc::TaggedHeap;
-use super::header::VecLikeType;
-use super::value::{TaggedValue, ValueKind};
+use super::super::gc::TaggedHeap;
+use super::super::header::VecLikeType;
+use super::super::value::{TaggedValue, ValueKind};
 use crate::emacs_core::intern::SymId;
 
 /// Helper: create a proper list (a b c ... nil) from a slice of values.

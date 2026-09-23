@@ -4734,5 +4734,4 @@ impl GcTrace for TextPropertyTable {
 // ===========================================================================
 
 #[cfg(test)]
-#[path = "text_props_test.rs"]
 mod tests;

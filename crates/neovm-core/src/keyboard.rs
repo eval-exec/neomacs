@@ -7518,5 +7518,4 @@ fn key_sequence_translation_events(translation: Value) -> Option<Vec<Value>> {
 // ===========================================================================
 
 #[cfg(test)]
-#[path = "keyboard_test.rs"]
 mod tests;

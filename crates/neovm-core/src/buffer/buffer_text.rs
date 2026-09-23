@@ -3390,7 +3390,6 @@ fn scan_backward_bytes(
 }
 
 #[cfg(test)]
-#[path = "buffer_text_test.rs"]
 mod tests;
 
 #[cfg(test)]
