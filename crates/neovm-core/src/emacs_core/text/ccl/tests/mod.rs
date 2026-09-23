@@ -433,7 +433,7 @@ fn ccl_execute_accepts_registered_symbol_program_designator() {
         Flow::Signal(sig) => {
             assert_eq!(
                 sig.data[0],
-                Value::string("Error in CCL program at 6th code")
+                Value::string("Error in CCL program at 5th code")
             );
         }
         other => panic!("expected error signal, got {other:?}"),
@@ -655,6 +655,130 @@ fn ccl_execute_on_string_read_branch_selects_from_the_input_byte() {
     assert_eq!(suspended, b"");
     assert_eq!(status[0], Value::fixnum(0));
     assert_eq!(status[8], Value::fixnum(2));
+}
+
+#[test]
+fn ccl_execute_runs_assignment_and_comparison() {
+    crate::test_utils::init_test_tracing();
+    // GNU `ccl-compile` / `ccl-execute` of
+    // (r0 = 7) (r1 = (r0 + 1)) (r2 = (r0 << 1)) (if (r1 < 9) (r3 = 1) (r3 = 2))
+    let program = Value::vector(
+        [
+            1, 13, 1793, 57, 1, 131161, 1, 1083, 16, 9, 353, 260, 609, 22,
+        ]
+        .into_iter()
+        .map(Value::fixnum)
+        .collect(),
+    );
+    let registers = Value::vector(vec![
+        Value::fixnum(3),
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+    ]);
+    builtin_ccl_execute_impl(vec![program, registers]).expect("arithmetic program should run");
+    assert_eq!(
+        registers.as_vector_data().unwrap().as_slice(),
+        &[
+            Value::fixnum(7),
+            Value::fixnum(8),
+            Value::fixnum(14),
+            Value::fixnum(1),
+            Value::fixnum(0),
+            Value::fixnum(0),
+            Value::fixnum(0),
+            Value::fixnum(1),
+        ]
+    );
+}
+
+#[test]
+fn ccl_execute_on_string_resumes_a_multiregister_read() {
+    crate::test_utils::init_test_tracing();
+    // GNU `ccl-compile` of (1 ((read r0 r1) (write r0) (write r1))).
+    // One input byte suspends on the second read operand. The next call
+    // reads that byte into r1 and writes both registers.
+    let program = [1, 6, 270, 46, 17, 49, 22];
+    let (output, status) = execute_ccl_on_string(&program, [0; 8], &[65], false);
+    assert_eq!(output, b"");
+    assert_eq!(status[0], Value::fixnum(65));
+    assert_eq!(status[1], Value::fixnum(0));
+    assert_eq!(status[8], Value::fixnum(3));
+
+    let mut registers = [0; 8];
+    registers[0] = 65;
+    let program_value = Value::vector(program.into_iter().map(Value::fixnum).collect());
+    let mut slots = registers.map(Value::fixnum).to_vec();
+    slots.push(Value::fixnum(3));
+    let status = Value::vector(slots);
+    let output = builtin_ccl_execute_on_string_impl(vec![
+        program_value,
+        status,
+        Value::heap_string(crate::heap_types::LispString::from_unibyte(vec![66])),
+        Value::NIL,
+        Value::T,
+    ])
+    .expect("the second read should resume at r1");
+    assert_eq!(output.as_lisp_string().unwrap().as_bytes(), b"AB");
+    assert_eq!(status.as_vector_data().unwrap()[1], Value::fixnum(66));
+    assert_eq!(status.as_vector_data().unwrap()[8], Value::fixnum(6));
+}
+
+#[test]
+fn ccl_execute_on_string_writes_a_multibyte_constant_character() {
+    crate::test_utils::init_test_tracing();
+    // GNU `ccl-compile` of (1 ((write "あ"))). The data word has the
+    // multibyte flag set and U+3042 in the low 24 bits.
+    let program = Value::vector(
+        [1, 4, 308, 16_789_570, 22]
+            .into_iter()
+            .map(Value::fixnum)
+            .collect(),
+    );
+    let status = Value::vector(vec![Value::NIL; 9]);
+    let output = builtin_ccl_execute_on_string_impl(vec![
+        program,
+        status,
+        Value::heap_string(crate::heap_types::LispString::from_unibyte(Vec::new())),
+    ])
+    .expect("a multibyte constant character should be written");
+    let string = output.as_lisp_string().unwrap();
+    assert!(string.is_multibyte());
+    let (character, length) = crate::emacs_core::emacs_char::string_char(string.as_bytes());
+    assert_eq!(character, 0x3042);
+    assert_eq!(length, string.as_bytes().len());
+}
+
+#[test]
+fn ccl_execute_on_string_runs_pgg_crc24() {
+    crate::test_utils::init_test_tracing();
+    // GNU `pgg-parse-crc24` vector and initial registers from
+    // `pgg-parse-crc24-string`. The checksum is the three bytes
+    // (r1 & 255), (r2 >> 8) & 255, (r2 & 255).
+    let program = [
+        1, 30, 14, 114744, 114775, 0, 161, 131127, 1, 148217, 15, 82167, 1, 1848, 131159, 1, 1595,
+        5, 256, 114743, 390, 114775, 19707, 1467, 16, 7, 183, 1, -5628, -7164, 22,
+    ];
+    let mut registers = [0; 8];
+    registers[1] = 183;
+    registers[2] = 1230;
+    for (input, expected) in [
+        (b"foo".as_slice(), [0x4f, 0xc2, 0x55]),
+        (b"bar", [0x51, 0xd9, 0x53]),
+        (b"baz", [0xf0, 0x58, 0x6a]),
+    ] {
+        let (_output, status) = execute_ccl_on_string(&program, registers, input, true);
+        let r1 = status[1].as_int().unwrap();
+        let r2 = status[2].as_int().unwrap();
+        assert_eq!(
+            [r1 & 255, (r2 >> 8) & 255, r2 & 255],
+            expected.map(i64::from)
+        );
+    }
 }
 
 #[test]
