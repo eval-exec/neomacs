@@ -6062,87 +6062,101 @@ impl<'a> Vm<'a> {
                 vec![Value::from_sym_id(name_id)],
             )
         })?;
-        use crate::emacs_core::symbol::SymbolRedirect;
-        // A redirect selects exactly one representation. Dispatch once so
-        // ordinary and forwarded reads do not test the alias/local paths.
-        match sym.redirect() {
-            SymbolRedirect::Plainval => {
-                // SAFETY: redirect() already confirmed Plainval, so val.plain is active
-                let val = unsafe { sym.val.plain };
-                if !val.is_unbound() {
-                    // GNU installs `buffer-undo-list` as a DEFVAR_PER_BUFFER
-                    // forwarder. Neomacs keeps its value in SharedUndoState so
-                    // indirect buffers share one history, but classifies that
-                    // one dedicated local by symbol identity. Ordinary nil-valued
-                    // globals stay on this direct PLAINVAL path instead of all
-                    // paying a generic buffer-local probe.
-                    if !val.is_nil() {
-                        return Ok(val);
-                    }
-                    if let Some(dedicated) =
-                        crate::buffer::buffer::DedicatedBufferLocal::from_sym_id(name_id)
-                        && let Some(buf) = self.ctx.buffers.current_buffer()
-                    {
-                        return Ok(dedicated.read(buf));
-                    }
+        if sym.redirect() == crate::emacs_core::symbol::SymbolRedirect::Plainval {
+            // SAFETY: redirect() already confirmed Plainval, so val.plain is active
+            let val = unsafe { sym.val.plain };
+            if !val.is_unbound() {
+                // GNU installs `buffer-undo-list` as a DEFVAR_PER_BUFFER
+                // forwarder. Neomacs keeps its value in SharedUndoState so
+                // indirect buffers share one history, but classifies that
+                // one dedicated local by symbol identity. Ordinary nil-valued
+                // globals stay on this direct PLAINVAL path instead of all
+                // paying a generic buffer-local probe.
+                if !val.is_nil() {
                     return Ok(val);
                 }
-            }
-            SymbolRedirect::Forwarded => {
-                // Descriptor-owned forwarders need no buffer context.
-                // BufferObj alone keeps the full contextual fallback.
-                // SAFETY: redirect() confirmed Forwarded, so val.fwd is active and
-                // points at a descriptor `install_*fwd` leaked.
-                let fwd = unsafe { &*sym.val.fwd };
-                if let Some(value) = fwd.load() {
-                    return Ok(value);
-                }
-            }
-            SymbolRedirect::Varalias => {
-                // Preserve original-name buffer identities and re-read the
-                // current target; chains, cycles and void cells fall through.
-                if crate::buffer::buffer::DedicatedBufferLocal::from_sym_id(name_id).is_none()
-                    && crate::buffer::buffer::lookup_buffer_slot_by_sym_id(name_id).is_none()
+                if let Some(dedicated) =
+                    crate::buffer::buffer::DedicatedBufferLocal::from_sym_id(name_id)
+                    && let Some(buf) = self.ctx.buffers.current_buffer()
                 {
-                    let target = sym.alias_target();
-                    if crate::buffer::buffer::DedicatedBufferLocal::from_sym_id(target).is_none()
-                        && let Some(target_sym) = ob.get_by_id(target)
-                        && target_sym.redirect() == SymbolRedirect::Plainval
-                    {
-                        // SAFETY: the target's redirect selects its plain value cell.
-                        let value = unsafe { target_sym.val.plain };
-                        if !value.is_unbound() {
-                            return Ok(value);
-                        }
-                    }
+                    return Ok(dedicated.read(buf));
                 }
+                return Ok(val);
             }
-            SymbolRedirect::Localized => {
-                // Reuse the existing buffer-id/epoch cache before constructing
-                // a buffer Value or gathering general forwarding inputs.
-                if let Some(buf) = self.ctx.buffers.current_buffer()
-                    && let Some(value) = ob.read_localized_symbol_for_buffer(
-                        name_id,
-                        sym,
-                        buf.id,
-                        buf.local_var_alist_value(),
-                    )
-                {
-                    return if value.is_unbound() {
-                        Err(signal(
-                            LispCondition::VoidVariable,
-                            vec![Value::from_sym_id(name_id)],
-                        ))
-                    } else {
-                        Ok(value)
-                    };
-                }
+        }
+        // A forwarder whose storage IS the descriptor needs no buffer context,
+        // so the read is one indirection instead of `lookup_var_id`'s
+        // resolve-alias + gather-buffer-slots-and-defaults path.  This is the
+        // hot half of GNU's `Bvarref` for every `DEFVAR_INT`, `DEFVAR_BOOL`,
+        // `DEFVAR_LISP` and `DEFVAR_KBOARD` variable.  `LispFwd::load` answers
+        // `None` for exactly the one variant that does need the context
+        // (`BufferObj`), and the slow path's own non-`BufferObj` arm ends at
+        // the same call, so the two cannot drift.
+        if sym.redirect() == crate::emacs_core::symbol::SymbolRedirect::Forwarded {
+            // SAFETY: redirect() confirmed Forwarded, so val.fwd is active and
+            // points at a descriptor `install_*fwd` leaked.
+            let fwd = unsafe { &*sym.val.fwd };
+            if let Some(value) = fwd.load() {
+                return Ok(value);
             }
         }
         self.lookup_var_id(name_id)
     }
 
+    // Keep alias/local cache probes out of the common plain/forwarded reader.
+    // Inlining all four representations expands that reader's dispatch and
+    // adds work even when these shortcuts cannot apply.
+    #[inline(never)]
     fn lookup_var_id(&mut self, name_id: SymId) -> EvalResult {
+        use crate::emacs_core::symbol::SymbolRedirect;
+        let ob = &self.ctx.obarray;
+        if let Some(sym) = ob.get_by_id(name_id) {
+            match sym.redirect() {
+                SymbolRedirect::Varalias => {
+                    // Preserve original-name buffer identities and re-read the
+                    // current target; chains, cycles and void cells fall through.
+                    if crate::buffer::buffer::DedicatedBufferLocal::from_sym_id(name_id).is_none()
+                        && crate::buffer::buffer::lookup_buffer_slot_by_sym_id(name_id).is_none()
+                    {
+                        let target = sym.alias_target();
+                        if crate::buffer::buffer::DedicatedBufferLocal::from_sym_id(target)
+                            .is_none()
+                            && let Some(target_sym) = ob.get_by_id(target)
+                            && target_sym.redirect() == SymbolRedirect::Plainval
+                        {
+                            // SAFETY: the target's redirect selects its plain value cell.
+                            let value = unsafe { target_sym.val.plain };
+                            if !value.is_unbound() {
+                                return Ok(value);
+                            }
+                        }
+                    }
+                }
+                SymbolRedirect::Localized => {
+                    // Reuse the existing buffer-id/epoch cache before constructing
+                    // a buffer Value or gathering general forwarding inputs.
+                    if let Some(buf) = self.ctx.buffers.current_buffer()
+                        && let Some(value) = ob.read_localized_symbol_for_buffer(
+                            name_id,
+                            sym,
+                            buf.id,
+                            buf.local_var_alist_value(),
+                        )
+                    {
+                        return if value.is_unbound() {
+                            Err(signal(
+                                LispCondition::VoidVariable,
+                                vec![Value::from_sym_id(name_id)],
+                            ))
+                        } else {
+                            Ok(value)
+                        };
+                    }
+                }
+                _ => {}
+            }
+        }
+
         let resolved = crate::emacs_core::builtins::symbols::resolve_variable_alias_id_in_obarray(
             &self.ctx.obarray,
             name_id,
@@ -6157,7 +6171,6 @@ impl<'a> Vm<'a> {
         // For PLAINVAL / VARALIAS, fall through to the PLAINVAL fast path
         // via `find_symbol_value`. With Phase B complete, every LOCALIZED
         // symbol is handled by the redirect dispatch above.
-        use crate::emacs_core::symbol::SymbolRedirect;
         let redirect = self.ctx.obarray.get_by_id(resolved).map(|s| s.redirect());
         if matches!(
             redirect,
