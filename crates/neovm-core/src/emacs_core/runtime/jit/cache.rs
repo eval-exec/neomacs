@@ -262,12 +262,24 @@ fn osr_body_has_unsupported_state(func: &ByteCodeFunction) -> bool {
     })
 }
 
-/// Compile (once) the OSR variant of `func` entered at `osr_pc`, or `None` when
-/// `func` is not OSR-eligible or the body doesn't compile. Eligibility: lexical
-/// (params on the operand stack, so the seeded snapshot carries them), no
+enum OsrCompilation {
+    Compiled(OsrEntry),
+    Unsupported,
+    MismatchedSnapshot,
+}
+
+/// Compile the OSR variant at `osr_pc`, after checking the live snapshot shape.
+/// A transient shape mismatch must not become a negative cache entry.
+/// Eligibility: lexical params (carried by the operand-stack snapshot), no
 /// handler/save ops, and the loop header has well-defined operand and binding
 /// depths with no active handlers. Both depths are checked against the live VM.
-fn compile_osr_leaf(obarray: &Obarray, func: &ByteCodeFunction, osr_pc: usize) -> Option<OsrEntry> {
+fn compile_osr_leaf(
+    obarray: &Obarray,
+    func: &ByteCodeFunction,
+    osr_pc: usize,
+    stack: &[Value],
+    live_bind_depth: usize,
+) -> OsrCompilation {
     let dbg = std::env::var_os("NEOMACS_OSR_DEBUG").is_some();
     if !func.lexical || osr_body_has_unsupported_state(func) {
         if dbg {
@@ -277,7 +289,7 @@ fn compile_osr_leaf(obarray: &Obarray, func: &ByteCodeFunction, osr_pc: usize) -
                 osr_body_has_unsupported_state(func)
             );
         }
-        return None;
+        return OsrCompilation::Unsupported;
     }
     let ops = func.executable_ops();
     let native_arity = func.params.required.len()
@@ -290,7 +302,7 @@ fn compile_osr_leaf(obarray: &Obarray, func: &ByteCodeFunction, osr_pc: usize) -
             if dbg {
                 eprintln!("OSR_DEBUG reject analyze_cfg: {e:?} ops={}", ops.len());
             }
-            return None;
+            return OsrCompilation::Unsupported;
         }
     };
     // The loop header must be a real block boundary with a known entry depth and
@@ -299,15 +311,23 @@ fn compile_osr_leaf(obarray: &Obarray, func: &ByteCodeFunction, osr_pc: usize) -
         if dbg {
             eprintln!("OSR_DEBUG reject: no entry depth at pc {osr_pc}");
         }
-        return None;
+        return OsrCompilation::Unsupported;
     };
-    let &bind_depth = cfg.entry_binds.get(&osr_pc)?;
+    let Some(&bind_depth) = cfg.entry_binds.get(&osr_pc) else {
+        return OsrCompilation::Unsupported;
+    };
     if !cfg.entry_handlers.get(&osr_pc).is_none_or(|h| h.is_empty()) {
         if dbg {
             eprintln!("OSR_DEBUG reject: handlers live at pc {osr_pc}");
         }
-        return None;
+        return OsrCompilation::Unsupported;
     }
+    // Snapshot types become compilation inputs only after both dimensions
+    // match the CFG. A malformed transfer must leave this cache key unoccupied.
+    if stack.len() != entry_depth || live_bind_depth != bind_depth {
+        return OsrCompilation::MismatchedSnapshot;
+    }
+    let observed_fixnums: Vec<bool> = stack.iter().map(|value| value.is_fixnum()).collect();
     // A loop that is already running gets the full allocator: its work per
     // entry is unbounded, so the code quality is worth the compile.
     let _regalloc = RegallocScope::enter(super::compile::regalloc_for(
@@ -318,27 +338,28 @@ fn compile_osr_leaf(obarray: &Obarray, func: &ByteCodeFunction, osr_pc: usize) -
     // Same feedback the tier-up compile sees: without it every Float site
     // read FixnumOnly and an OSR'd float loop deopted straight back.
     let _numeric = super::compile::publish_numeric_feedback(func);
-    let leaf = match super::compile::lower_leaf_full_osr(
+    let leaf = match super::compile::lower_osr_with_observed_fixnums(
         ops,
         &func.constants,
         native_arity,
         offset_map,
-        Some(obarray),
-        Some(osr_pc),
+        obarray,
+        osr_pc,
         func.jit_runtime().patched_prefix(),
+        &observed_fixnums,
     ) {
         Ok(leaf) => leaf,
         Err(e) => {
             if dbg {
                 eprintln!("OSR_DEBUG reject lower: {e:?}");
             }
-            return None;
+            return OsrCompilation::Unsupported;
         }
     };
     if dbg {
         eprintln!("OSR_DEBUG compiled: pc={osr_pc} depth={entry_depth} binds={bind_depth}");
     }
-    Some(OsrEntry {
+    OsrCompilation::Compiled(OsrEntry {
         leaf: Rc::new(leaf),
         stack_depth: entry_depth,
         bind_depth,
@@ -373,10 +394,20 @@ pub(crate) fn try_run_osr(
     // SAFETY: dormant seam-provided Context (as try_run_compiled); shared obarray read.
     let obarray = unsafe { &(*ctx).obarray };
     let cached = OSR_CACHE.with(|c| {
-        c.borrow_mut()
-            .entry((id, osr_pc))
-            .or_insert_with(|| compile_osr_leaf(obarray, func, osr_pc))
-            .clone()
+        use std::collections::hash_map::Entry;
+        match c.borrow_mut().entry((id, osr_pc)) {
+            Entry::Occupied(entry) => entry.get().clone(),
+            Entry::Vacant(entry) => {
+                match compile_osr_leaf(obarray, func, osr_pc, stack, binds.len()) {
+                    OsrCompilation::Compiled(compiled) => entry.insert(Some(compiled)).clone(),
+                    OsrCompilation::Unsupported => {
+                        entry.insert(None);
+                        None
+                    }
+                    OsrCompilation::MismatchedSnapshot => None,
+                }
+            }
+        }
     });
     let OsrEntry {
         leaf,
