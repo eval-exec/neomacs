@@ -396,3 +396,83 @@ fn raw_varref_keeps_heap_roots_live_at_a_later_collecting_call() {
         assert!(eval.tagged_heap.gc_collections() >= before + 3);
     }
 }
+
+#[test]
+fn reused_alias_reader_observes_retargeting_and_contextual_values() {
+    let mut eval = Context::new();
+    eval_ok(
+        &mut eval,
+        "(progn (defvar vri-alias-first 42)
+                (defvar vri-alias-second 17)
+                (defvaralias 'vri-alias-reused 'vri-alias-first))",
+    );
+    let f = reader(Value::symbol("vri-alias-reused"));
+    let leaf = compile_bytecode_function(&f).expect("compiles");
+    let check = |eval: &mut Context, expected: &str| {
+        let want = interpret(eval, &f);
+        assert_eq!(want, expected);
+        VARREF_SHIM_CALLS.with(|c| c.set(0));
+        let got = match leaf.call(eval as *mut Context as *mut u8, &[]) {
+            NativeRun::Ok(bits) => print_value(&Value::from_bits(bits)),
+            NativeRun::Signal => flow_text(take_pending_flow().expect("flow stashed")),
+            other => panic!("alias read left native code: {other:?}"),
+        };
+        assert_eq!(got, want);
+        assert_eq!(VARREF_SHIM_CALLS.with(|c| c.get()), 1);
+    };
+    check(&mut eval, "42");
+    for (setup, expected) in [
+        ("(defvaralias 'vri-alias-reused 'vri-alias-second)", "17"),
+        ("(setq vri-alias-second nil)", "nil"),
+        ("(setq vri-alias-second '(1 2))", "(1 2)"),
+        ("(setq vri-alias-second 0.5)", "0.5"),
+        (
+            "(progn (setq vri-alias-second 23)
+                  (defvaralias 'vri-alias-middle 'vri-alias-second)
+                  (defvaralias 'vri-alias-reused 'vri-alias-middle))",
+            "23",
+        ),
+        (
+            "(progn (set-buffer (get-buffer-create \" *vri-alias-a*\"))
+                  (defvar vri-alias-local 11)
+                  (make-local-variable 'vri-alias-local)
+                  (setq vri-alias-local 22)
+                  (defvaralias 'vri-alias-reused 'vri-alias-local))",
+            "22",
+        ),
+        ("(set-buffer (get-buffer-create \" *vri-alias-b*\"))", "11"),
+        ("(set-buffer \" *vri-alias-a*\")", "22"),
+        (
+            "(progn (defvaralias 'vri-alias-reused 'gc-cons-threshold)
+                  (setq gc-cons-threshold 1234567))",
+            "1234567",
+        ),
+        (
+            "(progn (defvaralias 'vri-alias-reused 'buffer-undo-list)
+                  (setq buffer-undo-list '(42)))",
+            "(42)",
+        ),
+        (
+            "(progn (set-default 'buffer-undo-list t)
+                  (setq buffer-undo-list '(43)))",
+            "(43)",
+        ),
+        (
+            "(progn (defvaralias 'vri-alias-reused 'vri-alias-second)
+                  (makunbound 'vri-alias-second))",
+            "signal void-variable [\"vri-alias-reused\"]",
+        ),
+    ] {
+        eval_ok(&mut eval, setup);
+        check(&mut eval, expected);
+    }
+    let alias = crate::emacs_core::intern::intern("vri-alias-reused");
+    let second = crate::emacs_core::intern::intern("vri-alias-second");
+    // Public defvaralias rejects cycles. Exercise the resolver's signal path
+    // through a low-level cycle after this same native leaf already ran.
+    eval.obarray.make_alias(second, alias);
+    check(
+        &mut eval,
+        "signal cyclic-variable-indirection [\"vri-alias-reused\"]",
+    );
+}
