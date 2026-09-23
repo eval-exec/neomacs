@@ -1072,22 +1072,7 @@ pub extern "C" fn neovm_jit_varref(ctx: *mut u8, sym: i64, out: *mut i64) -> i64
         // font-lock op paid a Vm construction and two frames for it). nil
         // (a possible dedicated buffer-local), unbound, forwarded and
         // buffer-local symbols keep the full path below.
-        let symbol = ctx.obarray.get_by_id(sym_id);
-        // A current one-hop alias to an ordinary plain cell needs no general
-        // resolver. Keep the original identity for all contextual/error paths;
-        // neither the target nor its cell pointer survives this call.
-        let symbol = match symbol {
-            Some(symbol) if symbol.redirect() == SymbolRedirect::Varalias => {
-                let target = symbol.alias_target();
-                if crate::buffer::buffer::DedicatedBufferLocal::from_sym_id(target).is_some() {
-                    None
-                } else {
-                    ctx.obarray.get_by_id(target)
-                }
-            }
-            symbol => symbol,
-        };
-        if let Some(symbol) = symbol
+        if let Some(symbol) = ctx.obarray.get_by_id(sym_id)
             && symbol.redirect() == SymbolRedirect::Plainval
         {
             let val = unsafe { symbol.val.plain };
