@@ -1025,37 +1025,28 @@ impl EngineMatchData {
     ) {
         #[cfg(debug_assertions)]
         match_stats::count_publish(&self.groups);
-        let start = groups.len();
-        // Initialize the whole appended range at once, then fill present
-        // captures without repeated SmallVec pushes. Keep conversion in the
-        // loop body so it does not add an iterator call for every register.
-        groups.extend(std::iter::repeat_with(|| None).take(self.groups.len()));
-        let appended = &mut groups[start..];
+        groups.reserve(self.groups.len());
         // GNU `search_buffer_re` converts each register with `BYTE_TO_CHAR`,
         // whose first test is `Z == Z_BYTE`. That test is made once for the
         // whole set here: where every character is one byte, a register's
         // Lisp position is its clamped byte position plus one.
         if let Some(end) = buf.text_single_byte_chars_end() {
             let lisp = |pos: EmacsBytePos| LispMatchPosition::new(pos.min(end).get() + 1);
-            for (range, slot) in self.groups.iter().zip(appended) {
-                if let Some(range) = range {
-                    *slot = Some(LispCharMatchRange {
-                        start: lisp(range.start()),
-                        end: lisp(range.end()),
-                    });
-                }
+            for range in &self.groups {
+                groups.push(range.map(|range| LispCharMatchRange {
+                    start: lisp(range.start()),
+                    end: lisp(range.end()),
+                }));
             }
         } else {
             let lisp = |pos: EmacsBytePos| {
                 LispMatchPosition::from_buffer_position(buf.emacs_byte_pos_to_lisp_char_pos(pos))
             };
-            for (range, slot) in self.groups.iter().zip(appended) {
-                if let Some(range) = range {
-                    *slot = Some(LispCharMatchRange {
-                        start: lisp(range.start()),
-                        end: lisp(range.end()),
-                    });
-                }
+            for range in &self.groups {
+                groups.push(range.map(|range| LispCharMatchRange {
+                    start: lisp(range.start()),
+                    end: lisp(range.end()),
+                }));
             }
         }
     }
