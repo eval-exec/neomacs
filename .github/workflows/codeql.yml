@@ -53,7 +53,7 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq zstd
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
+        uses: github/codeql-action/init@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4
         with:
           # CodeQL 2.26.4 regresses Rust analysis enough to terminate the hosted runner.
           # Remove this pin after https://github.com/github/codeql/issues/22463 is fixed.
