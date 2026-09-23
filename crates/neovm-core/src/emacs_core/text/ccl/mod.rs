@@ -354,16 +354,57 @@ pub(super) fn install_translation_hash(entries: HashMap<i64, i64>) -> i64 {
     with_ccl_registry_mut(|registry| registry.add_translation_hash(entries))
 }
 
-pub(super) fn translation_hash_lookup(id: i64, key: i64) -> Option<i64> {
-    if let Some(value) = lisp_translation_hash_lookup(id, key) {
-        return Some(value);
+/// Result of one translation-hash probe.
+///
+/// GNU `hash_find` distinguishes a missing key from a value that is not a
+/// C `int`. A symbol, a bignum, or an integer outside `i32` is invalid.
+/// A missing key is a miss.
+pub(super) enum TranslationHashLookup {
+    Miss,
+    Integer(i32),
+    Invalid,
+}
+
+pub(super) fn translation_hash_lookup(id: i64, key: i64) -> TranslationHashLookup {
+    if let Some(found) = lisp_translation_hash_lookup(id, key) {
+        return found;
     }
     with_ccl_registry(|registry| {
-        registry
-            .translation_hashes
-            .get(usize::try_from(id).ok()?)
-            .and_then(|table| table.get(&key).copied())
+        let Some(table) = usize::try_from(id)
+            .ok()
+            .and_then(|index| registry.translation_hashes.get(index))
+        else {
+            return TranslationHashLookup::Miss;
+        };
+        match table.get(&key) {
+            None => TranslationHashLookup::Miss,
+            Some(value) => match i32::try_from(*value) {
+                Ok(value) => TranslationHashLookup::Integer(value),
+                Err(_) => TranslationHashLookup::Invalid,
+            },
+        }
     })
+}
+
+fn lisp_translation_hash_lookup(id: i64, key: i64) -> Option<TranslationHashLookup> {
+    let slot = lisp_vector_slot("translation-hash-table-vector", id)?;
+    let table = if slot.is_cons() {
+        slot.cons_cdr()
+    } else {
+        slot
+    };
+    let Some(table) = table.as_hash_table() else {
+        return Some(TranslationHashLookup::Invalid);
+    };
+    Some(
+        match table.data.lookup(Value::fixnum(key), table.test, false) {
+            None => TranslationHashLookup::Miss,
+            Some(value) => match value.as_int().and_then(|number| i32::try_from(number).ok()) {
+                Some(number) => TranslationHashLookup::Integer(number),
+                None => TranslationHashLookup::Invalid,
+            },
+        },
+    )
 }
 
 pub(super) fn translation_table(id: i64) -> Option<Value> {
@@ -385,20 +426,6 @@ fn lisp_vector_slot(name: &str, id: i64) -> Option<Value> {
     let data = vector.as_vector_data()?;
     let index = usize::try_from(id).ok()?;
     data.get(index).copied()
-}
-
-fn lisp_translation_hash_lookup(id: i64, key: i64) -> Option<i64> {
-    let slot = lisp_vector_slot("translation-hash-table-vector", id)?;
-    let table = if slot.is_cons() {
-        slot.cons_cdr()
-    } else {
-        slot
-    };
-    let table = table.as_hash_table()?;
-    table
-        .data
-        .lookup(Value::fixnum(key), table.test, false)
-        .and_then(|value| value.as_int())
 }
 
 fn write_embedded_characters(

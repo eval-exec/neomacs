@@ -8,8 +8,8 @@ use super::super::charset::{
 };
 use super::super::chartable::char_table_ref_and_range;
 use super::{
-    Flow, ccl_reg, code_conversion_map, invalid_ccl_program_at, next_ccl_i32,
-    program_words_by_symbol, translation_hash_lookup, translation_table,
+    Flow, TranslationHashLookup, ccl_reg, code_conversion_map, invalid_ccl_program_at,
+    next_ccl_i32, program_words_by_symbol, translation_hash_lookup, translation_table,
 };
 
 const UNICODE_CHARSET_ID: i32 = 2;
@@ -120,31 +120,37 @@ pub(super) fn execute_extension(
         ExtendedCommand::LookupInteger => {
             let table_id = i64::from(next_ccl_i32(words, instruction, error_at)?);
             let key = ccl_reg(registers, status_register);
+            // GNU requires the hash value to be a character. The instruction
+            // counter has already moved past the table id, which is the index
+            // reported in the error. A symbol is invalid, not a miss.
             match translation_hash_lookup(table_id, i64::from(key)) {
-                Some(value) => {
-                    // GNU requires the hash value to be a character. The
-                    // instruction counter has already moved past the table id,
-                    // which is the index reported in the error.
-                    if !is_emacs_character(value) {
-                        return Err(invalid_ccl_program_at(instruction.saturating_sub(1)));
-                    }
+                TranslationHashLookup::Integer(value) if is_emacs_character(i64::from(value)) => {
                     registers[status_register] = i64::from(UNICODE_CHARSET_ID);
-                    registers[value_register] = value;
+                    registers[value_register] = i64::from(value);
                     registers[7] = 1;
                 }
-                None => registers[7] = 0,
+                TranslationHashLookup::Miss => registers[7] = 0,
+                TranslationHashLookup::Integer(_) | TranslationHashLookup::Invalid => {
+                    return Err(invalid_ccl_program_at(instruction.saturating_sub(1)));
+                }
             }
             Ok(ExtensionStep::Continue)
         }
         ExtendedCommand::LookupCharacter => {
             let table_id = i64::from(next_ccl_i32(words, instruction, error_at)?);
             let character = decode_register_character(registers, status_register, value_register);
+            // GNU stores any C int, including negatives. A non-integer or an
+            // integer outside that range is an invalid command at the same
+            // index lookup-integer uses.
             match translation_hash_lookup(table_id, character) {
-                Some(value) => {
-                    registers[status_register] = value;
+                TranslationHashLookup::Miss => registers[7] = 0,
+                TranslationHashLookup::Integer(value) => {
+                    registers[status_register] = i64::from(value);
                     registers[7] = 1;
                 }
-                None => registers[7] = 0,
+                TranslationHashLookup::Invalid => {
+                    return Err(invalid_ccl_program_at(instruction.saturating_sub(1)));
+                }
             }
             Ok(ExtensionStep::Continue)
         }
@@ -227,6 +233,8 @@ fn translate_character(
     encode_character(registers, charset_register, code_register, mapped);
     Ok(ExtensionStep::Continue)
 }
+
+const MAX_TRANSLATION_LIST_DEPTH: usize = 1024;
 
 fn map_single(
     registers: &mut [i64; 8],

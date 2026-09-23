@@ -1413,6 +1413,147 @@ fn ccl_execute_lookup_integer_sets_unicode_and_the_value() {
     assert_eq!(slots[7], Value::fixnum(1));
 }
 
+fn assert_ccl_error_at_index(err: crate::emacs_core::error::EvalError, nth: usize) {
+    match err {
+        crate::emacs_core::error::EvalError::Signal { data, .. } => {
+            assert_eq!(
+                data[0],
+                Value::string(format!("Error in CCL program at {nth}th code"))
+            );
+        }
+        other => panic!("expected error signal, got {other:?}"),
+    }
+}
+
+fn assert_ccl_error_at_fourth(err: crate::emacs_core::error::EvalError) {
+    match err {
+        crate::emacs_core::error::EvalError::Signal { data, .. } => {
+            assert_eq!(data[0], Value::string("Error in CCL program at 4th code"));
+        }
+        other => panic!("expected error signal, got {other:?}"),
+    }
+}
+
+#[test]
+fn ccl_execute_lookup_character_stores_an_int_including_negative() {
+    crate::test_utils::init_test_tracing();
+    // GNU: (lookup-character TABLE r1 r0) decodes charset r1 and code r0.
+    // A hit writes the integer into r1 and sets r7. -1 is a valid C int.
+    // A missing key clears r7 and leaves the code register alone.
+    // Opcode 327967 is that instruction.
+    let mut entries = std::collections::HashMap::new();
+    entries.insert(65, 99);
+    entries.insert(66, -1);
+    let id = super::install_translation_hash(entries);
+
+    let hit = lookup_character_registers(id, 65, 0);
+    let hit = hit.as_vector_data().unwrap();
+    assert_eq!(hit[0], Value::fixnum(65));
+    assert_eq!(hit[1], Value::fixnum(99));
+    assert_eq!(hit[7], Value::fixnum(1));
+
+    let negative = lookup_character_registers(id, 66, 0);
+    let negative = negative.as_vector_data().unwrap();
+    assert_eq!(negative[0], Value::fixnum(66));
+    assert_eq!(negative[1], Value::fixnum(-1));
+    assert_eq!(negative[7], Value::fixnum(1));
+
+    let miss = lookup_character_registers(id, 69, 5);
+    let miss = miss.as_vector_data().unwrap();
+    assert_eq!(miss[0], Value::fixnum(69));
+    assert_eq!(miss[1], Value::fixnum(0));
+    assert_eq!(miss[7], Value::fixnum(0));
+}
+
+fn lookup_character_registers(id: i64, code: i64, r7: i64) -> Value {
+    let program = Value::vector(
+        [0, 4, 327_967, id, 22]
+            .into_iter()
+            .map(Value::fixnum)
+            .collect(),
+    );
+    let registers = Value::vector(vec![
+        Value::fixnum(code),
+        Value::fixnum(0),
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::fixnum(r7),
+    ]);
+    builtin_ccl_execute_impl(vec![program, registers]).expect("lookup-character should run");
+    registers
+}
+
+#[test]
+fn ccl_execute_lookup_character_rejects_an_integer_past_int_max() {
+    crate::test_utils::init_test_tracing();
+    // GNU IN_INT_RANGE is the C int range. 2^31 does not fit, so the command
+    // is invalid at the 4th code and the register vector is left unchanged.
+    let mut entries = std::collections::HashMap::new();
+    entries.insert(68, 1_i64 << 31);
+    let id = super::install_translation_hash(entries);
+    let program = Value::vector(
+        [0, 4, 327_967, id, 22]
+            .into_iter()
+            .map(Value::fixnum)
+            .collect(),
+    );
+    let registers = Value::vector(vec![
+        Value::fixnum(68),
+        Value::fixnum(0),
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+    ]);
+    let err = builtin_ccl_execute_impl(vec![program, registers])
+        .expect_err("an integer past INT_MAX is an invalid CCL command");
+    match err {
+        Flow::Signal(sig) => {
+            assert_eq!(
+                sig.data[0],
+                Value::string("Error in CCL program at 4th code")
+            );
+        }
+        other => panic!("expected error signal, got {other:?}"),
+    }
+    assert_eq!(registers.as_vector_data().unwrap()[0], Value::fixnum(68));
+    assert_eq!(registers.as_vector_data().unwrap()[7], Value::NIL);
+}
+
+#[test]
+fn ccl_execute_lookup_character_rejects_a_non_integer_hash_value() {
+    crate::test_utils::init_test_tracing();
+    // GNU Emacs: hash key 67 maps to the symbol not-int. lookup-character
+    // requires a fixnum in the C int range. The table id has already been
+    // read, so the error is "at 4th code". lookup-integer of a symbol is
+    // the same invalid command, not a miss.
+    let mut eval = crate::test_utils::runtime_startup_context();
+    let character = eval
+        .eval_str(
+            r#"(let ((table (make-hash-table :test 'eq)))
+                 (puthash 67 'not-int table)
+                 (setq translation-hash-table-vector (vector (cons 'th table)))
+                 (ccl-execute [0 4 327967 0 22] (vector 67 0 0 0 0 0 0 0)))"#,
+        )
+        .expect_err("a non-integer hash value is an invalid CCL command");
+    assert_ccl_error_at_fourth(character);
+
+    let integer = eval
+        .eval_str(
+            r#"(let ((table (make-hash-table :test 'eq)))
+                 (puthash 1 'not-int table)
+                 (setq translation-hash-table-vector (vector (cons 'th table)))
+                 (ccl-execute [0 4 311359 0 22] (vector 1 0 0 0 0 0 0 0)))"#,
+        )
+        .expect_err("lookup-integer of a symbol is an invalid CCL command");
+    assert_ccl_error_at_fourth(integer);
+}
+
 #[test]
 fn ccl_execute_on_string_runs_pgg_crc24() {
     crate::test_utils::init_test_tracing();
