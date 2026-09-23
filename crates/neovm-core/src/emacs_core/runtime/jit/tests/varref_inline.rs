@@ -259,3 +259,140 @@ fn a_later_call_site_roots_what_only_the_varref_shim_stored() {
         }
     }
 }
+
+#[test]
+fn raw_varref_preserves_integer_values_across_inline_and_fallback_reads() {
+    let mut eval = Context::new();
+    eval_ok(
+        &mut eval,
+        "(progn (defvar raw-vri-plain 7)
+                (defvaralias 'raw-vri-alias 'raw-vri-plain)
+                (defvar raw-vri-local 8)
+                (make-local-variable 'raw-vri-local)
+                (setq raw-vri-local 9))",
+    );
+    for (name, inline) in [
+        ("raw-vri-plain", true),
+        ("raw-vri-alias", false),
+        ("raw-vri-local", false),
+    ] {
+        let mut f = body(
+            vec![Op::Add1, Op::VarRef(0), Op::List(2), Op::Return],
+            vec![Value::symbol(name)],
+        );
+        f.params
+            .required
+            .push(crate::emacs_core::intern::intern("x"));
+        let leaf = compile_bytecode_function(&f).expect("raw reader compiles");
+        for n in [
+            Value::MOST_NEGATIVE_FIXNUM,
+            -1,
+            0,
+            Value::MOST_POSITIVE_FIXNUM - 1,
+        ] {
+            let arg = Value::make_int(n);
+            let want = Vm::from_context(&mut eval)
+                .execute(&f, vec![arg])
+                .expect("interpreter");
+            let want = print_value(&want);
+            VARREF_SHIM_CALLS.with(|c| c.set(0));
+            let result = leaf.call(&mut eval as *mut Context as *mut u8, &[arg]);
+            let NativeRun::Ok(bits) = result else {
+                panic!("{name} {n}: {result:?}")
+            };
+            assert_eq!(print_value(&Value::from_bits(bits)), want, "{name} {n}");
+            assert_eq!(VARREF_SHIM_CALLS.with(|c| c.get()), usize::from(!inline));
+            assert_eq!(eval.jit_root_stack_top, 0);
+        }
+    }
+}
+
+#[test]
+fn raw_varref_signal_handler_receives_tagged_residual_values() {
+    let mut eval = Context::new();
+    eval_ok(&mut eval, "(defvar raw-vri-void)");
+    let mut f = body(
+        vec![
+            Op::PushConditionCase(6), // handler keeps the live argument
+            Op::Add1,                 // raw integer replaces that argument
+            Op::VarRef(0),
+            Op::PopHandler,
+            Op::List(2),
+            Op::Return,
+            Op::List(2), // [updated integer, condition data]
+            Op::Return,
+        ],
+        vec![Value::symbol("raw-vri-void")],
+    );
+    f.params
+        .required
+        .push(crate::emacs_core::intern::intern("x"));
+    let leaf = compile_bytecode_function(&f).expect("raw signal reader compiles");
+    let result = leaf.call(&mut eval as *mut Context as *mut u8, &[Value::make_int(-1)]);
+    let NativeRun::Ok(bits) = result else {
+        panic!("{result:?}")
+    };
+    assert_eq!(
+        print_value(&Value::from_bits(bits)),
+        "(0 (void-variable raw-vri-void))"
+    );
+    assert_eq!(eval.jit_root_stack_top, 0);
+    eval_ok(&mut eval, "(setq raw-vri-void 5)");
+    let result = leaf.call(&mut eval as *mut Context as *mut u8, &[Value::make_int(-1)]);
+    let NativeRun::Ok(bits) = result else {
+        panic!("{result:?}")
+    };
+    assert_eq!(print_value(&Value::from_bits(bits)), "(0 5)");
+    assert_eq!(eval.jit_root_stack_top, 0);
+}
+
+#[test]
+fn raw_varref_keeps_heap_roots_live_at_a_later_collecting_call() {
+    super::force_profit_gate_for_test(false);
+    let mut eval = Context::new();
+    eval_ok(
+        &mut eval,
+        "(progn (defvar raw-vri-gc 3)
+                (defvaralias 'raw-vri-gc-alias 'raw-vri-gc)
+                (fset 'raw-vri-collect (lambda () (garbage-collect) (make-list 4096 (cons 0 0)) nil)))",
+    );
+    for name in ["raw-vri-gc", "raw-vri-gc-alias"] {
+        let mut f = body(
+            vec![
+                Op::Constant(0),
+                Op::Constant(1),
+                Op::Cons, // [x heap]
+                Op::StackRef(1),
+                Op::Add1,
+                Op::StackSet(2), // [raw heap]
+                Op::VarRef(2),
+                Op::Pop,
+                Op::Constant(3),
+                Op::Call(0),
+                Op::Pop,
+                Op::List(2),
+                Op::Return,
+            ],
+            vec![
+                Value::make_int(1),
+                Value::make_int(2),
+                Value::symbol(name),
+                Value::symbol("raw-vri-collect"),
+            ],
+        );
+        f.params
+            .required
+            .push(crate::emacs_core::intern::intern("x"));
+        let leaf = compile_bytecode_function(&f).expect("raw collecting reader compiles");
+        let before = eval.tagged_heap.gc_collections();
+        for _ in 0..3 {
+            let result = leaf.call(&mut eval as *mut Context as *mut u8, &[Value::make_int(41)]);
+            let NativeRun::Ok(bits) = result else {
+                panic!("{name}: {result:?}")
+            };
+            assert_eq!(print_value(&Value::from_bits(bits)), "(42 (1 . 2))");
+            assert_eq!(eval.jit_root_stack_top, 0);
+        }
+        assert!(eval.tagged_heap.gc_collections() >= before + 3);
+    }
+}

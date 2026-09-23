@@ -4685,7 +4685,8 @@ pub(crate) fn retag_all_raw(
 
 /// Ops that participate in cross-op fixnum unboxing: they maintain `stack_raw`
 /// themselves (arithmetic produces raw results, comparisons consume raw operands,
-/// stack shuffles move the raw flags). EVERY OTHER op force-tags the stack first
+/// stack shuffles move the raw flags, VarRef tags a separate slow-path snapshot).
+/// EVERY OTHER op force-tags the stack first
 /// (so its gc_push / signal snapshot / shim args never observe a raw slot) and has
 /// its mask re-synced by the caller.
 pub(crate) fn op_preserves_raw(op: &Op) -> bool {
@@ -4714,6 +4715,7 @@ pub(crate) fn op_preserves_raw(op: &Op) -> bool {
             | Op::StackRef(_)
             | Op::StackSet(_)
             | Op::DiscardN(_)
+            | Op::VarRef(_)
     )
 }
 
@@ -5526,10 +5528,19 @@ pub(crate) fn lower_simple_op(
             fb.switch_to_block(slow);
             fb.seal_block(slow);
             let carry_fast = rootwin_carry_snapshot();
-            let saved = if stack.is_empty() {
+            // Reading a variable leaves the residual stack unchanged. Keep
+            // its integers raw across the inline read and the continuation;
+            // only the fallback needs tagged roots and a signal snapshot.
+            let mut tagged = std::borrow::Cow::Borrowed(stack.as_slice());
+            for (i, &raw) in stack_raw.iter().enumerate() {
+                if raw {
+                    tagged.to_mut()[i] = retag_fixnum(fb, stack[i]);
+                }
+            }
+            let saved = if tagged.is_empty() {
                 CondRoots::NONE
             } else {
-                emit_cond_residual_roots_pre(fb, rt, stack.as_slice())
+                emit_cond_residual_roots_pre(fb, rt, &tagged)
             };
             let vmctx = fb.use_var(rt.vmctx_var);
             let out_addr = fb.ins().stack_addr(rt.ptr_ty, rt.call_result_slot, 0);
@@ -5537,7 +5548,7 @@ pub(crate) fn lower_simple_op(
             let status = fb.inst_results(call)[0];
             emit_cond_residual_roots_post(fb, rt, saved);
             rootwin_carry_meet(&carry_fast);
-            let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack);
+            let se = signal_target_for_site(fb, signal_exit, handlers, pending, &tagged);
             let slow_ok = fb.create_block();
             let ok = icmp_imm_p(fb, IntCC::Equal, status, STATUS_OK);
             fb.ins().brif(ok, slow_ok, &[], se, &[]);
@@ -5551,6 +5562,7 @@ pub(crate) fn lower_simple_op(
             fb.switch_to_block(cont);
             fb.seal_block(cont);
             stack.push(fb.use_var(res));
+            stack_raw.push(false);
         }
         Op::VarSet(idx) => {
             // Assign through the runtime (may run variable watchers — arbitrary

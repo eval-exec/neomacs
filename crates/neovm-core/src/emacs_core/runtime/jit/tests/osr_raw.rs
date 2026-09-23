@@ -263,3 +263,77 @@ fn osr_raw_overflow_retags_the_snapshot_and_resumes_without_replaying_effects() 
     assert!(ctx.bc_buf.is_empty());
     assert_eq!(ctx.jit_root_stack_top, 0);
 }
+
+#[test]
+fn osr_raw_varref_preserves_loop_slots_on_inline_and_fallback_reads() {
+    use super::shims::VARREF_SHIM_CALLS;
+    let mut ctx = Context::new();
+    ctx.eval_str(
+        "(progn (defvar raw-osr-read 7)
+                (defvaralias 'raw-osr-read-alias 'raw-osr-read)
+                (defvar raw-osr-read-local 8)
+                (make-local-variable 'raw-osr-read-local)
+                (setq raw-osr-read-local 9))",
+    )
+    .unwrap();
+    for (name, value, inline) in [
+        ("raw-osr-read", 7, true),
+        ("raw-osr-read-alias", 7, false),
+        ("raw-osr-read-local", 9, false),
+    ] {
+        let mut f = ByteCodeFunction::new(LambdaParams {
+            required: vec![],
+            optional: vec![],
+            rest: None,
+        });
+        f.lexical = true;
+        f.constants = vec![
+            Value::make_int(0),
+            Value::symbol(name),
+            Value::make_int(1024),
+        ]
+        .into();
+        f.ops = vec![
+            Op::Constant(2),
+            Op::Constant(0),
+            Op::StackRef(1),
+            Op::Constant(0),
+            Op::Gtr,
+            Op::GotoIfNil(14),
+            Op::StackRef(0),
+            Op::VarRef(1),
+            Op::Add,
+            Op::StackSet(1),
+            Op::StackRef(1),
+            Op::Sub1,
+            Op::StackSet(2),
+            Op::Goto(2),
+            Op::List(2),
+            Op::Return,
+        ];
+        f.max_stack = 8;
+        f.seal_hand_assembled_ops();
+        let cfg = analyze_cfg(&f.ops, &f.constants, None, 0).unwrap();
+        let facts = compute_known_fixnum_slots(&f.ops, &f.constants, &cfg);
+        let raw = uniform_raw_osr_slots(&cfg, &facts, Some(2));
+        assert!(raw[0] && raw[1]);
+        let snapshot = [Value::make_int(1024), Value::make_int(0)];
+        ctx.bc_buf.clear();
+        ctx.bc_buf.extend_from_slice(&snapshot);
+        VARREF_SHIM_CALLS.with(|c| c.set(0));
+        let result = cache::try_run_osr(&mut ctx, &f, 2, &snapshot, &[]);
+        let Some(NativeRun::Ok(bits)) = result else {
+            panic!("{name}: {result:?}")
+        };
+        assert_eq!(
+            crate::emacs_core::print::print_value(&Value::from_bits(bits)),
+            format!("(0 {})", 1024 * value)
+        );
+        assert_eq!(
+            VARREF_SHIM_CALLS.with(|c| c.get()),
+            if inline { 0 } else { 1024 }
+        );
+        assert_eq!(&ctx.bc_buf[..], &snapshot);
+        assert_eq!(ctx.jit_root_stack_top, 0);
+    }
+}
