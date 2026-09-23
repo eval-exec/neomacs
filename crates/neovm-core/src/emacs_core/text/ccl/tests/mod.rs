@@ -1784,3 +1784,39 @@ fn register_code_conversion_map_rejects_over_arity() {
         other => panic!("expected wrong-number-of-arguments signal, got {other:?}"),
     }
 }
+
+#[test]
+fn ccl_execute_runs_a_tight_loop_way_past_any_step_budget() {
+    crate::test_utils::init_test_tracing();
+    // GNU has no step budget (`ccl_driver` loops until success/quit): this
+    // program decrements r0 from 200000 in a two-word loop and ends with
+    // r0 = 0 and r7 = 1. A step budget of 4096 steps per word aborted it
+    // with `Error in CCL program` instead. Infinite loops hang GNU too; the
+    // only launched interruption is a pending quit.
+    let program = Value::vector(
+        [2, 11, 51_200_001, 16_407, 1, 795, 17, 0, -1532, 295_161, 0, 22]
+            .into_iter()
+            .map(Value::fixnum)
+            .collect(),
+    );
+    let registers = Value::vector(vec![Value::NIL; 8]);
+    match builtin_ccl_execute_impl(vec![program, registers]) {
+        Ok(value) => drop(value),
+        Err(e) => {
+            let signal = match &e {
+                super::Flow::Signal(sig) => sig,
+                other => panic!("unexpected flow: {other:?}"),
+            };
+            let message = match signal.data[0].as_lisp_string() {
+                Some(string) => {
+                    String::from_utf8_lossy(string.as_bytes()).into_owned()
+                }
+                None => format!("{:?}", signal.data),
+            };
+            panic!("CCL errored: {message}");
+        }
+    }
+    let regs = registers.as_vector_data().unwrap();
+    assert_eq!(regs[0], Value::fixnum(0));
+    assert_eq!(regs[7], Value::fixnum(1));
+}

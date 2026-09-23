@@ -611,7 +611,6 @@ fn execute_compiled_ccl_with_state(
     initial_instruction: Option<usize>,
 ) -> Result<CclExecution, Flow> {
     const HEADER_MAIN: usize = 2;
-    const MAX_STEPS_PER_WORD: usize = 4096;
 
     let mut words = compiled_ccl_words(designator)?;
     // GNU disables reading and writing when the top program's buffer
@@ -628,13 +627,11 @@ fn execute_compiled_ccl_with_state(
     let mut instruction = initial_instruction
         .filter(|instruction| HEADER_MAIN < *instruction && *instruction < words.len())
         .unwrap_or(HEADER_MAIN);
-    let step_limit = words
-        .len()
-        .saturating_add(input.len())
-        .saturating_add(1)
-        .saturating_mul(MAX_STEPS_PER_WORD);
 
-    for _ in 0..step_limit {
+    // GNU has no step budget: `ccl_driver` loops until success, quit, or an
+    // invalid command. A pending quit is the only expected interruption, so
+    // infinite loops hang exactly like they hang GNU's `ccl-execute`.
+    loop {
         // GNU polls `Vquit_flag` before fetching. The counter in the
         // interrupt message is that index, and the flag is left set.
         if ccl_quit_pending() {
@@ -1212,8 +1209,6 @@ fn execute_compiled_ccl_with_state(
             }
         }
     }
-
-    Err(invalid_ccl_program_at(instruction))
 }
 
 /// Execute one complete compiled CCL program over integer character codes.
