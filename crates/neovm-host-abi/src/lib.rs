@@ -376,5 +376,4 @@ pub trait HostAbi {
 }
 
 #[cfg(test)]
-#[path = "lib_test.rs"]
 mod tests;

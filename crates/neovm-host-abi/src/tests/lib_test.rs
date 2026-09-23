@@ -1,4 +1,4 @@
-use super::*;
+use crate::*;
 use std::collections::HashSet;
 
 #[test]
