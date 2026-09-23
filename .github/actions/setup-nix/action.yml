@@ -4,6 +4,15 @@ description: Install Nix and configure the binary caches trusted by the flake.
 runs:
   using: composite
   steps:
+    # The runner image now arrives with a Nix profile written by the new CLI.
+    # The installer below still installs through `nix-env`, which refuses it --
+    # "profile ... is incompatible with 'nix-env'; please use 'nix profile'
+    # instead" -- and the job dies in "Set up Nix" before any flake is looked
+    # at.  Clearing the profile first is a no-op on a runner that has none.
+    - name: Clear an incompatible Nix profile left by the runner image
+      shell: bash
+      run: rm -rf "$HOME/.local/state/nix/profiles/profile"
+
     - name: Install Nix
       uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
       with:

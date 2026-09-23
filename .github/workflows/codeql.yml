@@ -45,6 +45,13 @@ jobs:
       - name: Prepare workspace temp directory
         run: mkdir -p "$TMPDIR"
 
+      # The runner image stopped shipping `zstd`, which the pinned bundle below
+      # needs: `tar --zstd ...` dies with "zstd: Cannot exec: No such file or
+      # directory" and every Analyze job fails in Initialize CodeQL before a
+      # single line is analyzed.
+      - name: Ensure zstd can unpack the CodeQL bundle
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq zstd
+
       - name: Initialize CodeQL
         uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4
         with:
