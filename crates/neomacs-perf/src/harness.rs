@@ -550,7 +550,9 @@ impl PerfHarness {
             | ScenarioId::FirstHotLoop
             | ScenarioId::FirstHotLoop8K
             | ScenarioId::FirstHotLoop16K
-            | ScenarioId::FirstHotLoop32K => {
+            | ScenarioId::FirstHotLoop32K
+            | ScenarioId::FirstBranchLoop64
+            | ScenarioId::FirstBranchLoop256 => {
                 scenarios::vm_loop::prepare(&self.workspace_root, request, run_directory)
             }
             ScenarioId::BuiltinCallPoint
@@ -1723,7 +1725,9 @@ fn parse_scenario_result(
         ScenarioId::FirstHotLoop
         | ScenarioId::FirstHotLoop8K
         | ScenarioId::FirstHotLoop16K
-        | ScenarioId::FirstHotLoop32K => {
+        | ScenarioId::FirstHotLoop32K
+        | ScenarioId::FirstBranchLoop64
+        | ScenarioId::FirstBranchLoop256 => {
             serde_json::from_str(raw).map(ScenarioResult::FirstHotLoop)
         }
         ScenarioId::LexicalLoop | ScenarioId::DynamicBindingLoop => {

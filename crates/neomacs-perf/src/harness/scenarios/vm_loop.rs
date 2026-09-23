@@ -52,6 +52,7 @@ pub(crate) fn prepare(
         host: collect_host_provenance(request.machine_policy()),
         workload_source,
         first_call_inner_iterations: request.scenario.first_hot_loop_iterations(),
+        first_call_branches: request.scenario.first_call_branches(),
         workload_source_sha256: sha256_file(&fixture_source)?,
         execution_policy: "editor-default-with-recorded-overrides",
         environment_policy: "closed-v1",
@@ -90,6 +91,8 @@ struct VmLoopInputProvenanceManifest<'a> {
     workload_source: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     first_call_inner_iterations: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    first_call_branches: Option<u32>,
     workload_source_sha256: String,
     execution_policy: &'a str,
     environment_policy: &'a str,

@@ -17,6 +17,8 @@ struct FirstHotLoopResultWire {
     status: ScenarioStatus,
     iterations: u32,
     inner_iterations: u32,
+    #[serde(default)]
+    branches_per_iteration: Option<u32>,
     prepared_functions: u32,
     bytecode_compiled: bool,
     completed_operations: u32,
@@ -98,6 +100,21 @@ pub(crate) fn validate(
         true,
         r.bytecode_compiled,
     );
+    let branches = request.scenario.first_call_branches();
+    mismatch(
+        &mut mismatches,
+        "branches-per-iteration",
+        format!("{branches:?}"),
+        format!("{:?}", r.branches_per_iteration),
+    );
+    let sum = branches.map_or_else(
+        || expected_sum(inner_iterations),
+        |branches| {
+            // Each k=1..D adds 1 for the first k iterations and 2 thereafter.
+            let d = i64::from(branches);
+            2 * i64::from(inner_iterations) * d - d * (d + 1) / 2
+        },
+    );
     for (index, values) in r.results.iter().enumerate() {
         mismatch(
             &mut mismatches,
@@ -108,7 +125,7 @@ pub(crate) fn validate(
         mismatch(
             &mut mismatches,
             &format!("function-{index}-sum"),
-            expected_sum(inner_iterations),
+            sum,
             values[1],
         );
         mismatch(

@@ -683,7 +683,9 @@ pub(crate) fn validate_editor_workload_result(
         | ScenarioId::FirstHotLoop
         | ScenarioId::FirstHotLoop8K
         | ScenarioId::FirstHotLoop16K
-        | ScenarioId::FirstHotLoop32K => {
+        | ScenarioId::FirstHotLoop32K
+        | ScenarioId::FirstBranchLoop64
+        | ScenarioId::FirstBranchLoop256 => {
             unreachable!("dedicated scenario results do not use the editor workload validator")
         }
     }

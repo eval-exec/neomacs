@@ -210,3 +210,78 @@ fn first_hot_loop_lengths_require_the_requested_work_for_every_function() {
         }
     }
 }
+
+#[test]
+fn first_branch_calls_validate_shape_sum_and_each_fresh_identity() {
+    let workspace = workspace();
+    let harness = PerfHarness::new(workspace.path());
+    for (id, branches, sum) in [
+        (ScenarioId::FirstBranchLoop64, 64, 522_208),
+        (ScenarioId::FirstBranchLoop256, 256, 2_064_256),
+    ] {
+        assert_eq!(serde_json::to_value(id).unwrap(), json!(id.as_str()));
+        let request = RunRequest::new(id, "/unused/editor", NonZeroU32::new(3).unwrap());
+        let mut result = valid_result();
+        result["scenario"] = json!(id.as_str());
+        result["inner_iterations"] = json!(4096);
+        result["branches_per_iteration"] = json!(branches);
+        result["results"] = json!([[4096, sum, 0], [4096, sum, 1], [4096, sum, 2]]);
+        let verdict = |result: &Value| {
+            harness
+                .record_fixture_result(&request, &result.to_string())
+                .unwrap()
+                .artifact
+                .verdict
+        };
+        let RunVerdict::Valid { measurements } = verdict(&result) else {
+            panic!("valid branch-heavy first calls rejected: {id}");
+        };
+        assert_eq!(
+            measurements
+                .iter()
+                .find(|m| m.name == MetricName::PerOperationWallTime)
+                .unwrap()
+                .value,
+            300.0
+        );
+        let mut invalid = Vec::new();
+        let mut missing = result.clone();
+        missing
+            .as_object_mut()
+            .unwrap()
+            .remove("branches_per_iteration");
+        invalid.push(missing);
+        for wrong in [json!(null), json!(0), json!(branches / 2)] {
+            let mut changed = result.clone();
+            changed["branches_per_iteration"] = wrong;
+            invalid.push(changed);
+        }
+        for function in 0..3 {
+            for field in 0..3 {
+                let mut changed = result.clone();
+                changed["results"][function][field] = json!(-1);
+                invalid.push(changed);
+            }
+        }
+        let mut duplicate = result.clone();
+        duplicate["results"][1] = duplicate["results"][0].clone();
+        invalid.push(duplicate);
+        for changed in invalid {
+            assert!(matches!(
+                verdict(&changed),
+                RunVerdict::CorrectnessMismatch { .. }
+            ));
+        }
+    }
+    // A branch-shaped record must not enter the existing simple-loop series.
+    let mut unexpected = valid_result();
+    unexpected["branches_per_iteration"] = json!(64);
+    assert!(matches!(
+        harness
+            .record_fixture_result(&request(), &unexpected.to_string())
+            .unwrap()
+            .artifact
+            .verdict,
+        RunVerdict::CorrectnessMismatch { .. }
+    ));
+}

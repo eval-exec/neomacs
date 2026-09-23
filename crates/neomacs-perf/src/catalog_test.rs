@@ -7,7 +7,7 @@ use super::{CrossEditorParityMetric, Frontend, MetricName, ScenarioId, scenario,
 #[test]
 fn catalog_exposes_the_rust_lsp_typing_workload_as_a_typed_scenario() {
     let scenarios = scenarios();
-    assert_eq!(scenarios.len(), 46);
+    assert_eq!(scenarios.len(), 48);
 
     // The heavy row exists so the light one keeps its baseline: same workload,
     // a whole-file diagnostic set instead of four on adjacent lines.
@@ -307,6 +307,8 @@ fn rare_call_loop_diagnostics_stay_out_of_editor_score() {
         ScenarioId::FirstHotLoop8K,
         ScenarioId::FirstHotLoop16K,
         ScenarioId::FirstHotLoop32K,
+        ScenarioId::FirstBranchLoop64,
+        ScenarioId::FirstBranchLoop256,
     ] {
         assert_eq!(ScenarioId::from_str(id.as_str()), Ok(id));
         let spec = scenario(id);

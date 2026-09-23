@@ -9,7 +9,13 @@
   '(("first-hot-loop" . 65536)
     ("first-hot-loop-8k" . 8192)
     ("first-hot-loop-16k" . 16384)
-    ("first-hot-loop-32k" . 32768)))
+    ("first-hot-loop-32k" . 32768)
+    ("first-branch-loop-64" . 4096)
+    ("first-branch-loop-256" . 4096)))
+
+(defconst neomacs-perf-first-hot-loop--branch-counts
+  '(("first-branch-loop-64" . 64)
+    ("first-branch-loop-256" . 256)))
 
 (defvar neomacs-perf-first-hot-loop--profile-gate-process nil)
 (defvar neomacs-perf-first-hot-loop--profile-gate-response "")
@@ -76,6 +82,18 @@
   (let* ((scenario (getenv "NEOMACS_PERF_WORKLOAD"))
          (inner-iterations
           (or (cdr (assoc scenario neomacs-perf-first-hot-loop--iteration-counts)) 0))
+         (branches
+          (cdr (assoc scenario neomacs-perf-first-hot-loop--branch-counts)))
+         ;; These diamonds remain conditional on the live loop index. Each
+         ;; changes outcome during the call; no body is executed in setup.
+         (body
+          (if branches
+              (append
+               (mapcar (lambda (cutoff)
+                         `(setq sum (+ sum (if (< i ,cutoff) 1 2))))
+                       (number-sequence 1 branches))
+               '((setq i (1+ i))))
+            '((setq sum (+ sum i) i (1+ i)))))
          (iterations (string-to-number (or (getenv "NEOMACS_PERF_ITERATIONS") "0")))
          (functions nil) (results nil) (index 0) (compiled t)
          (prepared 0) (completed 0) (elapsed-us 0) (wall-us 0)
@@ -92,7 +110,7 @@
                     `(lambda (n)
                        (let ((held ,index) (i 0) (sum 0))
                          (while (< i n)
-                           (setq sum (+ sum i) i (1+ i)))
+                           ,@(copy-tree body))
                          (list i sum held))))))
               (unless (byte-code-function-p function)
                 (setq compiled nil)
@@ -122,6 +140,7 @@
         `((schema_version . 1) (scenario . ,scenario) (status . ,status)
           (iterations . ,iterations)
           (inner_iterations . ,inner-iterations)
+          ,@(when branches `((branches_per_iteration . ,branches)))
           (prepared_functions . ,prepared)
           (bytecode_compiled . ,(if compiled t :json-false))
           (completed_operations . ,completed)

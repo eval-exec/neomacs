@@ -47,6 +47,11 @@ pub enum ScenarioId {
     FirstHotLoop16K,
     #[serde(rename = "first-hot-loop-32k")]
     FirstHotLoop32K,
+    /// First calls with many conditional blocks, to expose compilation scaling.
+    #[serde(rename = "first-branch-loop-64")]
+    FirstBranchLoop64,
+    #[serde(rename = "first-branch-loop-256")]
+    FirstBranchLoop256,
     /// Warmed builtin calls from bytecode; excluded from the whole-editor score.
     BuiltinCallPoint,
     BuiltinCallStringBytes,
@@ -175,6 +180,16 @@ impl ScenarioId {
             Self::FirstHotLoop8K => Some(8_192),
             Self::FirstHotLoop16K => Some(16_384),
             Self::FirstHotLoop32K => Some(32_768),
+            Self::FirstBranchLoop64 | Self::FirstBranchLoop256 => Some(4_096),
+            _ => None,
+        }
+    }
+
+    /// Conditional updates per inner iteration of a branch-heavy first call.
+    pub(crate) const fn first_call_branches(self) -> Option<u32> {
+        match self {
+            Self::FirstBranchLoop64 => Some(64),
+            Self::FirstBranchLoop256 => Some(256),
             _ => None,
         }
     }
@@ -191,6 +206,8 @@ impl ScenarioId {
             Self::FirstHotLoop8K => "first-hot-loop-8k",
             Self::FirstHotLoop16K => "first-hot-loop-16k",
             Self::FirstHotLoop32K => "first-hot-loop-32k",
+            Self::FirstBranchLoop64 => "first-branch-loop-64",
+            Self::FirstBranchLoop256 => "first-branch-loop-256",
             Self::BuiltinCallPoint => "builtin-call-point",
             Self::BuiltinCallStringBytes => "builtin-call-string-bytes",
             Self::BuiltinCallStringLessp => "builtin-call-string-lessp",
@@ -265,6 +282,8 @@ impl FromStr for ScenarioId {
             "first-hot-loop-8k" => Ok(Self::FirstHotLoop8K),
             "first-hot-loop-16k" => Ok(Self::FirstHotLoop16K),
             "first-hot-loop-32k" => Ok(Self::FirstHotLoop32K),
+            "first-branch-loop-64" => Ok(Self::FirstBranchLoop64),
+            "first-branch-loop-256" => Ok(Self::FirstBranchLoop256),
             "builtin-call-point" => Ok(Self::BuiltinCallPoint),
             "builtin-call-string-bytes" => Ok(Self::BuiltinCallStringBytes),
             "builtin-call-string-lessp" => Ok(Self::BuiltinCallStringLessp),
@@ -735,6 +754,22 @@ const SCENARIOS: &[ScenarioSpec] = &[
         primary_metric: MetricName::PerOperationWallTime,
         cross_editor_parity_metrics: &[],
     },
+    ScenarioSpec {
+        id: ScenarioId::FirstBranchLoop64,
+        description: "First call of fresh bytecode functions with 64 conditional updates per iteration and 4,096 iterations; includes any compilation selected by the recorded execution policy",
+        default_frontend: Frontend::Batch,
+        default_iterations: NonZeroU32::new(100).expect("non-zero scenario default"),
+        primary_metric: MetricName::PerOperationWallTime,
+        cross_editor_parity_metrics: &[],
+    },
+    ScenarioSpec {
+        id: ScenarioId::FirstBranchLoop256,
+        description: "First call of fresh bytecode functions with 256 conditional updates per iteration and 4,096 iterations; includes any compilation selected by the recorded execution policy",
+        default_frontend: Frontend::Batch,
+        default_iterations: NonZeroU32::new(100).expect("non-zero scenario default"),
+        primary_metric: MetricName::PerOperationWallTime,
+        cross_editor_parity_metrics: &[],
+    },
 ];
 
 pub fn scenarios() -> &'static [ScenarioSpec] {
@@ -757,6 +792,8 @@ pub const fn scenario(id: ScenarioId) -> &'static ScenarioSpec {
         ScenarioId::FirstHotLoop8K => &SCENARIOS[43],
         ScenarioId::FirstHotLoop16K => &SCENARIOS[44],
         ScenarioId::FirstHotLoop32K => &SCENARIOS[45],
+        ScenarioId::FirstBranchLoop64 => &SCENARIOS[46],
+        ScenarioId::FirstBranchLoop256 => &SCENARIOS[47],
         ScenarioId::BuiltinCallPoint => &SCENARIOS[30],
         ScenarioId::BuiltinCallStringBytes => &SCENARIOS[31],
         ScenarioId::BuiltinCallStringLessp => &SCENARIOS[32],
