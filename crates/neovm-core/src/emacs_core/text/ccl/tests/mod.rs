@@ -1536,13 +1536,47 @@ fn ccl_execute_map_multiple_rejects_a_missing_called_program() {
     assert_ccl_error_at_index(err, 4);
 }
 
+fn assert_lookup_invalid(err: crate::emacs_core::error::EvalError) {
+    assert_ccl_error_at_index(err, 4);
+}
+
+#[test]
+fn ccl_execute_lookup_rejects_a_table_id_outside_the_hash_vector() {
+    crate::test_utils::init_test_tracing();
+    // GNU bounds the table id with `GET_CCL_RANGE` against
+    // `ASIZE (Vtranslation_hash_table_vector)`. A nil vector bounds to -1, so
+    // every id is out of range; an id beyond the vector likewise. Emacs 31.1
+    // reads one past the end for id == ASIZE (UB), which we reject.
+    let mut eval = crate::test_utils::runtime_startup_context();
+    let err = eval
+        .eval_str(
+            r#"(let ((reg (vector 1 0 0 0 0 0 0 0)))
+                 (ccl-execute [0 4 311359 0 22] reg))"#,
+        )
+        .expect_err("a nil translation-hash-table-vector invalidates lookup-integer");
+    assert_lookup_invalid(err);
+
+    let err = eval
+        .eval_str(
+            r#"(let ((reg (vector 1 0 0 0 0 0 0 0)))
+                 (setq translation-hash-table-vector (vector (cons 'h (make-hash-table :test 'eq))))
+                 (ccl-execute [0 4 311359 1 22] reg))"#,
+        )
+        .expect_err("an id beyond the hash vector invalidates lookup-integer");
+    assert_lookup_invalid(err);
+
+    let err = eval
+        .eval_str(
+            r#"(let ((reg (vector 65 0 0 0 0 0 0 0)))
+                 (setq translation-hash-table-vector (vector (cons 'h (make-hash-table :test 'eq))))
+                 (ccl-execute [0 4 327967 -1 22] reg))"#,
+        )
+        .expect_err("a negative id invalidates lookup-character");
+    assert_lookup_invalid(err);
+}
+
 fn assert_ccl_error_at_fourth(err: crate::emacs_core::error::EvalError) {
-    match err {
-        crate::emacs_core::error::EvalError::Signal { data, .. } => {
-            assert_eq!(data[0], Value::string("Error in CCL program at 4th code"));
-        }
-        other => panic!("expected error signal, got {other:?}"),
-    }
+    assert_ccl_error_at_index(err, 4);
 }
 
 #[test]

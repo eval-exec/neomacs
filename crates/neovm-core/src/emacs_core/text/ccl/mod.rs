@@ -366,7 +366,11 @@ pub(super) enum TranslationHashLookup {
 }
 
 pub(super) fn translation_hash_lookup(id: i64, key: i64) -> TranslationHashLookup {
-    if let Some(found) = lisp_translation_hash_lookup(id, key) {
+    // GNU `GET_CCL_RANGE` bounds the table id against the size of
+    // `Vtranslation_hash_table_vector`; a nil vector bounds to -1, so every id
+    // is out of range. `id == ASIZE` reads one past the end in GNU (UB); we
+    // reject it, and ids naming a missing slot surface `Invalid`.
+    if let Some(found) = checked_lisp_translation_hash_lookup(id, key) {
         return found;
     }
     with_ccl_registry(|registry| {
@@ -386,8 +390,29 @@ pub(super) fn translation_hash_lookup(id: i64, key: i64) -> TranslationHashLooku
     })
 }
 
-fn lisp_translation_hash_lookup(id: i64, key: i64) -> Option<TranslationHashLookup> {
-    let slot = lisp_vector_slot("translation-hash-table-vector", id)?;
+/// Probe `translation-hash-table-vector` when a Lisp runtime is attached.
+///
+/// `None` means "no live vector answer; defer to the registry fallback": only
+/// when the variable is unbound or no obarray is attached. A bound vector
+/// outside `[0, len)` yields `Invalid` for the lookup, matching `GET_CCL_RANGE`.
+fn checked_lisp_translation_hash_lookup(id: i64, key: i64) -> Option<TranslationHashLookup> {
+    let obarray = CCL_OBARRAY.with(|cell| cell.get());
+    if obarray.is_null() {
+        return None;
+    }
+    let slot_of_vector = unsafe { &*obarray }
+        .symbol_value("translation-hash-table-vector")
+        .copied()?;
+    if !slot_of_vector.is_vector() {
+        return Some(TranslationHashLookup::Invalid);
+    }
+    let data = slot_of_vector.as_vector_data().expect("checked vector");
+    let Some(index) = usize::try_from(id).ok() else {
+        return Some(TranslationHashLookup::Invalid);
+    };
+    let Some(slot) = data.get(index).copied() else {
+        return Some(TranslationHashLookup::Invalid);
+    };
     let table = if slot.is_cons() {
         slot.cons_cdr()
     } else {
