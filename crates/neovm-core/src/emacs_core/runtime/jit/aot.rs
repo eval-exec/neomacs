@@ -2730,8 +2730,9 @@ pub fn testkit_cbsym_aot_fast_shim_selftest(dir: &std::path::Path) -> Result<(),
 /// symbols) and the var ops (`iconst(sym)`, not even collected) baked the SESSION
 /// SymId under baseline-AOT → silent cross-session corruption (recipe check still
 /// passes). This test exercises both kinds of body END-TO-END through the
-/// baseline serve, with the same decoy-growth + reloc-set-membership rigor as
-/// [`testkit_callbuiltinsym_aot_selftest`].
+/// baseline serve and checks relocation-set membership. The variable body also
+/// executes with its relocation payload changed to a symbol in another chunk,
+/// exercising the generated runtime address calculation.
 ///
 /// CRUCIAL — both bodies carry a `CallBuiltinSym` so `mir_is_aot_runnable` is
 /// FALSE → the emit AND load tier-selects BOTH pick the baseline tier (a
@@ -2850,8 +2851,8 @@ pub fn testkit_baseline_op_symbol_reloc_selftest(dir: &std::path::Path) -> Resul
             .ok_or(format!("{}: baseline AOT emit/place failed", b.label))?;
     }
 
-    // Cross-session drift: grow the intern table AFTER all emits so a baked
-    // emit-time SymId would now be stale relative to a fresh rebuild (audit #16).
+    // Grow the table between emission and loading. Existing symbol identities
+    // stay stable; the explicit payload change below exercises a different id.
     for i in 0..64 {
         let _ = crate::emacs_core::intern::intern(&format!("aot-opsym-decoy-{i}"));
     }
@@ -2911,12 +2912,11 @@ pub fn testkit_baseline_op_symbol_reloc_selftest(dir: &std::path::Path) -> Resul
         let content_hash = leaf_content_hash(&b.ops, &b.constants, b.arity)
             .ok_or(format!("{}: hash None", b.label))?;
         let unit = load_unit(content_hash).ok_or(format!("{}: unit not found", b.label))?;
-        let leaf = load_leaf_from_unit(&unit, content_hash, b.arity, &b.constants, None).ok_or(
-            format!(
+        let mut leaf = load_leaf_from_unit(&unit, content_hash, b.arity, &b.constants, None)
+            .ok_or(format!(
                 "{}: load_leaf_from_unit None (reloc/recipe mismatch?)",
                 b.label
-            ),
-        )?;
+            ))?;
         let reloc_names: std::collections::HashSet<String> = leaf
             .reloc_values()
             .iter()
@@ -2928,6 +2928,42 @@ pub fn testkit_baseline_op_symbol_reloc_selftest(dir: &std::path::Path) -> Resul
                 "{}: '{}' NOT in the leaf's reloc set (op-SymId was BAKED) — reloc names: {reloc_names:?}",
                 b.label, b.must_contain
             ));
+        }
+        if b.label == "varbind/set/ref" {
+            // Changing the payload in its existing allocation tests runtime
+            // address calculation directly. Growing the intern table alone
+            // never changes a previously interned symbol's identity.
+            let original = Value::symbol("aot-dynvar");
+            let original_id = original.as_symbol_id().unwrap().0 as usize;
+            let slots = crate::emacs_core::symbol::OBARRAY_CHUNK_SLOTS;
+            for i in 0..=slots {
+                crate::emacs_core::intern::intern(&format!("aot-varref-offset-decoy-{i}"));
+            }
+            let relocated = Value::symbol("aot-varref-offset-target");
+            let relocated_id = relocated.as_symbol_id().unwrap().0 as usize;
+            assert_ne!(original_id / slots, relocated_id / slots);
+            // Keep the original cell bound: an incorrectly baked address must
+            // return the wrong value, instead of falling through to the shim.
+            ev.eval_str("(setq aot-dynvar 41 aot-varref-offset-target 17)")
+                .map_err(|e| format!("relocated variable setup: {e:?}"))?;
+            let slot = leaf
+                .reloc_data
+                .iter()
+                .position(|v| *v == original)
+                .ok_or("variable relocation missing")?;
+            let base = leaf.reloc_data.as_ptr();
+            leaf.reloc_data[slot] = relocated;
+            assert_eq!(leaf.reloc_data.as_ptr(), base);
+            match leaf.call(ctx as *mut u8, &[]) {
+                super::compile::NativeRun::Ok(bits) => {
+                    assert_eq!(Value::from_bits(bits), Value::make_int(42));
+                }
+                other => return Err(format!("relocated variable leaf: {other:?}")),
+            }
+            let restored = ev
+                .eval_str("(list aot-dynvar aot-varref-offset-target)")
+                .map_err(|e| format!("relocated variable restoration: {e:?}"))?;
+            assert_eq!(crate::emacs_core::print::print_value(&restored), "(41 17)");
         }
         super::cache::clear();
     }

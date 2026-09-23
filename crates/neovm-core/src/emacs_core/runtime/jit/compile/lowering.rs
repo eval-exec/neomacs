@@ -5477,14 +5477,34 @@ pub(crate) fn lower_simple_op(
                     vmctx,
                     (ob + OBARRAY_JIT_SPINE_OFFSET) as i32,
                 );
-                let chunk_index = ushr_imm_p(fb, sym_v, OBARRAY_CHUNK_BITS as i64);
-                let chunk_off = ishl_imm_p(fb, chunk_index, 3);
+                // Same-session JIT symbol identities are constants. AOT may
+                // load a relocated identity, so fold only proven constants.
+                let offsets = iconst_bits(fb, sym_v)
+                    .and_then(|sym| u32::try_from(sym).ok())
+                    .and_then(|sym| {
+                        let cell = (sym as usize & (OBARRAY_CHUNK_SLOTS - 1))
+                            .checked_mul(LISP_SYMBOL_SIZE)?;
+                        Some((
+                            i64::from(sym >> OBARRAY_CHUNK_BITS) * 8,
+                            i64::try_from(cell).ok()?,
+                        ))
+                    });
+                let chunk_off = if let Some((chunk, _)) = offsets {
+                    fb.ins().iconst(types::I64, chunk)
+                } else {
+                    let chunk_index = ushr_imm_p(fb, sym_v, OBARRAY_CHUNK_BITS as i64);
+                    ishl_imm_p(fb, chunk_index, 3)
+                };
                 let chunk_slot = fb.ins().iadd(spine, chunk_off);
                 let chunk = fb
                     .ins()
                     .load(rt.ptr_ty, MemFlagsData::trusted(), chunk_slot, 0);
-                let slot_index = band_imm_p(fb, sym_v, (OBARRAY_CHUNK_SLOTS - 1) as i64);
-                let cell_off = fb.ins().imul_imm_u(slot_index, LISP_SYMBOL_SIZE as i64);
+                let cell_off = if let Some((_, cell)) = offsets {
+                    fb.ins().iconst(types::I64, cell)
+                } else {
+                    let slot_index = band_imm_p(fb, sym_v, (OBARRAY_CHUNK_SLOTS - 1) as i64);
+                    fb.ins().imul_imm_u(slot_index, LISP_SYMBOL_SIZE as i64)
+                };
                 let cell = fb.ins().iadd(chunk, cell_off);
                 let flags = fb.ins().uload8(
                     types::I64,
