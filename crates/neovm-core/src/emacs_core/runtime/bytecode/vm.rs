@@ -6062,85 +6062,81 @@ impl<'a> Vm<'a> {
                 vec![Value::from_sym_id(name_id)],
             )
         })?;
-        if sym.redirect() == crate::emacs_core::symbol::SymbolRedirect::Plainval {
-            // SAFETY: redirect() already confirmed Plainval, so val.plain is active
-            let val = unsafe { sym.val.plain };
-            if !val.is_unbound() {
-                // GNU installs `buffer-undo-list` as a DEFVAR_PER_BUFFER
-                // forwarder. Neomacs keeps its value in SharedUndoState so
-                // indirect buffers share one history, but classifies that
-                // one dedicated local by symbol identity. Ordinary nil-valued
-                // globals stay on this direct PLAINVAL path instead of all
-                // paying a generic buffer-local probe.
-                if !val.is_nil() {
+        use crate::emacs_core::symbol::SymbolRedirect;
+        // A redirect selects exactly one representation. Dispatch once so
+        // ordinary and forwarded reads do not test the alias/local paths.
+        match sym.redirect() {
+            SymbolRedirect::Plainval => {
+                // SAFETY: redirect() already confirmed Plainval, so val.plain is active
+                let val = unsafe { sym.val.plain };
+                if !val.is_unbound() {
+                    // GNU installs `buffer-undo-list` as a DEFVAR_PER_BUFFER
+                    // forwarder. Neomacs keeps its value in SharedUndoState so
+                    // indirect buffers share one history, but classifies that
+                    // one dedicated local by symbol identity. Ordinary nil-valued
+                    // globals stay on this direct PLAINVAL path instead of all
+                    // paying a generic buffer-local probe.
+                    if !val.is_nil() {
+                        return Ok(val);
+                    }
+                    if let Some(dedicated) =
+                        crate::buffer::buffer::DedicatedBufferLocal::from_sym_id(name_id)
+                        && let Some(buf) = self.ctx.buffers.current_buffer()
+                    {
+                        return Ok(dedicated.read(buf));
+                    }
                     return Ok(val);
                 }
-                if let Some(dedicated) =
-                    crate::buffer::buffer::DedicatedBufferLocal::from_sym_id(name_id)
-                    && let Some(buf) = self.ctx.buffers.current_buffer()
-                {
-                    return Ok(dedicated.read(buf));
-                }
-                return Ok(val);
             }
-        }
-        // Most aliases end at one ordinary value cell. The current target can
-        // answer directly in both the interpreter and JIT fallback; dedicated
-        // buffer state, chains, cycles and void targets keep full resolution
-        // with the original name for signals. The full reader also consults
-        // identity-based buffer state under the original name. Never cache
-        // the resolved target.
-        if sym.redirect() == crate::emacs_core::symbol::SymbolRedirect::Varalias
-            && crate::buffer::buffer::DedicatedBufferLocal::from_sym_id(name_id).is_none()
-            && crate::buffer::buffer::lookup_buffer_slot_by_sym_id(name_id).is_none()
-        {
-            let target = sym.alias_target();
-            if crate::buffer::buffer::DedicatedBufferLocal::from_sym_id(target).is_none()
-                && let Some(target_sym) = ob.get_by_id(target)
-                && target_sym.redirect() == crate::emacs_core::symbol::SymbolRedirect::Plainval
-            {
-                // SAFETY: the target's redirect selects its plain value cell.
-                let value = unsafe { target_sym.val.plain };
-                if !value.is_unbound() {
+            SymbolRedirect::Forwarded => {
+                // Descriptor-owned forwarders need no buffer context.
+                // BufferObj alone keeps the full contextual fallback.
+                // SAFETY: redirect() confirmed Forwarded, so val.fwd is active and
+                // points at a descriptor `install_*fwd` leaked.
+                let fwd = unsafe { &*sym.val.fwd };
+                if let Some(value) = fwd.load() {
                     return Ok(value);
                 }
             }
-        }
-        // A non-alias localized symbol is already resolved. Reuse the
-        // evaluator's buffer-id/epoch cache reader before preparing general
-        // forwarding inputs or looking up a buffer reference on every read.
-        if sym.redirect() == crate::emacs_core::symbol::SymbolRedirect::Localized
-            && let Some(buf) = self.ctx.buffers.current_buffer()
-            && let Some(value) = ob.read_localized_symbol_for_buffer(
-                name_id,
-                sym,
-                buf.id,
-                buf.local_var_alist_value(),
-            )
-        {
-            return if value.is_unbound() {
-                Err(signal(
-                    LispCondition::VoidVariable,
-                    vec![Value::from_sym_id(name_id)],
-                ))
-            } else {
-                Ok(value)
-            };
-        }
-        // A forwarder whose storage IS the descriptor needs no buffer context,
-        // so the read is one indirection instead of `lookup_var_id`'s
-        // resolve-alias + gather-buffer-slots-and-defaults path.  This is the
-        // hot half of GNU's `Bvarref` for every `DEFVAR_INT`, `DEFVAR_BOOL`,
-        // `DEFVAR_LISP` and `DEFVAR_KBOARD` variable.  `LispFwd::load` answers
-        // `None` for exactly the one variant that does need the context
-        // (`BufferObj`), and the slow path's own non-`BufferObj` arm ends at
-        // the same call, so the two cannot drift.
-        if sym.redirect() == crate::emacs_core::symbol::SymbolRedirect::Forwarded {
-            // SAFETY: redirect() confirmed Forwarded, so val.fwd is active and
-            // points at a descriptor `install_*fwd` leaked.
-            let fwd = unsafe { &*sym.val.fwd };
-            if let Some(value) = fwd.load() {
-                return Ok(value);
+            SymbolRedirect::Varalias => {
+                // Preserve original-name buffer identities and re-read the
+                // current target; chains, cycles and void cells fall through.
+                if crate::buffer::buffer::DedicatedBufferLocal::from_sym_id(name_id).is_none()
+                    && crate::buffer::buffer::lookup_buffer_slot_by_sym_id(name_id).is_none()
+                {
+                    let target = sym.alias_target();
+                    if crate::buffer::buffer::DedicatedBufferLocal::from_sym_id(target).is_none()
+                        && let Some(target_sym) = ob.get_by_id(target)
+                        && target_sym.redirect() == SymbolRedirect::Plainval
+                    {
+                        // SAFETY: the target's redirect selects its plain value cell.
+                        let value = unsafe { target_sym.val.plain };
+                        if !value.is_unbound() {
+                            return Ok(value);
+                        }
+                    }
+                }
+            }
+            SymbolRedirect::Localized => {
+                // Reuse the existing buffer-id/epoch cache before constructing
+                // a buffer Value or gathering general forwarding inputs.
+                if let Some(buf) = self.ctx.buffers.current_buffer()
+                    && let Some(value) = ob.read_localized_symbol_for_buffer(
+                        name_id,
+                        sym,
+                        buf.id,
+                        buf.local_var_alist_value(),
+                    )
+                {
+                    return if value.is_unbound() {
+                        Err(signal(
+                            LispCondition::VoidVariable,
+                            vec![Value::from_sym_id(name_id)],
+                        ))
+                    } else {
+                        Ok(value)
+                    };
+                }
             }
         }
         self.lookup_var_id(name_id)
