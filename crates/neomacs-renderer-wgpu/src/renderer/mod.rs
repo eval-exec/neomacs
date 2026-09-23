@@ -60,8 +60,6 @@ mod stats;
 mod tooltip;
 mod transitions;
 mod ui_overlays;
-#[cfg(test)]
-mod ui_overlays_test;
 mod window_effects;
 
 pub use fx_state::RendererFrameEffects;

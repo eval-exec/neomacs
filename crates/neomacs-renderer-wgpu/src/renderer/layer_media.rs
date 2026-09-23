@@ -704,5 +704,4 @@ impl WgpuRenderer {
     test,
     any(feature = "video", all(feature = "webview", target_os = "linux"))
 ))]
-#[path = "layer_media_test.rs"]
 mod tests;

@@ -385,5 +385,4 @@ pub(crate) fn decode_sequence(data: &[u8]) -> Option<Arc<DecodedImageSequence>> 
 }
 
 #[cfg(test)]
-#[path = "image_sequence_test.rs"]
 mod tests;

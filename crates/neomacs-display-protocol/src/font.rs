@@ -913,5 +913,4 @@ pub struct FrameFontBindings<'a> {
 }
 
 #[cfg(test)]
-#[path = "font_test.rs"]
 mod tests;

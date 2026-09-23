@@ -352,3 +352,6 @@ impl PresentMapping {
         PresentedFramePoint::from_px(x - visible.x(), y - visible.y()).ok()
     }
 }
+
+#[cfg(test)]
+mod tests;

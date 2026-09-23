@@ -183,3 +183,6 @@ fn shift_into_viewport(origin: Point, popup: Size, viewport: Rect, padding: f32)
     let max_y = (viewport.bottom() - padding - popup.height).max(min_y);
     Point::new(origin.x.clamp(min_x, max_x), origin.y.clamp(min_y, max_y))
 }
+
+#[cfg(test)]
+mod tests;

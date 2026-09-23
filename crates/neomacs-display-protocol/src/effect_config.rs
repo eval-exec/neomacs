@@ -1754,7 +1754,6 @@ effect_config!(
 );
 
 #[cfg(test)]
-#[path = "effect_config_test.rs"]
 mod tests;
 
 /// Container for all visual effect configurations.

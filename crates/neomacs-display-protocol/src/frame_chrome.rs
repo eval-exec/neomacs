@@ -771,3 +771,6 @@ pub enum ChromeLayoutError {
     ContentExceedsBand,
     ContentKindMismatch { kind: FrameChromeKind },
 }
+
+#[cfg(test)]
+mod tests;

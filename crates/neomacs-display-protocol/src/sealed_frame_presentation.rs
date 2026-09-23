@@ -105,3 +105,6 @@ impl Deref for SealedFramePresentation {
         self.state()
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -456,5 +456,4 @@ impl BufferWindowLocalDisplayPolicy {
 }
 
 #[cfg(test)]
-#[path = "text_walk_test.rs"]
 mod tests;

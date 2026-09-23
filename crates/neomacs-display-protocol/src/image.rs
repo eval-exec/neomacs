@@ -1141,6 +1141,7 @@ fn ratio(size: u32, from: f64, to: f64) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    mod image_test;
     use super::{AxisSize, ImageRealization, ImageRotation, ImageSizeSpec};
 
     #[test]

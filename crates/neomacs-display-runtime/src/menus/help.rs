@@ -87,5 +87,4 @@ impl HoverHelp {
 }
 
 #[cfg(test)]
-#[path = "help_test.rs"]
 mod tests;

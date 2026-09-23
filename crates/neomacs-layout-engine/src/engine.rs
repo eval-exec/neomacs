@@ -4180,5 +4180,4 @@ impl LayoutEngine {
 }
 
 #[cfg(test)]
-#[path = "engine_test.rs"]
 mod tests;

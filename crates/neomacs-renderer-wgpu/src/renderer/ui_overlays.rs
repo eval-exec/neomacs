@@ -2365,3 +2365,6 @@ impl WgpuRenderer {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

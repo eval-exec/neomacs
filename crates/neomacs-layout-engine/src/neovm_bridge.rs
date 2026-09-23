@@ -5362,5 +5362,4 @@ fn box_style_to_u8(style: &NeoBoxStyle) -> u8 {
 }
 
 #[cfg(test)]
-#[path = "neovm_bridge_test.rs"]
 mod tests;

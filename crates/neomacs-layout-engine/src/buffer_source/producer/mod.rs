@@ -294,7 +294,6 @@ impl<'request, B: LayoutBufferView> BufferElementProducer<'request, B> {
 }
 
 #[cfg(test)]
-#[path = "producer_test.rs"]
 mod tests;
 
 #[cfg(test)]

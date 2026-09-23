@@ -290,5 +290,4 @@ fn hex(color: Color) -> String {
 }
 
 #[cfg(test)]
-#[path = "snapshot_text_test.rs"]
 mod tests;

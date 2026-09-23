@@ -3063,5 +3063,4 @@ fn source_span_start_char(span: &SourceSpan) -> usize {
 }
 
 #[cfg(test)]
-#[path = "builder_test.rs"]
 mod tests;

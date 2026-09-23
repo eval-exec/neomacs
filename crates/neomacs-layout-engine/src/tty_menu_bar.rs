@@ -363,5 +363,4 @@ fn key_symbol_name(key: &Value) -> String {
 }
 
 #[cfg(test)]
-#[path = "tty_menu_bar_test.rs"]
 mod tests;

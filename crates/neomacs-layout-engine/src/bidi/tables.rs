@@ -846,5 +846,4 @@ pub fn canonical_bracket(ch: char) -> char {
 }
 
 #[cfg(test)]
-#[path = "tables_test.rs"]
 mod tests;

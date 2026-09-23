@@ -211,5 +211,4 @@ pub const MAX_DEPTH: u8 = 125;
 pub const MAX_BPA_STACK: usize = 63;
 
 #[cfg(test)]
-#[path = "types_test.rs"]
 mod tests;

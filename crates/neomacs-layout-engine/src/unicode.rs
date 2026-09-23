@@ -225,5 +225,4 @@ pub(crate) fn is_potentially_glyphless(ch: char) -> bool {
 }
 
 #[cfg(test)]
-#[path = "unicode_test.rs"]
 mod tests;

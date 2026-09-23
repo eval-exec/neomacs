@@ -1053,5 +1053,4 @@ pub fn import_dmabuf_via_mmap(
 }
 
 #[cfg(test)]
-#[path = "vulkan_dmabuf_test.rs"]
 mod tests;

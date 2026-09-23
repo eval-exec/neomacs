@@ -1066,5 +1066,4 @@ impl DisplayRowGeometryCursor {
 }
 
 #[cfg(test)]
-#[path = "geometry_test.rs"]
 mod tests;

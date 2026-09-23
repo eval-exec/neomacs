@@ -65,5 +65,4 @@ impl ToolBarIconKey {
 }
 
 #[cfg(test)]
-#[path = "toolbar_icon_test.rs"]
 mod tests;

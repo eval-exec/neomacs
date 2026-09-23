@@ -43,3 +43,6 @@ pub const fn xterm_256_rgb(index: u8) -> (u8, u8, u8) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

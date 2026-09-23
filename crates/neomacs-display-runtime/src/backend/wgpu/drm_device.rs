@@ -50,5 +50,4 @@ fn render_node_from_device_number_in(
 }
 
 #[cfg(test)]
-#[path = "drm_device_test.rs"]
 mod tests;

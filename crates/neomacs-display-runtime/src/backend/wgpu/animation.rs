@@ -222,5 +222,4 @@ impl Default for AnimationEngine {
 }
 
 #[cfg(test)]
-#[path = "animation_test.rs"]
 mod tests;

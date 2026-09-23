@@ -1461,5 +1461,4 @@ impl LayoutSample {
 }
 
 #[cfg(test)]
-#[path = "pane_layout_test.rs"]
 mod tests;

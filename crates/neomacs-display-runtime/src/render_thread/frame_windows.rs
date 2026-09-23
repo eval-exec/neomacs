@@ -2590,5 +2590,4 @@ impl GuiFrameWindowManager {
 }
 
 #[cfg(test)]
-#[path = "frame_windows_test.rs"]
 mod tests;

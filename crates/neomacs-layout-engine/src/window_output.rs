@@ -2068,5 +2068,4 @@ impl WindowOutputEmitter {
 }
 
 #[cfg(test)]
-#[path = "window_output_test.rs"]
 mod tests;

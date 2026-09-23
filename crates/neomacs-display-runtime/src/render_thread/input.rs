@@ -530,5 +530,4 @@ impl RenderApp {
 }
 
 #[cfg(test)]
-#[path = "input_test.rs"]
 mod tests;

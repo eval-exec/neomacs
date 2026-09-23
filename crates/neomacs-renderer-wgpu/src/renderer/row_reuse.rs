@@ -644,5 +644,4 @@ pub(super) fn scale_is_power_of_two(scale: f32) -> bool {
 }
 
 #[cfg(test)]
-#[path = "row_reuse_test.rs"]
 mod tests;

@@ -440,5 +440,4 @@ impl ProducedElement {
 }
 
 #[cfg(test)]
-#[path = "vocabulary_test.rs"]
 mod tests;

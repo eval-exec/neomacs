@@ -118,5 +118,4 @@ pub(super) enum TerminalExpansionUpdate {
 }
 
 #[cfg(test)]
-#[path = "terminal_expansion_test.rs"]
 mod tests;

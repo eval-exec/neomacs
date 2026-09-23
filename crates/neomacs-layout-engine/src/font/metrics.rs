@@ -3379,5 +3379,4 @@ fn font_slant_to_cosmic_style(slant: FontSlant) -> Option<Style> {
 }
 
 #[cfg(test)]
-#[path = "metrics_test.rs"]
 mod tests;

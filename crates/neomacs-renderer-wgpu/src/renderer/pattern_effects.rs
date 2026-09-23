@@ -1917,5 +1917,4 @@ pub(super) fn emit_prism_rainbow_edge(ctx: &EffectCtx) -> Vec<RectVertex> {
 }
 
 #[cfg(test)]
-#[path = "pattern_effects_test.rs"]
 mod tests;

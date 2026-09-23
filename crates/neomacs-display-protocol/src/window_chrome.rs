@@ -39,3 +39,6 @@ impl WindowChromePolicy {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

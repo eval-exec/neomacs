@@ -480,7 +480,6 @@ impl<'cursor> GlyphRowFinalizer<'cursor> {
 }
 
 #[cfg(test)]
-#[path = "finalizer_test.rs"]
 mod tests;
 
 #[cfg(test)]

@@ -498,5 +498,4 @@ impl BufferWindowSourceRequest {
 }
 
 #[cfg(test)]
-#[path = "window_source_test.rs"]
 mod tests;

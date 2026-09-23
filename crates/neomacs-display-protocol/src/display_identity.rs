@@ -93,5 +93,4 @@ impl GraphicalDisplayIdentity {
 }
 
 #[cfg(test)]
-#[path = "display_identity_test.rs"]
 mod tests;

@@ -244,5 +244,4 @@ pub struct Uniforms {
 }
 
 #[cfg(test)]
-#[path = "vertex_test.rs"]
 mod tests;

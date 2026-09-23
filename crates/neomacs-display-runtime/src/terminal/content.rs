@@ -189,5 +189,4 @@ pub fn extract_text<T: EventListener>(
 }
 
 #[cfg(test)]
-#[path = "content_test.rs"]
 mod tests;

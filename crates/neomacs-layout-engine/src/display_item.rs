@@ -1715,5 +1715,4 @@ impl DisplayRowBreak {
 }
 
 #[cfg(test)]
-#[path = "display_item_test.rs"]
 mod tests;

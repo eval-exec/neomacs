@@ -90,5 +90,4 @@ impl<'row> TextRowGeometry<'row> {
 }
 
 #[cfg(test)]
-#[path = "text_geometry_test.rs"]
 mod tests;

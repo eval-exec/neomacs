@@ -206,5 +206,4 @@ impl WgpuRenderer {
 }
 
 #[cfg(test)]
-#[path = "layout_pass_test.rs"]
 mod tests;

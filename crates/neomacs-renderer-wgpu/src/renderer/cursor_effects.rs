@@ -2703,5 +2703,4 @@ pub(super) fn emit_cursor_trail_fade(
 }
 
 #[cfg(test)]
-#[path = "cursor_effects_test.rs"]
 mod tests;

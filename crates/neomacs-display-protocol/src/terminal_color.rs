@@ -91,3 +91,6 @@ impl TerminalColor {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

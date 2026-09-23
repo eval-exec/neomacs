@@ -166,5 +166,4 @@ impl FontCatalog {
 }
 
 #[cfg(test)]
-#[path = "catalog_test.rs"]
 mod tests;

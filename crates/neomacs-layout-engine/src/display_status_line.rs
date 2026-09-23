@@ -2296,5 +2296,4 @@ pub(crate) fn window_chrome_row_height_for_face_at_scale(
 }
 
 #[cfg(test)]
-#[path = "display_status_line_test.rs"]
 mod tests;

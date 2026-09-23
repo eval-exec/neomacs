@@ -809,5 +809,4 @@ fn key_symbol_name(key: &Value) -> String {
 }
 
 #[cfg(test)]
-#[path = "gui_chrome_test.rs"]
 mod tests;

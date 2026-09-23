@@ -310,5 +310,4 @@ impl ChildFrameManager {
 }
 
 #[cfg(test)]
-#[path = "child_frames_test.rs"]
 mod tests;

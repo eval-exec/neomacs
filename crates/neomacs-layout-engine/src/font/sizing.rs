@@ -306,5 +306,4 @@ pub(crate) fn fallback_frame_res_y(display_height_px: i32, display_height_mm: i3
 }
 
 #[cfg(test)]
-#[path = "sizing_test.rs"]
 mod tests;

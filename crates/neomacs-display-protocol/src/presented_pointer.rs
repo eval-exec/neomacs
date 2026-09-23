@@ -2368,3 +2368,6 @@ fn rect_has_valid_geometry(rect: FrameRect) -> bool {
         && (rect.x() + rect.width()).is_finite()
         && (rect.y() + rect.height()).is_finite()
 }
+
+#[cfg(test)]
+mod tests;

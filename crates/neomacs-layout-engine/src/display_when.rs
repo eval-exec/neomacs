@@ -332,5 +332,4 @@ fn collect_prefix_string_when_forms(
 }
 
 #[cfg(test)]
-#[path = "display_when_test.rs"]
 mod tests;

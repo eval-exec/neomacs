@@ -4,7 +4,6 @@ use neomacs_renderer_wgpu::WgpuRenderer;
 use std::path::Path;
 
 #[cfg(test)]
-#[path = "surface_readback_test.rs"]
 mod tests;
 
 pub(crate) fn surface_usage_for_debug_readback(

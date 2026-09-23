@@ -67,8 +67,6 @@ pub use present_mapping::*;
 pub use window_chrome::*;
 
 #[cfg(test)]
-#[path = "window_chrome_test.rs"]
-mod window_chrome_test;
 pub use presented_frame::*;
 pub use presented_pointer::*;
 pub use scene::*;
@@ -85,49 +83,28 @@ pub use xterm_palette::xterm_256_rgb;
 pub use xwidget_extent::*;
 
 #[cfg(test)]
-#[path = "frame_chrome_test.rs"]
-mod frame_chrome_test;
 
 #[cfg(test)]
-#[path = "image_test.rs"]
-mod image_test;
 
 #[cfg(test)]
-#[path = "font_catalog_test.rs"]
-mod font_catalog_test;
 
 #[cfg(test)]
-#[path = "presented_pointer_test.rs"]
-mod presented_pointer_test;
 
 #[cfg(test)]
-#[path = "popup_placement_test.rs"]
-mod popup_placement_test;
 
 #[cfg(test)]
-#[path = "geometry_test.rs"]
-mod geometry_test;
 
 #[cfg(test)]
-#[path = "present_mapping_test.rs"]
-mod present_mapping_test;
 
 #[cfg(test)]
-#[path = "sealed_frame_presentation_test.rs"]
-mod sealed_frame_presentation_test;
 
 #[cfg(test)]
-#[path = "terminal_color_test.rs"]
-mod terminal_color_test;
 
 #[cfg(test)]
-#[path = "xterm_palette_test.rs"]
-mod xterm_palette_test;
 
 #[cfg(test)]
-#[path = "tty_palette_test.rs"]
-mod tty_palette_test;
 
 #[cfg(test)]
-#[path = "witnessed_query_test.rs"]
-mod witnessed_query_test;
+
+#[cfg(test)]
+mod tests;

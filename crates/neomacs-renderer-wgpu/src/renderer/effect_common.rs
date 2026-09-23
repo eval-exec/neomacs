@@ -150,5 +150,4 @@ pub(super) fn find_cursor_pos(
 }
 
 #[cfg(test)]
-#[path = "effect_common_test.rs"]
 mod tests;

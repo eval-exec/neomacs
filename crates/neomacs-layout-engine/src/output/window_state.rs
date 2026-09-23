@@ -603,5 +603,4 @@ impl OutputWindowGridEntry {
 }
 
 #[cfg(test)]
-#[path = "window_state_test.rs"]
 mod tests;

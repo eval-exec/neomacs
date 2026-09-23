@@ -363,5 +363,4 @@ enum EmptyLineFringeSide {
 }
 
 #[cfg(test)]
-#[path = "end_of_buffer_rows_test.rs"]
 mod tests;

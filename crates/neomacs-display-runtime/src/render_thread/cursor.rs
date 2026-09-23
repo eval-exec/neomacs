@@ -683,5 +683,4 @@ impl CursorState {
 }
 
 #[cfg(test)]
-#[path = "cursor_test.rs"]
 mod tests;

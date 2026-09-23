@@ -2772,7 +2772,6 @@ fn effective_font_size(face_size: Option<f32>, default_font_size: f32) -> f32 {
 }
 
 #[cfg(test)]
-#[path = "glyph_atlas_test.rs"]
 mod tests;
 
 mod menu;

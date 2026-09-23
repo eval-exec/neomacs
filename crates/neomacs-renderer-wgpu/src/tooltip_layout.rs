@@ -164,5 +164,4 @@ impl TooltipLayout {
 }
 
 #[cfg(test)]
-#[path = "tooltip_layout_test.rs"]
 mod tests;

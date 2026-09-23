@@ -86,5 +86,4 @@ pub fn configure_before_threads() {
 pub fn configure_before_threads() {}
 
 #[cfg(test)]
-#[path = "macos_bundle_runtime_test.rs"]
 mod tests;

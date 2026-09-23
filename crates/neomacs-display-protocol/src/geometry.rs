@@ -607,3 +607,6 @@ impl DeviceScale {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

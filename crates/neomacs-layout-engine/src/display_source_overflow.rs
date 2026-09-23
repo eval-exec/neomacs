@@ -210,5 +210,4 @@ impl DisplayXwidgetOverflowAction {
 }
 
 #[cfg(test)]
-#[path = "display_source_overflow_test.rs"]
 mod tests;

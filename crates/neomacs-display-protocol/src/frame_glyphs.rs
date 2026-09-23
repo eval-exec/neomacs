@@ -1154,7 +1154,7 @@ pub struct FrameGlyphBuffer {
     /// Evaluator interaction snapshot paired with these exact pixels.
     pub presentation_id: crate::frame_chrome::PresentationId,
     /// Canonical frame ancestry/placement for this presentation.
-    pub frame_placement: crate::PresentedFramePlacement,
+    pub frame_placement: crate::presented_frame::PresentedFramePlacement,
     /// Why this presentation was produced.
     ///
     /// Carried here and not only on the `FrameDisplayState` it was
@@ -1527,7 +1527,7 @@ impl FrameGlyphBuffer {
     pub fn new() -> Self {
         Self {
             presentation_id: crate::frame_chrome::PresentationId::default(),
-            frame_placement: crate::PresentedFramePlacement::default(),
+            frame_placement: crate::presented_frame::PresentedFramePlacement::default(),
             origin: crate::presentation_origin::PresentationOrigin::Ordinary,
             width: 0.0,
             height: 0.0,
@@ -1628,11 +1628,11 @@ impl FrameGlyphBuffer {
         no_accept_focus: bool,
         background_alpha: f32,
     ) {
-        self.frame_placement = crate::PresentedFramePlacement::new(
+        self.frame_placement = crate::presented_frame::PresentedFramePlacement::new(
             frame_id,
             self.presentation_id,
             (parent_id.get() != 0).then_some(parent_id),
-            crate::ParentFrameRect::new(parent_x, parent_y, self.width, self.height)
+            crate::presented_frame::ParentFrameRect::new(parent_x, parent_y, self.width, self.height)
                 .expect("frame identity placement is valid"),
             z_order,
         );
@@ -2512,5 +2512,4 @@ impl FrameGlyphBuffer {
 }
 
 #[cfg(test)]
-#[path = "frame_glyphs_test.rs"]
 mod tests;

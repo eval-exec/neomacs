@@ -146,5 +146,4 @@ impl NativeFontAssetCache {
 }
 
 #[cfg(test)]
-#[path = "native_asset_cache_test.rs"]
 mod tests;

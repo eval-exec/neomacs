@@ -760,5 +760,4 @@ pub(crate) fn display_item_append_kind(
 }
 
 #[cfg(test)]
-#[path = "append_test.rs"]
 mod tests;

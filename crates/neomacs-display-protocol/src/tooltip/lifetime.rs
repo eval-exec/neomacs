@@ -115,5 +115,4 @@ impl TooltipClient {
 }
 
 #[cfg(test)]
-#[path = "lifetime_test.rs"]
 mod tests;

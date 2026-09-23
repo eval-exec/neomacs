@@ -265,5 +265,4 @@ fn pick_nearest_css_weight(weights: &[u16], requested_weight: u16) -> u16 {
 }
 
 #[cfg(test)]
-#[path = "font_match_test.rs"]
 mod tests;

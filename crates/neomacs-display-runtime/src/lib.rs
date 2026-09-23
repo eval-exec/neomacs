@@ -68,8 +68,6 @@ pub use render_thread::frame_stats::{
     DEMAND_REASON_NAMES, FRAME_TIME_BUCKET_UPPER_US, FrameSchedSnapshot, WindowFrameSnapshot,
 };
 
-#[cfg(test)]
-mod frame_metrics_pub_test;
 
 /// Read the current process-global frame-scheduling counters.
 ///
@@ -139,5 +137,4 @@ pub fn init() -> Result<(), DisplayError> {
 }
 
 #[cfg(test)]
-#[path = "lib_test.rs"]
 mod tests;

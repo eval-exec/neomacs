@@ -29,5 +29,4 @@ impl<T> Drop for Retirements<T> {
 }
 
 #[cfg(test)]
-#[path = "retirement_test.rs"]
 mod tests;

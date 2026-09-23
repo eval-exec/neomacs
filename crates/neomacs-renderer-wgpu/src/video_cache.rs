@@ -1479,5 +1479,4 @@ impl VideoCache {
 }
 
 #[cfg(test)]
-#[path = "video_cache_test.rs"]
 mod tests;

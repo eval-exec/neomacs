@@ -1868,7 +1868,7 @@ pub struct FrameDisplayState {
     pub origin: crate::presentation_origin::PresentationOrigin,
     /// Canonical parent-relative placement paired with this presentation.
     #[serde(default)]
-    pub frame_placement: crate::PresentedFramePlacement,
+    pub frame_placement: crate::presented_frame::PresentedFramePlacement,
     /// Pointer semantics and transient paints paired with this exact snapshot.
     #[serde(default)]
     pub presented_pointer_source: crate::PresentedPointerSourceMap,
@@ -2394,7 +2394,7 @@ impl FrameDisplayState {
         Self {
             presentation_id: PresentationId::default(),
             origin: crate::presentation_origin::PresentationOrigin::Ordinary,
-            frame_placement: crate::PresentedFramePlacement::default(),
+            frame_placement: crate::presented_frame::PresentedFramePlacement::default(),
             presented_pointer_source: crate::PresentedPointerSourceMap::empty(),
             presented_hit_index: crate::PresentedHitIndex::default(),
             window_matrices: Vec::new(),
@@ -3569,5 +3569,4 @@ pub trait RedisplayInterface {
 }
 
 #[cfg(test)]
-#[path = "glyph_matrix_test.rs"]
 mod tests;

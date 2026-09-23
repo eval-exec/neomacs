@@ -232,5 +232,4 @@ fn query_x11_display() -> X11DisplayObservation {
 // Every test here drives the X11/Wayland probe, whose types exist only
 // on Linux; the module would not compile elsewhere.
 #[cfg(all(test, target_os = "linux"))]
-#[path = "display_scale_test.rs"]
 mod tests;

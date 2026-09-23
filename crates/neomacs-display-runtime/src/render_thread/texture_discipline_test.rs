@@ -53,7 +53,11 @@ fn render_thread_files() -> Vec<String> {
         .iter()
         .filter(|path| {
             let name = path.file_name().unwrap_or_default().to_string_lossy();
-            !name.ends_with("_test.rs") && name != "tests.rs"
+            // Test code lives under a `tests/` directory (or in `tests.rs`), never
+            // beside the production code it exercises.
+            !path.components().any(|part| part.as_os_str() == "tests")
+                && !name.ends_with("_test.rs")
+                && name != "tests.rs"
         })
         .map(|path| {
             path.strip_prefix(&root)

@@ -222,5 +222,4 @@ impl InteractionProjection {
 }
 
 #[cfg(test)]
-#[path = "interaction_projection_test.rs"]
 mod tests;

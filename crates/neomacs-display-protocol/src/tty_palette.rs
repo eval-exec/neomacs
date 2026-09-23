@@ -163,3 +163,6 @@ fn off_gray_diagonal(r: u8, g: u8, b: u8) -> f64 {
     }
     ((r + g + b) / magnitude).clamp(-1.0, 1.0).acos()
 }
+
+#[cfg(test)]
+mod tests;

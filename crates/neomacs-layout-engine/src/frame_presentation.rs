@@ -137,5 +137,4 @@ impl PresentationComposer {
 }
 
 #[cfg(test)]
-#[path = "frame_presentation_test.rs"]
 mod tests;

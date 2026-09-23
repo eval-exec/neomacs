@@ -190,5 +190,4 @@ fn rect_approximately_equal(left: Rect, right: Rect) -> bool {
 }
 
 #[cfg(test)]
-#[path = "cursor_presentation_test.rs"]
 mod tests;
