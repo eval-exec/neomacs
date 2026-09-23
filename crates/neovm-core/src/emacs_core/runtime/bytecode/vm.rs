@@ -6106,6 +6106,27 @@ impl<'a> Vm<'a> {
                 }
             }
         }
+        // A non-alias localized symbol is already resolved. Reuse the
+        // evaluator's buffer-id/epoch cache reader before preparing general
+        // forwarding inputs or looking up a buffer reference on every read.
+        if sym.redirect() == crate::emacs_core::symbol::SymbolRedirect::Localized
+            && let Some(buf) = self.ctx.buffers.current_buffer()
+            && let Some(value) = ob.read_localized_symbol_for_buffer(
+                name_id,
+                sym,
+                buf.id,
+                buf.local_var_alist_value(),
+            )
+        {
+            return if value.is_unbound() {
+                Err(signal(
+                    LispCondition::VoidVariable,
+                    vec![Value::from_sym_id(name_id)],
+                ))
+            } else {
+                Ok(value)
+            };
+        }
         // A forwarder whose storage IS the descriptor needs no buffer context,
         // so the read is one indirection instead of `lookup_var_id`'s
         // resolve-alias + gather-buffer-slots-and-defaults path.  This is the

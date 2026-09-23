@@ -503,3 +503,86 @@ fn aliases_of_buffer_identities_keep_original_name_context() {
         }
     }
 }
+
+#[test]
+fn reused_local_reader_observes_cache_misses_writes_and_unbinding() {
+    let mut eval = Context::new();
+    eval_ok(
+        &mut eval,
+        "(progn (set-buffer (get-buffer-create \" *vri-cache-a*\"))
+                (defvar vri-cache-local 1)
+                (make-local-variable 'vri-cache-local)
+                (setq vri-cache-local 2))",
+    );
+    let f = reader(Value::symbol("vri-cache-local"));
+    let leaf = compile_bytecode_function(&f).expect("compiles");
+    let check = |eval: &mut Context, expected: &str| {
+        // Run native first: interpretation would otherwise warm the cache and
+        // hide the native miss after a buffer/structural-epoch change.
+        let got = match leaf.call(eval as *mut Context as *mut u8, &[]) {
+            NativeRun::Ok(bits) => print_value(&Value::from_bits(bits)),
+            NativeRun::Signal => flow_text(take_pending_flow().expect("flow stashed")),
+            other => panic!("localized read left native code: {other:?}"),
+        };
+        assert_eq!(got, expected);
+        assert_eq!(interpret(eval, &f), expected);
+    };
+    check(&mut eval, "2");
+    for (setup, expected) in [
+        ("(setq vri-cache-local nil)", "nil"),
+        ("(setq vri-cache-local '(1 2))", "(1 2)"),
+        ("(set-default 'vri-cache-local 7)", "(1 2)"),
+        ("(set-buffer (get-buffer-create \" *vri-cache-b*\"))", "7"),
+        (
+            "(progn (make-local-variable 'vri-cache-local) (setq vri-cache-local 33))",
+            "33",
+        ),
+        ("(set-buffer \" *vri-cache-a*\")", "(1 2)"),
+        ("(kill-local-variable 'vri-cache-local)", "7"),
+        (
+            "(progn (make-local-variable 'vri-cache-local) (setq vri-cache-local 22))",
+            "22",
+        ),
+        ("(garbage-collect)", "22"),
+    ] {
+        eval_ok(&mut eval, setup);
+        check(&mut eval, expected);
+    }
+    // Exercise a real void local cell independently of public makunbound's
+    // handling of local bindings. The cached cons must expose UNBOUND and
+    // preserve it across a buffer switch, even with a bound default.
+    let current = eval.buffers.current_buffer().expect("current buffer").id;
+    eval.buffers
+        .set_buffer_local_property_by_sym_id(
+            current,
+            crate::emacs_core::intern::intern("vri-cache-local"),
+            Value::UNBOUND,
+        )
+        .expect("local void cell");
+    check(&mut eval, "signal void-variable [\"vri-cache-local\"]");
+    for (setup, expected) in [
+        ("(set-buffer \" *vri-cache-b*\")", "33"),
+        (
+            "(set-buffer \" *vri-cache-a*\")",
+            "signal void-variable [\"vri-cache-local\"]",
+        ),
+        ("(setq vri-cache-local 55)", "55"),
+        ("(kill-all-local-variables)", "7"),
+        (
+            "(progn (make-local-variable 'vri-cache-local) (setq vri-cache-local 22))",
+            "22",
+        ),
+    ] {
+        eval_ok(&mut eval, setup);
+        check(&mut eval, expected);
+    }
+    let depth = eval.specpdl.len();
+    eval.try_specbind(
+        crate::emacs_core::intern::intern("vri-cache-local"),
+        Value::fixnum(44),
+    )
+    .expect("localized let");
+    check(&mut eval, "44");
+    eval.unbind_to(depth);
+    check(&mut eval, "22");
+}
