@@ -4373,8 +4373,17 @@ impl crate::emacs_core::eval::Context {
     fn command_input_kbd_macro_iteration_is_exhausted(&self) -> bool {
         // GNU `at_end_of_macro_p` treats Lisp-visible
         // `executing-kbd-macro == t` as an explicit early-termination request.
-        // Requeued events and unread selection/input-method events must drain
-        // before the macro boundary is observable.
+        //
+        // Only REQUEUED events defer the boundary: GNU's mid-read check is
+        // `at_end_of_macro_p () && !requeued_events_pending_p ()`
+        // (keyboard.c:11204-11212), and `requeued_events_pending_p`
+        // (keyboard.c:10847) covers just `unread-command-events` and the two
+        // input-method queues.  Low-level special events still sitting in the
+        // keyboard buffer (dbus, file-notify, selection) do NOT defer it --
+        // `read_key_sequence` returns zero with the event left queued for the
+        // next read.  Requiring those queues to drain pinned the boundary open
+        // forever whenever a special event no read ever consumes was pending,
+        // which is what stalled the helm batch sessions.
         let visible_macro_forces_end = self
             .visible_variable_value_or_nil("executing-kbd-macro")
             .is_t();
@@ -4383,15 +4392,7 @@ impl crate::emacs_core::eval::Context {
             Some(events) if self.command_loop.keyboard.kboard.kbd_macro_index >= events.len()
         );
         let macro_at_end = visible_macro_forces_end || runtime_macro_at_end;
-        macro_at_end
-            && !self.has_pending_requeued_events()
-            && self
-                .command_loop
-                .keyboard
-                .kboard
-                .unread_selection_event
-                .is_none()
-            && self.command_loop.keyboard.kboard.unread_events.is_empty()
+        macro_at_end && !self.has_pending_requeued_events()
     }
 
     /// The prologue GNU `read_key_sequence` runs before it reads anything, at
