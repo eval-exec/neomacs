@@ -1231,6 +1231,62 @@ fn ccl_execute_map_multiple_treats_minus_three_as_lambda() {
 }
 
 #[test]
+fn ccl_execute_lookup_integer_reads_the_lisp_hash_table_vector() {
+    crate::test_utils::init_test_tracing();
+    // Same registers as `ccl-hash-table` in test/lisp/international/ccl-tests.el:
+    // key 17 maps to character 16, r0 becomes the unicode charset id, r7 is 1.
+    let mut eval = crate::test_utils::runtime_startup_context();
+    let registers = eval
+        .eval_str(
+            r#"(let ((table (make-hash-table :test 'eq))
+                     (reg (vector 17 0 0 0 0 0 0 0)))
+                 (puthash 16 17 table)
+                 (puthash 17 16 table)
+                 (setq translation-hash-table-vector (vector (cons 'th table)))
+                 (ccl-execute [0 4 311359 0 22] reg)
+                 reg)"#,
+        )
+        .expect("lookup-integer through the Lisp hash table");
+    let registers = registers.as_vector_data().expect("register vector");
+    assert_eq!(registers[0], Value::fixnum(2));
+    assert_eq!(registers[1], Value::fixnum(16));
+    assert_eq!(registers[7], Value::fixnum(1));
+}
+
+#[test]
+fn ccl_execute_translate_character_rewrites_a_char_table_entry() {
+    crate::test_utils::init_test_tracing();
+    // GNU `define-translation-table` of (?A . ?B), then
+    // (r1 = 0) (r0 = ?A) (translate-character tr r1 r0)
+    // leaves (66, 0). ?Z is not in the table and stays 90.
+    let mut eval = crate::test_utils::runtime_startup_context();
+    let hit = eval
+        .eval_str(
+            r#"(let* ((tbl (make-char-table nil nil))
+                      (reg (vector 65 0 0 0 0 0 0 0)))
+                 (aset tbl 65 66)
+                 (setq translation-table-vector (vector (cons 'tr tbl)))
+                 (ccl-execute [0 6 33 16641 49439 0 22] reg)
+                 reg)"#,
+        )
+        .expect("translate A to B");
+    let hit = hit.as_vector_data().expect("register vector");
+    assert_eq!(hit[0], Value::fixnum(66));
+    assert_eq!(hit[1], Value::fixnum(0));
+
+    let miss = eval
+        .eval_str(
+            r#"(let ((reg (vector 90 0 0 0 0 0 0 0)))
+                 (ccl-execute [0 6 33 23041 49439 0 22] reg)
+                 reg)"#,
+        )
+        .expect("untranslated Z stays Z");
+    let miss = miss.as_vector_data().expect("register vector");
+    assert_eq!(miss[0], Value::fixnum(90));
+    assert_eq!(miss[1], Value::fixnum(0));
+}
+
+#[test]
 fn ccl_execute_quit_signals_quit() {
     crate::test_utils::init_test_tracing();
     // GNU `ccl-execute` stops for `Vquit_flag`, then `maybe_quit` signals
