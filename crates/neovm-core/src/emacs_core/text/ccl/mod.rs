@@ -512,6 +512,9 @@ fn execute_compiled_ccl_with_state(
     const MAX_STEPS_PER_WORD: usize = 4096;
 
     let mut words = compiled_ccl_words(designator)?;
+    // GNU disables reading and writing when the top program's buffer
+    // magnification is 0. Called programs do not get their own check.
+    let allows_io = allows_io && words[0] != 0;
     let mut eof_instruction = usize::try_from(words[1])
         .ok()
         .filter(|instruction| *instruction < words.len())

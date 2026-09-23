@@ -269,14 +269,33 @@ fn iterate_multiple_map(
         *instruction = end;
         return Ok(ExtensionStep::Continue);
     }
-    let value = ccl_reg(registers, value_register);
+    let value = i64::from(ccl_reg(registers, value_register));
     for offset in i64::from(from)..count {
         let map_id = words[start + offset as usize];
-        if let Some(mapped) = lookup_map_integer(map_id, i64::from(value)) {
-            registers[status_register] = offset;
-            registers[value_register] = mapped;
-            *instruction = end;
-            return Ok(ExtensionStep::Continue);
+        match lookup_map_slot(map_id, value) {
+            MapHit::Number(mapped) => {
+                registers[status_register] = offset;
+                registers[value_register] = mapped;
+                *instruction = end;
+                return Ok(ExtensionStep::Continue);
+            }
+            // `t` and `lambda` record the map index and leave the value alone.
+            MapHit::Identity | MapHit::Lambda => {
+                registers[status_register] = offset;
+                *instruction = end;
+                return Ok(ExtensionStep::Continue);
+            }
+            // A symbol calls that CCL program and resumes after this map list,
+            // not back at the iterate instruction.
+            MapHit::Call(symbol) => {
+                if let Some(program) = program_words_by_symbol(symbol) {
+                    return Ok(ExtensionStep::Call {
+                        words: program,
+                        resume_at: end,
+                    });
+                }
+            }
+            MapHit::Miss => {}
         }
     }
     registers[status_register] = -1;
@@ -332,7 +351,7 @@ fn map_multiple(
         state.stack.push((0, op as i32));
         registers[status_register] = -1;
     } else {
-        let Some((rest_a, orig_op)) = state.stack.pop() else {
+        let Some((_rest, orig_op)) = state.stack.pop() else {
             return Err(invalid_ccl_program_at(error_at));
         };
         let Some((rest_b, saved_value)) = state.stack.pop() else {
@@ -459,26 +478,37 @@ enum MapHit {
     Call(crate::emacs_core::SymId),
 }
 
-fn lookup_map_integer(map_id: i64, value: i64) -> Option<i64> {
-    match lookup_map_slot(map_id, value) {
-        MapHit::Number(mapped) => Some(mapped),
-        _ => None,
-    }
-}
-
 fn lookup_map_slot(map_id: i64, value: i64) -> MapHit {
     let Some(map) = code_conversion_map(map_id) else {
         return MapHit::Miss;
     };
     let slots = vector_slots(&map);
-    let Some(start) = slots.first().and_then(ValueSlot::as_int) else {
+    if slots.len() <= 1 {
+        return MapHit::Miss;
+    }
+    // `[t ELEMENT START END]` covers `START <= value < END`. `map-single`
+    // never uses this shape; `map-multiple` and `iterate-multiple-map` do.
+    if matches!(slots[0], ValueSlot::True) && slots.len() == 4 {
+        let (Some(start), Some(end)) = (slots[2].as_int(), slots[3].as_int()) else {
+            return MapHit::Miss;
+        };
+        if start <= value && value < end {
+            return hit_of(&slots[1]);
+        }
+        return MapHit::Miss;
+    }
+    let Some(start) = slots[0].as_int() else {
         return MapHit::Miss;
     };
     let index = value - start + 1;
     if index < 1 || index >= slots.len() as i64 {
         return MapHit::Miss;
     }
-    match &slots[index as usize] {
+    hit_of(&slots[index as usize])
+}
+
+fn hit_of(content: &ValueSlot) -> MapHit {
+    match content {
         ValueSlot::Int(number) => MapHit::Number(*number),
         ValueSlot::Nil => MapHit::Miss,
         ValueSlot::True => MapHit::Identity,
@@ -551,6 +581,14 @@ fn vector_slots(value: &super::Value) -> Vec<ValueSlot> {
 fn classify_slot(value: super::Value) -> ValueSlot {
     if let Some(number) = value.as_int() {
         return ValueSlot::Int(number);
+    }
+    // `(ATTRIB . VALUE)` stores VALUE. GNU ignores the attribute once both
+    // halves are integers.
+    if value.is_cons()
+        && value.cons_car().as_int().is_some()
+        && let Some(mapped) = value.cons_cdr().as_int()
+    {
+        return ValueSlot::Int(mapped);
     }
     if value.is_nil() {
         return ValueSlot::Nil;

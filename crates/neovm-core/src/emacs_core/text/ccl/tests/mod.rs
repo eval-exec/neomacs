@@ -999,6 +999,171 @@ fn ccl_execute_map_multiple_keeps_a_normal_call_result_and_skips_the_rest() {
 }
 
 #[test]
+fn ccl_execute_map_multiple_chains_nested_separator_sets() {
+    crate::test_utils::init_test_tracing();
+    // GNU `(map-multiple r1 r0 ((ma) (mb)))` with ma `[0 10]` and mb
+    // `[10 20]`. 0 maps to 10, then 10 maps to 20. Status register is 3.
+    let ma = Value::vector([0, 10].into_iter().map(Value::fixnum).collect());
+    let mb = Value::vector([10, 20].into_iter().map(Value::fixnum).collect());
+    let ma_id = builtin_register_code_conversion_map_impl(vec![Value::symbol("ccl-nest-ma"), ma])
+        .expect("ma")
+        .as_int()
+        .unwrap();
+    let mb_id = builtin_register_code_conversion_map_impl(vec![Value::symbol("ccl-nest-mb"), mb])
+        .expect("mb")
+        .as_int()
+        .unwrap();
+    let program = Value::vector(
+        [0, 8, 278_815, 4, -1, ma_id, -1, mb_id, 22]
+            .into_iter()
+            .map(Value::fixnum)
+            .collect(),
+    );
+    let registers = Value::vector(vec![Value::NIL; 8]);
+    builtin_ccl_execute_impl(vec![program, registers]).expect("nested map-multiple");
+    let slots = registers.as_vector_data().unwrap();
+    assert_eq!(slots[0], Value::fixnum(20));
+    assert_eq!(slots[1], Value::fixnum(3));
+}
+
+#[test]
+fn ccl_execute_map_single_reads_a_pair_value() {
+    crate::test_utils::init_test_tracing();
+    let map = Value::vector(vec![Value::fixnum(0), Value::cons(Value::fixnum(1), Value::fixnum(55))]);
+    let id = builtin_register_code_conversion_map_impl(vec![Value::symbol("ccl-pair-map"), map])
+        .expect("pair map")
+        .as_int()
+        .unwrap();
+    let program = Value::vector(
+        [0, 4, 295_199, id, 22]
+            .into_iter()
+            .map(Value::fixnum)
+            .collect(),
+    );
+    let registers = Value::vector(vec![Value::NIL; 8]);
+    builtin_ccl_execute_impl(vec![program, registers]).expect("pair map-single");
+    let slots = registers.as_vector_data().unwrap();
+    assert_eq!(slots[0], Value::fixnum(55));
+    assert_eq!(slots[1], Value::fixnum(0));
+}
+
+#[test]
+fn ccl_execute_map_multiple_applies_a_closed_open_range() {
+    crate::test_utils::init_test_tracing();
+    // `[t 77 5 9]` maps `5 <= value < 9` to 77. 9 is outside the range.
+    let map = Value::vector(vec![
+        Value::T,
+        Value::fixnum(77),
+        Value::fixnum(5),
+        Value::fixnum(9),
+    ]);
+    let id = builtin_register_code_conversion_map_impl(vec![Value::symbol("ccl-range-map"), map])
+        .expect("range map")
+        .as_int()
+        .unwrap();
+    let program = Value::vector(
+        [0, 5, 278_815, 1, id, 22]
+            .into_iter()
+            .map(Value::fixnum)
+            .collect(),
+    );
+    let inside = Value::vector(vec![
+        Value::fixnum(6),
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+    ]);
+    builtin_ccl_execute_impl(vec![program, inside]).expect("range hit");
+    assert_eq!(inside.as_vector_data().unwrap()[0], Value::fixnum(77));
+    assert_eq!(inside.as_vector_data().unwrap()[1], Value::fixnum(0));
+
+    let program = Value::vector(
+        [0, 5, 278_815, 1, id, 22]
+            .into_iter()
+            .map(Value::fixnum)
+            .collect(),
+    );
+    let outside = Value::vector(vec![
+        Value::fixnum(9),
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+    ]);
+    builtin_ccl_execute_impl(vec![program, outside]).expect("range miss");
+    assert_eq!(outside.as_vector_data().unwrap()[0], Value::fixnum(9));
+    assert_eq!(outside.as_vector_data().unwrap()[1], Value::fixnum(-1));
+}
+
+#[test]
+fn ccl_execute_on_string_rejects_io_when_magnification_is_zero() {
+    crate::test_utils::init_test_tracing();
+    // GNU sets the output pointer to null when buffer magnification is 0,
+    // so a write is an invalid command. 16660 is `(write 65)`.
+    let err = builtin_ccl_execute_on_string_impl(vec![
+        Value::vector(
+            [0, 3, 16_660, 22]
+                .into_iter()
+                .map(Value::fixnum)
+                .collect(),
+        ),
+        Value::vector(vec![Value::NIL; 9]),
+        Value::heap_string(crate::heap_types::LispString::from_unibyte(Vec::new())),
+    ])
+    .expect_err("magnification 0 cannot write");
+    match err {
+        Flow::Signal(sig) => {
+            assert_eq!(sig.data[0], Value::string("Error in CCL program at 3th code"));
+        }
+        other => panic!("expected error signal, got {other:?}"),
+    }
+}
+
+#[test]
+fn ccl_execute_iterate_multiple_map_calls_a_program_then_continues() {
+    crate::test_utils::init_test_tracing();
+    // GNU `(iterate-multiple-map r1 r0 mi)` then `(r2 = 5)`. The map slot is
+    // a CCL program that sets r0 to 9 and r1 to 4. Execution resumes after
+    // the map list, so r2 becomes 5.
+    let callee = Value::vector(
+        [0, 4, 2305, 1057, 22]
+            .into_iter()
+            .map(Value::fixnum)
+            .collect(),
+    );
+    builtin_register_ccl_program_impl(vec![Value::symbol("ccl-iter-mapper"), callee])
+        .expect("mapper should register");
+    let map = Value::vector(vec![
+        Value::fixnum(0),
+        Value::symbol("ccl-iter-mapper"),
+    ]);
+    let map_id =
+        builtin_register_code_conversion_map_impl(vec![Value::symbol("ccl-iter-map"), map])
+            .expect("map should register")
+            .as_int()
+            .unwrap();
+    let program = Value::vector(
+        [0, 6, 262_431, 1, map_id, 1345, 22]
+            .into_iter()
+            .map(Value::fixnum)
+            .collect(),
+    );
+    let registers = Value::vector(vec![Value::NIL; 8]);
+    builtin_ccl_execute_impl(vec![program, registers]).expect("iterate should call and continue");
+    let slots = registers.as_vector_data().unwrap();
+    assert_eq!(slots[0], Value::fixnum(9));
+    assert_eq!(slots[1], Value::fixnum(4));
+    assert_eq!(slots[2], Value::fixnum(5));
+}
+
+#[test]
 fn ccl_execute_lookup_integer_sets_unicode_and_the_value() {
     crate::test_utils::init_test_tracing();
     let mut entries = std::collections::HashMap::new();
