@@ -155,5 +155,4 @@ pub(crate) fn write_build_provenance(output: &mut String) {
 }
 
 #[cfg(test)]
-#[path = "build_info_test.rs"]
 mod tests;

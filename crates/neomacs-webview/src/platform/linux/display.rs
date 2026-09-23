@@ -232,5 +232,4 @@ pub struct DmaBufPlane {
 }
 
 #[cfg(test)]
-#[path = "display_test.rs"]
 mod tests;

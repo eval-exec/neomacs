@@ -1,8 +1,6 @@
 //! macOS native-overlay backend built on WKWebView.
 
 mod focus;
-#[cfg(test)]
-mod focus_test;
 mod view;
 
 use std::collections::HashMap;

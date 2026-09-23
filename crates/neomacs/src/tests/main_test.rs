@@ -1,13 +1,13 @@
-use super::frame_layout::{
+use super::super::frame_layout::{
     REDISPLAY_RUNTIME, current_layout_frame_id,
     install_tty_redisplay_callback as maybe_install_tty_redisplay_callback,
 };
-use super::image_catalog::{AsyncImageCatalog, wait_for_image_metadata};
-use super::tty_frontend::{TtyPopupDisplayHost, TtyTerminalHost};
-use super::tty_init::{
+use super::super::image_catalog::{AsyncImageCatalog, wait_for_image_metadata};
+use super::super::tty_frontend::{TtyPopupDisplayHost, TtyTerminalHost};
+use super::super::tty_init::{
     default_controlling_tty_name, detect_tty_background_mode, should_enable_live_tty_io,
 };
-use super::{
+use super::super::{
     BOOTSTRAP_CORE_FEATURES, BootstrapDisplayConfig, DumpImageKind, EarlyCliAction, FontSizing,
     FrontendKind, Interactivity, PrimaryWindowDisplayHost, PrimaryWindowSize, RuntimeMode,
     StartupOptions, adopt_existing_primary_gui_frame, bootstrap_buffers, bootstrap_frame_metrics,
@@ -83,7 +83,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 #[cfg(target_os = "linux")]
-#[path = "platform_startup_test.rs"]
+#[path = "../platform_startup_test.rs"]
 mod platform_fonts;
 
 fn gui_display() -> BootstrapDisplayConfig {
@@ -164,11 +164,11 @@ fn initialized_redisplay_test_frame(
         .expect("frame")
         .initial = false;
 
-    super::frame_layout::install_window_layout_query_fn(&mut eval);
-    let initial = super::frame_layout::layout_frame_display_state(
+    super::super::frame_layout::install_window_layout_query_fn(&mut eval);
+    let initial = super::super::frame_layout::layout_frame_display_state(
         &mut eval,
         frame_id,
-        super::frame_layout::FrameLayoutPurpose::Redisplay,
+        super::super::frame_layout::FrameLayoutPurpose::Redisplay,
     )
     .expect("initial layout");
     let _ = initial.discard(&mut eval);
@@ -228,10 +228,10 @@ fn scroll_hook_can_query_window_end_through_frontend_layout_seam() {
     ]))
     .expect("force a redisplay start");
 
-    let redisplay = super::frame_layout::layout_frame_display_state(
+    let redisplay = super::super::frame_layout::layout_frame_display_state(
         &mut eval,
         frame_id,
-        super::frame_layout::FrameLayoutPurpose::Redisplay,
+        super::super::frame_layout::FrameLayoutPurpose::Redisplay,
     )
     .expect("reentrant scroll-hook layout");
     let _ = redisplay.discard(&mut eval);
@@ -294,10 +294,10 @@ fn scroll_hook_changed_start_is_final_without_running_the_hook_twice() {
     ]))
     .expect("force the first start");
 
-    let redisplay = super::frame_layout::layout_frame_display_state(
+    let redisplay = super::super::frame_layout::layout_frame_display_state(
         &mut eval,
         frame_id,
-        super::frame_layout::FrameLayoutPurpose::Redisplay,
+        super::super::frame_layout::FrameLayoutPurpose::Redisplay,
     )
     .expect("layout after hook changed its start");
     let _ = redisplay.discard(&mut eval);
@@ -348,10 +348,10 @@ fn scroll_hook_resume_survives_an_earlier_windows_intervening_hook() {
             neovm_core::window::SplitPlacement::AfterTarget,
         )
         .expect("split window");
-    let split_layout = super::frame_layout::layout_frame_display_state(
+    let split_layout = super::super::frame_layout::layout_frame_display_state(
         &mut eval,
         frame_id,
-        super::frame_layout::FrameLayoutPurpose::Redisplay,
+        super::super::frame_layout::FrameLayoutPurpose::Redisplay,
     )
     .expect("layout split frame");
     let _ = split_layout.discard(&mut eval);
@@ -404,10 +404,10 @@ fn scroll_hook_resume_survives_an_earlier_windows_intervening_hook() {
     ]))
     .expect("force the later window start");
 
-    let redisplay = super::frame_layout::layout_frame_display_state(
+    let redisplay = super::super::frame_layout::layout_frame_display_state(
         &mut eval,
         frame_id,
-        super::frame_layout::FrameLayoutPurpose::Redisplay,
+        super::super::frame_layout::FrameLayoutPurpose::Redisplay,
     )
     .expect("multi-window resumed layout");
     let _ = redisplay.discard(&mut eval);
@@ -435,10 +435,10 @@ fn scroll_hook_resume_survives_an_earlier_windows_intervening_hook() {
         "GNU does not revisit an earlier leaf after a later leaf's hook mutates it; log={hook_log}, earlier_start_seen={earlier_start_seen}"
     );
 
-    let followup = super::frame_layout::layout_frame_display_state(
+    let followup = super::super::frame_layout::layout_frame_display_state(
         &mut eval,
         frame_id,
-        super::frame_layout::FrameLayoutPurpose::Redisplay,
+        super::super::frame_layout::FrameLayoutPurpose::Redisplay,
     )
     .expect("follow-up redisplay for the earlier invalidated leaf");
     let _ = followup.discard(&mut eval);
@@ -471,10 +471,10 @@ fn scroll_hook_window_tree_mutation_restarts_the_frame_plan() {
             neovm_core::window::SplitPlacement::AfterTarget,
         )
         .expect("split window");
-    let split_layout = super::frame_layout::layout_frame_display_state(
+    let split_layout = super::super::frame_layout::layout_frame_display_state(
         &mut eval,
         frame_id,
-        super::frame_layout::FrameLayoutPurpose::Redisplay,
+        super::super::frame_layout::FrameLayoutPurpose::Redisplay,
     )
     .expect("layout split frame");
     let _ = split_layout.discard(&mut eval);
@@ -508,10 +508,10 @@ fn scroll_hook_window_tree_mutation_restarts_the_frame_plan() {
     )
     .expect("install topology-changing scroll hook");
 
-    let redisplay = super::frame_layout::layout_frame_display_state(
+    let redisplay = super::super::frame_layout::layout_frame_display_state(
         &mut eval,
         frame_id,
-        super::frame_layout::FrameLayoutPurpose::Redisplay,
+        super::super::frame_layout::FrameLayoutPurpose::Redisplay,
     )
     .expect("layout after scroll hook changed the window tree");
     assert_eq!(
@@ -601,10 +601,10 @@ fn gui_chrome_lisp_runs_once_before_window_scroll_hooks_across_physical_retry() 
     )
     .expect("install GUI chrome and scroll-hook order probes");
 
-    let redisplay = super::frame_layout::layout_frame_display_state(
+    let redisplay = super::super::frame_layout::layout_frame_display_state(
         &mut eval,
         frame_id,
-        super::frame_layout::FrameLayoutPurpose::Redisplay,
+        super::super::frame_layout::FrameLayoutPurpose::Redisplay,
     )
     .expect("layout GUI frame");
     assert_eq!(
@@ -650,10 +650,10 @@ fn scroll_hook_runs_before_status_line_lisp_and_status_line_runs_once() {
     ]))
     .expect("force a redisplay start");
 
-    let redisplay = super::frame_layout::layout_frame_display_state(
+    let redisplay = super::super::frame_layout::layout_frame_display_state(
         &mut eval,
         frame_id,
-        super::frame_layout::FrameLayoutPurpose::Redisplay,
+        super::super::frame_layout::FrameLayoutPurpose::Redisplay,
     )
     .expect("ordered scroll-hook layout");
     let _ = redisplay.discard(&mut eval);
@@ -691,10 +691,10 @@ fn status_line_layout_mutation_rejects_rows_built_from_the_old_geometry() {
     )
     .expect("install layout-mutating status line");
 
-    let redisplay = super::frame_layout::layout_frame_display_state(
+    let redisplay = super::super::frame_layout::layout_frame_display_state(
         &mut eval,
         frame_id,
-        super::frame_layout::FrameLayoutPurpose::Redisplay,
+        super::super::frame_layout::FrameLayoutPurpose::Redisplay,
     )
     .expect("layout must retry from status-line-mutated inputs");
     let info = redisplay
@@ -756,10 +756,10 @@ fn rejected_chrome_convergence_restores_the_last_accepted_window_end() {
     )
     .expect("install non-converging status line");
 
-    let rejected = super::frame_layout::layout_frame_display_state(
+    let rejected = super::super::frame_layout::layout_frame_display_state(
         &mut eval,
         frame_id,
-        super::frame_layout::FrameLayoutPurpose::Redisplay,
+        super::super::frame_layout::FrameLayoutPurpose::Redisplay,
     );
     let rejected_attempts = eval
         .eval_str("neomacs-rejected-end-attempt")
@@ -803,10 +803,10 @@ fn later_sibling_failure_restores_every_earlier_provisional_window_end() {
             neovm_core::window::SplitPlacement::AfterTarget,
         )
         .expect("split frame");
-    let accepted = super::frame_layout::layout_frame_display_state(
+    let accepted = super::super::frame_layout::layout_frame_display_state(
         &mut eval,
         frame_id,
-        super::frame_layout::FrameLayoutPurpose::Redisplay,
+        super::super::frame_layout::FrameLayoutPurpose::Redisplay,
     )
     .expect("establish both accepted window ends");
     let _ = accepted.discard(&mut eval);
@@ -842,10 +842,10 @@ fn later_sibling_failure_restores_every_earlier_provisional_window_end() {
     .expect("install later-sibling convergence failure");
 
     assert!(
-        super::frame_layout::layout_frame_display_state(
+        super::super::frame_layout::layout_frame_display_state(
             &mut eval,
             frame_id,
-            super::frame_layout::FrameLayoutPurpose::Redisplay,
+            super::super::frame_layout::FrameLayoutPurpose::Redisplay,
         )
         .is_none(),
         "the later sibling must exhaust the bounded frame coordinator"
@@ -883,10 +883,10 @@ fn scroll_hooks_preserve_gnu_leaf_order_across_windows() {
             neovm_core::window::SplitPlacement::AfterTarget,
         )
         .expect("split window");
-    let initial = super::frame_layout::layout_frame_display_state(
+    let initial = super::super::frame_layout::layout_frame_display_state(
         &mut eval,
         frame_id,
-        super::frame_layout::FrameLayoutPurpose::Redisplay,
+        super::super::frame_layout::FrameLayoutPurpose::Redisplay,
     )
     .expect("layout split frame");
     let _ = initial.discard(&mut eval);
@@ -929,10 +929,10 @@ fn scroll_hooks_preserve_gnu_leaf_order_across_windows() {
     )
     .expect("install leaf-order probes");
 
-    let redisplay = super::frame_layout::layout_frame_display_state(
+    let redisplay = super::super::frame_layout::layout_frame_display_state(
         &mut eval,
         frame_id,
-        super::frame_layout::FrameLayoutPurpose::Redisplay,
+        super::super::frame_layout::FrameLayoutPurpose::Redisplay,
     )
     .expect("ordered multi-window layout");
     let _ = redisplay.discard(&mut eval);
@@ -965,10 +965,10 @@ fn scroll_hook_layout_mutations_replace_the_phase_a_window_snapshot() {
     )
     .expect("install margin-changing scroll hook");
 
-    let redisplay = super::frame_layout::layout_frame_display_state(
+    let redisplay = super::super::frame_layout::layout_frame_display_state(
         &mut eval,
         frame_id,
-        super::frame_layout::FrameLayoutPurpose::Redisplay,
+        super::super::frame_layout::FrameLayoutPurpose::Redisplay,
     )
     .expect("layout after hook changed canonical window inputs");
     let info = redisplay
@@ -1010,10 +1010,10 @@ fn fontification_layout_mutations_discard_the_speculative_frame() {
     )
     .expect("install layout-mutating fontification hook");
 
-    let redisplay = super::frame_layout::layout_frame_display_state(
+    let redisplay = super::super::frame_layout::layout_frame_display_state(
         &mut eval,
         frame_id,
-        super::frame_layout::FrameLayoutPurpose::Redisplay,
+        super::super::frame_layout::FrameLayoutPurpose::Redisplay,
     )
     .expect("layout after fontification changed canonical window inputs");
     let info = redisplay
@@ -1062,10 +1062,10 @@ fn scoped_display_binding_during_chrome_layout_does_not_prevent_convergence() {
     )
     .expect("install a chrome callback with a restored display binding");
 
-    let redisplay = super::frame_layout::layout_frame_display_state(
+    let redisplay = super::super::frame_layout::layout_frame_display_state(
         &mut eval,
         frame_id,
-        super::frame_layout::FrameLayoutPurpose::Redisplay,
+        super::super::frame_layout::FrameLayoutPurpose::Redisplay,
     );
 
     assert!(
@@ -1134,10 +1134,10 @@ fn fontification_window_start_supersedes_the_exact_scroll_hook_resume() {
     )
     .expect("install ordered hook/fontification start mutations");
 
-    let redisplay = super::frame_layout::layout_frame_display_state(
+    let redisplay = super::super::frame_layout::layout_frame_display_state(
         &mut eval,
         frame_id,
-        super::frame_layout::FrameLayoutPurpose::Redisplay,
+        super::super::frame_layout::FrameLayoutPurpose::Redisplay,
     )
     .expect("layout after fontification superseded the hook continuation");
     let _ = redisplay.discard(&mut eval);
@@ -1217,10 +1217,10 @@ fn scroll_hook_does_not_observe_speculative_window_end() {
     ]))
     .expect("force a new start");
 
-    let redisplay = super::frame_layout::layout_frame_display_state(
+    let redisplay = super::super::frame_layout::layout_frame_display_state(
         &mut eval,
         frame_id,
-        super::frame_layout::FrameLayoutPurpose::Redisplay,
+        super::super::frame_layout::FrameLayoutPurpose::Redisplay,
     )
     .expect("layout after observing the pre-final end");
     let _ = redisplay.discard(&mut eval);
@@ -1273,10 +1273,10 @@ fn nested_window_query_from_mode_line_uses_the_renderer_inert_query_engine() {
     )
     .expect("install reentrant mode-line query");
 
-    let display = super::frame_layout::layout_frame_display_state(
+    let display = super::super::frame_layout::layout_frame_display_state(
         &mut eval,
         frame_id,
-        super::frame_layout::FrameLayoutPurpose::Redisplay,
+        super::super::frame_layout::FrameLayoutPurpose::Redisplay,
     )
     .expect("layout must complete without a recursive RefCell panic");
     let _ = display.discard(&mut eval);
@@ -1341,10 +1341,10 @@ fn current_fresh_window_end_does_not_reenter_the_layout_adapter() {
         "current window end fixture\n",
         80,
     );
-    let activated = super::frame_layout::layout_frame_display_state(
+    let activated = super::super::frame_layout::layout_frame_display_state(
         &mut eval,
         frame_id,
-        super::frame_layout::FrameLayoutPurpose::Redisplay,
+        super::super::frame_layout::FrameLayoutPurpose::Redisplay,
     )
     .expect("prepare current presentation")
     .activate(&mut eval)
@@ -1491,10 +1491,10 @@ fn inactive_echo_layout_preserves_live_minibuffer_positions_and_query_source() {
         "the test must establish a non-echo live start before redisplay"
     );
 
-    let redisplay = super::frame_layout::layout_frame_display_state(
+    let redisplay = super::super::frame_layout::layout_frame_display_state(
         &mut eval,
         frame_id,
-        super::frame_layout::FrameLayoutPurpose::Redisplay,
+        super::super::frame_layout::FrameLayoutPurpose::Redisplay,
     )
     .expect("render inactive echo source");
     let _ = redisplay.discard(&mut eval);
@@ -2298,13 +2298,13 @@ fn opening_gui_frame_adoption_does_not_push_stale_window_size() {
         primary_window_size: shared_primary_window_size(1600, 1800),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
-        resolved_videos: Mutex::new(super::ResolvedVideoRegistry::default()),
+        resolved_videos: Mutex::new(super::super::ResolvedVideoRegistry::default()),
         resolved_webkits: Mutex::new(std::collections::HashMap::new()),
-        resolved_surfaces: Mutex::new(super::ResolvedSurfaceMemo::default()),
+        resolved_surfaces: Mutex::new(super::super::ResolvedSurfaceMemo::default()),
         render_capabilities: Arc::new(SharedRenderCapabilities::default()),
         requested_frame_shader: Mutex::new(None),
         #[cfg(feature = "neo-term")]
-        terminal_state: super::TerminalHostState::new(new_shared_terminals()),
+        terminal_state: super::super::TerminalHostState::new(new_shared_terminals()),
     };
 
     neovm_core::emacs_core::DisplayHost::realize_gui_frame(
@@ -2376,13 +2376,13 @@ fn opening_gui_frame_adoption_applies_fullscreen_mode() {
         primary_window_size: shared_primary_window_size(1600, 1800),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
-        resolved_videos: Mutex::new(super::ResolvedVideoRegistry::default()),
+        resolved_videos: Mutex::new(super::super::ResolvedVideoRegistry::default()),
         resolved_webkits: Mutex::new(std::collections::HashMap::new()),
-        resolved_surfaces: Mutex::new(super::ResolvedSurfaceMemo::default()),
+        resolved_surfaces: Mutex::new(super::super::ResolvedSurfaceMemo::default()),
         render_capabilities: Arc::new(SharedRenderCapabilities::default()),
         requested_frame_shader: Mutex::new(None),
         #[cfg(feature = "neo-term")]
-        terminal_state: super::TerminalHostState::new(new_shared_terminals()),
+        terminal_state: super::super::TerminalHostState::new(new_shared_terminals()),
     };
 
     neovm_core::emacs_core::DisplayHost::realize_gui_frame(
@@ -2435,13 +2435,13 @@ fn primary_display_host_destroy_gui_frame_routes_primary_and_secondary_windows()
         primary_window_size: shared_primary_window_size(1600, 1800),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
-        resolved_videos: Mutex::new(super::ResolvedVideoRegistry::default()),
+        resolved_videos: Mutex::new(super::super::ResolvedVideoRegistry::default()),
         resolved_webkits: Mutex::new(std::collections::HashMap::new()),
-        resolved_surfaces: Mutex::new(super::ResolvedSurfaceMemo::default()),
+        resolved_surfaces: Mutex::new(super::super::ResolvedSurfaceMemo::default()),
         render_capabilities: Arc::new(SharedRenderCapabilities::default()),
         requested_frame_shader: Mutex::new(None),
         #[cfg(feature = "neo-term")]
-        terminal_state: super::TerminalHostState::new(new_shared_terminals()),
+        terminal_state: super::super::TerminalHostState::new(new_shared_terminals()),
     };
 
     neovm_core::emacs_core::DisplayHost::destroy_gui_frame(&mut host, FrameId(0x100000002))
@@ -2485,13 +2485,13 @@ fn primary_display_host_popup_menu_routes_primary_and_secondary_frames() {
         primary_window_size: shared_primary_window_size(1600, 1800),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
-        resolved_videos: Mutex::new(super::ResolvedVideoRegistry::default()),
+        resolved_videos: Mutex::new(super::super::ResolvedVideoRegistry::default()),
         resolved_webkits: Mutex::new(std::collections::HashMap::new()),
-        resolved_surfaces: Mutex::new(super::ResolvedSurfaceMemo::default()),
+        resolved_surfaces: Mutex::new(super::super::ResolvedSurfaceMemo::default()),
         render_capabilities: Arc::new(SharedRenderCapabilities::default()),
         requested_frame_shader: Mutex::new(None),
         #[cfg(feature = "neo-term")]
-        terminal_state: super::TerminalHostState::new(new_shared_terminals()),
+        terminal_state: super::super::TerminalHostState::new(new_shared_terminals()),
     };
 
     let entry = PopupMenuEntry {
@@ -2561,13 +2561,13 @@ fn primary_image_catalog_lookup_returns_pending_without_waiting_for_render_threa
         primary_window_size: shared_primary_window_size(1600, 1800),
         image_catalog: test_image_catalog(&cmd_tx, Arc::clone(&image_metadata)),
         #[cfg(feature = "video")]
-        resolved_videos: Mutex::new(super::ResolvedVideoRegistry::default()),
+        resolved_videos: Mutex::new(super::super::ResolvedVideoRegistry::default()),
         resolved_webkits: Mutex::new(std::collections::HashMap::new()),
-        resolved_surfaces: Mutex::new(super::ResolvedSurfaceMemo::default()),
+        resolved_surfaces: Mutex::new(super::super::ResolvedSurfaceMemo::default()),
         render_capabilities: Arc::new(SharedRenderCapabilities::default()),
         requested_frame_shader: Mutex::new(None),
         #[cfg(feature = "neo-term")]
-        terminal_state: super::TerminalHostState::new(new_shared_terminals()),
+        terminal_state: super::super::TerminalHostState::new(new_shared_terminals()),
     };
     let repo_root = neomacs_infra::workspace_root();
     let image_path = repo_root.join("test/data/image/blank-100x200.png");
@@ -2725,13 +2725,13 @@ fn primary_image_catalog_does_not_block_on_render_command_backpressure() {
                 Arc::new(ImageRenderState::default()),
             ),
             #[cfg(feature = "video")]
-            resolved_videos: Mutex::new(super::ResolvedVideoRegistry::default()),
+            resolved_videos: Mutex::new(super::super::ResolvedVideoRegistry::default()),
             resolved_webkits: Mutex::new(std::collections::HashMap::new()),
-            resolved_surfaces: Mutex::new(super::ResolvedSurfaceMemo::default()),
+            resolved_surfaces: Mutex::new(super::super::ResolvedSurfaceMemo::default()),
             render_capabilities: Arc::new(SharedRenderCapabilities::default()),
             requested_frame_shader: Mutex::new(None),
             #[cfg(feature = "neo-term")]
-            terminal_state: super::TerminalHostState::new(new_shared_terminals()),
+            terminal_state: super::super::TerminalHostState::new(new_shared_terminals()),
         };
         let lookup = host.image_catalog.lookup(request.clone());
         let duplicate_lookup = host.image_catalog.lookup(request);
@@ -2784,13 +2784,13 @@ fn primary_image_catalog_does_not_wait_for_renderer_metadata_lock() {
         primary_window_size: shared_primary_window_size(1600, 1800),
         image_catalog: test_image_catalog(&cmd_tx, Arc::clone(&image_metadata)),
         #[cfg(feature = "video")]
-        resolved_videos: Mutex::new(super::ResolvedVideoRegistry::default()),
+        resolved_videos: Mutex::new(super::super::ResolvedVideoRegistry::default()),
         resolved_webkits: Mutex::new(std::collections::HashMap::new()),
-        resolved_surfaces: Mutex::new(super::ResolvedSurfaceMemo::default()),
+        resolved_surfaces: Mutex::new(super::super::ResolvedSurfaceMemo::default()),
         render_capabilities: Arc::new(SharedRenderCapabilities::default()),
         requested_frame_shader: Mutex::new(None),
         #[cfg(feature = "neo-term")]
-        terminal_state: super::TerminalHostState::new(new_shared_terminals()),
+        terminal_state: super::super::TerminalHostState::new(new_shared_terminals()),
     };
     let request = ImageResolveRequest {
         spec: test_image_spec_identity("metadata-lock.png"),
@@ -2846,13 +2846,13 @@ fn primary_display_host_expands_tilde_in_image_file_before_render_command() {
         primary_window_size: shared_primary_window_size(1600, 1800),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
-        resolved_videos: Mutex::new(super::ResolvedVideoRegistry::default()),
+        resolved_videos: Mutex::new(super::super::ResolvedVideoRegistry::default()),
         resolved_webkits: Mutex::new(std::collections::HashMap::new()),
-        resolved_surfaces: Mutex::new(super::ResolvedSurfaceMemo::default()),
+        resolved_surfaces: Mutex::new(super::super::ResolvedSurfaceMemo::default()),
         render_capabilities: Arc::new(SharedRenderCapabilities::default()),
         requested_frame_shader: Mutex::new(None),
         #[cfg(feature = "neo-term")]
-        terminal_state: super::TerminalHostState::new(new_shared_terminals()),
+        terminal_state: super::super::TerminalHostState::new(new_shared_terminals()),
     };
     let request = ImageResolveRequest {
         spec: test_image_spec_identity("~/Pictures/Pik.png"),
@@ -2932,13 +2932,13 @@ fn primary_display_host_resolve_image_sync_returns_cached_decode_failure_promptl
         primary_window_size: shared_primary_window_size(1600, 1800),
         image_catalog: test_image_catalog(&cmd_tx, Arc::clone(&image_metadata)),
         #[cfg(feature = "video")]
-        resolved_videos: Mutex::new(super::ResolvedVideoRegistry::default()),
+        resolved_videos: Mutex::new(super::super::ResolvedVideoRegistry::default()),
         resolved_webkits: Mutex::new(std::collections::HashMap::new()),
-        resolved_surfaces: Mutex::new(super::ResolvedSurfaceMemo::default()),
+        resolved_surfaces: Mutex::new(super::super::ResolvedSurfaceMemo::default()),
         render_capabilities: Arc::new(SharedRenderCapabilities::default()),
         requested_frame_shader: Mutex::new(None),
         #[cfg(feature = "neo-term")]
-        terminal_state: super::TerminalHostState::new(new_shared_terminals()),
+        terminal_state: super::super::TerminalHostState::new(new_shared_terminals()),
     };
     let request = ImageResolveRequest {
         spec: test_image_spec_identity("failed-decode.png"),
@@ -3001,13 +3001,13 @@ fn primary_display_host_request_video_queues_create_once_with_stable_id() {
         primary_window_size: shared_primary_window_size(1600, 1800),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
-        resolved_videos: Mutex::new(super::ResolvedVideoRegistry::default()),
+        resolved_videos: Mutex::new(super::super::ResolvedVideoRegistry::default()),
         resolved_webkits: Mutex::new(std::collections::HashMap::new()),
-        resolved_surfaces: Mutex::new(super::ResolvedSurfaceMemo::default()),
+        resolved_surfaces: Mutex::new(super::super::ResolvedSurfaceMemo::default()),
         render_capabilities: Arc::new(SharedRenderCapabilities::default()),
         requested_frame_shader: Mutex::new(None),
         #[cfg(feature = "neo-term")]
-        terminal_state: super::TerminalHostState::new(new_shared_terminals()),
+        terminal_state: super::super::TerminalHostState::new(new_shared_terminals()),
     };
     let request = VideoResolveRequest {
         source: VideoResolveSource::File(LispString::from_utf8("/tmp/demo.mp4")),
@@ -3040,7 +3040,7 @@ fn primary_display_host_request_video_queues_create_once_with_stable_id() {
 #[test]
 #[cfg(feature = "video")]
 fn resolved_video_registry_never_evicts_a_still_referenceable_identity() {
-    let mut registry = super::ResolvedVideoRegistry::default();
+    let mut registry = super::super::ResolvedVideoRegistry::default();
     for index in 0..80 {
         registry.insert(
             VideoResolveRequest {
@@ -3050,7 +3050,7 @@ fn resolved_video_registry_never_evicts_a_still_referenceable_identity() {
                 loop_count: 0,
                 autoplay: false,
             },
-            super::ResolvedVideo {
+            super::super::ResolvedVideo {
                 video_id: VideoId::new(index as u32 + 1),
             },
         );
@@ -3087,13 +3087,13 @@ fn primary_display_host_request_video_preserves_uri_source() {
         primary_window_size: shared_primary_window_size(1600, 1800),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
-        resolved_videos: Mutex::new(super::ResolvedVideoRegistry::default()),
+        resolved_videos: Mutex::new(super::super::ResolvedVideoRegistry::default()),
         resolved_webkits: Mutex::new(std::collections::HashMap::new()),
-        resolved_surfaces: Mutex::new(super::ResolvedSurfaceMemo::default()),
+        resolved_surfaces: Mutex::new(super::super::ResolvedSurfaceMemo::default()),
         render_capabilities: Arc::new(SharedRenderCapabilities::default()),
         requested_frame_shader: Mutex::new(None),
         #[cfg(feature = "neo-term")]
-        terminal_state: super::TerminalHostState::new(new_shared_terminals()),
+        terminal_state: super::super::TerminalHostState::new(new_shared_terminals()),
     };
     let request = VideoResolveRequest {
         source: VideoResolveSource::Uri(LispString::from_utf8("https://example.com/video.mp4")),
@@ -3136,13 +3136,13 @@ fn primary_display_host_routes_one_typed_video_session_lifecycle() {
         primary_window_size: shared_primary_window_size(1600, 1800),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
-        resolved_videos: Mutex::new(super::ResolvedVideoRegistry::default()),
+        resolved_videos: Mutex::new(super::super::ResolvedVideoRegistry::default()),
         resolved_webkits: Mutex::new(std::collections::HashMap::new()),
-        resolved_surfaces: Mutex::new(super::ResolvedSurfaceMemo::default()),
+        resolved_surfaces: Mutex::new(super::super::ResolvedSurfaceMemo::default()),
         render_capabilities: Arc::new(SharedRenderCapabilities::default()),
         requested_frame_shader: Mutex::new(None),
         #[cfg(feature = "neo-term")]
-        terminal_state: super::TerminalHostState::new(new_shared_terminals()),
+        terminal_state: super::super::TerminalHostState::new(new_shared_terminals()),
     };
     let open = VideoOpenRequest {
         source: VideoSource::File("movie.mp4".into()),
@@ -3195,13 +3195,13 @@ fn primary_display_host_request_webkit_queues_create_and_load_once_with_stable_i
         primary_window_size: shared_primary_window_size(1600, 1800),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
-        resolved_videos: Mutex::new(super::ResolvedVideoRegistry::default()),
+        resolved_videos: Mutex::new(super::super::ResolvedVideoRegistry::default()),
         resolved_webkits: Mutex::new(std::collections::HashMap::new()),
-        resolved_surfaces: Mutex::new(super::ResolvedSurfaceMemo::default()),
+        resolved_surfaces: Mutex::new(super::super::ResolvedSurfaceMemo::default()),
         render_capabilities: Arc::new(SharedRenderCapabilities::default()),
         requested_frame_shader: Mutex::new(None),
         #[cfg(feature = "neo-term")]
-        terminal_state: super::TerminalHostState::new(new_shared_terminals()),
+        terminal_state: super::super::TerminalHostState::new(new_shared_terminals()),
     };
     let request = WebKitResolveRequest {
         source: WebKitResolveSource::Uri(LispString::from_utf8("https://example.com")),
@@ -3249,13 +3249,13 @@ fn primary_display_host_preserves_file_navigation_as_a_typed_path() {
         primary_window_size: shared_primary_window_size(1600, 1800),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
-        resolved_videos: Mutex::new(super::ResolvedVideoRegistry::default()),
+        resolved_videos: Mutex::new(super::super::ResolvedVideoRegistry::default()),
         resolved_webkits: Mutex::new(std::collections::HashMap::new()),
-        resolved_surfaces: Mutex::new(super::ResolvedSurfaceMemo::default()),
+        resolved_surfaces: Mutex::new(super::super::ResolvedSurfaceMemo::default()),
         render_capabilities: Arc::new(SharedRenderCapabilities::default()),
         requested_frame_shader: Mutex::new(None),
         #[cfg(feature = "neo-term")]
-        terminal_state: super::TerminalHostState::new(new_shared_terminals()),
+        terminal_state: super::super::TerminalHostState::new(new_shared_terminals()),
     };
     let path = std::path::PathBuf::from("/tmp/neomacs web#view.html");
     let request = WebKitResolveRequest {
@@ -3293,13 +3293,13 @@ fn primary_display_host_xwidget_lifecycle_uses_explicit_xwidget_id() {
         primary_window_size: shared_primary_window_size(1600, 1800),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
-        resolved_videos: Mutex::new(super::ResolvedVideoRegistry::default()),
+        resolved_videos: Mutex::new(super::super::ResolvedVideoRegistry::default()),
         resolved_webkits: Mutex::new(std::collections::HashMap::new()),
-        resolved_surfaces: Mutex::new(super::ResolvedSurfaceMemo::default()),
+        resolved_surfaces: Mutex::new(super::super::ResolvedSurfaceMemo::default()),
         render_capabilities: Arc::new(SharedRenderCapabilities::default()),
         requested_frame_shader: Mutex::new(None),
         #[cfg(feature = "neo-term")]
-        terminal_state: super::TerminalHostState::new(new_shared_terminals()),
+        terminal_state: super::super::TerminalHostState::new(new_shared_terminals()),
     };
 
     let id = WebViewId::new(42);
@@ -3367,13 +3367,13 @@ fn bootstrap_gui_frame_adoption_routes_future_resizes_to_primary_window() {
         primary_window_size: shared_primary_window_size(843, 489),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
-        resolved_videos: Mutex::new(super::ResolvedVideoRegistry::default()),
+        resolved_videos: Mutex::new(super::super::ResolvedVideoRegistry::default()),
         resolved_webkits: Mutex::new(std::collections::HashMap::new()),
-        resolved_surfaces: Mutex::new(super::ResolvedSurfaceMemo::default()),
+        resolved_surfaces: Mutex::new(super::super::ResolvedSurfaceMemo::default()),
         render_capabilities: Arc::new(SharedRenderCapabilities::default()),
         requested_frame_shader: Mutex::new(None),
         #[cfg(feature = "neo-term")]
-        terminal_state: super::TerminalHostState::new(new_shared_terminals()),
+        terminal_state: super::super::TerminalHostState::new(new_shared_terminals()),
     }));
 
     adopt_existing_primary_gui_frame(&mut eval).expect("bootstrap GUI frame should adopt");
@@ -3435,13 +3435,13 @@ fn primary_window_resize_does_not_wait_for_host_acknowledgement() {
         primary_window_size: Arc::clone(&shared),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
-        resolved_videos: Mutex::new(super::ResolvedVideoRegistry::default()),
+        resolved_videos: Mutex::new(super::super::ResolvedVideoRegistry::default()),
         resolved_webkits: Mutex::new(std::collections::HashMap::new()),
-        resolved_surfaces: Mutex::new(super::ResolvedSurfaceMemo::default()),
+        resolved_surfaces: Mutex::new(super::super::ResolvedSurfaceMemo::default()),
         render_capabilities: Arc::new(SharedRenderCapabilities::default()),
         requested_frame_shader: Mutex::new(None),
         #[cfg(feature = "neo-term")]
-        terminal_state: super::TerminalHostState::new(new_shared_terminals()),
+        terminal_state: super::super::TerminalHostState::new(new_shared_terminals()),
     };
 
     let started = Instant::now();
@@ -3502,13 +3502,13 @@ fn primary_window_display_host_forwards_visual_config_to_renderer() {
         primary_window_size: shared_primary_window_size(843, 489),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
-        resolved_videos: Mutex::new(super::ResolvedVideoRegistry::default()),
+        resolved_videos: Mutex::new(super::super::ResolvedVideoRegistry::default()),
         resolved_webkits: Mutex::new(std::collections::HashMap::new()),
-        resolved_surfaces: Mutex::new(super::ResolvedSurfaceMemo::default()),
+        resolved_surfaces: Mutex::new(super::super::ResolvedSurfaceMemo::default()),
         render_capabilities: Arc::new(SharedRenderCapabilities::default()),
         requested_frame_shader: Mutex::new(None),
         #[cfg(feature = "neo-term")]
-        terminal_state: super::TerminalHostState::new(new_shared_terminals()),
+        terminal_state: super::super::TerminalHostState::new(new_shared_terminals()),
     };
 
     let mut config = neomacs_display_protocol::VisualConfig::default();
@@ -3576,13 +3576,13 @@ fn primary_window_display_host_round_trips_clipboard_requests_through_renderer()
         primary_window_size: shared_primary_window_size(843, 489),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
-        resolved_videos: Mutex::new(super::ResolvedVideoRegistry::default()),
+        resolved_videos: Mutex::new(super::super::ResolvedVideoRegistry::default()),
         resolved_webkits: Mutex::new(std::collections::HashMap::new()),
-        resolved_surfaces: Mutex::new(super::ResolvedSurfaceMemo::default()),
+        resolved_surfaces: Mutex::new(super::super::ResolvedSurfaceMemo::default()),
         render_capabilities: Arc::new(SharedRenderCapabilities::default()),
         requested_frame_shader: Mutex::new(None),
         #[cfg(feature = "neo-term")]
-        terminal_state: super::TerminalHostState::new(new_shared_terminals()),
+        terminal_state: super::super::TerminalHostState::new(new_shared_terminals()),
     };
 
     neovm_core::emacs_core::DisplayHost::set_clipboard_text(&mut host, Some("copied"))
@@ -3648,13 +3648,13 @@ fn redisplay_title_sync_formats_frame_title_format_for_primary_window() {
         primary_window_size: shared_primary_window_size(843, 489),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
-        resolved_videos: Mutex::new(super::ResolvedVideoRegistry::default()),
+        resolved_videos: Mutex::new(super::super::ResolvedVideoRegistry::default()),
         resolved_webkits: Mutex::new(std::collections::HashMap::new()),
-        resolved_surfaces: Mutex::new(super::ResolvedSurfaceMemo::default()),
+        resolved_surfaces: Mutex::new(super::super::ResolvedSurfaceMemo::default()),
         render_capabilities: Arc::new(SharedRenderCapabilities::default()),
         requested_frame_shader: Mutex::new(None),
         #[cfg(feature = "neo-term")]
-        terminal_state: super::TerminalHostState::new(new_shared_terminals()),
+        terminal_state: super::super::TerminalHostState::new(new_shared_terminals()),
     }));
 
     adopt_existing_primary_gui_frame(&mut eval).expect("bootstrap GUI frame should adopt");
@@ -3697,13 +3697,13 @@ fn frame_host_title_formats_the_restored_runtime_system_name() {
         primary_window_size: shared_primary_window_size(843, 489),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
-        resolved_videos: Mutex::new(super::ResolvedVideoRegistry::default()),
+        resolved_videos: Mutex::new(super::super::ResolvedVideoRegistry::default()),
         resolved_webkits: Mutex::new(std::collections::HashMap::new()),
-        resolved_surfaces: Mutex::new(super::ResolvedSurfaceMemo::default()),
+        resolved_surfaces: Mutex::new(super::super::ResolvedSurfaceMemo::default()),
         render_capabilities: Arc::new(SharedRenderCapabilities::default()),
         requested_frame_shader: Mutex::new(None),
         #[cfg(feature = "neo-term")]
-        terminal_state: super::TerminalHostState::new(new_shared_terminals()),
+        terminal_state: super::super::TerminalHostState::new(new_shared_terminals()),
     }));
     let expected_system_name: String = hostname::get()
         .expect("OS hostname")
@@ -6563,7 +6563,7 @@ fn frame_snapshot_subr_end_to_end_json_and_text() {
         .id;
     configure_gnu_startup_state(&mut eval, frame_id, &gui_startup());
     REDISPLAY_RUNTIME.with(|runtime| runtime.enable_cosmic_metrics());
-    super::frame_layout::install_frame_snapshot_fn(&mut eval);
+    super::super::frame_layout::install_frame_snapshot_fn(&mut eval);
 
     let json_value = eval
         .eval_str("(neomacs--frame-snapshot t 'json)")
@@ -6622,15 +6622,15 @@ fn primary_display_host_reports_quality_policy_frame_shader_suppression() {
         primary_window_size: shared_primary_window_size(1600, 900),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
-        resolved_videos: Mutex::new(super::ResolvedVideoRegistry::default()),
+        resolved_videos: Mutex::new(super::super::ResolvedVideoRegistry::default()),
         resolved_webkits: Mutex::new(std::collections::HashMap::new()),
-        resolved_surfaces: Mutex::new(super::ResolvedSurfaceMemo::default()),
+        resolved_surfaces: Mutex::new(super::super::ResolvedSurfaceMemo::default()),
         render_capabilities: Arc::new(SharedRenderCapabilities::new(
             FrameShaderAvailability::SuppressedByQualityPolicy,
         )),
         requested_frame_shader: Mutex::new(None),
         #[cfg(feature = "neo-term")]
-        terminal_state: super::TerminalHostState::new(new_shared_terminals()),
+        terminal_state: super::super::TerminalHostState::new(new_shared_terminals()),
     };
 
     let error = neovm_core::emacs_core::DisplayHost::set_frame_shader(
@@ -6703,12 +6703,12 @@ fn primary_display_host_routes_typed_terminal_requests_to_the_renderer() {
         primary_window_size: shared_primary_window_size(1600, 900),
         image_catalog: test_image_catalog(&cmd_tx, Arc::new(ImageRenderState::default())),
         #[cfg(feature = "video")]
-        resolved_videos: Mutex::new(super::ResolvedVideoRegistry::default()),
+        resolved_videos: Mutex::new(super::super::ResolvedVideoRegistry::default()),
         resolved_webkits: Mutex::new(std::collections::HashMap::new()),
-        resolved_surfaces: Mutex::new(super::ResolvedSurfaceMemo::default()),
+        resolved_surfaces: Mutex::new(super::super::ResolvedSurfaceMemo::default()),
         render_capabilities: Arc::new(SharedRenderCapabilities::default()),
         requested_frame_shader: Mutex::new(None),
-        terminal_state: super::TerminalHostState::new(shared_terminals),
+        terminal_state: super::super::TerminalHostState::new(shared_terminals),
     };
 
     let id = neovm_core::emacs_core::DisplayHost::create_terminal(
@@ -6807,17 +6807,17 @@ fn primary_display_host_routes_typed_terminal_requests_to_the_renderer() {
 #[cfg(feature = "neo-term")]
 #[test]
 fn terminal_id_allocation_is_isolated_per_editor_host() {
-    let first = super::TerminalHostState::new(new_shared_terminals());
-    let second = super::TerminalHostState::new(new_shared_terminals());
+    let first = super::super::TerminalHostState::new(new_shared_terminals());
+    let second = super::super::TerminalHostState::new(new_shared_terminals());
 
     assert_eq!(first.allocate().unwrap(), second.allocate().unwrap());
     assert_eq!(
         first.allocate().unwrap().get(),
-        super::HOST_TERMINAL_ID_START + 1
+        super::super::HOST_TERMINAL_ID_START + 1
     );
     assert_eq!(
         second.allocate().unwrap().get(),
-        super::HOST_TERMINAL_ID_START + 1
+        super::super::HOST_TERMINAL_ID_START + 1
     );
 }
 

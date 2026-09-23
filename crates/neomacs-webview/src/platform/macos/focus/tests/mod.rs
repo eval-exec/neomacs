@@ -1,4 +1,4 @@
-use super::focus::{
+use super::super::focus::{
     FOCUS_PROBE, FocusProbe, GIVE_UP_FOCUS_MESSAGE, GNU_XW_SCRIPT, HostEpoch,
     KEY_DOWN_MESSAGE_HANDLER, KeyDownMessage, KeyRoute, focus_transition, key_down_message,
     route_key,

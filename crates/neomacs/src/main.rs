@@ -5654,5 +5654,4 @@ fn initialize_system_locale() {
 fn initialize_system_locale() {}
 
 #[cfg(test)]
-#[path = "main_test.rs"]
 mod tests;

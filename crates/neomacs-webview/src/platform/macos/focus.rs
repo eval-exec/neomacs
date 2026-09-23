@@ -143,3 +143,6 @@ pub(super) fn focus_transition(
     let wanted = intent == FocusIntent::Focus;
     (accepted && wanted != previously_focused).then_some(wanted)
 }
+
+#[cfg(test)]
+mod tests;

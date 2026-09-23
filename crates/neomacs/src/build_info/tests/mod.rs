@@ -1,6 +1,6 @@
 use super::{BuildProfile, BuildProvenance, SourceRevision, WorktreeState, usable_embedded_value};
 
-#[path = "../build_support.rs"]
+#[path = "../../../build_support.rs"]
 mod build_support;
 
 #[test]

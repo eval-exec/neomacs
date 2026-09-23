@@ -221,5 +221,4 @@ impl PageLoadState {
 }
 
 #[cfg(test)]
-#[path = "load_state_test.rs"]
 mod tests;
