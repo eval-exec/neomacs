@@ -1888,3 +1888,27 @@ pub(crate) fn assert_invalid_program(err: super::Flow) {
         other => panic!("expected error signal, got {other:?}"),
     }
 }
+
+#[test]
+fn ccl_execute_wraps_int_max_plus_one_like_gnu_ckd_add() {
+    crate::test_utils::init_test_tracing();
+    // GNU `ckd_add (&reg[rrr], ...)` stores the modular result: with
+    // r0 = INT_MAX, `r0 += 1` ends at -2147483648, not an invalid command.
+    let program = Value::vector(
+        [0, 4, 0, 23, 1, 22].into_iter().map(Value::fixnum).collect(),
+    );
+    let registers = Value::vector(vec![
+        Value::fixnum(2_147_483_647),
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+    ]);
+    builtin_ccl_execute_impl(vec![program, registers])
+        .expect("GNU wraps r0 += 1 past INT_MAX");
+    let regs = registers.as_vector_data().unwrap();
+    assert_eq!(regs[0], Value::fixnum(-2_147_483_648));
+}
