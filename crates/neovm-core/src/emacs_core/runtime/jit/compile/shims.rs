@@ -11,8 +11,8 @@ use super::*;
 /// makes a runtime call imports this shim by its BARE name and binds it at
 /// `dlopen` against the host's dynamic symbol table (the host/test binary is
 /// linked `-rdynamic`). The JIT path is unaffected — it binds shims by ADDRESS
-/// via `builder.symbol(...)`, so the only effect of `no_mangle` is an exported
-/// symbol name. All 41 shims the MIR tier can emit ([`MIR_SHIM_NAMES`]) carry it.
+/// through [`register_shims`], so the only effect of `no_mangle` is an exported
+/// symbol name. All shims the MIR tier can emit ([`MIR_SHIM_NAMES`]) carry it.
 #[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
 #[unsafe(no_mangle)]
 pub extern "C" fn neovm_jit_gc_save() -> i64 {
@@ -917,14 +917,73 @@ pub(crate) static JIT_SHIM_TABLE: [(&str, ShimAddr); 51] = [
 /// tiers' builders call this, so a shim that exists is a shim the JIT can
 /// resolve — in the production binary and in a test binary alike.
 pub(crate) fn register_shims(builder: &mut cranelift_jit::JITBuilder) {
-    for (name, addr) in &JIT_SHIM_TABLE {
-        builder.symbol(*name, addr.0 as *const u8);
-    }
+    // A module usually references only a few shims. Let Cranelift cache those
+    // resolutions instead of allocating every shim name for every compilation.
+    builder.symbol_lookup_fn(Box::new(|name| {
+        JIT_SHIM_TABLE
+            .iter()
+            .find(|(candidate, _)| *candidate == name)
+            .map(|(_, addr)| addr.0 as *const u8)
+    }));
 }
 
 #[cfg(test)]
 mod shim_table_tests {
     use super::JIT_SHIM_TABLE;
+
+    #[test]
+    fn runtime_shims_link_without_dynamic_exports_and_preserve_host_fallback() {
+        use cranelift_codegen::ir::Signature;
+        use cranelift_jit::{JITBuilder, JITModule};
+        use cranelift_module::{DataDescription, Linkage, Module, default_libcall_names};
+
+        extern "C" fn host_fallback() {}
+        let mut builder = JITBuilder::new(default_libcall_names()).unwrap();
+        // Lookup callbacks run in reverse registration order. Reject a shim
+        // reaching the host fallback: exported test-binary symbols must not
+        // conceal a missing runtime registration.
+        builder.symbol_lookup_fn(Box::new(|name| {
+            assert!(!name.starts_with("neovm_jit_"), "unregistered shim: {name}");
+            (name == "neomacs_test_host_fallback")
+                .then_some(host_fallback as *const () as *const u8)
+        }));
+        super::register_shims(&mut builder);
+        let mut module = JITModule::new(builder);
+        let mut symbols: Vec<_> = JIT_SHIM_TABLE
+            .iter()
+            .map(|(name, addr)| (*name, addr.0 as usize))
+            .collect();
+        symbols.push((
+            "neomacs_test_host_fallback",
+            host_fallback as *const () as usize,
+        ));
+        let word = std::mem::size_of::<usize>();
+        let mut data = DataDescription::new();
+        data.define_zeroinit(symbols.len() * word);
+        let signature = Signature::new(module.target_config().default_call_conv);
+        for (i, (name, _)) in symbols.iter().enumerate() {
+            let id = module
+                .declare_function(name, Linkage::Import, &signature)
+                .unwrap();
+            let reference = module.declare_func_in_data(id, &mut data);
+            data.write_function_addr((i * word) as u32, reference);
+        }
+        let id = module
+            .declare_data("runtime_shim_addresses", Linkage::Local, false, false)
+            .unwrap();
+        module.define_data(id, &data).unwrap();
+        module.finalize_definitions().unwrap();
+        let (ptr, size) = module.get_finalized_data(id);
+        assert_eq!(size, symbols.len() * word);
+        for (i, (name, expected)) in symbols.iter().enumerate() {
+            // SAFETY: each relocated pointer lies inside the checked live data
+            // allocation. Read addresses only; no shim is called with a dummy ABI.
+            let actual = unsafe { ptr.add(i * word).cast::<usize>().read_unaligned() };
+            assert_eq!(actual, *expected, "{name}");
+        }
+        // SAFETY: no compiled function ran and the data pointer is not used again.
+        unsafe { module.free_memory() };
+    }
 
     /// `shim_names.rs` (what an AOT `.so` may import; exported by the build
     /// scripts) and [`JIT_SHIM_TABLE`] (what the JIT can resolve) must name
