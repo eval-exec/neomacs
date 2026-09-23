@@ -526,6 +526,137 @@ fn ccl_execute_on_string_resumes_identity_program_from_status_instruction() {
     assert_eq!(status.as_vector_data().unwrap()[8], Value::fixnum(5));
 }
 
+fn execute_ccl_on_string(
+    words: &[i64],
+    registers: [i64; 8],
+    input: &[u8],
+    last_block: bool,
+) -> (Vec<u8>, Vec<Value>) {
+    let program = Value::vector(words.iter().copied().map(Value::fixnum).collect());
+    let mut status_slots = registers.map(Value::fixnum).to_vec();
+    status_slots.push(Value::NIL);
+    let status = Value::vector(status_slots);
+    let output = builtin_ccl_execute_on_string_impl(vec![
+        program,
+        status,
+        Value::heap_string(crate::heap_types::LispString::from_unibyte(input.to_vec())),
+        Value::bool_val(!last_block),
+        Value::T,
+    ])
+    .expect("CCL program should execute");
+    let bytes = output.as_lisp_string().unwrap().as_bytes().to_vec();
+    assert!(!output.as_lisp_string().unwrap().is_multibyte());
+    let status = status.as_vector_data().unwrap().to_vec();
+    (bytes, status)
+}
+
+#[test]
+fn ccl_execute_on_string_runs_branch_to_the_selected_block() {
+    crate::test_utils::init_test_tracing();
+    // GNU Emacs `ccl-compile` of (1 ((branch r0 (write "A")))), then
+    // `ccl-execute-on-string` with a zeroed status vector and an empty input.
+    // r0 is 0, so the jump table selects the block that writes "A" and leaves
+    // the instruction counter on the trailing End word.
+    let program = Value::vector(
+        [1, 7, 269, 2, 4, 308, 4_259_840, 22]
+            .into_iter()
+            .map(Value::fixnum)
+            .collect(),
+    );
+    let status = Value::vector(vec![Value::NIL; 9]);
+    let output = builtin_ccl_execute_on_string_impl(vec![
+        program,
+        status,
+        Value::heap_string(crate::heap_types::LispString::from_unibyte(Vec::new())),
+        Value::NIL,
+        Value::T,
+    ])
+    .expect("branch on r0 selects the write block");
+    assert_eq!(output.as_lisp_string().unwrap().as_bytes(), b"A");
+    assert!(!output.as_lisp_string().unwrap().is_multibyte());
+    assert_eq!(
+        status.as_vector_data().unwrap().as_slice(),
+        &[
+            Value::fixnum(0),
+            Value::fixnum(0),
+            Value::fixnum(0),
+            Value::fixnum(0),
+            Value::fixnum(0),
+            Value::fixnum(0),
+            Value::fixnum(0),
+            Value::fixnum(0),
+            Value::fixnum(7),
+        ]
+    );
+}
+
+#[test]
+fn ccl_execute_on_string_branch_uses_the_out_of_range_slot() {
+    crate::test_utils::init_test_tracing();
+    // Same GNU program as the r0 == 0 case. Register 1 and -1 both take the
+    // extra jump-table slot, which lands on End and writes nothing.
+    let program = [1, 7, 269, 2, 4, 308, 4_259_840, 22];
+    for selector in [1, -1] {
+        let mut registers = [0; 8];
+        registers[0] = selector;
+        let (output, status) = execute_ccl_on_string(&program, registers, b"", true);
+        assert_eq!(output, b"");
+        assert_eq!(status[0], Value::fixnum(selector));
+        assert_eq!(status[8], Value::fixnum(7));
+    }
+}
+
+#[test]
+fn ccl_execute_on_string_branch_selects_a_later_register_block() {
+    crate::test_utils::init_test_tracing();
+    // GNU `ccl-compile` of (1 ((branch r1 (write "A") (write "B")))) with r1 = 1.
+    let mut registers = [0; 8];
+    registers[1] = 1;
+    let (output, status) = execute_ccl_on_string(
+        &[1, 11, 557, 3, 6, 8, 308, 4_259_840, 516, 308, 4_325_376, 22],
+        registers,
+        b"",
+        true,
+    );
+    assert_eq!(output, b"B");
+    assert_eq!(status[1], Value::fixnum(1));
+    assert_eq!(status[8], Value::fixnum(11));
+}
+
+#[test]
+fn ccl_execute_on_string_read_branch_selects_from_the_input_byte() {
+    crate::test_utils::init_test_tracing();
+    // GNU `ccl-compile` of (1 ((read-branch r0 (write "A") (write "B")))).
+    // Byte 0 selects "A", byte 1 selects "B", byte 2 takes the out-of-range
+    // slot. An empty final block stores EOF in r0 and skips the table. An
+    // empty non-final block suspends on the ReadBranch word itself.
+    let program = [1, 11, 528, 3, 6, 8, 308, 4_259_840, 516, 308, 4_325_376, 22];
+    let (zero, status) = execute_ccl_on_string(&program, [0; 8], &[0], true);
+    assert_eq!(zero, b"A");
+    assert_eq!(status[0], Value::fixnum(0));
+    assert_eq!(status[8], Value::fixnum(11));
+
+    let (one, status) = execute_ccl_on_string(&program, [0; 8], &[1], true);
+    assert_eq!(one, b"B");
+    assert_eq!(status[0], Value::fixnum(1));
+    assert_eq!(status[8], Value::fixnum(11));
+
+    let (two, status) = execute_ccl_on_string(&program, [0; 8], &[2], true);
+    assert_eq!(two, b"");
+    assert_eq!(status[0], Value::fixnum(2));
+    assert_eq!(status[8], Value::fixnum(11));
+
+    let (eof, status) = execute_ccl_on_string(&program, [0; 8], b"", true);
+    assert_eq!(eof, b"");
+    assert_eq!(status[0], Value::fixnum(-1));
+    assert_eq!(status[8], Value::fixnum(11));
+
+    let (suspended, status) = execute_ccl_on_string(&program, [0; 8], b"", false);
+    assert_eq!(suspended, b"");
+    assert_eq!(status[0], Value::fixnum(0));
+    assert_eq!(status[8], Value::fixnum(2));
+}
+
 #[test]
 fn ccl_execute_on_string_runs_packed_constant_string_in_eof_block() {
     crate::test_utils::init_test_tracing();

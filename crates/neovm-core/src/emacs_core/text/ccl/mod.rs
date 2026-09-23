@@ -7,9 +7,15 @@
 //! - `register-code-conversion-map` — stores named conversion maps and returns stable ids
 //! - CCL-backed coding systems and `ccl-execute-on-string` share one bounded
 //!   bytecode machine, including resumable register/instruction state.
+//! - Each 5-bit opcode decodes to [`command::CclCommand`]. The driver matches
+//!   that enum exhaustively; commands not yet executed still signal
+//!   `Error in CCL program`.
 //! - `ccl-execute` — validates shape and designators while the remaining
 //!   register-only instruction set is implemented incrementally.
 
+mod command;
+
+use self::command::CclCommand;
 use super::error::{EvalResult, Flow, signal};
 use super::value::*;
 use crate::emacs_core::SymId;
@@ -191,6 +197,31 @@ fn ccl_relative_instruction(instruction: usize, offset: i64) -> Option<usize> {
     usize::try_from(target).ok()
 }
 
+/// GNU `CCL_Branch` (`src/ccl.c`). `table_head` is the first jump-table word.
+/// `length` table entries are followed by one out-of-range entry. Each entry
+/// is a raw relative offset from `table_head`, not a packed command.
+fn ccl_branch_target(
+    words: &[i64],
+    table_head: usize,
+    length: i64,
+    selector: i64,
+    error_at: usize,
+) -> Result<usize, Flow> {
+    let slot = if (0..length).contains(&selector) {
+        selector
+    } else {
+        length
+    };
+    let slot = usize::try_from(slot).map_err(|_| invalid_ccl_program_at(error_at))?;
+    let entry = table_head
+        .checked_add(slot)
+        .ok_or_else(|| invalid_ccl_program_at(error_at))?;
+    let offset = *words
+        .get(entry)
+        .ok_or_else(|| invalid_ccl_program_at(error_at))?;
+    ccl_relative_instruction(table_head, offset).ok_or_else(|| invalid_ccl_program_at(error_at))
+}
+
 struct CclExecution {
     output: Vec<i64>,
     registers: [i64; 8],
@@ -238,7 +269,8 @@ fn execute_compiled_ccl_with_state(
             .ok()
             .filter(|register| *register < registers.len())
             .ok_or_else(|| invalid_ccl_program_at(this_instruction))?;
-        let command = code & 0x1f;
+        let command = CclCommand::from_repr((code & 0x1f) as u8)
+            .ok_or_else(|| invalid_ccl_program_at(this_instruction))?;
 
         let mut read_character = |destination: &mut i64| -> Option<bool> {
             if let Some(value) = input.get(source) {
@@ -254,39 +286,32 @@ fn execute_compiled_ccl_with_state(
         };
 
         match command {
-            // CCL_SetRegister
-            0x00 => registers[register] = registers[other_register],
-            // CCL_SetShortConst
-            0x01 => registers[register] = field1,
-            // CCL_SetConst
-            0x02 => {
+            CclCommand::SetRegister => registers[register] = registers[other_register],
+            CclCommand::SetShortConst => registers[register] = field1,
+            CclCommand::SetConst => {
                 registers[register] = *words
                     .get(instruction)
                     .ok_or_else(|| invalid_ccl_program_at(this_instruction))?;
                 instruction += 1;
             }
-            // CCL_Jump
-            0x04 => {
+            CclCommand::Jump => {
                 instruction = ccl_relative_instruction(instruction, field1)
                     .ok_or_else(|| invalid_ccl_program_at(this_instruction))?;
             }
-            // CCL_JumpCond
-            0x05 if registers[register] == 0 => {
+            CclCommand::JumpCond if registers[register] == 0 => {
                 instruction = ccl_relative_instruction(instruction, field1)
                     .ok_or_else(|| invalid_ccl_program_at(this_instruction))?;
             }
-            0x05 => {}
-            // CCL_WriteRegisterJump
-            0x06 => {
+            CclCommand::JumpCond => {}
+            CclCommand::WriteRegisterJump => {
                 output.push(registers[register]);
                 instruction = ccl_relative_instruction(instruction, field1)
                     .ok_or_else(|| invalid_ccl_program_at(this_instruction))?;
             }
-            // CCL_WriteRegisterReadJump. The compiler stores a paired
-            // CCL_ReadJump word after this fused instruction; GNU skips it
-            // after a successful read, but resumes at that word when input is
-            // exhausted in a non-final block.
-            0x07 => {
+            // The compiler stores a paired ReadJump word after this fused
+            // instruction. GNU skips it after a successful read, but resumes
+            // at that word when input is exhausted in a non-final block.
+            CclCommand::WriteRegisterReadJump => {
                 output.push(registers[register]);
                 instruction = instruction
                     .checked_add(1)
@@ -306,8 +331,7 @@ fn execute_compiled_ccl_with_state(
                     }
                 }
             }
-            // CCL_WriteConstJump
-            0x08 => {
+            CclCommand::WriteConstJump => {
                 output.push(
                     *words
                         .get(instruction)
@@ -316,8 +340,7 @@ fn execute_compiled_ccl_with_state(
                 instruction = ccl_relative_instruction(instruction, field1)
                     .ok_or_else(|| invalid_ccl_program_at(this_instruction))?;
             }
-            // CCL_ReadJump
-            0x0c => match read_character(&mut registers[register]) {
+            CclCommand::ReadJump => match read_character(&mut registers[register]) {
                 Some(true) => instruction = eof_instruction,
                 Some(false) => {
                     instruction = ccl_relative_instruction(instruction, field1)
@@ -331,9 +354,43 @@ fn execute_compiled_ccl_with_state(
                     });
                 }
             },
-            // CCL_ReadRegister. Consecutive encoded operands read into one or
-            // more registers; a zero field terminates the sequence.
-            0x0e => {
+            // `instruction` already points at the jump table. GNU indexes that
+            // table by the register, or by `field1` when the register is
+            // outside `0..field1`.
+            CclCommand::Branch => {
+                instruction = ccl_branch_target(
+                    &words,
+                    instruction,
+                    field1,
+                    registers[register],
+                    this_instruction,
+                )?;
+            }
+            // GNU reads one character, then falls through into CCL_Branch.
+            // EOF skips the table and runs the eof program. A suspended read
+            // resumes on this same word.
+            CclCommand::ReadBranch => match read_character(&mut registers[register]) {
+                Some(true) => instruction = eof_instruction,
+                Some(false) => {
+                    instruction = ccl_branch_target(
+                        &words,
+                        instruction,
+                        field1,
+                        registers[register],
+                        this_instruction,
+                    )?;
+                }
+                None => {
+                    return Ok(CclExecution {
+                        output,
+                        registers,
+                        instruction: this_instruction,
+                    });
+                }
+            },
+            // Consecutive encoded operands read into one or more registers; a
+            // zero field terminates the sequence.
+            CclCommand::ReadRegister => {
                 let mut read_field = field1;
                 let mut read_register = register;
                 loop {
@@ -365,8 +422,7 @@ fn execute_compiled_ccl_with_state(
                         .ok_or_else(|| invalid_ccl_program_at(this_instruction))?;
                 }
             }
-            // CCL_WriteRegister
-            0x11 => {
+            CclCommand::WriteRegister => {
                 let mut write_field = field1;
                 let mut write_register = register;
                 loop {
@@ -385,12 +441,11 @@ fn execute_compiled_ccl_with_state(
                         .ok_or_else(|| invalid_ccl_program_at(this_instruction))?;
                 }
             }
-            // CCL_WriteConstString. A zero register field embeds one
-            // character directly in FIELD1. A nonzero field stores an ASCII
-            // string three octets per following word, most-significant octet
-            // first (the representation emitted by GNU `ccl-embed-string`).
-            0x14 if register == 0 => output.push(field1),
-            0x14 => {
+            // A zero register field embeds one character directly in FIELD1.
+            // A nonzero field stores an ASCII string three octets per following
+            // word, most-significant octet first (GNU `ccl-embed-string`).
+            CclCommand::WriteConstString if register == 0 => output.push(field1),
+            CclCommand::WriteConstString => {
                 let length = usize::try_from(field1)
                     .ok()
                     .ok_or_else(|| invalid_ccl_program_at(this_instruction))?;
@@ -408,16 +463,34 @@ fn execute_compiled_ccl_with_state(
                 }
                 instruction = end;
             }
-            // CCL_End. GNU leaves IC pointing at the End instruction so a
-            // completed STATUS cannot accidentally resume beyond the vector.
-            0x16 => {
+            // GNU leaves IC pointing at the End instruction so a completed
+            // STATUS cannot accidentally resume beyond the vector.
+            CclCommand::End => {
                 return Ok(CclExecution {
                     output,
                     registers,
                     instruction: this_instruction,
                 });
             }
-            _ => return Err(invalid_ccl_program_at(this_instruction)),
+            CclCommand::SetArray
+            | CclCommand::WriteConstReadJump
+            | CclCommand::WriteStringJump
+            | CclCommand::WriteArrayReadJump
+            | CclCommand::WriteExprConst
+            | CclCommand::WriteExprRegister
+            | CclCommand::Call
+            | CclCommand::WriteArray
+            | CclCommand::ExprSelfConst
+            | CclCommand::ExprSelfReg
+            | CclCommand::SetExprConst
+            | CclCommand::SetExprReg
+            | CclCommand::JumpCondExprConst
+            | CclCommand::JumpCondExprReg
+            | CclCommand::ReadJumpCondExprConst
+            | CclCommand::ReadJumpCondExprReg
+            | CclCommand::Extension => {
+                return Err(invalid_ccl_program_at(this_instruction));
+            }
         }
     }
 
