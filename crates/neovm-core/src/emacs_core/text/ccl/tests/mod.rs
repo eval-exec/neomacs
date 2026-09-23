@@ -1163,6 +1163,65 @@ fn ccl_execute_iterate_multiple_map_calls_a_program_then_continues() {
     assert_eq!(slots[2], Value::fixnum(5));
 }
 
+fn map_multiple_return(return_word: i64, mapper: &str, calling: &str, after: &str) -> Vec<Value> {
+    let callee = Value::vector(
+        [0, 3, return_word, 22]
+            .into_iter()
+            .map(Value::fixnum)
+            .collect(),
+    );
+    builtin_register_ccl_program_impl(vec![Value::symbol(mapper), callee]).expect("mapper");
+    let calling_map = Value::vector(vec![Value::fixnum(4), Value::symbol(mapper)]);
+    let calling_id =
+        builtin_register_code_conversion_map_impl(vec![Value::symbol(calling), calling_map])
+            .expect("calling map")
+            .as_int()
+            .unwrap();
+    let after_map = Value::vector([4, 99].into_iter().map(Value::fixnum).collect());
+    let after_id = builtin_register_code_conversion_map_impl(vec![Value::symbol(after), after_map])
+        .expect("following map")
+        .as_int()
+        .unwrap();
+    let program = Value::vector(
+        [0, 6, 278_815, 2, calling_id, after_id, 22]
+            .into_iter()
+            .map(Value::fixnum)
+            .collect(),
+    );
+    let registers = Value::vector(vec![
+        Value::fixnum(4),
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+        Value::NIL,
+    ]);
+    builtin_ccl_execute_impl(vec![program, registers]).expect("map-multiple should resume");
+    registers.as_vector_data().unwrap().to_vec()
+}
+
+#[test]
+fn ccl_execute_map_multiple_treats_minus_two_as_continue() {
+    crate::test_utils::init_test_tracing();
+    // GNU regards a returned -2 as t. The original value 4 is kept and the
+    // next map, which sends 4 to 99, still runs. Status is that map's index.
+    let slots = map_multiple_return(-511, "ccl-map-minus-two", "ccl-call-minus-two", "ccl-after-minus-two");
+    assert_eq!(slots[0], Value::fixnum(99));
+    assert_eq!(slots[1], Value::fixnum(1));
+}
+
+#[test]
+fn ccl_execute_map_multiple_treats_minus_three_as_lambda() {
+    crate::test_utils::init_test_tracing();
+    // GNU regards a returned -3 as lambda and skips the rest of the map set.
+    // The following map would turn 4 into 99, but the value stays 4.
+    let slots = map_multiple_return(-767, "ccl-map-minus-three", "ccl-call-minus-three", "ccl-after-minus-three");
+    assert_eq!(slots[0], Value::fixnum(4));
+    assert_eq!(slots[1], Value::fixnum(0));
+}
+
 #[test]
 fn ccl_execute_lookup_integer_rejects_a_non_character_value() {
     crate::test_utils::init_test_tracing();
