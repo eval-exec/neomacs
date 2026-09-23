@@ -1287,6 +1287,68 @@ fn ccl_execute_translate_character_rewrites_a_char_table_entry() {
 }
 
 #[test]
+fn ccl_execute_translate_character_keeps_everything_for_a_nil_table() {
+    crate::test_utils::init_test_tracing();
+    // GNU `translate_char` returns the character untouched when the table is
+    // nil: (r0 = ?A) (r1 = 0) (translate-const-table 0) leaves [65, 0].
+    // The old code signalled `Error in CCL program` here.
+    let mut eval = crate::test_utils::runtime_startup_context();
+    let registers = eval
+        .eval_str(
+            r#"(let ((reg (vector 65 0 0 0 0 0 0 0)))
+                 (setq translation-table-vector (vector (cons 'tt nil)))
+                 (ccl-execute [0 4 49439 0 22] reg)
+                 reg)"#,
+        )
+        .expect("nil table maps identity");
+    let registers = registers.as_vector_data().expect("register vector");
+    assert_eq!(registers[0], Value::fixnum(65));
+    assert_eq!(registers[1], Value::fixnum(0));
+}
+
+#[test]
+fn ccl_execute_translate_character_skips_a_mapping_that_is_not_a_character() {
+    crate::test_utils::init_test_tracing();
+    // GNU guards the lookup result with `CHARACTERP (ch)` in
+    // `translate_char`. A -1 entry is not a character, so ?A is untouched.
+    let mut eval = crate::test_utils::runtime_startup_context();
+    let registers = eval
+        .eval_str(
+            r#"(let* ((tbl (make-char-table nil nil))
+                      (reg (vector 65 0 0 0 0 0 0 0)))
+                 (aset tbl 65 -1)
+                 (setq translation-table-vector (vector (cons 'tt tbl)))
+                 (ccl-execute [0 4 49439 0 22] reg)
+                 reg)"#,
+        )
+        .expect("non-character mapping keeps the input");
+    let registers = registers.as_vector_data().expect("register vector");
+    assert_eq!(registers[0], Value::fixnum(65));
+    assert_eq!(registers[1], Value::fixnum(0));
+}
+
+#[test]
+fn ccl_execute_translate_character_walks_a_list_of_tables() {
+    crate::test_utils::init_test_tracing();
+    // GNU `translate_char` recurses through a cons list of char tables
+    // (`for (; CONSP (table); table = XCDR (table))`).
+    let mut eval = crate::test_utils::runtime_startup_context();
+    let registers = eval
+        .eval_str(
+            r#"(let* ((tbl (make-char-table nil nil))
+                      (reg (vector 65 0 0 0 0 0 0 0)))
+                 (aset tbl 65 66)
+                 (setq translation-table-vector (vector (cons 'tt (list tbl))))
+                 (ccl-execute [0 4 49439 0 22] reg)
+                 reg)"#,
+        )
+        .expect("list table translates recursively");
+    let registers = registers.as_vector_data().expect("register vector");
+    assert_eq!(registers[0], Value::fixnum(66));
+    assert_eq!(registers[1], Value::fixnum(0));
+}
+
+#[test]
 fn ccl_execute_quit_signals_quit() {
     crate::test_utils::init_test_tracing();
     // GNU `ccl-execute` stops for `Vquit_flag`, then `maybe_quit` signals

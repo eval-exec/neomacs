@@ -114,7 +114,7 @@ pub(super) fn execute_extension(
                 status_register,
                 value_register,
                 table_id,
-                error_at,
+                instruction.saturating_sub(1),
             )
         }
         ExtendedCommand::LookupInteger => {
@@ -227,11 +227,34 @@ fn translate_character(
         return Err(invalid_ccl_program_at(error_at));
     };
     let character = decode_register_character(registers, charset_register, code_register);
-    let (mapped, _, _) = char_table_ref_and_range(&table, character)
-        .map_err(|_| invalid_ccl_program_at(error_at))?;
-    let mapped = mapped.as_int().unwrap_or(character);
+    // GNU `translate_char` in `src/character.c`: a cons table walks a list of
+    // char tables recursively, and a result that fails `CHARACTERP` leaves the
+    // character untouched. Anything else is not a table and no-ops.
+    let mapped = translate_char(&table, character);
     encode_character(registers, charset_register, code_register, mapped);
     Ok(ExtensionStep::Continue)
+}
+
+fn translate_char(table: &super::Value, character: i64) -> i64 {
+    use super::super::chartable::is_char_table;
+    if is_char_table(table) {
+        if let Ok((mapped, _, _)) = char_table_ref_and_range(table, character)
+            && let Some(mapped) = mapped.as_int().filter(|mapped| is_emacs_character(*mapped))
+        {
+            return mapped;
+        }
+        return character;
+    }
+    let mut character = character;
+    let mut cursor = *table;
+    for _ in 0..MAX_TRANSLATION_LIST_DEPTH {
+        if !cursor.is_cons() {
+            break;
+        }
+        character = translate_char(&cursor.cons_car(), character);
+        cursor = cursor.cons_cdr();
+    }
+    character
 }
 
 const MAX_TRANSLATION_LIST_DEPTH: usize = 1024;
