@@ -4430,9 +4430,9 @@ fn build_leaf_fn<M: Module>(
                 write_edge_stack_to_vars(&mut fb, &vars, &stack, &stack_raw, &variable_raw);
                 fb.ins().jump(block_for[&end], &[]);
             }
-            // Raw-slot reconstruction belongs to failed-guard exits. Mark
-            // those paths cold so their tagging uses do not compete with
-            // frequently used loop operands during register allocation.
+            // Keep failed-guard reconstruction out of the ordinary emitted
+            // path. Cranelift sinks cold blocks during final code emission;
+            // this is a layout hint, not a register-allocation weight.
             if has_raw_slots {
                 for site in &pending_deopt {
                     fb.set_cold_block(site.block);

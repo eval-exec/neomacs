@@ -191,3 +191,75 @@ fn osr_raw_switch_backedges_root_heap_payloads_and_preserve_quit_cadence() {
     assert_eq!(bytecode_branch_poll_count(), 1);
     assert_eq!(ctx.jit_root_stack_top, 0);
 }
+
+#[test]
+fn osr_raw_overflow_retags_the_snapshot_and_resumes_without_replaying_effects() {
+    use crate::emacs_core::bytecode::vm::Vm;
+    let mut ctx = Context::new();
+    ctx.eval_str("(setq osr-raw-effects 0)").unwrap();
+    let mut f = ByteCodeFunction::new(LambdaParams {
+        required: vec![],
+        optional: vec![],
+        rest: None,
+    });
+    f.lexical = true;
+    f.constants = vec![Value::make_int(0), Value::symbol("osr-raw-effects")].into();
+    f.ops = vec![
+        Op::Constant(0),
+        Op::VarRef(1),
+        Op::Add1,
+        Op::VarSet(1),
+        Op::Goto(5),
+        Op::StackRef(0),
+        Op::Add1,
+        Op::StackSet(1),
+        Op::Nil,
+        Op::GotoIfNotNil(1),
+        Op::Return,
+    ];
+    f.max_stack = 8;
+    f.seal_hand_assembled_ops();
+    let cfg = analyze_cfg(&f.ops, &f.constants, None, 0).unwrap();
+    let facts = compute_known_fixnum_slots(&f.ops, &f.constants, &cfg);
+    assert!(uniform_raw_osr_slots(&cfg, &facts, Some(1))[0]);
+    let max = Value::MOST_POSITIVE_FIXNUM;
+    let snapshot = [Value::make_int(max)];
+    ctx.bc_buf.extend_from_slice(&snapshot);
+    let Some(NativeRun::DeoptAt(resume)) = cache::try_run_osr(&mut ctx, &f, 1, &snapshot, &[])
+    else {
+        panic!("raw increment must precisely deopt on overflow");
+    };
+    assert_eq!(resume.pc, 6);
+    assert_eq!(resume.stack, [snapshot[0], snapshot[0]]);
+    assert_eq!(ctx.eval_str("osr-raw-effects").unwrap(), Value::make_int(1));
+    assert_eq!(ctx.jit_root_stack_top, 0);
+    let DeoptResume {
+        pc,
+        stack,
+        handlers,
+        binds,
+        spec_base,
+        cond_base,
+    } = *resume;
+    ctx.bc_buf.clear();
+    let value = Vm::from_context(&mut ctx)
+        .run_resumed_frame_latched(
+            &f,
+            Value::NIL,
+            pc,
+            &stack,
+            handlers,
+            &binds,
+            spec_base,
+            cond_base,
+            true,
+        )
+        .unwrap();
+    assert_eq!(
+        value.as_bignum().unwrap().to_string(),
+        (max + 1).to_string()
+    );
+    assert_eq!(ctx.eval_str("osr-raw-effects").unwrap(), Value::make_int(1));
+    assert!(ctx.bc_buf.is_empty());
+    assert_eq!(ctx.jit_root_stack_top, 0);
+}
