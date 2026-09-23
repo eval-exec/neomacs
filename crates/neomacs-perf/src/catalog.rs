@@ -40,6 +40,8 @@ pub enum ScenarioId {
     DynamicBindingLoop,
     DynamicVariableReadLoop,
     DynamicRebindingLoop,
+    DynamicAliasReadLoop,
+    BufferLocalReadLoop,
     /// First call of fresh functions, including heat-up and OSR compilation.
     FirstHotLoop,
     /// Short first-call controls for native compilation cost.
@@ -206,6 +208,8 @@ impl ScenarioId {
             Self::DynamicBindingLoop => "dynamic-binding-loop",
             Self::DynamicVariableReadLoop => "dynamic-variable-read-loop",
             Self::DynamicRebindingLoop => "dynamic-rebinding-loop",
+            Self::DynamicAliasReadLoop => "dynamic-alias-read-loop",
+            Self::BufferLocalReadLoop => "buffer-local-read-loop",
             Self::FirstHotLoop => "first-hot-loop",
             Self::FirstHotLoop8K => "first-hot-loop-8k",
             Self::FirstHotLoop16K => "first-hot-loop-16k",
@@ -284,6 +288,8 @@ impl FromStr for ScenarioId {
             "dynamic-binding-loop" => Ok(Self::DynamicBindingLoop),
             "dynamic-variable-read-loop" => Ok(Self::DynamicVariableReadLoop),
             "dynamic-rebinding-loop" => Ok(Self::DynamicRebindingLoop),
+            "dynamic-alias-read-loop" => Ok(Self::DynamicAliasReadLoop),
+            "buffer-local-read-loop" => Ok(Self::BufferLocalReadLoop),
             "first-hot-loop" => Ok(Self::FirstHotLoop),
             "first-hot-loop-8k" => Ok(Self::FirstHotLoop8K),
             "first-hot-loop-16k" => Ok(Self::FirstHotLoop16K),
@@ -792,6 +798,22 @@ const SCENARIOS: &[ScenarioSpec] = &[
         primary_metric: MetricName::PerOperationWallTime,
         cross_editor_parity_metrics: &[],
     },
+    ScenarioSpec {
+        id: ScenarioId::DynamicAliasReadLoop,
+        description: "Read a variable alias on every loop iteration while its target is dynamically bound",
+        default_frontend: Frontend::Batch,
+        default_iterations: NonZeroU32::new(1_000_000).expect("non-zero scenario default"),
+        primary_metric: MetricName::PerOperationWallTime,
+        cross_editor_parity_metrics: &[],
+    },
+    ScenarioSpec {
+        id: ScenarioId::BufferLocalReadLoop,
+        description: "Read a dynamically bound buffer-local variable on every loop iteration",
+        default_frontend: Frontend::Batch,
+        default_iterations: NonZeroU32::new(1_000_000).expect("non-zero scenario default"),
+        primary_metric: MetricName::PerOperationWallTime,
+        cross_editor_parity_metrics: &[],
+    },
 ];
 
 pub fn scenarios() -> &'static [ScenarioSpec] {
@@ -812,6 +834,8 @@ pub const fn scenario(id: ScenarioId) -> &'static ScenarioSpec {
         ScenarioId::DynamicBindingLoop => &SCENARIOS[28],
         ScenarioId::DynamicVariableReadLoop => &SCENARIOS[48],
         ScenarioId::DynamicRebindingLoop => &SCENARIOS[49],
+        ScenarioId::DynamicAliasReadLoop => &SCENARIOS[50],
+        ScenarioId::BufferLocalReadLoop => &SCENARIOS[51],
         ScenarioId::FirstHotLoop => &SCENARIOS[29],
         ScenarioId::FirstHotLoop8K => &SCENARIOS[43],
         ScenarioId::FirstHotLoop16K => &SCENARIOS[44],

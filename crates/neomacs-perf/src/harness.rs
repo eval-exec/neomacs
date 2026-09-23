@@ -548,6 +548,8 @@ impl PerfHarness {
             ScenarioId::LexicalLoop
             | ScenarioId::DynamicBindingLoop
             | ScenarioId::DynamicVariableReadLoop
+            | ScenarioId::DynamicAliasReadLoop
+            | ScenarioId::BufferLocalReadLoop
             | ScenarioId::DynamicRebindingLoop
             | ScenarioId::FirstHotLoop
             | ScenarioId::FirstHotLoop8K
@@ -1735,6 +1737,8 @@ fn parse_scenario_result(
         ScenarioId::LexicalLoop
         | ScenarioId::DynamicBindingLoop
         | ScenarioId::DynamicVariableReadLoop
+        | ScenarioId::DynamicAliasReadLoop
+        | ScenarioId::BufferLocalReadLoop
         | ScenarioId::DynamicRebindingLoop => serde_json::from_str(raw).map(ScenarioResult::VmLoop),
         ScenarioId::BytecodeCallLoop => {
             serde_json::from_str(raw).map(ScenarioResult::BytecodeCallLoop)

@@ -129,6 +129,11 @@ struct VmLoopResultWire {
     outer_value_after: i64,
     warmup_result: [i64; 3],
     warmup_outer_value: i64,
+    // Old loop artifacts predate these checks. New alias/local cases require
+    // them; supplied values are checked for every scenario.
+    global_value_after: Option<i64>,
+    warmup_global_value: Option<i64>,
+    buffer_local: Option<bool>,
     dynamic_binding: bool,
     bytecode_compiled: bool,
     #[serde(deserialize_with = "deserialize_optional_error", rename = "error")]
@@ -151,7 +156,12 @@ fn expected_sum(iterations: u32) -> i64 {
 }
 
 fn expected_loop_sum(scenario: ScenarioId, iterations: u32) -> i64 {
-    if scenario == ScenarioId::DynamicVariableReadLoop {
+    if matches!(
+        scenario,
+        ScenarioId::DynamicVariableReadLoop
+            | ScenarioId::DynamicAliasReadLoop
+            | ScenarioId::BufferLocalReadLoop
+    ) {
         i64::from(iterations) * 7
     } else {
         expected_sum(iterations)
@@ -235,8 +245,35 @@ pub(crate) fn validate_vm_loop_result(
             ScenarioId::DynamicBindingLoop
                 | ScenarioId::DynamicVariableReadLoop
                 | ScenarioId::DynamicRebindingLoop
+                | ScenarioId::DynamicAliasReadLoop
+                | ScenarioId::BufferLocalReadLoop
         ),
         r.dynamic_binding,
+    );
+    let require_context = matches!(
+        request.scenario,
+        ScenarioId::DynamicAliasReadLoop | ScenarioId::BufferLocalReadLoop
+    );
+    validate_context_field(
+        &mut mismatches,
+        "global-value-after",
+        17,
+        r.global_value_after,
+        require_context,
+    );
+    validate_context_field(
+        &mut mismatches,
+        "warmup-global-value",
+        17,
+        r.warmup_global_value,
+        require_context,
+    );
+    validate_context_field(
+        &mut mismatches,
+        "buffer-local",
+        request.scenario == ScenarioId::BufferLocalReadLoop,
+        r.buffer_local,
+        require_context,
     );
     mismatch(
         &mut mismatches,
@@ -247,6 +284,24 @@ pub(crate) fn validate_vm_loop_result(
     crate::harness::require_positive_phase(&mut mismatches, "elapsed-cpu-time", r.elapsed_us);
     crate::harness::require_positive_phase(&mut mismatches, "elapsed-wall-time", r.elapsed_wall_us);
     mismatches
+}
+
+fn validate_context_field<T: PartialEq + std::fmt::Display>(
+    mismatches: &mut Vec<CorrectnessMismatch>,
+    invariant: &str,
+    expected: T,
+    actual: Option<T>,
+    required: bool,
+) {
+    match actual {
+        Some(actual) => mismatch(mismatches, invariant, expected, actual),
+        None if required => mismatches.push(CorrectnessMismatch {
+            invariant: invariant.to_string(),
+            expected: expected.to_string(),
+            actual: "missing".to_string(),
+        }),
+        None => {}
+    }
 }
 
 pub(crate) fn valid_vm_loop_measurements(
