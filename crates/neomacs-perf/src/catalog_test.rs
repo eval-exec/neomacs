@@ -2,12 +2,14 @@ use std::str::FromStr;
 
 use std::num::NonZeroU32;
 
+use strum::EnumCount;
+
 use super::{CrossEditorParityMetric, Frontend, MetricName, ScenarioId, scenario, scenarios};
 
 #[test]
 fn catalog_exposes_the_rust_lsp_typing_workload_as_a_typed_scenario() {
     let scenarios = scenarios();
-    assert_eq!(scenarios.len(), 52);
+    assert_eq!(scenarios.len(), ScenarioId::COUNT);
 
     // The heavy row exists so the light one keeps its baseline: same workload,
     // a whole-file diagnostic set instead of four on adjacent lines.
@@ -383,4 +385,31 @@ fn search_shape_diagnostics_are_portable_and_excluded_from_the_editor_score() {
                 .any(|row| row.scenario == id)
         );
     }
+}
+
+/// The scenario name is stated once, by `strum`, and every other spelling is
+/// generated from it — except serde's `rename`, which is a second attribute
+/// set that nothing else checks.  This walks the closed enum (so a new variant
+/// is covered automatically) and asserts the three spellings agree, that no
+/// name is repeated, and that Display and FromStr round-trip.
+///
+/// A scenario whose `serialize` or `serde(rename)` disagreed would otherwise
+/// key a *different* time series than the one its row reports, silently.
+#[test]
+fn every_scenario_name_agrees_across_strum_serde_and_round_trip() {
+    use strum::IntoEnumIterator;
+
+    let mut seen = std::collections::HashSet::new();
+    for id in ScenarioId::iter() {
+        let name = id.as_str();
+        assert!(seen.insert(name), "duplicate scenario name `{name}`");
+        assert_eq!(
+            serde_json::to_value(id).expect("a scenario id serializes"),
+            serde_json::json!(name),
+            "serde spells {id:?} differently from its name `{name}`"
+        );
+        assert_eq!(ScenarioId::from_str(name), Ok(id));
+        assert_eq!(id.to_string(), name);
+    }
+    assert_eq!(seen.len(), ScenarioId::COUNT);
 }

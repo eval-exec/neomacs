@@ -3,6 +3,7 @@ use std::num::NonZeroU32;
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
+use strum::{Display, EnumCount, EnumIter, IntoEnumIterator, IntoStaticStr};
 
 use crate::MetricName;
 
@@ -28,8 +29,31 @@ impl CrossEditorParityMetric {
 ///
 /// A closed enum prevents a typo from selecting a different fixture or
 /// silently creating a new time series.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+///
+/// The name is stated **once**, by `strum`'s `serialize_all` plus the explicit
+/// `serialize` on the rows whose spelling kebab-case cannot derive (the `8K`
+/// family and the `64`/`256` pair, which carry a digit boundary).  Display,
+/// `IntoStaticStr`, `EnumIter` and `EnumCount` are all generated from that same
+/// attribute set, so a name cannot drift between the enum, the CLI parser and
+/// the time-series key — and `catalog_test` asserts the serde spelling agrees
+/// with it, since serde's `rename` is the one list that is still separate.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Display,
+    EnumCount,
+    EnumIter,
+    Eq,
+    IntoStaticStr,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+)]
 #[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case")]
 pub enum ScenarioId {
     RustLspTyping,
     RustLspTypingHeavy,
@@ -46,15 +70,20 @@ pub enum ScenarioId {
     FirstHotLoop,
     /// Short first-call controls for native compilation cost.
     #[serde(rename = "first-hot-loop-8k")]
+    #[strum(serialize = "first-hot-loop-8k")]
     FirstHotLoop8K,
     #[serde(rename = "first-hot-loop-16k")]
+    #[strum(serialize = "first-hot-loop-16k")]
     FirstHotLoop16K,
     #[serde(rename = "first-hot-loop-32k")]
+    #[strum(serialize = "first-hot-loop-32k")]
     FirstHotLoop32K,
     /// First calls with many conditional blocks, to expose compilation scaling.
     #[serde(rename = "first-branch-loop-64")]
+    #[strum(serialize = "first-branch-loop-64")]
     FirstBranchLoop64,
     #[serde(rename = "first-branch-loop-256")]
+    #[strum(serialize = "first-branch-loop-256")]
     FirstBranchLoop256,
     /// Warmed builtin calls from bytecode; excluded from the whole-editor score.
     BuiltinCallPoint,
@@ -168,7 +197,7 @@ impl ScenarioId {
     /// branch. Fixtures dispatch on this name and end in an
     /// `(error "unknown editor workload")`, so a variant that reported its own
     /// id would fail the run rather than measure it.
-    pub const fn workload_str(self) -> &'static str {
+    pub fn workload_str(self) -> &'static str {
         match self {
             Self::MagitStatusCompiled | Self::MagitStatusHeavy => Self::MagitStatus.as_str(),
             Self::OrgJournalOpenCompiled => Self::OrgJournalOpen.as_str(),
@@ -198,69 +227,11 @@ impl ScenarioId {
         }
     }
 
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::RustLspTyping => "rust-lsp-typing",
-            Self::RustLspTypingHeavy => "rust-lsp-typing-heavy",
-            Self::MxTabCompletion => "mx-tab-completion",
-            Self::BytecodeCallLoop => "bytecode-call-loop",
-            Self::LexicalLoop => "lexical-loop",
-            Self::DynamicBindingLoop => "dynamic-binding-loop",
-            Self::DynamicVariableReadLoop => "dynamic-variable-read-loop",
-            Self::DynamicRebindingLoop => "dynamic-rebinding-loop",
-            Self::DynamicAliasReadLoop => "dynamic-alias-read-loop",
-            Self::BufferLocalReadLoop => "buffer-local-read-loop",
-            Self::FirstHotLoop => "first-hot-loop",
-            Self::FirstHotLoop8K => "first-hot-loop-8k",
-            Self::FirstHotLoop16K => "first-hot-loop-16k",
-            Self::FirstHotLoop32K => "first-hot-loop-32k",
-            Self::FirstBranchLoop64 => "first-branch-loop-64",
-            Self::FirstBranchLoop256 => "first-branch-loop-256",
-            Self::BuiltinCallPoint => "builtin-call-point",
-            Self::BuiltinCallStringBytes => "builtin-call-string-bytes",
-            Self::BuiltinCallStringLessp => "builtin-call-string-lessp",
-            Self::BuiltinCallGetTextProperty => "builtin-call-get-text-property",
-            Self::BuiltinCallMultibyteStringP => "builtin-call-multibyte-string-p",
-            Self::BuiltinCallCharOrStringP => "builtin-call-char-or-string-p",
-            Self::BuiltinCallMaxChar => "builtin-call-max-char",
-            Self::SearchLiteralForward => "search-literal-forward",
-            Self::SearchLiteralBackward => "search-literal-backward",
-            Self::SearchRegexpForward => "search-regexp-forward",
-            Self::SearchRegexpBackward => "search-regexp-backward",
-            Self::SearchPosixForward => "search-posix-forward",
-            Self::SearchPosixBackward => "search-posix-backward",
-
-            Self::EditingSimulation => "editing-simulation",
-            Self::Startup => "startup",
-            Self::SustainedEditing => "sustained-editing",
-            Self::GuiInputLatency => "gui-input-latency",
-            Self::OrgEditing => "org-editing",
-            Self::OrgEditingHeavy => "org-editing-heavy",
-            Self::MagitStatus => "magit-status",
-            Self::OrgJournalOpen => "org-journal-open",
-            Self::LargeFileEditing => "large-file-editing",
-            Self::Indentation => "indentation",
-            Self::RegexSearch => "regex-search",
-            Self::BoundedSearchEditSmall => "bounded-search-edit-small",
-            Self::BoundedSearchEditLarge => "bounded-search-edit-large",
-            Self::BoundedSearchEditOnly => "bounded-search-edit-only",
-            Self::BoundedSearchNoEdit => "bounded-search-no-edit",
-
-            Self::SustainedNativeVideo => "sustained-native-video",
-            Self::MagitStatusCompiled => "magit-status-compiled",
-            Self::OrgJournalOpenCompiled => "org-journal-open-compiled",
-            Self::MagitStatusHeavy => "magit-status-heavy",
-            Self::FileOpen => "file-open",
-            Self::ProcessOutput => "process-output",
-            Self::ElispBenchmarks => "elisp-benchmarks",
-            Self::LspJsonRpc => "lsp-json-rpc",
-        }
-    }
-}
-
-impl fmt::Display for ScenarioId {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.as_str())
+    /// The scenario's stable name — the same string `Display`, `FromStr`, the
+    /// CLI and serde all carry, generated from the enum's `strum`/`serde`
+    /// attributes rather than restated here.
+    pub fn as_str(self) -> &'static str {
+        self.into()
     }
 }
 
@@ -278,64 +249,14 @@ impl std::error::Error for UnknownScenarioId {}
 impl FromStr for ScenarioId {
     type Err = UnknownScenarioId;
 
+    /// A search over the generated iteration rather than a second table of
+    /// strings: the spelling lives on the enum's `strum` attributes, and this
+    /// cannot disagree with it.  A few dozen string comparisons, on a path
+    /// taken a handful of times per process.
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
-            "rust-lsp-typing" => Ok(Self::RustLspTyping),
-            "rust-lsp-typing-heavy" => Ok(Self::RustLspTypingHeavy),
-            "mx-tab-completion" => Ok(Self::MxTabCompletion),
-            "bytecode-call-loop" => Ok(Self::BytecodeCallLoop),
-            "lexical-loop" => Ok(Self::LexicalLoop),
-            "dynamic-binding-loop" => Ok(Self::DynamicBindingLoop),
-            "dynamic-variable-read-loop" => Ok(Self::DynamicVariableReadLoop),
-            "dynamic-rebinding-loop" => Ok(Self::DynamicRebindingLoop),
-            "dynamic-alias-read-loop" => Ok(Self::DynamicAliasReadLoop),
-            "buffer-local-read-loop" => Ok(Self::BufferLocalReadLoop),
-            "first-hot-loop" => Ok(Self::FirstHotLoop),
-            "first-hot-loop-8k" => Ok(Self::FirstHotLoop8K),
-            "first-hot-loop-16k" => Ok(Self::FirstHotLoop16K),
-            "first-hot-loop-32k" => Ok(Self::FirstHotLoop32K),
-            "first-branch-loop-64" => Ok(Self::FirstBranchLoop64),
-            "first-branch-loop-256" => Ok(Self::FirstBranchLoop256),
-            "builtin-call-point" => Ok(Self::BuiltinCallPoint),
-            "builtin-call-string-bytes" => Ok(Self::BuiltinCallStringBytes),
-            "builtin-call-string-lessp" => Ok(Self::BuiltinCallStringLessp),
-            "builtin-call-get-text-property" => Ok(Self::BuiltinCallGetTextProperty),
-            "builtin-call-multibyte-string-p" => Ok(Self::BuiltinCallMultibyteStringP),
-            "builtin-call-char-or-string-p" => Ok(Self::BuiltinCallCharOrStringP),
-            "builtin-call-max-char" => Ok(Self::BuiltinCallMaxChar),
-            "search-literal-forward" => Ok(Self::SearchLiteralForward),
-            "search-literal-backward" => Ok(Self::SearchLiteralBackward),
-            "search-regexp-forward" => Ok(Self::SearchRegexpForward),
-            "search-regexp-backward" => Ok(Self::SearchRegexpBackward),
-            "search-posix-forward" => Ok(Self::SearchPosixForward),
-            "search-posix-backward" => Ok(Self::SearchPosixBackward),
-
-            "editing-simulation" => Ok(Self::EditingSimulation),
-            "startup" => Ok(Self::Startup),
-            "sustained-editing" => Ok(Self::SustainedEditing),
-            "gui-input-latency" => Ok(Self::GuiInputLatency),
-            "org-editing" => Ok(Self::OrgEditing),
-            "org-editing-heavy" => Ok(Self::OrgEditingHeavy),
-            "magit-status" => Ok(Self::MagitStatus),
-            "org-journal-open" => Ok(Self::OrgJournalOpen),
-            "large-file-editing" => Ok(Self::LargeFileEditing),
-            "indentation" => Ok(Self::Indentation),
-            "regex-search" => Ok(Self::RegexSearch),
-            "bounded-search-edit-small" => Ok(Self::BoundedSearchEditSmall),
-            "bounded-search-edit-large" => Ok(Self::BoundedSearchEditLarge),
-            "bounded-search-edit-only" => Ok(Self::BoundedSearchEditOnly),
-            "bounded-search-no-edit" => Ok(Self::BoundedSearchNoEdit),
-
-            "sustained-native-video" => Ok(Self::SustainedNativeVideo),
-            "magit-status-compiled" => Ok(Self::MagitStatusCompiled),
-            "org-journal-open-compiled" => Ok(Self::OrgJournalOpenCompiled),
-            "magit-status-heavy" => Ok(Self::MagitStatusHeavy),
-            "file-open" => Ok(Self::FileOpen),
-            "process-output" => Ok(Self::ProcessOutput),
-            "elisp-benchmarks" => Ok(Self::ElispBenchmarks),
-            "lsp-json-rpc" => Ok(Self::LspJsonRpc),
-            unknown => Err(UnknownScenarioId(unknown.to_string())),
-        }
+        Self::iter()
+            .find(|id| id.as_str() == value)
+            .ok_or_else(|| UnknownScenarioId(value.to_string()))
     }
 }
 
