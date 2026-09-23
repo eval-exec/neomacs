@@ -186,3 +186,6 @@ pub fn folded_to_pprof(folded: &str) -> Vec<u8> {
 
     profile.buf
 }
+
+#[cfg(test)]
+mod tests;

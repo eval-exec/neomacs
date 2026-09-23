@@ -313,7 +313,6 @@ fn sampled_format(fourcc: u32) -> Option<(vk::Format, wgpu::TextureFormat)> {
 }
 
 #[cfg(test)]
-#[path = "dmabuf_test.rs"]
 mod tests;
 
 unsafe fn modifier_plane_count(

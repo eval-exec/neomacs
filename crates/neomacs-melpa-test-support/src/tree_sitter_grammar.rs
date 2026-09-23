@@ -369,3 +369,6 @@ fn grammar_library_exists(grammar_dir: &Path, language: &str) -> bool {
         })
     })
 }
+
+#[cfg(test)]
+mod tests;

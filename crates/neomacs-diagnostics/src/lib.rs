@@ -25,13 +25,3 @@ pub use server::{
     DiagnosticsConfig, MetricsProvider, ProfileController, port_from_str, router, spawn,
 };
 
-#[cfg(test)]
-mod flamegraph_test;
-#[cfg(test)]
-mod metrics_test;
-#[cfg(test)]
-mod pprof_test;
-#[cfg(test)]
-mod report_test;
-#[cfg(test)]
-mod server_test;

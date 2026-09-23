@@ -1625,5 +1625,4 @@ fn frame_format_from_fourcc(fourcc: u32) -> Result<VideoFrameFormat, String> {
 }
 
 #[cfg(test)]
-#[path = "decoder_test.rs"]
 mod tests;

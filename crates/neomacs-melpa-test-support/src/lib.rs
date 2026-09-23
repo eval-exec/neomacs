@@ -37,10 +37,6 @@ pub use tree_sitter_grammar::{
 
 pub const DEFAULT_PROCESS_TIMEOUT: Duration = Duration::from_secs(300);
 
-#[cfg(test)]
-mod process_test;
-#[cfg(test)]
-mod tree_sitter_grammar_test;
 
 /// Resolve the checkout used by a normal Cargo run or an extracted Nextest
 /// archive.
@@ -532,3 +528,6 @@ pub type PackageEnvironmentEntry = (OsString, OsString);
 pub(crate) fn os_string(value: &OsStr) -> OsString {
     value.to_os_string()
 }
+
+#[cfg(test)]
+mod tests;

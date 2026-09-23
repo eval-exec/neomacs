@@ -8,8 +8,8 @@ fn timeout_kills_the_complete_child_process_group() {
     command.args(["-c", "sleep 60 & child=$!; echo $child; wait"]);
 
     let started = Instant::now();
-    let output = match super::group_output_with_timeout(&mut command, Duration::from_millis(100)) {
-        Err(super::CommandError::TimedOut(output)) => output,
+    let output = match crate::group_output_with_timeout(&mut command, Duration::from_millis(100)) {
+        Err(crate::CommandError::TimedOut(output)) => output,
         result => panic!("child-spawning command must time out, got {result:?}"),
     };
 
@@ -39,8 +39,8 @@ fn timeout_still_kills_the_group_when_its_leader_exits_first() {
     command.args(["-c", "sleep 60 & echo $!"]);
 
     let started = Instant::now();
-    let output = match super::group_output_with_timeout(&mut command, Duration::from_millis(100)) {
-        Err(super::CommandError::TimedOut(output)) => output,
+    let output = match crate::group_output_with_timeout(&mut command, Duration::from_millis(100)) {
+        Err(crate::CommandError::TimedOut(output)) => output,
         result => panic!("leader-exits-first command must time out, got {result:?}"),
     };
 
@@ -67,7 +67,7 @@ fn private_pty_timeout_kills_a_hup_ignoring_session_child() {
     use std::process::Command;
     use std::time::Duration;
 
-    let workspace_root = super::workspace_root();
+    let workspace_root = crate::workspace_root();
     let scratch = tempfile::Builder::new()
         .prefix("neomacs-pty-timeout-")
         .tempdir_in(workspace_root.join("tmp"))
@@ -87,7 +87,7 @@ fn private_pty_timeout_kills_a_hup_ignoring_session_child() {
         .env("PTY_OUTPUT", terminal_output)
         .env("PTY_TIMEOUT", "0.1");
 
-    let output = super::group_output_with_timeout(&mut command, Duration::from_secs(2))
+    let output = crate::group_output_with_timeout(&mut command, Duration::from_secs(2))
         .expect("PTY runner must enforce its inner deadline");
     assert!(!output.status.success());
     let child_pid = fs::read_to_string(child_pid_path)

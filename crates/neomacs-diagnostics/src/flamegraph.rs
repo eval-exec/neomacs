@@ -28,3 +28,6 @@ fn empty_svg(title: &str) -> String {
 {title}: no samples captured (idle window)</text></svg>"
     )
 }
+
+#[cfg(test)]
+mod tests;

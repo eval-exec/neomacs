@@ -1,4 +1,4 @@
-use super::*;
+use crate::*;
 
 #[test]
 fn downloads_and_verifies_every_public_fixture() {
@@ -18,6 +18,6 @@ fn downloads_and_verifies_every_public_fixture() {
 
 #[test]
 fn downloads_the_nonzero_face_woff2_collection_fixture() {
-    let bytes = std::fs::read(super::woff2_collection()).expect("downloaded WOFF2 collection");
+    let bytes = std::fs::read(crate::woff2_collection()).expect("downloaded WOFF2 collection");
     assert_eq!(&bytes[..8], b"wOF2ttcf");
 }

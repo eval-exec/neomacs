@@ -507,4 +507,4 @@ fn sha256_bytes(bytes: &[u8]) -> String {
 }
 
 #[cfg(test)]
-mod lib_test;
+mod tests;

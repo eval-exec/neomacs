@@ -4677,5 +4677,4 @@ Environment:
 }
 
 #[cfg(test)]
-#[path = "main_test.rs"]
 mod tests;

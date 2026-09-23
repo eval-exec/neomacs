@@ -1,4 +1,4 @@
-use super::{EmacsRuntime, prepare_cached_tree_sitter_grammar};
+use crate::{EmacsRuntime, prepare_cached_tree_sitter_grammar};
 
 #[test]
 fn cached_tree_sitter_grammar_rejects_an_unpinned_revision_before_io() {

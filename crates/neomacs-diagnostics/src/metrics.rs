@@ -112,3 +112,6 @@ pub struct GcMetrics {
     pub strings: u64,
     pub vector_cells: u64,
 }
+
+#[cfg(test)]
+mod tests;

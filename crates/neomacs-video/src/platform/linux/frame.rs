@@ -108,5 +108,4 @@ pub(super) fn dmabuf_cache_key(
 }
 
 #[cfg(test)]
-#[path = "frame_test.rs"]
 mod tests;
