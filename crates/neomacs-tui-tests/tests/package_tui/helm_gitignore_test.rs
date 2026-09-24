@@ -9,6 +9,19 @@ use super::{CachedMelpaOracle, HELM_GITIGNORE_MELPA_PIN};
 
 use super::scenario::{PackageTuiPair, PackageTuiScenario, PairTimeout, ReadinessCheckpoint};
 
+/// The failure bound every checkpoint in this file waits against.
+///
+/// Checkpoints exit the moment the editor *reaches* the stage's observable
+/// state, so the bound is paid only by runs that are already failing; what
+/// it must exceed is the worst-case scheduling lag of a loaded runner.  A
+/// full-suite nextest run keeps ~24 editor processes and GNU oracles alive
+/// at once, and under that load one lagging frame legitimately overshoots
+/// the old 5-15s bounds: the harness observed Neomacs reach every later
+/// stage exactly, only after the "list HTTP failure" bound had burned.
+/// Generous bounds make that slow-but-correct case pass instead of flake;
+/// they cost nothing when nothing is wrong.
+const STAGE_TIMEOUT: Duration = Duration::from_secs(45);
+
 /// `helm-gitignore' is a thin interactive client, so its public seam is the
 /// complete `M-x helm-gitignore' session.  The package, Helm, Request,
 /// url-retrieve, JSON parser, callbacks, generated buffer, and file writing all
@@ -493,7 +506,7 @@ fn open_helm_gitignore(pair: &mut PackageTuiPair, divergences: &mut Vec<String>)
     wait_for_progress(
         pair,
         "Helm startup",
-        Duration::from_secs(12),
+        STAGE_TIMEOUT,
         |grid| {
             grid.iter().any(|row| row.contains("*helm-gitignore*"))
                 && grid.iter().any(|row| row.contains("pattern:"))
@@ -512,7 +525,7 @@ fn type_query_and_wait(
     wait_for_progress(
         pair,
         &format!("query {query:?}"),
-        Duration::from_secs(15),
+        STAGE_TIMEOUT,
         |grid| {
             grid.iter()
                 .any(|row| row.contains("pattern:") && row.contains(query))
@@ -656,7 +669,7 @@ fn navigate_to_visual_studio_code(
     let selection_reached = wait_for_progress(
         pair,
         &format!("{stage} VisualStudioCode selection"),
-        Duration::from_secs(5),
+        STAGE_TIMEOUT,
         |grid| {
             grid.iter().any(|row| {
                 row.contains("*helm-gitignore*")
@@ -705,7 +718,7 @@ fn capture_editor(session: &mut TuiSession, stage: &str, editor: &str) -> String
     );
     session.send_key("RET");
     let path = session.home_dir().join(format!("{stage}.state"));
-    let deadline = Instant::now() + Duration::from_secs(8);
+    let deadline = Instant::now() + STAGE_TIMEOUT;
     loop {
         session.read(Duration::from_millis(10));
         if let Ok(state) = fs::read_to_string(&path) {
@@ -726,7 +739,7 @@ fn wait_for_state_file(
     editor: &str,
 ) -> String {
     let path = session.home_dir().join(name);
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + STAGE_TIMEOUT;
     loop {
         session.read(Duration::from_millis(10));
         if let Ok(state) = fs::read_to_string(&path)
@@ -792,7 +805,7 @@ fn ready_helm_gitignore_pair(label: &str) -> PackageTuiPair {
         .spawn_when_ready(
             ReadinessCheckpoint::new(
                 "release engineering fixture",
-                PairTimeout::same(Duration::from_secs(20)),
+                PairTimeout::same(STAGE_TIMEOUT),
             ),
             |grid| {
                 grid.iter()
@@ -843,7 +856,7 @@ fn helm_gitignore_public_workflows_match_gnu() {
     let (gnu, neo) = capture_reached_stage(
         &mut pair,
         "single-selection",
-        Duration::from_secs(15),
+        STAGE_TIMEOUT,
         |grid| {
             grid.iter().any(|row| {
                 row.contains("# Created by https://www.toptal.com/developers/gitignore/api/visual")
@@ -910,7 +923,7 @@ fn helm_gitignore_public_workflows_match_gnu() {
     wait_for_progress(
         &mut pair,
         "ordered multi-selection marks",
-        Duration::from_secs(5),
+        STAGE_TIMEOUT,
         |grid| {
             grid.iter().any(|row| {
                 row.contains("*helm-gitignore*") && row.contains(" L2 ") && row.contains(" M2 ")
@@ -932,7 +945,7 @@ fn helm_gitignore_public_workflows_match_gnu() {
     let (gnu, neo) = capture_reached_stage(
         &mut pair,
         "ordered-multi-selection",
-        Duration::from_secs(15),
+        STAGE_TIMEOUT,
         |grid| {
             grid.iter().any(|row| {
                 row.contains("# Created by https://www.toptal.com/developers/gitignore/api/linux")
@@ -1210,7 +1223,7 @@ fn helm_gitignore_public_workflows_match_gnu() {
     let neo_generated = wait_for_progress(
         &mut pair,
         "generated buffer before save",
-        Duration::from_secs(15),
+        STAGE_TIMEOUT,
         |grid| {
             grid.iter().any(|row| {
                 row.contains("# Created by https://www.toptal.com/developers/gitignore/api/visual")
@@ -1235,7 +1248,7 @@ fn helm_gitignore_public_workflows_match_gnu() {
         pair.neo.send_key("RET");
     }
     let saved_relative = ".gitignore";
-    let deadline = Instant::now() + Duration::from_secs(12);
+    let deadline = Instant::now() + STAGE_TIMEOUT;
     let gnu_file = loop {
         pair.gnu.read(Duration::from_millis(10));
         if let Ok(text) = fs::read_to_string(pair.gnu.home_dir().join(saved_relative))
@@ -1250,7 +1263,7 @@ fn helm_gitignore_public_workflows_match_gnu() {
         thread::yield_now();
     };
     let neo_file = if neo_generated {
-        let deadline = Instant::now() + Duration::from_secs(12);
+        let deadline = Instant::now() + STAGE_TIMEOUT;
         loop {
             pair.neo.read(Duration::from_millis(10));
             if let Ok(text) = fs::read_to_string(pair.neo.home_dir().join(saved_relative))
@@ -1359,7 +1372,7 @@ release-output/
     wait_for_progress(
         &mut pair,
         "list HTTP failure",
-        Duration::from_secs(15),
+        STAGE_TIMEOUT,
         failure,
         &mut divergences,
     );
@@ -1439,7 +1452,7 @@ release-output/
     wait_for_progress(
         &mut pair,
         "generation connection-refused failure",
-        Duration::from_secs(15),
+        STAGE_TIMEOUT,
         |grid| {
             grid.iter().any(|row| {
                 row.contains("Keyword argument")
@@ -1461,7 +1474,7 @@ release-output/
     wait_for_progress(
         &mut pair,
         "generation failure cleanup",
-        Duration::from_secs(5),
+        STAGE_TIMEOUT,
         |grid| {
             grid.iter()
                 .any(|row| row.contains("Release engineering scratchpad"))
