@@ -980,6 +980,26 @@ fn test_format_mode_line_size_and_process_specs_match_gnu() {
 }
 
 #[test]
+fn test_format_mode_line_size_specs_count_characters_not_bytes() {
+    // GNU xdisp.c:29511-29524 defines %i/%I as ZV - BEGV, a character count.
+    // A buffer of multi-byte glyphs must report its character length: the
+    // Spacemacs home banner's box-drawing art first exposed the byte-count
+    // divergence ("4.1k" where GNU says "3.1k").
+    crate::test_utils::init_test_tracing();
+    let mut eval = interactive_context();
+    let buffer_id = eval.buffers.create_buffer("mode-line-multibyte-size");
+    eval.buffers.set_current(buffer_id);
+    {
+        let buffer = eval.buffers.get_mut(buffer_id).expect("buffer");
+        buffer.insert(&"─".repeat(1536));
+    }
+
+    let rendered =
+        builtin_format_mode_line_ctx(&mut eval, vec![Value::string("%i|%I")]).expect("specs");
+    assert_eq!(rendered, Value::string("1536|1.5k"));
+}
+
+#[test]
 fn test_format_mode_line_column_c_and_big_c_specs_match_gnu() {
     crate::test_utils::init_test_tracing();
     let mut eval = interactive_context();
@@ -1114,8 +1134,11 @@ fn format_mode_line_position_backend_trace(kind: BufferTextBackendKind) -> Strin
 #[test]
 fn implemented_text_backends_match_format_mode_line_position_specs() {
     crate::test_utils::init_test_tracing();
+    // GNU xdisp.c:29511 %i is ZV - BEGV, a CHARACTER count, so the 11-char
+    // fixture reports 11 even though its Emacs bytes number 14.  Verified
+    // against GNU 31.1 on a PTY: "%i|%I" -> "11|11".
     let baseline = format_mode_line_position_backend_trace(BufferTextBackendKind::GapBuffer);
-    assert_eq!(baseline, "2|2|3|14");
+    assert_eq!(baseline, "2|2|3|11");
 
     for kind in implemented_text_backends() {
         assert_eq!(

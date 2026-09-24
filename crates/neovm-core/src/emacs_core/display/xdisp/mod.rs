@@ -3449,7 +3449,7 @@ fn expand_mode_line_percent_in_state(
             }
             Some('i') => {
                 let size = buf
-                    .map(|buffer| buffer.accessible_emacs_byte_region().range().len().get())
+                    .map(|buffer| buffer.accessible_char_len().get())
                     .unwrap_or(0);
                 append_mode_line_percent_string_spec(
                     result,
@@ -3461,7 +3461,7 @@ fn expand_mode_line_percent_in_state(
             }
             Some('I') => {
                 let size = buf
-                    .map(|buffer| buffer.accessible_emacs_byte_region().range().len().get())
+                    .map(|buffer| buffer.accessible_char_len().get())
                     .unwrap_or(0);
                 append_mode_line_percent_string_spec(
                     result,
