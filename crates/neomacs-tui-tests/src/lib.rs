@@ -721,17 +721,30 @@ impl TuiSession {
     /// `IDLE_CUTOFF` (e.g. `view-hello-file` running format-decode →
     /// enriched-decode → view-mode setup) so plain idle-detection
     /// returns too eagerly.
+    ///
+    /// The predicate is re-checked at least every [`PREDICATE_POLL`] and
+    /// again after every idle settle, so a state that is already on screen
+    /// is observed even when the editor emits nothing further.  (Checking
+    /// only once after a whole-length `read` makes a silent editor burn the
+    /// entire deadline — the editor that reached the state first and then
+    /// went quiet pays the bound, while its noisier peer sails through on
+    /// the idle cut-off.)
     pub fn read_until<F>(&mut self, max_timeout: Duration, predicate: F)
     where
         F: Fn(&[String]) -> bool,
     {
+        /// How often the predicate is re-checked while the editor is
+        /// silent; small enough that a satisfied predicate is observed
+        /// promptly, large enough not to spin on grid snapshots.
+        const PREDICATE_POLL: Duration = Duration::from_millis(50);
+
         let deadline = Instant::now() + max_timeout;
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 break;
             }
-            self.read(remaining);
+            self.read(remaining.min(PREDICATE_POLL));
             if predicate(&self.text_grid()) {
                 break;
             }

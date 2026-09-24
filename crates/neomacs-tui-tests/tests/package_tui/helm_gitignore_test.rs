@@ -497,6 +497,45 @@ where
     neo_reached
 }
 
+/// Quit the failed helm session the way the state says, not the clock.
+///
+/// `C-g C-g' sent blind reaches GNU's emergency-escape path when the two
+/// keys straddle an unconsumed quit: the first C-g sets `quit-flag' inside
+/// code still running with `inhibit-quit', and the second (50ms later)
+/// finds it non-nil and suspends the editor — "Emacs is resuming after an
+/// emergency escape. Auto-save? (y or n)", which struck this test twice.
+/// The timing-safe fix is to observe each key's effect before sending the
+/// next: settle the sentinel-error state, send ONE C-g, and wait for the
+/// helm session to close (its buffer leaves the grid) before sending the
+/// second.  Both editors then receive the same keys, each gated on that
+/// editor's own state.
+fn quit_failure_session(pair: &mut PackageTuiPair) {
+    settle_pair(pair);
+    send_to_both(pair, |session| session.send_key("C-g"));
+    let session_closed = |grid: &[String]| !grid.iter().any(|row| row.contains("*helm-gitignore*"));
+    for (name, session) in [("GNU", &mut pair.gnu), ("Neomacs", &mut pair.neo)] {
+        let deadline = Instant::now() + STAGE_TIMEOUT;
+        loop {
+            session.read(Duration::from_millis(20));
+            if session_closed(&session.text_grid()) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{name} did not close the helm session after C-g:\n{}",
+                session.text_grid().join("\n")
+            );
+        }
+    }
+    settle_pair(pair);
+    send_to_both(pair, |session| session.send_key("C-g"));
+}
+
+fn settle_pair(pair: &mut PackageTuiPair) {
+    let _ = neomacs_tui_tests::pair::settle_session(&mut pair.gnu);
+    let _ = neomacs_tui_tests::pair::settle_session(&mut pair.neo);
+}
+
 fn open_helm_gitignore(pair: &mut PackageTuiPair, divergences: &mut Vec<String>) -> bool {
     send_to_both(pair, |session| {
         session.send_key("M-x");
@@ -1470,7 +1509,7 @@ release-output/
         ],
         &mut divergences,
     );
-    send_to_both(&mut pair, |session| session.send_keys("C-g C-g"));
+    quit_failure_session(&mut pair);
     wait_for_progress(
         &mut pair,
         "generation failure cleanup",
