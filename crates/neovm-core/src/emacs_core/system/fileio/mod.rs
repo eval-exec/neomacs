@@ -7066,64 +7066,13 @@ pub(crate) fn builtin_find_file_noselect(
 // Auto-save support
 // ===========================================================================
 
-/// Compute the auto-save file name for a buffer.
-///
-/// For visited files: `#filename#` in the same directory.
-/// For non-visited buffers: `#*buffername*#` in the auto-save-list-file-prefix
-/// directory (or temporary-file-directory as fallback).
-fn make_auto_save_file_name_for_buffer(
-    obarray: &Obarray,
-    buf: &crate::buffer::Buffer,
-) -> crate::heap_types::LispString {
-    if let Some(file_name) = buf.file_name_lisp_string() {
-        // Visited file: #dir/filename# -> dir/#filename#
-        let dir = lisp_file_name_directory(file_name)
-            .unwrap_or_else(|| file_name_lisp_from_bytes(Vec::new(), file_name.is_multibyte()));
-        let base =
-            wrap_ascii_around_lisp_string(&lisp_file_name_nondirectory(file_name), b"#", b"#");
-        concat_file_name_lisp(&dir, &base)
-    } else {
-        // Non-visited buffer: #*buffername*# in prefix dir or temp dir
-        let dir = obarray
-            .symbol_value("auto-save-list-file-prefix")
-            .and_then(|value| value.as_lisp_string().cloned())
-            .and_then(|value| {
-                if value.as_bytes().is_empty() {
-                    None
-                } else {
-                    lisp_file_name_directory(&value)
-                }
-            })
-            .or_else(|| {
-                obarray
-                    .symbol_value("temporary-file-directory")
-                    .and_then(|value| value.as_lisp_string().cloned())
-            })
-            .unwrap_or_else(|| crate::heap_types::LispString::from_utf8("/tmp/"));
-        let name_value = buf.name_value();
-        let name = name_value
-            .as_lisp_string()
-            .expect("buffer name must be a Lisp string");
-        let mut safe_name_bytes = name.as_bytes().to_vec();
-        for byte in &mut safe_name_bytes {
-            if *byte == b'/' {
-                *byte = b'!';
-            }
-        }
-        let safe_name = file_name_lisp_from_bytes(safe_name_bytes, name.is_multibyte());
-        let base = wrap_ascii_around_lisp_string(&safe_name, b"#*", b"*#");
-        concat_file_name_lisp(&lisp_file_name_as_directory(&dir), &base)
-    }
-}
-
 // `make-auto-save-file-name' is not here.  GNU has no C version: it is
 // `(defun make-auto-save-file-name () ...)' at lisp/files.el:7699, over
 // `auto-save-file-name-transforms', and it only RETURNS a name -- setting
-// `buffer-auto-save-file-name' is `auto-save-mode's job (lisp/files.el), and
-// C only reads the field (`BVAR (b, auto_save_file_name)', src/fileio.c:6406).
-// The Rust subr wrote the field itself (DIVERGENCES.md 152).
-// `make_auto_save_file_name_for_buffer' below is still reached from
-// `builtin_do_auto_save', which computes a name when the buffer has none.
+// `buffer-auto-save-file-name' is `auto-save-mode's job (lisp/files.el),
+// and C only reads the field (`BVAR (b, auto_save_file_name)',
+// src/fileio.c:6406-6408), which is also the gate Fdo_auto_save applies
+// to every buffer.  do-auto-save therefore never names a buffer.
 
 /// `(do-auto-save &optional NO-MESSAGE CURRENT)` -> nil
 ///
@@ -7195,8 +7144,18 @@ pub(crate) fn builtin_do_auto_save(
                 continue;
             }
 
-            // Determine the auto-save target
+            // GNU fileio.c:6408 gates every buffer on
+            // `STRINGP (BVAR (b, auto_save_file_name))' before anything
+            // else: a buffer with no auto-save name is skipped -- never
+            // written, and never NAMED here.  Naming is `auto-save-mode's
+            // job (lisp/files.el); do-auto-save only reads the field.  The
+            // Rust subr used to invent `#*buffer*#' names for file-less
+            // buffers (DIVERGENCES.md 152), which made buffer-modified-p
+            // answer `autosaved' where GNU answers t.
             let auto_name = buf.auto_save_file_name_lisp_string().cloned();
+            if auto_name.is_none() {
+                continue;
+            }
             let visit_name = buf.file_name_lisp_string().cloned();
             let mut bytes = Vec::new();
             buf.copy_emacs_byte_range_to(buf.full_emacs_byte_range(), &mut bytes);
@@ -7218,27 +7177,9 @@ pub(crate) fn builtin_do_auto_save(
         };
 
         let Some(target_path) = target else {
-            // No auto-save file name and no visited file -- generate one
-            let auto_name = {
-                let buf = eval.buffers.get(buf_id).unwrap();
-                make_auto_save_file_name_for_buffer(&eval.obarray, buf)
-            };
-            // Set the auto-save name on the buffer
-            let auto_name_value = Value::heap_string(auto_name.clone());
-            if let Some(buf) = eval.buffers.get_mut(buf_id) {
-                buf.set_buffer_local("buffer-auto-save-file-name", auto_name_value);
-                buf.set_auto_save_file_name_value(auto_name_value);
-            }
-            let _ = write_bytes_to_file_with_mode(
-                &content_bytes,
-                &lisp_file_name_to_path_buf(&auto_name),
-                FileWriteMode::Truncate,
-            );
-            let _ = eval.buffers.set_buffer_auto_saved(buf_id);
-            // Update buffer-saved-size
-            if let Some(buf) = eval.buffers.get_mut(buf_id) {
-                buf.set_buffer_local("buffer-saved-size", Value::fixnum(content_len));
-            }
+            // GNU's gate above already required STRINGP (auto_save_file_name);
+            // only `auto-save-visited-file-name' can make the target nil
+            // here (no visited file), and GNU skips that buffer too.
             continue;
         };
 

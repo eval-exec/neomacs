@@ -157,8 +157,18 @@ fn find_file_name_handler_reads_its_variables_like_gnu() {
     assert_eq!(results[2], "OK (nil vm-fnh-h nil)");
 }
 
+/// GNU fileio.c:6408 gates every buffer on `STRINGP (auto_save_file_name)':
+/// a buffer with no auto-save name is never written and never NAMED by
+/// do-auto-save.  Naming a fileless buffer was a Neomacs divergence
+/// (DIVERGENCES.md 152): it wrote `#*buffer*#' under the auto-save-list
+/// prefix and made buffer-modified-p answer `autosaved' where GNU answers t
+/// -- the helm-gitignore parity test surfaced it once its stage bounds
+/// became generous enough for the idle auto-save to land.
+///
+/// Verified against GNU 31.1 in batch: a modified, file-less buffer after
+/// do-auto-save has autosave-name nil and stays modified.
 #[test]
-fn do_auto_save_names_a_fileless_buffer_under_a_raw_unibyte_prefix_directory() {
+fn do_auto_save_skips_a_modified_buffer_without_an_auto_save_name() {
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new();
     let raw = Value::heap_string(crate::heap_types::LispString::from_unibyte(
@@ -167,25 +177,33 @@ fn do_auto_save_names_a_fileless_buffer_under_a_raw_unibyte_prefix_directory() {
     eval.obarray
         .set_symbol_value("auto-save-list-file-prefix", raw);
 
-    let buffer_name = eval
-        .buffers
-        .current_buffer()
-        .expect("current buffer")
-        .name_runtime_string_owned();
     eval.buffers
         .current_buffer_mut()
         .expect("current buffer")
         .insert_lisp_string(&crate::heap_types::LispString::from_utf8("payload"));
-    let safe_name = buffer_name.replace('/', "!");
-    let mut expected = b"/tmp/neomacs-\xFF/#*".to_vec();
-    expected.extend_from_slice(safe_name.as_bytes());
-    expected.extend_from_slice(b"*#");
 
-    builtin_do_auto_save(&mut eval, vec![]).expect("do-auto-save should name the buffer");
+    builtin_do_auto_save(&mut eval, vec![]).expect("do-auto-save runs");
     let buf = eval.buffers.current_buffer().expect("current buffer");
-    assert_unibyte_string_bytes(buf.auto_save_file_name_value(), &expected);
+    assert!(
+        buf.auto_save_file_name_value().is_nil(),
+        "do-auto-save must not name a buffer with no auto-save name"
+    );
+    assert!(buf.is_modified(), "GNU leaves a skipped buffer modified");
+    assert!(
+        fs::read_dir("/tmp")
+            .expect("tmp dir")
+            .filter_map(Result::ok)
+            .any(|entry| entry.file_name().to_string_lossy().contains("#*"))
+            == false,
+        "no #*buffer*# auto-save file was created"
+    );
 }
 
+/// GNU names the auto-save file in `auto-save-mode' (lisp/files.el) --
+/// do-auto-save only READS `buffer-auto-save-file-name' (fileio.c:6408).
+/// The naming-side coverage belongs to the Lisp layer; here the name is
+/// set explicitly with raw unibyte bytes, and the write must preserve
+/// them.
 #[cfg(unix)]
 #[test]
 fn do_auto_save_preserves_a_raw_unibyte_visited_filename_in_the_auto_save_name() {
@@ -197,6 +215,11 @@ fn do_auto_save_preserves_a_raw_unibyte_visited_filename_in_the_auto_save_name()
     {
         let buf = eval.buffers.current_buffer_mut().expect("current buffer");
         buf.set_file_name_value(raw);
+        let auto_name = Value::heap_string(crate::heap_types::LispString::from_unibyte(
+            b"/tmp/neomacs-\xFF/#demo-\xFE#".to_vec(),
+        ));
+        buf.set_auto_save_file_name_value(auto_name.clone());
+        buf.set_buffer_local("buffer-auto-save-file-name", auto_name);
         buf.insert_lisp_string(&crate::heap_types::LispString::from_utf8("payload"));
     }
 
@@ -5994,9 +6017,16 @@ fn builtin_do_auto_save_preserves_raw_unibyte_filename_and_bytes() {
             0xFF, b'A',
         ]));
     }
-    // `do-auto-save' names the buffer itself when it has no auto-save name;
-    // `make-auto-save-file-name' is Lisp (lisp/files.el:7699) and cannot be
-    // called here (DIVERGENCES.md 152).
+    // `buffer-auto-save-file-name' is set explicitly (auto-save-mode's job,
+    // lisp/files.el) -- do-auto-save only reads it (fileio.c:6408).
+    {
+        let buf = eval.buffers.current_buffer_mut().expect("current buffer");
+        let auto_name = Value::heap_string(crate::heap_types::LispString::from_unibyte(
+            auto_path.as_os_str().as_bytes().to_vec(),
+        ));
+        buf.set_auto_save_file_name_value(auto_name.clone());
+        buf.set_buffer_local("buffer-auto-save-file-name", auto_name);
+    }
     builtin_do_auto_save(&mut eval, vec![]).expect("do-auto-save should preserve raw filenames");
 
     assert_eq!(fs::read(&auto_path).unwrap(), vec![0xFF, b'A']);
