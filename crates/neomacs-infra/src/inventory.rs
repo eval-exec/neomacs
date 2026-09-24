@@ -31,8 +31,21 @@ impl Inventory {
     /// covered when the target itself is visited, if it lives inside the
     /// fixture).
     pub fn build(root: &Path) -> Result<Self, String> {
+        Self::build_excluding(root, &[])
+    }
+
+    /// [`Self::build`], skipping the named fixture-relative paths.
+    ///
+    /// The one caller is the record itself: `INVENTORY` cannot contain its
+    /// own digest, so the sealing walk skips exactly that path.
+    pub fn build_excluding(root: &Path, excluded: &[&str]) -> Result<Self, String> {
         let mut entries = Vec::new();
-        fn walk(root: &Path, dir: &Path, entries: &mut Vec<Entry>) -> Result<(), String> {
+        fn walk(
+            root: &Path,
+            dir: &Path,
+            entries: &mut Vec<Entry>,
+            excluded: &[&str],
+        ) -> Result<(), String> {
             let items =
                 fs::read_dir(dir).map_err(|error| format!("read {}: {error}", dir.display()))?;
             let mut items: Vec<_> = items.filter_map(Result::ok).map(|e| e.path()).collect();
@@ -44,7 +57,10 @@ impl Inventory {
                     .strip_prefix(root)
                     .map_err(|error| format!("relativize {}: {error}", path.display()))?
                     .to_string_lossy()
-                    .into_owned();
+                    .replace('\\', "/");
+                if excluded.contains(&rel.as_str()) {
+                    continue;
+                }
                 if meta.is_symlink() {
                     let target = fs::read_link(&path)
                         .map_err(|error| format!("readlink {}: {error}", path.display()))?;
@@ -54,7 +70,7 @@ impl Inventory {
                         sha256: format!("link:{}", target.to_string_lossy()),
                     });
                 } else if meta.is_dir() {
-                    walk(root, &path, entries)?;
+                    walk(root, &path, entries, excluded)?;
                 } else {
                     let bytes = fs::read(&path)
                         .map_err(|error| format!("read {}: {error}", path.display()))?;
@@ -72,7 +88,7 @@ impl Inventory {
             }
             Ok(())
         }
-        walk(root, root, &mut entries)?;
+        walk(root, root, &mut entries, excluded)?;
         Ok(Self { entries })
     }
 
@@ -116,6 +132,17 @@ impl Inventory {
     }
 }
 
+/// Hex SHA-256 of `bytes` — the digest format the inventory and the
+/// MANIFEST chain use everywhere, so callers never hand-roll one.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        hex.push_str(&format!("{byte:02x}"));
+    }
+    hex
+}
+
 /// Read an unquoted numeric field from a JSON-lines entry.
 fn get_number(line: &str, key: &str) -> Option<u64> {
     let marker = format!("\"{key}\":");
@@ -142,10 +169,19 @@ impl Drift {
 /// Deep verification: re-walk the tree, re-hash every file, and compare
 /// against the sealed inventory.  A clean report proves the fixture is
 /// byte-identical to the day it was sealed.
-pub fn verify_deep(root: &Path, inventory: &Inventory) -> Result<Drift, String> {
+///
+/// The live walk skips `excluded` fixture-relative paths: the record's own
+/// file (`INVENTORY`) is excluded by every caller, since it cannot be part
+/// of the content it hashes; anything else recorded must exist unmodified.
+pub fn verify_deep(root: &Path, inventory: &Inventory, excluded: &[&str]) -> Result<Drift, String> {
     // Current tree state, walked and hashed the same way.
     let mut current: Vec<(String, u64, String)> = Vec::new();
-    fn walk(root: &Path, dir: &Path, out: &mut Vec<(String, u64, String)>) -> Result<(), String> {
+    fn walk(
+        root: &Path,
+        dir: &Path,
+        out: &mut Vec<(String, u64, String)>,
+        excluded: &[&str],
+    ) -> Result<(), String> {
         let items =
             fs::read_dir(dir).map_err(|error| format!("read {}: {error}", dir.display()))?;
         let mut items: Vec<_> = items.filter_map(Result::ok).map(|e| e.path()).collect();
@@ -157,13 +193,16 @@ pub fn verify_deep(root: &Path, inventory: &Inventory) -> Result<Drift, String> 
                 .strip_prefix(root)
                 .map_err(|error| format!("relativize {}: {error}", path.display()))?
                 .to_string_lossy()
-                .into_owned();
+                .replace('\\', "/");
+            if excluded.contains(&rel.as_str()) {
+                continue;
+            }
             if meta.is_symlink() {
                 let target = fs::read_link(&path)
                     .map_err(|error| format!("readlink {}: {error}", path.display()))?;
                 out.push((rel, 0, format!("link:{}", target.to_string_lossy())));
             } else if meta.is_dir() {
-                walk(root, &path, out)?;
+                walk(root, &path, out, excluded)?;
             } else {
                 let bytes =
                     fs::read(&path).map_err(|error| format!("read {}: {error}", path.display()))?;
@@ -177,7 +216,7 @@ pub fn verify_deep(root: &Path, inventory: &Inventory) -> Result<Drift, String> 
         }
         Ok(())
     }
-    walk(root, root, &mut current)?;
+    walk(root, root, &mut current, excluded)?;
 
     let sealed: std::collections::HashMap<&str, (u64, &str)> = inventory
         .entries

@@ -42,6 +42,7 @@ pub fn verify_provisioned(
     Ok(ProvisionedSealReport::Verified(inventory::verify_deep(
         package.package_dir(),
         &parsed,
+        &[],
     )?))
 }
 

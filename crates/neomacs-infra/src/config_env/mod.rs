@@ -10,6 +10,8 @@ pub mod common;
 pub mod doom;
 pub use crate::inventory;
 pub mod spacemacs;
+#[cfg(test)]
+mod tests;
 
 pub use doom::{DoomEnvironment, DoomSource};
 pub use inventory::{Drift, Inventory};

@@ -282,34 +282,97 @@ pub fn seal(root: &Path) -> Result<(), String> {
     walk(root)
 }
 
-/// Write the MANIFEST recording the fixture's name and source note, then
-/// seal — the tail every environment's materialize shares.
+/// Write the MANIFEST, record the content inventory the fixture is verified
+/// against, then seal — the tail every environment's materialize shares.
 ///
-/// The seal runs last so the INVENTORY's hashes describe the final sealed
-/// bytes; the INVENTORY itself is written before sealing so `seal`'s walk
-/// covers it too.
+/// The identity chain is MANIFEST -> INVENTORY -> bytes: `INVENTORY` hashes
+/// every fixture file, and `MANIFEST` records the digest of those hashes.
+/// The two record files are excluded from their own content — a file cannot
+/// contain a digest of itself, and the root of the chain is trusted the way
+/// `parity-reference.toml` is — so verification rebuilds the current state
+/// excluding `MANIFEST` and `INVENTORY` and compares those bytes only.
 pub fn manifest_and_seal(root: &Path, name: &str, source_note: &str) -> Result<(), String> {
+    // Hash the fixture content, excluding both record files.  Neither is
+    // final yet, and their bytes are exactly what the two writes below fix.
+    let inventory = super::inventory::Inventory::build_excluding(root, RECORD_FILES)?;
+    let inventory_text = inventory.to_jsonl();
+    let inventory_digest = super::inventory::sha256_hex(inventory_text.as_bytes());
+    fs::write(root.join(INVENTORY_FILE), &inventory_text)
+        .map_err(|error| format!("write INVENTORY: {error}"))?;
     fs::write(
         root.join("MANIFEST"),
-        format!("name = {name}\nsource = {source_note}\n"),
+        format!("name = {name}\nsource = {source_note}\ninventory = {inventory_digest}\n"),
     )
     .map_err(|error| format!("write MANIFEST: {error}"))?;
     seal(root)?;
-    // Self-check: the sealed fixture must verify clean against its own
-    // fresh inventory.  A drift here means the bootstrap wrote after the
-    // inventory was taken, or the seal missed a path -- fail loudly now,
-    // not six hours later in a mysterious parity divergence.
-    let inventory = super::inventory::Inventory::build(root)?;
-    let drift = super::inventory::verify_deep(root, &inventory)?;
+    // Self-check: the sealed fixture must verify clean against the inventory
+    // it was just recorded with.  A drift here means the bootstrap wrote
+    // after the inventory was taken, or the seal missed a path -- fail
+    // loudly now, not six hours later in a mysterious parity divergence.
+    let drift = verify_sealed_fixture(root)?;
     if !drift.is_clean() {
         return Err(format!(
-            "{name} fixture failed post-seal self-check:              {} missing, {} modified, {} added",
+            "{name} fixture failed post-seal self-check: {} missing, {} modified, {} added",
             drift.missing.len(),
             drift.modified.len(),
             drift.added.len()
         ));
     }
     Ok(())
+}
+
+/// The file the fixture's sealed content inventory is recorded under.
+pub const INVENTORY_FILE: &str = "INVENTORY";
+
+/// The two record files: the roots and subjects of the identity chain.
+/// Both are excluded from content hashing — `INVENTORY` cannot contain its
+/// own digest, and `MANIFEST` is written after the inventory walk — and
+/// `MANIFEST` is trusted as the chain root, as `parity-reference.toml` is.
+const RECORD_FILES: &[&str] = &["MANIFEST", INVENTORY_FILE];
+
+/// Load the sealed content inventory of a fixture.
+///
+/// `Err` for a fixture that predates the inventory record — such a fixture
+/// cannot prove byte-identity, and the honest answer is to re-materialize.
+pub fn load_sealed_inventory(root: &Path) -> Result<super::inventory::Inventory, String> {
+    let text = fs::read_to_string(root.join(INVENTORY_FILE)).map_err(|error| {
+        format!(
+            "{}: cannot read the sealed content inventory: {error}\n             (a fixture without one cannot prove byte-identity; re-materialize)",
+            root.join(INVENTORY_FILE).display()
+        )
+    })?;
+    let manifest = fs::read_to_string(root.join("MANIFEST"))
+        .map_err(|error| format!("read MANIFEST: {error}"))?;
+    let recorded_digest = manifest_field(&manifest, "inventory").ok_or_else(|| {
+        "MANIFEST does not record an inventory digest; the fixture predates the \
+         MANIFEST -> INVENTORY -> bytes chain and must be re-materialized"
+    })?;
+    if recorded_digest != super::inventory::sha256_hex(text.as_bytes()) {
+        return Err(
+            "the sealed content inventory does not match the digest MANIFEST \
+             recorded for it; the fixture record was mutated after sealing"
+                .to_owned(),
+        );
+    }
+    super::inventory::Inventory::parse_jsonl(&text)
+}
+
+/// One `key = value` line from a MANIFEST, if present.
+fn manifest_field(manifest: &str, key: &str) -> Option<String> {
+    let line = manifest
+        .lines()
+        .find(|line| line.starts_with(key) && line[key.len()..].trim_start().starts_with('='))?;
+    let value = line[line.find('=').unwrap() + 1..].trim();
+    Some(value.to_owned())
+}
+
+/// Verify a fixture against the inventory it was sealed with.
+///
+/// Not "build an inventory and compare the tree against itself": the stored
+/// record is the authority, so any post-seal mutation reports as drift.
+pub fn verify_sealed_fixture(root: &Path) -> Result<super::inventory::Drift, String> {
+    let inventory = load_sealed_inventory(root)?;
+    super::inventory::verify_deep(root, &inventory, RECORD_FILES)
 }
 
 /// Build the content inventory of a sealed fixture root.
