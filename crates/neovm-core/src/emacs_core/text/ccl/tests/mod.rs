@@ -1963,3 +1963,34 @@ fn ccl_execute_map_multiple_rejects_an_out_of_int_range_value() {
         .expect_err("map-multiple with an out-of-int-range content is invalid");
     assert_ccl_error_at_index(err, 4);
 }
+
+#[test]
+fn ccl_execute_runs_shift_jis_decoding_via_set_expr_reg() {
+    crate::test_utils::init_test_tracing();
+    // GNU: word 366874 = CCL_SetExprReg with op 0x16 (`CCL_DECODE_SJIS`),
+    // reg[RRR=1] reg[Rrr=3] into reg[rrr=0]. (0x81, 0x30) decodes to the
+    // JIS pair (0x21, 0x11): r0 = 0x21, r7 = 0x11.
+    let program = Value::vector([0, 4, 366_874, 22].into_iter().map(Value::fixnum).collect());
+    let registers = Value::vector(
+        [0u8, 129u8, 0u8, 48u8, 0u8, 0u8, 0u8, 0u8]
+            .into_iter()
+            .map(|number| Value::fixnum(i64::from(number)))
+            .collect(),
+    );
+    match builtin_ccl_execute_impl(vec![program, registers]) {
+        Ok(_) => {}
+        Err(super::Flow::Signal(signal)) => {
+            let message = signal
+                .data
+                .first()
+                .and_then(|value| value.as_lisp_string())
+                .map(|string| String::from_utf8_lossy(string.as_bytes()).into_owned())
+                .unwrap_or_else(|| format!("{:?}", signal.data));
+            panic!("de-sjis errored: {message}");
+        }
+        Err(other) => panic!("unexpected flow: {other:?}"),
+    }
+    let regs = registers.as_vector_data().unwrap();
+    assert_eq!(regs[0], Value::fixnum(0x21));
+    assert_eq!(regs[7], Value::fixnum(0x11));
+}

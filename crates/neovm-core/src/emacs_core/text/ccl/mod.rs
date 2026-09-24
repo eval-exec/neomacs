@@ -627,9 +627,12 @@ fn execute_compiled_ccl_with_state(
     // GNU disables reading and writing when the top program's buffer
     // magnification is 0. Called programs do not get their own check.
     let allows_io = allows_io && words[0] != 0;
+    // GNU validates eof against `0 <= eof <= ASIZE` at resolve time and
+    // only dereferences it on an actual EOF hit, so an eof exactly at the
+    // size is accepted and fails only when jumped to.
     let mut eof_instruction = usize::try_from(words[1])
         .ok()
-        .filter(|instruction| *instruction < words.len())
+        .filter(|instruction| *instruction <= words.len())
         .ok_or_else(|| invalid_ccl_program_at(1))?;
     let mut call_stack: Vec<(Vec<i32>, usize, usize)> = Vec::new();
     let mut map_state = MapMultipleState::default();
@@ -1175,7 +1178,7 @@ fn execute_compiled_ccl_with_state(
                 };
                 let callee_eof = usize::try_from(callee.get(1).copied().unwrap_or(-1))
                     .ok()
-                    .filter(|eof| *eof < callee.len())
+                    .filter(|eof| *eof <= callee.len())
                     .ok_or_else(|| invalid_ccl_program_at(this_instruction))?;
                 let caller = std::mem::replace(&mut words, callee);
                 call_stack.push((caller, instruction, eof_instruction));
@@ -1214,7 +1217,7 @@ fn execute_compiled_ccl_with_state(
                         }
                         let callee_eof = usize::try_from(callee.get(1).copied().unwrap_or(-1))
                             .ok()
-                            .filter(|eof| *eof < callee.len())
+                            .filter(|eof| *eof <= callee.len())
                             .ok_or_else(|| invalid_ccl_program_at(this_instruction))?;
                         let caller = std::mem::replace(&mut words, callee);
                         call_stack.push((caller, resume_at, eof_instruction));
