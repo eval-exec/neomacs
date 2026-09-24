@@ -129,6 +129,12 @@ impl SpacemacsEnvironment {
                 format!("operator copy of {} (@ {})", path.display(), spec.revision)
             }
         };
+        // Record the installed-package identity before sealing: the
+        // INVENTORY covers the record itself, and this is the only honest
+        // moment to observe what the bootstrap actually produced.
+        let packages = super::package_state::PackageStateIdentity::from_fixture(&root)?;
+        fs::write(root.join(common::PACKAGES_FILE), packages.to_record())
+            .map_err(|error| format!("write {}: {error}", common::PACKAGES_FILE))?;
         common::manifest_and_seal(&root, "spacemacs", &source_note)?;
         common::is_open_fixture(&root)
             .then_some(Self { root })
@@ -225,6 +231,12 @@ impl ConfigEnvironment for SpacemacsEnvironment {
 
     fn session_args(&self) -> Vec<String> {
         Vec::new()
+    }
+
+    fn package_state(
+        &self,
+    ) -> Result<crate::config_env::package_state::PackageStateIdentity, String> {
+        common::load_sealed_packages(&self.root)
     }
 
     fn verify_deep(&self) -> Result<crate::config_env::inventory::Drift, String> {

@@ -324,6 +324,26 @@ pub fn manifest_and_seal(root: &Path, name: &str, source_note: &str) -> Result<(
 /// The file the fixture's sealed content inventory is recorded under.
 pub const INVENTORY_FILE: &str = "INVENTORY";
 
+/// The file the fixture's installed-package identity is recorded under.
+pub const PACKAGES_FILE: &str = "PACKAGES";
+
+/// Read the sealed `PACKAGES` record of a fixture, if it has one.
+///
+/// `Err` for a fixture that predates the record.
+pub fn load_sealed_packages(
+    root: &Path,
+) -> Result<super::package_state::PackageStateIdentity, String> {
+    let text = fs::read_to_string(root.join(PACKAGES_FILE)).map_err(|error| {
+        format!(
+            "{}: cannot read the sealed package record: {error}\n\
+                 (a fixture without one does not record its package identity; \
+                 re-materialize)",
+            root.join(PACKAGES_FILE).display()
+        )
+    })?;
+    super::package_state::PackageStateIdentity::parse_record(&text)
+}
+
 /// The two record files: the roots and subjects of the identity chain.
 /// Both are excluded from content hashing — `INVENTORY` cannot contain its
 /// own digest, and `MANIFEST` is written after the inventory walk — and

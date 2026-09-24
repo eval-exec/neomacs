@@ -9,6 +9,7 @@
 pub mod common;
 pub mod doom;
 pub use crate::inventory;
+pub mod package_state;
 pub mod spacemacs;
 #[cfg(test)]
 mod tests;
@@ -45,6 +46,11 @@ pub trait ConfigEnvironment {
     /// state, share the multi-hundred-MB package builds read-only by
     /// symlink, so a write attempt hits the seal and fails loudly.
     fn prepare_session_state(&self, session_state: &Path) -> Result<(), String>;
+
+    /// The installed-package identity the fixture was sealed with.
+    ///
+    /// `Err` for a fixture that predates the `PACKAGES` record.
+    fn package_state(&self) -> Result<package_state::PackageStateIdentity, String>;
 
     /// Deep verification: re-walk the sealed fixture, re-hash every file,
     /// and compare against the sealed inventory.  Ok(drift) with a clean
