@@ -937,6 +937,52 @@ fn maybe_resolve_keyelt(binding: Value, resolve_keyelt: bool) -> Value {
     }
 }
 
+/// How one keymap walk resolves a raw definition, mirroring the two depths of
+/// GNU `get_keyelt`.
+///
+/// GNU `access_keymap_1` resolves every definition *before* deciding whether it
+/// is a prefix keymap to compose with the parent's prefix, so the resolver must
+/// run inside the walk.  Resolving after the walk loses the parent composition
+/// of a menu-item's filter result: `evil-esc-mode` rebinds `\e` in
+/// `input-decode-map` to `(menu-item "" CAPTURED :filter evil-esc)`, and only
+/// the composed result still carries the terminal map's `\e[200~`.
+///
+/// The capability is encoded as the implementor rather than a flag: a walk
+/// given `Option<&Obarray>` can only strip indirections, while a walk given
+/// `&mut Context` may evaluate a menu-item `:filter` exactly as GNU's
+/// `autoload` argument does.  Neither implementor needs a lifetime-carrying
+/// adapter struct, so no lifetime annotations appear in signatures.
+pub(crate) trait KeyeltResolution {
+    /// The obarray whose function cells a symbol keymap tail resolves through.
+    fn lookup_obarray(&self) -> Option<&Obarray>;
+    /// GNU `get_keyelt (binding, autoload)`.  `resolve_keyelt` is Neo's
+    /// existing "strip indirections at all" flag; runtime resolvers evaluate
+    /// menu-item filters regardless of it.
+    fn resolve(&mut self, binding: Value, resolve_keyelt: bool) -> Result<Value, Flow>;
+}
+
+/// Structural resolution for walks without an evaluator.
+impl KeyeltResolution for Option<&Obarray> {
+    fn lookup_obarray(&self) -> Option<&Obarray> {
+        *self
+    }
+
+    fn resolve(&mut self, binding: Value, resolve_keyelt: bool) -> Result<Value, Flow> {
+        Ok(maybe_resolve_keyelt(binding, resolve_keyelt))
+    }
+}
+
+/// Runtime resolution: the borrowed evaluator *is* the resolver.
+impl KeyeltResolution for &mut Context {
+    fn lookup_obarray(&self) -> Option<&Obarray> {
+        Some((**self).obarray())
+    }
+
+    fn resolve(&mut self, binding: Value, _resolve_keyelt: bool) -> Result<Value, Flow> {
+        get_keyelt_runtime(*self, binding, true)
+    }
+}
+
 /// The single canonical event index GNU's `access_keymap_1` compares against
 /// every entry in a keymap spine.
 ///
@@ -980,9 +1026,11 @@ fn lookup_in_keymap_level_impl(
     noinherit: bool,
     t_ok: bool,
     resolve_keyelt: bool,
-    obarray: Option<&Obarray>,
-) -> Option<Value> {
-    let mut cursor = keymap_binding_spine(keymap)?;
+    resolution: &mut dyn KeyeltResolution,
+) -> Result<Option<Value>, Flow> {
+    let Some(mut cursor) = keymap_binding_spine(keymap) else {
+        return Ok(None);
+    };
     let mut entries = 0;
     let mut t_binding: Option<Value> = None;
     let mut prefix_binding: Option<Value> = None;
@@ -1017,7 +1065,7 @@ fn lookup_in_keymap_level_impl(
                         } else {
                             result
                         };
-                        let val = maybe_resolve_keyelt(val, resolve_keyelt);
+                        let val = resolution.resolve(val, resolve_keyelt)?;
                         if val.is_nil() {
                             nil_binding_found = true;
                         } else if is_list_keymap(&val) {
@@ -1025,7 +1073,7 @@ fn lookup_in_keymap_level_impl(
                         } else if prefix_binding.is_some() {
                             break;
                         } else {
-                            return Some(val);
+                            return Ok(Some(val));
                         }
                     }
                     // nil in char-table means unbound — fall through
@@ -1045,7 +1093,7 @@ fn lookup_in_keymap_level_impl(
                 let items = entry_car.as_vector_data().unwrap();
                 if idx < items.len() {
                     let val = items[idx];
-                    let val = maybe_resolve_keyelt(val, resolve_keyelt);
+                    let val = resolution.resolve(val, resolve_keyelt)?;
                     if val.is_nil() {
                         nil_binding_found = true;
                     } else if is_list_keymap(&val) {
@@ -1053,7 +1101,7 @@ fn lookup_in_keymap_level_impl(
                     } else if prefix_binding.is_some() {
                         break;
                     } else {
-                        return Some(val);
+                        return Ok(Some(val));
                     }
                 }
             }
@@ -1074,9 +1122,14 @@ fn lookup_in_keymap_level_impl(
         // parent of the composed member `swiper-isearch-map` -- fell through to
         // the global `fill-paragraph`.
         if entry_car.is_cons() && is_list_keymap(&entry_car) {
-            if let Some(found) =
-                access_keymap_in_member(&entry_car, event, noinherit, t_ok, resolve_keyelt, obarray)
-            {
+            if let Some(found) = access_keymap_in_member(
+                &entry_car,
+                event,
+                noinherit,
+                t_ok,
+                resolve_keyelt,
+                resolution,
+            )? {
                 if found.is_nil() {
                     nil_binding_found = true;
                 } else if is_list_keymap(&found) {
@@ -1084,7 +1137,7 @@ fn lookup_in_keymap_level_impl(
                 } else if prefix_binding.is_some() {
                     break;
                 } else {
-                    return Some(found);
+                    return Ok(Some(found));
                 }
             }
             cursor = entry_cdr;
@@ -1096,7 +1149,7 @@ fn lookup_in_keymap_level_impl(
             let binding_car = entry_car.cons_car();
             let binding_cdr = entry_car.cons_cdr();
             if event.matches_stored_key(binding_car) {
-                let val = maybe_resolve_keyelt(binding_cdr, resolve_keyelt);
+                let val = resolution.resolve(binding_cdr, resolve_keyelt)?;
                 if val.is_nil() {
                     nil_binding_found = true;
                 } else if is_list_keymap(&val) {
@@ -1104,14 +1157,14 @@ fn lookup_in_keymap_level_impl(
                 } else if prefix_binding.is_some() {
                     break;
                 } else {
-                    return Some(val);
+                    return Ok(Some(val));
                 }
             }
             // Check for (t . COMMAND) default binding.
             // GNU keymap.c:425-429: when t_ok, record the first t binding
             // but keep scanning for a specific match.
             if t_ok && t_binding.is_none() && binding_car == Value::T {
-                t_binding = Some(maybe_resolve_keyelt(binding_cdr, resolve_keyelt));
+                t_binding = Some(resolution.resolve(binding_cdr, resolve_keyelt)?);
             }
         }
 
@@ -1122,7 +1175,7 @@ fn lookup_in_keymap_level_impl(
         // this same scan -- its bindings belong to this keymap, not to a parent.
         if !cursor.is_cons()
             && !cursor.is_nil()
-            && let Some(resolved) = resolve_keymap(cursor, obarray)
+            && let Some(resolved) = resolve_keymap(cursor, resolution.lookup_obarray())
             && let Some(spine) = keymap_binding_spine(&resolved)
         {
             cursor = spine;
@@ -1132,11 +1185,11 @@ fn lookup_in_keymap_level_impl(
     // If no specific binding found but we have a t default binding, use it.
     // Matches GNU keymap.c:486-487.
     if let Some(binding) = prefix_binding {
-        Some(binding)
+        Ok(Some(binding))
     } else if nil_binding_found {
-        Some(Value::NIL)
+        Ok(Some(Value::NIL))
     } else {
-        t_binding
+        Ok(t_binding)
     }
 }
 
@@ -1153,32 +1206,41 @@ fn access_keymap_in_member(
     noinherit: bool,
     t_ok: bool,
     resolve_keyelt: bool,
-    obarray: Option<&Obarray>,
-) -> Option<Value> {
+    resolution: &mut dyn KeyeltResolution,
+) -> Result<Option<Value>, Flow> {
     let found =
-        lookup_in_keymap_level_impl(member, event, noinherit, t_ok, resolve_keyelt, obarray);
+        lookup_in_keymap_level_impl(member, event, noinherit, t_ok, resolve_keyelt, resolution)?;
     if noinherit {
-        return found;
+        return Ok(found);
     }
     let parent = get_keymap_tail_parent(member);
     match found {
         // A prefix keymap merges with whatever the member's parent binds for the
         // same event, exactly as it would if the member were looked up directly.
         Some(binding) if is_list_keymap(&binding) && !parent.is_nil() => {
-            let parent_binding =
-                list_keymap_access_with_event(&parent, event, false, t_ok, resolve_keyelt, obarray);
+            let parent_binding = list_keymap_access_with_event(
+                &parent,
+                event,
+                false,
+                t_ok,
+                resolve_keyelt,
+                resolution,
+            )?;
             if is_list_keymap(&parent_binding) {
-                Some(compose_prefix_with_parent_keymap(&binding, &parent_binding))
+                Ok(Some(compose_prefix_with_parent_keymap(
+                    &binding,
+                    &parent_binding,
+                )))
             } else {
-                Some(binding)
+                Ok(Some(binding))
             }
         }
-        Some(binding) => Some(binding),
+        Some(binding) => Ok(Some(binding)),
         // Nothing at the member's own level: its parent chain still applies.
         None if !parent.is_nil() => {
-            access_keymap_in_member(&parent, event, noinherit, t_ok, resolve_keyelt, obarray)
+            access_keymap_in_member(&parent, event, noinherit, t_ok, resolve_keyelt, resolution)
         }
-        None => None,
+        None => Ok(None),
     }
 }
 
@@ -1233,17 +1295,6 @@ fn list_keymap_access_unresolved(
     list_keymap_access_impl(keymap, event, noinherit, t_ok, false, None)
 }
 
-/// [`list_keymap_access_unresolved`] with a symbol-tail-resolving obarray.
-fn list_keymap_access_unresolved_in_obarray(
-    keymap: &Value,
-    event: &Value,
-    noinherit: bool,
-    t_ok: bool,
-    obarray: &Obarray,
-) -> Value {
-    list_keymap_access_impl(keymap, event, noinherit, t_ok, false, Some(obarray))
-}
-
 /// Look up ONE event, following a spine tail that names a keymap -- the lookup
 /// GNU's `access_keymap` performs. Used by the `lookup-key` paths, which have the
 /// obarray in hand; the obarray-less variants above stay structural.
@@ -1263,30 +1314,14 @@ pub(crate) fn list_keymap_lookup_one_t_ok_in_obarray(
     list_keymap_access_in_obarray(keymap, event, false, true, obarray)
 }
 
-pub(crate) fn list_keymap_lookup_one_unresolved_in_obarray(
-    keymap: &Value,
-    event: &Value,
-    obarray: &Obarray,
-) -> Value {
-    list_keymap_access_unresolved_in_obarray(keymap, event, false, false, obarray)
-}
-
-pub(crate) fn list_keymap_lookup_one_unresolved_t_ok_in_obarray(
-    keymap: &Value,
-    event: &Value,
-    obarray: &Obarray,
-) -> Value {
-    list_keymap_access_unresolved_in_obarray(keymap, event, false, true, obarray)
-}
-
 fn list_keymap_access_with_event(
     keymap: &Value,
     event: KeymapLookupEvent,
     noinherit: bool,
     t_ok: bool,
     resolve_keyelt: bool,
-    obarray: Option<&Obarray>,
-) -> Value {
+    resolution: &mut dyn KeyeltResolution,
+) -> Result<Value, Flow> {
     let mut current = *keymap;
     let mut depth = 0;
     const MAX_KEYMAP_DEPTH: usize = 50;
@@ -1295,14 +1330,20 @@ fn list_keymap_access_with_event(
         depth += 1;
         if depth > MAX_KEYMAP_DEPTH {
             tracing::warn!("list_keymap_access: depth limit reached, possible cycle");
-            return Value::NIL;
+            return Ok(Value::NIL);
         }
 
         // Look up the event in the current keymap level only.
         // Some(val) means "found" (val may be nil for explicit nil binding).
         // None means "not found at this level".
-        match lookup_in_keymap_level_impl(&current, event, noinherit, t_ok, resolve_keyelt, obarray)
-        {
+        match lookup_in_keymap_level_impl(
+            &current,
+            event,
+            noinherit,
+            t_ok,
+            resolve_keyelt,
+            resolution,
+        )? {
             Some(binding) => {
                 if !noinherit && is_list_keymap(&binding) {
                     // Found a prefix keymap at this level. Check if parent
@@ -1316,24 +1357,27 @@ fn list_keymap_access_with_event(
                             false,
                             t_ok,
                             resolve_keyelt,
-                            obarray,
-                        );
+                            resolution,
+                        )?;
                         if is_list_keymap(&parent_binding) {
-                            return compose_prefix_with_parent_keymap(&binding, &parent_binding);
+                            return Ok(compose_prefix_with_parent_keymap(
+                                &binding,
+                                &parent_binding,
+                            ));
                         }
                     }
                 }
                 // Return the found binding (even if nil — nil shadows parents)
-                return binding;
+                return Ok(binding);
             }
             None => {
                 // No binding at this level. Follow parent chain if allowed.
                 if noinherit {
-                    return Value::NIL;
+                    return Ok(Value::NIL);
                 }
                 let parent = get_keymap_tail_parent(&current);
                 if parent.is_nil() {
-                    return Value::NIL;
+                    return Ok(Value::NIL);
                 }
                 current = parent;
             }
@@ -1349,13 +1393,37 @@ fn list_keymap_access_impl(
     resolve_keyelt: bool,
     obarray: Option<&Obarray>,
 ) -> Value {
+    let mut resolution = obarray;
     list_keymap_access_with_event(
         keymap,
         KeymapLookupEvent::from_event(*event),
         noinherit,
         t_ok,
         resolve_keyelt,
-        obarray,
+        &mut resolution,
+    )
+    .unwrap_or(Value::NIL)
+}
+
+/// Look up one event for a caller that holds the evaluator, resolving the
+/// definition exactly as GNU `access_keymap` does with `autoload` set: a
+/// menu-item `:filter` runs, and a filter result that is a prefix keymap is
+/// composed with the parent chain's prefix for the same event before the walk
+/// descends.
+pub(crate) fn list_keymap_lookup_one_runtime(
+    ctx: &mut Context,
+    keymap: &Value,
+    event: &Value,
+    t_ok: bool,
+) -> Result<Value, Flow> {
+    let mut resolution: &mut Context = ctx;
+    list_keymap_access_with_event(
+        keymap,
+        KeymapLookupEvent::from_event(*event),
+        false,
+        t_ok,
+        true,
+        &mut resolution,
     )
 }
 
@@ -1507,13 +1575,14 @@ pub(crate) fn lookup_key_in_obarray_runtime(
 
     let mut current_map = keymap;
     for (i, event) in events.iter().enumerate() {
-        let raw_binding = if t_ok {
-            list_keymap_lookup_one_unresolved_t_ok_in_obarray(&current_map, event, ctx.obarray())
-        } else {
-            list_keymap_lookup_one_unresolved_in_obarray(&current_map, event, ctx.obarray())
-        };
+        // GNU access_keymap resolves `get_keyelt (def, autoload)` inside the
+        // walk, so a menu-item's filter result is what the prefix decision
+        // sees, and a filter that returns a prefix keymap still composes with
+        // the parent chain's prefix for the same event.  The runtime step does
+        // both; the old order (compose raw, resolve after) dropped the parent
+        // branch every time a package rebinds a prefix through a filter.
         let is_last = i == events.len() - 1;
-        let binding = get_keyelt_runtime(ctx, raw_binding, true)?;
+        let binding = list_keymap_lookup_one_runtime(ctx, &current_map, event, t_ok)?;
 
         if is_last {
             return Ok(binding);
@@ -3489,10 +3558,6 @@ pub fn list_keymap_lookup_seq(keymap: &Value, events: &[Value]) -> Value {
     list_keymap_lookup_seq_impl(keymap, events, true)
 }
 
-pub(crate) fn list_keymap_lookup_seq_unresolved(keymap: &Value, events: &[Value]) -> Value {
-    list_keymap_lookup_seq_impl(keymap, events, false)
-}
-
 fn list_keymap_lookup_seq_impl(keymap: &Value, events: &[Value], resolve_keyelt: bool) -> Value {
     if events.is_empty() {
         return *keymap;
@@ -3541,7 +3606,9 @@ fn list_keymap_lookup_composed_seq(
     events: &[Value],
     resolve_keyelt: bool,
 ) -> Option<Value> {
-    let mut cursor = keymap_binding_spine(keymap)?;
+    let Some(mut cursor) = keymap_binding_spine(keymap) else {
+        return None;
+    };
     let mut saw_embedded_keymap = false;
     let mut parent = Value::NIL;
 
