@@ -77,9 +77,11 @@ fn spacemacs_boot_reaches_home_buffer_in_both_editors() {
     read_both(&mut gnu, &mut neo, Duration::from_secs(2));
 
     for (label, session) in [("GNU", &gnu), ("NEO", &neo)] {
+        let grid = session.text_grid();
         assert!(
-            home_visible(&session.text_grid()),
-            "{label} should reach the Spacemacs home buffer"
+            home_visible(&grid),
+            "{label} should reach the Spacemacs home buffer\n{}",
+            grid.join("\n")
         );
     }
     assert_pair_exact_display(
