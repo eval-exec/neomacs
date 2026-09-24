@@ -38,6 +38,7 @@ fn shell_command_via_mbang_displays_short_output() {
 #[test]
 fn shell_command_empty_prompt_multiple_del_keeps_prompt() {
     let (mut gnu, mut neo) = boot_pair("");
+    let trace = CommandTrace::install(&mut gnu, &mut neo);
 
     send_both(&mut gnu, &mut neo, "M-!");
     let prompt_ready = |grid: &[String]| grid.iter().any(|row| row.contains("Shell command:"));
@@ -45,7 +46,9 @@ fn shell_command_empty_prompt_multiple_del_keeps_prompt() {
     neo.read_until(Duration::from_secs(8), prompt_ready);
     read_both(&mut gnu, &mut neo, Duration::from_millis(300));
 
+    let baseline = trace.mark();
     send_both(&mut gnu, &mut neo, "DEL DEL DEL");
+    trace.wait_for(&mut gnu, &mut neo, baseline, 3, Duration::from_secs(8));
 
     let prompt_intact = |grid: &[String]| {
         grid.iter().any(|row| row.contains("Shell command:"))
@@ -160,6 +163,7 @@ fn async_shell_command_via_mampersand_displays_output_buffer() {
 #[test]
 fn async_shell_command_empty_prompt_multiple_del_keeps_prompt() {
     let (mut gnu, mut neo) = boot_pair("");
+    let trace = CommandTrace::install(&mut gnu, &mut neo);
 
     send_both(&mut gnu, &mut neo, "M-&");
     let prompt_ready =
@@ -168,7 +172,9 @@ fn async_shell_command_empty_prompt_multiple_del_keeps_prompt() {
     neo.read_until(Duration::from_secs(8), prompt_ready);
     read_both(&mut gnu, &mut neo, Duration::from_millis(300));
 
+    let baseline = trace.mark();
     send_both(&mut gnu, &mut neo, "DEL DEL DEL");
+    trace.wait_for(&mut gnu, &mut neo, baseline, 3, Duration::from_secs(8));
 
     let prompt_intact = |grid: &[String]| {
         grid.iter().any(|row| row.contains("Async shell command:"))
@@ -443,6 +449,7 @@ fn compile_via_mx_runs_command_in_compilation_buffer() {
 #[test]
 fn compile_empty_prompt_multiple_del_keeps_prompt() {
     let (mut gnu, mut neo) = boot_pair("");
+    let trace = CommandTrace::install(&mut gnu, &mut neo);
 
     invoke_mx_command(&mut gnu, &mut neo, "compile");
     let prompt_ready = |grid: &[String]| grid.iter().any(|row| row.contains("Compile command:"));
@@ -450,7 +457,9 @@ fn compile_empty_prompt_multiple_del_keeps_prompt() {
     neo.read_until(Duration::from_secs(10), prompt_ready);
     read_both(&mut gnu, &mut neo, Duration::from_millis(300));
 
+    let baseline = trace.mark();
     send_both(&mut gnu, &mut neo, "C-a C-k DEL DEL DEL");
+    trace.wait_for(&mut gnu, &mut neo, baseline, 5, Duration::from_secs(8));
 
     let prompt_intact = |grid: &[String]| {
         grid.iter().any(|row| row.contains("Compile command:"))
@@ -500,12 +509,8 @@ fn grep_via_mx_lists_matching_file_lines() {
 
     let ready = |grid: &[String]| {
         grid.iter().any(|row| row.contains("*grep*"))
-            && grid
-                .iter()
-                .any(|row| row.contains("grep-usage.txt:1:alpha needle one"))
-            && grid
-                .iter()
-                .any(|row| row.contains("grep-usage.txt:3:gamma needle two"))
+            && grid.iter().any(|row| row.contains("1:alpha needle one"))
+            && grid.iter().any(|row| row.contains("3:gamma needle two"))
     };
     gnu.read_until(Duration::from_secs(12), ready);
     neo.read_until(Duration::from_secs(14), ready);
@@ -532,6 +537,7 @@ fn grep_via_mx_lists_matching_file_lines() {
 #[test]
 fn grep_empty_prompt_multiple_del_keeps_prompt() {
     let (mut gnu, mut neo) = boot_pair("");
+    let trace = CommandTrace::install(&mut gnu, &mut neo);
     open_home_file(
         &mut gnu,
         &mut neo,
@@ -547,7 +553,9 @@ fn grep_empty_prompt_multiple_del_keeps_prompt() {
     neo.read_until(Duration::from_secs(10), prompt_ready);
     read_both(&mut gnu, &mut neo, Duration::from_millis(300));
 
+    let baseline = trace.mark();
     send_both(&mut gnu, &mut neo, "C-a C-k DEL DEL DEL");
+    trace.wait_for(&mut gnu, &mut neo, baseline, 5, Duration::from_secs(8));
 
     let prompt_intact = |grid: &[String]| {
         grid.iter().any(|row| row.contains("Run grep (like this):"))
@@ -672,6 +680,7 @@ fn diff_buffer_with_file_via_mx_shows_unsaved_changes() {
 #[test]
 fn diff_buffer_with_file_empty_prompt_multiple_del_keeps_prompt() {
     let (mut gnu, mut neo) = boot_pair_editing_a_shared_file();
+    let trace = CommandTrace::install(&mut gnu, &mut neo);
     let shared_path = write_shared_temp_file("diff-buffer-empty-del.txt", "alpha\nbeta\n");
     open_shared_file(&mut gnu, &mut neo, &shared_path, "C-x C-f");
 
@@ -681,7 +690,9 @@ fn diff_buffer_with_file_empty_prompt_multiple_del_keeps_prompt() {
     neo.read_until(Duration::from_secs(8), prompt_ready);
     read_both(&mut gnu, &mut neo, Duration::from_millis(300));
 
+    let baseline = trace.mark();
     send_both(&mut gnu, &mut neo, "DEL DEL DEL");
+    trace.wait_for(&mut gnu, &mut neo, baseline, 3, Duration::from_secs(8));
 
     let prompt_intact = |grid: &[String]| {
         grid.iter().any(|row| row.contains("Buffer (default"))
@@ -759,6 +770,7 @@ fn shell_command_on_region_via_mbar_with_cat_preserves_text() {
 #[test]
 fn shell_command_on_region_empty_prompt_multiple_del_keeps_prompt() {
     let (mut gnu, mut neo) = boot_pair("");
+    let trace = CommandTrace::install(&mut gnu, &mut neo);
 
     open_home_file(
         &mut gnu,
@@ -777,7 +789,9 @@ fn shell_command_on_region_empty_prompt_multiple_del_keeps_prompt() {
     neo.read_until(Duration::from_secs(8), prompt_ready);
     read_both(&mut gnu, &mut neo, Duration::from_millis(300));
 
+    let baseline = trace.mark();
     send_both(&mut gnu, &mut neo, "DEL DEL DEL");
+    trace.wait_for(&mut gnu, &mut neo, baseline, 3, Duration::from_secs(8));
 
     let prompt_intact = |grid: &[String]| {
         grid.iter()

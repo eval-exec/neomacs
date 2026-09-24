@@ -2,7 +2,7 @@
 
 use crate::*;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 /// Maximum total time for GNU Emacs to reach the startup predicate.
@@ -566,6 +566,96 @@ pub fn assert_home_file_contents(gnu: &TuiSession, neo: &TuiSession, name: &str,
         expected,
         "Neomacs file contents should match"
     );
+}
+
+// ── Event-ordered barriers ─────────────────────────────────────────────
+
+/// A per-command record written by the editor's own `post-command-hook`.
+///
+/// Some waits cannot be phrased as a screen predicate because the awaited
+/// event's visible effect is a no-op — `DEL` on an empty minibuffer prompt
+/// must be *processed* while leaving the screen unchanged, so "still looks
+/// right" is true both before and after. Waiting a duration guesses; this
+/// barrier observes the editor's command loop directly: every executed
+/// command appends its name to a per-session trace file, so waiting for the
+/// line count to advance by N is an ordered event, independent of machine
+/// speed.
+///
+/// Install before the interaction under test (the install itself is input,
+/// so it cannot run once a minibuffer is open), take a baseline with
+/// [`CommandTrace::mark`], then wait for the expected number of commands.
+/// Follow with a drain (the suite's fixed `read_both` tails do this):
+/// `post-command-hook` runs before redisplay, so the trace proves input was
+/// consumed while the drain lets the resulting frame be painted.
+pub struct CommandTrace {
+    gnu_path: PathBuf,
+    neo_path: PathBuf,
+}
+
+impl CommandTrace {
+    /// Install the trace hook in both editors and return their log paths.
+    pub fn install(gnu: &mut TuiSession, neo: &mut TuiSession) -> Self {
+        let gnu_path = gnu.temp_dir().join("command-trace");
+        let neo_path = neo.temp_dir().join("command-trace");
+        for path in [&gnu_path, &neo_path] {
+            let _ = fs::remove_file(path);
+        }
+        let install = |path: &Path| {
+            format!(
+                r#"(progn
+                     (defun neomacs-tui--trace-command ()
+                       (ignore-errors
+                         (let ((inhibit-message t))
+                           (write-region (format "%S\n" this-command) nil {path:?} 'append))))
+                     (add-hook 'post-command-hook #'neomacs-tui--trace-command))"#,
+            )
+        };
+        eval_expression_one(gnu, &install(&gnu_path));
+        eval_expression_one(neo, &install(&neo_path));
+        Self { gnu_path, neo_path }
+    }
+
+    /// Count commands executed so far, as `(gnu, neomacs)`.
+    pub fn mark(&self) -> (usize, usize) {
+        (trace_lines(&self.gnu_path), trace_lines(&self.neo_path))
+    }
+
+    /// Block until both editors have executed `delta` more commands than
+    /// `baseline`, re-reading their PTYs while waiting.
+    pub fn wait_for(
+        &self,
+        gnu: &mut TuiSession,
+        neo: &mut TuiSession,
+        baseline: (usize, usize),
+        delta: usize,
+        timeout: Duration,
+    ) {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let now = self.mark();
+            if now.0 >= baseline.0 + delta && now.1 >= baseline.1 + delta {
+                return;
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            read_both(gnu, neo, remaining.min(Duration::from_millis(100)));
+        }
+        panic!(
+            "command trace did not advance: baseline {baseline:?} want +{delta}, got {:?}\n\
+             GNU trace:\n{}\nNeomacs trace:\n{}",
+            self.mark(),
+            fs::read_to_string(&self.gnu_path).unwrap_or_default(),
+            fs::read_to_string(&self.neo_path).unwrap_or_default(),
+        );
+    }
+}
+
+fn trace_lines(path: &Path) -> usize {
+    fs::read_to_string(path)
+        .map(|contents| contents.lines().filter(|line| !line.is_empty()).count())
+        .unwrap_or(0)
 }
 
 // ── File helpers ──────────────────────────────────────────────────────
