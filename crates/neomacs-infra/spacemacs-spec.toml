@@ -6,6 +6,18 @@
 # is where Spacemacs development happens (master has been stale for
 # years).  Re-pin by editing this file; materialization keys its cache
 # on the revision, so a new revision rebuilds rather than reuses.
+#
+# `packages` pins the identity of the package builds the GNU bootstrap
+# produced (the SHA-256 of the sealed fixture's PACKAGES record).  The
+# packages come from live archives and are only reproducible as a record,
+# so this digest is what `open` checks: a rebuild that silently pulled
+# different versions refuses to mount, and re-pinning is its own
+# ceremony — never a side effect of a materialization.
+#
+# RE-BASELINING LOG
+#   2026-09-24  Pin the elpa builds: 137 packages under 31.1/develop,
+#               from the sealed fixture.
 
 repo = "https://github.com/syl20bnr/spacemacs"
 revision = "ab5bb4cecff218d30c21fc4204260412c7ce8abd"
+packages = "9286c8d9280795f52558adb2d4edec019a2cc1605f7c3a1e762b27c0098bbf61"

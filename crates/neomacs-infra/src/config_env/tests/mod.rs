@@ -165,3 +165,91 @@ fn package_identity_records_the_straight_layout() {
         "an added repo must change the identity record"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn spec_pin_binds_the_recorded_package_identity() {
+    let owner = tempfile::tempdir().expect("spec dir");
+    let spec_dir = owner.path();
+    fs::write(
+        spec_dir.join("synthetic-spec.toml"),
+        "repo = \"https://example.invalid/fixture\"\n\
+         revision = \"a1b2c3d4e5f6\"\n",
+    )
+    .expect("write spec");
+
+    // Unpinned: reading the pin answers None, not an error.
+    let spec = super::common::Spec::load_from(spec_dir, "synthetic").expect("load unpinned spec");
+    assert!(spec.packages.is_none(), "no pin recorded yet: {spec:?}");
+
+    // The identity under test: whatever a fixture's PACKAGES record says.
+    let identity = super::package_state::PackageStateIdentity::parse_record(
+        "schema = 1\nlayout = straight\nbuild_cache = dead\nrepos = 0\n",
+    )
+    .expect("synthetic record");
+    let fixture_digest = super::package_state::digest(&identity.to_record());
+
+    // Unpinned: the check passes for any identity -- nothing has committed
+    // to a package set yet; `infra status` surfaces the unpinned state.
+    assert!(
+        super::common::check_package_pin(spec.packages.as_deref(), "synthetic", &identity).is_ok(),
+        "an unpinned spec does not refuse any identity"
+    );
+
+    // The pin ceremony records the digest and logs the re-baseline.
+    super::common::Spec::pin_packages(
+        spec_dir,
+        "synthetic",
+        &fixture_digest,
+        "2026-09-24 synthetic fixture materialized; package identity recorded",
+    )
+    .expect("pin packages");
+    let pinned = super::common::Spec::load_from(spec_dir, "synthetic").expect("load pinned");
+    assert_eq!(
+        pinned.packages.as_deref(),
+        Some(fixture_digest.as_str()),
+        "{pinned:?}"
+    );
+    assert!(
+        super::common::check_package_pin(pinned.packages.as_deref(), "synthetic", &identity)
+            .is_ok()
+    );
+
+    // A changed fixture identity must fail the check with the fix named.
+    let changed = super::package_state::PackageStateIdentity::parse_record(
+        "schema = 1\nlayout = straight\nbuild_cache = beff\nrepos = 1\nmelpa\n",
+    )
+    .expect("changed synthetic record");
+    let error = super::common::check_package_pin(pinned.packages.as_deref(), "synthetic", &changed)
+        .expect_err("diverging identity must fail");
+    assert!(
+        error.contains("pin-packages synthetic"),
+        "the failure must name the re-pin ceremony: {error}"
+    );
+
+    // Re-pinning updates the value and appends to the log, never silently.
+    super::common::Spec::pin_packages(
+        spec_dir,
+        "synthetic",
+        &super::package_state::digest(&changed.to_record()),
+        "2026-09-24 re-pin after deliberate re-materialization",
+    )
+    .expect("re-pin");
+    let repinned = super::common::Spec::load_from(spec_dir, "synthetic").expect("re-pinned");
+    assert!(
+        super::common::check_package_pin(repinned.packages.as_deref(), "synthetic", &changed)
+            .is_ok(),
+        "the re-pinned spec must accept the new identity"
+    );
+    assert!(
+        super::common::check_package_pin(repinned.packages.as_deref(), "synthetic", &identity)
+            .is_err(),
+        "the re-pinned spec must refuse the old identity"
+    );
+    let spec_text =
+        fs::read_to_string(spec_dir.join("synthetic-spec.toml")).expect("read spec after re-pin");
+    assert!(
+        spec_text.contains("2026-09-24 re-pin after deliberate re-materialization"),
+        "the re-baseline must be logged in the spec: {spec_text}"
+    );
+}

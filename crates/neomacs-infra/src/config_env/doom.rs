@@ -18,6 +18,8 @@ pub const DOOM_ROOT_OVERRIDE: &str = "NEOMACS_INFRA_DOOM_ROOT";
 pub struct DoomSpec {
     pub repo: String,
     pub revision: String,
+    /// The `PACKAGES` pin from the spec, if one is recorded.
+    pub packages: Option<String>,
 }
 
 impl DoomSpec {
@@ -26,6 +28,7 @@ impl DoomSpec {
         Ok(Self {
             repo: spec.repo,
             revision: spec.revision,
+            packages: spec.packages,
         })
     }
 }
@@ -62,9 +65,21 @@ impl DoomEnvironment {
     /// The sealed fixture for the pinned revision, if materialized.
     /// `None` makes callers skip fast rather than build.
     pub fn open() -> Option<Self> {
-        let revision = DoomSpec::load().ok()?.revision;
-        let root = common::fixture_root("doom", &revision);
-        common::is_open_fixture(&root).then_some(Self { root })
+        let spec = DoomSpec::load().ok()?;
+        let root = common::fixture_root("doom", &spec.revision);
+        if !common::is_open_fixture(&root) {
+            return None;
+        }
+        // The pin is load-bearing: a fixture that exists but no longer
+        // matches the recorded package identity must stop the suite, not
+        // skip it, so `open` panics with the fix named rather than
+        // answering None (which callers read as "fixture absent").
+        let identity = common::load_sealed_packages(&root)
+            .unwrap_or_else(|error| panic!("doom fixture unusable: {error}"));
+        if let Err(error) = common::check_package_pin(spec.packages.as_deref(), "doom", &identity) {
+            panic!("doom fixture unusable: {error}");
+        }
+        Some(Self { root })
     }
 
     /// Bootstrap the fixture with GNU Emacs and seal it.  Safe to re-run:

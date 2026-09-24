@@ -52,9 +52,23 @@ pub struct SpacemacsEnvironment {
 
 impl SpacemacsEnvironment {
     pub fn open() -> Option<Self> {
-        let revision = Spec::load("spacemacs").ok()?.revision;
-        let root = common::fixture_root("spacemacs", &revision);
-        common::is_open_fixture(&root).then_some(Self { root })
+        let spec = Spec::load("spacemacs").ok()?;
+        let root = common::fixture_root("spacemacs", &spec.revision);
+        if !common::is_open_fixture(&root) {
+            return None;
+        }
+        // The pin is load-bearing: a fixture that exists but no longer
+        // matches the recorded package identity must stop the suite, not
+        // skip it, so `open` panics with the fix named rather than
+        // answering None (which callers read as "fixture absent").
+        let identity = common::load_sealed_packages(&root)
+            .unwrap_or_else(|error| panic!("spacemacs fixture unusable: {error}"));
+        if let Err(error) =
+            common::check_package_pin(spec.packages.as_deref(), "spacemacs", &identity)
+        {
+            panic!("spacemacs fixture unusable: {error}");
+        }
+        Some(Self { root })
     }
 
     pub fn materialize(source: SpacemacsSource) -> Result<Self, String> {

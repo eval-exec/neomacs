@@ -1,5 +1,6 @@
 //! `infra` — materialize and inspect shared test environment fixtures.
 
+use std::path::Path;
 use std::process::exit;
 
 fn main() {
@@ -117,6 +118,28 @@ fn main() {
                 exit(2);
             }
         },
+        Some("pin-packages") => match args.next().as_deref().and_then(|arg| arg.to_str()) {
+            Some(name) if neomacs_infra::config_env::NAMES.contains(&name) => {
+                // Everything after the name is the note; join so multi-word
+                // notes survive whatever layer quotes the invocation.
+                let note = args
+                    .map(|argument| argument.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                let note = (!note.is_empty()).then_some(note);
+                match pin_packages(name, note) {
+                    Ok(digest) => println!("{name}: pinned packages = {digest}"),
+                    Err(error) => {
+                        eprintln!("error: {error}");
+                        exit(1);
+                    }
+                }
+            }
+            other => {
+                eprintln!("unknown environment: {other:?}");
+                exit(2);
+            }
+        },
         Some("status") => {
             for name in neomacs_infra::config_env::NAMES {
                 let status = match name.as_ref() {
@@ -189,6 +212,30 @@ fn materialize(name: &str, source: MaterializeSource) -> Result<(), String> {
         }
         _ => unreachable!(),
     }
+}
+
+/// Record the sealed fixture's `PACKAGES` digest into the spec — the
+/// re-pinning ceremony.  The spec lives beside this crate's manifest, the
+/// same place [`Spec::load`] resolves from; the digest comes from the
+/// sealed fixture, never from anything else.
+fn pin_packages(name: &str, note: Option<String>) -> Result<String, String> {
+    use neomacs_infra::config_env::ConfigEnvironment as _;
+
+    let Some(environment) = neomacs_infra::config_env::open_by_name(name) else {
+        return Err(format!(
+            "{name}: not materialized; materialize first, then pin"
+        ));
+    };
+    let identity = environment.package_state()?;
+    let digest = neomacs_infra::config_env::package_state::digest(&identity.to_record());
+    let note = note.unwrap_or_else(|| "pinned from the sealed fixture".to_owned());
+    neomacs_infra::config_env::common::Spec::pin_packages(
+        Path::new(env!("CARGO_MANIFEST_DIR")),
+        name,
+        &digest,
+        &note,
+    )?;
+    Ok(digest)
 }
 
 fn parse_package_pins(

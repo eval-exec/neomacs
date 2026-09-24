@@ -5,6 +5,18 @@
 # this fixture was first validated against: doomemacs/core at v2.2.1.
 # Re-pin by editing this file; materialization keys its cache on the
 # revision, so a new revision rebuilds rather than reuses.
+#
+# `packages` pins the identity of the package builds the GNU bootstrap
+# produced (the SHA-256 of the sealed fixture's PACKAGES record).  The
+# packages come from live archives and are only reproducible as a record,
+# so this digest is what `open` checks: a rebuild that silently pulled
+# different versions refuses to mount, and re-pinning is its own
+# ceremony — never a side effect of a materialization.
+#
+# RE-BASELINING LOG
+#   2026-09-24  Pin the straight package builds: 17 repos, anchored by
+#               the build-31.1 cache digest, from the sealed fixture.
 
 repo = "https://github.com/doomemacs/core"
 revision = "8a301d98d0d6d1aa7c54a8f8df48de7b2c886b2e"
+packages = "302eaa75791091a79d6b0e4a4c307cdb0aeb237c92ca72f3239e7ec74f4c679f"

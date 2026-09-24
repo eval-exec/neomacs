@@ -62,28 +62,103 @@ pub const INFRA_CACHE_OVERRIDE: &str = "NEOMACS_INFRA_CACHE";
 pub struct Spec {
     pub repo: String,
     pub revision: String,
+    /// The SHA-256 of the sealed fixture's `PACKAGES` record, from the
+    /// `packages = "<digest>"` line.  `None` means unpinned: the fixture
+    /// exists, but no one has committed to its package identity yet.
+    pub packages: Option<String>,
 }
 
 impl Spec {
     pub fn load(name: &str) -> Result<Self, String> {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("{name}-spec.toml"));
+        Self::load_from(Path::new(env!("CARGO_MANIFEST_DIR")), name)
+    }
+
+    /// [`Self::load`] anchored at an explicit spec directory — the seam the
+    /// pin tests use; production resolves against this crate's manifest.
+    pub fn load_from(manifest_dir: &Path, name: &str) -> Result<Self, String> {
+        let path = manifest_dir.join(format!("{name}-spec.toml"));
         let text = fs::read_to_string(&path)
             .map_err(|error| format!("read {}: {error}", path.display()))?;
         let mut repo = None;
         let mut revision = None;
+        let mut packages = None;
         for line in text.lines() {
             let line = line.trim();
             if let Some(value) = line.strip_prefix("repo = ") {
                 repo = Some(value.trim_matches('"').to_owned());
             } else if let Some(value) = line.strip_prefix("revision = ") {
                 revision = Some(value.trim_matches('"').to_owned());
+            } else if let Some(value) = line.strip_prefix("packages = ") {
+                packages = Some(value.trim_matches('"').to_owned());
             }
         }
         Ok(Self {
             repo: repo.ok_or_else(|| format!("{name}-spec.toml: repo is missing"))?,
             revision: revision.ok_or_else(|| format!("{name}-spec.toml: revision is missing"))?,
+            packages,
         })
     }
+
+    /// Record the fixture's package-identity pin in the spec, with a log
+    /// line for the re-baseline.
+    ///
+    /// Re-pinning is its own explicit ceremony — the fixture-check side
+    /// refuses divergences, so this is the only legitimate way the pin
+    /// changes, and it always leaves the log behind `parity-reference.toml`
+    /// leaves its.
+    pub fn pin_packages(
+        manifest_dir: &Path,
+        name: &str,
+        digest: &str,
+        note: &str,
+    ) -> Result<(), String> {
+        let path = manifest_dir.join(format!("{name}-spec.toml"));
+        let text = fs::read_to_string(&path)
+            .map_err(|error| format!("read {}: {error}", path.display()))?;
+        let pin_line = format!("packages = \"{digest}\"");
+        // Rewrite the pin line in place if present, else append it; then
+        // append the re-baseline log line.
+        let mut lines: Vec<String> = text.lines().map(|line| line.to_owned()).collect();
+        if let Some(existing) = lines
+            .iter_mut()
+            .find(|line| line.trim_start().starts_with("packages ="))
+        {
+            *existing = pin_line;
+        } else {
+            lines.push(pin_line);
+        }
+        lines.push(format!("#   {note}"));
+        fs::write(&path, lines.join("\n") + "\n")
+            .map_err(|error| format!("write {}: {error}", path.display()))
+    }
+}
+
+/// The pin check a fixture must pass at open time: the fixture's sealed
+/// `PACKAGES` digest must equal the spec's recorded pin.
+///
+/// An unpinned spec passes (nothing has committed to a package identity
+/// yet — `infra status` surfaces it); a pinned divergence is an error that
+/// names the ceremony, because silently mounting a re-built fixture is
+/// exactly the divergence this exists to catch.
+pub fn check_package_pin(
+    pin: Option<&str>,
+    name: &str,
+    identity: &super::package_state::PackageStateIdentity,
+) -> Result<(), String> {
+    let Some(pinned) = pin else {
+        return Ok(());
+    };
+    let fixture_digest = super::package_state::digest(&identity.to_record());
+    if fixture_digest == *pinned {
+        return Ok(());
+    }
+    Err(format!(
+        "the fixture's package identity ({fixture_digest}) diverges from the \
+         pinned identity ({pinned}); the spec was pinned against a different \
+         package set\n\
+         fix: re-materialize deliberately, then run \
+         `cargo run -p xtask -- infra pin-packages {name}` to record it"
+    ))
 }
 
 /// The fixture cache root: `$NEOMACS_INFRA_CACHE`, else the workspace's
