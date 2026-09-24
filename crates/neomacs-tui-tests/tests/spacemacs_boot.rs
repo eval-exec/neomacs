@@ -90,3 +90,83 @@ fn spacemacs_boot_reaches_home_buffer_in_both_editors() {
         &neo,
     );
 }
+
+/// Pasting into `M-:` under the Spacemacs fixture must evaluate, not leave
+/// bracketed-paste residue.
+///
+/// The terminal wraps pasted text in `\e[200~` ... `\e[201~`.  Under this
+/// configuration Neo surfaced the closing sequence's `~` as keyboard input,
+/// so the minibuffer held `(setq ...)~` and `eval-expression` answered
+/// "[Trailing garbage following expression]" while GNU evaluated it.
+/// `-Q` sessions never showed it, so only a configuration environment can
+/// witness the divergence.
+#[test]
+fn spacemacs_paste_into_eval_minibuffer_evaluates_in_both_editors() {
+    let Some(spacemacs) = neomacs_infra::SpacemacsEnvironment::open() else {
+        eprintln!(
+            "skipping: no sealed Spacemacs fixture; run \
+             `cargo run -p xtask -- infra materialize spacemacs` to build one"
+        );
+        return;
+    };
+
+    let gnu_state = TuiTempDirectory::new("spac-paste-gnu-");
+    let neo_state = TuiTempDirectory::new("spac-paste-neo-");
+    for state in [&gnu_state, &neo_state] {
+        spacemacs
+            .prepare_session_state(state)
+            .expect("seed Spacemacs session state");
+    }
+
+    let mut gnu = TuiSession::spawn_launch(
+        spacemacs_launch(&spacemacs, &gnu_state, std::ffi::OsStr::new("emacs")),
+        "GNU",
+    );
+    gnu.read(Duration::from_secs(5));
+    let mut neo = TuiSession::spawn_launch(
+        spacemacs_launch(
+            &spacemacs,
+            &neo_state,
+            neomacs_tui_tests::neomacs_binary().as_os_str(),
+        ),
+        "NEO",
+    );
+
+    let home_visible = |grid: &[String]| {
+        grid.iter()
+            .any(|row| row.contains("SPC") && row.contains("Find File"))
+            || grid.iter().any(|row| row.contains("spacemacs"))
+    };
+    wait_for_both(&mut gnu, &mut neo, Duration::from_secs(90), home_visible);
+    read_both(&mut gnu, &mut neo, Duration::from_secs(4));
+    read_both(&mut gnu, &mut neo, Duration::from_secs(2));
+
+    send_both(&mut gnu, &mut neo, "M-:");
+    let eval_prompt = |grid: &[String]| grid.iter().any(|row| row.contains("Eval:"));
+    gnu.read_until(Duration::from_secs(6), eval_prompt);
+    neo.read_until(Duration::from_secs(8), eval_prompt);
+
+    let expression = "(setq spacemacs-paste-probe 42)";
+    gnu.paste(expression);
+    neo.paste(expression);
+    send_both(&mut gnu, &mut neo, "RET");
+
+    let minibuffer_closed = |grid: &[String]| !grid.iter().any(|row| row.contains("Eval:"));
+    gnu.read_until(Duration::from_secs(6), minibuffer_closed);
+    neo.read_until(Duration::from_secs(8), minibuffer_closed);
+
+    for (label, session) in [("GNU", &gnu), ("NEO", &neo)] {
+        let grid = session.text_grid();
+        assert!(
+            minibuffer_closed(&grid),
+            "{label} should leave the eval minibuffer after RET\n{}",
+            grid.join("\n")
+        );
+        assert!(
+            !grid.iter().any(|row| row.contains("Trailing garbage")),
+            "{label} should not find trailing garbage after a bracketed paste\n{}",
+            grid.join("\n")
+        );
+    }
+    assert_pair_exact_display("spacemacs_paste_into_eval_minibuffer", &gnu, &neo);
+}

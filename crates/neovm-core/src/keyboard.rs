@@ -14,7 +14,7 @@ use crate::buffer::{CharLen, CharPos0, CharRange};
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::intern::{intern, resolve_sym};
 use crate::emacs_core::keyboard::pure::KEY_CHAR_META;
-use crate::emacs_core::keymap::{KeymapMarker, MenuItemProperty};
+use crate::emacs_core::keymap::KeymapMarker;
 use crate::emacs_core::wait::CommandInputWaitOutcome;
 // decode_storage_char_codes import removed — now using emacs_char directly
 use crate::emacs_core::value::{Value, ValueKind, VecLikeType};
@@ -3213,72 +3213,6 @@ impl crate::emacs_core::eval::Context {
         self.command_loop.set_command_key_sequences(translated, raw);
     }
 
-    fn resolve_key_sequence_translation_binding(
-        &mut self,
-        binding: Value,
-        prompt: Value,
-    ) -> Result<Option<Vec<Value>>, crate::emacs_core::error::Flow> {
-        let binding = self.resolve_key_sequence_menu_item_filter(binding)?;
-        let resolved = if self.function_value_is_callable(&binding) {
-            self.apply(binding, vec![prompt])?
-        } else {
-            binding
-        };
-        Ok(key_sequence_translation_events(resolved))
-    }
-
-    fn resolve_key_sequence_menu_item_filter(
-        &mut self,
-        binding: Value,
-    ) -> Result<Value, crate::emacs_core::error::Flow> {
-        if !binding.is_cons() || !KeymapMarker::MenuItem.is_value(binding.cons_car()) {
-            return Ok(binding);
-        }
-
-        let tail = binding.cons_cdr();
-        if !tail.is_cons() {
-            return Ok(binding);
-        }
-        let definition_tail = tail.cons_cdr();
-        if !definition_tail.is_cons() {
-            return Ok(Value::NIL);
-        }
-
-        let definition = definition_tail.cons_car();
-        let mut properties = definition_tail.cons_cdr();
-        while properties.is_cons() {
-            let key = properties.cons_car();
-            properties = properties.cons_cdr();
-            if !properties.is_cons() {
-                break;
-            }
-            let value = properties.cons_car();
-            properties = properties.cons_cdr();
-
-            if MenuItemProperty::Filter.is_value(key) {
-                return self.apply_key_sequence_menu_item_filter(value, definition);
-            }
-        }
-
-        Ok(definition)
-    }
-
-    fn apply_key_sequence_menu_item_filter(
-        &mut self,
-        filter: Value,
-        definition: Value,
-    ) -> Result<Value, crate::emacs_core::error::Flow> {
-        match self.apply(filter, vec![definition]) {
-            Ok(value) => Ok(value),
-            Err(crate::emacs_core::error::Flow::Signal(signal))
-                if signal.symbol != intern("quit") =>
-            {
-                Ok(Value::NIL)
-            }
-            Err(err) => Err(err),
-        }
-    }
-
     fn lookup_key_sequence_suffix_translation(
         &mut self,
         map: Value,
@@ -3292,19 +3226,57 @@ impl crate::emacs_core::eval::Context {
         }
 
         for start in 0..events.len() {
-            let lookup = crate::emacs_core::keymap::list_keymap_lookup_seq_unresolved(
-                &map,
-                &events[start..],
-            );
-            let Some(replacement) =
-                self.resolve_key_sequence_translation_binding(lookup, prompt)?
-            else {
-                continue;
-            };
-            return Ok(Some(KeySequenceSuffixTranslation { start, replacement }));
+            // GNU `keyremap_step` walks the translation map one event at a
+            // time with `access_keymap (..., autoload)` — menu-item `:filter`s
+            // run mid-walk (`evil-esc-mode` lives at this exact spot), and a
+            // filter result that is a prefix keymap composes with the parent
+            // chain so the walk can descend into it.  The old whole-suffix
+            // structural lookup stopped at a filter-resolved prefix and
+            // reported the deep translation as unreachable.
+            let mut current_map = map;
+            for event in events[start..].iter() {
+                let binding = crate::emacs_core::keymap::list_keymap_lookup_one_runtime(
+                    self,
+                    &current_map,
+                    event,
+                    true,
+                )?;
+                if is_list_keymap(&binding) {
+                    current_map = binding;
+                    continue;
+                }
+                // GNU errors when a *called* translation returns something
+                // invalid; a nil resolution (an explicit nil binding or an
+                // unbound suffix) is simply not a translation for this start.
+                if binding.is_nil() {
+                    break;
+                }
+                let Some(replacement) = self.call_key_sequence_translation(binding, prompt)? else {
+                    break;
+                };
+                return Ok(Some(KeySequenceSuffixTranslation { start, replacement }));
+            }
         }
 
         Ok(None)
+    }
+
+    /// Take an already filter-resolved translation binding: when it is
+    /// callable, call it with `prompt` (GNU `access_keymap_keyremap`'s
+    /// DO_FUNCALL branch) and validate the result; otherwise the binding is
+    /// not a translation.  The menu-item filter was already applied by the
+    /// runtime walk, so it must not run twice.
+    fn call_key_sequence_translation(
+        &mut self,
+        binding: Value,
+        prompt: Value,
+    ) -> Result<Option<Vec<Value>>, crate::emacs_core::error::Flow> {
+        let resolved = if self.function_value_is_callable(&binding) {
+            self.apply(binding, vec![prompt])?
+        } else {
+            binding
+        };
+        Ok(key_sequence_translation_events(resolved))
     }
 
     fn translation_map_has_pending_suffix_prefix(&self, map: Value, events: &[Value]) -> bool {

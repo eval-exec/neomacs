@@ -1367,3 +1367,95 @@ fn event_position_before_narrowing_inherits_map_from_preceding_full_buffer_char(
         "GNU widens before get-pos-property resolves preceding-character stickiness"
     );
 }
+
+/// GNU `make-composed-keymap` embeds each member in the composed map's spine,
+/// and the member is searched with its own parent chain.  `xterm.el` builds
+/// exactly this shape for terminal input: `xterm-rxvt-function-map` <-
+/// `xterm-function-map` <- `(keymap member)` <- `input-decode-map`, and the
+/// bracketed-paste start `\e[200~` lives only in the leaf.
+///
+/// A key bound in the member itself and one bound only in the member's parent
+/// must both resolve from the root, and the shared prefix must merge both
+/// branches.  Before the fix the leaf branch was dropped once the root's tail
+/// became a composed keymap: the lookup returned a partial-match count instead.
+#[test]
+fn composed_keymap_member_searches_its_parent_chain_from_the_root() {
+    crate::test_utils::init_test_tracing();
+
+    let rxvt = make_sparse_list_keymap();
+    let member = make_sparse_list_keymap();
+    let root = make_sparse_list_keymap();
+
+    let esc = Value::fixnum(27);
+    let bracket = Value::fixnum(91);
+    let tilde = Value::fixnum(126);
+    let paste_start = [
+        esc,
+        bracket,
+        Value::fixnum(50),
+        Value::fixnum(48),
+        Value::fixnum(48),
+        tilde,
+    ];
+    let f9 = [esc, bracket, Value::fixnum(50), Value::fixnum(48), tilde];
+
+    list_keymap_define_seq(rxvt, &paste_start, Value::symbol("xterm-paste"))
+        .expect("define leaf binding");
+    list_keymap_define_seq(member, &f9, Value::symbol("f9")).expect("define member binding");
+    list_keymap_set_parent(member, rxvt);
+    let composed = Value::list(vec![KeymapMarker::Keymap.symbol_value(), member]);
+    list_keymap_set_parent(root, composed);
+
+    assert_eq!(
+        list_keymap_lookup_seq(&root, &paste_start),
+        Value::symbol("xterm-paste"),
+        "the member's parent chain must stay reachable from the root"
+    );
+    assert_eq!(
+        list_keymap_lookup_seq(&root, &f9),
+        Value::symbol("f9"),
+        "the member's own binding must keep resolving"
+    );
+}
+
+/// `evil-esc-mode` rebinds `\e` in `input-decode-map` to
+/// `(menu-item "" CAPTURED :filter evil-esc)`, where CAPTURED is the ESC
+/// prefix keymap captured *before* the patch and therefore lacks whatever the
+/// parent chain contributes.
+///
+/// GNU `access_keymap_1` resolves the menu-item filter while walking
+/// (`get_keyelt`), then composes the resolved prefix keymap with the parent's
+/// prefix for the same event.  Neo resolved the filter only after the lookup,
+/// so the composed parent branch (`xterm-rxvt-function-map`'s `\e[200~`) was
+/// lost and bracketed paste never reached `xterm-translate-bracketed-paste`.
+#[test]
+fn filter_resolved_prefix_binding_merges_with_parent_keymap() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new();
+
+    let result = eval
+        .eval_str(
+            r#"
+(let* ((rxvt (make-sparse-keymap))
+       (member (make-sparse-keymap))
+       (root (make-sparse-keymap))
+       (captured (make-sparse-keymap)))
+  (define-key rxvt "\e[200~" 'xterm-paste)
+  (define-key member "\e[20~" 'f9)
+  (set-keymap-parent member rxvt)
+  ;; The child-only ESC prefix evil's filter closes over.
+  (define-key captured "\e[20~" 'f9)
+  (define-key root [?\e] (list 'menu-item "" captured :filter (lambda (map) map)))
+  (set-keymap-parent root (list 'keymap member))
+  (list (lookup-key root "\e[200~")
+        (lookup-key root "\e[20~")))
+"#,
+        )
+        .expect("build evil-shaped input-decode-map");
+
+    assert_eq!(
+        result,
+        Value::list(vec![Value::symbol("xterm-paste"), Value::symbol("f9")]),
+        "the filter-resolved prefix must merge with the parent branch"
+    );
+}
