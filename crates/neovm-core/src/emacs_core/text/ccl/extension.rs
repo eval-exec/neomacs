@@ -350,6 +350,9 @@ fn iterate_multiple_map(
                     }
                 };
             }
+            MapHit::Invalid => {
+                return Err(invalid_ccl_program_at(start + offset as usize));
+            }
             MapHit::Miss => {}
         }
     }
@@ -464,6 +467,11 @@ fn map_multiple(
         } else {
             match lookup_map_slot(point, op) {
                 MapHit::Miss => {}
+                MapHit::Invalid => {
+                    // GNU signals `CCL_INVALID_CMD` once the content fails
+                    // the int-range guard; the point word is not consumed.
+                    return Err(invalid_ccl_program_at(list_at.saturating_sub(1)));
+                }
                 MapHit::Number(mapped) => {
                     registers[status_register] = index;
                     op = mapped;
@@ -536,11 +544,19 @@ fn map_multiple(
 }
 
 enum MapHit {
+    /// A C-int mapping value (GNU `IN_INT_RANGE`).
     Number(i64),
     Identity,
     Miss,
     Lambda,
     Call(crate::emacs_core::SymId),
+    /// Content that fails GNU's `IN_INT_RANGE` guard without being nil, t,
+    /// lambda, a cons pair, or a symbol.
+    Invalid,
+}
+
+fn in_ccl_int_range(number: i64) -> bool {
+    i32::try_from(number).is_ok()
 }
 
 /// Resolution of a map entry's symbol program.
@@ -591,7 +607,8 @@ fn lookup_map_slot(map_id: i64, value: i64) -> MapHit {
 
 fn hit_of(content: &ValueSlot) -> MapHit {
     match content {
-        ValueSlot::Int(number) => MapHit::Number(*number),
+        ValueSlot::Int(number) if in_ccl_int_range(*number) => MapHit::Number(*number),
+        ValueSlot::Int(_) => MapHit::Invalid,
         ValueSlot::Nil => MapHit::Miss,
         ValueSlot::True => MapHit::Identity,
         ValueSlot::Lambda => MapHit::Lambda,
@@ -613,9 +630,16 @@ fn apply_map_content(
             registers[status_register] = -1;
             Ok(ExtensionStep::Continue)
         }
-        ValueSlot::Int(number) => {
+        ValueSlot::Int(number) if in_ccl_int_range(*number) => {
             registers[status_register] = 0;
             registers[value_register] = *number;
+            Ok(ExtensionStep::Continue)
+        }
+        // GNU map-single content guard: content that fails
+        // `TYPE_RANGED_FIXNUMP (int, ...)` falls through to the final
+        // `else reg[RRR] = -1` branch.
+        ValueSlot::Int(_) => {
+            registers[status_register] = -1;
             Ok(ExtensionStep::Continue)
         }
         ValueSlot::True => {
@@ -662,11 +686,15 @@ fn classify_slot(value: super::Value) -> ValueSlot {
     if let Some(number) = value.as_int() {
         return ValueSlot::Int(number);
     }
-    // `(ATTRIB . VALUE)` stores VALUE. GNU ignores the attribute once both
-    // halves are integers.
+    // `(ATTRIB . VALUE)` stores VALUE. GNU reads the pair only when both
+    // halves are C ints (`FIXNUMP (attrib) && IN_INT_RANGE (value)`); a
+    // wider value makes the pair a miss, not an invalid command.
     if value.is_cons()
         && value.cons_car().as_int().is_some()
-        && let Some(mapped) = value.cons_cdr().as_int()
+        && let Some(mapped) = value
+            .cons_cdr()
+            .as_int()
+            .filter(|number| i32::try_from(*number).is_ok())
     {
         return ValueSlot::Int(mapped);
     }

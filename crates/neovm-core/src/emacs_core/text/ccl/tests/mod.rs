@@ -1895,7 +1895,10 @@ fn ccl_execute_wraps_int_max_plus_one_like_gnu_ckd_add() {
     // GNU `ckd_add (&reg[rrr], ...)` stores the modular result: with
     // r0 = INT_MAX, `r0 += 1` ends at -2147483648, not an invalid command.
     let program = Value::vector(
-        [0, 4, 0, 23, 1, 22].into_iter().map(Value::fixnum).collect(),
+        [0, 4, 0, 23, 1, 22]
+            .into_iter()
+            .map(Value::fixnum)
+            .collect(),
     );
     let registers = Value::vector(vec![
         Value::fixnum(2_147_483_647),
@@ -1907,8 +1910,56 @@ fn ccl_execute_wraps_int_max_plus_one_like_gnu_ckd_add() {
         Value::NIL,
         Value::NIL,
     ]);
-    builtin_ccl_execute_impl(vec![program, registers])
-        .expect("GNU wraps r0 += 1 past INT_MAX");
+    builtin_ccl_execute_impl(vec![program, registers]).expect("GNU wraps r0 += 1 past INT_MAX");
     let regs = registers.as_vector_data().unwrap();
     assert_eq!(regs[0], Value::fixnum(-2_147_483_648));
+}
+
+#[test]
+fn ccl_execute_map_single_treats_an_out_of_int_range_value_as_a_miss() {
+    crate::test_utils::init_test_tracing();
+    // GNU map-single content guard: content that is not a C int falls
+    // through to the final `reg[RRR] = -1`. The value register keeps its
+    // original store because the failure path writes only the status.
+    let mut eval = crate::test_utils::runtime_startup_context();
+    let registers = eval
+        .eval_str(
+            r#"(let ((reg (vector 0 0 0 0 0 0 0 0)))
+                 (register-code-conversion-map 'm2 (vector 0 4294967296))
+                 (ccl-execute [0 4 294943 0 22] reg)
+                 reg)"#,
+        )
+        .expect("out-of-int-range map content is a miss, not an error");
+    let regs = registers.as_vector_data().expect("register vector");
+    assert_eq!(regs[0], Value::fixnum(-1));
+}
+
+#[test]
+fn ccl_execute_iterate_rejects_an_out_of_int_range_value() {
+    crate::test_utils::init_test_tracing();
+    // GNU consumed the map-id word (counter at 5) and signals invalid.
+    let mut eval = crate::test_utils::runtime_startup_context();
+    let err = eval
+        .eval_str(
+            r#"(let ((reg (vector 0 0 0 0 0 0 0 0)))
+                 (register-code-conversion-map 'm2 (vector 0 4294967296))
+                 (ccl-execute [0 4 262431 1 0 22] reg))"#,
+        )
+        .expect_err("iterate with an out-of-int-range content is invalid");
+    assert_ccl_error_at_index(err, 5);
+}
+
+#[test]
+fn ccl_execute_map_multiple_rejects_an_out_of_int_range_value() {
+    crate::test_utils::init_test_tracing();
+    // The point word is not consumed at map-multiple: error at 4th code.
+    let mut eval = crate::test_utils::runtime_startup_context();
+    let err = eval
+        .eval_str(
+            r#"(let ((reg (vector 0 0 0 0 0 0 0 0)))
+                 (register-code-conversion-map 'm2 (vector 0 4294967296))
+                 (ccl-execute [0 4 278815 1 0 22] reg))"#,
+        )
+        .expect_err("map-multiple with an out-of-int-range content is invalid");
+    assert_ccl_error_at_index(err, 4);
 }
