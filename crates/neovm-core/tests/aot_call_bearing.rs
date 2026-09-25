@@ -47,14 +47,20 @@ fn aot_baseline_tier_emit_serve_and_forced_deopt_match_interp() {
     let dir = tempfile::tempdir().expect("tempdir");
     // SAFETY: single-threaded setup before any AOT entry point reads these
     // (nextest isolates each test in its own process → no OnceLock cross-talk).
+    // Deopt reoptimization off: the self-test checks, after each run, that
+    // the leaf it served is still the cached AOT leaf, and its float input
+    // is a conclusive deopt that would retire that leaf (an invalidated
+    // source never reloads its AOT leaf).
     unsafe {
         std::env::set_var("NEOVM_AOT", "force");
         std::env::set_var("NEOVM_AOT_DIR", dir.path());
+        std::env::set_var("NEOVM_JIT_REOPT", "off");
     }
     let r = neovm_core::emacs_core::jit::aot::testkit_baseline_aot_selftest(dir.path());
     unsafe {
         std::env::remove_var("NEOVM_AOT");
         std::env::remove_var("NEOVM_AOT_DIR");
+        std::env::remove_var("NEOVM_JIT_REOPT");
     }
     if let Err(e) = r {
         panic!("baseline-tier AOT self-test failed: {e}");

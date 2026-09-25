@@ -326,6 +326,18 @@ impl LeafObs {
         }
     }
 
+    /// Precise deopts counted at resume `pc` so far, the one being handled
+    /// included (the reoptimizer's per-site limit reads this; see
+    /// `jit::reopt`). A pc past the first [`Self::MAX_DEOPT_PCS`] shares the
+    /// overflow count: an over-estimate, which can only hasten the response
+    /// at a site that did deopt.
+    pub(crate) fn deopt_count_at(&self, pc: u32) -> u64 {
+        match self.deopt_pcs.borrow().iter().find(|(p, _)| *p == pc) {
+            Some(&(_, n)) => n,
+            None => self.deopt_pc_overflow.get(),
+        }
+    }
+
     /// Count a rerun-from-start deopt.
     #[cold]
     #[inline(never)]

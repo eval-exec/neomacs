@@ -463,9 +463,12 @@ pub struct RuntimeState {
     /// written.
     #[cfg_attr(not(feature = "jit"), allow(dead_code))]
     native_rejected_epoch: AtomicU64,
-    /// Heat at which a body the profitability gate refused (`NotProfitable`)
-    /// is compiled anyway (0 = not deferred). A call-heavy body RUNS faster
-    /// native but its compile is dear (org editing probe, 2026-09-05: ~38M
+    /// Heat at which a DEFERRED body is compiled (0 = not deferred): one the
+    /// profitability gate refused (`NotProfitable`), or one whose leaf a
+    /// deopt invalidated (`jit::reopt`: the end of its re-profile window).
+    /// Either way the body already proved hot, so once the deferral expires
+    /// `dispatch_sized` answers `Compiled` at once. For the profit gate: a
+    /// call-heavy body RUNS faster native but its compile is dear (org editing probe, 2026-09-05: ~38M
     /// instructions per admitted body vs ~830 saved per native entry), so it
     /// pays off only past ~18k calls: the gate was +6.4% on a 5-pass session
     /// and −8.8% on a 50-pass one. Deferring to `profit_defer_factor() ×

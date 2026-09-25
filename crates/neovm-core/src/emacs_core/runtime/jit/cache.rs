@@ -38,6 +38,22 @@ use crate::emacs_core::intern::SymId;
 use crate::emacs_core::symbol::Obarray;
 use crate::emacs_core::value::Value;
 
+/// Why a body is interpreted for now although it is hot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DeferReason {
+    /// The profitability gate refused the body; its runtime carries the heat
+    /// at which the compile is retried with the gate bypassed.
+    NotProfitable,
+    /// A deopt invalidated this body's leaf (`jit::reopt`): it re-profiles
+    /// until its runtime's deferral heat, then recompiles with the tier the
+    /// old leaf had earned.
+    Reoptimize {
+        regalloc: RegallocChoice,
+        profit_gate_bypassed: bool,
+        call_heavy: bool,
+    },
+}
+
 /// One thread's knowledge of a function's compiled state.
 enum CacheEntry {
     /// Native code, ready to run. `Rc` so execution can happen *outside* the
@@ -46,10 +62,10 @@ enum CacheEntry {
     Compiled(Rc<CompiledLeaf>),
     /// The body is outside the baseline JIT's supported subset; never retried.
     NotCompilable,
-    /// The profitability gate refused the body for now; its runtime carries
-    /// the heat at which the compile is retried with the gate bypassed
-    /// (`RuntimeState::profit_deferred_heat`). Interpreted until then.
-    Deferred,
+    /// Interpreted for now (see [`DeferReason`]); the runtime carries the
+    /// heat at which the compile is retried (`RuntimeState::
+    /// profit_deferred_heat`).
+    Deferred(DeferReason),
 }
 
 /// Dense per-thread compiled-leaf store indexed by `compiled_id`. Ids are
@@ -89,6 +105,19 @@ impl DenseCache {
             // Every armed leaf slot (RuntimeState::leaf_slot) re-resolves:
             // a retired leaf stays ALLOCATED but is never CALLED again.
             bump_leaf_slot_epoch();
+        }
+    }
+
+    /// Replace `id`'s entry with `next` (or empty it), RETIRING a compiled
+    /// leaf that was there — like [`Self::remove`] but without the global
+    /// leaf-slot epoch bump: the caller disarms the one leaf slot that can
+    /// hold this source's leaf (`RuntimeState::disarm_leaf_slot`).
+    fn retire_and_replace(&mut self, id: u64, next: Option<CacheEntry>) {
+        let Some(slot) = self.slots.get_mut(id as usize) else {
+            return;
+        };
+        if let Some(CacheEntry::Compiled(leaf)) = std::mem::replace(slot, next) {
+            self.retire(leaf);
         }
     }
 
@@ -566,7 +595,7 @@ pub(crate) fn try_run_osr(
     }
     // The deopt hook runs before the interpreter installs the resume state
     // (the local `leaf` keeps the OSR leaf alive across it).
-    match &run {
+    let _verdict = match &run {
         NativeRun::Deopt => super::reopt::note_deopt(
             ctx,
             func,
@@ -590,8 +619,8 @@ pub(crate) fn try_run_osr(
                 stack: &resume.stack,
             },
         ),
-        NativeRun::Ok(_) | NativeRun::Signal => {}
-    }
+        NativeRun::Ok(_) | NativeRun::Signal => super::reopt::ReoptVerdict::Kept,
+    };
     if std::env::var_os("NEOMACS_OSR_DEBUG").is_some() {
         let tag = match &run {
             NativeRun::Ok(_) => "ok",
@@ -720,7 +749,7 @@ fn compile_cache_entry(
                 .saturating_mul(super::profit_defer_factor())
                 .max(rt.heat().saturating_add(1));
             rt.defer_tier_up(at);
-            CacheEntry::Deferred
+            CacheEntry::Deferred(DeferReason::NotProfitable)
         }
         Err(_) => {
             // Remember the verdict where the dispatcher can see it. Measured
@@ -806,8 +835,6 @@ pub(crate) fn evict_compiled(id: u64) {
 /// 5 slots each. Used where a leaf stops being current: the deopt
 /// invalidation (`jit::reopt`) and, later, a re-tier or a per-symbol resync.
 /// Must run outside any `COMPILED`/`OSR_CACHE` borrow.
-// The first caller lands with the deopt invalidation.
-#[allow(dead_code)]
 pub(crate) fn unlink_spec_slots(dead: *const CompiledLeaf) -> usize {
     let mut cleared = 0;
     COMPILED.with(|c| {
@@ -827,6 +854,137 @@ pub(crate) fn unlink_spec_slots(dead: *const CompiledLeaf) -> usize {
         }
     });
     cleared
+}
+
+/// Whether `leaf` is still the leaf the caches hold for `func` at `origin`:
+/// the entry leaf of its `compiled_id`, or the OSR leaf at its header. A
+/// retired leaf never is.
+pub(crate) fn leaf_is_current(
+    func: &ByteCodeFunction,
+    leaf: &CompiledLeaf,
+    origin: LeafOrigin<'_>,
+) -> bool {
+    if leaf.retired.get() {
+        return false;
+    }
+    let Some(id) = func.jit_runtime().compiled_id() else {
+        return false;
+    };
+    match origin {
+        LeafOrigin::Entry => COMPILED.with(|c| {
+            c.try_borrow().is_ok_and(|c| {
+                matches!(c.get(id), Some(CacheEntry::Compiled(l)) if std::ptr::eq(Rc::as_ptr(l), leaf))
+            })
+        }),
+        LeafOrigin::Osr { header_pc, .. } => OSR_CACHE.with(|c| {
+            c.try_borrow().is_ok_and(|c| {
+                matches!(c.get(&(id, header_pc)), Some(Some(e)) if std::ptr::eq(Rc::as_ptr(&e.leaf), leaf))
+            })
+        }),
+    }
+}
+
+/// Deopt-driven invalidation of `func`'s compiled code on this thread
+/// (`jit::reopt`), after its feedback was widened. Counts the invalidation
+/// toward the source's backoff, makes the interpreter record feedback
+/// again, and:
+///
+/// 1. retires the entry leaf, leaving `Deferred(Reoptimize)` (a re-profile
+///    window of `heat` interpreted calls), nothing (`Reprofile::Immediate`:
+///    the next hot dispatch recompiles) or `NotCompilable` (the level
+///    reached `Interpreter`);
+/// 2. retires the source's OSR leaves (compiled from the same feedback; kept
+///    allocated and rooted, a running OSR frame also holds its own `Rc`);
+/// 3. clears every caller's spec slot that caches the retired entry leaf,
+///    and the source's own leaf slot, so nothing calls it again;
+/// 4. forgets the source's inline dependencies (its entry is no longer a
+///    compiled leaf that inlined anything).
+///
+/// Runs on a deopt exit before the resume state is seeded: no Lisp-heap
+/// allocation, no safepoint. Cold.
+#[cold]
+#[inline(never)]
+pub(crate) fn invalidate_for_reopt(
+    func: &ByteCodeFunction,
+    origin: LeafOrigin<'_>,
+    floor: ReoptLevel,
+    reprofile: super::reopt::Reprofile,
+) {
+    use super::reopt::Reprofile;
+    let rt = func.jit_runtime();
+    let id = rt.compiled_id_or_assign();
+    let knobs = super::reopt::knobs();
+    let level = rt.note_reopt(floor, knobs.max_reopts);
+    rt.reopen_numeric_feedback();
+    rt.clear_aot_prewarmed();
+    rt.disarm_leaf_slot();
+    forget_inline_deps(id);
+    let retired_entry = COMPILED.with(|c| {
+        let Ok(mut c) = c.try_borrow_mut() else {
+            tracing::warn!(target: "neovm_jit::reopt", id, "cache borrowed; entry kept");
+            return None;
+        };
+        let old = match c.get(id) {
+            Some(CacheEntry::Compiled(l)) => Rc::clone(l),
+            _ => return None,
+        };
+        let next = match (level, reprofile) {
+            (ReoptLevel::Interpreter, _) => Some(CacheEntry::NotCompilable),
+            (_, Reprofile::Immediate) => None,
+            (_, Reprofile::Window) => Some(CacheEntry::Deferred(DeferReason::Reoptimize {
+                regalloc: old.regalloc,
+                profit_gate_bypassed: old.profit_gate_bypassed,
+                call_heavy: old.call_heavy,
+            })),
+        };
+        c.retire_and_replace(id, next);
+        Some(old)
+    });
+    let osr: Vec<Rc<CompiledLeaf>> = OSR_CACHE.with(|c| {
+        let Ok(mut c) = c.try_borrow_mut() else {
+            return Vec::new();
+        };
+        let keys: Vec<(u64, usize)> = c
+            .iter()
+            .filter(|((fid, _), e)| *fid == id && e.is_some())
+            .map(|(k, _)| *k)
+            .collect();
+        keys.iter()
+            .filter_map(|k| c.remove(k).flatten().map(|e| e.leaf))
+            .collect()
+    });
+    if !osr.is_empty() {
+        COMPILED.with(|c| {
+            if let Ok(mut c) = c.try_borrow_mut() {
+                for leaf in &osr {
+                    c.retire(Rc::clone(leaf));
+                }
+            }
+        });
+    }
+    let unlinked = retired_entry
+        .as_ref()
+        .map_or(0, |old| unlink_spec_slots(Rc::as_ptr(old)));
+    match level {
+        ReoptLevel::Interpreter => rt.mark_native_rejected(rejection_epoch()),
+        _ if reprofile == Reprofile::Window => {
+            rt.defer_tier_up(rt.heat().saturating_add(knobs.heat).max(1))
+        }
+        _ => {}
+    }
+    stats::record_reopt(level);
+    tracing::debug!(
+        target: "neovm_jit::reopt",
+        id,
+        osr = matches!(origin, LeafOrigin::Osr { .. }),
+        floor = floor.name(),
+        level = level.name(),
+        count = rt.reopt_count(),
+        entry = retired_entry.is_some(),
+        osr_leaves = osr.len(),
+        unlinked,
+        "invalidated"
+    );
 }
 
 /// Evictions after which a callee counts as unstable (see `INLINE_EVICTIONS`).
@@ -874,7 +1032,8 @@ pub(crate) fn cache_entry_kind_for_test(id: u64) -> &'static str {
     COMPILED.with(|c| match c.borrow().get(id) {
         Some(CacheEntry::Compiled(_)) => "compiled",
         Some(CacheEntry::NotCompilable) => "not-compilable",
-        Some(CacheEntry::Deferred) => "deferred",
+        Some(CacheEntry::Deferred(DeferReason::NotProfitable)) => "deferred",
+        Some(CacheEntry::Deferred(DeferReason::Reoptimize { .. })) => "deferred-reopt",
         None => "none",
     })
 }
@@ -1320,19 +1479,46 @@ pub fn try_run_compiled(
         } else {
             RegallocPolicy::Auto
         };
-        // A deferred body whose deferral ran out compiles now, gate bypassed;
-        // one whose deferral still holds stays interpreted (the dispatcher
-        // does not probe for it, but the funcall seam and tests may).
-        let deferred = matches!(cache.get(id), Some(CacheEntry::Deferred));
-        if deferred && !func.jit_runtime().profit_deferral_expired() {
+        // A deferred body whose deferral ran out compiles now; one whose
+        // deferral still holds stays interpreted (the dispatcher does not
+        // probe for it, but the funcall seam and tests may).
+        let deferred = match cache.get(id) {
+            Some(CacheEntry::Deferred(reason)) => Some(*reason),
+            _ => None,
+        };
+        if deferred.is_some() && !func.jit_runtime().profit_deferral_expired() {
             return None;
         }
-        if deferred {
+        if deferred.is_some() {
             cache.remove(id);
         }
+        let (policy, bypass_profit_gate) = match deferred {
+            // A refused body that proved hot: compile it, gate bypassed.
+            Some(DeferReason::NotProfitable) => (policy, true),
+            // A deopt-invalidated body re-profiled: recompile with the tier
+            // the old leaf had earned. The allocator is not re-decided, and
+            // a leaf already past its re-tier heat gets the full allocator
+            // now rather than a second compile on the next call.
+            Some(DeferReason::Reoptimize {
+                regalloc,
+                profit_gate_bypassed,
+                call_heavy,
+            }) => {
+                let retier_due = !call_heavy
+                    && forced_regalloc().is_none()
+                    && super::retier_heat().is_some_and(|at| func.jit_runtime().heat() >= at);
+                let policy = if regalloc == RegallocChoice::Full || retier_due {
+                    RegallocPolicy::Full
+                } else {
+                    policy
+                };
+                (policy, profit_gate_bypassed || prev_bypassed)
+            }
+            None => (policy, prev_bypassed),
+        };
         let request = CompileRequest {
             regalloc: policy,
-            bypass_profit_gate: deferred || prev_bypassed,
+            bypass_profit_gate,
         };
         match cache.get_or_insert_with(id, || {
             // R1c-6: consult AOT FIRST (additive — a miss/error falls through to
@@ -1342,10 +1528,13 @@ pub fn try_run_compiled(
             // (no &optional/&rest — matches the MIR pure path's arity seeding).
             // AOT bodies bake every constant; a source with a make-closure
             // patched prefix needs the JIT's dynamic-prefix lowering.
+            // A source a deopt invalidated never reloads its AOT leaf: that
+            // leaf speculates exactly as the one that deopted.
             if super::aot::aot_enabled()
                 && func.params.optional.is_empty()
                 && func.params.rest.is_none()
                 && func.jit_runtime().patched_prefix() == 0
+                && func.jit_runtime().reopt_count() == 0
             {
                 let native_arity = func.params.required.len();
                 if let Some(mut leaf) = super::aot::try_load_leaf(

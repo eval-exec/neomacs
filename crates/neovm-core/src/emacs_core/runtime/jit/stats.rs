@@ -103,6 +103,12 @@ pub(crate) struct CompileStats {
     pub deopt_causes: [u64; DEOPT_CAUSES],
     /// Of those, deopts of OSR leaves.
     pub deopt_osr: u64,
+    /// Deopt-driven invalidations (`reopt::invalidate_for_reopt`), by the
+    /// `ReoptLevel` the source stood at afterwards.
+    pub reopt_levels: [u64; 5],
+    /// Deopts of a leaf already stale (retired): its callers were unlinked,
+    /// nothing invalidated.
+    pub reopt_stale: u64,
 }
 
 /// Number of deopt census buckets.
@@ -143,6 +149,8 @@ impl CompileStats {
             mir_inlined_callees: d(self.mir_inlined_callees, base.mir_inlined_callees),
             deopt_causes: std::array::from_fn(|i| d(self.deopt_causes[i], base.deopt_causes[i])),
             deopt_osr: d(self.deopt_osr, base.deopt_osr),
+            reopt_levels: std::array::from_fn(|i| d(self.reopt_levels[i], base.reopt_levels[i])),
+            reopt_stale: d(self.reopt_stale, base.reopt_stale),
         }
     }
 
@@ -474,6 +482,24 @@ pub(crate) fn record_deopt(cause: super::reopt::DeoptCause, osr: bool) {
     });
 }
 
+/// Record one deopt-driven invalidation that left its source at `level`.
+pub(crate) fn record_reopt(level: super::ReoptLevel) {
+    STATS.with(|s| {
+        let mut stats = s.get();
+        stats.reopt_levels[level as usize] += 1;
+        s.set(stats);
+    });
+}
+
+/// Record a deopt of an already-stale leaf (callers unlinked).
+pub(crate) fn record_reopt_stale() {
+    STATS.with(|s| {
+        let mut stats = s.get();
+        stats.reopt_stale += 1;
+        s.set(stats);
+    });
+}
+
 /// The deopt census, rendered `name=count` for every nonzero cause.
 pub(crate) fn format_deopt_causes(s: &CompileStats) -> String {
     let parts: Vec<String> = super::reopt::DeoptCause::CENSUS_NAMES
@@ -505,7 +531,8 @@ pub(crate) fn format_summary(s: &CompileStats) -> String {
          total_us={} mean_us={mean_us} max_us={} max_fn_len={} \
          mir[taken={} tier_rej={} lower_fail={} build_fail={} gate_opt={} gate_rest={} gate_prefix={} gate_reopt={} inlined={}] \
          hist[<100us,<250us,<500us,<1ms,<2.5ms,<5ms,<10ms,>=10ms]={:?} \
-         deopts[total={} osr={}{}{}]",
+         deopts[total={} osr={}{}{}] \
+         reopt[invalidated={} stale={} speculative={} no_inline={} baseline_only={} generic={} interpreter={}]",
         s.total_compiles,
         s.compiled_ok,
         s.native_entries,
@@ -532,6 +559,13 @@ pub(crate) fn format_summary(s: &CompileStats) -> String {
         s.deopt_osr,
         if s.deopts() > 0 { " " } else { "" },
         format_deopt_causes(s),
+        s.reopt_levels.iter().sum::<u64>(),
+        s.reopt_stale,
+        s.reopt_levels[0],
+        s.reopt_levels[1],
+        s.reopt_levels[2],
+        s.reopt_levels[3],
+        s.reopt_levels[4],
     )
 }
 

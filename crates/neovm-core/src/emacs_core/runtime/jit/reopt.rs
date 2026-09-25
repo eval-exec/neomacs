@@ -18,13 +18,33 @@
 //! leaf's release counters ([`super::compile::LeafObs`]), which every deopt
 //! has already bumped by the time it reaches the hook.
 //!
+//! # The policy
+//!
+//! Where the cause is conclusive the hook WIDENS the source's feedback: a
+//! float or non-fixnum operand at a fixnum site moves the site's
+//! `NumericFeedback`; an overflow repeated `site_limit` times at one pc
+//! widens it to `Other` (the generic fallback); a call-site guard failing
+//! that often sets the site's no-inline bit. Then it INVALIDATES the stale
+//! leaf (`cache::invalidate_for_reopt`): retired, its callers' spec slots
+//! and its source's leaf slot cleared, the interpreter recording feedback
+//! again, and the source re-profiled for `heat` interpreted calls before it
+//! recompiles against the widened feedback. Each invalidation counts toward
+//! the source's backoff ([`super::ReoptLevel`]): past `max_reopts`, each one
+//! pulls the source's speculation back a level, down to the interpreter, so
+//! a source recompiles at most `max_reopts + 4` times for deopts.
+//!
+//! GNU has no JIT, so none of this is Lisp-visible: the re-profile window
+//! runs the interpreter and the strict call path, both GNU-parity, and the
+//! `Generic` level is GNU's own arithmetic opcode shape (`bytecode.c`
+//! `Bplus`: a fixnum fast path, else `Fplus`, no backtrace frame).
+//!
 //! GC window: the hook runs while the resume stack is still unrooted (it is
 //! seeded into the traced `bc_buf` only afterwards). It must not allocate on
 //! the Lisp heap, reach a safepoint or run Lisp. Rust-heap allocation is
 //! fine, as in `CompiledLeaf::deopt_at_outcome`.
 
-use super::NumericFeedback;
 use super::compile::CompiledLeaf;
+use super::{NumericFeedback, ReoptLevel};
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Vm};
 use crate::emacs_core::eval::Context;
@@ -57,6 +77,26 @@ pub(crate) enum DeoptEvent<'a> {
     Precise { pc: usize, stack: &'a [Value] },
     /// `STATUS_DEOPT`: rerun from the start. No pc (pure MIR bodies).
     Rerun,
+}
+
+/// What the hook did about a deopt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReoptVerdict {
+    /// The leaf that deopted is still what the caches hold (or was already
+    /// stale): nothing was invalidated.
+    Kept,
+    /// The leaf was retired and its source will recompile.
+    Invalidated,
+}
+
+/// When an invalidated source recompiles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Reprofile {
+    /// After `heat` interpreted calls that re-record its feedback.
+    Window,
+    /// On the next hot dispatch: the cause needs no new feedback (a MIR
+    /// leaf whose inline epoch moved only needs rebuilding).
+    Immediate,
 }
 
 /// Why a deopt happened, derived from data the deopt already carries.
@@ -174,7 +214,11 @@ pub(crate) fn classify(
     }
 }
 
-/// The deopt hook (see the module docs). Cold: runs only on deopt exits.
+/// The deopt hook (see the module docs). Cold: runs only on deopt exits,
+/// BEFORE the resumed frame seeds `bc_buf`: it must not allocate on the Lisp
+/// heap or reach a safepoint, because the resume stack is still unrooted.
+/// It touches only tag bits, relaxed atomics, `Cell`/`RefCell` fields, Rust
+/// collections and `tracing`.
 #[cold]
 #[inline(never)]
 pub(crate) fn note_deopt(
@@ -183,7 +227,7 @@ pub(crate) fn note_deopt(
     leaf: &CompiledLeaf,
     origin: LeafOrigin<'_>,
     event: DeoptEvent<'_>,
-) {
+) -> ReoptVerdict {
     let cause = match event {
         DeoptEvent::Rerun => DeoptCause::Rerun,
         DeoptEvent::Precise { pc, stack } => {
@@ -198,6 +242,82 @@ pub(crate) fn note_deopt(
         osr = origin.is_osr(),
         "deopt"
     );
+    if !reopt_enabled() {
+        return ReoptVerdict::Kept;
+    }
+    respond(func, leaf, origin, event, cause)
+}
+
+/// The policy half of [`note_deopt`]: widen what the cause proved, then
+/// invalidate the leaf when the cause is conclusive or has repeated
+/// `site_limit` times at one pc.
+fn respond(
+    func: &ByteCodeFunction,
+    leaf: &CompiledLeaf,
+    origin: LeafOrigin<'_>,
+    event: DeoptEvent<'_>,
+    cause: DeoptCause,
+) -> ReoptVerdict {
+    // The OSR leaves' response lands with the OSR re-entry.
+    if origin.is_osr() {
+        return ReoptVerdict::Kept;
+    }
+    let rt = func.jit_runtime();
+    let ops_len = func.executable_ops().len();
+    let k = knobs();
+    let at_limit =
+        |pc: usize| u32::try_from(pc).is_ok_and(|pc| leaf.obs.deopt_count_at(pc) >= k.site_limit);
+    let (floor, reprofile) = match (cause, event) {
+        // Conclusive: the site met operands its lowering does not take.
+        (DeoptCause::ArithOperands(seen), DeoptEvent::Precise { pc, .. }) => {
+            rt.widen_numeric(pc, ops_len, seen);
+            (ReoptLevel::Speculative, Reprofile::Window)
+        }
+        // An overflow is data-dependent: widen only a site that keeps
+        // overflowing, or one warm-up overflow would make a fixnum-hot site
+        // generic for good.
+        (DeoptCause::ArithOverflow, DeoptEvent::Precise { pc, .. }) if at_limit(pc) => {
+            rt.widen_numeric(pc, ops_len, NumericFeedback::Other);
+            (ReoptLevel::Speculative, Reprofile::Window)
+        }
+        // A spliced region, MIR-inlined callee or inline bit-op keeps
+        // failing its guard at this call: leave the call a call.
+        (DeoptCause::InlinedCall, DeoptEvent::Precise { pc, .. }) if at_limit(pc) => {
+            rt.mark_call_site_no_inline(pc, ops_len);
+            (ReoptLevel::Speculative, Reprofile::Window)
+        }
+        // The inlined callee is unchanged; only the global epoch moved.
+        // Rebuilding against the current epoch is all it needs.
+        (DeoptCause::InlineEpochMoved, DeoptEvent::Precise { .. }) => {
+            (ReoptLevel::Speculative, Reprofile::Immediate)
+        }
+        // A guard nothing above attributes: nothing to widen, so climb.
+        (DeoptCause::Unattributed, DeoptEvent::Precise { pc, .. }) if at_limit(pc) => {
+            (leaf.compiled_level.next(), Reprofile::Window)
+        }
+        // TypeError is bounded by the signal it precedes; the rest has not
+        // reached its limit.
+        _ => return ReoptVerdict::Kept,
+    };
+    if super::cache::leaf_is_current(func, leaf, origin) {
+        super::cache::invalidate_for_reopt(func, origin, floor, reprofile);
+        ReoptVerdict::Invalidated
+    } else {
+        // A stale leaf (retired by a re-tier, an inline eviction or an
+        // earlier invalidation) still reached through some caller's spec
+        // slot: point those callers back at the cache. The widening above
+        // still counts for the leaf that is current.
+        let unlinked = super::cache::unlink_spec_slots(leaf);
+        super::stats::record_reopt_stale();
+        tracing::debug!(
+            target: "neovm_jit::reopt",
+            id = leaf.obs.id,
+            ?cause,
+            unlinked,
+            "stale leaf deopted; callers unlinked"
+        );
+        ReoptVerdict::Kept
+    }
 }
 
 /// The reoptimization knobs (see the `jit/mod.rs` knob table), resolved.
@@ -249,6 +369,7 @@ impl ReoptKnobs {
     }
 
     /// `NEOVM_JIT_REOPT=off`: count only.
+    #[cfg(test)]
     pub(crate) fn off() -> Self {
         ReoptKnobs {
             enabled: false,
@@ -314,3 +435,7 @@ pub(crate) fn reopt_enabled() -> bool {
 #[cfg(test)]
 #[path = "reopt/tests/reopt_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "reopt/tests/end_to_end.rs"]
+mod end_to_end;
