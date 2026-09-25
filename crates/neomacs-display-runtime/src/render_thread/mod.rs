@@ -20,6 +20,9 @@ mod gpu_startup;
 mod input;
 mod lifecycle;
 mod media;
+#[cfg(test)]
+mod modifier_policy_cooking_test;
+mod modifier_sides;
 mod pointer_events;
 pub(in crate::render_thread) mod render_pass;
 mod render_quality;

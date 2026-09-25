@@ -631,6 +631,15 @@ pub enum ConfigCommand {
     SetLigaturesEnabled { enabled: bool },
     /// Replace the complete, already validated visual configuration snapshot.
     SetVisualConfig(VisualConfig),
+    /// Replace the compiled NS modifier policy (issue #442).
+    ///
+    /// GNU's `nsterm.m` reads `ns-command-modifier' and friends at every
+    /// `keyDown:'; winit cannot read Lisp per event, so the evaluator
+    /// compiles the policy once per change (`add-variable-watcher' in
+    /// `lisp/term/neo-win.el') and ships it here.  The render thread then
+    /// cooks raw physical modifier facts through the same
+    /// `EV_MODIFIERS2' arithmetic GNU runs.
+    SetModifierPolicy(neomacs_display_protocol::ModifierPolicy),
     /// Toggle scroll indicators and focus ring
     SetScrollIndicators { enabled: bool },
     /// Set custom title bar height (0 = hidden, >0 = show with given height)

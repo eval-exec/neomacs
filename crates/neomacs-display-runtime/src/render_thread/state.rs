@@ -841,6 +841,20 @@ pub(super) struct RenderApp {
     /// per-render rebuild entirely.
     pub(super) faces_signature: Vec<(u64, u64)>,
     pub(super) modifiers: u32,
+    /// The compiled NS modifier policy (issue #442).
+    ///
+    /// Defaults to GNU's `syms_of_nsterm` values so a session where Lisp has
+    /// not pushed a policy yet cooks identically to the pre-policy
+    /// hardcode: Option -> meta, Command -> super (Cocoa defaults,
+    /// `src/nsterm.m:11576-11643`).
+    pub(super) modifier_policy: neomacs_display_protocol::ModifierPolicy,
+    /// winit's aggregate answer to "which modifiers are down", kept so a
+    /// key event can be re-cooked with its own GNU kind at send time.
+    pub(super) modifier_state: winit::keyboard::ModifiersState,
+    /// Per-side down/up tracking for the command/option/control families,
+    /// which winit's aggregate `ModifiersState` cannot express; updated
+    /// from the physical modifier keys' own key events.
+    pub(super) modifier_sides: super::modifier_sides::ModifierSides,
     pub(super) pending_file_drops: std::collections::HashSet<winit::event_loop::AsyncRequestSerial>,
 
     pub(super) image_metadata: SharedImageRenderState,
@@ -1048,6 +1062,9 @@ impl RenderApp {
             faces: rustc_hash::FxHashMap::default(),
             faces_signature: Vec::new(),
             modifiers: 0,
+            modifier_policy: neomacs_display_protocol::ModifierPolicy::gnu_ns_default(),
+            modifier_state: winit::keyboard::ModifiersState::empty(),
+            modifier_sides: super::modifier_sides::ModifierSides::default(),
             pending_file_drops: Default::default(),
             image_metadata,
             cursor_defaults: CursorState::new(

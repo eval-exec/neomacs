@@ -1920,6 +1920,16 @@ impl DisplayHost for PrimaryWindowDisplayHost {
         )
     }
 
+    fn set_modifier_policy(
+        &mut self,
+        policy: neomacs_display_protocol::ModifierPolicy,
+    ) -> Result<(), String> {
+        self.send_render_command(
+            RenderCommand::Config(ConfigCommand::SetModifierPolicy(policy)),
+            "failed to set the NS modifier policy",
+        )
+    }
+
     fn resolve_font_for_char(
         &mut self,
         request: FontResolveRequest,

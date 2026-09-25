@@ -209,13 +209,19 @@ impl crate::gc_trace::GcTrace for PresentedInteractions {
 // ---------------------------------------------------------------------------
 
 /// Modifier flags for key events.
+///
+/// GNU distinguishes `alt_modifier' from `meta_modifier` (src/event.h), and
+/// the NS modifier policy cooks Option to either of them
+/// (`parse_solitary_modifier', src/keyboard.c:7917), so this struct carries
+/// both.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Modifiers {
     pub ctrl: bool,
-    pub meta: bool, // Alt
+    pub meta: bool,
     pub shift: bool,
     pub super_: bool,
     pub hyper: bool,
+    pub alt: bool,
 }
 
 impl Modifiers {
@@ -248,7 +254,8 @@ impl Modifiers {
     /// Convert to Emacs modifier bitmask.
     pub fn to_bits(&self) -> u32 {
         use crate::emacs_core::keyboard::pure::{
-            KEY_CHAR_CTRL, KEY_CHAR_HYPER, KEY_CHAR_META, KEY_CHAR_SHIFT, KEY_CHAR_SUPER,
+            KEY_CHAR_ALT, KEY_CHAR_CTRL, KEY_CHAR_HYPER, KEY_CHAR_META, KEY_CHAR_SHIFT,
+            KEY_CHAR_SUPER,
         };
         let mut bits = 0u32;
         if self.ctrl {
@@ -266,13 +273,17 @@ impl Modifiers {
         if self.hyper {
             bits |= KEY_CHAR_HYPER as u32;
         }
+        if self.alt {
+            bits |= KEY_CHAR_ALT as u32;
+        }
         bits
     }
 
     /// Parse from Emacs modifier bitmask.
     pub fn from_bits(bits: u32) -> Self {
         use crate::emacs_core::keyboard::pure::{
-            KEY_CHAR_CTRL, KEY_CHAR_HYPER, KEY_CHAR_META, KEY_CHAR_SHIFT, KEY_CHAR_SUPER,
+            KEY_CHAR_ALT, KEY_CHAR_CTRL, KEY_CHAR_HYPER, KEY_CHAR_META, KEY_CHAR_SHIFT,
+            KEY_CHAR_SUPER,
         };
         Self {
             ctrl: bits & KEY_CHAR_CTRL as u32 != 0,
@@ -280,20 +291,24 @@ impl Modifiers {
             shift: bits & KEY_CHAR_SHIFT as u32 != 0,
             super_: bits & KEY_CHAR_SUPER as u32 != 0,
             hyper: bits & KEY_CHAR_HYPER as u32 != 0,
+            alt: bits & KEY_CHAR_ALT as u32 != 0,
         }
     }
 
     /// Format as Emacs modifier prefix (e.g., "C-M-").
+    ///
+    /// The order is GNU's canonical modifier order (`event_modifier_prefix`,
+    /// mirroring keymap.c:1478): A- C- H- M- S- s-.
     pub fn prefix_string(&self) -> String {
         let mut s = String::new();
-        if self.hyper {
-            s.push_str("H-");
-        }
-        if self.super_ {
-            s.push_str("s-");
+        if self.alt {
+            s.push_str("A-");
         }
         if self.ctrl {
             s.push_str("C-");
+        }
+        if self.hyper {
+            s.push_str("H-");
         }
         if self.meta {
             s.push_str("M-");
@@ -301,11 +316,14 @@ impl Modifiers {
         if self.shift {
             s.push_str("S-");
         }
+        if self.super_ {
+            s.push_str("s-");
+        }
         s
     }
 
     pub fn is_empty(&self) -> bool {
-        !self.ctrl && !self.meta && !self.shift && !self.super_ && !self.hyper
+        !self.ctrl && !self.meta && !self.shift && !self.super_ && !self.hyper && !self.alt
     }
 }
 
@@ -555,6 +573,7 @@ impl KeyEvent {
                         shift,
                         super_,
                         hyper,
+                        alt,
                     },
                 })
             }
@@ -599,6 +618,7 @@ impl KeyEvent {
                         shift,
                         super_,
                         hyper,
+                        alt,
                     },
                 })
             }
@@ -948,10 +968,18 @@ pub const XK_F1: u32 = 0xFFBE;
 pub const XK_F24: u32 = 0xFFD5;
 
 // Render thread modifier bitmask constants.
+//
+// These are the wire values of `neomacs_display_protocol`'s
+// `TransportModifierBit` masks (`modifier_policy.rs`); `Alt` and `Hyper`
+// were appended when the NS modifier policy (issue #442) taught the
+// transport to carry the full GNU modifier set, which distinguishes
+// `alt_modifier' from `meta_modifier'.
 pub const RENDER_SHIFT_MASK: u32 = 1 << 0;
 pub const RENDER_CTRL_MASK: u32 = 1 << 1;
 pub const RENDER_META_MASK: u32 = 1 << 2;
 pub const RENDER_SUPER_MASK: u32 = 1 << 3;
+pub const RENDER_ALT_MASK: u32 = 1 << 4;
+pub const RENDER_HYPER_MASK: u32 = 1 << 5;
 
 /// Meaning of a character-shaped frontend event before it enters Emacs's
 /// command loop.
@@ -994,7 +1022,16 @@ impl FrontendCharacterInput {
                 produced,
                 modifiers: ControlChordModifiers(modifiers),
             }
-        } else if modifiers.meta || modifiers.super_ || modifiers.hyper {
+        } else if modifiers.meta
+            || modifiers.super_
+            || modifiers.hyper
+            // GNU cooks `parse_solitary_modifier("alt")' to a distinct
+            // `alt_modifier' bit (`src/keyboard.c:7941`), which is as much a
+            // command modifier as meta: the NS modifier policy can map
+            // Option to `alt' (issue #442), and that chord must reach the
+            // command loop as `A-x', never as text.
+            || modifiers.alt
+        {
             Self::NonControlChord {
                 produced,
                 modifiers: NonControlChordModifiers(modifiers),
@@ -1069,7 +1106,8 @@ pub fn render_modifiers_to_modifiers(bits: u32) -> Modifiers {
         meta: bits & RENDER_META_MASK != 0,
         shift: bits & RENDER_SHIFT_MASK != 0,
         super_: bits & RENDER_SUPER_MASK != 0,
-        hyper: false,
+        hyper: bits & RENDER_HYPER_MASK != 0,
+        alt: bits & RENDER_ALT_MASK != 0,
     }
 }
 

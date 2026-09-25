@@ -130,12 +130,6 @@ impl GuiFrameNativeWindowState {
 pub(super) struct NativeTextInputPolicy {
     pub(super) ime_allowed_on_create: bool,
     pub(super) initial_cursor_area: ImeCursorArea,
-    /// Whether the Option key delivers a command modifier instead of the
-    /// layout's composed character.  This is GNU's `ns-alternate-modifier`,
-    /// whose default is `meta` (`src/nsterm.m`), so Emacs reads an Option
-    /// chord from `charactersIgnoringModifiers` and never from the composed
-    /// `characters`.
-    pub(super) option_key_is_meta: bool,
 }
 
 impl NativeTextInputPolicy {
@@ -148,12 +142,10 @@ impl NativeTextInputPolicy {
                 width: 1,
                 height: 1,
             },
-            option_key_is_meta: true,
         }
     }
 
     pub(super) fn apply_to_window(self, window: &dyn Window) {
-        apply_option_key_policy(window, self.option_key_is_meta);
         let request = if self.ime_allowed_on_create {
             // Enabling declares the capabilities the IME may drive from here
             // on, so the initial cursor area rides along with the request that
@@ -200,12 +192,14 @@ fn request_ime_cursor_area(window: &dyn Window, position: Position, size: Size) 
     }
 }
 
-/// Make Option a command modifier the way GNU's `ns-alternate-modifier`
-/// default does.
+/// Make Option a command modifier the way GNU's compiled-in
+/// `ns-alternate-modifier` default does, or leave it composing characters
+/// when the policy maps Option to `none'.
 ///
 /// macOS composes an Option chord in the window server, so AppKit hands over
 /// the composed character: Option+X arrives as `≈`, Option+Shift+, as `¯`.
-/// GNU never reads that.  `keyDown:` takes its code from
+/// GNU never reads that when a control-like modifier is down.
+/// `keyDown:` takes its code from
 /// `[theEvent charactersIgnoringModifiers]` (`src/nsterm.m`), which applies
 /// Shift but not Option, and re-derives it with `ns_get_shifted_character` --
 /// `UCKeyTranslate` with only the shift-like modifier bits -- when a
@@ -213,28 +207,42 @@ fn request_ime_cursor_area(window: &dyn Window, position: Position, size: Size) 
 /// `ns-alternate-modifier` of `meta` those two agree, because Option is then
 /// never shift-like, so `nil_or_none` is false and only `shiftKey` is passed.
 ///
-/// `OptionAsAlt::Both` is winit's name for exactly that: it rewrites the
-/// `NSEvent` so `characters` becomes `charactersIgnoringModifiers` whenever
-/// Option is down and Control and Command are not.  It has to happen here,
+/// `OptionAsAlt` is winit's knob for exactly that split: its rewriting shapes
+/// make `characters` become `charactersIgnoringModifiers` whenever Option is
+/// down and Control and Command are not.  It has to happen here,
 /// at the window, rather than while translating a `KeyEvent`, because winit
 /// applies it before `interpretKeyEvents` -- so an Option chord that lands on
 /// a dead key (Option+E on the US layout) stops opening a preedit and starts
 /// arriving as a key event at all.
+///
+/// The shape is the *policy's* answer (`ModifierPolicy::option_as_alt_shape`),
+/// not a constant: `mac-option-modifier nil` (GNU's `none') must keep
+/// composing characters, so the knob is driven by the NS modifier policy
+/// shipped from Lisp.
 #[cfg(target_os = "macos")]
-fn apply_option_key_policy(window: &dyn Window, option_key_is_meta: bool) {
+pub(super) fn apply_option_key_policy(
+    window: &dyn Window,
+    shape: neomacs_display_protocol::OptionAsAltShape,
+) {
+    use neomacs_display_protocol::OptionAsAltShape as Shape;
     use winit::platform::macos::{OptionAsAlt, WindowExtMacOS};
 
-    window.set_option_as_alt(if option_key_is_meta {
-        OptionAsAlt::Both
-    } else {
-        OptionAsAlt::None
+    window.set_option_as_alt(match shape {
+        Shape::None => OptionAsAlt::None,
+        Shape::LeftOnly => OptionAsAlt::OnlyLeft,
+        Shape::RightOnly => OptionAsAlt::OnlyRight,
+        Shape::Both => OptionAsAlt::Both,
     });
 }
 
 /// No other window system composes an Option/Alt chord into a different
 /// character, so Alt already reaches Emacs as a bare modifier there.
 #[cfg(not(target_os = "macos"))]
-fn apply_option_key_policy(_window: &dyn Window, _option_key_is_meta: bool) {}
+pub(super) fn apply_option_key_policy(
+    _window: &dyn Window,
+    _shape: neomacs_display_protocol::OptionAsAltShape,
+) {
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ActivePresentationTransition {
@@ -1799,6 +1807,9 @@ pub(crate) struct GuiFrameWindowManager {
     pub(super) chrome_defaults: WindowChrome,
     /// Whether future secondary frame windows should start with FPS enabled.
     pub(super) fps_enabled: bool,
+    /// The NS modifier policy's Option rewrite shape, applied to every live
+    /// window and to windows opened later (issue #442).
+    pub(super) option_as_alt: neomacs_display_protocol::OptionAsAltShape,
 }
 
 /// A request to create a new OS window.
@@ -1821,6 +1832,7 @@ impl GuiFrameWindowManager {
             pending_destroys: Vec::new(),
             chrome_defaults: WindowChrome::default(),
             fps_enabled: false,
+            option_as_alt: neomacs_display_protocol::OptionAsAltShape::Both,
         }
     }
 
@@ -2055,6 +2067,7 @@ impl GuiFrameWindowManager {
                     surface.configure(device, &config);
 
                     NativeTextInputPolicy::for_gui_frame().apply_to_window(window.as_ref());
+                    apply_option_key_policy(window.as_ref(), self.option_as_alt);
                     apply_window_geometry_hints(window.as_ref(), req.geometry_hints);
 
                     let winit_id = window.id();
@@ -2384,6 +2397,20 @@ impl GuiFrameWindowManager {
         self.for_each_top_level_window_mut(|window_state| {
             window_state.chrome_mut().corner_radius = radius;
             window_state.render.compositor.dirty = true;
+        });
+    }
+
+    /// Apply the NS modifier policy's Option rewrite shape to every live
+    /// window and remember it for windows opened later.
+    pub(super) fn apply_option_key_policy(
+        &mut self,
+        shape: neomacs_display_protocol::OptionAsAltShape,
+    ) {
+        self.option_as_alt = shape;
+        self.for_each_top_level_window(|window_state| {
+            if let Some(window) = window_state.lifecycle.window() {
+                apply_option_key_policy(window.as_ref(), shape);
+            }
         });
     }
 

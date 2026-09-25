@@ -1,5 +1,5 @@
 use super::RenderApp;
-use super::frame_windows::{FrameLifecycle, NativeTextInputPolicy};
+use super::frame_windows::{FrameLifecycle, NativeTextInputPolicy, apply_option_key_policy};
 use super::geometry_hints::apply_window_geometry_hints;
 use super::state::{
     RenderGpuContext, effective_window_scale_factor, window_size_from_emacs_pixels,
@@ -162,6 +162,7 @@ impl RenderApp {
                 Ok(window) => {
                     let window: Arc<dyn winit::window::Window> = Arc::from(window);
                     NativeTextInputPolicy::for_gui_frame().apply_to_window(window.as_ref());
+                    apply_option_key_policy(window.as_ref(), self.frame_windows.option_as_alt);
 
                     if self.clipboard.is_err() {
                         self.clipboard = crate::clipboard::ClipboardService::for_display(

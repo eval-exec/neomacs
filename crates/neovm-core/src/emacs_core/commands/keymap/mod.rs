@@ -272,6 +272,10 @@ pub enum KeyEvent {
 // Conversion from keyboard::KeyEvent → keymap::KeyEvent
 // ---------------------------------------------------------------------------
 
+/// GNU carries `alt_modifier' as a distinct bit (src/event.h), and the NS
+/// modifier policy cooks Option to either `meta' or `alt'
+/// (`parse_solitary_modifier', src/keyboard.c:7917), so the frontend's alt
+/// modifier must survive this conversion instead of being dropped.
 impl From<crate::keyboard::KeyEvent> for KeyEvent {
     fn from(ke: crate::keyboard::KeyEvent) -> Self {
         use crate::keyboard::{Key, NamedKey};
@@ -283,7 +287,7 @@ impl From<crate::keyboard::KeyEvent> for KeyEvent {
                 shift: ke.modifiers.shift,
                 super_: ke.modifiers.super_,
                 hyper: ke.modifiers.hyper,
-                alt: false,
+                alt: ke.modifiers.alt,
             },
             Key::Named(named) => {
                 let name = match named {
@@ -309,7 +313,7 @@ impl From<crate::keyboard::KeyEvent> for KeyEvent {
                             shift: ke.modifiers.shift,
                             super_: ke.modifiers.super_,
                             hyper: ke.modifiers.hyper,
-                            alt: false,
+                            alt: ke.modifiers.alt,
                         };
                     }
                 };
@@ -320,7 +324,7 @@ impl From<crate::keyboard::KeyEvent> for KeyEvent {
                     shift: ke.modifiers.shift,
                     super_: ke.modifiers.super_,
                     hyper: ke.modifiers.hyper,
-                    alt: false,
+                    alt: ke.modifiers.alt,
                 }
             }
             // A function key that already carries its symbol — the misc and
@@ -335,7 +339,7 @@ impl From<crate::keyboard::KeyEvent> for KeyEvent {
                 shift: ke.modifiers.shift,
                 super_: ke.modifiers.super_,
                 hyper: ke.modifiers.hyper,
-                alt: false,
+                alt: ke.modifiers.alt,
             },
         }
     }

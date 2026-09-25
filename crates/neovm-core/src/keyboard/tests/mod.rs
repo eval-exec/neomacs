@@ -621,6 +621,7 @@ fn tracked_mouse_motion_ignores_keyboard_modifiers_but_keeps_position() {
             shift: true,
             super_: true,
             hyper: true,
+            alt: true,
         },
     ] {
         let event = eval
@@ -1285,6 +1286,7 @@ fn modifier_bits_round_trip() {
         shift: false,
         super_: false,
         hyper: false,
+        alt: false,
     };
     let bits = m.to_bits();
     let m2 = Modifiers::from_bits(bits);
@@ -1301,6 +1303,7 @@ fn modifier_bits_round_trip_all_combinations() {
         ("shift", 1u32 << 25),
         ("super", 1u32 << 23),
         ("hyper", 1u32 << 24),
+        ("alt", 1u32 << 22),
     ] {
         let m = match field {
             "ctrl" => Modifiers {
@@ -1323,6 +1326,10 @@ fn modifier_bits_round_trip_all_combinations() {
                 hyper: true,
                 ..Modifiers::none()
             },
+            "alt" => Modifiers {
+                alt: true,
+                ..Modifiers::none()
+            },
             _ => unreachable!(),
         };
         assert_eq!(m.to_bits(), expected_bit, "bit mismatch for {}", field);
@@ -1341,6 +1348,7 @@ fn modifier_bits_round_trip_all_combinations() {
         shift: true,
         super_: true,
         hyper: true,
+        alt: true,
     };
     assert_eq!(Modifiers::from_bits(all.to_bits()), all);
 
@@ -1363,9 +1371,10 @@ fn prefix_string_various() {
         shift: true,
         super_: true,
         hyper: true,
+        alt: true,
     };
-    // Order: H- s- C- M- S-
-    assert_eq!(all.prefix_string(), "H-s-C-M-S-");
+    // GNU's canonical order (keymap.c:1478): A- C- H- M- S- s-.
+    assert_eq!(all.prefix_string(), "A-C-H-M-S-s-");
 }
 
 #[test]
@@ -2168,4 +2177,30 @@ fn keysym_to_key_event_synthesizes_a_name_for_an_unnamed_keysym() {
     let event = keysym_to_key_event(0x10081000, 0).expect("vendor keysym");
     assert_eq!(event.key, Key::Function("key-268963840".to_string()));
     assert!(keysymdefs::get_item_by_keysym(0x10081000).is_none());
+}
+
+/// Issue #442: the NS modifier policy can cook Option to `alt', and the
+/// transport carries it as RENDER_ALT_MASK; the cooked lisp event must be
+/// `A-x' (KEY_CHAR_ALT | ?x), never plain text.
+#[test]
+fn alt_transport_cooks_the_alt_bit_like_gnu() {
+    let event = crate::keyboard::keysym_to_key_event('x' as u32, crate::keyboard::RENDER_ALT_MASK)
+        .expect("A-x transport event");
+    let value = event.to_emacs_event_value();
+    let expected = crate::emacs_core::keyboard::pure::KEY_CHAR_ALT | ('x' as i64);
+    assert_eq!(
+        value,
+        Value::fixnum(expected),
+        "Option cooked to alt must arrive as A-x"
+    );
+    assert_eq!(
+        crate::keyboard::KeyEvent::to_description(&crate::keyboard::KeyEvent::char_with_mods(
+            'x',
+            crate::keyboard::Modifiers {
+                alt: true,
+                ..Default::default()
+            },
+        )),
+        "A-x"
+    );
 }

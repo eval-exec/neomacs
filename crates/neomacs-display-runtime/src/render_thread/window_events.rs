@@ -1,14 +1,92 @@
 use super::RenderApp;
+use super::modifier_sides::{TrackedModifier, TrackedSide};
 use super::state::effective_window_scale_factor;
-use crate::backend::wgpu::{
-    NEOMACS_CTRL_MASK, NEOMACS_META_MASK, NEOMACS_SHIFT_MASK, NEOMACS_SUPER_MASK,
-};
 use crate::thread_comm::InputEvent;
+use neomacs_display_protocol::{ModifierEventKind, TransportModifierBits};
 use winit::event::{ElementState, KeyEvent, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
+use winit::keyboard::PhysicalKey;
 use winit::window::WindowId;
 
 impl RenderApp {
+    /// Record the physical modifier keys' own press and release.
+    ///
+    /// winit's `ModifiersState` aggregates the sides away, and GNU's
+    /// `ev_modifiers_helper` cooks left/right keys differently
+    /// (`src/nsterm.m:371-395`).  The modifier keys themselves always emit
+    /// key events with a distinguishable `physical_key`, so those events
+    /// are the side facts; everything else keeps the aggregate answer.
+    ///
+    /// Note the physical codes are winit/xkb codes: `MetaLeft`/`MetaRight`
+    /// is the Command key on macOS and the Super key elsewhere, which is
+    /// exactly how this transport already overloads `meta` (`super`)
+    /// today.
+    pub(super) fn track_modifier_key(&mut self, physical_key: PhysicalKey, pressed: bool) {
+        use winit::keyboard::KeyCode;
+        let (modifier, side) = match physical_key {
+            PhysicalKey::Code(KeyCode::MetaLeft) => (TrackedModifier::Command, TrackedSide::Left),
+            PhysicalKey::Code(KeyCode::MetaRight) => (TrackedModifier::Command, TrackedSide::Right),
+            PhysicalKey::Code(KeyCode::AltLeft) => (TrackedModifier::Option, TrackedSide::Left),
+            PhysicalKey::Code(KeyCode::AltRight) => (TrackedModifier::Option, TrackedSide::Right),
+            PhysicalKey::Code(KeyCode::ControlLeft) => {
+                (TrackedModifier::Control, TrackedSide::Left)
+            }
+            PhysicalKey::Code(KeyCode::ControlRight) => {
+                (TrackedModifier::Control, TrackedSide::Right)
+            }
+            _ => return,
+        };
+        self.modifier_sides.observe_key(modifier, side, pressed);
+    }
+
+    /// Cook the current raw modifier facts for one GNU event kind
+    /// (`EV_MODIFIERS2`, `src/nsterm.m:397-425`).
+    pub(super) fn cook_modifiers(&self, kind: ModifierEventKind) -> TransportModifierBits {
+        let raw = self.modifier_sides.to_raw(
+            self.modifier_state.shift_key(),
+            self.modifier_state.control_key(),
+            self.modifier_state.meta_key(),
+            self.modifier_state.alt_key(),
+        );
+        self.modifier_policy.cook(raw, kind)
+    }
+
+    /// The modifiers an Emacs key event travels with, cooked with the
+    /// event's GNU kind: function keys (arrows, F-keys, TAB, RET, the
+    /// keypad — GNU's `ns_convert_key` coverage) consult the :function
+    /// slots, every other key the :ordinary slots (`src/nsterm.m:7322`).
+    pub(super) fn cooked_key_modifiers(&self, keysym: u32) -> u32 {
+        let kind = if Self::keysym_is_function_key(keysym) {
+            ModifierEventKind::Function
+        } else {
+            ModifierEventKind::Ordinary
+        };
+        self.cook_modifiers(kind).bits()
+    }
+
+    /// Whether a keysym lands in GNU's `ns_convert_key` coverage
+    /// (`src/nsterm.m:217-292`): the navigation band, the undo/redo/menu
+    /// band, the F1-F24 block, the keypad, TAB, RET, BS, ESC and the
+    /// delete keys.  GNU's `keyDown:` picks the :function slot exactly for
+    /// these (`fnKeysym != 0`, `:7322`).
+    pub(super) fn keysym_is_function_key(keysym: u32) -> bool {
+        matches!(
+            keysym,
+            0xff08
+                | 0xff09
+                | 0xff0b
+                | 0xff0d
+                | 0xff1b
+                | 0xff50..=0xff58
+                | 0xff60..=0xff6b
+                | 0xff8d
+                | 0xff9f
+                | 0xffaa..=0xffb9
+                | 0xffbd
+                | 0xffbe..=0xffd5
+                | 0xffff
+        )
+    }
     fn emacs_frame_for_window_event(&self, window_id: WindowId) -> u64 {
         self.frame_windows
             .event_frame_for_winit(window_id)
@@ -171,6 +249,13 @@ impl RenderApp {
                     self.frame_coordinator
                         .set_focused(super::frame_sched::NativeWindowId(sched_id), focused);
                 }
+                if !focused {
+                    // Focus left: any modifier-side observation is stale
+                    // (the keys are tracked on this window's own key
+                    // events), so the next ModifiersChanged must fall back
+                    // to GNU's "use the left value" rule.
+                    self.modifier_sides.reset();
+                }
                 let retirements = if focused {
                     Vec::new()
                 } else {
@@ -226,6 +311,10 @@ impl RenderApp {
                     physical_key,
                     ..
                 } = event;
+                // Side facts first: the modifier keys' own events are the
+                // only place winit distinguishes left from right, and they
+                // must be recorded before anything consumes the aggregate.
+                self.track_modifier_key(physical_key, state == ElementState::Pressed);
                 #[cfg(feature = "webview")]
                 if let Some(target) = self.focused_webview {
                     use winit::platform::scancode::PhysicalKeyExtScancode;
@@ -283,16 +372,22 @@ impl RenderApp {
                         && let Some(ref txt) = text
                     {
                         let s = txt.as_str();
+                        // The committed-text vs chord decision is GNU's
+                        // shift-like vs control-like split, so it cooks the
+                        // :ordinary slots for a printable key
+                        // (`src/nsterm.m:7318-7339`).
+                        let ordinary_modifiers =
+                            self.cook_modifiers(ModifierEventKind::Ordinary).bits();
                         if let Some(control_keysym) = Self::translate_control_text(s) {
                             tracing::debug!(
                                 "KeyboardInput control text path: text={:?} keysym=0x{:04x} mods=0x{:x}",
                                 s,
                                 control_keysym,
-                                self.modifiers
+                                ordinary_modifiers
                             );
                             self.comms.send_input(InputEvent::Key {
                                 keysym: control_keysym,
-                                modifiers: self.modifiers,
+                                modifiers: ordinary_modifiers,
                                 pressed: true,
                                 emacs_frame_id: self.emacs_frame_for_window_event(window_id),
                             });
@@ -300,23 +395,23 @@ impl RenderApp {
                             self.record_typing_speed_keypress(window_id);
                             handled_via_text = true;
                         } else if let Some(keysyms) =
-                            Self::translate_committed_text(s, self.modifiers)
+                            Self::translate_committed_text(s, ordinary_modifiers)
                         {
                             tracing::debug!(
                                 "KeyboardInput committed text path: text={:?} keysyms={:?} mods=0x{:x}",
                                 s,
                                 keysyms,
-                                self.modifiers
+                                ordinary_modifiers
                             );
                             for keysym in keysyms {
                                 tracing::debug!(
                                     "Queueing text key event: keysym=0x{:04x} mods=0x{:x}",
                                     keysym,
-                                    self.modifiers
+                                    ordinary_modifiers
                                 );
                                 self.comms.send_input(InputEvent::Key {
                                     keysym,
-                                    modifiers: self.modifiers,
+                                    modifiers: ordinary_modifiers,
                                     pressed: true,
                                     emacs_frame_id: self.emacs_frame_for_window_event(window_id),
                                 });
@@ -335,13 +430,24 @@ impl RenderApp {
                         // it not to (`apply_option_key_policy`), so no
                         // per-event substitution is needed here.
                         let mut keysym = Self::translate_key(&logical_key);
-                        if keysym == 0 && self.modifiers != 0 {
+                        // Shift-only chords still reach the keystroke path
+                        // the way GNU keeps them ordinary keys; the
+                        // space-fallback gate below now includes the
+                        // policy-cooked alt/hyper bits.
+                        let mut key_modifiers = if keysym != 0 {
+                            self.cooked_key_modifiers(keysym)
+                        } else {
+                            0
+                        };
+                        if keysym == 0 && key_modifiers != 0 {
                             use winit::keyboard::KeyCode;
-                            use winit::keyboard::PhysicalKey;
                             keysym = match physical_key {
                                 PhysicalKey::Code(KeyCode::Space) => 0x20,
                                 _ => 0,
                             };
+                            if keysym != 0 {
+                                key_modifiers = self.cooked_key_modifiers(keysym);
+                            }
                         }
                         if keysym != 0 {
                             tracing::debug!(
@@ -349,7 +455,7 @@ impl RenderApp {
                                 logical_key,
                                 physical_key,
                                 keysym,
-                                self.modifiers,
+                                key_modifiers,
                                 state == ElementState::Pressed
                             );
                             if state == ElementState::Pressed
@@ -366,7 +472,7 @@ impl RenderApp {
                             }
                             self.comms.send_input(InputEvent::Key {
                                 keysym,
-                                modifiers: self.modifiers,
+                                modifiers: key_modifiers,
                                 pressed: state == ElementState::Pressed,
                                 emacs_frame_id: self.emacs_frame_for_window_event(window_id),
                             });
@@ -496,19 +602,13 @@ impl RenderApp {
             WindowEvent::ModifiersChanged(mods) => {
                 let old_modifiers = self.modifiers;
                 let state = mods.state();
-                self.modifiers = 0;
-                if state.shift_key() {
-                    self.modifiers |= NEOMACS_SHIFT_MASK;
-                }
-                if state.control_key() {
-                    self.modifiers |= NEOMACS_CTRL_MASK;
-                }
-                if state.alt_key() {
-                    self.modifiers |= NEOMACS_META_MASK;
-                }
-                if state.meta_key() {
-                    self.modifiers |= NEOMACS_SUPER_MASK;
-                }
+                self.modifier_state = state;
+                // Cook through the NS modifier policy: the raw per-side
+                // facts (which side of command/option/control was tracked
+                // down) go through `EV_MODIFIERS2` with the mouse kind,
+                // which is the kind pointer and WebView consumers
+                // correspond to (`src/nsterm.m:425`).
+                self.modifiers = self.cook_modifiers(ModifierEventKind::Mouse).bits();
                 tracing::debug!(
                     "ModifiersChanged: old=0x{:x} new=0x{:x} shift={} ctrl={} alt={} super={}",
                     old_modifiers,

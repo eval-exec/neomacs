@@ -661,6 +661,20 @@ pub trait DisplayHost {
     ) -> Result<(), String> {
         Ok(())
     }
+    /// Publish the compiled NS modifier policy to the display backend.
+    ///
+    /// GNU's `nsterm.m` reads `ns-command-modifier' and friends at every
+    /// `keyDown:'; a winit backend cannot read Lisp per event, so Lisp
+    /// compiles the policy once per change (`add-variable-watcher' in
+    /// `lisp/term/neo-win.el') and ships it here.  The conservative default
+    /// keeps test and TTY hosts honest: they carry no modifier policy, and
+    /// the render thread keeps cooking with GNU's compiled-in defaults.
+    fn set_modifier_policy(
+        &mut self,
+        _policy: neomacs_display_protocol::modifier_policy::ModifierPolicy,
+    ) -> Result<(), String> {
+        Ok(())
+    }
     /// The display rebuilt its GPU state after a device loss
     /// (`keyboard::InputEvent::DisplayReset`). Hosts drop every memo of
     /// renderer-resident media (so redisplay re-creates it), re-upload

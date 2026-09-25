@@ -24,10 +24,17 @@ pub enum EventKind {
 }
 
 /// Modifier flags matching Emacs.
+///
+/// Bit positions are the wire values of
+/// `neomacs_display_protocol`'s `TransportModifierBit` (`modifier_policy.rs`);
+/// `Alt` and `Hyper` were appended when the NS modifier policy (issue #442)
+/// taught the transport to carry the full GNU modifier set.
 pub const NEOMACS_SHIFT_MASK: u32 = 1 << 0;
 pub const NEOMACS_CTRL_MASK: u32 = 1 << 1;
 pub const NEOMACS_META_MASK: u32 = 1 << 2;
 pub const NEOMACS_SUPER_MASK: u32 = 1 << 3;
+pub const NEOMACS_ALT_MASK: u32 = 1 << 4;
+pub const NEOMACS_HYPER_MASK: u32 = 1 << 5;
 
 /// Event kind constants for FFI.
 pub const NEOMACS_EVENT_KEY_PRESS: u32 = EventKind::KeyPress as u32;
