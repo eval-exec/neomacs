@@ -7,6 +7,7 @@
 //! missed the others, since a correctness assertion alone passes just as
 //! well when nothing was emitted.
 
+use super::super::dispatch::LIST_SEARCH_SHIM_CALLS;
 use super::super::leaf_abi::leaf_trampoline_calls;
 use super::*;
 use crate::emacs_core::bytecode::opcode::Op;
@@ -125,7 +126,14 @@ fn knob_off_emits_no_intrinsic() {
         .iter()
         .map(|&w| intrinsic_sites_for_test(w))
         .collect();
-    for (op, nargs) in [(Op::Length, 1), (Op::Nth, 2), (Op::SymbolValue, 1)] {
+    for (op, nargs) in [
+        (Op::Length, 1),
+        (Op::Nth, 2),
+        (Op::Memq, 2),
+        (Op::Assq, 2),
+        (Op::Member, 2),
+        (Op::SymbolValue, 1),
+    ] {
         compile_with(&opcode_fn(op, nargs), LeafKnob::DEFAULT, IntrinsicKnob::OFF);
     }
     let after: Vec<u64> = Intrinsic::ALL
@@ -278,6 +286,131 @@ fn a_dynamic_index_emits_no_intrinsic() {
         IntrinsicKnob::ALL,
     );
     assert_eq!(intrinsic_sites_for_test(Intrinsic::Nth), sites0);
+}
+
+// ---------------------------------------------------------------------------
+// I5: memq, assq, member.
+// ---------------------------------------------------------------------------
+
+/// `memq`/`assq`/`member` over keys × lists natively against the opcode
+/// arm, with `symbols-with-pos-enabled` off and on. A match within the
+/// first 16 conses, or the end of a short proper list, is answered inline
+/// (no shim or leaf call runs); a longer walk, an improper tail, a
+/// `member` key that is neither a fixnum nor a bare symbol, and the flag on
+/// reach the call.
+#[test]
+fn list_search_intrinsics_match_their_opcode_arms() {
+    let mut ev = Context::new();
+    let ctx_ptr = &mut ev as *mut Context as *mut u8;
+    let keys = operands(
+        &mut ev,
+        &[
+            "'a",
+            "'z",
+            "3",
+            "0",
+            "nil",
+            "\"s\"",
+            "1.5",
+            "(expt 2 70)",
+            "'(1)",
+        ],
+    );
+    let lists = operands(
+        &mut ev,
+        &[
+            "nil",
+            "'(a b c)",
+            "'(1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 a)",
+            "(append (make-list 15 'q) '(a))",
+            "(append (make-list 16 'q) '(a))",
+            "'((a . 1) (3 . 2) (nil . n) b (z . 9))",
+            "'(a . b)",
+            "'(q q . a)",
+            "(list \"s\" 1.5 (expt 2 70) '(1))",
+            "(let ((l (list 'q 'q))) (setcdr (cdr l) l) l)",
+            "(let ((l (list 'a 'q))) (setcdr (cdr l) l) l)",
+            "5",
+        ],
+    );
+    for (op, which) in [
+        (Op::Memq, Intrinsic::Memq),
+        (Op::Assq, Intrinsic::Assq),
+        (Op::Member, Intrinsic::Member),
+    ] {
+        let f = opcode_fn(op.clone(), 2);
+        for leaf_knob in LEAF_KNOBS {
+            let sites0 = intrinsic_sites_for_test(which);
+            let leaf = compile_with(&f, leaf_knob, IntrinsicKnob::ALL);
+            assert_eq!(intrinsic_sites_for_test(which), sites0 + 1, "{op:?}");
+            let mut inline_answers = 0;
+            for swp in [false, true] {
+                ev.symbols_with_pos_enabled = swp;
+                for &k in &keys {
+                    for &l in &lists {
+                        let what =
+                            format!("({op:?} {} {}) swp={swp} {leaf_knob:?}", show(k), show(l));
+                        let want = interpret(&mut ev, &f, vec![k, l]);
+                        let calls0 = LIST_SEARCH_SHIM_CALLS.with(|c| c.get())
+                            + leaf_trampoline_calls(LeafId::Member) as usize;
+                        assert_eq!(native(ctx_ptr, &leaf, &[k, l], &what), want, "{what}");
+                        let calls = LIST_SEARCH_SHIM_CALLS.with(|c| c.get())
+                            + leaf_trampoline_calls(LeafId::Member) as usize;
+                        let called = calls != calls0;
+                        // `member`'s table shim (the leaf knob off) counts
+                        // nothing: only its leaf call can be seen.
+                        if op == Op::Member && !leaf_knob.opcode {
+                            continue;
+                        }
+                        if swp {
+                            assert!(called, "{what}: the flag on is the call's");
+                        } else if !called {
+                            inline_answers += 1;
+                        }
+                    }
+                }
+            }
+            ev.symbols_with_pos_enabled = false;
+            if op != Op::Member || leaf_knob.opcode {
+                assert!(inline_answers > 20, "{op:?}: {inline_answers} inline");
+            }
+        }
+    }
+}
+
+/// A constant `member` key: an immediate that `equal` does not decide by
+/// identity (a character is a fixnum; there is none) cannot occur, so the
+/// immediate keys emit the walk with no key test; a heap key (a string, a
+/// float) is loaded, so the site tests it at run time and leaves it to the
+/// call. Either way the answer is `Bmember`'s.
+#[test]
+fn member_with_a_constant_key() {
+    let mut ev = Context::new();
+    let ctx_ptr = &mut ev as *mut Context as *mut u8;
+    let lists = operands(&mut ev, &["'(a \"s\" 1.5 7 k)", "'(1 2)", "nil"]);
+    let keys = operands(&mut ev, &["\"s\"", "1.5", "'k", "7"]);
+    for &key in &keys {
+        let f = lexical_fn(
+            1,
+            vec![Op::Constant(0), Op::StackRef(1), Op::Member, Op::Return],
+            vec![key],
+        );
+        let sites0 = intrinsic_sites_for_test(Intrinsic::Member);
+        let leaf = compile_with(&f, LeafKnob::DEFAULT, IntrinsicKnob::ALL);
+        assert_eq!(intrinsic_sites_for_test(Intrinsic::Member) - sites0, 1);
+        for &l in &lists {
+            let what = format!("(member {} {})", show(key), show(l));
+            let want = interpret(&mut ev, &f, vec![l]);
+            let calls0 = leaf_trampoline_calls(LeafId::Member);
+            assert_eq!(native(ctx_ptr, &leaf, &[l], &what), want, "{what}");
+            let called = leaf_trampoline_calls(LeafId::Member) != calls0;
+            assert_eq!(
+                called,
+                key.is_string() || key.is_float(),
+                "{what}: a heap key is the call's"
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

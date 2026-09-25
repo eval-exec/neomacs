@@ -1,6 +1,6 @@
-//! CLIF intrinsics for leaf builtins (design `p1-2-builtin-intrinsics` §2.7):
-//! I3 `length`, I4 `nth`/`nthcdr`/`elt` at a constant small index, I6
-//! `symbol-value`.
+//! CLIF intrinsics for leaf builtins (design `p1-2-builtin-intrinsics`
+//! §2.7): I3 `length`, I4 `nth`/`nthcdr`/`elt` at a constant small index,
+//! I5 `memq`/`assq`/`member` over a short list, I6 `symbol-value`.
 //!
 //! Each is a PREFIX of its opcode site: the common shape is answered inline,
 //! and every other shape falls through -- never to a deopt -- into the code
@@ -37,6 +37,12 @@ pub(crate) enum Intrinsic {
     Nthcdr,
     /// I4: `Op::Elt` of a list at a constant index.
     Elt,
+    /// I5: `Op::Memq`.
+    Memq,
+    /// I5: `Op::Assq`.
+    Assq,
+    /// I5: `Op::Member` with a fixnum or bare-symbol key.
+    Member,
     /// I6: `Op::SymbolValue`.
     SymbolValue,
 }
@@ -48,6 +54,9 @@ impl Intrinsic {
         Intrinsic::Nth,
         Intrinsic::Nthcdr,
         Intrinsic::Elt,
+        Intrinsic::Memq,
+        Intrinsic::Assq,
+        Intrinsic::Member,
         Intrinsic::SymbolValue,
     ];
 
@@ -57,6 +66,9 @@ impl Intrinsic {
             Intrinsic::Nth => "nth",
             Intrinsic::Nthcdr => "nthcdr",
             Intrinsic::Elt => "elt",
+            Intrinsic::Memq => "memq",
+            Intrinsic::Assq => "assq",
+            Intrinsic::Member => "member",
             Intrinsic::SymbolValue => "symbol-value",
         }
     }
@@ -68,6 +80,9 @@ impl Intrinsic {
             Op::Nth => Intrinsic::Nth,
             Op::Nthcdr => Intrinsic::Nthcdr,
             Op::Elt => Intrinsic::Elt,
+            Op::Memq => Intrinsic::Memq,
+            Op::Assq => Intrinsic::Assq,
+            Op::Member => Intrinsic::Member,
             Op::SymbolValue => Intrinsic::SymbolValue,
             _ => return None,
         })
@@ -80,6 +95,7 @@ impl Intrinsic {
         match self {
             Intrinsic::Length => knob.length,
             Intrinsic::Nth | Intrinsic::Nthcdr | Intrinsic::Elt => knob.nth,
+            Intrinsic::Memq | Intrinsic::Assq | Intrinsic::Member => knob.memq,
             Intrinsic::SymbolValue => knob.symbol_value,
         }
     }
@@ -128,6 +144,9 @@ pub(crate) fn render_intrinsic_stats() -> Vec<String> {
 pub(crate) const LENGTH_INLINE_STEPS: i64 = 64;
 /// The largest constant index I4 unrolls.
 pub(crate) const NTH_INLINE_MAX: i64 = 4;
+/// How many conses I5's walk visits before handing the list to the site's
+/// call (the value shim walks up to 64 more, then the builtin).
+pub(crate) const MEMQ_INLINE_STEPS: i64 = 16;
 
 /// An emitted prefix: its hits define `res` and jump to `merge`; the builder
 /// is left in the (sealed) miss block, where the site's call follows and
@@ -164,6 +183,9 @@ pub(crate) fn emit_prefix(
         Intrinsic::Length => emit_length(fb, operands[0], res, merge, miss),
         Intrinsic::Nth | Intrinsic::Nthcdr | Intrinsic::Elt => {
             emit_nth(fb, which, operands[0], operands[1], res, merge, miss)
+        }
+        Intrinsic::Memq | Intrinsic::Assq | Intrinsic::Member => {
+            emit_memq(fb, rt, which, operands[0], operands[1], res, merge, miss)
         }
         Intrinsic::SymbolValue => emit_symbol_value(fb, rt, operands[0], res, merge, miss),
     };
@@ -540,6 +562,129 @@ fn emit_nth(
     fb.switch_to_block(nil_blk);
     fb.seal_block(nil_blk);
     hit(fb, res, merge, nil_v);
+    true
+}
+
+// ---------------------------------------------------------------------------
+// I5: memq, assq, member.
+// ---------------------------------------------------------------------------
+
+/// `Bmemq`, `Bassq` and `Bmember` over the first [`MEMQ_INLINE_STEPS`]
+/// conses of a list, by bit identity -- exactly `memq_fast`/`assq_fast`'s
+/// rule: only while `symbols-with-pos-enabled` is off (`eq` then looks
+/// through positions), a match found before the builtin's cycle check
+/// could fire, nil at a nil tail. `member` takes the same walk only for a
+/// fixnum or bare-symbol key, for which `equal` decides as `eq` does (a
+/// constant key is tested at compile time). An improper tail, a longer
+/// list, any other key and the flag on go to `miss`.
+#[allow(clippy::too_many_arguments)]
+fn emit_memq(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    which: Intrinsic,
+    key: ClifValue,
+    list: ClifValue,
+    res: Variable,
+    merge: Block,
+    miss: Block,
+) -> bool {
+    let key_const = constant_bits(fb, key).map(|bits| Value::from_bits(bits as usize));
+    if which == Intrinsic::Member && key_const.is_some_and(|k| !(k.is_symbol() || k.is_fixnum())) {
+        return false;
+    }
+    let nil = Value::NIL.bits() as i64;
+    // The flag first: it is a context byte, off in all but byte-compiler runs.
+    let vmctx = fb.use_var(rt.vmctx_var);
+    let swp = fb.ins().load(
+        types::I8,
+        trusted(),
+        vmctx,
+        core::mem::offset_of!(Context, symbols_with_pos_enabled) as i32,
+    );
+    let flag_off = fb.create_block();
+    fb.ins().brif(swp, miss, &[], flag_off, &[]);
+    fb.switch_to_block(flag_off);
+    fb.seal_block(flag_off);
+    if which == Intrinsic::Member && key_const.is_none() {
+        // A fixnum (`...10`) or a bare symbol (tag 000) key.
+        let fix_tag = band_imm_p(fb, key, FIXNUM_CHECK_MASK as i64);
+        let is_fixnum = icmp_imm_p(fb, IntCC::Equal, fix_tag, FIXNUM_CHECK_VALUE as i64);
+        let is_symbol = has_tag(fb, key, TAG_SYMBOL);
+        let eqable = fb.ins().bor(is_fixnum, is_symbol);
+        let keyed = fb.create_block();
+        fb.ins().brif(eqable, keyed, &[], miss, &[]);
+        fb.switch_to_block(keyed);
+        fb.seal_block(keyed);
+    }
+    let head = fb.create_block();
+    fb.append_block_param(head, types::I64); // the tail
+    fb.append_block_param(head, types::I64); // conses visited
+    let body = fb.create_block();
+    let next = fb.create_block();
+    let end = fb.create_block();
+    let zero = fb.ins().iconst(types::I64, 0);
+    fb.ins()
+        .jump(head, &[BlockArg::Value(list), BlockArg::Value(zero)]);
+
+    fb.switch_to_block(head);
+    let t = fb.block_params(head)[0];
+    let n = fb.block_params(head)[1];
+    let is_cons = has_tag(fb, t, TAG_CONS);
+    fb.ins().brif(is_cons, body, &[], end, &[]);
+
+    fb.switch_to_block(body);
+    fb.seal_block(body);
+    let element = cons_field(fb, t, false);
+    match which {
+        Intrinsic::Assq => {
+            // The first element that is a cons whose car is KEY.
+            let entry = fb.create_block();
+            let is_entry = has_tag(fb, element, TAG_CONS);
+            fb.ins().brif(is_entry, entry, &[], next, &[]);
+            fb.switch_to_block(entry);
+            fb.seal_block(entry);
+            let entry_key = cons_field(fb, element, false);
+            let found = fb.ins().icmp(IntCC::Equal, entry_key, key);
+            let hit_blk = fb.create_block();
+            fb.ins().brif(found, hit_blk, &[], next, &[]);
+            fb.switch_to_block(hit_blk);
+            fb.seal_block(hit_blk);
+            hit(fb, res, merge, element);
+        }
+        _ => {
+            // The first tail whose car is KEY.
+            let found = fb.ins().icmp(IntCC::Equal, element, key);
+            let hit_blk = fb.create_block();
+            fb.ins().brif(found, hit_blk, &[], next, &[]);
+            fb.switch_to_block(hit_blk);
+            fb.seal_block(hit_blk);
+            hit(fb, res, merge, t);
+        }
+    }
+
+    fb.switch_to_block(next);
+    fb.seal_block(next);
+    let d = cons_field(fb, t, true);
+    let n2 = iadd_imm_p(fb, n, 1);
+    let within = icmp_imm_p(fb, IntCC::SignedLessThan, n2, MEMQ_INLINE_STEPS);
+    fb.ins().brif(
+        within,
+        head,
+        &[BlockArg::Value(d), BlockArg::Value(n2)],
+        miss,
+        &[],
+    );
+    fb.seal_block(head);
+
+    // The end of the list: nil answers nil; an improper tail is the call's.
+    fb.switch_to_block(end);
+    fb.seal_block(end);
+    let is_nil = icmp_imm_p(fb, IntCC::Equal, t, nil);
+    let nil_blk = fb.create_block();
+    fb.ins().brif(is_nil, nil_blk, &[], miss, &[]);
+    fb.switch_to_block(nil_blk);
+    fb.seal_block(nil_blk);
+    hit(fb, res, merge, t);
     true
 }
 

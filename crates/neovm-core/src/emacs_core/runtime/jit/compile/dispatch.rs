@@ -377,6 +377,14 @@ thread_local! {
 
 #[cfg(test)]
 thread_local! {
+    /// Test hook: how many times compiled code called `neovm_jit_memq` or
+    /// `neovm_jit_assq` (a search its inline path left to the shim).
+    pub(crate) static LIST_SEARCH_SHIM_CALLS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+thread_local! {
     /// Test hook: how many times compiled code called `neovm_jit_setcar` or
     /// `neovm_jit_setcdr` (a store its inline path left to the shim).
     pub(crate) static LIST_STORE_SHIM_CALLS: std::cell::Cell<usize> =
@@ -462,6 +470,8 @@ fn assq_fast(ctx: &Context, key: Value, list: Value) -> Option<Value> {
 #[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
 #[unsafe(no_mangle)]
 pub extern "C" fn neovm_jit_memq(ctx: *mut u8, elt: i64, list: i64) -> i64 {
+    #[cfg(test)]
+    LIST_SEARCH_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     let elt = Value::from_bits(elt as usize);
     let list = Value::from_bits(list as usize);
     // SAFETY: seam-provided dormant Context; read-only access.
@@ -478,6 +488,8 @@ pub extern "C" fn neovm_jit_memq(ctx: *mut u8, elt: i64, list: i64) -> i64 {
 #[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
 #[unsafe(no_mangle)]
 pub extern "C" fn neovm_jit_assq(ctx: *mut u8, key: i64, list: i64) -> i64 {
+    #[cfg(test)]
+    LIST_SEARCH_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     let key = Value::from_bits(key as usize);
     let list = Value::from_bits(list as usize);
     // SAFETY: seam-provided dormant Context; read-only access.
