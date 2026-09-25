@@ -3238,14 +3238,22 @@ pub(crate) fn search_backward_into(
 fn coerce_pattern_to_buffer_bytes(
     pattern: &crate::heap_types::LispString,
     buf_multibyte: bool,
-) -> Vec<u8> {
-    if pattern.is_multibyte() == buf_multibyte {
+) -> std::borrow::Cow<'_, [u8]> {
+    // U2.8: the pattern's own bytes whenever the coercion is the identity --
+    // the same multibyteness, or all ASCII, whose bytes both conversions
+    // keep -- instead of a copy per search call.
+    if crate::emacs_core::eval::builtin_frontend_on()
+        && (pattern.is_multibyte() == buf_multibyte || pattern.as_bytes().is_ascii())
+    {
+        return std::borrow::Cow::Borrowed(pattern.as_bytes());
+    }
+    std::borrow::Cow::Owned(if pattern.is_multibyte() == buf_multibyte {
         pattern.as_bytes().to_vec()
     } else if buf_multibyte {
         crate::emacs_core::emacs_char::str_to_multibyte(pattern.as_bytes())
     } else {
         crate::emacs_core::emacs_char::str_to_unibyte(pattern.as_bytes())
-    }
+    })
 }
 
 /// Search forward from point for a regex PATTERN.

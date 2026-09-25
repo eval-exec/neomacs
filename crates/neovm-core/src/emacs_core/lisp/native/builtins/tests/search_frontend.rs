@@ -102,6 +102,31 @@ const STRING_MATCH_MATRIX: &str = r#"
   (nreverse out))
 "#;
 
+/// Literal searches over multibyte and unibyte buffers, with patterns of
+/// either multibyteness.
+const LITERAL_MATRIX: &str = r#"
+(let ((out nil))
+  (dolist (multibyte '(t nil))
+    (with-temp-buffer
+      (set-buffer-multibyte multibyte)
+      (insert "abc été ABC \377 abc")
+      (dolist (pattern (list "" "abc" "ABC" "ét" (string-to-unibyte "\377")
+                             (string-to-multibyte "abc") "zzz"))
+        (dolist (spec '((1 nil t nil) (1 nil t 2) (20 nil t -1) (5 12 t nil) (1 nil nil nil)))
+          (dolist (fn '(search-forward search-backward))
+            (dolist (fold '(nil t))
+              (goto-char (min (point-max) (car spec)))
+              (set-match-data (list 1 1))
+              (let ((case-fold-search fold))
+                (push (list multibyte pattern spec fn fold
+                            (condition-case err (apply fn pattern (cdr spec))
+                              (error (list 'signal err)))
+                            (point)
+                            (match-data t))
+                      out))))))))
+  (nreverse out))
+"#;
+
 fn run_matrix(frontend: bool) -> Vec<String> {
     run_form(SEARCH_MATRIX, frontend)
 }
@@ -178,6 +203,18 @@ fn fast_string_match_answers_like_the_general_path() {
         "only {fast_calls} of {} calls took the fast path",
         general.len()
     );
+}
+
+#[test]
+fn literal_searches_answer_alike_with_the_knob_on_and_off() {
+    crate::test_utils::init_test_tracing();
+    let general = run_form(LITERAL_MATRIX, false);
+    let fast = run_form(LITERAL_MATRIX, true);
+    assert_eq!(general.len(), fast.len());
+    assert!(general.len() > 200, "{} rows", general.len());
+    for (index, (general, fast)) in general.iter().zip(&fast).enumerate() {
+        assert_eq!(fast, general, "row {index} differs");
+    }
 }
 
 #[test]
