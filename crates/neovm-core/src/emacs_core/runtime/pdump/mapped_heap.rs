@@ -15,9 +15,9 @@ use super::types::{
 use super::value_fixups::RawValueFixup;
 use crate::heap_types::LispString;
 use crate::tagged::header::{
-    ByteCodeObj, CharTableObj, ConsCell, FloatObj, GcHeader, HeapObjectKind, LambdaObj, MacroObj,
-    MarkerObj, OverlayObj, RecordObj, StringObj, SubCharTableObj, VecLikeHeader, VecLikeType,
-    VectorObj,
+    ByteCodeObj, ByteCodeSlotObject, ByteCodeSlotObjects, CharTableObj, ConsCell, FloatObj,
+    GcHeader, HeapObjectKind, LambdaObj, MacroObj, MarkerObj, OverlayObj, RecordObj, StringObj,
+    SubCharTableObj, VecLikeHeader, VecLikeType, VectorObj,
 };
 use crate::tagged::value::TaggedValue;
 use bytemuck::{Pod, Zeroable};
@@ -1320,6 +1320,24 @@ impl MappedHeapBuilder {
                                 span.offset as usize + std::mem::offset_of!(ByteCodeObj, data),
                                 extras_len,
                             );
+                            // The `aref` slot objects Lisp held at dump time:
+                            // relocated value words in the (pre-zeroed, i.e.
+                            // nil) slot-object region, since no descriptor
+                            // carries a self-contained function.
+                            let objects = span.offset as usize
+                                + std::mem::offset_of!(ByteCodeObj, slot_objects);
+                            for (slot, object) in [
+                                (ByteCodeSlotObject::Code, &function.code_object),
+                                (ByteCodeSlotObject::Constants, &function.constants_object),
+                            ] {
+                                if let Some(object) = object {
+                                    self.write_dump_value_word(
+                                        objects + ByteCodeSlotObjects::word_offset(slot),
+                                        object,
+                                        heap,
+                                    );
+                                }
+                            }
                             let slots_span = heap.mapped_slots.get(index).copied().flatten();
                             let end = self.write_bytecode_extras(
                                 base,

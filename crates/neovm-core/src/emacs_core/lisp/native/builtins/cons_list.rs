@@ -176,63 +176,62 @@ pub(crate) fn closure_vector_length(value: &Value) -> Option<i64> {
     }
 }
 
-/// Convert a ByteCode value to the GNU Emacs closure vector layout.
-/// This is used by `aref` on bytecode closures for oclosure slot access.
+/// One GNU closure slot of a ByteCode value, as `aref` returns it:
+///   [0]=ARGLIST [1]=CODE [2]=CONSTANTS/ENV [3]=DEPTH [4]=DOC [5]=INTERACTIVE
+///   [6..]=extra slots
+/// `None` when `idx` is past the observable slot count (or `value` is not
+/// byte code). Slots 1 and 2 are the function's own objects, the same on
+/// every read (`Value::bytecode_slot_object`), as GNU's pseudovector slots
+/// are; the hot `(aref f 2)` returns without touching the function data.
+/// Out of line: `aref`'s vector path must not grow with it.
+#[inline(never)]
+pub(crate) fn bytecode_closure_slot(value: &Value, idx: usize) -> Option<Value> {
+    use crate::tagged::header::{ByteCodeSlotObject, CLOSURE_CODE, CLOSURE_CONSTANTS};
+    // Every byte-code object has at least the four mandatory slots, so
+    // slots 1 and 2 need no bounds check.
+    match idx {
+        CLOSURE_CODE => return value.bytecode_slot_object(ByteCodeSlotObject::Code),
+        CLOSURE_CONSTANTS => return value.bytecode_slot_object(ByteCodeSlotObject::Constants),
+        _ => {}
+    }
+    let bc = value.get_bytecode_data()?;
+    if idx >= bc.observable_closure_slot_count() {
+        return None;
+    }
+    Some(match idx {
+        crate::tagged::header::CLOSURE_ARGLIST => bc.arglist,
+        crate::tagged::header::CLOSURE_STACK_DEPTH => Value::fixnum(bc.max_stack as i64),
+        crate::tagged::header::CLOSURE_DOC_STRING => bc
+            .doc_form
+            .or_else(|| bc.docstring.as_ref().map(|d| Value::heap_string(d.clone())))
+            .unwrap_or(Value::NIL),
+        crate::tagged::header::CLOSURE_INTERACTIVE => bc.interactive.unwrap_or(Value::NIL),
+        _ => bc
+            .extra_slots
+            .get(idx - crate::tagged::header::CLOSURE_MIN_SLOTS)
+            .copied()
+            .unwrap_or(Value::NIL),
+    })
+}
+
+/// Convert a ByteCode value to the GNU Emacs closure vector layout: every
+/// observable slot, in order, as [`bytecode_closure_slot`] returns it (so
+/// `append` and `vconcat` hand out the same slot objects `aref` does).
 pub(crate) fn bytecode_to_closure_vector(value: &Value) -> Vec<Value> {
-    let bc = match value.get_bytecode_data() {
-        Some(d) => d.clone(),
-        None => return Vec::new(),
+    let Some(slot_count) = value
+        .get_bytecode_data()
+        .map(|bc| bc.observable_closure_slot_count())
+    else {
+        return Vec::new();
     };
     let saved_roots = crate::emacs_core::eval::save_scratch_gc_roots();
-
-    let args = bc.arglist;
-    crate::emacs_core::eval::push_scratch_gc_root(args);
-
-    // Slot 1: bytecode string.  GNU Emacs stores this as a unibyte string of
-    // raw opcode bytes.  NeoVM normally executes from `ops` (decoded IR), but
-    // elisp code like `byte-compile-make-closure` reads `(aref fn 1)` and
-    // passes it to `make-byte-code`, so we need to round-trip the bytes.
-    let code = if let Some(bytes) = &bc.gnu_bytecode_bytes {
-        // Store raw bytes directly as a unibyte string.
-        // GNU Emacs bytecode strings are unibyte — each byte is one character.
-        Value::heap_string(crate::heap_types::LispString::from_unibyte(
-            bytes.as_slice().to_vec(),
-        ))
-    } else {
-        Value::NIL
-    };
-    crate::emacs_core::eval::push_scratch_gc_root(code);
-
-    // Slot 2: env if NeoVM-compiled (cons alist), else constants vector
-    let env = if let Some(env_val) = bc.env {
-        env_val
-    } else {
-        Value::vector(bc.constants.as_slice().to_vec())
-    };
-    crate::emacs_core::eval::push_scratch_gc_root(env);
-
-    // Slot 3: max stack depth
-    let depth = Value::fixnum(bc.max_stack as i64);
-
-    let slot4 = bc
-        .doc_form
-        .or_else(|| bc.docstring.as_ref().map(|d| Value::heap_string(d.clone())))
-        .unwrap_or(Value::NIL);
-    let slot5 = bc.interactive.unwrap_or(Value::NIL);
-
-    let slot_count = bc.observable_closure_slot_count();
-    let mut result = vec![args, code, env, depth];
-    if slot_count > 4 {
-        result.push(slot4);
-    }
-    if slot_count > 5 {
-        result.push(slot5);
-    }
-    if slot_count > 6 {
-        let extra_count = slot_count - 6;
-        for idx in 0..extra_count {
-            result.push(bc.extra_slots.get(idx).copied().unwrap_or(Value::NIL));
-        }
+    let mut result = Vec::with_capacity(slot_count);
+    for idx in 0..slot_count {
+        let slot = bytecode_closure_slot(value, idx).unwrap_or(Value::NIL);
+        // A docstring slot is a fresh string; keep it rooted while the rest
+        // are built.
+        crate::emacs_core::eval::push_scratch_gc_root(slot);
+        result.push(slot);
     }
     crate::emacs_core::eval::restore_scratch_gc_roots(saved_roots);
     result

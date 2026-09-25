@@ -2633,13 +2633,14 @@ impl TaggedValue {
     }
 
     /// Allocate a `make-closure` instance of `proto` with the constant pool
-    /// `constants`, built in place in its arena slot (see
-    /// `TaggedHeap::alloc_bytecode_instance`).
+    /// `constants` and the prototype's code-string object `code`, built in
+    /// place in its arena slot (see `TaggedHeap::alloc_bytecode_instance`).
     pub(crate) fn make_bytecode_instance(
         proto: &super::bytecode::ByteCodeFunction,
         constants: crate::tagged::header::LispValueVec,
+        code: Value,
     ) -> Self {
-        with_tagged_heap(|h| h.alloc_bytecode_instance(proto, constants))
+        with_tagged_heap(|h| h.alloc_bytecode_instance(proto, constants, code))
     }
 
     /// Allocate a hash table.
@@ -3329,6 +3330,74 @@ impl TaggedValue {
         let ptr = self.as_veclike_ptr().unwrap() as *const ByteCodeObj;
         let data = unsafe { &(*ptr).data };
         (!data.is_pdump_stub()).then_some(data)
+    }
+
+    /// The Lisp object `aref` returns for byte-code closure slot `slot`: one
+    /// object for the function's life, as GNU's pseudovector slot is
+    /// (`(eq (aref f 2) (aref f 2))` is t). Created on the first read and
+    /// kept in the object (`ByteCodeObj::slot_objects`); never read by code,
+    /// so mutating it does not change what the function computes (P3.2 L4b).
+    ///
+    /// `Code` is `nil` for a function with no GNU byte string. `Constants`
+    /// is the captured environment alist for a NeoVM-compiled closure, which
+    /// is already a Lisp object. `None` when `self` is not byte code.
+    #[inline]
+    pub(crate) fn bytecode_slot_object(
+        self,
+        slot: crate::tagged::header::ByteCodeSlotObject,
+    ) -> Option<Value> {
+        if self.veclike_type()? != VecLikeType::ByteCode {
+            return None;
+        }
+        let ptr = self.as_veclike_ptr().unwrap() as *const ByteCodeObj;
+        // SAFETY: a live byte-code object (the type test above).
+        let cached = unsafe { (*ptr).slot_objects.get(slot) };
+        if !cached.is_nil() {
+            return Some(cached);
+        }
+        Some(self.create_bytecode_slot_object(slot))
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn create_bytecode_slot_object(self, slot: crate::tagged::header::ByteCodeSlotObject) -> Value {
+        use crate::tagged::header::ByteCodeSlotObject;
+        let bc = self
+            .get_bytecode_data()
+            .expect("caller proved a byte-code value");
+        let object = match slot {
+            ByteCodeSlotObject::Code => match &bc.gnu_bytecode_bytes {
+                // GNU byte-code strings are unibyte: each byte one character.
+                Some(bytes) => {
+                    Value::heap_string(LispString::from_unibyte(bytes.as_slice().to_vec()))
+                }
+                None => return Value::NIL,
+            },
+            ByteCodeSlotObject::Constants => match bc.env {
+                Some(env) => return env,
+                None => Value::vector(bc.constants.as_slice().to_vec()),
+            },
+        };
+        mutate::install_bytecode_slot_object(self, slot, object);
+        object
+    }
+
+    /// [`Self::bytecode_slot_object`] without creating anything: the object
+    /// Lisp may already hold, or `None` when none was created yet (so no
+    /// Lisp reference to it can exist) or `self` is not byte code. For the
+    /// printer, which must show `print-circle` the shared object when there
+    /// is one, but need not keep a fresh one alive.
+    pub(crate) fn bytecode_slot_object_if_created(
+        self,
+        slot: crate::tagged::header::ByteCodeSlotObject,
+    ) -> Option<Value> {
+        if self.veclike_type()? != VecLikeType::ByteCode {
+            return None;
+        }
+        let ptr = self.as_veclike_ptr().unwrap() as *const ByteCodeObj;
+        // SAFETY: a live byte-code object (the type test above).
+        let cached = unsafe { (*ptr).slot_objects.get(slot) };
+        (!cached.is_nil()).then_some(cached)
     }
 
     /// The command-classification facts of a bytecode value, WITHOUT forcing

@@ -1345,7 +1345,8 @@ fn bytecode_instance_reads_back_as_the_prototype_with_its_own_pool() {
     ];
 
     let before = heap.bytes_since_gc();
-    let instance = heap.alloc_bytecode_instance(p, LispValueVec::owned(pool.clone()));
+    let instance =
+        heap.alloc_bytecode_instance(p, LispValueVec::owned(pool.clone()), TaggedValue::NIL);
     let instance_bytes = heap.bytes_since_gc() - before;
     let mut clone = p.clone();
     clone.constants = LispValueVec::owned(pool.clone());
@@ -1441,6 +1442,7 @@ fn bytecode_instance_born_mid_mark_survives_and_traces_its_pool() {
     let instance = heap.alloc_bytecode_instance(
         bc_data(proto),
         LispValueVec::owned(vec![child, TaggedValue::fixnum(7)]),
+        TaggedValue::NIL,
     );
     let instance_ptr = bc_ptr(instance);
     while !heap.concurrent_mark_done() {
@@ -1487,6 +1489,7 @@ fn bytecode_instance_churn_through_collections() {
         let instance = heap.alloc_bytecode_instance(
             bc_data(proto),
             LispValueVec::owned(vec![child, TaggedValue::fixnum(-1)]),
+            TaggedValue::NIL,
         );
         if i % 997 == 0 {
             kept.push((instance, i));

@@ -74,15 +74,12 @@ pub(crate) fn map_sequence_element(sequence: Value, index: usize) -> Result<Valu
                 })
         }
         ValueKind::Veclike(VecLikeType::ByteCode) => {
-            super::cons_list::bytecode_to_closure_vector(&sequence)
-                .get(index)
-                .copied()
-                .ok_or_else(|| {
-                    signal(
-                        LispCondition::WrongTypeArgument,
-                        vec![Value::symbol("sequencep"), sequence],
-                    )
-                })
+            super::cons_list::bytecode_closure_slot(&sequence, index).ok_or_else(|| {
+                signal(
+                    LispCondition::WrongTypeArgument,
+                    vec![Value::symbol("sequencep"), sequence],
+                )
+            })
         }
         ValueKind::String => super::lisp_string_value_char_at(sequence, index)
             .map(|code| Value::fixnum(code as i64))

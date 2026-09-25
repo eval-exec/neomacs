@@ -549,6 +549,8 @@ fn write_byte_code(out: &mut Vec<u8>, function: &DumpByteCodeFunction) -> Result
     write_usize(out, function.closure_slot_count)?;
     write_values(out, &function.extra_slots)?;
     write_bool(out, function.ops_sealed);
+    write_opt_value(out, function.code_object.as_ref())?;
+    write_opt_value(out, function.constants_object.as_ref())?;
     Ok(())
 }
 
@@ -1275,6 +1277,8 @@ impl<'a> Cursor<'a> {
             closure_slot_count: self.read_usize("bytecode closure slot count")?,
             extra_slots: self.read_values()?,
             ops_sealed: self.read_bool("bytecode ops sealed flag")?,
+            code_object: self.read_opt_value()?,
+            constants_object: self.read_opt_value()?,
         })
     }
 

@@ -229,6 +229,14 @@ pub struct DumpByteCodeFunction {
     /// re-seal on load.
     #[serde(default)]
     pub ops_sealed: bool,
+    /// The `aref` slot-1 object (`ByteCodeObj::slot_objects`) when one was
+    /// created before the dump: Lisp may hold it, so it round-trips to keep
+    /// `(eq v (aref f 1))`. `None` = never created (created on first read).
+    #[serde(default)]
+    pub code_object: Option<DumpValue>,
+    /// The `aref` slot-2 constants vector object, likewise.
+    #[serde(default)]
+    pub constants_object: Option<DumpValue>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

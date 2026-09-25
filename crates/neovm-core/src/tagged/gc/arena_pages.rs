@@ -94,7 +94,8 @@ const _: () = assert!(
      its own larger stride instead of silently overlapping the link word",
 );
 // ByteCode (task 03/3a): `ByteCodeObj` is VecLikeHeader 24 + ByteCodeFunction
-// (~336B of vecs/options/params + the jit Runtime) → 384B slots with the
+// (~320B of vecs/options/params + the jit Runtime) + the two `aref`
+// slot-object words (16B), 360B in all → 384B slots with the
 // free-list link in bytes 376..384. 384 is NOT a power of two: a page holds
 // floor(64KB / 384) = 170 slots and the trailing 256 bytes are a permanently
 // unused tail (never bump-reached, no alloc bit — `ObjectArena::owns` bounds

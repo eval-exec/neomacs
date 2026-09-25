@@ -45,6 +45,8 @@ fn heap_object_codec_round_trips_representative_objects() {
             closure_slot_count: 6,
             extra_slots: vec![],
             ops_sealed: false,
+            code_object: Some(DumpValue::Str(DumpHeapRef { index: 0 })),
+            constants_object: Some(DumpValue::Vector(DumpHeapRef { index: 4 })),
         }),
         DumpHeapObject::ByteCode(DumpByteCodeFunction {
             instructions: DumpByteCodeInstructions::Decoded(vec![
@@ -75,6 +77,8 @@ fn heap_object_codec_round_trips_representative_objects() {
             closure_slot_count: 6,
             extra_slots: vec![],
             ops_sealed: false,
+            code_object: None,
+            constants_object: None,
         }),
         DumpHeapObject::HashTable(DumpLispHashTable {
             test: DumpHashTableTest::Equal,

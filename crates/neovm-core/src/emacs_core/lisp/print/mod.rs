@@ -1212,7 +1212,13 @@ fn with_bytecode_literal_slots<R>(value: &Value, f: impl FnOnce(&[Value]) -> R) 
     let arglist = bc.arglist;
     crate::emacs_core::eval::push_scratch_gc_root(arglist);
 
-    let code = if let Some(bytes) = &bc.gnu_bytecode_bytes {
+    // Slots 1 and 2: the objects Lisp already holds when `aref` created
+    // them (so `print-circle` sees the sharing, as in GNU), else a temporary
+    // equal copy: with no object created, no Lisp reference can share it.
+    use crate::tagged::header::ByteCodeSlotObject;
+    let code = if let Some(code) = value.bytecode_slot_object_if_created(ByteCodeSlotObject::Code) {
+        code
+    } else if let Some(bytes) = &bc.gnu_bytecode_bytes {
         Value::heap_string(crate::heap_types::LispString::from_unibyte(
             bytes.as_slice().to_vec(),
         ))
@@ -1223,6 +1229,10 @@ fn with_bytecode_literal_slots<R>(value: &Value, f: impl FnOnce(&[Value]) -> R) 
 
     let constants = if let Some(env) = bc.env {
         env
+    } else if let Some(constants) =
+        value.bytecode_slot_object_if_created(ByteCodeSlotObject::Constants)
+    {
+        constants
     } else {
         Value::vector(bc.constants.as_slice().to_vec())
     };

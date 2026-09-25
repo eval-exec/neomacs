@@ -1207,6 +1207,104 @@ pub struct MacroObj {
 pub struct ByteCodeObj {
     pub header: VecLikeHeader,
     pub data: crate::emacs_core::bytecode::ByteCodeFunction,
+    /// The Lisp objects GNU keeps in closure slots 1 and 2, handed out by
+    /// `aref` (see [`ByteCodeSlotObjects`]). Outside `data` on purpose: a
+    /// lazy pdump stub is materialized by overwriting `data`, and these
+    /// words belong to the object's identity, not to its function.
+    pub slot_objects: ByteCodeSlotObjects,
+}
+
+/// A GNU closure slot that Neomacs does not execute from, but whose Lisp
+/// object `aref` must return with GNU's identity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ByteCodeSlotObject {
+    /// `CLOSURE_CODE` (slot 1): the unibyte byte-code string. GNU's
+    /// `make-closure` copies it into every instance, so an instance and its
+    /// prototype share one string.
+    Code,
+    /// `CLOSURE_CONSTANTS` (slot 2) of a GNU-compiled function: the constants
+    /// vector. Each `make-closure` instance has its own.
+    Constants,
+}
+
+/// The objects `aref` returns for a byte-code closure's code string and
+/// constants vector (GNU `(eq (aref f 2) (aref f 2))` is t).
+///
+/// Neomacs executes from `ByteCodeFunction::constants` and its decoded
+/// instructions, and the JIT bakes constants into compiled code, so these
+/// objects are never read by code: they exist only so that Lisp sees one
+/// object per slot. Consequently a Lisp `aset` into the constants vector is
+/// NOT seen by the function (GNU sees it; P3.2 L4b, deferred).
+///
+/// Each word starts as `nil` (all zero bits, so a zero-filled pdump span and
+/// a fresh arena slot both read as empty) and is written at most once, by
+/// the mutator, through `mutate::install_bytecode_slot_object` (which runs
+/// the write barrier first) or by a constructor before the object is
+/// published. The concurrent GC thread reads them with the atomic loads
+/// below, so the words are atomics rather than plain values.
+#[repr(C)]
+pub struct ByteCodeSlotObjects {
+    code: AtomicUsize,
+    constants: AtomicUsize,
+}
+
+impl ByteCodeSlotObjects {
+    /// Both slots empty (`nil`).
+    pub const EMPTY: Self = Self {
+        code: AtomicUsize::new(0),
+        constants: AtomicUsize::new(0),
+    };
+
+    /// A constructor's value: `code` already known (a `make-closure`
+    /// instance takes its prototype's string), constants still empty.
+    pub fn with_code(code: TaggedValue) -> Self {
+        Self {
+            code: AtomicUsize::new(code.0),
+            constants: AtomicUsize::new(0),
+        }
+    }
+
+    #[inline(always)]
+    fn word(&self, slot: ByteCodeSlotObject) -> &AtomicUsize {
+        match slot {
+            ByteCodeSlotObject::Code => &self.code,
+            ByteCodeSlotObject::Constants => &self.constants,
+        }
+    }
+
+    /// The object installed for `slot`, or `nil` if none is yet. Acquire,
+    /// so a GC-thread reader observes the installed object's header (see
+    /// [`load_value_atomic`]).
+    #[inline(always)]
+    pub fn get(&self, slot: ByteCodeSlotObject) -> TaggedValue {
+        TaggedValue(self.word(slot).load(Ordering::Acquire))
+    }
+
+    /// Byte offset of `slot`'s word in this struct (the pdump bakes a
+    /// relocated value word there).
+    pub const fn word_offset(slot: ByteCodeSlotObject) -> usize {
+        match slot {
+            ByteCodeSlotObject::Code => std::mem::offset_of!(Self, code),
+            ByteCodeSlotObject::Constants => std::mem::offset_of!(Self, constants),
+        }
+    }
+
+    /// Both words, for the GC's child walks.
+    #[inline]
+    pub fn children(&self) -> [TaggedValue; 2] {
+        [
+            self.get(ByteCodeSlotObject::Code),
+            self.get(ByteCodeSlotObject::Constants),
+        ]
+    }
+
+    /// Store `object` for `slot`. Only `mutate::install_bytecode_slot_object`
+    /// (after the write barrier) and the pdump loader (before publication)
+    /// call this.
+    #[inline]
+    pub(crate) fn set(&self, slot: ByteCodeSlotObject, object: TaggedValue) {
+        self.word(slot).store(object.0, Ordering::Release);
+    }
 }
 
 /// Heap-allocated record (like vector with a type tag in slot 0).

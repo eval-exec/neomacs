@@ -615,6 +615,7 @@ impl TaggedHeap {
                 ByteCodeObj {
                     header: VecLikeHeader::new(VecLikeType::ByteCode),
                     data,
+                    slot_objects: ByteCodeSlotObjects::EMPTY,
                 },
             );
             // BORN-AT-PARITY, unconditionally — the link seam's store (see
@@ -629,7 +630,9 @@ impl TaggedHeap {
     }
 
     /// Allocate a `make-closure` instance of `proto` whose constant pool is
-    /// `constants`: every other field is `proto`'s (the `Clone` shares its
+    /// `constants` and whose GNU code-string object (`aref` slot 1) is
+    /// `code`, the prototype's, as GNU's instance copies the prototype's
+    /// slot: every other field is `proto`'s (the `Clone` shares its
     /// bytes, decode cell and tiering state), written STRAIGHT INTO the arena
     /// slot field by field. `alloc_bytecode` of a clone moved the whole
     /// ~336-byte function through several stack temporaries on the way into
@@ -648,6 +651,7 @@ impl TaggedHeap {
         &mut self,
         proto: &crate::emacs_core::bytecode::ByteCodeFunction,
         constants: LispValueVec,
+        code: TaggedValue,
     ) -> TaggedValue {
         debug_assert!(
             !proto.is_pdump_stub(),
@@ -720,6 +724,9 @@ impl TaggedHeap {
             #[cfg(feature = "jit")]
             addr_of_mut!((*data).runtime).write(runtime);
             addr_of_mut!((*data).lazy_gnu_code).write(lazy_gnu_code);
+            // Pre-publish, like every field above: `code` is reachable from
+            // the prototype, so no barrier is owed.
+            addr_of_mut!((*ptr).slot_objects).write(ByteCodeSlotObjects::with_code(code));
             // BORN-AT-PARITY, unconditionally — the link seam's store (see
             // `link_veclike`).
             (*ptr).header.gc.set_marked(self.mark_parity);

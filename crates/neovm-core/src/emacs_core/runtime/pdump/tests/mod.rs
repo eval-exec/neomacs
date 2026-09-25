@@ -2303,3 +2303,5 @@ fn baked_stub_template_is_stack_state_independent() {
          an uninitialized byte is reaching the baked image"
     );
 }
+
+mod bytecode_slot_objects;

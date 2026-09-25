@@ -191,7 +191,12 @@ buffer until both are empty and the mutator asks it to stop. It marks:
     bytecode is COMPILE-TIME immutable (the sole mutation seam is
     `#[cfg(test)] with_bytecode_data_mut_for_test`), so a fresh claim proves
     the object pre-dates the cycle and its fields are stable to read on the GC
-    thread. Counter: `bc_claimed`.
+    thread. The one exception is `ByteCodeObj::slot_objects`, outside `data`:
+    two atomic words (the `aref` code string and constants vector), each
+    written at most once from nil by `install_bytecode_slot_object` after the
+    barrier, read here with Acquire, and holding either a born-black object or
+    a prototype's code string reachable through the prototype. Counter:
+    `bc_claimed`.
   - **subrs** → recognize-and-drop (NOT a claim): `SubrObj`s are `Box::leak`ed
     statics (`allocate_static_subr_object`), never page-allocated, never linked
     into `all_objects`, never swept — permanently live by construction. The

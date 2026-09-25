@@ -1293,6 +1293,9 @@ impl TaggedHeap {
                 }
                 VecLikeType::ByteCode => {
                     let obj = ptr as *const ByteCodeObj;
+                    // Stub or not: the `aref` slot objects live outside
+                    // `data` (see the marking arm).
+                    sink.children((*obj).slot_objects.children());
                     let data = &(*obj).data;
                     // LAZY STUB LEG — keep in lockstep with the marking arm
                     // below: a stub's vectors are empty, its children live

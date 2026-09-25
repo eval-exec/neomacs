@@ -65,9 +65,9 @@ use crate::face::{
 use crate::heap_types::LispString;
 use crate::tagged::gc::with_tagged_heap;
 use crate::tagged::header::{
-    ByteCodeObj, CLOSURE_MIN_SLOTS, CharTableObj, ConsCell, FloatObj, HeapObjectKind, LambdaObj,
-    LispValueVec, MacroObj, MarkerObj, OverlayObj, RecordObj, StringObj, SubCharTableObj, SubrObj,
-    VecLikeHeader, VectorObj,
+    ByteCodeObj, ByteCodeSlotObject, ByteCodeSlotObjects, CLOSURE_MIN_SLOTS, CharTableObj,
+    ConsCell, FloatObj, HeapObjectKind, LambdaObj, LispValueVec, MacroObj, MarkerObj, OverlayObj,
+    RecordObj, StringObj, SubCharTableObj, SubrObj, VecLikeHeader, VectorObj,
 };
 use crate::tagged::value::TaggedValue;
 
@@ -1078,6 +1078,7 @@ impl<'a> LoadDecoder<'a> {
                             ByteCodeObj {
                                 header: VecLikeHeader::new(VecLikeType::ByteCode),
                                 data: function,
+                                slot_objects: ByteCodeSlotObjects::EMPTY,
                             },
                         );
                         Value::from_veclike_ptr(ptr.cast::<VecLikeHeader>())
@@ -1440,6 +1441,19 @@ impl<'a> LoadDecoder<'a> {
         Ok(())
     }
 
+    /// Restore-time twin of `mutate::install_bytecode_slot_object`: the
+    /// object is not yet user-observable (pre-publish), so no barrier.
+    fn install_restored_bytecode_slot_object(
+        value: Value,
+        slot: ByteCodeSlotObject,
+        object: Value,
+    ) {
+        let ptr = value.as_veclike_ptr().unwrap() as *const ByteCodeObj;
+        // SAFETY: `install_restored_bytecode_data` proved a live byte-code
+        // object; the slot words are atomics.
+        unsafe { (*ptr).slot_objects.set(slot, object) };
+    }
+
     fn mapped_cons_has_raw_words(
         &self,
         id: TaggedHeapRef,
@@ -1718,6 +1732,7 @@ impl<'a> LoadDecoder<'a> {
                             ByteCodeObj {
                                 header: VecLikeHeader::new(VecLikeType::ByteCode),
                                 data: function,
+                                slot_objects: ByteCodeSlotObjects::EMPTY,
                             },
                         );
                         Value::from_veclike_ptr(ptr.cast::<VecLikeHeader>())
@@ -2238,14 +2253,25 @@ impl<'a> LoadDecoder<'a> {
                     }
                 }
             }
-            DumpHeapObject::ByteCode(bc) => {
+            DumpHeapObject::ByteCode(mut bc) => {
                 // Alias the constants pool directly in the mapped image when
                 // the dump reserved a slot span (same phase contract as
                 // vector/record slots: fixups patch the image in place).
                 let len = self.mapped_slot_count_or(id, bc.constants.len())?;
                 let mapped = self.mapped_slots_for_object_without_copy(id, len)?;
+                let code_object = bc.code_object.take();
+                let constants_object = bc.constants_object.take();
                 let data = load_bytecode_owned(self, bc, mapped)?;
                 Self::install_restored_bytecode_data(value, data)?;
+                for (slot, object) in [
+                    (ByteCodeSlotObject::Code, code_object),
+                    (ByteCodeSlotObject::Constants, constants_object),
+                ] {
+                    if let Some(object) = object {
+                        let object = self.load_value(&object);
+                        Self::install_restored_bytecode_slot_object(value, slot, object);
+                    }
+                }
             }
             DumpHeapObject::Record(items) => {
                 let len = self.mapped_slot_count_or(id, items.len())?;
@@ -2367,6 +2393,8 @@ impl<'a> LoadDecoder<'a> {
                         stack.push(interactive);
                     }
                     stack.extend(bc.extra_slots);
+                    stack.extend(bc.code_object);
+                    stack.extend(bc.constants_object);
                 }
                 DumpHeapObject::Overlay(overlay) => {
                     stack.push(overlay.plist);
@@ -2829,6 +2857,9 @@ pub(crate) fn dump_bytecode(
             .map(|value| encoder.dump_value(value))
             .collect(),
         ops_sealed: bc.ops_sealed,
+        // Filled by the caller, which holds the object (`ByteCodeObj`).
+        code_object: None,
+        constants_object: None,
     }
 }
 
@@ -3080,10 +3111,18 @@ fn dump_heap_object_from_value(encoder: &mut DumpEncoder, value: Value) -> DumpH
         ValueKind::Veclike(VecLikeType::Macro) => {
             DumpHeapObject::Macro(dump_closure_slots(encoder, value))
         }
-        ValueKind::Veclike(VecLikeType::ByteCode) => DumpHeapObject::ByteCode(dump_bytecode(
-            encoder,
-            value.get_bytecode_data().expect("bytecode"),
-        )),
+        ValueKind::Veclike(VecLikeType::ByteCode) => {
+            let mut function = dump_bytecode(encoder, value.get_bytecode_data().expect("bytecode"));
+            // The `aref` slot objects Lisp may hold: dumped so the loaded
+            // function hands out the same objects (identity round trip).
+            function.code_object = value
+                .bytecode_slot_object_if_created(ByteCodeSlotObject::Code)
+                .map(|object| encoder.dump_value(&object));
+            function.constants_object = value
+                .bytecode_slot_object_if_created(ByteCodeSlotObject::Constants)
+                .map(|object| encoder.dump_value(&object));
+            DumpHeapObject::ByteCode(function)
+        }
         ValueKind::Veclike(VecLikeType::Record) => DumpHeapObject::Record(
             value
                 .as_record_data()

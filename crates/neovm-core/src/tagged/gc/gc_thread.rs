@@ -533,9 +533,10 @@ pub(super) fn concurrent_try_mark_owned(
         // the termination drain — `mark_value` early-returns on the mark
         // bit — drops no children):
         //  (a) fresh claim: THIS arm gray-pushes exactly the fields
-        //      `trace_veclike`'s ByteCode arm traces (arglist, constants,
-        //      env, doc_form, interactive, extra_slots; `params` carries
-        //      only SymIds — untraced by design), and the drain traces them
+        //      `trace_veclike`'s ByteCode arm traces (the two `aref` slot
+        //      objects, arglist, constants, env, doc_form, interactive,
+        //      extra_slots; `params` carries only SymIds — untraced by
+        //      design), and the drain traces them
         //      to the fixpoint (a mid-drain stop hands residual gray to the
         //      termination).
         //  (b) mid-cycle-ALLOCATED bytecode in a NEW page: not in the
@@ -576,6 +577,18 @@ pub(super) fn concurrent_try_mark_owned(
                 // Field reads are race-free per the immutability argument
                 // above (a fresh claim proves the object pre-dates the
                 // cycle, so construction completed before the snapshot).
+                // The `aref` slot objects: the one part of a published
+                // bytecode that is written after publication (at most once
+                // per word, from nil, by `install_bytecode_slot_object`),
+                // hence atomics read with Acquire. An object installed after
+                // the snapshot was allocated this cycle (born black) or is a
+                // prototype's code string reachable through the prototype;
+                // pushing it is harmless either way.
+                for child in unsafe { (*(ptr as *const ByteCodeObj)).slot_objects.children() } {
+                    if child.is_heap_object() {
+                        gray.push(child);
+                    }
+                }
                 let data = unsafe { &(*(ptr as *const ByteCodeObj)).data };
                 // Lazy pdump stubs are confined to the MAPPED image (the
                 // arena/descriptor load fallback stays eager): this arm

@@ -10,11 +10,9 @@ use crate::emacs_core::value::LispHashTable;
 use crate::heap_types::{LispMarker, LispString, OverlayData};
 
 use super::gc::{HeapWriteKind, note_heap_slot_write, note_heap_write};
-#[cfg(test)]
-use super::header::ByteCodeObj;
 use super::header::{
-    ConsCell, HashTableObj, LambdaObj, MacroObj, MarkerObj, OverlayObj, RecordObj, StringObj,
-    VecLikeType, VectorObj, XwidgetObj, XwidgetViewObj,
+    ByteCodeObj, ByteCodeSlotObject, ConsCell, HashTableObj, LambdaObj, MacroObj, MarkerObj,
+    OverlayObj, RecordObj, StringObj, VecLikeType, VectorObj, XwidgetObj, XwidgetViewObj,
 };
 use super::value::TaggedValue;
 
@@ -253,6 +251,39 @@ pub fn with_hash_table_mut<R>(
     let result = f(unsafe { &mut (*ptr).table });
     unsafe { (*ptr).table.data.switch_epoch = epoch };
     Some(result)
+}
+
+/// Install the Lisp object `aref` hands out for one of a byte-code
+/// function's GNU slots (see [`super::header::ByteCodeSlotObjects`]).
+///
+/// The one post-publication write into a `ByteCodeObj`, and it never touches
+/// `data`: the constants-immutability invariant below still holds. Each slot
+/// is written at most once (from `nil`), so there is no overwritten value to
+/// log, but the barrier still runs first: a dumped or tenured function must
+/// enter the remembered set, or the next cycle would never trace the young
+/// object it now holds. The concurrent GC thread reads the word atomically;
+/// `object` was either allocated this cycle (born black) or is already
+/// reachable from another traced owner (a prototype's code string).
+///
+/// Returns `false` for a non-bytecode `value` or an already-filled slot.
+pub fn install_bytecode_slot_object(
+    value: TaggedValue,
+    slot: ByteCodeSlotObject,
+    object: TaggedValue,
+) -> bool {
+    if value.veclike_type() != Some(VecLikeType::ByteCode) {
+        return false;
+    }
+    let ptr = value.as_veclike_ptr().unwrap() as *const ByteCodeObj;
+    // SAFETY: a live byte-code object (the type test above); the slot
+    // words are atomics, written through a shared reference.
+    let objects = unsafe { &(*ptr).slot_objects };
+    if !objects.get(slot).is_nil() {
+        return false;
+    }
+    note_heap_write(value, HeapWriteKind::ByteCodeData);
+    objects.set(slot, object);
+    true
 }
 
 /// TEST-ONLY mutation seam for a live bytecode object's `ByteCodeFunction`.

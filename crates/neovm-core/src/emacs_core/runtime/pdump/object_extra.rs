@@ -25,7 +25,9 @@ use super::{DumpError, types::*};
 use crate::tagged::header::VecLikeType;
 
 const OBJECT_EXTRA_MAGIC: [u8; 16] = *b"NEOOBJEXTRA\0\0\0\0\0";
-const OBJECT_EXTRA_FORMAT_VERSION: u32 = 7;
+/// v8: bytecode descriptors carry the `aref` slot objects
+/// (`code_object`, `constants_object`).
+const OBJECT_EXTRA_FORMAT_VERSION: u32 = 8;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]

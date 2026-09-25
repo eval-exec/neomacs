@@ -656,6 +656,9 @@ mod fixed_arity_hot_subrs;
 mod replace_region_contents_test;
 
 #[cfg(test)]
+#[path = "tests/closure_slot_identity.rs"]
+mod closure_slot_identity_test;
+#[cfg(test)]
 #[path = "tests/make_byte_code_literals.rs"]
 mod make_byte_code_literals_test;
 #[cfg(test)]

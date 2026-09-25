@@ -10,6 +10,7 @@ use crate::emacs_core::fontset;
 use crate::emacs_core::intern::{NIL_SYM_ID, T_SYM_ID, intern, is_canonical_id};
 use crate::emacs_core::minibuffer;
 use crate::emacs_core::symbol::{FunctionCellSnapshot, Obarray, SymbolPlistSnapshot};
+use crate::tagged::header::ByteCodeSlotObject;
 use malachite::integer::Integer;
 
 /// GNU `init_obarray_once` creates the initial obarray with size_bits = 15.
@@ -6346,10 +6347,13 @@ pub(crate) fn builtin_make_closure(args: &[Value]) -> EvalResult {
         // NeoVM-compiled: replace first N values in env alist
         let mut new_bc = proto.clone();
         new_bc.env = Some(replace_env_alist_values(env_val, closure_vars));
-        return Ok(Value::make_bytecode(new_bc));
+        return Ok(share_prototype_code(
+            *prototype,
+            Value::make_bytecode(new_bc),
+        ));
     }
     if !make_closure_in_place() {
-        return make_closure_by_clone(proto, closure_vars);
+        return make_closure_by_clone(*prototype, proto, closure_vars);
     }
 
     // GNU .elc: a fresh constant vector (GNU copies it per call too — the
@@ -6375,7 +6379,27 @@ pub(crate) fn builtin_make_closure(args: &[Value]) -> EvalResult {
         crate::emacs_core::jit::cache::evict_compiled(id);
     }
 
-    Ok(Value::make_bytecode_instance(proto, constants.into()))
+    // GNU copies the prototype's slots into the instance, so the two share
+    // one code string: create the prototype's now if nothing read it yet.
+    let code = prototype
+        .bytecode_slot_object(ByteCodeSlotObject::Code)
+        .unwrap_or(Value::NIL);
+    Ok(Value::make_bytecode_instance(proto, constants.into(), code))
+}
+
+/// A `make-closure` instance built outside the in-place writer, given its
+/// prototype's code-string object (GNU copies the slot, so the two are `eq`).
+fn share_prototype_code(prototype: Value, instance: Value) -> Value {
+    if let Some(code) = prototype.bytecode_slot_object(ByteCodeSlotObject::Code)
+        && !code.is_nil()
+    {
+        crate::tagged::mutate::install_bytecode_slot_object(
+            instance,
+            ByteCodeSlotObject::Code,
+            code,
+        );
+    }
+    instance
 }
 
 #[cfg(test)]
@@ -6430,6 +6454,7 @@ fn make_closure_in_place() -> bool {
 /// move the copy into the heap.
 #[inline(never)]
 fn make_closure_by_clone(
+    prototype: Value,
     proto: &crate::emacs_core::bytecode::ByteCodeFunction,
     closure_vars: &[Value],
 ) -> EvalResult {
@@ -6447,7 +6472,10 @@ fn make_closure_by_clone(
     if let Some(id) = new_bc.jit_runtime().note_patched_prefix(closure_vars.len()) {
         crate::emacs_core::jit::cache::evict_compiled(id);
     }
-    Ok(Value::make_bytecode(new_bc))
+    Ok(share_prototype_code(
+        prototype,
+        Value::make_bytecode(new_bc),
+    ))
 }
 
 /// Replace the first N values in a cons alist with closure_vars.

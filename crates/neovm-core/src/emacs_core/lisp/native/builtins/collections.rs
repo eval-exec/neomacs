@@ -85,10 +85,8 @@ pub(crate) fn builtin_aref_values(array: Value, index: Value) -> EvalResult {
         }
         // ByteCode closures: [0]=ARGLIST [1]=CODE [2]=ENV/CONSTANTS [3]=DEPTH [4]=DOC
         ValueKind::Veclike(VecLikeType::ByteCode) => {
-            let idx = idx_fixnum as usize;
-            let vec = bytecode_to_closure_vector(&array);
-            vec.get(idx)
-                .cloned()
+            // Negative indices wrap to huge `usize`s: out of range, as GNU.
+            bytecode_closure_slot(&array, idx_fixnum as usize)
                 .ok_or_else(|| signal(LispCondition::ArgsOutOfRange, vec![array, index]))
         }
         _ => Err(signal(

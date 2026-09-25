@@ -850,6 +850,12 @@ impl TaggedHeap {
             }
             VecLikeType::ByteCode => {
                 let obj = ptr as *const ByteCodeObj;
+                // The `aref` slot objects live outside `data`, so a stub
+                // carries them too (a dumped function whose slot objects
+                // Lisp held at dump time).
+                for child in unsafe { (*obj).slot_objects.children() } {
+                    self.mark_or_push_child(child, "bytecode-slot-object");
+                }
                 let data = unsafe { &(*obj).data };
                 // LAZY STUB LEG — lockstep with the collect arm: children
                 // are read from the patched image, never from the (empty)

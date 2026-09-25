@@ -6,9 +6,10 @@
 //! on every read, and `make-closure` instances share the prototype's code
 //! string while each gets a fresh constants vector.
 //!
-//! Neomacs executes from its own representation. Its constants vector is not
-//! the Lisp vector `aref` returns, so a Lisp `aset` into that vector is not
-//! seen by the function (P3.2 L4b); that pin stays an expected failure.
+//! Neomacs executes from its own representation and keeps those objects
+//! beside it (P3.2 L4a), so `aref` answers as GNU does, but its constants
+//! pool is not the Lisp vector `aref` returns: a Lisp `aset` into that vector
+//! is not seen by the function (P3.2 L4b), which stays an expected failure.
 
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
@@ -47,7 +48,7 @@ fn oracle_closure_code_and_constants_slots_are_eq_stable() {
     let expect = expect_test::expect![[
         r#""OK (t t t t t t t nil nil t t t t (t t [3]) [1 one neomacs--oracle-ci-tail] [2 two neomacs--oracle-ci-tail] [V0 V1 neomacs--oracle-ci-tail])""#
     ]];
-    crate::common::assert_oracle_divergence_expect(form, expect);
+    crate::common::assert_oracle_parity_expect(form, expect);
 }
 
 /// `print-circle` sees the closure's slot objects as the ones Lisp holds.
@@ -65,7 +66,7 @@ fn oracle_closure_slot_objects_print_circle_shared() {
     let expect = expect_test::expect![[
         r#""OK \"(#1=[3] #[257 #2=\\\"\\\\211\\\\300\\\\\\\\\\\\207\\\" #1# 3] #2#)\"""#
     ]];
-    crate::common::assert_oracle_divergence_expect(form, expect);
+    crate::common::assert_oracle_parity_expect(form, expect);
 }
 
 /// Expected failure until P3.2 L4b: in GNU the function runs from the
