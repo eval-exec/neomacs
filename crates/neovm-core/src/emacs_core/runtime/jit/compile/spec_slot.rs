@@ -146,8 +146,9 @@ impl SpecSlot {
         self.leaf.load(Ordering::Relaxed) as *const CompiledLeaf
     }
 
-    /// The armed direct entry, null when the site may not call directly.
-    #[inline(always)]
+    /// The armed direct entry, null when the site may not call directly
+    /// (generated code reads the word itself; tests read it here).
+    #[cfg(test)]
     pub(crate) fn direct_entry(&self) -> *const u8 {
         self.direct_entry.load(Ordering::Relaxed) as usize as *const u8
     }
@@ -160,7 +161,8 @@ impl SpecSlot {
     /// leaf runs under its own native frame. The base is 8-byte aligned, so
     /// the low bits are free; folding the two facts into the word the fast
     /// path loads anyway keeps its pure, handler-free case at one test each
-    /// instead of the leaf's arity load and its three eligibility loads.
+    /// instead of the leaf's arity load and its three eligibility loads. Any
+    /// direct entry the slot held goes first.
     #[inline(always)]
     pub(crate) fn arm_leaf(
         &self,
@@ -170,10 +172,10 @@ impl SpecSlot {
         framed: bool,
     ) {
         debug_assert!(!self.holds_subr_binding(), "arm_leaf on a subr site's slot");
-        debug_assert!(
-            self.direct_entry().is_null(),
-            "a slot is armed only after its previous leaf was cleared"
-        );
+        // The runtime arms a slot only after a clear (the entry is 0), but
+        // a direct entry must never outlive the leaf it was armed for, so a
+        // re-arm over a live leaf drops it first.
+        self.direct_entry.store(0, Ordering::Relaxed);
         self.leaf.store(leaf as usize as u64, Ordering::Relaxed);
         let key = if direct_consts.is_null() {
             0

@@ -586,3 +586,25 @@ fn a_panic_contained_in_a_direct_callee_is_healed() {
         "the panic left through the finish: {direct:?}"
     );
 }
+
+/// T11 with direct calls: a direct recursion with no depth limit ends in
+/// GNU's "Bytecode stack overflow" (the callee's register-ABI entry guard),
+/// not a crash, and the evaluator is whole afterwards.
+#[test]
+fn a_deep_direct_recursion_signals_bytecode_stack_overflow() {
+    const PROGRAM: &str = r#"(progn
+  (defun neovm--dcso-deep (n) (if (= n 0) 0 (1+ (neovm--dcso-deep (1- n)))))
+  (byte-compile 'neovm--dcso-deep)
+  (dotimes (_ 60) (neovm--dcso-deep 100)))"#;
+    let [_, direct, _] = differential(
+        PROGRAM,
+        r#"(list (let ((max-lisp-eval-depth most-positive-fixnum))
+                (condition-case err (neovm--dcso-deep 100000000) (error err)))
+              (neovm--dcso-deep 500))"#,
+    );
+    assert_eq!(direct.out, "((error \"Bytecode stack overflow\") 500)");
+    assert!(
+        direct.shim_calls < 1000,
+        "the recursion ran direct: {direct:?}"
+    );
+}

@@ -106,3 +106,18 @@ fn a_direct_entry_needs_its_leaf_and_a_frameless_key() {
     );
     assert!(slot.direct_entry().is_null());
 }
+
+/// Re-arming a slot over a live leaf (only tests do it; the runtime arms
+/// after a clear) drops the old leaf's direct entry.
+#[test]
+fn arming_a_new_leaf_drops_the_old_leafs_direct_entry() {
+    let slot = SpecSlot::at_epoch(1);
+    let leaf = 0x7f00_0000_1000usize as *const CompiledLeaf;
+    let other = 0x7f00_0000_5000usize as *const CompiledLeaf;
+    let consts = 0x7f00_0000_2000usize as *const Value;
+    slot.arm_leaf(leaf, consts, false, false);
+    slot.arm_direct_entry(0x7f00_0000_3000usize as *const u8);
+    slot.arm_leaf(other, consts, false, false);
+    assert!(slot.direct_entry().is_null());
+    assert_eq!(slot.leaf_ptr(), other);
+}
