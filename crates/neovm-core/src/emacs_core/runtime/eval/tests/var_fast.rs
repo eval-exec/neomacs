@@ -56,10 +56,11 @@ const INLINE_ENGINES: &[Engine] = &[
         bind: false,
     }),
     Engine::JitInline(InlineVarsKnob {
-        read: true,
-        set: true,
-        bind: false,
+        read: false,
+        set: false,
+        bind: true,
     }),
+    Engine::JitInline(InlineVarsKnob::ALL),
 ];
 #[cfg(not(feature = "jit"))]
 const INLINE_ENGINES: &[Engine] = &[];

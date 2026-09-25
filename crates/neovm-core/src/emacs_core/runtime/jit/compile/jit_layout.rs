@@ -109,10 +109,6 @@ pub(crate) fn specpdl_vec_offsets() -> Option<VecOffsets> {
 }
 
 /// [`VecOffsets`] of `Context::jit_bind_stack`'s `Vec<usize>`.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "consumer: inline binds (P1.4 B4)")
-)]
 pub(crate) fn jit_bind_stack_vec_offsets() -> Option<VecOffsets> {
     static OFFSETS: OnceLock<Option<VecOffsets>> = OnceLock::new();
     *OFFSETS.get_or_init(|| vec_offsets_with(|| 0usize))
@@ -125,10 +121,6 @@ pub(crate) fn jit_bind_stack_vec_offsets() -> Option<VecOffsets> {
 /// `Context::specpdl` (the `Vec` itself; add a [`VecOffsets`] field).
 pub(crate) const CONTEXT_SPECPDL_OFFSET: usize = offset_of!(Context, specpdl);
 /// `Context::jit_bind_stack` (the `Vec` itself).
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "consumer: inline binds (P1.4 B4)")
-)]
 pub(crate) const CONTEXT_JIT_BIND_STACK_OFFSET: usize = offset_of!(Context, jit_bind_stack);
 /// `Context::depth`: the Lisp evaluation depth (`lisp_eval_depth`), a `usize`.
 pub(crate) const CONTEXT_DEPTH_OFFSET: usize = offset_of!(Context, depth);
@@ -755,10 +747,6 @@ pub(crate) struct LetLayout {
 }
 
 /// [`LetLayout`], probed once; `None` turns inline binds off.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "consumer: inline binds (P1.4 B4)")
-)]
 pub(crate) fn let_layout() -> Option<LetLayout> {
     static LAYOUT: OnceLock<Option<LetLayout>> = OnceLock::new();
     *LAYOUT.get_or_init(|| {

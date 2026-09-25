@@ -45,6 +45,43 @@ impl Prog {
             arity: 1,
         }
     }
+
+    /// `(lambda (v) (list (let ((VAR v)) (ivt-body)) VAR))`
+    fn let_call() -> Self {
+        Self {
+            ops: vec![
+                Op::StackRef(0),
+                Op::VarBind(0),
+                Op::Constant(1),
+                Op::Call(0),
+                Op::Unbind(1),
+                Op::VarRef(0),
+                Op::List(2),
+                Op::Return,
+            ],
+            arity: 1,
+        }
+    }
+
+    /// `(lambda (a b) (list (let ((VAR a)) (let ((VAR b)) (ivt-body))) VAR))`
+    /// with one `unbind 2`.
+    fn let_nested() -> Self {
+        Self {
+            ops: vec![
+                Op::StackRef(1),
+                Op::VarBind(0),
+                Op::StackRef(0),
+                Op::VarBind(0),
+                Op::Constant(1),
+                Op::Call(0),
+                Op::Unbind(2),
+                Op::VarRef(0),
+                Op::List(2),
+                Op::Return,
+            ],
+            arity: 2,
+        }
+    }
 }
 
 fn constants(var: &str) -> Vec<Value> {
@@ -256,8 +293,8 @@ fn inline_vars_knob_parses_every_spelling() {
 }
 
 /// Every shape a fast path takes answers as the interpreter does and calls
-/// no variable shim: reads and `setq`s of plain, buffer-local (own binding
-/// and default) and forwarded variables.
+/// no variable shim: reads, `setq`s, `let`s and nested `let`s of plain,
+/// buffer-local (own binding and default) and forwarded variables.
 #[test]
 fn cached_shapes_take_no_shim_and_answer_as_the_interpreter() {
     const VARS: &[&str] = &[
@@ -269,9 +306,15 @@ fn cached_shapes_take_no_shim_and_answer_as_the_interpreter() {
         "ivt-bool",
         "ivt-int",
     ];
-    let progs: [(&str, Prog, Vec<Value>); 2] = [
+    let progs: [(&str, Prog, Vec<Value>); 4] = [
         ("read", Prog::read(), vec![]),
         ("setq", Prog::setq(), vec![Value::make_int(5)]),
+        ("let", Prog::let_call(), vec![Value::make_int(6)]),
+        (
+            "nested",
+            Prog::let_nested(),
+            vec![Value::make_int(7), Value::make_int(8)],
+        ),
     ];
     for &var in VARS {
         for (name, prog, args) in &progs {
@@ -300,21 +343,23 @@ fn knob_off_inlines_nothing() {
     warm(&mut ev, &["ivt-plain", "ivt-loc"]);
     for (knob, inline) in [(OFF, false), (ALL, true)] {
         reset_inline_var_sites();
-        let leaf = compile(&ev, knob, &Prog::setq(), "ivt-loc");
+        let leaf = compile(&ev, knob, &Prog::let_call(), "ivt-loc");
         let (got, called) = run(&mut ev, &leaf, &[Value::make_int(3)]);
-        assert_eq!(got, "3");
-        let sites = [InlineVarOp::Read, InlineVarOp::Set].map(inline_var_sites);
+        assert_eq!(got, "(body 11)");
+        let sites =
+            [InlineVarOp::Read, InlineVarOp::Bind, InlineVarOp::Unbind].map(inline_var_sites);
         if inline {
-            assert_eq!(sites, [1, 1]);
+            assert_eq!(sites, [1, 1, 1]);
             assert_eq!(called, Shims::default());
         } else {
-            assert_eq!(sites, [0, 0]);
+            assert_eq!(sites, [0, 0, 0]);
             assert_eq!(
                 called,
                 Shims {
                     varref: 1,
-                    varset: 1,
-                    ..Shims::default()
+                    varset: 0,
+                    varbind: 1,
+                    unbind: 1
                 }
             );
         }
@@ -326,27 +371,29 @@ fn knob_off_inlines_nothing() {
 /// refuses and the shim answers as the interpreter does.
 #[test]
 fn a_class_change_after_compile_takes_the_shim() {
-    // (what, the change, which of read/setq must now reach a shim: a
+    // (what, the change, which of read/setq/let must now reach a shim: a
     // watcher traps writes only; a void plain cell refuses the read only --
-    // its `setq` is a plain store, as in `try_set_plain_variable`).
-    type Change = (&'static str, &'static str, [bool; 2]);
+    // its `setq` and `let` are plain stores, as in `try_set_plain_variable`).
+    type Change = (&'static str, &'static str, [bool; 3]);
     let changes: &[Change] = &[
         (
             "make-local",
             "(progn (make-local-variable 'ivt-plain) (setq ivt-plain 111))",
-            [true; 2],
+            [true; 3],
         ),
-        ("alias", "(defvaralias 'ivt-plain 'ivt-loc)", [true; 2]),
+        ("alias", "(defvaralias 'ivt-plain 'ivt-loc)", [true; 3]),
         (
             "watch",
             "(add-variable-watcher 'ivt-plain 'ivt-watcher)",
-            [false, true],
+            [false, true, true],
         ),
-        ("makunbound", "(makunbound 'ivt-plain)", [true, false]),
+        // The `let` program reads the void variable after its unbind.
+        ("makunbound", "(makunbound 'ivt-plain)", [true, false, true]),
     ];
     let progs = [
         ("read", Prog::read(), vec![]),
         ("setq", Prog::setq(), vec![Value::make_int(5)]),
+        ("let", Prog::let_call(), vec![Value::make_int(6)]),
     ];
     for &(what, change, refused) in changes {
         for ((name, prog, args), refused) in progs.iter().zip(refused) {
@@ -411,12 +458,17 @@ fn a_cache_miss_takes_the_shim_and_the_next_run_hits() {
 }
 
 /// Type rules: an integer forwarder takes a fixnum inline and signals for
-/// anything else through the shim; a Boolean one canonicalises.
+/// anything else through the shim with the specpdl unwound; a Boolean one
+/// canonicalises.
 #[test]
 fn type_rules_match_the_interpreter() {
     let cases: &[(&str, Prog, Vec<Value>)] = &[
         ("ivt-int", Prog::setq(), vec![Value::string("s")]),
+        ("ivt-int", Prog::let_call(), vec![Value::string("s")]),
+        ("ivt-lint", Prog::let_call(), vec![Value::string("s")]),
+        ("ivt-bool", Prog::let_call(), vec![Value::make_int(5)]),
         ("ivt-lbool", Prog::setq(), vec![Value::make_int(5)]),
+        ("ivt-lbool", Prog::let_call(), vec![Value::NIL]),
     ];
     for (var, prog, args) in cases {
         let answers: Vec<(String, String)> = [None, Some(ALL)]
@@ -445,18 +497,23 @@ fn type_rules_match_the_interpreter() {
 }
 
 /// While a concurrent mark runs (the barrier window is ALL), stores into a
-/// symbol cell and a forwarder go to the shim, which brackets the seqlock
-/// and logs the pre-image; after it they are inline again.
+/// symbol cell, a forwarder and a BLV cons go to the shims, which bracket
+/// the seqlock and log the pre-image; after it they are inline again.
 #[test]
 fn a_concurrent_mark_sends_every_store_to_the_shim() {
     let mut ev = fixture();
+    warm(&mut ev, &["ivt-loc"]);
     eval_ok(&mut ev, "(setq ivt-plain (list 'old-plain))");
     let set_plain = compile(&ev, ALL, &Prog::setq(), "ivt-plain");
+    let let_loc = compile(&ev, ALL, &Prog::let_call(), "ivt-loc");
     let set_obj = compile(&ev, ALL, &Prog::setq(), "ivt-obj");
     ev.tagged_heap.set_concurrent_active_for_test(true);
     let (got, called) = run(&mut ev, &set_plain, &[Value::make_int(1)]);
     assert_eq!((got.as_str(), called.varset), ("1", 1));
     let logged = ev.tagged_heap.take_satb_shared_for_test();
+    let (got, called) = run(&mut ev, &let_loc, &[Value::make_int(2)]);
+    assert_eq!(got, "(body 11)");
+    assert_eq!((called.varbind, called.unbind), (1, 1));
     let (_, called) = run(&mut ev, &set_obj, &[Value::make_int(3)]);
     assert_eq!(called.varset, 1);
     ev.tagged_heap.set_concurrent_active_for_test(false);
@@ -466,11 +523,47 @@ fn a_concurrent_mark_sends_every_store_to_the_shim() {
     );
     for (leaf, args) in [
         (&set_plain, vec![Value::make_int(4)]),
+        (&let_loc, vec![Value::make_int(5)]),
         (&set_obj, vec![Value::make_int(6)]),
     ] {
         assert_eq!(run(&mut ev, leaf, &args).1, Shims::default());
     }
     assert!(ev.tagged_heap.take_satb_shared_for_test().is_empty());
+}
+
+/// A `let` whose body switches buffers restores the binding in the buffer
+/// it was made in (the shim's `LetLocal` arm); one whose body kills the
+/// local lets the kill win; one whose body adds a watcher reports the
+/// `unlet` -- all as the interpreter.
+#[test]
+fn let_bodies_that_change_the_world_unbind_as_the_interpreter() {
+    let bodies = [
+        "(progn (set-buffer ivt-other) VAR)",
+        "(progn (kill-local-variable 'VAR) VAR)",
+        "(progn (add-variable-watcher 'VAR 'ivt-watcher) VAR)",
+        "(progn (kill-all-local-variables) VAR)",
+        "(progn (make-local-variable 'VAR) (setq VAR 400) VAR)",
+    ];
+    for var in ["ivt-plain", "ivt-loc", "ivt-locd", "ivt-obj", "ivt-lbool"] {
+        for body in bodies {
+            let body = body.replace("VAR", var);
+            let setup = format!("(fset 'ivt-body (lambda () {body}))");
+            let mut ev = fixture();
+            warm(&mut ev, &[var]);
+            eval_ok(&mut ev, &setup);
+            let want = interpret(&mut ev, &Prog::let_call(), var, &[Value::make_int(9)]);
+            let want_after = observe(&mut ev, var);
+            let want_log = eval(&mut ev, "(reverse ivt-log)");
+            let mut ev = fixture();
+            warm(&mut ev, &[var]);
+            eval_ok(&mut ev, &setup);
+            let leaf = compile(&ev, ALL, &Prog::let_call(), var);
+            let (got, _) = run(&mut ev, &leaf, &[Value::make_int(9)]);
+            assert_eq!(got, want, "{var} {body}");
+            assert_eq!(observe(&mut ev, var), want_after, "{var} {body}");
+            assert_eq!(eval(&mut ev, "(reverse ivt-log)"), want_log, "{var} {body}");
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -522,4 +615,168 @@ fn a_dumped_runtime_reads_inline() {
     assert!(answers[0].0.starts_with("(t nil "), "{}", answers[0].0);
     assert!(answers[0].1.varref >= 3, "{:?}", answers[0].1);
     assert_eq!(answers[1].1, Shims::default(), "{:?}", answers[1].1);
+}
+
+/// Programs over the dumped runtime's own variables: `case-fold-search`
+/// (buffer-local over an Obj forwarder, its default cell in the dump
+/// image), `inhibit-read-only` (forwarded Obj), `indent-tabs-mode`
+/// (buffer-local over a Bool forwarder), a `condition-case` inside a `let`,
+/// and a watched special.
+const RUNTIME_PROGRAM: &str = r#"(progn
+  (defvar ivt-count 0)
+  (defvar ivt-watched 1)
+  (defvar ivt-wlog nil)
+  (add-variable-watcher 'ivt-watched
+    (lambda (s n op w) (push (list op n (bufferp w)) ivt-wlog)))
+  (defun ivt-g () (list case-fold-search inhibit-read-only indent-tabs-mode))
+  (defun ivt-f (x)
+    (let ((case-fold-search x) (inhibit-read-only x) (indent-tabs-mode x))
+      (setq ivt-count (1+ ivt-count))
+      (ivt-g)))
+  (defun ivt-h (x)
+    (condition-case err
+        (let ((case-fold-search x)) (setq ivt-watched x) (signal 'error (list case-fold-search)))
+      (error (list err case-fold-search ivt-watched))))
+  (dolist (f '(ivt-g ivt-f ivt-h)) (byte-compile f))
+  (with-temp-buffer
+    (dotimes (i 1500) (ivt-f i) (ivt-h i))))"#;
+
+/// The dumped runtime's answers are the same with the knob on and off, and
+/// with it on the binds of `case-fold-search` -- whose default cell is a
+/// dump-image cons, remembered at compile time -- are inline.
+#[test]
+fn a_dumped_runtime_answers_the_same_with_binds_inline() {
+    // The first binds in a new buffer miss its BLV caches (the shim swaps
+    // them in); the probe runs in a buffer that has seen them once.
+    let setup = r#"(progn (set-buffer (get-buffer-create " ivt-probe"))
+                          (ivt-f 'warm) (ivt-h 'warm))"#;
+    let probe = r#"(list (ivt-f 'on) (ivt-h 'x) ivt-count case-fold-search inhibit-read-only
+             indent-tabs-mode ivt-watched (length ivt-wlog) (car ivt-wlog))"#;
+    let answers: Vec<(String, Shims)> = [OFF, ALL]
+        .into_iter()
+        .map(|knob| {
+            let mut ev = warmed_runtime(knob, RUNTIME_PROGRAM);
+            eval_ok(&mut ev, setup);
+            let before = shims();
+            let answer = eval(&mut ev, probe);
+            force_inline_vars_for_test(None);
+            (answer, shims_since(before))
+        })
+        .collect();
+    assert_eq!(answers[0].0, answers[1].0, "knob off vs on");
+    assert!(
+        answers[0].0.starts_with("((on on t) ((error x) t x) 1502 "),
+        "{}",
+        answers[0].0
+    );
+    // Off: every bind and unbind of the probe's compiled calls is a shim
+    // call; on, none is (the watched `setq` is the one write left).
+    assert!(answers[0].1.varbind >= 4, "{:?}", answers[0].1);
+    assert_eq!(
+        (answers[1].1.varbind, answers[1].1.unbind),
+        (0, 0),
+        "{:?}",
+        answers[1].1
+    );
+    assert_eq!(answers[1].1.varset, 1, "{:?}", answers[1].1);
+}
+
+/// `(lambda (n) (let ((osr-bound 3)) (let ((sum 0) (i 0)) (while (< i n)
+/// [(let ((osr-bound 7))] (setq sum (+ sum osr-bound)) [)] (setq i (1+ i)))
+/// sum)))`, hand-assembled (as `tests/osr_bindings.rs`).
+fn binding_sum(nested: bool) -> ByteCodeFunction {
+    let mut f = ByteCodeFunction::new(LambdaParams {
+        required: vec![intern("n")],
+        optional: vec![],
+        rest: None,
+    });
+    f.lexical = true;
+    f.constants = vec![
+        Value::make_int(0),
+        Value::make_int(3),
+        Value::symbol("osr-bound"),
+        Value::make_int(7),
+    ]
+    .into();
+    f.ops = vec![
+        Op::Constant(1),
+        Op::VarBind(2),
+        Op::Constant(0),
+        Op::Constant(0), // n sum i
+        Op::StackRef(0),
+        Op::StackRef(3),
+        Op::Lss,
+        Op::GotoIfNil(0),
+    ];
+    if nested {
+        f.ops.extend([Op::Constant(3), Op::VarBind(2)]);
+    }
+    f.ops
+        .extend([Op::StackRef(1), Op::VarRef(2), Op::Add, Op::StackSet(2)]);
+    if nested {
+        f.ops.extend([
+            Op::Unbind(1),
+            Op::StackRef(1),
+            Op::VarRef(2),
+            Op::Add,
+            Op::StackSet(2),
+        ]);
+    }
+    f.ops
+        .extend([Op::StackRef(0), Op::Add1, Op::StackSet(1), Op::Goto(4)]);
+    f.ops[7] = Op::GotoIfNil(f.ops.len() as u32);
+    f.ops.extend([Op::StackRef(1), Op::Unbind(1), Op::Return]);
+    f.max_stack = 16;
+    f
+}
+
+/// OSR into a loop inside a `let`: the interpreter made the binding before
+/// the transfer, and the inline `unbind` after the loop restores it; the
+/// nested variant binds and unbinds inline on every iteration.
+#[test]
+fn osr_into_a_let_unbinds_inline_what_the_interpreter_bound() {
+    use std::sync::atomic::Ordering;
+    for nested in [false, true] {
+        let mut answers = Vec::new();
+        for knob in [OFF, ALL] {
+            force_inline_vars_for_test(Some(knob));
+            crate::emacs_core::jit::force_osr_for_test(true);
+            let mut ctx = Context::new();
+            crate::emacs_core::jit::cache::clear();
+            ctx.eval_str("(setq osr-bound 17)").unwrap();
+            let depth = ctx.specpdl.len();
+            let mut f = binding_sum(nested);
+            f.seal_hand_assembled_ops();
+            f.jit_runtime().set_hot_for_test();
+            let transfers =
+                crate::emacs_core::jit::cache::OSR_TRANSFER_COUNT.load(Ordering::Relaxed);
+            let before = shims();
+            let value = Vm::from_context(&mut ctx)
+                .execute(&f, vec![Value::make_int(2000)])
+                .unwrap();
+            let called = shims_since(before);
+            assert_eq!(
+                crate::emacs_core::jit::cache::OSR_TRANSFER_COUNT.load(Ordering::Relaxed)
+                    - transfers,
+                1,
+                "the loop transferred"
+            );
+            crate::emacs_core::jit::force_osr_for_test(false);
+            force_inline_vars_for_test(None);
+            assert_eq!(ctx.specpdl.len(), depth);
+            assert!(ctx.jit_bind_stack.is_empty());
+            answers.push((
+                print_value(&value),
+                print_value(&ctx.eval_str("osr-bound").unwrap()),
+            ));
+            if knob == ALL {
+                assert_eq!(called.unbind, 0, "nested={nested}: {called:?}");
+                // The first inner bind grows the bind stack in the shim.
+                assert!(called.varbind <= 1, "nested={nested}: {called:?}");
+            }
+        }
+        let want = if nested { "20000" } else { "6000" };
+        assert_eq!(answers[0], (want.to_string(), "17".to_string()));
+        assert_eq!(answers[0], answers[1], "nested={nested}");
+    }
 }

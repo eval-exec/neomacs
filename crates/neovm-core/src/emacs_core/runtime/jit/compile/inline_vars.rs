@@ -5,7 +5,6 @@
 //! `swap_in_symval_forwarding`'s early-out), and of a forwarder that holds its
 //! own value, done in place instead of in `neovm_jit_varref`, `_varset`,
 //! `_varbind` and `_unbind`. Knob `NEOVM_JIT_INLINE_VARS` (default off).
-//! (`varbind` and `unbind` are not inlined yet.)
 //!
 //! # Contract
 //!
@@ -51,23 +50,35 @@
 
 use super::jit_layout::heap::{HEAP_JIT_BARRIER_LEN, HEAP_JIT_BARRIER_LO};
 use super::jit_layout::{
-    BLV_ALIST_EPOCH_OFFSET, BLV_DEFCELL_OFFSET, BLV_FWD_OFFSET, BLV_LOCAL_IF_SET_OFFSET,
-    BLV_VALCELL_OFFSET, BLV_WHERE_BUF_ID_OFFSET, CONS_CDR_OFFSET,
-    CONTEXT_CURRENT_BUFFER_RAW_OFFSET, LISP_BOOL_FWD_VALUE_OFFSET, LISP_INT_FWD_VALUE_OFFSET,
+    BLV_ALIST_EPOCH_OFFSET, BLV_DEFCELL_OFFSET, BLV_FOUND_OFFSET, BLV_FWD_OFFSET,
+    BLV_LOCAL_IF_SET_OFFSET, BLV_VALCELL_OFFSET, BLV_WHERE_BUF_ID_OFFSET, CONS_CDR_OFFSET,
+    CONTEXT_CURRENT_BUFFER_RAW_OFFSET, CONTEXT_JIT_BIND_STACK_OFFSET, CONTEXT_SPECPDL_OFFSET,
+    EntryTemplate, LISP_BOOL_FWD_VALUE_OFFSET, LISP_INT_FWD_VALUE_OFFSET,
     LISP_KBOARD_OBJ_FWD_VALUE_OFFSET, LISP_OBJ_FWD_VALUE_OFFSET, LISP_SYMBOL_FLAGS_OFFSET,
-    LISP_SYMBOL_VAL_OFFSET, SYMBOL_FLAGS_REDIRECT_MASK, blv_alist_epoch_addr,
+    LISP_SYMBOL_VAL_OFFSET, LetLayout, SYMBOL_FLAGS_REDIRECT_MASK, VecOffsets,
+    blv_alist_epoch_addr, jit_bind_stack_vec_offsets, let_layout, specpdl_vec_offsets,
 };
 use super::lowering::{
     CondRoots, PendingDispatch, SlotRep, band_imm_p, emit_cond_residual_roots_post,
-    emit_model_roots_pre, iadd_imm_p, icmp_imm_p, imm64, rootwin_carry_meet,
+    emit_model_roots_pre, iadd_imm_p, icmp_imm_p, imm64, ishl_imm_p, rootwin_carry_meet,
     rootwin_carry_snapshot, signal_target_for_site,
 };
 use super::*;
+use crate::emacs_core::eval::SpecBinding;
 use crate::emacs_core::forward::{LispFwd, LispFwdType};
 use crate::emacs_core::symbol::{
     SYMCELL_INLINE_WRITE_MASK, SymbolRedirect, symcell_inline_write_value,
 };
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+
+/// The most bindings one inline `unbind` pops (a `let` or `let*` of up to
+/// four specials); a longer `unbind` takes the shim.
+const MAX_UNBIND: usize = 4;
+
+/// log2 of a specpdl entry's size: generated code indexes the specpdl by
+/// shifting a depth.
+const ENTRY_SHIFT: i64 = std::mem::size_of::<SpecBinding>().trailing_zeros() as i64;
+const _: () = assert!(std::mem::size_of::<SpecBinding>().is_power_of_two());
 
 /// A cons's cdr, from the tagged cons word.
 const TAGGED_CONS_CDR: usize = CONS_CDR_OFFSET - TAG_CONS;
@@ -88,6 +99,11 @@ struct CompileEnv {
 
 thread_local! {
     static ENV: Cell<Option<CompileEnv>> = const { Cell::new(None) };
+    /// The function being lowered: for each `unbind` pc, the symbols its
+    /// bindings bound, top first (`None`: not a `varbind`, or not the same
+    /// symbol on every path). Set by [`begin_function`].
+    static UNBIND_SITES: RefCell<HashMap<usize, SmallVec<[Option<u32>; MAX_UNBIND]>>> =
+        RefCell::new(HashMap::new());
 }
 
 /// Lends the compiles inside it the running context's obarray and
@@ -270,6 +286,29 @@ fn with_remembered_defcell(mut site: VarSite) -> VarSite {
     site
 }
 
+/// The specpdl and bind-stack layouts inline binds need; `None` (a probe
+/// failed) turns them off.
+#[derive(Clone, Copy)]
+pub(crate) struct SpecLayout {
+    spdl: VecOffsets,
+    jbs: VecOffsets,
+    lets: LetLayout,
+    /// `LetLocal` and `LetDefault` keep their header and both words at the
+    /// same offsets, so one store sequence (or load) serves both.
+    local_default_share: bool,
+}
+
+fn spec_layout() -> Option<SpecLayout> {
+    let lets = let_layout()?;
+    Some(SpecLayout {
+        spdl: specpdl_vec_offsets()?,
+        jbs: jit_bind_stack_vec_offsets()?,
+        lets,
+        local_default_share: lets.let_local.header_offset == lets.let_default.header_offset
+            && lets.let_local.fields[..2] == lets.let_default.fields[..2],
+    })
+}
+
 /// The site a `varref` of SYM gets, if the knob inlines reads.
 pub(crate) fn read_site(sym: u32) -> Option<VarSite> {
     if !jit_inline_vars().read {
@@ -293,6 +332,221 @@ pub(crate) fn set_site(sym: u32) -> Option<VarSite> {
     Some(with_remembered_defcell(site))
 }
 
+/// A `varbind` site: the variable and the layouts.
+pub(crate) struct BindSite {
+    site: VarSite,
+    layout: SpecLayout,
+}
+
+/// The site a `varbind` of SYM gets, if the knob inlines binds and the
+/// layouts probed. A keyboard forwarder is bound by the general path (GNU
+/// records its keyboard, `where.kbd`).
+pub(crate) fn bind_site(sym: u32) -> Option<BindSite> {
+    if !jit_inline_vars().bind {
+        return None;
+    }
+    let layout = spec_layout()?;
+    let site = classify(sym)?;
+    match site.shape {
+        VarShape::Forwarded {
+            kind: FwdKind::Kboard,
+            ..
+        } => return None,
+        VarShape::Localized { .. } if !layout.local_default_share => return None,
+        _ => {}
+    }
+    Some(BindSite {
+        site: with_remembered_defcell(site),
+        layout,
+    })
+}
+
+/// An `unbind` site: its bindings' variables, top first.
+pub(crate) struct UnbindPlan {
+    sites: SmallVec<[VarSite; MAX_UNBIND]>,
+    layout: SpecLayout,
+}
+
+/// The plan an `unbind N` at PC gets, if the knob inlines binds, N is at
+/// most [`MAX_UNBIND`] and every binding it pops is a `varbind` of one known
+/// symbol on every path. A forwarded binding of a projected symbol makes
+/// the whole op take the shim (its restore republishes).
+pub(crate) fn unbind_plan(pc: usize, n: u16) -> Option<UnbindPlan> {
+    if !jit_inline_vars().bind || n == 0 || n as usize > MAX_UNBIND {
+        return None;
+    }
+    let layout = spec_layout()?;
+    let syms = UNBIND_SITES.with(|s| s.borrow().get(&pc).cloned())?;
+    if syms.len() != n as usize {
+        return None;
+    }
+    let mut sites = SmallVec::new();
+    for sym in syms {
+        let site = classify(sym?)?;
+        match site.shape {
+            VarShape::Forwarded { .. } if site.projected => return None,
+            VarShape::Localized { .. } if !layout.local_default_share => return None,
+            _ => {}
+        }
+        sites.push(with_remembered_defcell(site));
+    }
+    Some(UnbindPlan { sites, layout })
+}
+
+// ---------------------------------------------------------------------------
+// The static binding sites of each `unbind`
+// ---------------------------------------------------------------------------
+
+/// Start lowering a function: find, for each `unbind`, the symbols of the
+/// bindings it pops (only when binds may be inlined).
+pub(crate) fn begin_function(ops: &[Op], constants: &[Value], cfg: &Cfg, aot: bool) {
+    UNBIND_SITES.with(|sites| {
+        let mut sites = sites.borrow_mut();
+        sites.clear();
+        if !aot
+            && jit_inline_vars().bind
+            && ENV.with(Cell::get).is_some()
+            && ops.iter().any(|op| matches!(op, Op::Unbind(_)))
+        {
+            *sites = unbind_sites(ops, constants, cfg);
+        }
+    });
+}
+
+/// Meet two binding-site stacks position by position: a position keeps its
+/// symbol only where both agree. `true` if `into` changed.
+fn meet_sites(into: &mut [Option<u32>], other: &[Option<u32>]) -> bool {
+    let mut changed = false;
+    for (a, b) in into.iter_mut().zip(other) {
+        if a.is_some() && *a != *b {
+            *a = None;
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// A forward walk of the CFG `analyze_cfg` built, with the binding stack as
+/// its state: a `varbind` pushes its symbol, a `save-*` or
+/// `unwind-protect` record pushes `None`, an `unbind N` pops N and records
+/// them. The byte compiler's structured binding keeps the stack depth the
+/// same on every path (`analyze_cfg` checks it); where two paths bound
+/// different symbols the position is `None`. Empty when anything is off
+/// the expected shape (then no `unbind` is inlined).
+fn unbind_sites(
+    ops: &[Op],
+    constants: &[Value],
+    cfg: &Cfg,
+) -> HashMap<usize, SmallVec<[Option<u32>; MAX_UNBIND]>> {
+    let n = ops.len();
+    let leaders = &cfg.leaders;
+    let next_leader = |i: usize| {
+        let k = leaders.partition_point(|&l| l <= i);
+        leaders.get(k).copied().unwrap_or(n)
+    };
+    let mut entry: HashMap<usize, Vec<Option<u32>>> = HashMap::new();
+    let mut out: HashMap<usize, SmallVec<[Option<u32>; MAX_UNBIND]>> = HashMap::new();
+    let mut work = vec![0usize];
+    entry.insert(0, Vec::new());
+    let push = |entry: &mut HashMap<usize, Vec<Option<u32>>>,
+                work: &mut Vec<usize>,
+                target: usize,
+                state: &[Option<u32>]|
+     -> bool {
+        match entry.get_mut(&target) {
+            None => {
+                entry.insert(target, state.to_vec());
+                work.push(target);
+                true
+            }
+            Some(old) if old.len() != state.len() => false,
+            Some(old) => {
+                if meet_sites(old, state) {
+                    work.push(target);
+                }
+                true
+            }
+        }
+    };
+    while let Some(l) = work.pop() {
+        let mut state = entry[&l].clone();
+        let end = next_leader(l);
+        let mut falls_through = true;
+        let mut targets: SmallVec<[usize; 4]> = SmallVec::new();
+        for (pc, op) in ops.iter().enumerate().take(end).skip(l) {
+            match op {
+                Op::VarBind(idx) => state.push(const_sym_id(constants, *idx).ok()),
+                Op::SaveCurrentBuffer
+                | Op::SaveExcursion
+                | Op::SaveRestriction
+                | Op::UnwindProtectPop => state.push(None),
+                Op::Unbind(k) => {
+                    let k = *k as usize;
+                    if k > state.len() {
+                        return HashMap::new();
+                    }
+                    let top: SmallVec<[Option<u32>; MAX_UNBIND]> =
+                        state.iter().rev().take(k).copied().collect();
+                    match out.get_mut(&pc) {
+                        Some(old) if old.len() == top.len() => {
+                            meet_sites(old, &top);
+                        }
+                        Some(_) => return HashMap::new(),
+                        None => {
+                            out.insert(pc, top);
+                        }
+                    }
+                    state.truncate(state.len() - k);
+                }
+                Op::Goto(t) => {
+                    targets.push(*t as usize);
+                    falls_through = false;
+                    break;
+                }
+                Op::GotoIfNil(t)
+                | Op::GotoIfNotNil(t)
+                | Op::GotoIfNilElsePop(t)
+                | Op::GotoIfNotNilElsePop(t)
+                | Op::PushConditionCase(t)
+                | Op::PushConditionCaseRaw(t)
+                | Op::PushCatch(t) => {
+                    // A handler is entered with the binding stack of its push.
+                    targets.push(*t as usize);
+                    targets.push(end);
+                    falls_through = false;
+                    break;
+                }
+                Op::Switch => {
+                    targets.extend(
+                        cfg.switch_targets
+                            .get(&pc)
+                            .into_iter()
+                            .flatten()
+                            .map(|&(_, t)| t),
+                    );
+                    targets.push(end);
+                    falls_through = false;
+                    break;
+                }
+                Op::Return | Op::Throw => {
+                    falls_through = false;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        if falls_through {
+            targets.push(end);
+        }
+        for t in targets {
+            if t < n && !push(&mut entry, &mut work, t, &state) {
+                return HashMap::new();
+            }
+        }
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // Emission helpers
 // ---------------------------------------------------------------------------
@@ -303,6 +557,8 @@ pub(crate) fn set_site(sym: u32) -> Option<VarSite> {
 pub(crate) enum InlineVarOp {
     Read = 0,
     Set = 1,
+    Bind = 2,
+    Unbind = 3,
 }
 
 #[cfg(test)]
@@ -733,6 +989,495 @@ pub(crate) fn lower_varset(
     let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack, reps);
     let ok = icmp_imm_p(fb, IntCC::Equal, status, STATUS_OK);
     fb.ins().brif(ok, cont, &[], se, &[]);
+    fb.switch_to_block(cont);
+    fb.seal_block(cont);
+}
+
+// ---------------------------------------------------------------------------
+// varbind
+// ---------------------------------------------------------------------------
+
+/// The specpdl's and bind stack's length and capacity, loaded once.
+struct Stacks {
+    spdl_len: ClifValue,
+    spdl_cap: ClifValue,
+    jbs_len: ClifValue,
+    jbs_cap: ClifValue,
+}
+
+fn load_stacks(fb: &mut FunctionBuilder, rt: &RtCtx, layout: &SpecLayout) -> Stacks {
+    let vmctx = load_vmctx(fb, rt);
+    Stacks {
+        spdl_len: load_word(fb, vmctx, CONTEXT_SPECPDL_OFFSET + layout.spdl.len),
+        spdl_cap: load_word(fb, vmctx, CONTEXT_SPECPDL_OFFSET + layout.spdl.cap),
+        jbs_len: load_word(fb, vmctx, CONTEXT_JIT_BIND_STACK_OFFSET + layout.jbs.len),
+        jbs_cap: load_word(fb, vmctx, CONTEXT_JIT_BIND_STACK_OFFSET + layout.jbs.cap),
+    }
+}
+
+/// Both stacks have room for one more element: a full one takes the shim,
+/// which grows it (the fast path never calls).
+fn stacks_have_room(fb: &mut FunctionBuilder, s: &Stacks) -> ClifValue {
+    let spdl = fb
+        .ins()
+        .icmp(IntCC::UnsignedLessThan, s.spdl_len, s.spdl_cap);
+    let jbs = fb.ins().icmp(IntCC::UnsignedLessThan, s.jbs_len, s.jbs_cap);
+    fb.ins().band(spdl, jbs)
+}
+
+/// The address of the specpdl entry at DEPTH.
+fn entry_at(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    layout: &SpecLayout,
+    depth: ClifValue,
+) -> ClifValue {
+    let vmctx = load_vmctx(fb, rt);
+    let base = load_word(fb, vmctx, CONTEXT_SPECPDL_OFFSET + layout.spdl.ptr);
+    let offset = ishl_imm_p(fb, depth, ENTRY_SHIFT);
+    fb.ins().iadd(base, offset)
+}
+
+/// Push the entry TEMPLATE describes, header HEADER and word fields FIELDS,
+/// then the bind depth, as `push_specpdl_with` and the `varbind` shim do:
+/// the entry is written before the length that publishes it.
+fn push_binding(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    layout: &SpecLayout,
+    s: &Stacks,
+    template: &EntryTemplate,
+    header: ClifValue,
+    fields: &[ClifValue],
+) {
+    let entry = entry_at(fb, rt, layout, s.spdl_len);
+    store_word(fb, header, entry, template.header_offset as usize);
+    for (i, &field) in fields.iter().enumerate() {
+        store_word(fb, field, entry, template.field(i) as usize);
+    }
+    let vmctx = load_vmctx(fb, rt);
+    let spdl_len = iadd_imm_p(fb, s.spdl_len, 1);
+    store_word(
+        fb,
+        spdl_len,
+        vmctx,
+        CONTEXT_SPECPDL_OFFSET + layout.spdl.len,
+    );
+    let jbs = load_word(fb, vmctx, CONTEXT_JIT_BIND_STACK_OFFSET + layout.jbs.ptr);
+    let slot = ishl_imm_p(fb, s.jbs_len, 3);
+    let slot = fb.ins().iadd(jbs, slot);
+    store_word(fb, s.spdl_len, slot, 0);
+    let jbs_len = iadd_imm_p(fb, s.jbs_len, 1);
+    store_word(
+        fb,
+        jbs_len,
+        vmctx,
+        CONTEXT_JIT_BIND_STACK_OFFSET + layout.jbs.len,
+    );
+}
+
+/// `varbind` of the variable to VAL inline -- GNU `specbind` +
+/// `do_specbind` on a cache hit; jumps to CONT after the push, or branches
+/// to SLOW having changed nothing. Both stacks need room.
+///
+/// - Plain: `specbind_plain_untrapped_fast` (write window, no mark): swap
+///   the cell, push `Let`.
+/// - Forwarded (Obj, Bool, Int): `specbind_cached`'s forwarded arm -- push
+///   `Let` with the descriptor's (non-void) value, store the new one; an
+///   integer slot takes a fixnum only.
+/// - Buffer-local: `specbind_cached`'s `specbind_localized_hit` -- the cache
+///   loaded here with a non-void value, the forwarder unchanged, a cons the
+///   barrier need not see: push `LetLocal` (the buffer's own binding) or
+///   `LetDefault` (the default, `valcell == defcell`) with the loaded value
+///   and the current buffer, and store the value through the type rule.
+fn emit_varbind_fast(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    bind: &BindSite,
+    val: ClifValue,
+    slow: Block,
+    cont: Block,
+) {
+    let BindSite { site, layout } = bind;
+    let lets = &layout.lets;
+    let sym = site.sym;
+    let s = load_stacks(fb, rt, layout);
+    let room = stacks_have_room(fb, &s);
+    let cell = baked(fb, site.cell);
+    match site.shape {
+        VarShape::Plain => {
+            let writable = window_is(fb, cell, SymbolRedirect::Plainval);
+            let window = barrier_window(fb, rt);
+            let open = not_marking(fb, window);
+            let ok = all(fb, &[room, writable, open]);
+            guard(fb, ok, slow);
+            let old = load_word(fb, cell, LISP_SYMBOL_VAL_OFFSET);
+            store_word(fb, val, cell, LISP_SYMBOL_VAL_OFFSET);
+            let header = imm64(fb, lets.let_.header_with(sym) as i64);
+            push_binding(fb, rt, layout, &s, &lets.let_, header, &[old]);
+        }
+        VarShape::Forwarded { desc, kind } => {
+            let writable = window_is(fb, cell, SymbolRedirect::Forwarded);
+            let word = load_word(fb, cell, LISP_SYMBOL_VAL_OFFSET);
+            let desc = baked(fb, desc);
+            let same = eq(fb, word, desc);
+            let window = barrier_window(fb, rt);
+            let open = not_marking(fb, window);
+            let old = fwd_load(fb, desc, kind);
+            let mut conds: SmallVec<[ClifValue; 6]> =
+                smallvec::smallvec![room, writable, same, open];
+            match kind {
+                FwdKind::Obj | FwdKind::Kboard => {
+                    conds.push(ne_imm(fb, old, Value::UNBOUND.bits() as i64));
+                }
+                FwdKind::Int => conds.push(fixnum_p(fb, val)),
+                FwdKind::Bool => {}
+            }
+            let ok = all(fb, &conds);
+            guard(fb, ok, slow);
+            let header = imm64(fb, lets.let_.header_with(sym) as i64);
+            push_binding(fb, rt, layout, &s, &lets.let_, header, &[old]);
+            fwd_store(fb, desc, kind, val);
+        }
+        VarShape::Localized {
+            blv,
+            fwd,
+            rule,
+            remembered_defcell,
+        } => {
+            let writable = window_is(fb, cell, SymbolRedirect::Localized);
+            let word = load_word(fb, cell, LISP_SYMBOL_VAL_OFFSET);
+            let blv = baked(fb, blv);
+            let same = eq(fb, word, blv);
+            let cur = current_buffer(fb, rt);
+            let hit = blv_hit(fb, blv, cur);
+            let fwd_word = load_word(fb, blv, BLV_FWD_OFFSET);
+            let fwd_same = eq_imm(fb, fwd_word, fwd as i64);
+            let shape_ok = all(fb, &[room, writable, same, hit, fwd_same]);
+            // Only a live BLV's loaded cell is dereferenced.
+            guard(fb, shape_ok, slow);
+            let found = fb
+                .ins()
+                .uload8(types::I64, trusted(), blv, BLV_FOUND_OFFSET as i32);
+            let found = ne_imm(fb, found, 0);
+            let valcell = load_word(fb, blv, BLV_VALCELL_OFFSET);
+            let defcell = load_word(fb, blv, BLV_DEFCELL_OFFSET);
+            let default_loaded = eq(fb, valcell, defcell);
+            let own_cell = fb.ins().bor(found, default_loaded);
+            let old = load_word(fb, valcell, TAGGED_CONS_CDR);
+            let bound = ne_imm(fb, old, Value::UNBOUND.bits() as i64);
+            let window = barrier_window(fb, rt);
+            let plain_store = cons_store_ok(fb, window, valcell, remembered_defcell);
+            let (rule_ok, stored) = blv_rule(fb, rule, val);
+            let mut conds: SmallVec<[ClifValue; 5]> =
+                smallvec::smallvec![own_cell, bound, plain_store];
+            conds.extend(rule_ok);
+            let ok = all(fb, &conds);
+            guard(fb, ok, slow);
+            let local = imm64(fb, lets.let_local.header_with(sym) as i64);
+            let default = imm64(fb, lets.let_default.header_with(sym) as i64);
+            let header = fb.ins().select(found, local, default);
+            // `local_default_share`: one store sequence writes either.
+            push_binding(fb, rt, layout, &s, &lets.let_local, header, &[old, cur]);
+            store_word(fb, stored, valcell, TAGGED_CONS_CDR);
+        }
+    }
+    fb.ins().jump(cont, &[]);
+    note_site(InlineVarOp::Bind);
+}
+
+/// `Op::VarBind` with BIND's fast path, the unchanged `neovm_jit_varbind`
+/// call as its slow path. STACK is the residual operand stack (VAL popped).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn lower_varbind(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    bind: &BindSite,
+    sym_v: ClifValue,
+    val: ClifValue,
+    stack: &[ClifValue],
+    reps: &[SlotRep],
+    signal_exit: &mut Option<Block>,
+    handlers: &[HandlerStatic],
+    pending: &mut Vec<PendingDispatch>,
+) {
+    let slow = fb.create_block();
+    let cont = fb.create_block();
+    fb.set_cold_block(slow);
+    emit_varbind_fast(fb, rt, bind, val, slow, cont);
+    fb.switch_to_block(slow);
+    fb.seal_block(slow);
+    let carry_fast = rootwin_carry_snapshot();
+    let vmctx = load_vmctx(fb, rt);
+    let saved = if stack.is_empty() {
+        CondRoots::NONE
+    } else {
+        emit_model_roots_pre(fb, rt, stack, reps)
+    };
+    let varbind = rt.refs.get(fb.func, Shim::Varbind);
+    let call = fb.ins().call(varbind, &[vmctx, sym_v, val]);
+    let status = fb.inst_results(call)[0];
+    emit_cond_residual_roots_post(fb, rt, saved);
+    rootwin_carry_meet(&carry_fast);
+    let signal = signal_target_for_site(fb, signal_exit, handlers, pending, stack, reps);
+    let ok = icmp_imm_p(fb, IntCC::Equal, status, STATUS_OK);
+    fb.ins().brif(ok, cont, &[], signal, &[]);
+    fb.switch_to_block(cont);
+    fb.seal_block(cont);
+}
+
+// ---------------------------------------------------------------------------
+// unbind
+// ---------------------------------------------------------------------------
+
+/// One restore an inline `unbind` makes once every entry passed.
+enum Restore {
+    /// A plain cell's value word.
+    Cell { cell: ClifValue, value: ClifValue },
+    /// A forwarder's slot.
+    Fwd {
+        desc: ClifValue,
+        kind: FwdKind,
+        value: ClifValue,
+    },
+    /// A BLV cons's cdr.
+    Cons { cons: ClifValue, value: ClifValue },
+}
+
+/// The checks of one popped entry at ENTRY, bound by SITE, and the restore
+/// it makes -- `pop_simple_specpdl_suffix`'s arm for the entry, with the
+/// symbol's shape read now (a watcher or local made inside the binding
+/// sends it to the general unwinder):
+///
+/// - Plain: a `Let` of the symbol, write window of a plain cell (the `Let`
+///   arm's `swap_plain_untrapped_value_id`).
+/// - Forwarded: a `Let` of the symbol, the descriptor still its forwarder, a
+///   non-void old value its type rule accepts (`pop_forwarded_let_cached`).
+/// - Buffer-local: a `LetLocal` of the symbol for the current buffer whose
+///   cache is loaded here with its own binding (`pop_let_local_cached`: the
+///   cdr of the loaded cell), or a `LetDefault` (`pop_let_default_cached`,
+///   not for a projected symbol: the default cell, through the type rule);
+///   a non-void old value; a cons the barrier need not see.
+#[allow(clippy::too_many_arguments)]
+fn unbind_entry(
+    fb: &mut FunctionBuilder,
+    lets: &LetLayout,
+    site: &VarSite,
+    entry: ClifValue,
+    cur: Option<ClifValue>,
+    window: Window,
+    conds: &mut SmallVec<[ClifValue; 16]>,
+) -> Restore {
+    let cell = baked(fb, site.cell);
+    let sym = site.sym;
+    let is_entry = |fb: &mut FunctionBuilder, template: &EntryTemplate, header: ClifValue| {
+        let masked = band_imm_p(fb, header, template.header_mask as i64);
+        eq_imm(fb, masked, template.header_with(sym) as i64)
+    };
+    match site.shape {
+        VarShape::Plain => {
+            let header = load_word(fb, entry, lets.let_.header_offset as usize);
+            conds.push(is_entry(fb, &lets.let_, header));
+            conds.push(window_is(fb, cell, SymbolRedirect::Plainval));
+            let value = load_word(fb, entry, lets.let_.field(0) as usize);
+            Restore::Cell { cell, value }
+        }
+        VarShape::Forwarded { desc, kind } => {
+            let header = load_word(fb, entry, lets.let_.header_offset as usize);
+            conds.push(is_entry(fb, &lets.let_, header));
+            conds.push(window_is(fb, cell, SymbolRedirect::Forwarded));
+            let word = load_word(fb, cell, LISP_SYMBOL_VAL_OFFSET);
+            let desc = baked(fb, desc);
+            conds.push(eq(fb, word, desc));
+            let value = load_word(fb, entry, lets.let_.field(0) as usize);
+            conds.push(ne_imm(fb, value, Value::UNBOUND.bits() as i64));
+            if kind == FwdKind::Int {
+                conds.push(fixnum_p(fb, value));
+            }
+            Restore::Fwd { desc, kind, value }
+        }
+        VarShape::Localized {
+            blv,
+            fwd,
+            rule,
+            remembered_defcell,
+        } => {
+            let cur = cur.expect("loaded for a buffer-local binding");
+            let header = load_word(fb, entry, lets.let_local.header_offset as usize);
+            let is_local = is_entry(fb, &lets.let_local, header);
+            conds.push(window_is(fb, cell, SymbolRedirect::Localized));
+            let word = load_word(fb, cell, LISP_SYMBOL_VAL_OFFSET);
+            let blv = baked(fb, blv);
+            conds.push(eq(fb, word, blv));
+            // `local_default_share`: both variants keep the old value and
+            // the buffer at `let_local`'s offsets.
+            let old = load_word(fb, entry, lets.let_local.field(0) as usize);
+            conds.push(ne_imm(fb, old, Value::UNBOUND.bits() as i64));
+            let valcell = load_word(fb, blv, BLV_VALCELL_OFFSET);
+            // LetLocal: made in this buffer, still its loaded binding.
+            let buffer = load_word(fb, entry, lets.let_local.field(1) as usize);
+            let here = eq(fb, buffer, cur);
+            let hit = blv_hit(fb, blv, cur);
+            let found = fb
+                .ins()
+                .uload8(types::I64, trusted(), blv, BLV_FOUND_OFFSET as i32);
+            let found = ne_imm(fb, found, 0);
+            let local_store = cons_store_ok(fb, window, valcell, None);
+            let local_ok = all(fb, &[is_local, here, hit, found, local_store]);
+            if site.projected {
+                // The default's restore republishes a projected symbol.
+                conds.push(local_ok);
+                return Restore::Cons {
+                    cons: valcell,
+                    value: old,
+                };
+            }
+            // LetDefault: the default cell, whatever buffer is current.
+            let is_default = is_entry(fb, &lets.let_default, header);
+            let defcell = load_word(fb, blv, BLV_DEFCELL_OFFSET);
+            let fwd_word = load_word(fb, blv, BLV_FWD_OFFSET);
+            let fwd_same = eq_imm(fb, fwd_word, fwd as i64);
+            let (rule_ok, ruled) = blv_rule(fb, rule, old);
+            let default_store = cons_store_ok(fb, window, defcell, remembered_defcell);
+            let mut default_conds: SmallVec<[ClifValue; 4]> =
+                smallvec::smallvec![is_default, fwd_same, default_store];
+            default_conds.extend(rule_ok);
+            let default_ok = all(fb, &default_conds);
+            conds.push(fb.ins().bor(local_ok, default_ok));
+            let cons = fb.ins().select(is_local, valcell, defcell);
+            let value = fb.ins().select(is_local, old, ruled);
+            Restore::Cons { cons, value }
+        }
+    }
+}
+
+/// `unbind N` inline -- GNU `Bunbind`'s `unbind_to`, the
+/// `neovm_jit_unbind` shim's pop of `pop_simple_specpdl_suffix` arms: when
+/// the bind stack's top N depths are consecutive and exactly N entries sit
+/// above them, and each entry passes [`unbind_entry`], restore them top
+/// down, then drop the entries and the depths; otherwise branch to SLOW
+/// having changed nothing. No arm runs Lisp, so GNU's quit bracket around
+/// `unbind_to` is unobservable.
+fn emit_unbind_fast(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    plan: &UnbindPlan,
+    slow: Block,
+    cont: Block,
+) {
+    let UnbindPlan { sites, layout } = plan;
+    let n = sites.len();
+    let vmctx = load_vmctx(fb, rt);
+    let jbs_len = load_word(fb, vmctx, CONTEXT_JIT_BIND_STACK_OFFSET + layout.jbs.len);
+    let enough = icmp_imm_p(fb, IntCC::UnsignedGreaterThanOrEqual, jbs_len, n as i64);
+    guard(fb, enough, slow);
+    let jbs = load_word(fb, vmctx, CONTEXT_JIT_BIND_STACK_OFFSET + layout.jbs.ptr);
+    let top = ishl_imm_p(fb, jbs_len, 3);
+    let top = fb.ins().iadd(jbs, top);
+    // depths[k] = the depth the k-th binding from the top was made at.
+    let depths: SmallVec<[ClifValue; MAX_UNBIND]> = (0..n)
+        .map(|k| {
+            fb.ins()
+                .load(types::I64, trusted(), top, -8 * (k as i32 + 1))
+        })
+        .collect();
+    let spdl_len = load_word(fb, vmctx, CONTEXT_SPECPDL_OFFSET + layout.spdl.len);
+    let above = iadd_imm_p(fb, depths[0], 1);
+    let mut conds: SmallVec<[ClifValue; MAX_UNBIND]> = smallvec::smallvec![eq(fb, spdl_len, above)];
+    for (k, &depth) in depths.iter().enumerate().skip(1) {
+        let want = iadd_imm_p(fb, depths[0], -(k as i64));
+        conds.push(eq(fb, depth, want));
+    }
+    let consecutive = all(fb, &conds);
+    guard(fb, consecutive, slow);
+    let window = barrier_window(fb, rt);
+    let cur = sites
+        .iter()
+        .any(|site| matches!(site.shape, VarShape::Localized { .. }))
+        .then(|| current_buffer(fb, rt));
+    let mut conds: SmallVec<[ClifValue; 16]> = SmallVec::new();
+    if sites
+        .iter()
+        .any(|site| !matches!(site.shape, VarShape::Localized { .. }))
+    {
+        conds.push(not_marking(fb, window));
+    }
+    let mut restores: SmallVec<[Restore; MAX_UNBIND]> = SmallVec::new();
+    for (site, &depth) in sites.iter().zip(&depths) {
+        let entry = entry_at(fb, rt, layout, depth);
+        restores.push(unbind_entry(
+            fb,
+            &layout.lets,
+            site,
+            entry,
+            cur,
+            window,
+            &mut conds,
+        ));
+    }
+    let ok = all(fb, &conds);
+    guard(fb, ok, slow);
+    for restore in restores {
+        match restore {
+            Restore::Cell { cell, value } => store_word(fb, value, cell, LISP_SYMBOL_VAL_OFFSET),
+            Restore::Fwd { desc, kind, value } => fwd_store(fb, desc, kind, value),
+            Restore::Cons { cons, value } => store_word(fb, value, cons, TAGGED_CONS_CDR),
+        }
+    }
+    let vmctx = load_vmctx(fb, rt);
+    store_word(
+        fb,
+        depths[n - 1],
+        vmctx,
+        CONTEXT_SPECPDL_OFFSET + layout.spdl.len,
+    );
+    let jbs_len = iadd_imm_p(fb, jbs_len, -(n as i64));
+    store_word(
+        fb,
+        jbs_len,
+        vmctx,
+        CONTEXT_JIT_BIND_STACK_OFFSET + layout.jbs.len,
+    );
+    fb.ins().jump(cont, &[]);
+    note_site(InlineVarOp::Unbind);
+}
+
+/// `Op::Unbind(N)` with PLAN's fast path, the unchanged `neovm_jit_unbind`
+/// call as its slow path. STACK is the live operand stack.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn lower_unbind(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    plan: &UnbindPlan,
+    n: u16,
+    stack: &[ClifValue],
+    reps: &[SlotRep],
+    signal_exit: &mut Option<Block>,
+    handlers: &[HandlerStatic],
+    pending: &mut Vec<PendingDispatch>,
+) {
+    let slow = fb.create_block();
+    let cont = fb.create_block();
+    fb.set_cold_block(slow);
+    emit_unbind_fast(fb, rt, plan, slow, cont);
+    fb.switch_to_block(slow);
+    fb.seal_block(slow);
+    let carry_fast = rootwin_carry_snapshot();
+    let vmctx = load_vmctx(fb, rt);
+    let n_v = fb.ins().iconst(types::I64, i64::from(n));
+    let saved = if stack.is_empty() {
+        CondRoots::NONE
+    } else {
+        emit_model_roots_pre(fb, rt, stack, reps)
+    };
+    let unbind = rt.refs.get(fb.func, Shim::Unbind);
+    let call = fb.ins().call(unbind, &[vmctx, n_v]);
+    let status = fb.inst_results(call)[0];
+    emit_cond_residual_roots_post(fb, rt, saved);
+    rootwin_carry_meet(&carry_fast);
+    let signal = signal_target_for_site(fb, signal_exit, handlers, pending, stack, reps);
+    let ok = icmp_imm_p(fb, IntCC::Equal, status, STATUS_OK);
+    fb.ins().brif(ok, cont, &[], signal, &[]);
     fb.switch_to_block(cont);
     fb.seal_block(cont);
 }

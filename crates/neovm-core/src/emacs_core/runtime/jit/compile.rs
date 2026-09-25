@@ -3753,6 +3753,7 @@ fn build_leaf_fn<S: LeafSink>(
     LAST_IR_STATS.with(|c| c.set((0, 0, 0, 0)));
     lowering::flonum_census_reset();
     heap_inline::inline_heap_sites_reset();
+    inline_vars::begin_function(ops, constants, cfg, aot);
     let frontend_config = sink.module().target_config();
     let call_conv = frontend_config.default_call_conv;
     let ptr_ty = frontend_config.pointer_type();

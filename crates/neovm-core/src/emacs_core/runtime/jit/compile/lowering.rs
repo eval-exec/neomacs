@@ -7315,6 +7315,24 @@ fn lower_simple_op_arms(
             let rt = rt.ok_or(CompileError::UnsupportedOp("variable"))?;
             let sym = const_sym_id(constants, *idx)?;
             let val = stack.pop().ok_or(CompileError::StackUnderflow)?;
+            // `NEOVM_JIT_INLINE_VARS=bind`: the bind inline, the shim below
+            // as its slow path (`inline_vars`).
+            if let Some(bind) = (!aot).then(|| super::inline_vars::bind_site(sym)).flatten() {
+                let sym_v = materialize_op_sym_id(fb, reloc_base, reloc_index, sym);
+                super::inline_vars::lower_varbind(
+                    fb,
+                    rt,
+                    &bind,
+                    sym_v,
+                    val,
+                    stack,
+                    reps,
+                    signal_exit,
+                    handlers,
+                    pending,
+                );
+                return Ok(());
+            }
             let vmctx = fb.use_var(rt.vmctx_var);
             let sym_v = materialize_op_sym_id(fb, reloc_base, reloc_index, sym);
             // The shim runs variable watchers (arbitrary lisp -> GC). `val` is
@@ -7343,6 +7361,25 @@ fn lower_simple_op_arms(
             // Unbind the N most recent dynamic bindings. Static analysis
             // guarantees balance, but cleanup Lisp/watchers can still exit.
             let rt = rt.ok_or(CompileError::UnsupportedOp("variable"))?;
+            // `NEOVM_JIT_INLINE_VARS=bind`: the pops inline, the shim below
+            // as their slow path (`inline_vars`).
+            if let Some(plan) = (!aot)
+                .then(|| super::inline_vars::unbind_plan(pc, *n))
+                .flatten()
+            {
+                super::inline_vars::lower_unbind(
+                    fb,
+                    rt,
+                    &plan,
+                    *n,
+                    stack,
+                    reps,
+                    signal_exit,
+                    handlers,
+                    pending,
+                );
+                return Ok(());
+            }
             let vmctx = fb.use_var(rt.vmctx_var);
             let n_v = fb.ins().iconst(types::I64, *n as i64);
             // The shim runs unwind-protect cleanups (arbitrary lisp -> GC); root
