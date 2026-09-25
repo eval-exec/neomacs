@@ -5246,8 +5246,9 @@ fn lower_generic_arith_site(
     pending: &mut Vec<PendingDispatch>,
     signal_exit: &mut Option<Block>,
 ) -> Result<(), CompileError> {
-    let (kind, nargs) = crate::emacs_core::bytecode::Vm::arith_generic_kind(op)
+    let kind = crate::emacs_core::bytecode::ArithGenericKind::from_op(op)
         .ok_or(CompileError::UnsupportedOp("arith-generic"))?;
+    let nargs = kind.arity();
     if stack.len() < nargs {
         return Err(CompileError::StackUnderflow);
     }
@@ -5328,7 +5329,7 @@ fn lower_generic_arith_site(
             let r = raw_fixnum_unop(fb, gen_b, unary, a);
             retag_fixnum(fb, r)
         }
-        _ => unreachable!("arith_generic_kind admitted {op:?}"),
+        _ => unreachable!("ArithGenericKind::from_op admitted {op:?}"),
     };
     fb.def_var(res_var, fast);
     fb.ins().jump(merge, &[]);
@@ -5346,7 +5347,8 @@ fn lower_generic_arith_site(
     // Operands in registers: `call_args_slot` is sized for the body's
     // CALL sites only, so it must not carry them.
     let vmctx = fb.use_var(rt.vmctx_var);
-    let kind_v = fb.ins().iconst(types::I64, kind);
+    // The discriminant is the shim's ABI (`ArithGenericKind` pins it).
+    let kind_v = fb.ins().iconst(types::I64, kind as i64);
     let second = if nargs == 2 { operands[1] } else { operands[0] };
     let out_addr = fb.ins().stack_addr(rt.ptr_ty, rt.call_result_slot, 0);
     let call = fb.ins().call(

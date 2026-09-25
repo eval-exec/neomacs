@@ -5,6 +5,7 @@ use std::sync::OnceLock;
 
 use smallvec::SmallVec;
 
+use super::arith_kind::ArithGenericKind;
 use super::chunk::ByteCodeFunction;
 use super::opcode::Op;
 use crate::emacs_core::builtins;
@@ -4858,7 +4859,7 @@ impl<'a> Vm<'a> {
                             let result = vm_try!(self.call_arith_builtin_from_stack_args(
                                 func,
                                 pc_local - 1,
-                                Self::cached_builtin_id("+", &PLUS_ID),
+                                ArithGenericKind::Add,
                                 args_start,
                                 2
                             ));
@@ -4883,7 +4884,7 @@ impl<'a> Vm<'a> {
                                 let result = vm_try!(self.call_arith_builtin_from_stack_args(
                                     func,
                                     pc_local - 1,
-                                    Self::cached_builtin_id("-", &MINUS_ID),
+                                    ArithGenericKind::Sub,
                                     len - 2,
                                     2
                                 ));
@@ -4894,7 +4895,7 @@ impl<'a> Vm<'a> {
                             let result = vm_try!(self.call_arith_builtin_from_stack_args(
                                 func,
                                 pc_local - 1,
-                                Self::cached_builtin_id("-", &MINUS_ID),
+                                ArithGenericKind::Sub,
                                 len - 2,
                                 2
                             ));
@@ -4919,7 +4920,7 @@ impl<'a> Vm<'a> {
                                     let result = vm_try!(self.call_arith_builtin_from_stack_args(
                                         func,
                                         pc_local - 1,
-                                        Self::cached_builtin_id("*", &TIMES_ID),
+                                        ArithGenericKind::Mul,
                                         len - 2,
                                         2
                                     ));
@@ -4930,7 +4931,7 @@ impl<'a> Vm<'a> {
                                 let result = vm_try!(self.call_arith_builtin_from_stack_args(
                                     func,
                                     pc_local - 1,
-                                    Self::cached_builtin_id("*", &TIMES_ID),
+                                    ArithGenericKind::Mul,
                                     len - 2,
                                     2
                                 ));
@@ -4941,7 +4942,7 @@ impl<'a> Vm<'a> {
                             let result = vm_try!(self.call_arith_builtin_from_stack_args(
                                 func,
                                 pc_local - 1,
-                                Self::cached_builtin_id("*", &TIMES_ID),
+                                ArithGenericKind::Mul,
                                 len - 2,
                                 2
                             ));
@@ -4968,7 +4969,7 @@ impl<'a> Vm<'a> {
                                 let result = vm_try!(self.call_arith_builtin_from_stack_args(
                                     func,
                                     pc_local - 1,
-                                    Self::cached_builtin_id("/", &DIVIDE_ID),
+                                    ArithGenericKind::Div,
                                     len - 2,
                                     2
                                 ));
@@ -4979,7 +4980,7 @@ impl<'a> Vm<'a> {
                             let result = vm_try!(self.call_arith_builtin_from_stack_args(
                                 func,
                                 pc_local - 1,
-                                Self::cached_builtin_id("/", &DIVIDE_ID),
+                                ArithGenericKind::Div,
                                 len - 2,
                                 2
                             ));
@@ -5001,7 +5002,7 @@ impl<'a> Vm<'a> {
                                 let result = vm_try!(self.call_arith_builtin_from_stack_args(
                                     func,
                                     pc_local - 1,
-                                    Self::cached_builtin_id("%", &MODULO_ID),
+                                    ArithGenericKind::Rem,
                                     len - 2,
                                     2
                                 ));
@@ -5012,7 +5013,7 @@ impl<'a> Vm<'a> {
                             let result = vm_try!(self.call_arith_builtin_from_stack_args(
                                 func,
                                 pc_local - 1,
-                                Self::cached_builtin_id("%", &MODULO_ID),
+                                ArithGenericKind::Rem,
                                 len - 2,
                                 2
                             ));
@@ -5046,7 +5047,7 @@ impl<'a> Vm<'a> {
                             let result = vm_try!(self.call_arith_builtin_from_stack_args(
                                 func,
                                 pc_local - 1,
-                                Self::cached_builtin_id("1+", &ADD1_ID),
+                                ArithGenericKind::Add1,
                                 args_start,
                                 1
                             ));
@@ -5065,7 +5066,7 @@ impl<'a> Vm<'a> {
                                 let result = vm_try!(self.call_arith_builtin_from_stack_args(
                                     func,
                                     pc_local - 1,
-                                    Self::cached_builtin_id("1-", &SUB1_ID),
+                                    ArithGenericKind::Sub1,
                                     args_start,
                                     1
                                 ));
@@ -5077,7 +5078,7 @@ impl<'a> Vm<'a> {
                             let result = vm_try!(self.call_arith_builtin_from_stack_args(
                                 func,
                                 pc_local - 1,
-                                Self::cached_builtin_id("1-", &SUB1_ID),
+                                ArithGenericKind::Sub1,
                                 args_start,
                                 1
                             ));
@@ -5096,7 +5097,7 @@ impl<'a> Vm<'a> {
                                 let result = vm_try!(self.call_arith_builtin_from_stack_args(
                                     func,
                                     pc_local - 1,
-                                    Self::cached_builtin_id("-", &MINUS_ID),
+                                    ArithGenericKind::Negate,
                                     args_start,
                                     1
                                 ));
@@ -5108,7 +5109,7 @@ impl<'a> Vm<'a> {
                             let result = vm_try!(self.call_arith_builtin_from_stack_args(
                                 func,
                                 pc_local - 1,
-                                Self::cached_builtin_id("-", &MINUS_ID),
+                                ArithGenericKind::Negate,
                                 args_start,
                                 1
                             ));
@@ -5130,7 +5131,7 @@ impl<'a> Vm<'a> {
                             let result = vm_try!(self.call_arith_builtin_from_stack_args(
                                 func,
                                 pc_local - 1,
-                                Self::cached_builtin_id("=", &NUMEQ_ID),
+                                ArithGenericKind::NumEq,
                                 len - 2,
                                 2
                             ));
@@ -5153,7 +5154,7 @@ impl<'a> Vm<'a> {
                             let result = vm_try!(self.call_arith_builtin_from_stack_args(
                                 func,
                                 pc_local - 1,
-                                Self::cached_builtin_id(">", &GT_ID),
+                                ArithGenericKind::Gt,
                                 len - 2,
                                 2
                             ));
@@ -5188,7 +5189,7 @@ impl<'a> Vm<'a> {
                             let result = vm_try!(self.call_arith_builtin_from_stack_args(
                                 func,
                                 pc_local - 1,
-                                Self::cached_builtin_id("<", &LT_ID),
+                                ArithGenericKind::Lt,
                                 args_start,
                                 2
                             ));
@@ -5211,7 +5212,7 @@ impl<'a> Vm<'a> {
                             let result = vm_try!(self.call_arith_builtin_from_stack_args(
                                 func,
                                 pc_local - 1,
-                                Self::cached_builtin_id("<=", &LE_ID),
+                                ArithGenericKind::Le,
                                 len - 2,
                                 2
                             ));
@@ -5234,7 +5235,7 @@ impl<'a> Vm<'a> {
                             let result = vm_try!(self.call_arith_builtin_from_stack_args(
                                 func,
                                 pc_local - 1,
-                                Self::cached_builtin_id(">=", &GE_ID),
+                                ArithGenericKind::Ge,
                                 len - 2,
                                 2
                             ));
@@ -5253,7 +5254,7 @@ impl<'a> Vm<'a> {
                             let result = vm_try!(self.call_arith_builtin_from_stack_args(
                                 func,
                                 pc_local - 1,
-                                Self::cached_builtin_id("max", &MAX_ID),
+                                ArithGenericKind::Max,
                                 len - 2,
                                 2
                             ));
@@ -5272,7 +5273,7 @@ impl<'a> Vm<'a> {
                             let result = vm_try!(self.call_arith_builtin_from_stack_args(
                                 func,
                                 pc_local - 1,
-                                Self::cached_builtin_id("min", &MIN_ID),
+                                ArithGenericKind::Min,
                                 len - 2,
                                 2
                             ));
@@ -7905,10 +7906,16 @@ impl<'a> Vm<'a> {
         &mut self,
         func: &ByteCodeFunction,
         pc: usize,
-        sym_id: SymId,
+        kind: ArithGenericKind,
         args_start: usize,
         nargs: usize,
     ) -> EvalResult {
+        debug_assert_eq!(
+            nargs,
+            kind.arity(),
+            "{kind:?} takes {} operands",
+            kind.arity()
+        );
         // Every one of the arithmetic opcodes' slow arms funnels through here,
         // and they reach it only when the operands were NOT both fixnums — so
         // recording the observed types costs the fixnum fast path nothing at
@@ -7932,12 +7939,12 @@ impl<'a> Vm<'a> {
                 }
             }
         }
-        match Self::call_arith_builtin_on_context(self.ctx, sym_id, args_start, nargs) {
+        match Self::call_arith_builtin_on_context(self.ctx, kind, args_start, nargs) {
             Some(result) => result,
             // These are static subrs, so this is unreachable in practice; take
             // the traced path rather than invent a dispatch for it.
             None => self.call_function_from_stack_args(
-                Value::subr_from_sym_id(sym_id),
+                Value::subr_from_sym_id(kind.builtin_id()),
                 args_start,
                 nargs,
                 true,
@@ -7945,65 +7952,8 @@ impl<'a> Vm<'a> {
         }
     }
 
-    /// The arithmetic opcodes with a JIT generic fallback
-    /// (`compile::arith_site_takes_generic`): `(kind, nargs)`, where `kind`
-    /// is what the generated code passes to `neovm_jit_arith_generic` and
-    /// [`Self::arith_generic_builtin_id`] maps back to the builtin.
-    pub(crate) fn arith_generic_kind(op: &Op) -> Option<(i64, usize)> {
-        Some(match op {
-            Op::Add => (0, 2),
-            Op::Sub => (1, 2),
-            Op::Mul => (2, 2),
-            Op::Div => (3, 2),
-            Op::Rem => (4, 2),
-            Op::Max => (5, 2),
-            Op::Min => (6, 2),
-            Op::Eqlsign => (7, 2),
-            Op::Lss => (8, 2),
-            Op::Gtr => (9, 2),
-            Op::Leq => (10, 2),
-            Op::Geq => (11, 2),
-            Op::Add1 => (12, 1),
-            Op::Sub1 => (13, 1),
-            Op::Negate => (14, 1),
-            _ => return None,
-        })
-    }
-
-    /// The operand count of a [`Self::arith_generic_kind`] kind.
-    pub(crate) fn arith_generic_arity(kind: i64) -> Option<usize> {
-        match kind {
-            0..=11 => Some(2),
-            12..=14 => Some(1),
-            _ => None,
-        }
-    }
-
-    /// The builtin each [`Self::arith_generic_kind`] calls: the SAME cached
-    /// symbol ids the opcode arms pass to
-    /// [`Self::call_arith_builtin_from_stack_args`].
-    pub(crate) fn arith_generic_builtin_id(kind: i64) -> Option<SymId> {
-        Some(match kind {
-            0 => Self::cached_builtin_id("+", &PLUS_ID),
-            1 | 14 => Self::cached_builtin_id("-", &MINUS_ID),
-            2 => Self::cached_builtin_id("*", &TIMES_ID),
-            3 => Self::cached_builtin_id("/", &DIVIDE_ID),
-            4 => Self::cached_builtin_id("%", &MODULO_ID),
-            5 => Self::cached_builtin_id("max", &MAX_ID),
-            6 => Self::cached_builtin_id("min", &MIN_ID),
-            7 => Self::cached_builtin_id("=", &NUMEQ_ID),
-            8 => Self::cached_builtin_id("<", &LT_ID),
-            9 => Self::cached_builtin_id(">", &GT_ID),
-            10 => Self::cached_builtin_id("<=", &LE_ID),
-            11 => Self::cached_builtin_id(">=", &GE_ID),
-            12 => Self::cached_builtin_id("1+", &ADD1_ID),
-            13 => Self::cached_builtin_id("1-", &SUB1_ID),
-            _ => return None,
-        })
-    }
-
     /// The arithmetic opcodes' slow arm after feedback recording: the static
-    /// subr for `sym_id`, called on the `nargs` operands at
+    /// subr for `kind`, called on the `nargs` operands at
     /// `ctx.bc_buf[args_start..]` with no backtrace frame, then the debugger
     /// check on a signal. Shared with the JIT's generic arithmetic fallback
     /// (`neovm_jit_arith_generic`), so compiled code reaches exactly what the
@@ -8011,11 +7961,11 @@ impl<'a> Vm<'a> {
     #[inline]
     pub(crate) fn call_arith_builtin_on_context(
         ctx: &mut crate::emacs_core::eval::Context,
-        sym_id: SymId,
+        kind: ArithGenericKind,
         args_start: usize,
         nargs: usize,
     ) -> Option<EvalResult> {
-        let func_val = Value::subr_from_sym_id(sym_id);
+        let func_val = Value::subr_from_sym_id(kind.builtin_id());
         let callee = ResolvedBuiltinCallee::from_subr_value(func_val)?;
         let (sym_id, function, min_args, max_args) = callee.dispatch_parts();
         let result =
@@ -9339,6 +9289,29 @@ fn sym_id_at(constants: &[Value], idx: u16) -> SymId {
 #[cfg(test)]
 #[path = "tests/vm.rs"]
 mod tests;
+
+impl ArithGenericKind {
+    /// The builtin this kind's slow arm calls: the SAME cached symbol ids the
+    /// interpreter always used (`Negate` is `-` with one operand).
+    pub(crate) fn builtin_id(self) -> SymId {
+        match self {
+            Self::Add => Vm::cached_builtin_id("+", &PLUS_ID),
+            Self::Sub | Self::Negate => Vm::cached_builtin_id("-", &MINUS_ID),
+            Self::Mul => Vm::cached_builtin_id("*", &TIMES_ID),
+            Self::Div => Vm::cached_builtin_id("/", &DIVIDE_ID),
+            Self::Rem => Vm::cached_builtin_id("%", &MODULO_ID),
+            Self::Max => Vm::cached_builtin_id("max", &MAX_ID),
+            Self::Min => Vm::cached_builtin_id("min", &MIN_ID),
+            Self::NumEq => Vm::cached_builtin_id("=", &NUMEQ_ID),
+            Self::Lt => Vm::cached_builtin_id("<", &LT_ID),
+            Self::Gt => Vm::cached_builtin_id(">", &GT_ID),
+            Self::Le => Vm::cached_builtin_id("<=", &LE_ID),
+            Self::Ge => Vm::cached_builtin_id(">=", &GE_ID),
+            Self::Add1 => Vm::cached_builtin_id("1+", &ADD1_ID),
+            Self::Sub1 => Vm::cached_builtin_id("1-", &SUB1_ID),
+        }
+    }
+}
 
 impl crate::emacs_core::eval::Context {
     /// The JIT's armed builtin call (`neovm_jit_call_subr_spec`) without a

@@ -1920,7 +1920,7 @@ pub(crate) fn ash_fixnum_fast(value: i64, count: i64) -> Option<i64> {
 /// interpreter's own slow arm (`Vm::call_arith_builtin_on_context` — the
 /// static builtin, no backtrace frame, the debugger check on a signal) on the
 /// operands `a` and (for a binary kind) `b`, passed in registers. `kind` is
-/// `Vm::arith_generic_kind`'s; a unary kind ignores `b`.
+/// an `ArithGenericKind` discriminant; a unary kind ignores `b`.
 ///
 /// The operands go onto the GC-traced `bc_buf` for the call, as in
 /// [`neovm_jit_call_subr_spec`]; the generated code rooted its residual stack
@@ -1936,29 +1936,27 @@ pub extern "C" fn neovm_jit_arith_generic(
     out: *mut i64,
 ) -> i64 {
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
-        use crate::emacs_core::bytecode::Vm;
+        use crate::emacs_core::bytecode::{ArithGenericKind, Vm};
         // SAFETY: see neovm_jit_call's function-level contract.
         let ctx = unsafe { &mut *(ctx as *mut Context) };
-        let (Some(nargs), Some(sym)) = (
-            Vm::arith_generic_arity(kind),
-            Vm::arith_generic_builtin_id(kind),
-        ) else {
+        let Some(kind) = ArithGenericKind::from_raw(kind) else {
             stash_pending_flow(signal(
                 crate::emacs_core::error::LispCondition::InvalidFunction,
                 vec![Value::fixnum(kind)],
             ));
             return STATUS_SIGNAL;
         };
+        let nargs = kind.arity();
         let args_start = ctx.bc_buf.len();
         ctx.bc_buf.push(Value::from_bits(a as usize));
         if nargs == 2 {
             ctx.bc_buf.push(Value::from_bits(b as usize));
         }
         let res =
-            Vm::call_arith_builtin_on_context(ctx, sym, args_start, nargs).unwrap_or_else(|| {
+            Vm::call_arith_builtin_on_context(ctx, kind, args_start, nargs).unwrap_or_else(|| {
                 Err(signal(
                     crate::emacs_core::error::LispCondition::VoidFunction,
-                    vec![Value::from_sym_id(sym)],
+                    vec![Value::from_sym_id(kind.builtin_id())],
                 ))
             });
         ctx.bc_buf.truncate(args_start);
