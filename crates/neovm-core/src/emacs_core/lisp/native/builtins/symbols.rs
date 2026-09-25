@@ -5713,6 +5713,7 @@ pub(crate) fn plan_kill_emacs_request(
 pub(crate) fn builtin_kill_emacs(eval: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     let request = plan_kill_emacs_request(&args)?;
     let _ = eval.run_hook_if_bound("kill-emacs-hook");
+    eval.log_cconv_memo_report();
     eval.request_shutdown(request.exit_code, request.restart);
     Err(Flow::Shutdown(request))
 }

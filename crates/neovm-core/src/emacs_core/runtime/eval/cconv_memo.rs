@@ -80,7 +80,9 @@
 //! it is compared with the Lisp like a memo hit.
 //!
 //! The counts are logged at `info` under the `neovm::cconv_memo` target every
-//! 4096 trimming calls; [`Context::cconv_memo_report`] formats them.
+//! 4096 trimming calls and once more at `kill-emacs` (`final ...`);
+//! [`Context::cconv_memo_report`] formats them.  In `--batch`, set
+//! `NEOMACS_LOG_FILE=<path> RUST_LOG=neovm::cconv_memo=info` to see them.
 //!
 //! # Effect snapshot
 //!
@@ -669,6 +671,14 @@ impl Context {
     #[cfg(test)]
     pub(crate) fn cconv_memo_report(&self) -> String {
         self.cconv_memo.stats.report()
+    }
+
+    /// Log the final statistics line at `kill-emacs` when a knob is on, so a
+    /// measured process reports every call, not the last multiple of 4096.
+    pub(crate) fn log_cconv_memo_report(&self) {
+        if self.cconv_memo.engaged() {
+            tracing::info!(target: "neovm::cconv_memo", "final {}", self.cconv_memo.stats.report());
+        }
     }
 
     /// The symbol's function cell as `fboundp` sees it.

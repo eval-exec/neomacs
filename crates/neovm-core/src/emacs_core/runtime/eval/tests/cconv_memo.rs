@@ -137,9 +137,18 @@ use crate::emacs_core::eval::{
 };
 use crate::emacs_core::intern::intern;
 
-/// `(ARGS . BODY)` of a quoted lambda: `(lambda ARGS . BODY)`.
+/// `(ARGS . BODY)` of a quoted lambda: `(lambda ARGS . BODY)`.  The lambda
+/// is kept on `cm-test-roots`, so it stays live across later evaluations
+/// (the collector does not see Rust locals; this runs under GC stress).
 fn lambda_parts(eval: &mut Context, quoted_lambda: &str) -> (Value, Value) {
-    let lambda = eval_ok(eval, &format!("(quote {quoted_lambda})"));
+    let lambda = eval_ok(
+        eval,
+        &format!(
+            "(car (setq cm-test-roots
+                        (cons (quote {quoted_lambda})
+                              (and (boundp 'cm-test-roots) cm-test-roots))))"
+        ),
+    );
     let rest = lambda.cons_cdr();
     (rest.cons_car(), rest.cons_cdr())
 }
@@ -209,13 +218,19 @@ fn shape_refuses_cycles_huge_bodies_and_positions() {
     assert_eq!(ClosureShape::of(args, body), Err(ShapeRefusal::TooLarge));
     assert_eq!(ClosureFacts::of(args, body), Err(FactsRefusal::TooLarge));
 
-    let huge = eval_ok(&mut eval, &format!("(make-list {} 'x)", SHAPE_NODE_CAP));
+    let huge = eval_ok(
+        &mut eval,
+        &format!("(setq cm-test-huge (make-list {} 'x))", SHAPE_NODE_CAP),
+    );
     assert_eq!(
         ClosureShape::of(Value::NIL, huge),
         Err(ShapeRefusal::TooLarge)
     );
 
-    let positioned = eval_ok(&mut eval, "(list (list (position-symbol 'car 12) 'x))");
+    let positioned = eval_ok(
+        &mut eval,
+        "(setq cm-test-pos (list (list (position-symbol 'car 12) 'x)))",
+    );
     assert_eq!(
         ClosureShape::of(Value::NIL, positioned),
         Err(ShapeRefusal::SymbolWithPos)
@@ -1178,5 +1193,61 @@ fn fast_untrimmed_path_leaves_edge_cases_to_the_lisp() {
         count(&eval, CconvMemoEvent::FastRefused) > 0,
         "{}",
         eval.cconv_memo_report()
+    );
+}
+
+// ---------------------------------------------------------------------------
+// S0.7: verify soak on real GNU sources
+// ---------------------------------------------------------------------------
+
+/// Load GNU libraries from source (their eager expansion creates closures by
+/// the thousand) and run code that creates more, with the memo and the
+/// native path in verify: every hit is compared with the Lisp (a mismatch
+/// panics in test builds).  Then the same workload must print the same
+/// under `on` as under `off`.
+#[test]
+fn verify_soak_on_gnu_sources() {
+    crate::test_utils::init_test_tracing();
+    let load = "(let ((load-suffixes '(\".el\")))
+                  (dolist (lib '(\"emacs-lisp/cl-seq\" \"emacs-lisp/cl-extra\" \"emacs-lisp/seq\"
+                                 \"emacs-lisp/subr-x\" \"emacs-lisp/ring\"))
+                    (load lib nil t)))";
+    let work = "(let ((acc nil))
+                  (dotimes (i 30)
+                    (push (list (seq-filter (lambda (x) (> x i)) '(1 5 10 20 40))
+                                (cl-remove-if (lambda (x) (= x i)) (number-sequence 0 5))
+                                (seq-reduce (lambda (a b) (+ a b i)) '(1 2 3) 0)
+                                (cl-some (lambda (x) (and (> x i) x)) '(3 7 11))
+                                (seq-map-indexed (lambda (e n) (cons e (+ n i))) '(a b))
+                                (let ((r (make-ring 3))) (ring-insert r i) (ring-elements r))
+                                (string-join (mapcar (lambda (s) (format \"%s%d\" s i)) '(\"a\" \"b\")) \",\"))
+                          acc))
+                  acc)";
+    let mut verify = startup_fast(CconvMemoMode::Verify);
+    eval_ok(&mut verify, load);
+    let verified = printed(&mut verify, work);
+    let report = verify.cconv_memo_report();
+    assert!(
+        count(&verify, CconvMemoEvent::VerifyMatch) > 100,
+        "{report}"
+    );
+    assert_eq!(
+        count(&verify, CconvMemoEvent::VerifyMismatch),
+        0,
+        "{report}"
+    );
+    tracing::info!("verify soak: {report}");
+
+    let mut off = startup(CconvMemoMode::Off);
+    eval_ok(&mut off, load);
+    let expected = printed(&mut off, work);
+    assert_eq!(verified, expected);
+    let mut on = startup_fast(CconvMemoMode::On);
+    eval_ok(&mut on, load);
+    assert_eq!(printed(&mut on, work), expected);
+    assert!(
+        count(&on, CconvMemoEvent::Served) > 100,
+        "{}",
+        on.cconv_memo_report()
     );
 }
