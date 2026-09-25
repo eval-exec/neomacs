@@ -1259,7 +1259,7 @@ fn call_spec_framed_run(
 }
 
 /// How a fast-path native run ended when it did not end in a balanced OK.
-enum FastRun {
+pub(super) enum FastRun {
     /// OK, but the callee's backtrace frame is no longer the plain entry the
     /// push made (the debugger flagged it): the general pop must run.
     Done(Value),
@@ -1277,7 +1277,7 @@ enum FastRun {
 #[cold]
 #[inline(never)]
 #[allow(clippy::too_many_arguments)] // the fast path's live state, handed over whole
-fn call_spec_finish(
+pub(super) fn call_spec_finish(
     ctx: *mut u8,
     callee: Value,
     leaf: &CompiledLeaf,

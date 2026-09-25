@@ -3135,6 +3135,7 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
                 rootwin: None,
                 heap: None,
                 inline_alloc: !aot && super::jit_inline_alloc_on(),
+                direct_sites: std::cell::Cell::new(0),
             })
         } else {
             None
@@ -3980,6 +3981,9 @@ pub(crate) struct RtCtx {
     /// Allocate conses and box floats inline (`heap_inline`): JIT code with
     /// `NEOVM_JIT_INLINE_ALLOC` on; never AOT, whose leaves keep the shims.
     pub(crate) inline_alloc: bool,
+    /// Direct call sites emitted so far in this function
+    /// (`direct_call::DIRECT_SITE_CAP` bounds them).
+    pub(crate) direct_sites: std::cell::Cell<u32>,
 }
 
 /// The residual root window's frame base, loaded once at entry, with its
@@ -4314,6 +4318,64 @@ pub(crate) fn emit_hoisted_root_window_prologue(
     fb.seal_block(cont_blk);
     let byte_off = ishl_imm_p(fb, base, 3);
     rt.rootwin = Some(HoistedRootWin { base, byte_off });
+}
+
+/// The baked words of an `Op::Call` site lowered as a direct call.
+#[derive(Clone, Copy)]
+struct DirectSiteWords {
+    /// The byte-code object the symbol was bound to at compile time.
+    expected: u64,
+    /// The site's `SpecSlot` (its baked address).
+    slot_ptr: i64,
+    nargs: usize,
+}
+
+/// Lower an `Op::Call` site of a byte-code callee as a direct call
+/// (`direct_call`, `NEOVM_JIT_DIRECT_CALL`). The stack is `[.. f a1 .. aN]`.
+/// The residual stack is rooted across every path, as for the shim call;
+/// the hit path ends in the continuation with the callee's value, the slow
+/// and cold paths join, restore the root window and branch on their status
+/// like the shim call's site.
+#[allow(clippy::too_many_arguments)]
+fn lower_direct_call_site(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    site: super::direct_call::DirectSite,
+    sym_v: ClifValue,
+    words: DirectSiteWords,
+    stack: &mut Vec<ClifValue>,
+    reps: &[SlotRep],
+    signal_exit: &mut Option<Block>,
+    handlers: &[HandlerStatic],
+    pending: &mut Vec<PendingDispatch>,
+) -> Result<(), CompileError> {
+    let args_at = stack.len() - words.nargs;
+    let args: SmallVec<[ClifValue; 6]> = stack[args_at..].iter().copied().collect();
+    stack.truncate(args_at - 1);
+    let saved = if stack.is_empty() {
+        CondRoots::NONE
+    } else {
+        emit_model_roots_pre(fb, rt, stack, reps)
+    };
+    let exp_v = fb.ins().iconst(types::I64, words.expected as i64);
+    let slot_v = fb.ins().iconst(types::I64, words.slot_ptr);
+    let call =
+        super::direct_call::emit_direct_bytecode_call(fb, rt, &site, &args, sym_v, exp_v, slot_v);
+    // The slow and cold paths: the shim call site's tail.
+    emit_cond_residual_roots_post(fb, rt, saved);
+    let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack, reps);
+    let cont = fb.create_block();
+    let ok = icmp_imm_p(fb, IntCC::Equal, call.status, STATUS_OK);
+    fb.ins().brif(ok, cont, &[], se, &[]);
+    // The hit: restore the root window, continue with the value.
+    fb.switch_to_block(call.hot_done);
+    fb.seal_block(call.hot_done);
+    emit_cond_residual_roots_post(fb, rt, saved);
+    fb.ins().jump(cont, &[]);
+    fb.switch_to_block(cont);
+    fb.seal_block(cont);
+    stack.push(fb.use_var(call.result));
+    Ok(())
 }
 
 /// An `Op::Call` site lowered to a Bcall leaf.
@@ -6961,6 +7023,33 @@ fn lower_simple_op_arms(
                     leaf,
                     BcallLeafSite {
                         sym,
+                        expected,
+                        slot_ptr,
+                        nargs: n,
+                    },
+                    stack,
+                    reps,
+                    signal_exit,
+                    handlers,
+                    pending,
+                );
+            }
+            // `NEOVM_JIT_DIRECT_CALL` (JIT only): a speculated call of a
+            // byte-code callee whose leaf takes exactly these arguments in
+            // registers calls it from the site, the shim being its slow path
+            // (`direct_call`). Only a site whose callee is provably the
+            // symbol constant.
+            if let Some((sym, expected, slot_ptr, _, SpecCalleeKind::Bytecode)) = spec
+                && guarded_sym.is_none()
+                && let Some(site) = super::direct_call::DirectSite::plan(rt, aot, expected, n)
+            {
+                let sym_v = materialize_op_sym_value(fb, reloc_base, reloc_index, sym);
+                return lower_direct_call_site(
+                    fb,
+                    rt,
+                    site,
+                    sym_v,
+                    DirectSiteWords {
                         expected,
                         slot_ptr,
                         nargs: n,

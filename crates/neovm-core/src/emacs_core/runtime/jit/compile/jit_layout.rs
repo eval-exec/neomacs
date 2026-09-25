@@ -103,10 +103,6 @@ pub(crate) fn vec_offsets_with<T>(sample: impl Fn() -> T) -> Option<VecOffsets> 
 }
 
 /// [`VecOffsets`] of `Context::specpdl`'s `Vec<SpecBinding>`.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "consumer: the direct call site (S2.1c)")
-)]
 pub(crate) fn specpdl_vec_offsets() -> Option<VecOffsets> {
     static OFFSETS: OnceLock<Option<VecOffsets>> = OnceLock::new();
     *OFFSETS.get_or_init(|| vec_offsets_with(|| SpecBinding::GcRoot { value: Value::NIL }))
@@ -127,10 +123,6 @@ pub(crate) fn jit_bind_stack_vec_offsets() -> Option<VecOffsets> {
 // ---------------------------------------------------------------------------
 
 /// `Context::specpdl` (the `Vec` itself; add a [`VecOffsets`] field).
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "consumer: the direct call site (S2.1c)")
-)]
 pub(crate) const CONTEXT_SPECPDL_OFFSET: usize = offset_of!(Context, specpdl);
 /// `Context::jit_bind_stack` (the `Vec` itself).
 #[cfg_attr(
@@ -590,10 +582,6 @@ pub(crate) struct BacktraceLayout {
     pub(crate) native: EntryTemplate,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "consumer: the direct call site (S2.1c)")
-)]
 impl BacktraceLayout {
     /// The template and small-field value of the frame a call with `nargs`
     /// arguments pushes (the shim's own choice of shape).

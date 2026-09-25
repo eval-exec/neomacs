@@ -3849,6 +3849,7 @@ fn build_leaf_fn<S: LeafSink>(
                 rootwin: None,
                 heap: None,
                 inline_alloc: !aot && jit_inline_alloc_on(),
+                direct_sites: std::cell::Cell::new(0),
             })
         } else {
             None
@@ -4705,6 +4706,7 @@ pub(crate) mod shared;
 mod dispatch;
 pub use dispatch::*;
 
+pub(crate) mod direct_call;
 pub(crate) mod jit_layout;
 pub(crate) mod reg_abi;
 pub(crate) use reg_abi::LeafAbi;
