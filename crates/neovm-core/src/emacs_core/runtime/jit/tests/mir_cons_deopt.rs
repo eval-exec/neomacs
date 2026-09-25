@@ -84,6 +84,7 @@ fn mir_cons_precise_frames_preserve_aliases_and_completed_effects() {
         binds,
         spec_base,
         cond_base,
+        ..
     } = *resume;
     let value = Vm::from_context(&mut ev)
         .run_resumed_frame(

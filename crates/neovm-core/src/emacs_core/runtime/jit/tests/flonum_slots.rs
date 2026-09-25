@@ -369,6 +369,7 @@ fn deopt_mid_chain_boxes_live_flonums_like_the_interpreter() {
         binds,
         spec_base,
         cond_base,
+        ..
     } = *resume;
     let resumed = Vm::from_context(&mut ev).run_resumed_frame(
         &f,
@@ -489,6 +490,7 @@ fn a_flonum_into_a_fixnum_only_site_deopts_with_a_boxed_float() {
         binds,
         spec_base,
         cond_base,
+        ..
     } = *resume;
     let value = Vm::from_context(&mut ev)
         .run_resumed_frame(
@@ -914,6 +916,7 @@ fn a_fused_region_entry_boxes_flonums_before_its_framestate() {
             binds,
             spec_base,
             cond_base,
+            ..
         } = *resume;
         let value = Vm::from_context(&mut ev)
             .run_resumed_frame(

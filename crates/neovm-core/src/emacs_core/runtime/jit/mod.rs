@@ -151,6 +151,10 @@ pub mod aot;
 #[cfg(feature = "jit")]
 pub mod reopt;
 
+/// Per-source, per-pc retreat words deopts set (`SiteRetreat`). Always
+/// built: `RuntimeState` holds the table.
+pub(crate) mod retreat;
+
 /// Always-on metering of the synchronous compile stalls the cache-miss path
 /// pays on the eval thread — the evidence base for background compilation.
 /// Only built with the `jit` feature. See `jit/stats.rs`.
@@ -547,11 +551,11 @@ pub struct RuntimeState {
     /// respects. Monotone.
     #[cfg_attr(not(feature = "jit"), allow(dead_code))]
     reopt_level: std::sync::atomic::AtomicU8,
-    /// `Op::Call` pcs a deopt showed must not be spliced, MIR-inlined or
-    /// intrinsified: a bitset over the body's instructions, allocated on
-    /// first use (`ops_len.div_ceil(64)` words).
+    /// What deopts taught this source about each pc, allocated on the first
+    /// mark: among others, the `Op::Call` pcs that must not be spliced,
+    /// MIR-inlined or intrinsified ([`retreat::RetreatBit::NoInline`]).
     #[cfg_attr(not(feature = "jit"), allow(dead_code))]
-    no_inline_call_sites: OnceLock<Box<[AtomicU64]>>,
+    site_retreat: retreat::SiteRetreatTable,
     /// Test-only: pin this function to the Tier-0 interpreter regardless of
     /// hotness (the benchmark harness measures native vs interpreter in ONE
     /// process — a hot copy and a forced-cold copy — to cancel the
@@ -838,7 +842,7 @@ impl RuntimeState {
             patched_prefix: AtomicU32::new(0),
             reopt_count: std::sync::atomic::AtomicU8::new(0),
             reopt_level: std::sync::atomic::AtomicU8::new(0),
-            no_inline_call_sites: OnceLock::new(),
+            site_retreat: retreat::SiteRetreatTable::new(),
             #[cfg(test)]
             force_interpret: std::sync::atomic::AtomicBool::new(false),
         }
@@ -1343,13 +1347,8 @@ impl RuntimeState {
     /// Forbid splicing, MIR-inlining or intrinsifying the call site at `pc`.
     #[cfg_attr(not(feature = "jit"), allow(dead_code))]
     pub(crate) fn mark_call_site_no_inline(&self, pc: usize, ops_len: usize) {
-        let words = self.no_inline_call_sites.get_or_init(|| {
-            (0..ops_len.div_ceil(64))
-                .map(|_| AtomicU64::new(0))
-                .collect()
-        });
-        if let Some(word) = words.get(pc / 64) {
-            word.fetch_or(1 << (pc % 64), Ordering::Relaxed);
+        if let Some(site) = self.site_retreat.site(pc, ops_len) {
+            site.set(retreat::RetreatBit::NoInline);
         }
     }
 
@@ -1362,10 +1361,7 @@ impl RuntimeState {
     /// Whether a deopt forbade inlining the call site at `pc`.
     #[inline]
     pub(crate) fn call_site_no_inline(&self, pc: usize) -> bool {
-        self.no_inline_call_sites
-            .get()
-            .and_then(|words| words.get(pc / 64))
-            .is_some_and(|word| word.load(Ordering::Relaxed) & (1 << (pc % 64)) != 0)
+        self.site_retreat.has(pc, retreat::RetreatBit::NoInline)
     }
 
     /// Empty the interpreter's direct-entry leaf slot: only this source's

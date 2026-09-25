@@ -95,7 +95,11 @@ pub(crate) const ABI_TAG: u32 = compute_abi_tag();
 /// it), not its `SymId`.
 /// v12: descriptor v3 (each reloc slot carries its constant-pool index) and
 /// the preload's exported leaf index table (P4.2 A3).
-const ABI_TAG_VERSION: u32 = 12;
+/// v13: `DeoptCells` gains the trailing `reason` and `chain` cells (P2.0
+/// §3.4). AOT code reaches the first three through per-cell sidecar
+/// addresses and never stores the new two, so their offsets are unchanged;
+/// the bump re-tags once for the layout change.
+const ABI_TAG_VERSION: u32 = 13;
 
 /// Format version of the AOT descriptor spec-section + the runtime spec ABI
 /// (`SpecSlot`/`spec_expected` sidecar bases, the loader re-classify+arm protocol).
@@ -170,7 +174,7 @@ const fn compute_abi_tag() -> u32 {
     // LeafSidecar layout (the per-thread base block read through the 4th param):
     // a layout change (field add/reorder/resize) MUST re-tag stale `.so`s.
     mix_u64!(core::mem::size_of::<super::compile::LeafSidecar>() as u64);
-    // DeoptCells layout: 3 i64 cells (pc, depth, handlers).
+    // DeoptCells layout: 5 i64 cells (pc, depth, handlers, reason, chain).
     mix_u64!(core::mem::size_of::<DeoptCells>() as u64);
     // Shim name set (count + each byte) — a shim-ABI change re-tags artifacts.
     mix_u64!(MIR_SHIM_NAMES.len() as u64);
@@ -2209,6 +2213,16 @@ fn testkit_mir_cons_reconstruction_case(dir: &std::path::Path, singleton: bool) 
         panic!("precise AOT deopt expected: {result:?}")
     };
     assert_eq!(resume.pc, if singleton { 8 } else { 9 });
+    // AOT code never stores the reason and chain cells (P2.0 X12): the
+    // deopt reads them unset and leaves them unset.
+    assert_eq!((resume.cause, resume.chain), (None, None));
+    assert_eq!(
+        (leaf.deopt_meta.reason.get(), leaf.deopt_meta.chain.get()),
+        (
+            super::compile::DeoptCells::NO_REASON,
+            super::compile::DeoptCells::SINGLE_FRAME
+        )
+    );
     assert_eq!(resume.stack[2], resume.stack[3]);
     assert_eq!(resume.stack[2].cons_car(), Value::make_int(8));
     assert_eq!(
@@ -2222,6 +2236,7 @@ fn testkit_mir_cons_reconstruction_case(dir: &std::path::Path, singleton: bool) 
         binds,
         spec_base,
         cond_base,
+        ..
     } = *resume;
     let result = Vm::from_context(&mut ev)
         .run_resumed_frame(
@@ -5155,11 +5170,7 @@ fn define_leaf_into_module(
     } else {
         Box::from([])
     };
-    let deopt_meta: Box<DeoptCells> = Box::new(DeoptCells {
-        pc: core::cell::Cell::new(0),
-        depth: core::cell::Cell::new(0),
-        handlers: core::cell::Cell::new(0),
-    });
+    let deopt_meta: Box<DeoptCells> = Box::new(DeoptCells::new());
 
     // R1a reloc-constant collection (dedup by tagged bits), identical to the JIT.
     // AOT reloc index, derived from the ONE collector (`collect_reloc_consts`)

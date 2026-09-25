@@ -240,6 +240,7 @@ fn osr_raw_overflow_retags_the_snapshot_and_resumes_without_replaying_effects() 
         binds,
         spec_base,
         cond_base,
+        ..
     } = *resume;
     ctx.bc_buf.clear();
     let value = Vm::from_context(&mut ctx)
@@ -398,6 +399,7 @@ fn osr_raw_varref_type_change_retags_live_slots_for_precise_resume() {
         binds,
         spec_base,
         cond_base,
+        ..
     } = *resume;
     ctx.bc_buf.clear();
     let result = Vm::from_context(&mut ctx)

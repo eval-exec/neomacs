@@ -26,6 +26,7 @@ pub(super) fn resume(ev: &mut Context, f: &ByteCodeFunction, result: NativeRun) 
         binds,
         spec_base,
         cond_base,
+        ..
     } = *frame;
     Vm::from_context(ev)
         .run_resumed_frame(

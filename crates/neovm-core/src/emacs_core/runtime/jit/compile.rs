@@ -3568,11 +3568,7 @@ pub fn lower_leaf_full_osr(
     let deopt_spill: Box<[core::cell::Cell<i64>]> = (0..cfg.max_depth)
         .map(|_| core::cell::Cell::new(0))
         .collect();
-    let deopt_meta: Box<DeoptCells> = Box::new(DeoptCells {
-        pc: core::cell::Cell::new(0),
-        depth: core::cell::Cell::new(0),
-        handlers: core::cell::Cell::new(0),
-    });
+    let deopt_meta: Box<DeoptCells> = Box::new(DeoptCells::new());
 
     // R1a: per-leaf heap-constant reloc vector (see lower_mir_pure). The baseline's
     // Op::Constant loads from reloc_data[idx] instead of baking a heap pointer, so
@@ -3793,11 +3789,7 @@ pub(crate) fn build_baseline_leaf_object<S: LeafSink>(
     let deopt_spill: Box<[core::cell::Cell<i64>]> = (0..cfg.max_depth)
         .map(|_| core::cell::Cell::new(0))
         .collect();
-    let deopt_meta: Box<DeoptCells> = Box::new(DeoptCells {
-        pc: core::cell::Cell::new(0),
-        depth: core::cell::Cell::new(0),
-        handlers: core::cell::Cell::new(0),
-    });
+    let deopt_meta: Box<DeoptCells> = Box::new(DeoptCells::new());
     let max_depth = cfg.max_depth;
     build_leaf_fn(
         sink,

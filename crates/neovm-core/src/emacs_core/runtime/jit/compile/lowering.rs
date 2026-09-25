@@ -2624,11 +2624,7 @@ pub(super) fn lower_mir_with_plan(
     } else {
         Box::from([])
     };
-    let deopt_meta: Box<DeoptCells> = Box::new(DeoptCells {
-        pc: core::cell::Cell::new(0),
-        depth: core::cell::Cell::new(0),
-        handlers: core::cell::Cell::new(0),
-    });
+    let deopt_meta: Box<DeoptCells> = Box::new(DeoptCells::new());
 
     // R1a: per-leaf heap-constant reloc vector — collect the DISTINCT heap-object
     // constants (deduped by tagged bits) so generated code loads each from
@@ -4550,11 +4546,78 @@ fn lower_bcall_leaf_site(
 /// of condition frames this frame had registered at that point. `Cell` makes
 /// the native interior writes legal; the mutator is single-threaded and the
 /// values are consumed immediately after the native call returns.
+///
+/// Two trailing cells carry what a cold block knows beyond the framestate
+/// (P2.0 §3.4; the offsets of the first three never move, so the AOT
+/// sidecar's per-cell addresses stay valid):
+///
+/// * `reason`: the [`DeoptCause`](super::super::reopt::DeoptCause) a cold
+///   block stores through
+///   [`reason_code`](super::super::reopt::DeoptCause::reason_code), or
+///   [`Self::NO_REASON`]. The deopt hook reads it before classifying from
+///   the op, and classifies only when it is unset.
+/// * `chain`: the index of the inlined-frame chain the deopt resumes, or
+///   [`Self::SINGLE_FRAME`] for a single-frame site (today's format).
+///
+/// The cells are per leaf and reused across deopts, so a value one deopt
+/// left would be read by the next. [`Self::new`] starts them unset and
+/// [`Self::take_reason_and_chain`] (the only reader) resets them: a cold
+/// block or AOT code that never stores them then reads as unset.
+#[repr(C)]
 pub(crate) struct DeoptCells {
     pub(crate) pc: core::cell::Cell<i64>,
     pub(crate) depth: core::cell::Cell<i64>,
     pub(crate) handlers: core::cell::Cell<i64>,
+    pub(crate) reason: core::cell::Cell<i64>,
+    pub(crate) chain: core::cell::Cell<i64>,
 }
+
+impl DeoptCells {
+    /// `reason`'s unset value: the hook classifies the deopt from its op.
+    pub(crate) const NO_REASON: i64 = 0;
+    /// `chain`'s value for a single-frame deopt.
+    pub(crate) const SINGLE_FRAME: i64 = -1;
+    /// Byte offsets of the cells (the layout golden test pins them).
+    pub(crate) const OFF_PC: usize = 0;
+    pub(crate) const OFF_DEPTH: usize = 8;
+    pub(crate) const OFF_HANDLERS: usize = 16;
+    pub(crate) const OFF_REASON: usize = 24;
+    pub(crate) const OFF_CHAIN: usize = 32;
+
+    /// Fresh cells: every leaf, JIT or AOT, starts here.
+    pub(crate) fn new() -> Self {
+        DeoptCells {
+            pc: core::cell::Cell::new(0),
+            depth: core::cell::Cell::new(0),
+            handlers: core::cell::Cell::new(0),
+            reason: core::cell::Cell::new(Self::NO_REASON),
+            chain: core::cell::Cell::new(Self::SINGLE_FRAME),
+        }
+    }
+
+    /// Read `reason` and `chain` for the deopt being consumed, and reset
+    /// both, so the next deopt of this leaf reads only what its own cold
+    /// block stored.
+    pub(crate) fn take_reason_and_chain(
+        &self,
+    ) -> (Option<super::super::reopt::DeoptCause>, Option<u32>) {
+        let reason = self.reason.replace(Self::NO_REASON);
+        let chain = self.chain.replace(Self::SINGLE_FRAME);
+        (
+            super::super::reopt::DeoptCause::from_reason_code(reason),
+            u32::try_from(chain).ok(),
+        )
+    }
+}
+
+const _: () = {
+    assert!(core::mem::size_of::<DeoptCells>() == 40);
+    assert!(core::mem::offset_of!(DeoptCells, pc) == DeoptCells::OFF_PC);
+    assert!(core::mem::offset_of!(DeoptCells, depth) == DeoptCells::OFF_DEPTH);
+    assert!(core::mem::offset_of!(DeoptCells, handlers) == DeoptCells::OFF_HANDLERS);
+    assert!(core::mem::offset_of!(DeoptCells, reason) == DeoptCells::OFF_REASON);
+    assert!(core::mem::offset_of!(DeoptCells, chain) == DeoptCells::OFF_CHAIN);
+};
 
 /// A block-local virtual cons, reconstructed only on a precise deopt exit.
 /// The allocator does not collect; all operands and previously reconstructed

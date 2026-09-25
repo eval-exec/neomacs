@@ -5518,6 +5518,7 @@ fn guard_after_call_deopts_without_replaying_the_call() {
                 binds,
                 spec_base,
                 cond_base,
+                ..
             } = *resume;
             assert_eq!(pc, 3, "deopt at the 1+ after the call");
             assert_eq!(
@@ -6382,6 +6383,7 @@ fn fuzz_straightline_bodies_match_interpreter() {
                     binds,
                     spec_base,
                     cond_base,
+                    ..
                 } = *resume;
                 // Precise deopt: resume mid-function and the result must
                 // match the pure-interpreter run exactly.
@@ -6712,6 +6714,7 @@ fn fuzz_varset_bodies_match_interpreter_state() {
                     binds,
                     spec_base,
                     cond_base,
+                    ..
                 } = *resume;
                 // Precise deopt: resume mid-function on the MUTATED state.
                 let resumed = {

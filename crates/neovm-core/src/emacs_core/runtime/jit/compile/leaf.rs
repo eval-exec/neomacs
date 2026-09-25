@@ -655,6 +655,12 @@ pub struct DeoptResume {
     pub binds: Vec<usize>,
     pub spec_base: usize,
     pub cond_base: usize,
+    /// The cause the cold block stored in [`DeoptCells::reason`], if any
+    /// (the deopt hook classifies from the op otherwise).
+    pub(crate) cause: Option<crate::emacs_core::jit::reopt::DeoptCause>,
+    /// The inlined-frame chain the cold block stored in
+    /// [`DeoptCells::chain`]; `None` for a single-frame deopt.
+    pub(crate) chain: Option<u32>,
 }
 
 const _: () = {
@@ -728,11 +734,7 @@ impl CompiledLeaf {
         } else {
             Box::from([])
         };
-        let deopt_meta = Box::new(DeoptCells {
-            pc: core::cell::Cell::new(0),
-            depth: core::cell::Cell::new(0),
-            handlers: core::cell::Cell::new(0),
-        });
+        let deopt_meta = Box::new(DeoptCells::new());
         // RE-CLASSIFY each `Op::Call` spec site against the LIVE obarray cell and
         // ARM (epoch = live function_epoch, expected = live cell bits) ONLY when the
         // live re-classification matches the baked discriminant; else DISARM. This
@@ -1264,6 +1266,9 @@ impl CompiledLeaf {
         // The one chokepoint every precise deopt passes (wrapped, framed,
         // OSR and direct runs alike), so each is counted exactly once.
         self.obs.note_deopt_at(self.deopt_meta.pc.get() as u32);
+        // Every precise deopt consumes (and resets) the reason and chain
+        // cells, the rerun mapping below included (`DeoptCells`).
+        let (cause, chain) = self.deopt_meta.take_reason_and_chain();
         {
             // Precise deopt: NO frame unwind — the resumed interpreter frame
             // takes ownership of the registered binds/handlers and unwinds to
@@ -1325,6 +1330,8 @@ impl CompiledLeaf {
                 binds,
                 spec_base,
                 cond_base,
+                cause,
+                chain,
             }))
         }
     }

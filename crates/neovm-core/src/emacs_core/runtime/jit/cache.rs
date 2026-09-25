@@ -637,6 +637,7 @@ pub(crate) fn try_run_osr(
             DeoptEvent::Precise {
                 pc: resume.pc,
                 stack: &resume.stack,
+                cause: resume.cause,
             },
         ),
         NativeRun::Ok(_) | NativeRun::Signal => super::reopt::ReoptVerdict::Kept,
@@ -2045,6 +2046,8 @@ fn deopt_resume_outcome(
         binds,
         spec_base,
         cond_base,
+        cause,
+        chain: _,
     } = resume;
     // Before the resumed frame seeds `stack` into the traced bc_buf: the
     // hook neither allocates on the Lisp heap nor reaches a safepoint.
@@ -2053,7 +2056,11 @@ fn deopt_resume_outcome(
         func,
         leaf,
         LeafOrigin::Entry,
-        DeoptEvent::Precise { pc, stack: &stack },
+        DeoptEvent::Precise {
+            pc,
+            stack: &stack,
+            cause,
+        },
     );
     if ctx.is_null() {
         return NativeCallOutcome::Fallback;
@@ -2247,6 +2254,8 @@ fn finish_native_run(
                 binds,
                 spec_base,
                 cond_base,
+                cause,
+                chain: _,
             } = *resume;
             // Before the resumed frame seeds `stack` into the traced bc_buf.
             super::reopt::note_deopt(
@@ -2254,7 +2263,11 @@ fn finish_native_run(
                 func,
                 leaf,
                 LeafOrigin::Entry,
-                DeoptEvent::Precise { pc, stack: &stack },
+                DeoptEvent::Precise {
+                    pc,
+                    stack: &stack,
+                    cause,
+                },
             );
             if ctx.is_null() {
                 // call() maps null-vmctx deopts to Deopt; defensive only.

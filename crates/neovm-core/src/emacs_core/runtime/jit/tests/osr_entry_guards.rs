@@ -165,6 +165,7 @@ fn osr_entry_guard_keeps_heap_operands_through_native_and_resumed_watched_store_
                     binds,
                     spec_base,
                     cond_base,
+                    ..
                 } = *resume;
                 // Only the captured operands can root payload during resumption.
                 // Its first store invokes the collecting watcher.

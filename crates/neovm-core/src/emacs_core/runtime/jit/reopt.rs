@@ -14,7 +14,9 @@
 //!
 //! The deopt is classified from data it already carries — the op at the
 //! resume pc and the spilled pre-op operand stack — so the generated code,
-//! the ABI and the hot paths are untouched. The per-pc counts come from the
+//! the ABI and the hot paths are untouched. A cold block that knows more can
+//! name the cause itself (`DeoptCells::reason`, [`DeoptCause::reason_code`]);
+//! the hook then takes that instead of classifying. The per-pc counts come from the
 //! leaf's release counters ([`super::compile::LeafObs`]), which every deopt
 //! has already bumped by the time it reaches the hook.
 //!
@@ -73,9 +75,13 @@ impl LeafOrigin<'_> {
 /// What the deopt carried.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum DeoptEvent<'a> {
-    /// `STATUS_DEOPT_AT`: the resume pc and the pre-op operand stack
-    /// (`DeoptResume`).
-    Precise { pc: usize, stack: &'a [Value] },
+    /// `STATUS_DEOPT_AT`: the resume pc, the pre-op operand stack and the
+    /// cause its cold block stored, if any (`DeoptResume`).
+    Precise {
+        pc: usize,
+        stack: &'a [Value],
+        cause: Option<DeoptCause>,
+    },
     /// `STATUS_DEOPT`: rerun from the start. No pc (pure MIR bodies).
     Rerun,
 }
@@ -100,7 +106,13 @@ pub(crate) enum Reprofile {
     Immediate,
 }
 
-/// Why a deopt happened, derived from data the deopt already carries.
+/// Why a deopt happened: stored by its cold block (`DeoptCells::reason`,
+/// through [`Self::reason_code`]) or, when the block stored none, derived
+/// from data the deopt already carries ([`classify`]).
+///
+/// One enum for every tier (P2.0 §3.4): P0.4's classified causes, then the
+/// causes only a cold block can name (P2.1's entry guards and uncommon
+/// traps, P2.3's inlined-frame guards). Nothing produces the latter yet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DeoptCause {
     /// An arithmetic site met operands its lowering does not take (a float
@@ -123,11 +135,150 @@ pub(crate) enum DeoptCause {
     Rerun,
     /// A precise deopt at an op none of the above covers.
     Unattributed,
+    /// A hoisted guard on argument `i` failed at entry (P2.1).
+    EntryGuard(u8),
+    /// A block the profile never reached, and so was not compiled, was
+    /// reached: an uncommon trap (P2.1).
+    Unreached,
+    /// An inlined callee's identity guard failed: its function cell changed
+    /// (P2.3).
+    InlineIdentity,
+    /// The attention test an inlined call replaced found work (quit, a
+    /// debugger request): a semantic event, never counted toward
+    /// invalidation (P2.3).
+    InlineAttention,
+    /// The depth test an inlined call replaced failed: the interpreter
+    /// raises the nesting error. Never counted toward invalidation (P2.3).
+    DepthLimit,
+    /// A site compiled as cold was reached: rare, never counted (P2.3).
+    ColdFlagged,
+}
+
+/// The low byte of a [`DeoptCause::reason_code`]: which cause. Zero is
+/// [`DeoptCells::NO_REASON`](super::compile::DeoptCells::NO_REASON), so
+/// every kind is nonzero.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+enum ReasonKind {
+    ArithOperands = 1,
+    ArithOverflow = 2,
+    InlinedCall = 3,
+    InlineEpochMoved = 4,
+    TypeError = 5,
+    OsrEntry = 6,
+    Rerun = 7,
+    Unattributed = 8,
+    EntryGuard = 9,
+    Unreached = 10,
+    InlineIdentity = 11,
+    InlineAttention = 12,
+    DepthLimit = 13,
+    ColdFlagged = 14,
+}
+
+impl ReasonKind {
+    /// Every kind, in code order.
+    const ALL: [ReasonKind; 14] = [
+        ReasonKind::ArithOperands,
+        ReasonKind::ArithOverflow,
+        ReasonKind::InlinedCall,
+        ReasonKind::InlineEpochMoved,
+        ReasonKind::TypeError,
+        ReasonKind::OsrEntry,
+        ReasonKind::Rerun,
+        ReasonKind::Unattributed,
+        ReasonKind::EntryGuard,
+        ReasonKind::Unreached,
+        ReasonKind::InlineIdentity,
+        ReasonKind::InlineAttention,
+        ReasonKind::DepthLimit,
+        ReasonKind::ColdFlagged,
+    ];
+
+    fn from_byte(byte: u8) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| *kind as u8 == byte)
+    }
+}
+
+/// [`NumericFeedback`] as a reason-code payload byte.
+const fn numeric_feedback_byte(seen: NumericFeedback) -> u8 {
+    match seen {
+        NumericFeedback::FixnumOnly => 0,
+        NumericFeedback::Float => 1,
+        NumericFeedback::Other => 2,
+    }
+}
+
+fn numeric_feedback_of_byte(byte: u8) -> Option<NumericFeedback> {
+    match byte {
+        0 => Some(NumericFeedback::FixnumOnly),
+        1 => Some(NumericFeedback::Float),
+        2 => Some(NumericFeedback::Other),
+        _ => None,
+    }
 }
 
 impl DeoptCause {
+    /// The word a cold block stores in `DeoptCells::reason`: the
+    /// [`ReasonKind`] in the low byte and the payload (the argument index,
+    /// the operands' [`NumericFeedback`]) in the next. Never zero.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the cold-block store of a cause is P2.1 C2")
+    )]
+    pub(crate) const fn reason_code(self) -> i64 {
+        let (kind, payload) = match self {
+            DeoptCause::ArithOperands(seen) => {
+                (ReasonKind::ArithOperands, numeric_feedback_byte(seen))
+            }
+            DeoptCause::ArithOverflow => (ReasonKind::ArithOverflow, 0),
+            DeoptCause::InlinedCall => (ReasonKind::InlinedCall, 0),
+            DeoptCause::InlineEpochMoved => (ReasonKind::InlineEpochMoved, 0),
+            DeoptCause::TypeError => (ReasonKind::TypeError, 0),
+            DeoptCause::OsrEntry => (ReasonKind::OsrEntry, 0),
+            DeoptCause::Rerun => (ReasonKind::Rerun, 0),
+            DeoptCause::Unattributed => (ReasonKind::Unattributed, 0),
+            DeoptCause::EntryGuard(arg) => (ReasonKind::EntryGuard, arg),
+            DeoptCause::Unreached => (ReasonKind::Unreached, 0),
+            DeoptCause::InlineIdentity => (ReasonKind::InlineIdentity, 0),
+            DeoptCause::InlineAttention => (ReasonKind::InlineAttention, 0),
+            DeoptCause::DepthLimit => (ReasonKind::DepthLimit, 0),
+            DeoptCause::ColdFlagged => (ReasonKind::ColdFlagged, 0),
+        };
+        kind as i64 | (payload as i64) << 8
+    }
+
+    /// Decode a `DeoptCells::reason` word: `None` for the unset value and
+    /// for any word [`Self::reason_code`] never produces.
+    pub(crate) fn from_reason_code(code: i64) -> Option<Self> {
+        if code >> 16 != 0 {
+            return None;
+        }
+        let payload = (code >> 8) as u8;
+        let cause = match ReasonKind::from_byte(code as u8)? {
+            ReasonKind::ArithOperands => {
+                DeoptCause::ArithOperands(numeric_feedback_of_byte(payload)?)
+            }
+            ReasonKind::EntryGuard => return Some(DeoptCause::EntryGuard(payload)),
+            ReasonKind::ArithOverflow => DeoptCause::ArithOverflow,
+            ReasonKind::InlinedCall => DeoptCause::InlinedCall,
+            ReasonKind::InlineEpochMoved => DeoptCause::InlineEpochMoved,
+            ReasonKind::TypeError => DeoptCause::TypeError,
+            ReasonKind::OsrEntry => DeoptCause::OsrEntry,
+            ReasonKind::Rerun => DeoptCause::Rerun,
+            ReasonKind::Unattributed => DeoptCause::Unattributed,
+            ReasonKind::Unreached => DeoptCause::Unreached,
+            ReasonKind::InlineIdentity => DeoptCause::InlineIdentity,
+            ReasonKind::InlineAttention => DeoptCause::InlineAttention,
+            ReasonKind::DepthLimit => DeoptCause::DepthLimit,
+            ReasonKind::ColdFlagged => DeoptCause::ColdFlagged,
+        };
+        // Only the two payload-carrying kinds may have a nonzero payload.
+        (payload == 0 || matches!(cause, DeoptCause::ArithOperands(_))).then_some(cause)
+    }
+
     /// Census buckets: [`Self::census_index`] into these names.
-    pub(crate) const CENSUS_NAMES: [&'static str; 9] = [
+    pub(crate) const CENSUS_NAMES: [&'static str; 15] = [
         "arith_float",
         "arith_other",
         "overflow",
@@ -137,6 +288,12 @@ impl DeoptCause {
         "osr_entry",
         "rerun",
         "unattributed",
+        "entry_guard",
+        "unreached",
+        "inline_identity",
+        "inline_attention",
+        "depth_limit",
+        "cold_flagged",
     ];
 
     /// This cause's census bucket.
@@ -152,6 +309,12 @@ impl DeoptCause {
             DeoptCause::OsrEntry => 6,
             DeoptCause::Rerun => 7,
             DeoptCause::Unattributed => 8,
+            DeoptCause::EntryGuard(_) => 9,
+            DeoptCause::Unreached => 10,
+            DeoptCause::InlineIdentity => 11,
+            DeoptCause::InlineAttention => 12,
+            DeoptCause::DepthLimit => 13,
+            DeoptCause::ColdFlagged => 14,
         }
     }
 }
@@ -231,9 +394,15 @@ pub(crate) fn note_deopt(
 ) -> ReoptVerdict {
     let cause = match event {
         DeoptEvent::Rerun => DeoptCause::Rerun,
-        DeoptEvent::Precise { pc, stack } => {
-            classify(ctx, func.executable_ops(), leaf, origin, pc, stack)
-        }
+        // What the cold block named wins; the op classifies the rest.
+        DeoptEvent::Precise {
+            cause: Some(cause), ..
+        } => cause,
+        DeoptEvent::Precise {
+            pc,
+            stack,
+            cause: None,
+        } => classify(ctx, func.executable_ops(), leaf, origin, pc, stack),
     };
     super::stats::record_deopt(cause, origin.is_osr());
     tracing::trace!(
@@ -483,3 +652,7 @@ mod tests;
 #[cfg(test)]
 #[path = "reopt/tests/end_to_end.rs"]
 mod end_to_end;
+
+#[cfg(test)]
+#[path = "reopt/tests/deopt_cells_test.rs"]
+mod deopt_cells_test;

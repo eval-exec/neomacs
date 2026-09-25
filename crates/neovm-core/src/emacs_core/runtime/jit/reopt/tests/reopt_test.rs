@@ -207,6 +207,12 @@ fn census_buckets_are_distinct() {
         DeoptCause::OsrEntry,
         DeoptCause::Rerun,
         DeoptCause::Unattributed,
+        DeoptCause::EntryGuard(0),
+        DeoptCause::Unreached,
+        DeoptCause::InlineIdentity,
+        DeoptCause::InlineAttention,
+        DeoptCause::DepthLimit,
+        DeoptCause::ColdFlagged,
     ];
     let mut seen: Vec<usize> = causes.iter().map(|c| c.census_index()).collect();
     seen.sort_unstable();

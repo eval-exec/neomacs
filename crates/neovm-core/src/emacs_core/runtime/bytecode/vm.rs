@@ -3583,6 +3583,7 @@ impl<'a> Vm<'a> {
             binds,
             spec_base,
             cond_base,
+            ..
         } = *resume;
         if handlers == 0
             && spec_base == entry_spec_depth
