@@ -588,3 +588,159 @@ fn mode_off_emits_todays_boxing() {
     assert_eq!(float_of(ok_value(run)), 3.25);
     assert_eq!(allocated, 2, "one box per site");
 }
+
+fn floats_consed(ev: &Context) -> u64 {
+    ev.tagged_heap.memory_use_counts_snapshot()
+        [crate::tagged::gc::MemoryUseCountSlot::Floats.index()]
+}
+
+#[test]
+fn flonums_survive_a_call_that_collects() {
+    let mut ev = Context::new();
+    ev.eval_str("(defalias 'flonum-gc-callee (lambda () (garbage-collect) 7))")
+        .expect("define the collecting callee");
+    // (lambda (a b) (let* ((x (* a b)) (y (+ x a))) (flonum-gc-callee) (+ x y)))
+    let f = float_fn(
+        2,
+        vec![
+            Op::StackRef(1),
+            Op::StackRef(1),
+            Op::Mul,
+            Op::Dup,
+            Op::StackRef(3),
+            Op::Add,
+            Op::Constant(0),
+            Op::Call(0),
+            Op::Pop,
+            Op::StackRef(1),
+            Op::StackRef(1),
+            Op::Add,
+            Op::Return,
+        ],
+        vec![Value::symbol("flonum-gc-callee")],
+        &[2, 5, 11],
+    );
+    // Resident: x and y cross the collecting call unboxed (a raw f64 needs
+    // no root); local: they are boxed, and rooted, across it; off: every
+    // result is boxed at its site. The collection itself conses floats too,
+    // so the boxes are counted against `off`, which makes all three.
+    let mut consed = Vec::new();
+    for (mode, escapes) in [
+        (FlonumMode::Off, 0),
+        (FlonumMode::Resident, 1),
+        (FlonumMode::OpLocal, 3),
+    ] {
+        let (leaf, census) = compile_in(mode, &f);
+        let results = if mode == FlonumMode::Off { 0 } else { 3 };
+        assert_eq!(census.results, results, "{mode:?}");
+        assert_eq!(census.escape_boxes, escapes, "{mode:?}");
+        let mut per_call = Vec::new();
+        for _ in 0..3 {
+            let gcs = crate::emacs_core::gc_stats::snapshot().collections;
+            let before = floats_consed(&ev);
+            let args = [Value::make_float(1.5), Value::make_float(2.0)];
+            let got = ok_value(leaf.call(&mut ev as *mut Context as *mut u8, &args));
+            assert_eq!(float_of(got).to_bits(), 7.5_f64.to_bits(), "{mode:?}");
+            per_call.push(floats_consed(&ev) - before);
+            assert!(
+                crate::emacs_core::gc_stats::snapshot().collections > gcs,
+                "the callee must really have collected"
+            );
+            assert_eq!(ev.jit_root_stack_top, 0);
+        }
+        consed.push(per_call);
+    }
+    let (off, resident, local) = (&consed[0], &consed[1], &consed[2]);
+    for call in 0..3 {
+        assert_eq!(
+            off[call] - resident[call],
+            2,
+            "resident boxes only the returned sum: {consed:?}"
+        );
+        assert_eq!(off[call], local[call], "local boxes all three: {consed:?}");
+    }
+}
+
+#[test]
+fn a_handler_sees_boxed_flonums() {
+    let mut ev = Context::new();
+    ev.eval_str("(defalias 'flonum-signal-fn (lambda () (signal 'error '(\"boom\"))))")
+        .expect("define the signalling callee");
+    let conditions = ev.eval_str("'(error)").expect("conditions");
+    // (lambda (a b) (let ((x 0.0) (y 0.0))
+    //   (condition-case nil
+    //       (progn (setq y (setq x (* a b))) (flonum-signal-fn))
+    //     (error (list x y)))))
+    // `x` and `y` are set INSIDE the protected extent, so at the signalling
+    // call both slots below the handler's depth hold one unboxed product.
+    let f = float_fn(
+        2,
+        vec![
+            Op::Constant(0),
+            Op::Constant(0),
+            Op::Constant(1),
+            Op::PushConditionCaseRaw(16),
+            Op::StackRef(3),
+            Op::StackRef(3),
+            Op::Mul,
+            Op::Dup,
+            Op::StackSet(3),
+            Op::Dup,
+            Op::StackSet(2),
+            Op::Pop,
+            Op::Constant(2),
+            Op::Call(0),
+            Op::PopHandler,
+            Op::Return,
+            Op::Pop,
+            Op::StackRef(1),
+            Op::StackRef(1),
+            Op::List(2),
+            Op::Return,
+        ],
+        vec![
+            Value::make_float(0.0),
+            conditions,
+            Value::symbol("flonum-signal-fn"),
+        ],
+        &[6],
+    );
+    // Resident: the product crosses the call unboxed, and the handler's
+    // dispatch block boxes it once, for both slots. Local: the call boxes
+    // it. Off: its site does. Signalling conses floats of its own, so each
+    // mode's count is checked against `off`'s: one box in all three.
+    let mut off_consed = None;
+    for (mode, results, escapes, cold) in [
+        (FlonumMode::Off, 0, 0, 0),
+        (FlonumMode::Resident, 1, 0, 1),
+        (FlonumMode::OpLocal, 1, 1, 0),
+    ] {
+        let (leaf, census) = compile_in(mode, &f);
+        assert_eq!(census.results, results, "{mode:?}");
+        assert_eq!(census.escape_boxes, escapes, "{mode:?}");
+        assert_eq!(census.cold_boxes, cold, "{mode:?}");
+        let before = floats_consed(&ev);
+        let args = [Value::make_float(1.5), Value::make_float(2.0)];
+        let got = ok_value(leaf.call(&mut ev as *mut Context as *mut u8, &args));
+        let consed = floats_consed(&ev) - before;
+        assert_eq!(
+            *off_consed.get_or_insert(consed),
+            consed,
+            "{mode:?}: one box, like off"
+        );
+        let items = crate::emacs_core::value::list_to_vec(&got).expect("(list x y)");
+        assert_eq!(float_of(items[0]), 3.0, "{mode:?}");
+        assert_eq!(
+            items[0].bits(),
+            items[1].bits(),
+            "{mode:?}: x and y are one object"
+        );
+        let interp = Vm::from_context(&mut ev)
+            .execute(&f, args.to_vec())
+            .expect("interpreter");
+        let expect = crate::emacs_core::value::list_to_vec(&interp).expect("a list");
+        assert_eq!(float_of(expect[0]), 3.0);
+        assert_eq!(expect[0].bits(), expect[1].bits(), "the interpreter agrees");
+        assert_eq!(ev.jit_root_stack_top, 0);
+    }
+}

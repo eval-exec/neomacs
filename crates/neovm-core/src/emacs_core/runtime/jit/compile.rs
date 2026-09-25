@@ -4612,18 +4612,8 @@ fn build_leaf_fn<M: Module>(
                             dynamic_prefix,
                             consts_base,
                         )?;
-                        // Re-sync the raw mask after the op: raw-preserving ops keep
-                        // it in lockstep (assert); every other op force-tagged the
-                        // stack at the top, so reset the mask to all-tagged here.
-                        if op_preserves_raw(other) {
-                            debug_assert_eq!(
-                                stack.len(),
-                                reps.len(),
-                                "raw-preserving op left reps desynced"
-                            );
-                        } else {
-                            reps.resize(stack.len(), SlotRep::Tagged);
-                        }
+                        // `lower_simple_op` keeps `reps` in lockstep with `stack`
+                        // (it re-syncs after a non-unboxing op itself).
                     }
                 }
             }

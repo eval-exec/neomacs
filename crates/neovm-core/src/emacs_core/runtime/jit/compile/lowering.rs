@@ -5607,10 +5607,163 @@ pub(crate) fn lower_simple_op(
 ) -> Result<(), CompileError> {
     // Non-unboxing ops must see only tagged Values: force-tag the whole stack so
     // their gc_push / signal snapshot / shim args never observe a raw slot (closes
-    // the GC-root + dispatch-snapshot soundness holes in one place).
-    if !op_preserves_raw(op) {
-        materialize_model_stack(fb, rt, stack, reps);
+    // the GC-root + dispatch-snapshot soundness holes in one place). A
+    // resident flonum below an audited op's operands is the one exception:
+    // every reader of those slots is representation-aware.
+    let residual = if op_preserves_raw(op) {
+        None
+    } else {
+        Some(prepare_op_operands(fb, rt, op, stack, reps)?)
+    };
+    #[cfg(debug_assertions)]
+    let residual_before: Option<Vec<ClifValue>> = residual.map(|keep| stack[..keep].to_vec());
+    lower_simple_op_arms(
+        fb,
+        pc,
+        deopt_sites,
+        signal_exit,
+        constants,
+        stack,
+        reps,
+        rt,
+        handlers,
+        pending,
+        spec,
+        op,
+        known,
+        reloc_base,
+        reloc_index,
+        aot,
+        spec_slot_base,
+        spec_expected_base,
+        dynamic_prefix,
+        consts_base,
+    )?;
+    // Re-sync the reps after a non-unboxing op: the slots below `keep` are
+    // untouched (the audited-op invariant, checked in debug builds), and its
+    // result is tagged. Unboxing ops keep `reps` in lockstep themselves.
+    if let Some(keep) = residual {
+        #[cfg(debug_assertions)]
+        debug_assert!(
+            residual_before.as_deref() == stack.get(..keep),
+            "{op:?} rewrote the model stack below its operands"
+        );
+        reps.truncate(keep);
+        reps.resize(stack.len(), SlotRep::Tagged);
     }
+    debug_assert_eq!(stack.len(), reps.len(), "{op:?} left reps desynced");
+    Ok(())
+}
+
+/// Ops whose lowering reads nothing below its operands except through
+/// [`deopt_site`], [`signal_target_for_site`] and [`emit_model_roots_pre`] —
+/// all representation-aware — so under [`FlonumMode::Resident`] a flonum
+/// below its operands stays unboxed across it (an audited list: an op that
+/// reads a deeper slot any other way must not be here; the resync's debug
+/// check catches one that rewrites them).
+pub(crate) fn op_keeps_residual_flonums(op: &Op) -> bool {
+    matches!(
+        op,
+        Op::Call(_)
+            | Op::Apply(_)
+            | Op::Aset
+            | Op::CallBuiltin(..)
+            | Op::CallBuiltinSym(..)
+            | Op::List(_)
+            | Op::Cons
+            | Op::Car
+            | Op::Cdr
+            | Op::CarSafe
+            | Op::CdrSafe
+            | Op::Eq
+            | Op::Null
+            | Op::Not
+            | Op::Consp
+            | Op::Stringp
+            | Op::Listp
+            | Op::Symbolp
+            | Op::Integerp
+            | Op::Numberp
+            | Op::VarSet(_)
+    ) || direct_builtin_spec(op).is_some()
+        || slice_builtin_spec(op).is_some()
+}
+
+/// Before a non-unboxing op: tag what it may observe, and return `keep`, the
+/// depth below which its lowering leaves the model stack untouched. Raw
+/// fixnums are always retagged. Under [`FlonumMode::Resident`] an audited op
+/// ([`op_keeps_residual_flonums`]) boxes only its own operands (and their
+/// aliases, which then share the box); every other op boxes every flonum.
+fn prepare_op_operands(
+    fb: &mut FunctionBuilder,
+    rt: Option<&RtCtx>,
+    op: &Op,
+    stack: &mut [ClifValue],
+    reps: &mut [SlotRep],
+) -> Result<usize, CompileError> {
+    if super::jit_flonum_mode() == super::FlonumMode::Resident
+        && op_keeps_residual_flonums(op)
+        && let Ok((needs, _)) = super::simple_effect(op)
+    {
+        let at = stack
+            .len()
+            .checked_sub(needs)
+            .ok_or(CompileError::StackUnderflow)?;
+        retag_raw_fixnums(fb, stack, reps);
+        for k in at..stack.len() {
+            if reps[k].is_flonum() {
+                let rt = rt.expect("a flonum implies the runtime refs (float sites declare them)");
+                box_flonum_slot(fb, rt.refs.make_float, stack, reps, k);
+            }
+        }
+        return Ok(at);
+    }
+    materialize_model_stack(fb, rt, stack, reps);
+    // Everything is tagged now, so the resync owes nothing to the residual.
+    Ok(0)
+}
+
+/// The per-op arms of [`lower_simple_op`], after its operand preparation.
+#[allow(clippy::too_many_arguments)]
+fn lower_simple_op_arms(
+    fb: &mut FunctionBuilder,
+    pc: usize,
+    deopt_sites: &mut Vec<PendingDeopt>,
+    signal_exit: &mut Option<Block>,
+    constants: &[Value],
+    stack: &mut Vec<ClifValue>,
+    // Per-slot representations (cross-op unboxing), kept in lockstep with
+    // `stack`.
+    reps: &mut Vec<SlotRep>,
+    rt: Option<&RtCtx>,
+    handlers: &[HandlerStatic],
+    pending: &mut Vec<PendingDispatch>,
+    // R2 increment B2: an `Op::Call` spec site carries `(sym, expected, slot_ptr,
+    // slot_idx, kind)`. `slot_ptr` is the baked `SpecSlot*` (JIT); `slot_idx` indexes
+    // the AOT sidecar's `spec_slot_base`/`spec_expected_base` arrays.
+    spec: Option<(u32, u64, i64, usize, SpecCalleeKind)>,
+    op: &Op,
+    // Cross-block known-fixnum operand values at this block (seeded by
+    // `lower_leaf_full` from `compute_known_fixnum_slots`); `guard_fixnum` elides
+    // guards for members.
+    known: &HashSet<ClifValue>,
+    // R1a: heap-constant reloc vector base (baked in entry) + bits->index map, so
+    // `Op::Constant` loads a heap object from reloc_base[idx] instead of baking it.
+    reloc_base: Option<ClifValue>,
+    reloc_index: &std::collections::HashMap<usize, u32>,
+    // R2 increment B2: false → JIT (spec `expected`/`slot` baked as `iconst`,
+    // byte-identical); true → AOT (loaded from the sidecar's `spec_expected_base`/
+    // `spec_slot_base` at `slot_idx`). The two bases are `Some` only in AOT mode at a
+    // body with an `Op::Call` spec site (loaded once in the entry block).
+    aot: bool,
+    spec_slot_base: Option<ClifValue>,
+    spec_expected_base: Option<ClifValue>,
+    // `make-closure` patched prefix + the callee constant base bound in the entry
+    // block (JIT only, `None` when the prefix is 0): `Op::Constant(idx)` with
+    // `idx < dynamic_prefix` loads `consts_base[idx]` instead of baking.
+    dynamic_prefix: usize,
+    consts_base: Option<ClifValue>,
+) -> Result<(), CompileError> {
     if let Some(rt) = rt
         && !aot
         && super::arith_site_takes_generic(op, pc)
@@ -6222,7 +6375,7 @@ pub(crate) fn lower_simple_op(
             let saved = if stack.is_empty() {
                 CondRoots::NONE
             } else {
-                emit_cond_residual_roots_pre(fb, rt, stack.as_slice())
+                emit_model_roots_pre(fb, rt, stack, reps)
             };
             let vmctx = fb.use_var(rt.vmctx_var);
             let sym_v = materialize_op_sym_id(fb, reloc_base, reloc_index, sym);
@@ -6401,7 +6554,7 @@ pub(crate) fn lower_simple_op(
             let saved = if stack.is_empty() || reg_args.is_some() {
                 CondRoots::NONE
             } else {
-                emit_cond_residual_roots_pre(fb, rt, stack.as_slice())
+                emit_model_roots_pre(fb, rt, stack, reps)
             };
             let vmctx = fb.use_var(rt.vmctx_var);
             let (args_addr, out_addr, n_val) = guarded_buffers.unwrap_or_else(|| {
@@ -6579,7 +6732,7 @@ pub(crate) fn lower_simple_op(
                 let saved_gen = if stack.is_empty() {
                     CondRoots::NONE
                 } else {
-                    emit_cond_residual_roots_pre(fb, rt, stack.as_slice())
+                    emit_model_roots_pre(fb, rt, stack, reps)
                 };
                 let vmctx_gen = fb.use_var(rt.vmctx_var);
                 let call_gen = fb
@@ -6643,7 +6796,7 @@ pub(crate) fn lower_simple_op(
             let saved = if stack.is_empty() {
                 CondRoots::NONE
             } else {
-                emit_cond_residual_roots_pre(fb, rt, stack.as_slice())
+                emit_model_roots_pre(fb, rt, stack, reps)
             };
             let call = fb.ins().call(rt.refs.varbind, &[vmctx, sym_v, val]);
             let status = fb.inst_results(call)[0];
@@ -6667,7 +6820,7 @@ pub(crate) fn lower_simple_op(
             let saved = if stack.is_empty() {
                 CondRoots::NONE
             } else {
-                emit_cond_residual_roots_pre(fb, rt, stack.as_slice())
+                emit_model_roots_pre(fb, rt, stack, reps)
             };
             let call = fb.ins().call(rt.refs.unbind, &[vmctx, n_v]);
             let status = fb.inst_results(call)[0];
@@ -6710,7 +6863,7 @@ pub(crate) fn lower_simple_op(
             let saved = if stack.is_empty() {
                 CondRoots::NONE
             } else {
-                emit_cond_residual_roots_pre(fb, rt, stack.as_slice())
+                emit_model_roots_pre(fb, rt, stack, reps)
             };
             let vmctx = fb.use_var(rt.vmctx_var);
             let out_addr = fb.ins().stack_addr(rt.ptr_ty, rt.call_result_slot, 0);
@@ -6784,7 +6937,7 @@ pub(crate) fn lower_simple_op(
             let saved_gen = if stack.is_empty() {
                 CondRoots::NONE
             } else {
-                emit_cond_residual_roots_pre(fb, rt, stack.as_slice())
+                emit_model_roots_pre(fb, rt, stack, reps)
             };
             let vmctx_gen = fb.use_var(rt.vmctx_var);
             let variant_gen = fb.ins().iconst(types::I64, 2);
@@ -6866,7 +7019,7 @@ pub(crate) fn lower_simple_op(
             let saved = if stack.is_empty() || cbsym_a_which.is_some() {
                 CondRoots::NONE
             } else {
-                emit_cond_residual_roots_pre(fb, rt, stack.as_slice())
+                emit_model_roots_pre(fb, rt, stack, reps)
             };
             let vmctx = fb.use_var(rt.vmctx_var);
             // R2-E (must-nail #2): the named-builtin callee SymId is session-specific.
@@ -6979,7 +7132,7 @@ pub(crate) fn lower_simple_op(
                 let saved_gen = if stack.is_empty() {
                     CondRoots::NONE
                 } else {
-                    emit_cond_residual_roots_pre(fb, rt, stack.as_slice())
+                    emit_model_roots_pre(fb, rt, stack, reps)
                 };
                 let vmctx_gen = fb.use_var(rt.vmctx_var);
                 let variant_gen = fb.ins().iconst(types::I64, variant);
@@ -7023,7 +7176,7 @@ pub(crate) fn lower_simple_op(
             let saved = if stack.is_empty() {
                 CondRoots::NONE
             } else {
-                emit_cond_residual_roots_pre(fb, rt, stack.as_slice())
+                emit_model_roots_pre(fb, rt, stack, reps)
             };
             let args_addr = fb.ins().stack_addr(rt.ptr_ty, rt.call_args_slot, 0);
             let n_val = fb.ins().iconst(types::I64, n as i64);
@@ -7051,7 +7204,7 @@ pub(crate) fn lower_simple_op(
                 let saved = if stack.is_empty() {
                     CondRoots::NONE
                 } else {
-                    emit_cond_residual_roots_pre(fb, rt, stack.as_slice())
+                    emit_model_roots_pre(fb, rt, stack, reps)
                 };
                 let idx_v = fb.ins().iconst(types::I64, idx as i64);
                 let args_addr = fb.ins().stack_addr(rt.ptr_ty, rt.call_args_slot, 0);
@@ -7161,7 +7314,7 @@ pub(crate) fn lower_simple_op(
             let saved = if stack.is_empty() || gc_free {
                 CondRoots::NONE
             } else {
-                emit_cond_residual_roots_pre(fb, rt, stack.as_slice())
+                emit_model_roots_pre(fb, rt, stack, reps)
             };
             let vmctx = fb.use_var(rt.vmctx_var);
             let idx_v = fb.ins().iconst(types::I64, idx as i64);

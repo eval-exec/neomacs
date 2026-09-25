@@ -229,3 +229,14 @@ fn nbody_applyforces_boxed_at_every_site_allocates_27_floats_per_call() {
     assert_eq!(census, lowering::FlonumCensus::default());
     assert_eq!(per_call, 27, "one per result plus sqrt's, as GNU");
 }
+
+#[test]
+fn nbody_applyforces_unboxed_resident_allocates_8_floats_per_call() {
+    let (per_call, census) = run_nbody(FlonumMode::Resident, "flonum-nbody-resident");
+    assert_eq!(census.results, 26);
+    assert_eq!(
+        census.escape_boxes, 7,
+        "the sqrt argument and the six stored values"
+    );
+    assert_eq!(per_call, 8, "GNU allocates 27");
+}
