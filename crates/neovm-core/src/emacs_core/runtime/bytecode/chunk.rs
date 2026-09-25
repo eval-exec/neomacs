@@ -387,6 +387,17 @@ impl ByteCodeFunction {
         unsafe { self.runtime.as_ref().unwrap_unchecked() }
     }
 
+    /// The constant base a compiled leaf of this function reads its
+    /// `make-closure`-patched constants through (the leaf entry's `aux`
+    /// word): the first word of the constant pool, owned or mapped. The one
+    /// place the JIT takes it from (`jit_layout::bytecode_constants_offsets`
+    /// is the same word, read from the object).
+    #[cfg(feature = "jit")]
+    #[inline(always)]
+    pub(crate) fn jit_constant_base(&self) -> *const crate::emacs_core::value::Value {
+        self.constants.as_ptr()
+    }
+
     /// Release already-validated GNU decoded IR until it is first needed.
     /// The original byte string remains the single source of truth.
     pub(crate) fn defer_gnu_decode(&mut self) {

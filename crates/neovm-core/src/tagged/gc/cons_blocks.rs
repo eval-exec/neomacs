@@ -8,7 +8,7 @@ use super::*;
 /// GNU Emacs keeps conses in fixed-size aligned blocks and derives the owning
 /// block/index directly from the cons pointer. Keep the same shape here so
 /// mark/ownership checks stay O(1) instead of linearly scanning `cons_blocks`.
-pub(super) const CONS_BLOCK_BYTES: usize = 64 * 1024;
+pub(crate) const CONS_BLOCK_BYTES: usize = 64 * 1024;
 pub(super) const CONS_BLOCK_ALIGN: usize = CONS_BLOCK_BYTES;
 pub(super) const CONS_MARK_BITS_PER_WORD: usize = usize::BITS as usize;
 
@@ -30,10 +30,10 @@ pub(super) const fn cons_block_cell_count() -> usize {
     0
 }
 
-pub(super) const CONS_BLOCK_SIZE: usize = cons_block_cell_count();
-pub(super) const CONS_MARK_WORDS: usize = cons_mark_words(CONS_BLOCK_SIZE);
+pub(crate) const CONS_BLOCK_SIZE: usize = cons_block_cell_count();
+pub(crate) const CONS_MARK_WORDS: usize = cons_mark_words(CONS_BLOCK_SIZE);
 pub(super) const CONS_CELLS_BYTES: usize = CONS_BLOCK_SIZE * size_of::<ConsCell>();
-pub(super) const CONS_MARKS_OFFSET: usize = CONS_CELLS_BYTES;
+pub(crate) const CONS_MARKS_OFFSET: usize = CONS_CELLS_BYTES;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ConsMarkBit {

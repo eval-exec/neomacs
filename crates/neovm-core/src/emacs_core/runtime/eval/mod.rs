@@ -955,13 +955,13 @@ impl SavedBindingValue {
 
     /// A plain value cell as stored: `Value::UNBOUND` already means unbound.
     #[inline]
-    fn from_plain(value: Value) -> Self {
+    pub(crate) fn from_plain(value: Value) -> Self {
         Self(value)
     }
 
     /// The cell contents to store back: `Value::UNBOUND` restores "unbound".
     #[inline]
-    fn as_plain(self) -> Value {
+    pub(crate) fn as_plain(self) -> Value {
         self.0
     }
 
@@ -987,7 +987,7 @@ pub(crate) struct SavedBufferId(Option<std::num::NonZeroU64>);
 
 impl SavedBufferId {
     #[inline]
-    fn from_option(buffer_id: Option<crate::buffer::BufferId>) -> Self {
+    pub(crate) fn from_option(buffer_id: Option<crate::buffer::BufferId>) -> Self {
         Self(buffer_id.map(|buffer_id| {
             std::num::NonZeroU64::new(buffer_id.0)
                 .expect("live BufferId values are allocated from one")
@@ -995,7 +995,7 @@ impl SavedBufferId {
     }
 
     #[inline]
-    fn get(self) -> Option<crate::buffer::BufferId> {
+    pub(crate) fn get(self) -> Option<crate::buffer::BufferId> {
         self.0
             .map(|buffer_id| crate::buffer::BufferId(buffer_id.get()))
     }

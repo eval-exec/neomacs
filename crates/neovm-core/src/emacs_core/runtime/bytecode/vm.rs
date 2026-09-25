@@ -7242,7 +7242,7 @@ impl<'a> Vm<'a> {
                 && (passthrough
                     || leaf.arity <= crate::emacs_core::jit::compile::FAST_PATH_MAX_ARITY)
             {
-                bc.constants.as_ptr()
+                bc.jit_constant_base()
             } else {
                 core::ptr::null()
             };

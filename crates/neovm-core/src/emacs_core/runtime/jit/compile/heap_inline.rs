@@ -35,12 +35,12 @@
 //! A body containing an inline site dereferences its vmctx: see
 //! [`inline_heap_sites`] and `CompiledLeaf::needs_vmctx`.
 
-use super::*;
-use crate::emacs_core::eval::runtime_projection::CONTEXT_TAGGED_HEAP_OFFSET;
-use crate::tagged::gc::{
+use super::jit_layout::CONTEXT_TAGGED_HEAP_OFFSET;
+use super::jit_layout::heap::{
     FLOAT_SLOT_BYTES, HEAP_JIT_BARRIER_LEN, HEAP_JIT_BARRIER_LO, HEAP_JIT_CONS_CUR,
     HEAP_JIT_CONS_LIM, HEAP_JIT_FLOAT_CUR, HEAP_JIT_FLOAT_LIM,
 };
+use super::*;
 
 thread_local! {
     /// Inline heap sites emitted in the function being lowered.
@@ -187,13 +187,15 @@ pub(crate) fn emit_inline_aset(
     res: Variable,
     cont: Block,
 ) -> bool {
-    use crate::emacs_core::eval::runtime_projection::CONTEXT_ASET_EPOCH_OFFSET;
-    use crate::emacs_core::symbol::OBARRAY_FUNCTION_EPOCH_OFFSET;
-    use crate::tagged::header::{GC_HEADER_TENURED_OFFSET, GcHeader, LispValueVec};
-    if LispValueVec::jit_slice_offsets().is_none() {
+    use super::jit_layout::heap::{
+        GC_HEADER_TENURED_OFFSET, value_vec_owned_probe, value_vec_slice_offsets,
+    };
+    use super::jit_layout::{CONTEXT_ASET_EPOCH_OFFSET, OBARRAY_FUNCTION_EPOCH_OFFSET};
+    use crate::tagged::header::GcHeader;
+    if value_vec_slice_offsets().is_none() {
         return false;
     }
-    let Some(owned_probe) = LispValueVec::jit_owned_probe() else {
+    let Some(owned_probe) = value_vec_owned_probe() else {
         return false;
     };
     let vmctx = fb.use_var(rt.vmctx_var);
@@ -207,7 +209,7 @@ pub(crate) fn emit_inline_aset(
         types::I64,
         MemFlagsData::trusted(),
         vmctx,
-        (core::mem::offset_of!(Context, obarray) + OBARRAY_FUNCTION_EPOCH_OFFSET) as i32,
+        (super::jit_layout::CONTEXT_OBARRAY_OFFSET + OBARRAY_FUNCTION_EPOCH_OFFSET) as i32,
     );
     let stale = fb.ins().icmp(IntCC::NotEqual, armed, epoch);
     let armed_block = fb.create_block();
@@ -349,7 +351,7 @@ pub(crate) fn emit_inline_box_float(
     rt: &RtCtx,
     value: ClifValue,
 ) -> ClifValue {
-    use crate::tagged::header::FLOAT_VALUE_OFFSET;
+    use super::jit_layout::heap::FLOAT_VALUE_OFFSET;
     let res = fb.declare_var(types::I64);
     let slow = fb.create_block();
     let merge = fb.create_block();

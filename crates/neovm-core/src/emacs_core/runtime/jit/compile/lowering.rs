@@ -236,7 +236,7 @@ pub(crate) fn unbox_float(fb: &mut FunctionBuilder, v: ClifValue) -> ClifValue {
         types::F64,
         MemFlagsData::trusted(),
         ptr,
-        crate::tagged::header::FLOAT_VALUE_OFFSET,
+        super::jit_layout::heap::FLOAT_VALUE_OFFSET,
     )
 }
 
@@ -855,8 +855,8 @@ pub(crate) fn emit_plain_slot_address(
     slow: Block,
     owned_probe: Option<(usize, usize)>,
 ) -> Option<PlainSlot> {
-    use crate::tagged::header::{LispValueVec, VecLikeHeader, VecLikeType, VectorObj};
-    let (ptr_off, len_off) = LispValueVec::jit_slice_offsets()?;
+    use crate::tagged::header::{VecLikeHeader, VecLikeType, VectorObj};
+    let (ptr_off, len_off) = super::jit_layout::heap::value_vec_slice_offsets()?;
     const_assert_vector_record_share_layout();
     let data_off = core::mem::offset_of!(VectorObj, data);
     let type_off = core::mem::offset_of!(VecLikeHeader, type_tag);
@@ -1075,7 +1075,7 @@ fn emit_inline_string_aset(
     res: Variable,
     merge: Block,
 ) -> bool {
-    use crate::emacs_core::symbol::OBARRAY_FUNCTION_EPOCH_OFFSET;
+    use super::jit_layout::OBARRAY_FUNCTION_EPOCH_OFFSET;
     use crate::heap_types::LispString;
     use crate::tagged::header::StringObj;
     let [array, index, value] = operands;
@@ -1096,7 +1096,7 @@ fn emit_inline_string_aset(
         types::I64,
         flags,
         vmctx,
-        (core::mem::offset_of!(Context, obarray) + OBARRAY_FUNCTION_EPOCH_OFFSET) as i32,
+        (super::jit_layout::CONTEXT_OBARRAY_OFFSET + OBARRAY_FUNCTION_EPOCH_OFFSET) as i32,
     );
     // `Cell<u64>` is `repr(transparent)` over the word.
     let gate = fb.ins().load(
@@ -1239,8 +1239,9 @@ fn emit_inline_cbsym_read(
     which: u8,
     sym: u32,
 ) -> Option<ClifValue> {
-    use crate::buffer::buffer::{Buffer, jit_layout};
-    use crate::emacs_core::eval::runtime_projection::CONTEXT_BUFFERS_OFFSET;
+    use super::jit_layout::CONTEXT_BUFFERS_OFFSET;
+    use super::jit_layout::buffer_walk as jit_layout;
+    use crate::buffer::buffer::Buffer;
 
     // Two shapes. The position reads answer a 1-based Lisp CHARACTER position;
     // `bobp`/`eobp` compare point against an accessible bound in the BYTE
@@ -1375,17 +1376,15 @@ fn emit_inline_record_type_of(
     slot: ClifValue,
     arg: ClifValue,
 ) -> Option<(Block, Variable)> {
-    use crate::emacs_core::eval::runtime_projection::CONTEXT_ATTENTION_OFFSET;
+    use super::jit_layout::CONTEXT_ATTENTION_OFFSET;
+    use super::jit_layout::{OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET, OBARRAY_FUNCTION_EPOCH_OFFSET};
     use crate::emacs_core::forward::LISP_BOOL_FWD_VALUE_OFFSET;
-    use crate::emacs_core::symbol::{
-        OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET, OBARRAY_FUNCTION_EPOCH_OFFSET,
-    };
-    use crate::tagged::header::{LispValueVec, VecLikeHeader, VecLikeType, VectorObj};
-    let (ptr_off, len_off) = LispValueVec::jit_slice_offsets()?;
+    use crate::tagged::header::{VecLikeHeader, VecLikeType, VectorObj};
+    let (ptr_off, len_off) = super::jit_layout::heap::value_vec_slice_offsets()?;
     const_assert_vector_record_share_layout();
     let data_off = core::mem::offset_of!(VectorObj, data);
     let type_off = core::mem::offset_of!(VecLikeHeader, type_tag);
-    let ob = core::mem::offset_of!(Context, obarray);
+    let ob = super::jit_layout::CONTEXT_OBARRAY_OFFSET;
     let slot_epoch_off = core::mem::offset_of!(super::SpecSlot, epoch);
     let flags = MemFlagsData::trusted();
     debug_assert_eq!(Value::NIL.bits(), 0, "the clear test ORs nil words");
@@ -2067,12 +2066,10 @@ fn emit_mir_inline_entry_guard(
     epoch: u64,
     deopt: Block,
 ) -> Result<(), CompileError> {
-    use crate::emacs_core::eval::runtime_projection::CONTEXT_ATTENTION_OFFSET;
+    use super::jit_layout::CONTEXT_ATTENTION_OFFSET;
+    use super::jit_layout::{OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET, OBARRAY_FUNCTION_EPOCH_OFFSET};
     use crate::emacs_core::forward::LISP_BOOL_FWD_VALUE_OFFSET;
-    use crate::emacs_core::symbol::{
-        OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET, OBARRAY_FUNCTION_EPOCH_OFFSET,
-    };
-    let ob = core::mem::offset_of!(Context, obarray);
+    let ob = super::jit_layout::CONTEXT_OBARRAY_OFFSET;
     let flags = MemFlagsData::trusted();
     let vmctx = fb.use_var(rt.vmctx_var);
     let current = fb.ins().load(
@@ -2112,13 +2109,13 @@ fn emit_mir_inline_entry_guard(
         rt.ptr_ty,
         flags,
         vmctx,
-        core::mem::offset_of!(Context, depth) as i32,
+        super::jit_layout::CONTEXT_DEPTH_OFFSET as i32,
     );
     let max_depth = fb.ins().load(
         rt.ptr_ty,
         flags,
         vmctx,
-        core::mem::offset_of!(Context, max_depth) as i32,
+        super::jit_layout::CONTEXT_MAX_DEPTH_OFFSET as i32,
     );
     let depth_ok = fb.ins().icmp(IntCC::UnsignedLessThan, depth, max_depth);
     debug_assert_eq!(Value::NIL.bits(), 0);
@@ -6655,12 +6652,12 @@ fn lower_simple_op_arms(
             let slow = fb.create_block();
             let cont = fb.create_block();
             {
-                use crate::emacs_core::symbol::{
+                use super::jit_layout::{
                     LISP_SYMBOL_FLAGS_OFFSET, LISP_SYMBOL_SIZE, LISP_SYMBOL_VAL_OFFSET,
                     OBARRAY_CHUNK_BITS, OBARRAY_CHUNK_SLOTS, OBARRAY_JIT_LEN_OFFSET,
                     OBARRAY_JIT_SPINE_OFFSET, SYMBOL_FLAGS_REDIRECT_MASK,
                 };
-                let ob = core::mem::offset_of!(Context, obarray);
+                let ob = super::jit_layout::CONTEXT_OBARRAY_OFFSET;
                 let vmctx = fb.use_var(rt.vmctx_var);
                 let len = fb.ins().load(
                     types::I64,

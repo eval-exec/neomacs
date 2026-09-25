@@ -4832,6 +4832,7 @@ pub(crate) mod shared;
 mod dispatch;
 pub use dispatch::*;
 
+pub(crate) mod jit_layout;
 pub(crate) mod stack_guard;
 
 pub(crate) mod cold_exits;

@@ -606,7 +606,7 @@ pub(crate) fn try_run_osr(
     let run = leaf.invoke_osr(
         ctx as *mut u8,
         arg_bits.as_ptr(),
-        func.constants.as_ptr(),
+        func.jit_constant_base(),
         bind_frame,
     );
     if let Some((_, stack_base)) = bind_frame {
@@ -1923,7 +1923,7 @@ pub(crate) fn run_resolved_leaf(
         func,
         func_value,
         leaf,
-        leaf.call_consts(ctx as *mut u8, func.constants.as_ptr(), args),
+        leaf.call_consts(ctx as *mut u8, func.jit_constant_base(), args),
     )
 }
 
@@ -1962,7 +1962,7 @@ pub(crate) fn run_resolved_leaf_native(
         // call-args slot, pure passthrough — checked by our caller); ctx is
         // the dormant seam Context.
         let status = unsafe {
-            leaf.entry_call_raw_consts(ctx as *mut u8, func.constants.as_ptr(), args_ptr, &mut out)
+            leaf.entry_call_raw_consts(ctx as *mut u8, func.jit_constant_base(), args_ptr, &mut out)
         };
         if status == super::compile::STATUS_OK {
             #[cfg(any(test, debug_assertions))]
@@ -1988,7 +1988,7 @@ fn run_resolved_leaf_native_framed(
     leaf: &CompiledLeaf,
     args_ptr: *const i64,
 ) -> NativeCallOutcome {
-    let outcome = leaf.call_premarshaled_consts(ctx as *mut u8, func.constants.as_ptr(), args_ptr);
+    let outcome = leaf.call_premarshaled_consts(ctx as *mut u8, func.jit_constant_base(), args_ptr);
     finish_framed_run(ctx, func, func_value, leaf, outcome)
 }
 

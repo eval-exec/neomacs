@@ -2518,6 +2518,11 @@ mod incremental;
 
 mod cons_blocks;
 use cons_blocks::*;
+/// The cons-block trailer's shape, for `jit_layout::heap`.
+#[cfg_attr(not(feature = "jit"), allow(unused_imports))]
+pub(crate) use cons_blocks::{
+    CONS_BLOCK_BYTES, CONS_BLOCK_SIZE as CONS_BLOCK_CELLS, CONS_MARK_WORDS, CONS_MARKS_OFFSET,
+};
 
 mod arena_pages;
 pub(crate) use arena_pages::*;

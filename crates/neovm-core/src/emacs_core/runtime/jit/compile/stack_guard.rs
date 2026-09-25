@@ -54,7 +54,7 @@ pub(crate) fn body_may_reenter_lisp(ops: &[Op]) -> bool {
 
 /// Byte offset of [`Context::jit_stack_limit`], read by the guard.
 pub(crate) fn ctx_stack_limit_offset() -> i32 {
-    core::mem::offset_of!(Context, jit_stack_limit) as i32
+    super::jit_layout::CONTEXT_JIT_STACK_LIMIT_OFFSET as i32
 }
 
 /// Byte offset of [`Context::jit_stack_scratch`], where the guard's cold
