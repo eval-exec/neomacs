@@ -617,3 +617,87 @@ fn positioned_symbols_match_their_bare_symbols_only_under_swp() {
     );
     assert!(pa.veclike_type() == Some(VecLikeType::SymbolWithPos));
 }
+
+/// Every pass through `with_hash_table_mut` raises the table object's
+/// epoch -- a wholesale replacement too, by a fresh table (epoch 0) or by a
+/// copy carrying the same or a higher epoch -- and nothing else changes it:
+/// JIT code guarding a jump table on its epoch never sees a compiled epoch
+/// again once the table has changed.
+#[test]
+fn every_table_mutation_raises_the_epoch() {
+    let (a, b, c) = (sym("a"), sym("b"), sym("c"));
+    let eq = HashTableTest::Eq;
+    let table = Value::hash_table(eq);
+    let epoch = || {
+        table
+            .as_hash_table()
+            .expect("a hash table")
+            .data
+            .switch_epoch
+    };
+    let last = std::cell::Cell::new(epoch());
+    let raised = |what: &str| {
+        let now = epoch();
+        assert!(now > last.get(), "{what}: epoch {now} after {}", last.get());
+        last.set(now);
+    };
+    let _ = table.with_hash_table_mut(|ht| ht.insert(a.to_hash_key(&eq), a, Value::fixnum(8)));
+    raised("puthash of a new key");
+    let _ = table.with_hash_table_mut(|ht| ht.insert(a.to_hash_key(&eq), a, Value::fixnum(16)));
+    raised("puthash of an existing key");
+    let _ = table.with_hash_table_mut(|ht| ht.insert(b.to_hash_key(&eq), b, Value::fixnum(8)));
+    raised("another puthash");
+    let _ = table.with_hash_table_mut(|ht| ht.data.remove_by_value(b, eq, false));
+    raised("remhash");
+    let _ = table.with_hash_table_mut(|ht| ht.data.clear());
+    raised("clrhash");
+    let _ = table.with_hash_table_mut(|ht| ht.test = HashTableTest::Eql);
+    raised("a test change");
+    let _ = table.with_hash_table_mut(|_| ());
+    raised("a mutation that changes nothing");
+    assert!(table.replace_hash_table(table_of(eq, &[c])));
+    raised("a replacement by a fresh table");
+    let mut copy = table.as_hash_table().expect("a hash table").clone();
+    assert_eq!(
+        copy.data.switch_epoch,
+        last.get(),
+        "a copy carries the epoch"
+    );
+    assert!(table.replace_hash_table(copy.clone()));
+    raised("a replacement by a copy of the same epoch");
+    copy.data.switch_epoch = last.get() + 1000;
+    assert!(table.replace_hash_table(copy));
+    raised("a replacement by a copy of a higher epoch");
+
+    // Reads, dispatches and plan builds leave it alone.
+    let ht = table.as_hash_table().expect("a hash table");
+    for _ in 0..3 {
+        ht.switch_target(c, false);
+        ht.switch_target(a, true);
+    }
+    assert!(ht.data.switch_plan.shape().is_some(), "planned");
+    assert!(ht.data.get(&c.to_hash_key(&eq)).is_some());
+    assert_eq!(epoch(), last.get(), "reads do not move the epoch");
+}
+
+/// `SWITCH_EPOCH_OFFSET` addresses the epoch through a hash table value's
+/// untagged pointer, which is how JIT code reads it.
+#[test]
+fn the_epoch_offset_reads_the_epoch() {
+    let table = Value::hash_table(HashTableTest::Equal);
+    for _ in 0..5 {
+        let _ = table.with_hash_table_mut(|_| ());
+    }
+    let object = table.as_veclike_ptr().expect("a veclike") as *const u8;
+    // SAFETY: a live hash table object; the offset is `offset_of!` into it.
+    let read = unsafe { *(object.add(SWITCH_EPOCH_OFFSET) as *const u64) };
+    assert_eq!(
+        read,
+        table
+            .as_hash_table()
+            .expect("a hash table")
+            .data
+            .switch_epoch
+    );
+    assert_eq!(read, 5);
+}

@@ -61,6 +61,13 @@ const MAX_REBUILDS: u8 = 4;
 /// A dense fixnum slot no key occupies.
 const NO_ENTRY: u16 = u16::MAX;
 
+/// The byte offset of a table's [`super::HashTableStorage::switch_epoch`]
+/// from the start of its `HashTableObj` (the untagged pointer of a hash table
+/// value): JIT code reads it to check that a jump table is still the one it
+/// was compiled against.
+pub(crate) const SWITCH_EPOCH_OFFSET: usize =
+    core::mem::offset_of!(crate::tagged::header::HashTableObj, table.data.switch_epoch);
+
 /// The low-3-bit value tags some key can match: bit `t` is set when a key can
 /// equal a value whose tag is `t`. A value outside the set misses without
 /// looking at any key (elb-pcase's fixnum inputs against a table of conses).

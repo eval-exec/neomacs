@@ -243,7 +243,16 @@ pub fn with_hash_table_mut<R>(
         // other`) installs a table whose cache starts empty.
         (*ptr).table.data.switch_plan.invalidate();
     }
-    Some(f(unsafe { &mut (*ptr).table }))
+    // Nor does JIT code that answers it inline behind its epoch. The new
+    // epoch is stored before `f`, so even a mutation `f` abandons half way
+    // is covered, and again after it: a wholesale replacement installs
+    // another table's epoch (a fresh table's 0, a copy's), which could
+    // equal one compiled against this object.
+    let epoch = unsafe { (*ptr).table.data.switch_epoch.wrapping_add(1) };
+    unsafe { (*ptr).table.data.switch_epoch = epoch };
+    let result = f(unsafe { &mut (*ptr).table });
+    unsafe { (*ptr).table.data.switch_epoch = epoch };
+    Some(result)
 }
 
 /// TEST-ONLY mutation seam for a live bytecode object's `ByteCodeFunction`.

@@ -772,6 +772,12 @@ pub struct HashTableStorage {
     /// jump table (`switch_plan.rs`). Built on the table's second dispatch;
     /// dropped by every mutation.
     pub(crate) switch_plan: switch_plan::SwitchPlanCache,
+    /// How many times the table object has been through
+    /// `with_hash_table_mut`, the choke point every mutation of a published
+    /// table takes: equal epochs of ONE table object mean equal contents.
+    /// JIT code that answers a jump table inline guards on it
+    /// ([`switch_plan::SWITCH_EPOCH_OFFSET`]).
+    pub(crate) switch_epoch: u64,
 }
 
 /// Dump entries parked in `HashTableStorage::pending`: each tuple is
@@ -823,6 +829,7 @@ impl HashTableStorage {
             user_buckets: rustc_hash::FxHashMap::default(),
             pending: None,
             switch_plan: switch_plan::SwitchPlanCache::default(),
+            switch_epoch: 0,
         }
     }
 
