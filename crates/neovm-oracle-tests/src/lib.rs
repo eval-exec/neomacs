@@ -100,6 +100,7 @@ mod documentation_dynamic_reload;
 mod dolist;
 mod dotimes;
 mod dynamic;
+mod eager_expansion_failure_semantics;
 mod eieio_comprehensive;
 mod elt_aref_aset_patterns;
 mod emacsorphanage_ov;

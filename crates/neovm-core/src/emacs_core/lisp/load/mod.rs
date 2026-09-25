@@ -1517,12 +1517,73 @@ fn is_unsupported_compiled_path(path: &Path) -> bool {
     name.ends_with(".elc.gz")
 }
 
+/// What a failed eager macro-expansion does to the form being loaded.
+///
+/// GNU has no fallback: `internal-macroexpand-for-load` turns an expander
+/// error into `(error "Eager macro-expansion failure: %S")` and a detected
+/// cycle into `(error "Eager macro-expansion skipped due to cycle: ...")`
+/// (lisp/emacs-lisp/macroexp.el:915-948), and `readevalloop_eager_expand_eval`
+/// propagates either, so the load or `eval-buffer` stops at that form
+/// (src/lread.c:2135-2152).  A `throw` or `kill-emacs` out of an expander
+/// passes through the same way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EagerExpansionFailure {
+    /// GNU's behaviour: the flow propagates.
+    Propagate,
+    /// Image construction only (`loadup.el` under
+    /// [`create_bootstrap_evaluator_for_loadup`]): a SIGNAL from the expander
+    /// evaluates the unexpanded form instead (step 1) or the one-level
+    /// expansion (step 3).  Neomacs can build its image from `.el` sources,
+    /// whose eager expansion meets require cycles (cl-lib <-> cl-generic <->
+    /// seq) that GNU's compile-first bootstrap never expands.
+    FallBackWhileBuildingImage,
+}
+
+thread_local! {
+    static EAGER_EXPANSION_FAILURE: std::cell::Cell<EagerExpansionFailure> =
+        const { std::cell::Cell::new(EagerExpansionFailure::Propagate) };
+}
+
+/// The policy in force on this thread.
+pub(crate) fn eager_expansion_failure_policy() -> EagerExpansionFailure {
+    EAGER_EXPANSION_FAILURE.with(std::cell::Cell::get)
+}
+
+/// Scope guard: [`EagerExpansionFailure::FallBackWhileBuildingImage`] for the
+/// duration of an image-constructing `loadup.el` load, restored on drop (and
+/// on unwind).
+pub(crate) struct ImageConstructionExpansionScope {
+    previous: EagerExpansionFailure,
+}
+
+impl ImageConstructionExpansionScope {
+    pub(crate) fn enter() -> Self {
+        let previous = EAGER_EXPANSION_FAILURE
+            .with(|cell| cell.replace(EagerExpansionFailure::FallBackWhileBuildingImage));
+        Self { previous }
+    }
+}
+
+impl Drop for ImageConstructionExpansionScope {
+    fn drop(&mut self) {
+        let previous = self.previous;
+        EAGER_EXPANSION_FAILURE.with(|cell| cell.set(previous));
+    }
+}
+
+/// Whether a failed eager-expansion step falls back instead of propagating
+/// FLOW: only a signal, and only while an image is being built.
+fn eager_expansion_falls_back(flow: &Flow) -> bool {
+    flow.is_signal()
+        && eager_expansion_failure_policy() == EagerExpansionFailure::FallBackWhileBuildingImage
+}
+
 /// Check if eager macro expansion is available.
 ///
 /// GNU `readevalloop` only checks whether
 /// `internal-macroexpand-for-load` is fbound, and skips eager expansion for
-/// `.elc` files.  The Lisp helper itself handles cycles and expansion
-/// failures by returning the original form.
+/// `.elc` files.  The Lisp helper itself turns expansion failures and cycles
+/// into errors, which propagate (see [`EagerExpansionFailure`]).
 #[tracing::instrument(level = "debug", skip(eval))]
 pub(crate) fn get_eager_macroexpand_fn(eval: &super::eval::Context) -> Option<Value> {
     // Respect the Elisp `macroexp--pending-eager-loads` variable.
@@ -1558,12 +1619,10 @@ pub(crate) fn get_eager_macroexpand_fn(eval: &super::eval::Context) -> Option<Va
 /// This ensures all macros (including `pcase` inside function bodies) are
 /// expanded at load time, preventing combinatorial re-expansion at runtime.
 ///
-/// **Cycle/failure recovery**: NeoVM loads .el source files, not .elc
-/// compiled files. This means eager expansion encounters circular require
-/// chains (e.g. cl-lib ↔ cl-generic ↔ seq) that real Emacs avoids because
-/// .elc files don't need eager expansion. When expansion fails (cycle
-/// detection, missing macros, etc.), we fall back to evaluating the form
-/// without eager expansion — matching the behavior of loading .elc files.
+/// **Failures** propagate like GNU's: the error that
+/// `internal-macroexpand-for-load` raises stops the evaluation at this form.
+/// Only while an image is being built does a signal fall back to evaluating
+/// the unexpanded form ([`EagerExpansionFailure`]).
 #[tracing::instrument(level = "debug", skip(eval, form_value, macroexpand_fn, sink))]
 pub(crate) fn eager_expand_toplevel_forms(
     eval: &mut super::eval::Context,
@@ -1583,15 +1642,14 @@ pub(crate) fn eager_expand_toplevel_forms(
     // Its failures are handled here and its frames are not part of the
     // user-facing loaded form surface, so avoid paying full backtrace
     // bookkeeping on every eager expansion call.
-    let val = eval.apply2(macroexpand_fn, form_value, Value::NIL).ok();
+    let val = eval.apply2(macroexpand_fn, form_value, Value::NIL);
     eval.restore_specpdl_roots(step1_roots);
     eval.note_eager_macro_perf_step1(step1_start.elapsed());
     let val = match val {
-        Some(v) => v,
-        None => {
-            // Eager expansion failed (cycle detection, missing macro, etc.).
-            // Fall back to evaluating the original form without expansion.
-            // This matches .elc behavior where forms are already compiled.
+        Ok(v) => v,
+        Err(flow) if !eager_expansion_falls_back(&flow) => return Err(map_flow(flow)),
+        Err(_) => {
+            // Building an image: evaluate the original form unexpanded.
             tracing::debug!("eager_expand step1 failed, falling back to plain eval");
             let roots = eval.save_specpdl_roots();
             eval.push_specpdl_root(form_value);
@@ -1638,8 +1696,13 @@ pub(crate) fn eager_expand_toplevel_forms(
     // Call internal-macroexpand-for-load(val, t) — full-p=t means deep expand
     let expanded = match eval.apply2(macroexpand_fn, val, Value::T) {
         Ok(v) => v,
+        Err(flow) if !eager_expansion_falls_back(&flow) => {
+            eval.note_eager_macro_perf_step3(t3.elapsed());
+            eval.restore_specpdl_roots(roots);
+            return Err(map_flow(flow));
+        }
         Err(e) => {
-            // Full expansion failed; use the one-level-expanded form.
+            // Building an image: use the one-level-expanded form.
             let form_str = super::print::print_value(&val);
             let form_preview: String = form_str.chars().take(200).collect();
             tracing::debug!("eager_expand step3 failed: {e:?} form={form_preview}");
@@ -2097,10 +2160,14 @@ fn streaming_readevalloop_eager_expand_eval(
     let step1_start = std::time::Instant::now();
     let expanded = match eval.apply2(macroexpand, form, Value::NIL) {
         Ok(v) => v,
+        Err(flow) if !eager_expansion_falls_back(&flow) => {
+            eval.note_eager_macro_perf_step1(step1_start.elapsed());
+            eval.restore_specpdl_roots(roots);
+            return Err(map_flow(flow));
+        }
         Err(_) => {
-            // Expansion failed (cycle detection, missing macro, etc.).
-            // Fall back to evaluating the original form without expansion,
-            // matching .elc behavior.
+            // Building an image: evaluate the original form unexpanded
+            // (see `EagerExpansionFailure`).
             eval.note_eager_macro_perf_step1(step1_start.elapsed());
             tracing::debug!("streaming eager_expand step1 failed, falling back to plain eval");
             let result = eval.eval_sub(form).map_err(map_flow);
@@ -2147,8 +2214,12 @@ fn streaming_readevalloop_eager_expand_eval_inner(
     let step3_start = std::time::Instant::now();
     let fully_expanded = match eval.apply2(macroexpand, expanded, Value::T) {
         Ok(v) => v,
+        Err(flow) if !eager_expansion_falls_back(&flow) => {
+            eval.note_eager_macro_perf_step3(step3_start.elapsed());
+            return Err(map_flow(flow));
+        }
         Err(_) => {
-            // Full expansion failed; use the one-level-expanded form.
+            // Building an image: use the one-level-expanded form.
             tracing::debug!("streaming eager_expand step3 failed, using one-level expansion");
             expanded
         }
@@ -6198,13 +6269,19 @@ pub fn create_bootstrap_evaluator_for_loadup(
         // `preloaded-file-list` -- the one thing the flag exists to avoid.
         let loadup_requested = load_path_lisp_string(Path::new("loadup.el"));
         let loadup_found = load_path_lisp_string(&loadup_path);
-        match load_file_with_requested_and_found_options(
-            &mut eval,
-            &loadup_path,
-            &loadup_requested,
-            &loadup_found,
-            LoadOptions::EXPLICIT,
-        ) {
+        // GNU's `will_dump_p ()` context: the one place a failed eager
+        // expansion falls back instead of aborting the load.
+        let loadup_result = {
+            let _image_construction = ImageConstructionExpansionScope::enter();
+            load_file_with_requested_and_found_options(
+                &mut eval,
+                &loadup_path,
+                &loadup_requested,
+                &loadup_found,
+                LoadOptions::EXPLICIT,
+            )
+        };
+        match loadup_result {
             Ok(_) => tracing::info!("loadup.el completed successfully"),
             Err(e) => {
                 if matches!(e, EvalError::Shutdown(_)) {
@@ -6685,6 +6762,9 @@ pub(crate) fn expand_tilde(path: &str) -> String {
     path.to_string()
 }
 
+#[cfg(test)]
+#[path = "tests/eager_failure.rs"]
+mod eager_failure_tests;
 #[cfg(test)]
 #[path = "tests/mod.rs"]
 mod tests;
