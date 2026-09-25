@@ -1,6 +1,7 @@
 //! Regexp oracle parity tests.
 
 mod advanced;
+mod casefold_candidate_scan;
 mod comprehensive_advanced;
 mod comprehensive_patterns;
 mod context_semantics;
