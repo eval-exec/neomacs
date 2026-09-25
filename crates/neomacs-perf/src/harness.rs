@@ -1472,6 +1472,9 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     "NEOVM_GC_CENSUS",
     "NEOVM_GC_CENSUS_REMSET",
     "NEOVM_GC_CENSUS_FILE",
+    // P3.2 L0: the representation new bool-vectors get (`legacy` tagged
+    // vectors or `packed` words; same-binary A/B).
+    "NEOVM_BOOL_VECTOR_REPR",
 ];
 
 pub(crate) fn configure_benchmark_environment(command: &mut Command, sandbox: &MelpaSandbox) {

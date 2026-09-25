@@ -319,6 +319,8 @@ pub(crate) mod w32;
 pub(crate) mod wait;
 
 // Character representation, coding, syntax, search, and structured text.
+#[path = "text/boolvec/mod.rs"]
+pub mod boolvec;
 #[path = "text/casefiddle/mod.rs"]
 pub mod casefiddle;
 #[path = "text/casetab/mod.rs"]

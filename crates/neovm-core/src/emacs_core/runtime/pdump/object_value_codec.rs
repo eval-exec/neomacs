@@ -34,6 +34,7 @@ const HEAP_FREE: u8 = 16;
 const HEAP_CHAR_TABLE: u8 = 17;
 const HEAP_SUB_CHAR_TABLE: u8 = 18;
 const HEAP_OBARRAY: u8 = 19;
+const HEAP_BOOL_VECTOR: u8 = 20;
 
 const BYTECODE_DECODED: u8 = 0;
 const BYTECODE_GNU: u8 = 1;
@@ -86,6 +87,14 @@ pub(crate) fn write_heap_object(
             write_u8(out, HEAP_OBARRAY);
             write_values(out, buckets)?;
             write_u32(out, *count);
+        }
+        DumpHeapObject::BoolVector { nbits, words } => {
+            write_u8(out, HEAP_BOOL_VECTOR);
+            write_u64(out, *nbits);
+            write_len(out, words.len(), "bool-vector words")?;
+            for &word in words {
+                write_u64(out, word);
+            }
         }
         DumpHeapObject::Str {
             data,
@@ -207,6 +216,7 @@ const VALUE_UNBOUND: u8 = 21;
 const VALUE_CHAR_TABLE: u8 = 22;
 const VALUE_SUB_CHAR_TABLE: u8 = 23;
 const VALUE_OBARRAY: u8 = 24;
+const VALUE_BOOL_VECTOR: u8 = 25;
 
 pub(crate) fn write_value(out: &mut Vec<u8>, value: &DumpValue) -> Result<(), DumpError> {
     match value {
@@ -229,6 +239,7 @@ pub(crate) fn write_value(out: &mut Vec<u8>, value: &DumpValue) -> Result<(), Du
         DumpValue::Record(id) => write_heap_ref_value(out, VALUE_RECORD, id),
         DumpValue::HashTable(id) => write_heap_ref_value(out, VALUE_HASH_TABLE, id),
         DumpValue::Obarray(id) => write_heap_ref_value(out, VALUE_OBARRAY, id),
+        DumpValue::BoolVector(id) => write_heap_ref_value(out, VALUE_BOOL_VECTOR, id),
         DumpValue::Lambda(id) => write_heap_ref_value(out, VALUE_LAMBDA, id),
         DumpValue::Macro(id) => write_heap_ref_value(out, VALUE_MACRO, id),
         DumpValue::Subr(id) => {
@@ -325,6 +336,7 @@ const HASH_KEY_BOOL_VEC: u8 = 20;
 const HASH_KEY_BIGNUM: u8 = 21;
 const HASH_KEY_BYTE_CODE: u8 = 22;
 const HASH_KEY_STRING_CONTENT: u8 = 23;
+const HASH_KEY_BOOL_VECTOR: u8 = 24;
 
 const BYTE_CODE_KEY_OBSERVABLE_SLOT_COUNT: u8 = 0;
 const BYTE_CODE_KEY_VALUE: u8 = 1;
@@ -428,6 +440,14 @@ fn write_hash_key(out: &mut Vec<u8>, key: &DumpHashKey) -> Result<(), DumpError>
             write_u32(out, *len);
             write_u64(out, *bits as u64);
             write_u64(out, (*bits >> 64) as u64);
+        }
+        DumpHashKey::BoolVector { nbits, words } => {
+            write_u8(out, HASH_KEY_BOOL_VECTOR);
+            write_u64(out, *nbits);
+            write_len(out, words.len(), "bool-vector hash key words")?;
+            for &word in words {
+                write_u64(out, word);
+            }
         }
         DumpHashKey::SymbolWithPos(symbol, pos) => {
             write_u8(out, HASH_KEY_SYMBOL_WITH_POS);
@@ -972,6 +992,23 @@ impl<'a> Cursor<'a> {
                 buckets: self.read_values()?,
                 count: self.read_u32("obarray count")?,
             }),
+            HEAP_BOOL_VECTOR => {
+                let nbits = self.read_u64("bool-vector bit count")?;
+                let len = self.read_len("bool-vector words")?;
+                let expected = usize::try_from(nbits)
+                    .ok()
+                    .map(crate::tagged::header::BoolVectorObj::words_for);
+                if expected != Some(len) {
+                    return Err(DumpError::ImageFormatError(format!(
+                        "bool-vector of {nbits} bits carries {len} words"
+                    )));
+                }
+                let mut words = Vec::with_capacity(len);
+                for _ in 0..len {
+                    words.push(self.read_u64("bool-vector word")?);
+                }
+                Ok(DumpHeapObject::BoolVector { nbits, words })
+            }
             HEAP_STRING => Ok(DumpHeapObject::Str {
                 data: self.read_byte_data()?,
                 size: self.read_usize("string char size")?,
@@ -1041,6 +1078,9 @@ impl<'a> Cursor<'a> {
                 self.read_heap_ref("hash table heap ref")?,
             )),
             VALUE_OBARRAY => Ok(DumpValue::Obarray(self.read_heap_ref("obarray heap ref")?)),
+            VALUE_BOOL_VECTOR => Ok(DumpValue::BoolVector(
+                self.read_heap_ref("bool-vector heap ref")?,
+            )),
             VALUE_LAMBDA => Ok(DumpValue::Lambda(self.read_heap_ref("lambda heap ref")?)),
             VALUE_MACRO => Ok(DumpValue::Macro(self.read_heap_ref("macro heap ref")?)),
             VALUE_SUBR => Ok(DumpValue::Subr(DumpNameId(self.read_u32("subr id")?))),
@@ -1173,6 +1213,15 @@ impl<'a> Cursor<'a> {
                     len,
                     bits: u128::from(low) | (u128::from(high) << 64),
                 })
+            }
+            HASH_KEY_BOOL_VECTOR => {
+                let nbits = self.read_u64("bool-vector hash key bit count")?;
+                let len = self.read_len("bool-vector hash key words")?;
+                let mut words = Vec::with_capacity(len);
+                for _ in 0..len {
+                    words.push(self.read_u64("bool-vector hash key word")?);
+                }
+                Ok(DumpHashKey::BoolVector { nbits, words })
             }
             HASH_KEY_SYMBOL_WITH_POS => Ok(DumpHashKey::SymbolWithPos(
                 Box::new(self.read_hash_key()?),

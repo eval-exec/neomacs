@@ -348,32 +348,22 @@ fn fillarray_character_code_from_value(value: &Value) -> Result<u32, Flow> {
 }
 
 pub(crate) fn builtin_fillarray(args: Vec<Value>) -> EvalResult {
-    const BOOL_VECTOR_SIZE_SLOT: usize = 1;
-    const BOOL_VECTOR_BITS_START: usize = 2;
-
     expect_args("fillarray", &args, 2)?;
     match args[0].kind() {
         ValueKind::Veclike(VecLikeType::CharTable) => {
             super::chartable::fill_char_table_from_fillarray(&args[0], args[1])?;
             Ok(args[0])
         }
+        // GNU `bool_vector_fill`: every bit to (not (null ITEM)).
+        ValueKind::Veclike(VecLikeType::BoolVector) => {
+            super::boolvec::bool_vector_fill(&args[0], args[1].is_truthy());
+            Ok(args[0])
+        }
         ValueKind::Veclike(VecLikeType::Vector) => {
-            let is_bool_vector = super::chartable::is_bool_vector(&args[0]);
+            let is_bool_vector = super::boolvec::is_bool_vector(&args[0]);
             let is_char_table = !is_bool_vector && super::chartable::is_char_table(&args[0]);
             if is_bool_vector {
-                let fill_bit = if args[1].is_nil() { 0 } else { 1 };
-                let v = args[0].as_vector_data().unwrap();
-                let logical_len = match v.get(BOOL_VECTOR_SIZE_SLOT).map(|val| val.kind()) {
-                    Some(ValueKind::Fixnum(n)) if n > 0 => n as usize,
-                    _ => 0,
-                };
-                let available_bits = v.len().saturating_sub(BOOL_VECTOR_BITS_START);
-                let bit_count = logical_len.min(available_bits);
-                let mut vec = v.clone();
-                for bit in vec.iter_mut().skip(BOOL_VECTOR_BITS_START).take(bit_count) {
-                    *bit = Value::fixnum(fill_bit);
-                }
-                let _ = args[0].replace_vector_data(vec);
+                super::boolvec::bool_vector_fill(&args[0], args[1].is_truthy());
                 return Ok(args[0]);
             }
             if is_char_table {

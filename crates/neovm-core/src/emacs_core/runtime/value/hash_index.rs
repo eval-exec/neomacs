@@ -49,6 +49,7 @@ enum EqualHashTag {
     Lambda = 27,
     /// A node past [`SXHASH_MAX_DEPTH`], which GNU folds in as 0.
     Beyond = 28,
+    BoolVector = 29,
 }
 
 impl EqualHashTag {
@@ -195,6 +196,7 @@ impl HashKey {
                 | HashKey::Marker(_)
                 | HashKey::Overlay(_)
                 | HashKey::BoolVec(_)
+                | HashKey::BoolVector(_)
                 | HashKey::SymbolWithPos(..)
                 | HashKey::Cycle(_)
         )
@@ -224,6 +226,7 @@ pub(super) fn key_index_hash(key: &HashKey) -> Option<u64> {
             Some(hasher.finish())
         }
         HashKey::BoolVec(parts) => Some(bool_vector_key_hash(parts.0, parts.1)),
+        HashKey::BoolVector(parts) => Some(packed_bool_vector_hash(parts.0, &parts.1)),
         key if key.is_structural() => None,
         key => Some(fx_hash_key(key)),
     }
@@ -244,6 +247,25 @@ fn bool_vector_key_hash(len: usize, bits: u128) -> u64 {
     for index in 0..len.min(SXHASH_MAX_LEN - 2) {
         HashKey::Int(i64::from(bits & (1_u128 << index) != 0)).hash(&mut hasher);
     }
+    hasher.finish()
+}
+
+/// The stream [`equal_value_hash`] writes for a packed bool-vector: GNU
+/// `sxhash_bool_vector` (src/fns.c), the size and then the first
+/// [`SXHASH_MAX_LEN`] words. The trailing bits are zero, so `equal`
+/// bool-vectors hash alike.
+fn write_packed_bool_vector(hasher: &mut FxHasher, nbits: usize, words: &[u64]) {
+    EqualHashTag::BoolVector.write(hasher);
+    nbits.hash(hasher);
+    for word in words.iter().take(SXHASH_MAX_LEN) {
+        word.hash(hasher);
+    }
+}
+
+/// [`equal_value_hash`] of a packed bool-vector, from its key.
+fn packed_bool_vector_hash(nbits: usize, words: &[u64]) -> u64 {
+    let mut hasher = FxHasher::default();
+    write_packed_bool_vector(&mut hasher, nbits, words);
     hasher.finish()
 }
 
@@ -332,6 +354,13 @@ fn equal_hash_obj(value: Value, depth: u32, mut hasher: FxHasher) -> FxHasher {
                 value.bignum_hash_key().hash(&mut hasher);
                 hasher
             }
+            VecLikeType::BoolVector => match value.as_bool_vector_obj() {
+                Some(bv) => {
+                    write_packed_bool_vector(&mut hasher, bv.nbits, bv.words());
+                    hasher
+                }
+                None => identity(hasher),
+            },
             VecLikeType::Marker => {
                 // `equal` compares the buffer and, in a buffer, the position.
                 match crate::emacs_core::marker::marker_equal_logical_fields(&value) {

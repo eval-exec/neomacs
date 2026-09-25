@@ -1833,6 +1833,10 @@ impl TaggedHeap {
                         VecLikeType::XwidgetView => size_of::<XwidgetViewObj>(),
                         VecLikeType::SurfaceHandle => size_of::<SurfaceObj>(),
                         VecLikeType::VideoHandle => size_of::<VideoObj>(),
+                        VecLikeType::BoolVector => {
+                            let obj = &*(ptr as *const BoolVectorObj);
+                            size_of::<BoolVectorObj>().saturating_add(size_of_val(obj.words()))
+                        }
                         VecLikeType::Subr => size_of::<SubrObj>(),
                         VecLikeType::Bignum => size_of::<BignumObj>(),
                         VecLikeType::SymbolWithPos => size_of::<SymbolWithPosObj>(),
@@ -2017,6 +2021,7 @@ impl TaggedHeap {
                     VecLikeType::Marker => "marker",
                     VecLikeType::Overlay => "overlay",
                     VecLikeType::Finalizer => "finalizer",
+                    VecLikeType::BoolVector => "bool-vector",
                     VecLikeType::SymbolWithPos => "symbol-with-pos",
                     VecLikeType::UserPtr => "user-ptr",
                     VecLikeType::Process => "process",

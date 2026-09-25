@@ -311,6 +311,7 @@ pub(crate) fn builtin_cl_type_of(args: &[Value]) -> EvalResult {
         ValueKind::Symbol(_) => "symbol",
         ValueKind::Cons => "cons",
         ValueKind::Veclike(VecLikeType::Vector) => "vector",
+        ValueKind::Veclike(VecLikeType::BoolVector) => "bool-vector",
         ValueKind::Veclike(VecLikeType::CharTable) => "char-table",
         ValueKind::Veclike(VecLikeType::SubCharTable) => "sub-char-table",
         ValueKind::Veclike(VecLikeType::Record) => unreachable!(),

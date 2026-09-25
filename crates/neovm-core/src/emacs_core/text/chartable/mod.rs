@@ -31,7 +31,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const CHAR_TABLE_TAG: &str = "--char-table--";
 const SUB_CHAR_TABLE_TAG: &str = "--sub-char-table--";
-const BOOL_VECTOR_TAG: &str = "--bool-vector--";
 const CT_OPTIMIZED_PREFIX_MARKER: &str = "--char-table-optimized-prefix--";
 
 // Char-table fixed-layout indices (after the tag at index 0):
@@ -53,9 +52,6 @@ const GNU_CHAR_TABLE_CONTENT_START: usize = 4;
 const GNU_CHAR_TABLE_ASCII_SLOT: usize = 3;
 const GNU_CHARTAB_SIZE: [usize; 4] = [64, 16, 32, 128];
 const GNU_CHARTAB_CHARS: [i64; 4] = [65_536, 4_096, 128, 1];
-
-// Bool-vector fixed-layout indices:
-const BV_SIZE: usize = 1; // logical length
 
 // ---------------------------------------------------------------------------
 // Predicates
@@ -125,50 +121,7 @@ fn is_sub_char_table(v: Value) -> bool {
     v.is_sub_char_table()
 }
 
-/// Return `true` if `v` is a bool-vector (tagged vector).
-#[inline]
-pub fn is_bool_vector(v: &Value) -> bool {
-    if v.is_vector() {
-        classify_vector_slots(v.as_vector_data().unwrap(), false) == VectorTag::BoolVector
-    } else {
-        false
-    }
-}
-
-/// Return the logical bit length if `v` is a bool-vector.
-pub(crate) fn bool_vector_length(v: &Value) -> Option<i64> {
-    if !v.is_vector() {
-        return None;
-    };
-    let vec = v.as_vector_data().unwrap();
-    if vec.len() < 2
-        || vec[0]
-            .as_symbol_id()
-            .is_none_or(|id| id != bool_vector_tag_sym_id())
-    {
-        return None;
-    }
-    Some(match vec[BV_SIZE].kind() {
-        ValueKind::Fixnum(n) => n,
-        _ => 0,
-    })
-}
-
-/// Return a bool-vector element as GNU `bool_vector_ref` would expose it.
-pub(crate) fn bool_vector_ref_value(v: &Value, index: usize) -> Option<Value> {
-    let len = usize::try_from(bool_vector_length(v)?).ok()?;
-    if index >= len {
-        return None;
-    }
-    let vec = v.as_vector_data()?;
-    let bit = vec.get(index + 2).copied()?;
-    let truthy = match bit.kind() {
-        ValueKind::Fixnum(n) => n != 0,
-        ValueKind::Nil => false,
-        _ => bit.is_truthy(),
-    };
-    Some(Value::bool_val(truthy))
-}
+pub(crate) use super::boolvec::{bool_vector_length, bool_vector_ref_value, is_bool_vector};
 
 /// GNU `XCHAR_TABLE (table)->defalt`: the value characters with no entry of
 /// their own fall back to, or nil for a non-char-table.
@@ -739,13 +692,12 @@ fn char_code_property_table_sym_id() -> SymId {
 /// Cached SymId of [`CHAR_TABLE_TAG`] — `is_char_table` runs per case-table
 /// probe on string/buffer search paths, and resolving + strcmp'ing the tag
 /// symbol's name there dominated the check.
-/// Cached `SymId` of [`BOOL_VECTOR_TAG`]. The bool-vector shape test runs on
+/// Cached `SymId` of the legacy bool-vector tag. The bool-vector shape test runs on
 /// every `aset` and `aref` of a vector, and comparing NAMES there meant
 /// resolving a symbol to a `&str` and running a string compare per element
 /// access. Same rationale as [`char_table_tag_sym_id`].
 pub(crate) fn bool_vector_tag_sym_id() -> SymId {
-    static ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new();
-    *ID.get_or_init(|| intern(BOOL_VECTOR_TAG))
+    super::boolvec::legacy_tag_sym_id()
 }
 
 /// What [`classify_vector_slots`] compares, for compiled code that inlines
@@ -3443,316 +3395,16 @@ pub(crate) fn builtin_put_unicode_property_internal(args: Vec<Value>) -> EvalRes
 }
 
 // ---------------------------------------------------------------------------
-// Bool-vector builtins
+// Bool-vector builtins (`boolvec`, both representations)
 // ---------------------------------------------------------------------------
 
-/// `(make-bool-vector LENGTH INIT)` -- create a bool vector of LENGTH bits,
-/// each initialized to INIT (nil or non-nil).
-pub(crate) fn builtin_make_bool_vector(args: Vec<Value>) -> EvalResult {
-    expect_args("make-bool-vector", &args, 2)?;
-    let length = expect_wholenump(&args[0])?;
-    let init_val = if args[1].is_truthy() {
-        Value::fixnum(1)
-    } else {
-        Value::fixnum(0)
-    };
-    let len = length as usize;
-    note_tagged_vector_created();
-    let mut vec = Vec::with_capacity(2 + len);
-    vec.push(Value::symbol(BOOL_VECTOR_TAG));
-    vec.push(Value::fixnum(length));
-    for _ in 0..len {
-        vec.push(init_val);
-    }
-    Ok(Value::vector(vec))
-}
-
-/// `(bool-vector &rest OBJECTS)` -- create a bool-vector from OBJECTS
-/// truthiness.
-pub(crate) fn builtin_bool_vector(args: Vec<Value>) -> EvalResult {
-    let bits: Vec<bool> = args.into_iter().map(|v| v.is_truthy()).collect();
-    Ok(bool_vector_from_bits(&bits))
-}
-
-/// `(bool-vector-p OBJ)` -- return t if OBJ is a bool-vector.
-pub(crate) fn builtin_bool_vector_p(args: Vec<Value>) -> EvalResult {
-    expect_args("bool-vector-p", &args, 1)?;
-    Ok(Value::bool_val(is_bool_vector(&args[0])))
-}
-
-/// Helper: extract a bool-vector's length.
-fn bv_length(vec: &[Value]) -> i64 {
-    match vec[BV_SIZE].kind() {
-        ValueKind::Fixnum(n) => n,
-        _ => 0,
-    }
-}
-
-/// Helper: extract the bits of a bool-vector as a `Vec<bool>`.
-fn bv_bits(vec: &[Value]) -> Vec<bool> {
-    let len = bv_length(vec) as usize;
-    let mut bits = Vec::with_capacity(len);
-    for i in 0..len {
-        let v = &vec[2 + i];
-        bits.push(v.as_fixnum().is_some_and(|n| n != 0));
-    }
-    bits
-}
-
-/// `(bool-vector-count-population BV)` -- count the number of true values.
-pub(crate) fn builtin_bool_vector_count_population(args: Vec<Value>) -> EvalResult {
-    expect_args("bool-vector-count-population", &args, 1)?;
-    let (bits, _len) = extract_bv_bits(&args[0])?;
-    let count = bits.iter().filter(|&&b| b).count();
-    Ok(Value::fixnum(count as i64))
-}
-
-fn extract_bv_bits(value: &Value) -> Result<(Vec<bool>, i64), Flow> {
-    if !is_bool_vector(value) {
-        return Err(wrong_type("bool-vector-p", value));
-    }
-    let vec = value.as_vector_data().unwrap().clone();
-    let len = bv_length(&vec);
-    let bits = bv_bits(&vec);
-    Ok((bits, len))
-}
-
-/// A tagged vector (a bool-vector) is being created: the JIT's measurement
-/// knob `NEOVM_JIT_AREF_SKIP_SLOT0` counts it (its inline `aref`/`aset` no
-/// longer tell tagged vectors apart).
-#[inline]
-pub(crate) fn note_tagged_vector_created() {
-    #[cfg(feature = "jit")]
-    crate::emacs_core::jit::compile::note_tagged_vector_under_skip_slot0();
-}
-
-/// Build a bool-vector `Value` from a slice of bools.
-pub(crate) fn bool_vector_from_bits(bits: &[bool]) -> Value {
-    let len = bits.len();
-    note_tagged_vector_created();
-    let mut vec = Vec::with_capacity(2 + len);
-    vec.push(Value::symbol(BOOL_VECTOR_TAG));
-    vec.push(Value::fixnum(len as i64));
-    for &b in bits {
-        vec.push(Value::fixnum(if b { 1 } else { 0 }));
-    }
-    Value::vector(vec)
-}
-
-/// GNU's `NILP (dest)`: for the bool-vector set ops the optional destination is
-/// a real target only when it is supplied AND non-nil. An omitted arg and an
-/// explicit `nil` are identical (optional args default to nil), so both must
-/// allocate a fresh bool-vector rather than type-check nil as the destination.
-fn optional_bv_dest(args: &[Value], index: usize) -> Option<Value> {
-    args.get(index).copied().filter(|v| !v.is_nil())
-}
-
-/// `(bool-vector-intersection A B &optional C)` -- bitwise AND.
-/// If C is provided, store result in C and return C; otherwise return a new
-/// bool-vector.
-pub(crate) fn builtin_bool_vector_intersection(args: Vec<Value>) -> EvalResult {
-    expect_min_args("bool-vector-intersection", &args, 2)?;
-    expect_max_args("bool-vector-intersection", &args, 3)?;
-    let (bits_a, len_a) = extract_bv_bits(&args[0])?;
-    let (bits_b, len_b) = extract_bv_bits(&args[1])?;
-    if len_a != len_b {
-        return Err(signal(
-            LispCondition::WrongLengthArgument,
-            vec![Value::fixnum(len_a), Value::fixnum(len_b)],
-        ));
-    }
-    let result_bits: Vec<bool> = bits_a
-        .iter()
-        .zip(bits_b.iter())
-        .map(|(&a, &b)| a && b)
-        .collect();
-
-    if let Some(dest) = optional_bv_dest(&args, 2) {
-        let changed = store_bv_result_with_expected_lengths(&dest, &result_bits, &[len_a, len_b])?;
-        Ok(if changed { dest } else { Value::NIL })
-    } else {
-        Ok(bool_vector_from_bits(&result_bits))
-    }
-}
-
-/// `(bool-vector-union A B &optional C)` -- bitwise OR.
-pub(crate) fn builtin_bool_vector_union(args: Vec<Value>) -> EvalResult {
-    expect_min_args("bool-vector-union", &args, 2)?;
-    expect_max_args("bool-vector-union", &args, 3)?;
-    let (bits_a, len_a) = extract_bv_bits(&args[0])?;
-    let (bits_b, len_b) = extract_bv_bits(&args[1])?;
-    if len_a != len_b {
-        return Err(signal(
-            LispCondition::WrongLengthArgument,
-            vec![Value::fixnum(len_a), Value::fixnum(len_b)],
-        ));
-    }
-    let result_bits: Vec<bool> = bits_a
-        .iter()
-        .zip(bits_b.iter())
-        .map(|(&a, &b)| a || b)
-        .collect();
-
-    if let Some(dest) = optional_bv_dest(&args, 2) {
-        let changed = store_bv_result_with_expected_lengths(&dest, &result_bits, &[len_a, len_b])?;
-        Ok(if changed { dest } else { Value::NIL })
-    } else {
-        Ok(bool_vector_from_bits(&result_bits))
-    }
-}
-
-/// `(bool-vector-exclusive-or A B &optional C)` -- bitwise XOR.
-pub(crate) fn builtin_bool_vector_exclusive_or(args: Vec<Value>) -> EvalResult {
-    expect_min_args("bool-vector-exclusive-or", &args, 2)?;
-    expect_max_args("bool-vector-exclusive-or", &args, 3)?;
-    let (bits_a, len_a) = extract_bv_bits(&args[0])?;
-    let (bits_b, len_b) = extract_bv_bits(&args[1])?;
-    if len_a != len_b {
-        return Err(signal(
-            LispCondition::WrongLengthArgument,
-            vec![Value::fixnum(len_a), Value::fixnum(len_b)],
-        ));
-    }
-    let result_bits: Vec<bool> = bits_a
-        .iter()
-        .zip(bits_b.iter())
-        .map(|(&a, &b)| a ^ b)
-        .collect();
-
-    if let Some(dest) = optional_bv_dest(&args, 2) {
-        let changed = store_bv_result_with_expected_lengths(&dest, &result_bits, &[len_a, len_b])?;
-        Ok(if changed { dest } else { Value::NIL })
-    } else {
-        Ok(bool_vector_from_bits(&result_bits))
-    }
-}
-
-/// `(bool-vector-not A &optional B)` -- bitwise NOT.
-///
-/// If B is provided, store result in B and return B; otherwise return a new
-/// bool-vector.
-pub(crate) fn builtin_bool_vector_not(args: Vec<Value>) -> EvalResult {
-    expect_min_args("bool-vector-not", &args, 1)?;
-    expect_max_args("bool-vector-not", &args, 2)?;
-    let (bits, len_a) = extract_bv_bits(&args[0])?;
-    let result_bits: Vec<bool> = bits.into_iter().map(|b| !b).collect();
-    if let Some(dest) = optional_bv_dest(&args, 1) {
-        store_bv_result_with_expected_lengths(&dest, &result_bits, &[len_a])?;
-        Ok(dest)
-    } else {
-        Ok(bool_vector_from_bits(&result_bits))
-    }
-}
-
-/// `(bool-vector-set-difference A B &optional C)` -- `A & (not B)`.
-pub(crate) fn builtin_bool_vector_set_difference(args: Vec<Value>) -> EvalResult {
-    expect_min_args("bool-vector-set-difference", &args, 2)?;
-    expect_max_args("bool-vector-set-difference", &args, 3)?;
-    let (bits_a, len_a) = extract_bv_bits(&args[0])?;
-    let (bits_b, len_b) = extract_bv_bits(&args[1])?;
-    if len_a != len_b {
-        return Err(signal(
-            LispCondition::WrongLengthArgument,
-            vec![Value::fixnum(len_a), Value::fixnum(len_b)],
-        ));
-    }
-    let result_bits: Vec<bool> = bits_a
-        .iter()
-        .zip(bits_b.iter())
-        .map(|(&a, &b)| a && !b)
-        .collect();
-    if let Some(dest) = optional_bv_dest(&args, 2) {
-        let changed = store_bv_result_with_expected_lengths(&dest, &result_bits, &[len_a, len_b])?;
-        Ok(if changed { dest } else { Value::NIL })
-    } else {
-        Ok(bool_vector_from_bits(&result_bits))
-    }
-}
-
-/// `(bool-vector-count-consecutive BV BOOL START)` -- count matching bits from
-/// START until the first non-matching bit or the end.
-pub(crate) fn builtin_bool_vector_count_consecutive(args: Vec<Value>) -> EvalResult {
-    expect_args("bool-vector-count-consecutive", &args, 3)?;
-    let (bits, len) = extract_bv_bits(&args[0])?;
-    let target = args[1].is_truthy();
-    let start = expect_wholenump(&args[2])?;
-    if start > len {
-        return Err(signal(
-            LispCondition::ArgsOutOfRange,
-            vec![args[0], Value::fixnum(start)],
-        ));
-    }
-    let mut count = 0usize;
-    for bit in bits.iter().skip(start as usize) {
-        if *bit != target {
-            break;
-        }
-        count += 1;
-    }
-    Ok(Value::fixnum(count as i64))
-}
-
-/// `(bool-vector-subsetp A B)` -- return t if every true bit in A is also true
-/// in B.
-pub(crate) fn builtin_bool_vector_subsetp(args: Vec<Value>) -> EvalResult {
-    expect_args("bool-vector-subsetp", &args, 2)?;
-    let (bits_a, len_a) = extract_bv_bits(&args[0])?;
-    let (bits_b, len_b) = extract_bv_bits(&args[1])?;
-    if len_a != len_b {
-        return Err(signal(
-            LispCondition::WrongLengthArgument,
-            vec![
-                Value::fixnum(len_a),
-                Value::fixnum(len_b),
-                Value::fixnum(len_b),
-            ],
-        ));
-    }
-    let is_subset = bits_a.iter().zip(bits_b.iter()).all(|(&a, &b)| !a || b);
-    Ok(Value::bool_val(is_subset))
-}
-
-/// Store bits into an existing bool-vector (for the optional dest argument).
-fn store_bv_result_with_expected_lengths(
-    dest: &Value,
-    bits: &[bool],
-    expected_lengths: &[i64],
-) -> Result<bool, Flow> {
-    if !is_bool_vector(dest) {
-        return Err(wrong_type("bool-vector-p", dest));
-    }
-    let v = dest.as_vector_data().unwrap().clone();
-    let len = bv_length(&v) as usize;
-    if len != bits.len() {
-        let mut payload: Vec<Value> = expected_lengths
-            .iter()
-            .copied()
-            .map(Value::fixnum)
-            .collect();
-        payload.push(Value::fixnum(len as i64));
-        return Err(signal(LispCondition::WrongLengthArgument, payload));
-    }
-    let mut slots = dest
-        .as_vector_data()
-        .map(|items| items.to_vec())
-        .unwrap_or_default();
-    let changed = bits.iter().enumerate().any(|(i, &b)| {
-        let current = slots
-            .get(2 + i)
-            .copied()
-            .map(|value| value.as_fixnum().is_some_and(|n| n != 0))
-            .unwrap_or(false);
-        current != b
-    });
-    if !changed {
-        return Ok(false);
-    }
-    for (i, &b) in bits.iter().enumerate() {
-        slots[2 + i] = Value::fixnum(if b { 1 } else { 0 });
-    }
-    let _ = dest.replace_vector_data(slots);
-    Ok(true)
-}
+pub(crate) use super::boolvec::{
+    builtin_bool_vector, builtin_bool_vector_count_consecutive,
+    builtin_bool_vector_count_population, builtin_bool_vector_exclusive_or,
+    builtin_bool_vector_intersection, builtin_bool_vector_not, builtin_bool_vector_p,
+    builtin_bool_vector_set_difference, builtin_bool_vector_subsetp, builtin_bool_vector_union,
+    builtin_make_bool_vector,
+};
 
 // ---------------------------------------------------------------------------
 // Tests

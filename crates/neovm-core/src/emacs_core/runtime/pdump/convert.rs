@@ -241,6 +241,9 @@ impl DumpEncoder {
             ValueKind::Veclike(VecLikeType::Obarray) => {
                 DumpValue::Obarray(dump_heap_ref(self.value_to_heap_ref(v)))
             }
+            ValueKind::Veclike(VecLikeType::BoolVector) => {
+                DumpValue::BoolVector(dump_heap_ref(self.value_to_heap_ref(v)))
+            }
             ValueKind::Veclike(VecLikeType::Lambda) => {
                 DumpValue::Lambda(dump_heap_ref(self.value_to_heap_ref(v)))
             }
@@ -1633,6 +1636,14 @@ impl<'a> LoadDecoder<'a> {
                 ))
             }),
             DumpHeapObject::Obarray { buckets, .. } => Value::obarray(buckets.len()),
+            // Self-contained: no Lisp children, so the one allocation is the
+            // whole restore.
+            DumpHeapObject::BoolVector { nbits, words } => {
+                let nbits = usize::try_from(*nbits).map_err(|_| {
+                    DumpError::ImageFormatError("bool-vector bit count overflows usize".into())
+                })?;
+                Value::make_bool_vector(nbits, words.clone())
+            }
             DumpHeapObject::Str {
                 data,
                 size,
@@ -2223,6 +2234,8 @@ impl<'a> LoadDecoder<'a> {
                     crate::emacs_core::builtins::symbols::replace_obarray_buckets(value, buckets);
                 let _ = value.with_obarray_mut(|obj| obj.count = count);
             }
+            // Complete at allocation (`allocate_tagged_placeholder`).
+            DumpHeapObject::BoolVector { .. } => {}
             DumpHeapObject::Str { text_props, .. } => {
                 if !text_props.is_empty() {
                     for run in &text_props {
@@ -2373,6 +2386,8 @@ impl<'a> LoadDecoder<'a> {
                 DumpHeapObject::Obarray { buckets, .. } => {
                     stack.extend(buckets);
                 }
+                // No Lisp children.
+                DumpHeapObject::BoolVector { .. } => {}
                 DumpHeapObject::Str { text_props, .. } => {
                     for run in text_props {
                         stack.push(run.plist);
@@ -2427,6 +2442,7 @@ impl<'a> LoadDecoder<'a> {
             DumpValue::Record(id) => self.heap_ref_to_value(tagged_heap_ref(id)),
             DumpValue::HashTable(id) => self.heap_ref_to_value(tagged_heap_ref(id)),
             DumpValue::Obarray(id) => self.heap_ref_to_value(tagged_heap_ref(id)),
+            DumpValue::BoolVector(id) => self.heap_ref_to_value(tagged_heap_ref(id)),
             DumpValue::Lambda(id) => self.heap_ref_to_value(tagged_heap_ref(id)),
             DumpValue::Macro(id) => self.heap_ref_to_value(tagged_heap_ref(id)),
             DumpValue::Subr(s) => {
@@ -2468,6 +2484,7 @@ impl<'a> LoadDecoder<'a> {
             DumpValue::Record(id) => self.heap_ref_to_value(tagged_heap_ref(&id)),
             DumpValue::HashTable(id) => self.heap_ref_to_value(tagged_heap_ref(&id)),
             DumpValue::Obarray(id) => self.heap_ref_to_value(tagged_heap_ref(&id)),
+            DumpValue::BoolVector(id) => self.heap_ref_to_value(tagged_heap_ref(&id)),
             DumpValue::Lambda(id) => self.heap_ref_to_value(tagged_heap_ref(&id)),
             DumpValue::Macro(id) => self.heap_ref_to_value(tagged_heap_ref(&id)),
             DumpValue::Subr(s) => {
@@ -2531,6 +2548,7 @@ fn dump_value_heap_ref(value: &DumpValue) -> Option<TaggedHeapRef> {
         | DumpValue::Record(id)
         | DumpValue::HashTable(id)
         | DumpValue::Obarray(id)
+        | DumpValue::BoolVector(id)
         | DumpValue::Lambda(id)
         | DumpValue::Macro(id)
         | DumpValue::ByteCode(id)
@@ -2936,6 +2954,10 @@ pub(crate) fn dump_hash_key(encoder: &mut DumpEncoder, k: &HashKey) -> DumpHashK
             len: parts.0 as u32,
             bits: parts.1,
         },
+        HashKey::BoolVector(parts) => DumpHashKey::BoolVector {
+            nbits: parts.0 as u64,
+            words: parts.1.to_vec(),
+        },
         HashKey::SymbolWithPos(sym, pos) => DumpHashKey::SymbolWithPos(
             Box::new(dump_hash_key(encoder, sym)),
             Box::new(dump_hash_key(encoder, pos)),
@@ -3128,6 +3150,13 @@ fn dump_heap_object_from_value(encoder: &mut DumpEncoder, value: Value) -> DumpH
                     .map(|item| encoder.dump_value(item))
                     .collect(),
                 count: obarray.count,
+            }
+        }
+        ValueKind::Veclike(VecLikeType::BoolVector) => {
+            let bv = value.as_bool_vector_obj().expect("bool-vector");
+            DumpHeapObject::BoolVector {
+                nbits: bv.nbits as u64,
+                words: bv.words().to_vec(),
             }
         }
         ValueKind::Veclike(VecLikeType::Lambda) => {
@@ -4637,6 +4666,10 @@ pub(crate) fn load_hash_key(decoder: &mut LoadDecoder, k: &DumpHashKey) -> HashK
             load_hash_key(decoder, plist),
         ))),
         DumpHashKey::BoolVec { len, bits } => HashKey::BoolVec(Box::new((*len as usize, *bits))),
+        DumpHashKey::BoolVector { nbits, words } => HashKey::BoolVector(Box::new((
+            *nbits as usize,
+            words.clone().into_boxed_slice(),
+        ))),
         DumpHashKey::SymbolWithPos(sym, pos) => HashKey::SymbolWithPos(
             Box::new(load_hash_key(decoder, sym)),
             Box::new(load_hash_key(decoder, pos)),
@@ -4729,6 +4762,9 @@ fn load_hash_key_owned(decoder: &mut LoadDecoder, k: DumpHashKey) -> HashKey {
             load_hash_key_owned(decoder, *plist),
         ))),
         DumpHashKey::BoolVec { len, bits } => HashKey::BoolVec(Box::new((len as usize, bits))),
+        DumpHashKey::BoolVector { nbits, words } => {
+            HashKey::BoolVector(Box::new((nbits as usize, words.into_boxed_slice())))
+        }
         DumpHashKey::SymbolWithPos(sym, pos) => HashKey::SymbolWithPos(
             Box::new(load_hash_key_owned(decoder, *sym)),
             Box::new(load_hash_key_owned(decoder, *pos)),

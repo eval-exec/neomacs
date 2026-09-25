@@ -2005,16 +2005,11 @@ impl<'a> Reader<'a> {
             return Err(self.error("#&..."));
         }
 
-        let mut bits = Vec::with_capacity(size);
-        for byte_val in data_string.as_bytes() {
-            for bit_idx in 0..8 {
-                if bits.len() >= size {
-                    break;
-                }
-                bits.push((byte_val >> bit_idx) & 1 != 0);
-            }
-        }
-        Ok(super::chartable::bool_vector_from_bits(&bits))
+        // GNU `lread.c`: the bytes in order, bits past SIZE masked off.
+        Ok(crate::emacs_core::boolvec::bool_vector_from_bytes(
+            size,
+            data_string.as_bytes(),
+        ))
     }
 
     fn read_radix_number(&mut self, radix: u32) -> Result<Value, ReadError> {

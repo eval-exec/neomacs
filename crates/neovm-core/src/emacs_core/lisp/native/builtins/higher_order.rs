@@ -34,6 +34,9 @@ pub(crate) fn map_sequence_length(sequence: Value) -> Result<usize, Flow> {
                     )
                 })
         }
+        ValueKind::Veclike(VecLikeType::BoolVector) => {
+            Ok(super::boolvec::bool_vector_length(&sequence).unwrap_or(0) as usize)
+        }
         ValueKind::Veclike(VecLikeType::Vector) => {
             if let Some(len) = super::chartable::bool_vector_length(&sequence) {
                 usize::try_from(len).map_err(|_| {
@@ -55,6 +58,14 @@ pub(crate) fn map_sequence_length(sequence: Value) -> Result<usize, Flow> {
 
 pub(crate) fn map_sequence_element(sequence: Value, index: usize) -> Result<Value, Flow> {
     match sequence.kind() {
+        ValueKind::Veclike(VecLikeType::BoolVector) => {
+            super::boolvec::bool_vector_ref_value(&sequence, index).ok_or_else(|| {
+                signal(
+                    LispCondition::ArgsOutOfRange,
+                    vec![sequence, Value::fixnum(index as i64)],
+                )
+            })
+        }
         ValueKind::Veclike(VecLikeType::Vector) => {
             if let Some(value) = super::chartable::bool_vector_ref_value(&sequence, index) {
                 Ok(value)

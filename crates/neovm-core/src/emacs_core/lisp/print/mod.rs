@@ -980,6 +980,10 @@ fn write_value_stateful_inner(
                 });
             }
         }
+        ValueKind::Veclike(VecLikeType::BoolVector) => {
+            let nbits = bool_vector_length(value).unwrap_or(0);
+            out.push_str(&format_bool_vector(value, nbits as usize, state.options));
+        }
         ValueKind::Veclike(VecLikeType::Vector) => {
             if let Some(nbits) = bool_vector_length(value) {
                 out.push_str(&format_bool_vector(value, nbits as usize, state.options));
@@ -1968,6 +1972,10 @@ fn append_print_value_bytes(value: &Value, out: &mut Vec<u8>, options: PrintOpti
             }
             pop_bytes_cycle_object(pushed);
         }
+        ValueKind::Veclike(VecLikeType::BoolVector) => {
+            let nbits = bool_vector_length(value).unwrap_or(0);
+            append_bool_vector_bytes(value, nbits as usize, out, options);
+        }
         ValueKind::Veclike(VecLikeType::Vector) => {
             if let Some(nbits) = bool_vector_length(value) {
                 append_bool_vector_bytes(value, nbits as usize, out, options);
@@ -2717,36 +2725,15 @@ fn bool_vector_byte_syntax(byte: u8, options: PrintOptions) -> BoolVectorByteSyn
 }
 
 fn bool_vector_packed_bytes(value: &Value, nbits: usize) -> Vec<u8> {
-    let items = match value.kind() {
-        ValueKind::Veclike(VecLikeType::Vector) => value.as_vector_data().unwrap().clone(),
-        _ => return Vec::new(),
+    let Some(view) = crate::emacs_core::boolvec::BoolVectorView::of(value) else {
+        return Vec::new();
     };
-
+    debug_assert_eq!(view.len(), nbits);
     (0..nbits.div_ceil(8))
-        .map(|byte_idx| {
-            let mut byte = 0_u8;
-            for bit_idx in 0..8 {
-                let overall_bit = byte_idx * 8 + bit_idx;
-                if overall_bit >= nbits {
-                    break;
-                }
-                let is_set = match items.get(2 + overall_bit) {
-                    Some(value) => match value.kind() {
-                        ValueKind::Fixnum(n) => n != 0,
-                        _ => value.is_truthy(),
-                    },
-                    None => false,
-                };
-                if is_set {
-                    byte |= 1 << bit_idx;
-                }
-            }
-            byte
-        })
+        .map(|index| view.byte(index))
         .collect()
 }
 
-/// Format a bool-vector as `#&N"..."`.
 fn format_bool_vector(value: &Value, nbits: usize, options: PrintOptions) -> String {
     let mut out = Vec::new();
     append_bool_vector_bytes(value, nbits, &mut out, options);

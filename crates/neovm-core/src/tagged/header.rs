@@ -473,6 +473,8 @@ pub enum VecLikeType {
     Process = 9,
     Frame = 10,
     Window = 11,
+    /// Packed bool-vector (GNU `PVEC_BOOL_VECTOR`): [`BoolVectorObj`].
+    BoolVector = 12,
     Buffer = 13,
     HashTable = 14,
     /// Obarray object (GNU `PVEC_OBARRAY`).
@@ -536,6 +538,7 @@ impl VecLikeType {
             Self::Process => GnuPvecType::Process,
             Self::Frame => GnuPvecType::Frame,
             Self::Window => GnuPvecType::Window,
+            Self::BoolVector => GnuPvecType::BoolVector,
             Self::Buffer => GnuPvecType::Buffer,
             Self::HashTable => GnuPvecType::HashTable,
             Self::Obarray => GnuPvecType::Obarray,
@@ -1562,6 +1565,123 @@ pub struct TimerObj {
 pub struct SurfaceObj {
     pub header: VecLikeHeader,
     pub surface_id: u32,
+}
+
+/// Heap-allocated bool-vector: GNU `struct Lisp_Bool_Vector` (`lisp.h`).
+///
+/// `nbits` bits packed into `⌈nbits/64⌉` words. Bit `i` is bit `i % 64` of
+/// word `i / 64`, which on a little-endian host is GNU's byte order (bit
+/// `i` in byte `i / 8` at bit `i % 8`); byte-oriented code (the printer and
+/// the reader) goes through [`BoolVectorObj::byte`] so the printed form never
+/// depends on the host. Invariant: the bits past `nbits` in the last word
+/// are zero, so word operations and `equal` may read whole words.
+///
+/// No Lisp children: the collector claims the header and nothing else, and
+/// a bit store needs no write barrier. The words are mutated in place by the
+/// mutator only (`aset`, `fillarray`, the destination of the bool-vector
+/// set operations); the GC thread never reads them.
+#[repr(C)]
+pub struct BoolVectorObj {
+    pub header: VecLikeHeader,
+    /// GNU `size`: the number of bits.
+    pub nbits: usize,
+    words: Box<[u64]>,
+}
+
+impl BoolVectorObj {
+    /// Bits per storage word.
+    pub const WORD_BITS: usize = u64::BITS as usize;
+
+    /// The number of words `nbits` bits occupy.
+    #[inline]
+    pub const fn words_for(nbits: usize) -> usize {
+        nbits.div_ceil(Self::WORD_BITS)
+    }
+
+    /// The mask of the valid bits of the last word (all ones when `nbits`
+    /// is a multiple of the word size).
+    #[inline]
+    pub const fn last_word_mask(nbits: usize) -> u64 {
+        match nbits % Self::WORD_BITS {
+            0 => u64::MAX,
+            rem => (1u64 << rem) - 1,
+        }
+    }
+
+    /// A bool-vector of `nbits` bits from `words`, which must hold exactly
+    /// [`Self::words_for`]`(nbits)` words; bits past `nbits` are cleared.
+    pub fn new(nbits: usize, words: Vec<u64>) -> Self {
+        assert_eq!(
+            words.len(),
+            Self::words_for(nbits),
+            "bool-vector word count does not match its bit count"
+        );
+        let mut words = words.into_boxed_slice();
+        if let Some(last) = words.last_mut() {
+            *last &= Self::last_word_mask(nbits);
+        }
+        Self {
+            header: VecLikeHeader::new(VecLikeType::BoolVector),
+            nbits,
+            words,
+        }
+    }
+
+    /// The storage words (trailing bits zero).
+    #[inline]
+    pub fn words(&self) -> &[u64] {
+        &self.words
+    }
+
+    /// The storage words, for in-place updates. Callers keep the trailing
+    /// bits zero ([`Self::clear_trailing_bits`] restores it).
+    #[inline]
+    pub fn words_mut(&mut self) -> &mut [u64] {
+        &mut self.words
+    }
+
+    /// Re-establish the trailing-bits-zero invariant.
+    #[inline]
+    pub fn clear_trailing_bits(&mut self) {
+        let mask = Self::last_word_mask(self.nbits);
+        if let Some(last) = self.words.last_mut() {
+            *last &= mask;
+        }
+    }
+
+    /// Bit `index` (`index < nbits`).
+    #[inline]
+    pub fn get(&self, index: usize) -> bool {
+        debug_assert!(index < self.nbits);
+        self.words[index / Self::WORD_BITS] >> (index % Self::WORD_BITS) & 1 != 0
+    }
+
+    /// Set bit `index` (`index < nbits`) to `bit`.
+    #[inline]
+    pub fn set(&mut self, index: usize, bit: bool) {
+        debug_assert!(index < self.nbits);
+        let word = &mut self.words[index / Self::WORD_BITS];
+        let mask = 1u64 << (index % Self::WORD_BITS);
+        if bit {
+            *word |= mask;
+        } else {
+            *word &= !mask;
+        }
+    }
+
+    /// GNU's byte `index` of the bit data (bits `8*index .. 8*index+8`,
+    /// least significant first): the host-independent view the printer
+    /// and `sxhash` use.
+    #[inline]
+    pub fn byte(&self, index: usize) -> u8 {
+        (self.words[index / 8] >> ((index % 8) * 8)) as u8
+    }
+
+    /// The number of bytes of bit data: `⌈nbits/8⌉`.
+    #[inline]
+    pub fn byte_len(&self) -> usize {
+        self.nbits.div_ceil(8)
+    }
 }
 
 /// Heap-allocated handle for one thread, mutex or condition variable.

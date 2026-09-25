@@ -80,19 +80,9 @@ pub(crate) fn hash_key_to_value(key: &HashKey) -> Value {
         HashKey::Marker(_) | HashKey::Overlay(_) => Value::NIL,
         HashKey::BoolVec(parts) => {
             let (len, bits) = **parts;
-            crate::emacs_core::chartable::note_tagged_vector_created();
-            let mut vals = Vec::with_capacity(len + 2);
-            vals.push(Value::symbol("--bool-vector--"));
-            vals.push(Value::fixnum(len as i64));
-            for index in 0..len {
-                vals.push(Value::fixnum(if bits & (1_u128 << index) == 0 {
-                    0
-                } else {
-                    1
-                }));
-            }
-            Value::vector(vals)
+            crate::emacs_core::boolvec::bool_vector_from_u128(len, bits)
         }
+        HashKey::BoolVector(parts) => Value::make_bool_vector(parts.0, parts.1.to_vec()),
         HashKey::SymbolWithPos(_, _) => Value::NIL,
         HashKey::Cycle(index) => Value::string(format!("#{}", index)),
     }
@@ -119,6 +109,17 @@ fn sxhash_bignum(value: &Value) -> Option<u64> {
     let mut hash: u64 = if *bignum < 0 { 1 } else { 0 };
     for limb in bignum.unsigned_abs_ref().to_limbs_asc() {
         hash = sxhash_combine(hash, limb);
+    }
+    Some(hash)
+}
+
+/// GNU `sxhash_bool_vector` (src/fns.c:5462): the size, then the first
+/// `SXHASH_MAX_LEN` data words.
+fn sxhash_bool_vector(value: &Value) -> Option<u64> {
+    let bv = value.as_bool_vector_obj()?;
+    let mut hash = bv.nbits as u64;
+    for &word in bv.words().iter().take(SXHASH_MAX_LEN) {
+        hash = sxhash_combine(hash, word);
     }
     Some(hash)
 }
@@ -323,6 +324,7 @@ fn emacs_sxhash_obj(value: &Value, depth: usize) -> Option<u64> {
         }
         ValueKind::Veclike(VecLikeType::ByteCode) => emacs_sxhash_bytecode(value, depth),
         ValueKind::Veclike(VecLikeType::Bignum) => sxhash_bignum(value),
+        ValueKind::Veclike(VecLikeType::BoolVector) => sxhash_bool_vector(value),
         ValueKind::Veclike(VecLikeType::Marker) => emacs_sxhash_marker(value),
         ValueKind::Veclike(VecLikeType::Overlay) => emacs_sxhash_overlay(value, depth),
         _ => None,

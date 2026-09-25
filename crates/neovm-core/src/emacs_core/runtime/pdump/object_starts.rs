@@ -177,6 +177,7 @@ fn object_span_row(
         // Category C: no HeapImage representation.
         DumpHeapObject::HashTable(_)
         | DumpHeapObject::Obarray { .. }
+        | DumpHeapObject::BoolVector { .. }
         | DumpHeapObject::Subr { .. }
         | DumpHeapObject::Buffer(_)
         | DumpHeapObject::Window(_)
@@ -450,6 +451,7 @@ fn span_record_from_heap(heap: &DumpTaggedHeap, index: usize) -> LoadedObjectSpa
         Some(
             DumpHeapObject::HashTable(_)
             | DumpHeapObject::Obarray { .. }
+            | DumpHeapObject::BoolVector { .. }
             | DumpHeapObject::ByteCode(_)
             | DumpHeapObject::Subr { .. }
             | DumpHeapObject::Buffer(_)

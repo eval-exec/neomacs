@@ -1,4 +1,5 @@
 use super::*;
+use crate::emacs_core::boolvec::bool_vector_from_bits;
 use crate::emacs_core::error::Flow;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::{intern, intern_uninterned};
@@ -1839,11 +1840,12 @@ fn make_bv(bits: &[bool]) -> Value {
 
 /// Assert that a bool-vector has the expected bits.
 fn assert_bv_bits(bv: &Value, expected: &[bool]) {
-    assert!(bv.is_vector(), "expected a vector");
-    let vec = bv.as_vector_data().unwrap().clone();
-    let len = bv_length(&vec) as usize;
+    assert!(is_bool_vector(bv), "expected a bool-vector");
+    let len = bool_vector_length(bv).unwrap() as usize;
     assert_eq!(len, expected.len(), "bool-vector length mismatch");
-    let bits = bv_bits(&vec);
+    let bits: Vec<bool> = (0..len)
+        .map(|i| bool_vector_ref_value(bv, i).unwrap().is_truthy())
+        .collect();
     assert_eq!(bits, expected);
 }
 

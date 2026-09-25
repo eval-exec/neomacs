@@ -32,10 +32,10 @@ use crate::tagged::gc::{
     HeapWriteKind, MEMORY_USE_COUNT_LEN, MemoryUseCountSlot, note_heap_write, with_tagged_heap,
 };
 use crate::tagged::header::{
-    BufferObj, ByteCodeObj, CHAR_TABLE_TOP_SLOTS, CharTableObj, ConsCell, FontObj, FontObjectData,
-    FrameObj, HashTableObj, LambdaObj, LispValueSlice, MacroObj, MarkerObj, ObarrayObj, OverlayObj,
-    ProcessObj, RecordObj, SubCharTableObj, SurfaceObj, TimerObj, VectorObj, VideoObj, WindowObj,
-    XwidgetObj, XwidgetViewObj,
+    BoolVectorObj, BufferObj, ByteCodeObj, CHAR_TABLE_TOP_SLOTS, CharTableObj, ConsCell, FontObj,
+    FontObjectData, FrameObj, HashTableObj, LambdaObj, LispValueSlice, MacroObj, MarkerObj,
+    ObarrayObj, OverlayObj, ProcessObj, RecordObj, SubCharTableObj, SurfaceObj, TimerObj,
+    VectorObj, VideoObj, WindowObj, XwidgetObj, XwidgetViewObj,
 };
 use crate::tagged::mutate;
 use crate::tagged::value::{TAG_BITS, TAG_MASK, TaggedValue};
@@ -1732,8 +1732,12 @@ pub enum HashKey {
     Marker(Box<(Option<u64>, EmacsBytePos)>),
     /// Structural overlay key for `equal`-test hash tables.
     Overlay(Box<(Option<u64>, usize, usize, HashKey)>),
-    /// Compact structural key for bool-vectors whose bits fit in one word.
+    /// Compact structural key for LEGACY (tagged-vector) bool-vectors whose
+    /// bits fit in 128.
     BoolVec(Box<(usize, u128)>),
+    /// Structural key for a packed bool-vector (`BoolVectorObj`): its bit
+    /// count and words (trailing bits zero).
+    BoolVector(Box<(usize, Box<[u64]>)>),
     /// Structural key for symbol-with-pos objects when they are not transparent.
     SymbolWithPos(Box<HashKey>, Box<HashKey>),
     /// Back-reference marker used when structural objects recurse.
@@ -1967,6 +1971,7 @@ impl std::hash::Hash for HashKey {
             HashKey::Marker(_) => 18,
             HashKey::Overlay(_) => 19,
             HashKey::BoolVec(_) => 20,
+            HashKey::BoolVector(_) => 24,
         };
         tag.hash(state);
         match self {
@@ -2007,6 +2012,10 @@ impl std::hash::Hash for HashKey {
                 parts.0.hash(state);
                 parts.1.hash(state);
             }
+            HashKey::BoolVector(parts) => {
+                parts.0.hash(state);
+                parts.1.hash(state);
+            }
             HashKey::SymbolWithPos(sym, pos) => {
                 sym.hash(state);
                 pos.hash(state);
@@ -2044,6 +2053,7 @@ impl PartialEq for HashKey {
             (HashKey::Marker(a), HashKey::Marker(b)) => a == b,
             (HashKey::Overlay(a), HashKey::Overlay(b)) => a == b,
             (HashKey::BoolVec(a), HashKey::BoolVec(b)) => a == b,
+            (HashKey::BoolVector(a), HashKey::BoolVector(b)) => a == b,
             (HashKey::SymbolWithPos(a_sym, a_pos), HashKey::SymbolWithPos(b_sym, b_pos)) => {
                 a_sym == b_sym && a_pos == b_pos
             }
@@ -2788,6 +2798,13 @@ impl TaggedValue {
     /// the GC sweep queues the id for a best-effort
     /// `DisplayHost::destroy_shader_surface`, so a handle Lisp drops without
     /// an explicit `neomacs-surface-destroy` still frees its GPU objects.
+    /// Allocate a packed bool-vector of `nbits` bits from `words`
+    /// (`⌈nbits/64⌉` of them). Lisp-level constructors go through
+    /// `boolvec`, which honours `NEOVM_BOOL_VECTOR_REPR`.
+    pub fn make_bool_vector(nbits: usize, words: Vec<u64>) -> Self {
+        with_tagged_heap(|h| h.alloc_bool_vector(nbits, words))
+    }
+
     pub fn make_surface_handle(surface_id: u32) -> Self {
         with_tagged_heap(|h| h.alloc_surface_handle(surface_id))
     }
@@ -3629,6 +3646,37 @@ impl TaggedValue {
         mutate::set_vector_slot(self, index, value)
     }
 
+    /// Is this a packed bool-vector ([`BoolVectorObj`])? The legacy
+    /// tagged-vector encoding answers false; `boolvec::is_bool_vector` asks
+    /// about both.
+    #[inline]
+    pub fn is_bool_vector_obj(self) -> bool {
+        self.veclike_type() == Some(VecLikeType::BoolVector)
+    }
+
+    /// Borrow a packed bool-vector.
+    #[inline]
+    pub fn as_bool_vector_obj(self) -> Option<&'static BoolVectorObj> {
+        if self.is_bool_vector_obj() {
+            let ptr = self.as_veclike_ptr().unwrap() as *const BoolVectorObj;
+            Some(unsafe { &*ptr })
+        } else {
+            None
+        }
+    }
+
+    /// Mutate a packed bool-vector's bits in place. No write barrier: a
+    /// bool-vector holds no Lisp values, and the GC thread never reads its
+    /// words.
+    #[inline]
+    pub fn with_bool_vector_mut<R>(self, f: impl FnOnce(&mut BoolVectorObj) -> R) -> Option<R> {
+        if !self.is_bool_vector_obj() {
+            return None;
+        }
+        let ptr = self.as_veclike_ptr().unwrap() as *mut BoolVectorObj;
+        Some(f(unsafe { &mut *ptr }))
+    }
+
     /// Borrow a GNU-shaped char-table object.
     pub fn as_char_table_obj(self) -> Option<&'static CharTableObj> {
         if self.is_char_table() {
@@ -3974,6 +4022,10 @@ impl TaggedValue {
                 seen.pop();
                 HashKey::EqualCons(Box::new(car_key), Box::new(cdr_key))
             }
+            ValueKind::Veclike(VecLikeType::BoolVector) => match self.as_bool_vector_obj() {
+                Some(bv) => HashKey::BoolVector(Box::new((bv.nbits, bv.words().into()))),
+                None => self.to_eq_key(),
+            },
             ValueKind::Veclike(kind)
                 if matches!(
                     kind,
@@ -4149,6 +4201,16 @@ pub fn eql_value_swp(left: &Value, right: &Value, symbols_with_pos_enabled: bool
         (ValueKind::Veclike(VecLikeType::Bignum), ValueKind::Veclike(VecLikeType::Bignum)) => {
             left.as_bignum().expect("left bignum") == right.as_bignum().expect("right bignum")
         }
+        _ => false,
+    }
+}
+
+/// GNU `internal_equal` on two bool-vectors (`fns.c`): the same size and
+/// the same bits. The trailing bits are zero in both, so whole words
+/// compare.
+fn bool_vectors_equal(left: Value, right: Value) -> bool {
+    match (left.as_bool_vector_obj(), right.as_bool_vector_obj()) {
+        (Some(a), Some(b)) => a.nbits == b.nbits && a.words() == b.words(),
         _ => false,
     }
 }
@@ -4457,6 +4519,7 @@ fn equal_value_inner(
         VecLikeType::Bignum => {
             left.as_bignum().expect("left bignum") == right.as_bignum().expect("right bignum")
         }
+        VecLikeType::BoolVector => bool_vectors_equal(left, right),
         VecLikeType::Overlay => {
             let Some(left_overlay) = left.as_overlay_data() else {
                 return false;
@@ -4759,6 +4822,7 @@ fn try_equal_value_inner(
         VecLikeType::Bignum => {
             Ok(left.as_bignum().expect("left bignum") == right.as_bignum().expect("right bignum"))
         }
+        VecLikeType::BoolVector => Ok(bool_vectors_equal(left, right)),
         VecLikeType::Overlay => {
             let Some(left_overlay) = left.as_overlay_data() else {
                 return Ok(false);

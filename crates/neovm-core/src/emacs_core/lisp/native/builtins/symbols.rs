@@ -3615,6 +3615,7 @@ fn compare_value_lt_inner(
                     _ => Err(signal_value_lt_type_mismatch(lhs, rhs)),
                 },
                 VecLikeType::Record => compare_value_sequences(eval, lhs, rhs, maxdepth - 1),
+                VecLikeType::BoolVector => compare_bool_vectors_for_value_lt(lhs, rhs),
                 VecLikeType::Marker => compare_markers_for_value_lt(eval, lhs, rhs),
                 VecLikeType::Buffer => Ok(compare_buffers_for_value_lt(eval, lhs, rhs)),
                 VecLikeType::Bignum => unreachable!("bignums are handled in compare_number_values"),
@@ -3678,30 +3679,20 @@ fn vector_value_lt_kind(value: &Value) -> VectorValueLtKind {
     }
 }
 
+/// GNU `value_cmp` on two bool-vectors (fns.c): the first differing bit
+/// decides (a set bit is greater), then the length.
 fn compare_bool_vectors_for_value_lt(lhs: &Value, rhs: &Value) -> Result<std::cmp::Ordering, Flow> {
-    let left_len = crate::emacs_core::chartable::bool_vector_length(lhs)
-        .ok_or_else(|| signal_value_lt_type_mismatch(lhs, rhs))? as usize;
-    let right_len = crate::emacs_core::chartable::bool_vector_length(rhs)
-        .ok_or_else(|| signal_value_lt_type_mismatch(lhs, rhs))? as usize;
-    let left_values = lhs.as_vector_data().expect("bool-vector");
-    let right_values = rhs.as_vector_data().expect("bool-vector");
-    let min_len = left_len.min(right_len);
-
+    use crate::emacs_core::boolvec::BoolVectorView;
+    let left = BoolVectorView::of(lhs).ok_or_else(|| signal_value_lt_type_mismatch(lhs, rhs))?;
+    let right = BoolVectorView::of(rhs).ok_or_else(|| signal_value_lt_type_mismatch(lhs, rhs))?;
+    let min_len = left.len().min(right.len());
     for idx in 0..min_len {
-        let left_bit = left_values[2 + idx]
-            .as_fixnum()
-            .map(|n| n != 0)
-            .unwrap_or(false);
-        let right_bit = right_values[2 + idx]
-            .as_fixnum()
-            .map(|n| n != 0)
-            .unwrap_or(false);
+        let (left_bit, right_bit) = (left.get(idx), right.get(idx));
         if left_bit != right_bit {
             return Ok(left_bit.cmp(&right_bit));
         }
     }
-
-    Ok(left_len.cmp(&right_len))
+    Ok(left.len().cmp(&right.len()))
 }
 
 fn compare_markers_for_value_lt(

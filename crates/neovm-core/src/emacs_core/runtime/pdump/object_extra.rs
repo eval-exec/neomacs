@@ -27,7 +27,8 @@ use crate::tagged::header::VecLikeType;
 const OBJECT_EXTRA_MAGIC: [u8; 16] = *b"NEOOBJEXTRA\0\0\0\0\0";
 /// v8: bytecode descriptors carry the `aref` slot objects
 /// (`code_object`, `constants_object`).
-const OBJECT_EXTRA_FORMAT_VERSION: u32 = 8;
+/// v9: packed bool-vectors (`EXTRA_BOOL_VECTOR`).
+const OBJECT_EXTRA_FORMAT_VERSION: u32 = 9;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -57,6 +58,7 @@ const EXTRA_FREE: u8 = 111;
 const EXTRA_CHAR_TABLE: u8 = 112;
 const EXTRA_SUB_CHAR_TABLE: u8 = 113;
 const EXTRA_OBARRAY: u8 = 114;
+const EXTRA_BOOL_VECTOR: u8 = 115;
 
 /// Per-object extra data needed during load.
 #[derive(Debug, Clone)]
@@ -72,6 +74,8 @@ pub(crate) enum ObjectExtra {
     HashTable(DumpLispHashTable),
     /// Category C: obarray (no HeapImage bytes).
     Obarray { buckets: Vec<DumpValue>, count: u32 },
+    /// Category C: packed bool-vector (no HeapImage bytes).
+    BoolVector { nbits: u64, words: Vec<u64> },
     /// Category C: bytecode function (no HeapImage bytes).
     ByteCode(DumpByteCodeFunction),
     /// Category C: char-table (no HeapImage bytes).
@@ -319,6 +323,10 @@ fn write_object_extra(
             object_value_codec::write_u8(out, EXTRA_OBARRAY);
             object_value_codec::write_heap_object(out, obj)?;
         }
+        DumpHeapObject::BoolVector { .. } => {
+            object_value_codec::write_u8(out, EXTRA_BOOL_VECTOR);
+            object_value_codec::write_heap_object(out, obj)?;
+        }
         DumpHeapObject::ByteCode(function) => {
             object_value_codec::write_u8(out, EXTRA_BYTE_CODE);
             let mut function = function.clone();
@@ -537,6 +545,7 @@ fn object_extra_into_heap_object(extra: ObjectExtra) -> DumpHeapObject {
         },
         ObjectExtra::HashTable(table) => DumpHeapObject::HashTable(table),
         ObjectExtra::Obarray { buckets, count } => DumpHeapObject::Obarray { buckets, count },
+        ObjectExtra::BoolVector { nbits, words } => DumpHeapObject::BoolVector { nbits, words },
         ObjectExtra::ByteCode(function) => DumpHeapObject::ByteCode(function),
         ObjectExtra::CharTable {
             defalt,
@@ -684,6 +693,18 @@ fn read_object_extra(cursor: &mut object_value_codec::Cursor) -> Result<ObjectEx
                 }
                 other => Err(DumpError::ImageFormatError(format!(
                     "expected Obarray in ObjectExtra, got {:?}",
+                    other.variant_name()
+                ))),
+            }
+        }
+        EXTRA_BOOL_VECTOR => {
+            let obj = cursor.read_heap_object()?;
+            match obj {
+                DumpHeapObject::BoolVector { nbits, words } => {
+                    Ok(ObjectExtra::BoolVector { nbits, words })
+                }
+                other => Err(DumpError::ImageFormatError(format!(
+                    "expected BoolVector in ObjectExtra, got {:?}",
                     other.variant_name()
                 ))),
             }
@@ -883,6 +904,7 @@ impl DumpHeapObject {
             DumpHeapObject::Vector(_) => "Vector",
             DumpHeapObject::HashTable(_) => "HashTable",
             DumpHeapObject::Obarray { .. } => "Obarray",
+            DumpHeapObject::BoolVector { .. } => "BoolVector",
             DumpHeapObject::Str { .. } => "Str",
             DumpHeapObject::Float(_) => "Float",
             DumpHeapObject::Lambda(_) => "Lambda",

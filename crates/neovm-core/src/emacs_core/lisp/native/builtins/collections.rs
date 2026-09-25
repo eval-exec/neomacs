@@ -67,6 +67,12 @@ pub(crate) fn builtin_aref_values(array: Value, index: Value) -> EvalResult {
                     .ok_or_else(|| signal(LispCondition::ArgsOutOfRange, vec![array, index])),
             }
         }
+        // GNU `Faref`: a bool-vector's bit as t/nil; a negative index wraps
+        // to a huge one and is out of range.
+        ValueKind::Veclike(VecLikeType::BoolVector) => {
+            super::boolvec::bool_vector_ref_value(&array, idx_fixnum as usize)
+                .ok_or_else(|| signal(LispCondition::ArgsOutOfRange, vec![array, index]))
+        }
         ValueKind::String => {
             let idx = idx_fixnum as usize;
             super::lisp_string_value_char_at(array, idx)
@@ -273,6 +279,17 @@ pub(crate) fn builtin_aset_args(args: &[Value]) -> EvalResult {
             }
             Ok(args[2])
         }
+        // GNU `Faset`: any non-nil VALUE stores 1.
+        ValueKind::Veclike(VecLikeType::BoolVector) => {
+            if super::boolvec::bool_vector_set(&args[0], idx_fixnum as usize, args[2].is_truthy()) {
+                Ok(args[2])
+            } else {
+                Err(signal(
+                    LispCondition::ArgsOutOfRange,
+                    vec![args[0], args[1]],
+                ))
+            }
+        }
         ValueKind::String => {
             let _updated = aset_string_replacement(&args[0], &args[1], &args[2])?;
             Ok(args[2])
@@ -293,18 +310,10 @@ pub(crate) fn builtin_vconcat_slice(args: &[Value]) -> EvalResult {
     let mut result = Vec::new();
     for arg in args {
         match arg.kind() {
-            ValueKind::Veclike(VecLikeType::Vector) if super::chartable::is_bool_vector(arg) => {
-                let len = super::chartable::bool_vector_length(arg).unwrap_or_default();
-                for index in 0..usize::try_from(len).unwrap_or_default() {
-                    let bit =
-                        super::chartable::bool_vector_ref_value(arg, index).ok_or_else(|| {
-                            signal(
-                                LispCondition::WrongTypeArgument,
-                                vec![Value::symbol("bool-vector-p"), *arg],
-                            )
-                        })?;
-                    result.push(bit);
-                }
+            ValueKind::Veclike(VecLikeType::Vector | VecLikeType::BoolVector)
+                if super::boolvec::is_bool_vector(arg) =>
+            {
+                result.extend(super::boolvec::bool_vector_elements(arg).unwrap_or_default());
             }
             ValueKind::Veclike(VecLikeType::Vector) if super::chartable::is_char_table(arg) => {
                 return Err(signal(

@@ -483,6 +483,24 @@ impl TaggedHeap {
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
     }
 
+    /// Allocate a packed bool-vector of `nbits` bits from `words` (exactly
+    /// `⌈nbits/64⌉` of them; bits past `nbits` are cleared). A residual
+    /// `Box` veclike with no Lisp children.
+    ///
+    /// `memory-use-counts` vector-cells grows by `1 + ⌈nbits/64⌉`, as GNU's
+    /// `make_clear_bool_vector` counts it (the `size` word plus the data
+    /// words; the header is not a cell).
+    pub fn alloc_bool_vector(&mut self, nbits: usize, words: Vec<u64>) -> TaggedValue {
+        let nwords = words.len();
+        self.add_memory_use_count(MemoryUseCountSlot::VectorCells, 1 + nwords as u64);
+        let obj = Box::new(BoolVectorObj::new(nbits, words));
+        let ptr = Box::into_raw(obj);
+        self.link_veclike(ptr as *mut VecLikeHeader);
+        self.allocated_count += 1;
+        self.note_allocation_bytes(size_of::<BoolVectorObj>() + nwords * size_of::<u64>());
+        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+    }
+
     /// Allocate a GC-managed shader-surface handle.
     ///
     /// Deliberately NOT registry-rooted (contrast `alloc_finalizer` /

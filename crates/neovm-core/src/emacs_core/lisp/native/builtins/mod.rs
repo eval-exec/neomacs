@@ -401,6 +401,7 @@ pub(super) fn normalize_string_start_arg(
 
 // Re-export sibling modules so submodules can use `super::eval`, `super::marker`, etc.
 pub(super) use super::autoload;
+pub(super) use super::boolvec;
 pub(super) use super::builtins_extra;
 pub(super) use super::ccl;
 pub(super) use super::charset;

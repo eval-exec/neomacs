@@ -107,6 +107,10 @@ pub enum DumpValue {
     Vector(DumpHeapRef),
     CharTable(DumpHeapRef),
     SubCharTable(DumpHeapRef),
+    /// A packed bool-vector (`BoolVectorObj`): a heap object for identity,
+    /// since bool-vectors are mutable (a category table shares one set among
+    /// many characters).
+    BoolVector(DumpHeapRef),
     Record(DumpHeapRef),
     HashTable(DumpHeapRef),
     Obarray(DumpHeapRef),
@@ -159,6 +163,13 @@ pub enum DumpHeapObject {
     Obarray {
         buckets: Vec<DumpValue>,
         count: u32,
+    },
+    /// A packed bool-vector: its bit count and `⌈nbits/64⌉` words (bit `i`
+    /// in word `i / 64` at bit `i % 64`, trailing bits zero). No Lisp
+    /// children and no mapped span: rebuilt as a heap object at load.
+    BoolVector {
+        nbits: u64,
+        words: Vec<u64>,
     },
     Str {
         data: DumpByteData,
@@ -304,6 +315,11 @@ pub enum DumpHashKey {
     BoolVec {
         len: u32,
         bits: u128,
+    },
+    /// A packed bool-vector key: bit count and words.
+    BoolVector {
+        nbits: u64,
+        words: Vec<u64>,
     },
     SymbolWithPos(Box<DumpHashKey>, Box<DumpHashKey>),
     /// A Lisp string keyed by content: raw internal bytes plus SCHARS.

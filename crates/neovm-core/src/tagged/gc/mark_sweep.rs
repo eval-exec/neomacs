@@ -1354,10 +1354,11 @@ impl TaggedHeap {
                     sink.children([o.model, o.window]);
                 }
                 // Buffer/Window/Frame/Timer/Process/Terminal/Marker/Subr/
-                // Bignum/Sqlite/UserPtr/SurfaceHandle/VideoHandle and the three
-                // threading handles have no Value children to trace (mirrors
-                // trace_veclike).
-                VecLikeType::Buffer
+                // Bignum/BoolVector/Sqlite/UserPtr/SurfaceHandle/VideoHandle and
+                // the three threading handles have no Value children to trace
+                // (mirrors trace_veclike).
+                VecLikeType::BoolVector
+                | VecLikeType::Buffer
                 | VecLikeType::Window
                 | VecLikeType::Frame
                 | VecLikeType::Timer

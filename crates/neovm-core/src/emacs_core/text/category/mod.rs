@@ -12,10 +12,9 @@ use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
 use std::cell::RefCell;
 
+use super::boolvec::{self, BoolVectorView};
 use super::error::{EvalResult, Flow, signal};
-use super::value::{
-    HashKey, HashTableTest, Value, ValueKind, VecLikeType, bool_vector_equal_hash_key,
-};
+use super::value::{HashTableTest, Value, ValueKind, VecLikeType};
 
 thread_local! {
     static STANDARD_CATEGORY_TABLE_OBJECT: RefCell<Option<Value>> = const { RefCell::new(None) };
@@ -113,6 +112,16 @@ fn make_empty_category_set() -> EvalResult {
     super::chartable::builtin_make_bool_vector(vec![Value::fixnum(128), Value::NIL])
 }
 
+/// GNU `copy_category_set`: `Fcopy_sequence` of the bool-vector.
+fn copy_category_set(value: &Value) -> EvalResult {
+    boolvec::copy_bool_vector(value).ok_or_else(|| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("categorysetp"), *value],
+        )
+    })
+}
+
 fn clone_vector_value(value: &Value) -> EvalResult {
     match value.kind() {
         ValueKind::Veclike(VecLikeType::Vector) => {
@@ -165,26 +174,16 @@ fn intern_category_set(table: Value, category_set: Value) -> EvalResult {
     Ok(category_set)
 }
 
+/// A category set's bits, when it is one (a 128-bit bool-vector).
 fn category_set_bits(category_set: &Value) -> Option<u128> {
-    match bool_vector_equal_hash_key(category_set)? {
-        HashKey::BoolVec(parts) if parts.0 == 128 => Some(parts.1),
+    match boolvec::bool_vector_u128(category_set)? {
+        (128, bits) => Some(bits),
         _ => None,
     }
 }
 
 fn make_category_set_from_bits(bits: u128) -> Value {
-    crate::emacs_core::chartable::note_tagged_vector_created();
-    let mut values = Vec::with_capacity(130);
-    values.push(Value::symbol("--bool-vector--"));
-    values.push(Value::fixnum(128));
-    for index in 0..128 {
-        values.push(Value::fixnum(if bits & (1_u128 << index) == 0 {
-            0
-        } else {
-            1
-        }));
-    }
-    Value::vector(values)
+    boolvec::bool_vector_from_u128(128, bits)
 }
 
 fn intern_category_set_bits(table: Value, bits: u128) -> EvalResult {
@@ -195,7 +194,7 @@ fn intern_category_set_bits(table: Value, bits: u128) -> EvalResult {
             vec![Value::symbol("hash-table-p"), hash],
         ));
     };
-    let key = HashKey::BoolVec(Box::new((128, bits)));
+    let key = boolvec::bool_vector_equal_key_u128(128, bits);
     if let Some(existing) = hash_ref.key_snapshot(&key) {
         return Ok(*existing);
     }
@@ -219,7 +218,7 @@ fn category_set_with_member(
         return intern_category_set_bits(table, updated_bits);
     }
 
-    let updated = clone_vector_value(&existing)?;
+    let updated = copy_category_set(&existing)?;
     set_category_set_member(&updated, category, present)?;
     intern_category_set(table, updated)
 }
@@ -279,9 +278,9 @@ fn deep_copy_category_table(source: &Value) -> EvalResult {
     // aliasing the original table's nested chartable vectors.
     let copy = make_category_table_object()?;
     let default = super::chartable::builtin_char_table_range(vec![*source, Value::NIL], None)?;
-    if default.is_vector() {
+    if boolvec::is_bool_vector(&default) {
         super::chartable::builtin_set_char_table_range(
-            vec![copy, Value::NIL, clone_vector_value(&default)?],
+            vec![copy, Value::NIL, copy_category_set(&default)?],
             None,
         )?;
     }
@@ -306,8 +305,8 @@ fn deep_copy_category_table(source: &Value) -> EvalResult {
     ])?;
 
     for (key, value) in super::chartable::char_table_local_entries(source)? {
-        let copied = if value.is_vector() {
-            clone_vector_value(&value)?
+        let copied = if boolvec::is_bool_vector(&value) {
+            copy_category_set(&value)?
         } else {
             value
         };
@@ -435,18 +434,14 @@ fn set_current_buffer_category_table_in_buffers(
 }
 
 fn category_set_contains(category_set: &Value, category: char) -> Result<bool, Flow> {
-    if !category_set.is_vector() {
+    let Some(view) = BoolVectorView::of(category_set) else {
         return Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("categorysetp"), *category_set],
         ));
     };
-    let vec = category_set.as_vector_data().unwrap();
-    let bit_idx = 2 + (category as usize);
-    Ok(vec
-        .get(bit_idx)
-        .and_then(|v| v.as_fixnum())
-        .is_some_and(|n| n != 0))
+    let index = category as usize;
+    Ok(index < view.len() && view.get(index))
 }
 
 pub(crate) fn char_has_category_in_table(
@@ -475,19 +470,13 @@ fn set_category_set_member(
     category: char,
     present: bool,
 ) -> Result<(), Flow> {
-    if !category_set.is_vector() {
+    if !boolvec::is_bool_vector(category_set) {
         return Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("categorysetp"), *category_set],
         ));
     };
-    let bit_idx = 2 + (category as usize);
-    if category_set
-        .as_vector_data()
-        .is_some_and(|vec| bit_idx < vec.len())
-    {
-        let _ = category_set.set_vector_slot(bit_idx, Value::fixnum(if present { 1 } else { 0 }));
-    }
+    let _ = boolvec::bool_vector_set(category_set, category as usize, present);
     Ok(())
 }
 
@@ -540,50 +529,28 @@ pub(crate) fn builtin_make_category_set(args: Vec<Value>) -> EvalResult {
         ));
     }
 
-    let mut bits = vec![Value::fixnum(0); 128];
+    let mut bits = 0u128;
     for &byte in string.as_bytes() {
         let category = check_category(&Value::fixnum(i64::from(byte)))?;
-        bits[category as usize] = Value::fixnum(1);
+        bits |= 1u128 << category;
     }
-
-    crate::emacs_core::chartable::note_tagged_vector_created();
-    let mut vec = Vec::with_capacity(130);
-    vec.push(Value::symbol("--bool-vector--"));
-    vec.push(Value::fixnum(128));
-    vec.extend(bits);
-    Ok(Value::vector(vec))
+    Ok(make_category_set_from_bits(bits))
 }
 
 pub(crate) fn builtin_category_set_mnemonics(args: Vec<Value>) -> EvalResult {
     expect_args("category-set-mnemonics", &args, 1)?;
 
-    if !&args[0].is_vector() {
+    // GNU `CHECK_CATEGORY_SET`: a bool-vector of exactly 128 bits.
+    let Some(bits) = category_set_bits(&args[0]) else {
         return Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("categorysetp"), args[0]],
         ));
     };
 
-    let bits = args[0].as_vector_data().unwrap();
-    let valid_shape = bits.len() >= 130
-        && bits[0].as_symbol_id() == Some(crate::emacs_core::chartable::bool_vector_tag_sym_id())
-        && bits[1].is_fixnum();
-    if !valid_shape {
-        return Err(signal(
-            LispCondition::WrongTypeArgument,
-            vec![Value::symbol("categorysetp"), args[0]],
-        ));
-    }
-
     let mut out = String::new();
     for idx in CATEGORY_MIN as usize..=CATEGORY_MAX as usize {
-        let is_set = match bits.get(2 + idx) {
-            None => false,
-            Some(v) if v.is_nil() => false,
-            Some(v) if v.as_fixnum() == Some(0) => false,
-            _ => true,
-        };
-        if is_set {
+        if bits & (1u128 << idx) != 0 {
             out.push(idx as u8 as char);
         }
     }

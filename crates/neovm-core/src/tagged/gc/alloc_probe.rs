@@ -52,6 +52,7 @@ allocation_kinds! {
     Timer => ("Timer", super::TimerObj),
     SurfaceHandle => ("SurfaceHandle", super::SurfaceObj),
     VideoHandle => ("VideoHandle", super::VideoObj),
+    BoolVector => ("BoolVector", super::BoolVectorObj),
     ThreadingHandle => ("ThreadingHandle", super::ThreadingHandleObj),
 }
 /// Histogram bucket upper bounds (bytes).
@@ -105,6 +106,7 @@ fn kind_index(header: *const GcHeader) -> usize {
             VecLikeType::Timer => AllocKind::Timer,
             VecLikeType::SurfaceHandle => AllocKind::SurfaceHandle,
             VecLikeType::VideoHandle => AllocKind::VideoHandle,
+            VecLikeType::BoolVector => AllocKind::BoolVector,
         },
     };
     kind as usize

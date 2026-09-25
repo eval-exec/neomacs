@@ -990,6 +990,7 @@ impl TaggedValue {
                 VecLikeType::Bignum => "integer",
                 VecLikeType::SymbolWithPos => "symbol-with-pos",
                 VecLikeType::Finalizer => "finalizer",
+                VecLikeType::BoolVector => "bool-vector",
                 VecLikeType::Sqlite => "sqlite",
                 VecLikeType::Thread => "thread",
                 VecLikeType::Mutex => "mutex",

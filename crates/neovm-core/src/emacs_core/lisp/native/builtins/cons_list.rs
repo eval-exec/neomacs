@@ -450,6 +450,9 @@ pub(crate) fn builtin_length_value(sequence: Value) -> EvalResult {
         ValueKind::Veclike(VecLikeType::CharTable) => Ok(Value::fixnum(
             super::chartable::char_table_length(&sequence).unwrap(),
         )),
+        ValueKind::Veclike(VecLikeType::BoolVector) => Ok(Value::fixnum(
+            super::boolvec::bool_vector_length(&sequence).unwrap_or(0),
+        )),
         ValueKind::Veclike(VecLikeType::Vector) | ValueKind::Veclike(VecLikeType::Record) => {
             Ok(Value::fixnum(vector_sequence_length(&sequence)))
         }
@@ -517,7 +520,9 @@ fn sequence_length_less_than(sequence: &Value, target: i64) -> Result<bool, Flow
         ValueKind::Veclike(VecLikeType::CharTable) => {
             Ok(super::chartable::char_table_length(sequence).unwrap() < target)
         }
-        ValueKind::Veclike(VecLikeType::Vector) | ValueKind::Veclike(VecLikeType::Record) => {
+        ValueKind::Veclike(VecLikeType::Vector)
+        | ValueKind::Veclike(VecLikeType::Record)
+        | ValueKind::Veclike(VecLikeType::BoolVector) => {
             Ok(vector_sequence_length(sequence) < target)
         }
         ValueKind::Cons => {
@@ -543,7 +548,9 @@ fn sequence_length_equal(sequence: &Value, target: i64) -> Result<bool, Flow> {
         ValueKind::Veclike(VecLikeType::CharTable) => {
             Ok(super::chartable::char_table_length(sequence).unwrap() == target)
         }
-        ValueKind::Veclike(VecLikeType::Vector) | ValueKind::Veclike(VecLikeType::Record) => {
+        ValueKind::Veclike(VecLikeType::Vector)
+        | ValueKind::Veclike(VecLikeType::Record)
+        | ValueKind::Veclike(VecLikeType::BoolVector) => {
             Ok(vector_sequence_length(sequence) == target)
         }
         ValueKind::Cons => {
@@ -573,7 +580,9 @@ fn sequence_length_greater_than(sequence: &Value, target: i64) -> Result<bool, F
         ValueKind::Veclike(VecLikeType::CharTable) => {
             Ok(super::chartable::char_table_length(sequence).unwrap() > target)
         }
-        ValueKind::Veclike(VecLikeType::Vector) | ValueKind::Veclike(VecLikeType::Record) => {
+        ValueKind::Veclike(VecLikeType::Vector)
+        | ValueKind::Veclike(VecLikeType::Record)
+        | ValueKind::Veclike(VecLikeType::BoolVector) => {
             Ok(vector_sequence_length(sequence) > target)
         }
         ValueKind::Cons => {
@@ -879,19 +888,10 @@ fn builtin_append_slice_impl(args: &[Value]) -> EvalResult {
                         append_element(&mut result, &mut last, item);
                     }
                 }
-                ValueKind::Veclike(VecLikeType::Vector)
-                    if super::chartable::is_bool_vector(arg) =>
+                ValueKind::Veclike(VecLikeType::Vector | VecLikeType::BoolVector)
+                    if super::boolvec::is_bool_vector(arg) =>
                 {
-                    let len = super::chartable::bool_vector_length(arg).unwrap_or_default();
-                    for index in 0..usize::try_from(len).unwrap_or_default() {
-                        let item = super::chartable::bool_vector_ref_value(arg, index).ok_or_else(
-                            || {
-                                signal(
-                                    LispCondition::WrongTypeArgument,
-                                    vec![Value::symbol("bool-vector-p"), *arg],
-                                )
-                            },
-                        )?;
+                    for item in super::boolvec::bool_vector_elements(arg).unwrap_or_default() {
                         append_element(&mut result, &mut last, item);
                     }
                 }
@@ -967,18 +967,12 @@ pub(crate) fn builtin_reverse(args: Vec<Value>) -> EvalResult {
     }
 
     fn reverse_bool_vector(value: Value) -> EvalResult {
-        let Some(mut data) = value.as_vector_data().map(|items| items.to_vec()) else {
-            return Err(signal(
+        super::boolvec::reverse_bool_vector(&value).ok_or_else(|| {
+            signal(
                 LispCondition::WrongTypeArgument,
                 vec![Value::symbol("sequencep"), value],
-            ));
-        };
-        let logical_len = super::chartable::bool_vector_length(&value).unwrap_or_default() as usize;
-        let bits_end = 2 + logical_len;
-        if data.len() >= bits_end {
-            data[2..bits_end].reverse();
-        }
-        Ok(Value::vector(data))
+            )
+        })
     }
 
     expect_args("reverse", &args, 1)?;
@@ -1004,6 +998,7 @@ pub(crate) fn builtin_reverse(args: Vec<Value>) -> EvalResult {
             items.reverse();
             Ok(Value::vector(items))
         }
+        ValueKind::Veclike(VecLikeType::BoolVector) => reverse_bool_vector(args[0]),
         ValueKind::String => reverse_string(args[0]),
         _ => Err(signal(
             LispCondition::WrongTypeArgument,
@@ -1056,18 +1051,7 @@ pub(crate) fn nreverse_value(arg: Value) -> EvalResult {
                     vec![Value::symbol("arrayp"), arg],
                 ));
             }
-            if super::chartable::is_bool_vector(&arg) {
-                let logical_len =
-                    super::chartable::bool_vector_length(&arg).unwrap_or_default() as usize;
-                let bits_end = 2 + logical_len;
-                let mut data = arg
-                    .as_vector_data()
-                    .map(|items| items.to_vec())
-                    .unwrap_or_default();
-                if data.len() >= bits_end {
-                    data[2..bits_end].reverse();
-                }
-                let _ = arg.replace_vector_data(data);
+            if super::boolvec::nreverse_bool_vector(&arg) {
                 return Ok(arg);
             }
             let mut data = arg
@@ -1076,6 +1060,10 @@ pub(crate) fn nreverse_value(arg: Value) -> EvalResult {
                 .unwrap_or_default();
             data.reverse();
             let _ = arg.replace_vector_data(data);
+            Ok(arg)
+        }
+        ValueKind::Veclike(VecLikeType::BoolVector) => {
+            super::boolvec::nreverse_bool_vector(&arg);
             Ok(arg)
         }
         ValueKind::String => builtin_reverse(vec![arg]),
@@ -1612,6 +1600,10 @@ fn copy_sequence_value(arg: Value) -> EvalResult {
             let items = arg.as_record_data().unwrap().clone();
             Ok(Value::make_record(items))
         }
+        // GNU `Fcopy_sequence`: always a fresh bool-vector.
+        ValueKind::Veclike(VecLikeType::BoolVector) => {
+            Ok(super::boolvec::copy_bool_vector(&arg).expect("a bool-vector"))
+        }
         _ => Err(signal(
             LispCondition::WrongTypeArgument,
             vec![Value::symbol("sequencep"), arg],
@@ -1771,6 +1763,7 @@ pub(crate) fn builtin_elt(args: Vec<Value>) -> EvalResult {
         ValueKind::Cons | ValueKind::Nil => builtin_nth(vec![args[1], args[0]]),
         ValueKind::Veclike(VecLikeType::Vector)
         | ValueKind::Veclike(VecLikeType::CharTable)
+        | ValueKind::Veclike(VecLikeType::BoolVector)
         | ValueKind::String => builtin_aref(vec![args[0], args[1]]),
         _ => Err(signal(
             LispCondition::WrongTypeArgument,
@@ -1811,6 +1804,7 @@ pub(crate) fn builtin_elt_values(sequence: Value, n: Value) -> EvalResult {
         ValueKind::Cons | ValueKind::Nil => builtin_nth_values(n, sequence),
         ValueKind::Veclike(VecLikeType::Vector)
         | ValueKind::Veclike(VecLikeType::CharTable)
+        | ValueKind::Veclike(VecLikeType::BoolVector)
         | ValueKind::String => builtin_aref_values(sequence, n),
         _ => Err(signal(
             LispCondition::WrongTypeArgument,

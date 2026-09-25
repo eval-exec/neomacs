@@ -978,6 +978,7 @@ impl TaggedHeap {
             | VecLikeType::Marker
             | VecLikeType::Subr
             | VecLikeType::Bignum
+            | VecLikeType::BoolVector
             | VecLikeType::Sqlite
             | VecLikeType::UserPtr
             | VecLikeType::SurfaceHandle
@@ -1366,6 +1367,9 @@ impl TaggedHeap {
                     },
                     VecLikeType::SubCharTable => unsafe {
                         drop(Box::from_raw(ptr as *mut SubCharTableObj))
+                    },
+                    VecLikeType::BoolVector => unsafe {
+                        drop(Box::from_raw(ptr as *mut BoolVectorObj))
                     },
                     VecLikeType::HashTable => unsafe {
                         drop(Box::from_raw(ptr as *mut HashTableObj))
