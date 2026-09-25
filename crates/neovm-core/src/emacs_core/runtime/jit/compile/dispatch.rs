@@ -1166,7 +1166,9 @@ fn call_spec_finish(
                 cache::count_native_status(status);
                 cache::direct_call_cold(ctx_ptr, bc, callee, leaf, status)
             }
-            FastRun::Framed(outcome) => cache::finish_framed_run(ctx_ptr, bc, callee, outcome),
+            FastRun::Framed(outcome) => {
+                cache::finish_framed_run(ctx_ptr, bc, callee, leaf, outcome)
+            }
         };
         let outcome = match outcome {
             NativeCallOutcome::Fallback => {

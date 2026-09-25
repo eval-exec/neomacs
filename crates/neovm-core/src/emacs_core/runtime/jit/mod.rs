@@ -123,6 +123,12 @@ pub mod mir;
 #[cfg(feature = "jit")]
 pub mod aot;
 
+/// Deopt-driven reoptimization: classification and census of every deopt,
+/// feedback widening, invalidation and backoff. Only built with the `jit`
+/// feature. See `jit/reopt.rs`.
+#[cfg(feature = "jit")]
+pub mod reopt;
+
 /// Always-on metering of the synchronous compile stalls the cache-miss path
 /// pays on the eval thread — the evidence base for background compilation.
 /// Only built with the `jit` feature. See `jit/stats.rs`.

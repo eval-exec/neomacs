@@ -94,7 +94,16 @@ pub(crate) struct CompileStats {
     pub mir_taken: u64,
     /// Callees successfully spliced in by `inline_pure_single_block_callees`.
     pub mir_inlined_callees: u64,
+    /// Deopts consumed on this thread, by cause (`reopt::DeoptCause::
+    /// census_index`, names in `DeoptCause::CENSUS_NAMES`). Release builds
+    /// count too: this is the steady-state deopt census.
+    pub deopt_causes: [u64; DEOPT_CAUSES],
+    /// Of those, deopts of OSR leaves.
+    pub deopt_osr: u64,
 }
+
+/// Number of deopt census buckets.
+pub(crate) const DEOPT_CAUSES: usize = super::reopt::DeoptCause::CENSUS_NAMES.len();
 
 impl CompileStats {
     /// The counts accumulated since `base`, an earlier snapshot of the same
@@ -128,7 +137,14 @@ impl CompileStats {
             mir_tier_rejected: d(self.mir_tier_rejected, base.mir_tier_rejected),
             mir_taken: d(self.mir_taken, base.mir_taken),
             mir_inlined_callees: d(self.mir_inlined_callees, base.mir_inlined_callees),
+            deopt_causes: std::array::from_fn(|i| d(self.deopt_causes[i], base.deopt_causes[i])),
+            deopt_osr: d(self.deopt_osr, base.deopt_osr),
         }
+    }
+
+    /// Every deopt counted, all causes.
+    pub(crate) fn deopts(&self) -> u64 {
+        self.deopt_causes.iter().sum()
     }
 }
 
@@ -439,6 +455,30 @@ pub(super) fn record_compile(
     }
 }
 
+/// Record one consumed deopt by cause (`reopt::note_deopt`). Cold: deopt
+/// exits only.
+pub(crate) fn record_deopt(cause: super::reopt::DeoptCause, osr: bool) {
+    STATS.with(|s| {
+        let mut stats = s.get();
+        stats.deopt_causes[cause.census_index()] += 1;
+        if osr {
+            stats.deopt_osr += 1;
+        }
+        s.set(stats);
+    });
+}
+
+/// The deopt census, rendered `name=count` for every nonzero cause.
+pub(crate) fn format_deopt_causes(s: &CompileStats) -> String {
+    let parts: Vec<String> = super::reopt::DeoptCause::CENSUS_NAMES
+        .iter()
+        .zip(s.deopt_causes)
+        .filter(|&(_, n)| n > 0)
+        .map(|(name, n)| format!("{name}={n}"))
+        .collect();
+    parts.join(" ")
+}
+
 /// Record a cache miss served from the AOT store — a pre-warmed leaf, no JIT
 /// compile (and so no stall timed into the compile aggregates).
 pub(super) fn record_aot_load(ops_len: usize) {
@@ -458,7 +498,8 @@ pub(crate) fn format_summary(s: &CompileStats) -> String {
         "compiles={} ok={} native_entries={} dispatch={}/{} not_profitable={} not_compilable={} aot_loads={} retiers={} \
          total_us={} mean_us={mean_us} max_us={} max_fn_len={} \
          mir[taken={} tier_rej={} lower_fail={} build_fail={} gate_opt={} gate_rest={} gate_prefix={} inlined={}] \
-         hist[<100us,<250us,<500us,<1ms,<2.5ms,<5ms,<10ms,>=10ms]={:?}",
+         hist[<100us,<250us,<500us,<1ms,<2.5ms,<5ms,<10ms,>=10ms]={:?} \
+         deopts[total={} osr={}{}{}]",
         s.total_compiles,
         s.compiled_ok,
         s.native_entries,
@@ -480,6 +521,10 @@ pub(crate) fn format_summary(s: &CompileStats) -> String {
         s.mir_gate_prefix,
         s.mir_inlined_callees,
         s.histogram_us,
+        s.deopts(),
+        s.deopt_osr,
+        if s.deopts() > 0 { " " } else { "" },
+        format_deopt_causes(s),
     )
 }
 

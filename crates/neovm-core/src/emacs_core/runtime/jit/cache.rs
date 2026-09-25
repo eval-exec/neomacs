@@ -28,6 +28,7 @@ use super::compile::{
     CompiledLeaf, LeafObsSnapshot, LeafTier, LeafTotals, NativeRun, stash_pending_flow,
     take_pending_flow,
 };
+use super::reopt::{DeoptEvent, LeafOrigin};
 use super::stats;
 use crate::emacs_core::bytecode::ByteCodeFunction;
 use crate::emacs_core::error::Flow;
@@ -546,6 +547,34 @@ pub(crate) fn try_run_osr(
     if let Some((_, stack_base)) = bind_frame {
         // SAFETY: native execution has returned; only a dormant Context length read.
         debug_assert_eq!(unsafe { (*ctx).jit_bind_stack.len() }, stack_base);
+    }
+    // The deopt hook runs before the interpreter installs the resume state
+    // (the local `leaf` keeps the OSR leaf alive across it).
+    match &run {
+        NativeRun::Deopt => super::reopt::note_deopt(
+            ctx,
+            func,
+            &leaf,
+            LeafOrigin::Osr {
+                header_pc: osr_pc,
+                snapshot: stack,
+            },
+            DeoptEvent::Rerun,
+        ),
+        NativeRun::DeoptAt(resume) => super::reopt::note_deopt(
+            ctx,
+            func,
+            &leaf,
+            LeafOrigin::Osr {
+                header_pc: osr_pc,
+                snapshot: stack,
+            },
+            DeoptEvent::Precise {
+                pc: resume.pc,
+                stack: &resume.stack,
+            },
+        ),
+        NativeRun::Ok(_) | NativeRun::Signal => {}
     }
     if std::env::var_os("NEOMACS_OSR_DEBUG").is_some() {
         let tag = match &run {
@@ -1470,6 +1499,7 @@ pub(crate) fn run_resolved_leaf(
         ctx,
         func,
         func_value,
+        leaf,
         leaf.call_consts(ctx as *mut u8, func.constants.as_ptr(), args),
     )
 }
@@ -1536,18 +1566,19 @@ fn run_resolved_leaf_native_framed(
     args_ptr: *const i64,
 ) -> NativeCallOutcome {
     let outcome = leaf.call_premarshaled_consts(ctx as *mut u8, func.constants.as_ptr(), args_ptr);
-    finish_framed_run(ctx, func, func_value, outcome)
+    finish_framed_run(ctx, func, func_value, leaf, outcome)
 }
 
 /// Map a framed native run's outcome to the shim's compact outcome: the
 /// signal fold and the precise-deopt resume. Shared with the spec shim's
 /// fast path, which makes the framed call itself and hands a non-OK
-/// outcome here.
+/// outcome here. `leaf` is the leaf that ran (the deopt hook's subject).
 #[inline(never)]
 pub(crate) fn finish_framed_run(
     ctx: *mut Context,
     func: &ByteCodeFunction,
     func_value: Value,
+    leaf: &CompiledLeaf,
     outcome: NativeRun,
 ) -> NativeCallOutcome {
     #[cfg(any(test, debug_assertions))]
@@ -1556,7 +1587,10 @@ pub(crate) fn finish_framed_run(
         NativeRun::Ok(bits) => NativeCallOutcome::Value(Value::from_bits(bits)),
         // call_premarshaled maps null-vmctx deopts to Deopt; defensive only —
         // the caller re-runs the callee on the interpreter.
-        NativeRun::Deopt => NativeCallOutcome::Fallback,
+        NativeRun::Deopt => {
+            super::reopt::note_deopt(ctx, func, leaf, LeafOrigin::Entry, DeoptEvent::Rerun);
+            NativeCallOutcome::Fallback
+        }
         // Fold a contained shim panic into its signal flow at exactly the
         // boundary the old Result-shaped path did (take_pending_flow owns the
         // panic-wins conversion), then put the flow straight back — the shim
@@ -1568,16 +1602,18 @@ pub(crate) fn finish_framed_run(
             stash_pending_flow(flow);
             NativeCallOutcome::FlowStashed
         }
-        NativeRun::DeoptAt(resume) => deopt_resume_outcome(ctx, func, func_value, *resume),
+        NativeRun::DeoptAt(resume) => deopt_resume_outcome(ctx, func, func_value, leaf, *resume),
     }
 }
 
 /// Precise-deopt resume shared by the wrapped and direct native paths: run
 /// the Tier-0 interpreter mid-function off the [`DeoptResume`] payload.
+/// `leaf` is the entry leaf that deopted (the deopt hook's subject).
 fn deopt_resume_outcome(
     ctx: *mut Context,
     func: &ByteCodeFunction,
     func_value: Value,
+    leaf: &CompiledLeaf,
     resume: crate::emacs_core::jit::compile::DeoptResume,
 ) -> NativeCallOutcome {
     let crate::emacs_core::jit::compile::DeoptResume {
@@ -1588,6 +1624,15 @@ fn deopt_resume_outcome(
         spec_base,
         cond_base,
     } = resume;
+    // Before the resumed frame seeds `stack` into the traced bc_buf: the
+    // hook neither allocates on the Lisp heap nor reaches a safepoint.
+    super::reopt::note_deopt(
+        ctx,
+        func,
+        leaf,
+        LeafOrigin::Entry,
+        DeoptEvent::Precise { pc, stack: &stack },
+    );
     if ctx.is_null() {
         return NativeCallOutcome::Fallback;
     }
@@ -1641,7 +1686,9 @@ pub(crate) fn direct_call_cold(
         // Precise deopt: no bind/cond frames exist on the direct path (the
         // eligibility gate excludes them).
         return match leaf.deopt_at_outcome(ctx as *mut u8, None, None) {
-            NativeRun::DeoptAt(resume) => deopt_resume_outcome(ctx, func, func_value, *resume),
+            NativeRun::DeoptAt(resume) => {
+                deopt_resume_outcome(ctx, func, func_value, leaf, *resume)
+            }
             // deopt_at_outcome only degrades to plain Deopt with a null vmctx.
             _ => NativeCallOutcome::Fallback,
         };
@@ -1650,6 +1697,7 @@ pub(crate) fn direct_call_cold(
     // (the same defensive rule invoke_native applies).
     leaf.obs.note_deopt_rerun();
     leaf.assert_rerunnable();
+    super::reopt::note_deopt(ctx, func, leaf, LeafOrigin::Entry, DeoptEvent::Rerun);
     NativeCallOutcome::Fallback
 }
 
@@ -1758,13 +1806,17 @@ fn finish_native_run(
     ctx: *mut Context,
     func: &ByteCodeFunction,
     func_value: Value,
+    leaf: &CompiledLeaf,
     outcome: NativeRun,
 ) -> Result<Option<usize>, Flow> {
     #[cfg(any(test, debug_assertions))]
     count_native_outcome(&outcome);
     match outcome {
         NativeRun::Ok(bits) => Ok(Some(bits)),
-        NativeRun::Deopt => Ok(None),
+        NativeRun::Deopt => {
+            super::reopt::note_deopt(ctx, func, leaf, LeafOrigin::Entry, DeoptEvent::Rerun);
+            Ok(None)
+        }
         NativeRun::DeoptAt(resume) => {
             let crate::emacs_core::jit::compile::DeoptResume {
                 pc,
@@ -1774,6 +1826,14 @@ fn finish_native_run(
                 spec_base,
                 cond_base,
             } = *resume;
+            // Before the resumed frame seeds `stack` into the traced bc_buf.
+            super::reopt::note_deopt(
+                ctx,
+                func,
+                leaf,
+                LeafOrigin::Entry,
+                DeoptEvent::Precise { pc, stack: &stack },
+            );
             if ctx.is_null() {
                 // call() maps null-vmctx deopts to Deopt; defensive only.
                 return Ok(None);
