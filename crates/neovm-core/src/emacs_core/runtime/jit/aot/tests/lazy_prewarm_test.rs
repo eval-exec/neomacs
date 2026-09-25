@@ -50,7 +50,7 @@ fn install_lazy_preload(ev: &mut Context, members: &[Member]) -> tempfile::TempD
         prekeys.insert(
             member.name.into(),
             ManifestPreKey {
-                member: true,
+                class: PreloadClass::Prewarm,
                 ops_len: member.ops.len(),
                 arity: 1,
                 hash: member.hash(),
@@ -263,7 +263,7 @@ fn lazy_prewarm_marks_pdump_stubs_without_materializing_them() {
     prekeys.insert(
         leaf.name.as_str().into(),
         ManifestPreKey {
-            member: true,
+            class: PreloadClass::Prewarm,
             ops_len: leaf.ops.len(),
             arity: leaf.arity,
             hash: leaf_content_hash(leaf.ops, leaf.constants, leaf.arity).expect("hashable"),
@@ -336,28 +336,30 @@ fn leaves_hash(ctx: &Context, name: &str) -> u128 {
         .expect("hashable")
 }
 
-/// Startup marking streams the manifest's `m` lines (P4.2 A2): members only,
-/// escaped names decoded, the interlock header enforced, malformed lines
-/// skipped.
+/// Startup marking streams the manifest's member lines (P4.2 A2, A4): `m`
+/// and `c` members only, escaped names decoded, the interlock header
+/// enforced, malformed lines skipped.
 #[test]
 fn manifest_member_stream_yields_members_behind_the_interlock() {
-    let key = |member, ops_len, arity, hash| ManifestPreKey {
-        member,
+    let key = |class, ops_len, arity, hash| ManifestPreKey {
+        class,
         ops_len,
         arity,
         hash,
     };
     let header = |fingerprint: &str| {
         format!(
-            "version {PRELOAD_MANIFEST_VERSION}\nabi_tag {ABI_TAG:08x}\nfingerprint {fingerprint}\nleaves 5\n"
+            "version {PRELOAD_MANIFEST_VERSION}\nabi_tag {ABI_TAG:08x}\nfingerprint {fingerprint}\nleaves 6\n"
         )
     };
+    use PreloadClass::{AtTierUp, NonMember, Prewarm};
     let mut body = String::new();
-    body.push_str(&manifest_leaf_line(true, 3, 1, 0xabc, "plain-member"));
-    body.push_str(&manifest_leaf_line(false, 4, 1, 0xdef, "non-member"));
-    body.push_str(&manifest_leaf_line(true, 5, 2, 7, "with space"));
+    body.push_str(&manifest_leaf_line(Prewarm, 3, 1, 0xabc, "plain-member"));
+    body.push_str(&manifest_leaf_line(NonMember, 4, 1, 0xdef, "non-member"));
+    body.push_str(&manifest_leaf_line(Prewarm, 5, 2, 7, "with space"));
     body.push_str("leaf m 1 1 zz broken-hash\n");
-    body.push_str(&manifest_leaf_line(true, 6, 0, u128::MAX, "%leading"));
+    body.push_str(&manifest_leaf_line(AtTierUp, 9, 1, 0x99, "call-glue"));
+    body.push_str(&manifest_leaf_line(Prewarm, 6, 0, u128::MAX, "%leading"));
 
     let running = crate::emacs_core::pdump::fingerprint_hex();
     let text = header(running) + &body;
@@ -368,9 +370,10 @@ fn manifest_member_stream_yields_members_behind_the_interlock() {
     assert_eq!(
         seen,
         vec![
-            ("plain-member".to_string(), key(true, 3, 1, 0xabc)),
-            ("with space".to_string(), key(true, 5, 2, 7)),
-            ("%leading".to_string(), key(true, 6, 0, u128::MAX)),
+            ("plain-member".to_string(), key(Prewarm, 3, 1, 0xabc)),
+            ("with space".to_string(), key(Prewarm, 5, 2, 7)),
+            ("call-glue".to_string(), key(AtTierUp, 9, 1, 0x99)),
+            ("%leading".to_string(), key(Prewarm, 6, 0, u128::MAX)),
         ]
     );
 
@@ -381,4 +384,93 @@ fn manifest_member_stream_yields_members_behind_the_interlock() {
         |name, _| stale.push(name.to_string())
     ));
     assert!(stale.is_empty());
+}
+
+/// P4.2 A4: a `c` member (call glue) is not prewarmed. It runs in the
+/// interpreter like any cold function, and the consult serves it from the
+/// preload exactly when the JIT would compile it: the AOT leaf replaces that
+/// compile instead of moving it to call 1. `NEOVM_AOT_PREWARM=all` restores
+/// the old from-call-1 behavior.
+#[cfg(target_os = "linux")]
+#[test]
+fn call_glue_members_are_served_at_tier_up_not_from_call_1() {
+    for policy in [PrewarmPolicy::Profitable, PrewarmPolicy::All] {
+        let mut ev = Context::new_minimal_vm_harness();
+        let glue = Member {
+            name: "lazy-glue-add5",
+            ops: vec![Op::Constant(0), Op::Add, Op::Return],
+            constants: vec![Value::make_int(5)],
+        };
+        let _dir = install_lazy_preload(&mut ev, std::slice::from_ref(&glue));
+        // The same body classed `c` by the producer.
+        let mut prekeys = PreKeyMap::new();
+        prekeys.insert(
+            glue.name.into(),
+            ManifestPreKey {
+                class: PreloadClass::AtTierUp,
+                ops_len: glue.ops.len(),
+                arity: 1,
+                hash: glue.hash(),
+            },
+        );
+        test_support::inject_prekeys(prekeys);
+        test_support::set_forced_prewarm_policy(policy);
+
+        let prewarmed = policy == PrewarmPolicy::All;
+        assert_eq!(
+            mark_preload_members_prewarmed(&ev),
+            (1, usize::from(prewarmed))
+        );
+        let f = function_of(&ev, glue.name);
+        let bc = f.get_bytecode_data().unwrap();
+        let rt = bc.jit_runtime();
+        let id = rt.compiled_id().expect("stashed");
+        assert_eq!(prewarm_hash_for(id), Some(glue.hash()), "{policy:?}");
+        assert_eq!(rt.is_aot_prewarmed(), prewarmed, "{policy:?}");
+
+        super::super::stats::reset_compile_stats();
+        assert_eq!(
+            ev.apply1(f, Value::make_int(1)).unwrap(),
+            Value::make_int(6)
+        );
+        let loads_after_first_call = super::super::stats::compile_stats_snapshot().aot_loads;
+        assert_eq!(
+            loads_after_first_call,
+            u64::from(prewarmed),
+            "{policy:?}: call glue runs interpreted until its tier-up"
+        );
+        if !prewarmed {
+            // Reach the tier-up heat: the next call is the one the JIT
+            // would compile, and the preload serves it instead.
+            rt.set_heat_for_test(crate::emacs_core::jit::Runtime::HOT_THRESHOLD);
+            assert_eq!(
+                ev.apply1(f, Value::make_int(2)).unwrap(),
+                Value::make_int(7)
+            );
+        }
+        let stats = super::super::stats::compile_stats_snapshot();
+        assert_eq!(stats.aot_loads, 1, "{policy:?} {stats:?}");
+        assert_eq!(stats.total_compiles, 0, "{policy:?} {stats:?}");
+        assert_eq!(
+            super::super::cache::cached_leaf_is_aot_for_test(id),
+            Some(true)
+        );
+
+        super::super::cache::clear();
+        test_support::reset();
+    }
+}
+
+/// The consult's schedule for call glue is the JIT's profit gate: a
+/// call-heavy body is served only on the deferred re-attempt that bypasses
+/// the gate; a body the gate passes is served on its first tier-up.
+#[test]
+fn call_glue_is_servable_when_the_jit_would_compile_it() {
+    let glue_ops = [Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
+    let glue_consts = [Value::symbol("lazy-glue-callee")];
+    assert!(!jit_would_compile_now(&glue_ops, &glue_consts, false));
+    assert!(jit_would_compile_now(&glue_ops, &glue_consts, true));
+    let arith_ops = [Op::Constant(0), Op::Add, Op::Return];
+    let arith_consts = [Value::make_int(5)];
+    assert!(jit_would_compile_now(&arith_ops, &arith_consts, false));
 }

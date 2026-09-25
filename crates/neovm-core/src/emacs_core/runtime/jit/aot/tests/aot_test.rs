@@ -1290,7 +1290,7 @@ fn manifest_v2_prekeys_round_trip_and_fail_closed_parsing() {
         (
             "plain-name",
             ManifestPreKey {
-                member: true,
+                class: PreloadClass::Prewarm,
                 ops_len: 3,
                 arity: 1,
                 hash: 0xdead_beef,
@@ -1299,7 +1299,7 @@ fn manifest_v2_prekeys_round_trip_and_fail_closed_parsing() {
         (
             "with space", // whitespace → hex-escaped token
             ManifestPreKey {
-                member: false,
+                class: PreloadClass::NonMember,
                 ops_len: 7,
                 arity: 2,
                 hash: 1,
@@ -1308,7 +1308,7 @@ fn manifest_v2_prekeys_round_trip_and_fail_closed_parsing() {
         (
             "%leading", // leading '%' → hex-escaped (escape marker collision)
             ManifestPreKey {
-                member: false,
+                class: PreloadClass::NonMember,
                 ops_len: 1,
                 arity: 0,
                 hash: 2,
@@ -1317,7 +1317,7 @@ fn manifest_v2_prekeys_round_trip_and_fail_closed_parsing() {
         (
             "", // empty name → escapes to the bare "%" token
             ManifestPreKey {
-                member: true,
+                class: PreloadClass::AtTierUp, // v3 `c`: call glue
                 ops_len: 2,
                 arity: 3,
                 hash: u128::MAX,
@@ -1327,7 +1327,7 @@ fn manifest_v2_prekeys_round_trip_and_fail_closed_parsing() {
     let mut text = String::from("version 2\nabi_tag 00000000\nfingerprint f00\nleaves 4\n");
     for (name, key) in &entries {
         text.push_str(&manifest_leaf_line(
-            key.member,
+            key.class,
             key.ops_len,
             key.arity,
             key.hash,
@@ -1409,6 +1409,9 @@ fn build_and_link_preload_writes_v2_prekey_manifest() {
     // The trailing Return is unreachable Throw padding, but it keeps the
     // vector seal-shaped so the pipeline hashes exactly these ops.
     let throw_consts = vec![Value::symbol("prod-pf-tag"), Value::make_int(1)];
+    // (lambda (x) (prod-pf-glue-callee x)): call glue (P4.2 A4).
+    let glue_ops = vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
+    let glue_consts = vec![Value::symbol("prod-pf-glue-callee")];
     for (name, f) in [
         (
             "prod-pf-member-add5",
@@ -1437,6 +1440,15 @@ fn build_and_link_preload_writes_v2_prekey_manifest() {
                 member_consts.clone(),
             ),
         ),
+        (
+            "prod-pf-glue",
+            mk(
+                vec![SymId(1)],
+                vec![],
+                glue_ops.clone(),
+                glue_consts.clone(),
+            ),
+        ),
     ] {
         let sym = crate::emacs_core::intern::intern(name);
         ev.obarray
@@ -1463,7 +1475,7 @@ fn build_and_link_preload_writes_v2_prekey_manifest() {
     assert_eq!(
         map.get("prod-pf-member-add5"),
         Some(&ManifestPreKey {
-            member: true,
+            class: PreloadClass::Prewarm,
             ops_len: 3,
             arity: 1,
             hash: member_hash
@@ -1474,7 +1486,7 @@ fn build_and_link_preload_writes_v2_prekey_manifest() {
     assert_eq!(
         map.get("prod-pf-nonmember-throw"),
         Some(&ManifestPreKey {
-            member: false,
+            class: PreloadClass::NonMember,
             ops_len: 4,
             arity: 1,
             hash: throw_hash
@@ -1484,6 +1496,17 @@ fn build_and_link_preload_writes_v2_prekey_manifest() {
     assert!(
         !map.contains_key("prod-pf-optional"),
         "&optional fns are not required-only → no pre-key"
+    );
+    let glue_hash = leaf_content_hash(&glue_ops, &glue_consts, 1).expect("hashable");
+    assert_eq!(
+        map.get("prod-pf-glue"),
+        Some(&ManifestPreKey {
+            class: PreloadClass::AtTierUp,
+            ops_len: 4,
+            arity: 1,
+            hash: glue_hash
+        }),
+        "a call-heavy member gets a `c` pre-key: served at its tier-up (P4.2 A4)"
     );
 }
 
@@ -1578,7 +1601,7 @@ fn prepopulate_manifest_prefilter_skips_nonmember_without_hashing() {
     map.insert(
         "pf-member-add5".into(),
         ManifestPreKey {
-            member: true,
+            class: PreloadClass::Prewarm,
             ops_len: 3,
             arity: 1,
             hash: m_hash,
@@ -1587,7 +1610,7 @@ fn prepopulate_manifest_prefilter_skips_nonmember_without_hashing() {
     map.insert(
         "pf-nonmember-sub1".into(),
         ManifestPreKey {
-            member: false,
+            class: PreloadClass::NonMember,
             ops_len: 3,
             arity: 1,
             hash: x_hash,
@@ -1683,7 +1706,7 @@ fn prepopulate_prekey_mismatch_fails_closed_to_hash_path() {
     map.insert(
         "pf-fc-add5".into(),
         ManifestPreKey {
-            member: false,
+            class: PreloadClass::NonMember,
             ops_len: 99,
             arity: 1,
             hash: 0,

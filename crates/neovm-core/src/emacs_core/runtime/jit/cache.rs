@@ -1675,16 +1675,9 @@ pub fn try_run_compiled(
                 && func.jit_runtime().patched_prefix() == 0
                 && func.jit_runtime().reopt_count() == 0
             {
-                let native_arity = func.params.required.len();
-                if let Some(mut leaf) = super::aot::try_load_leaf(
-                    func.executable_ops(),
-                    &func.constants,
-                    native_arity,
-                    func.jit_runtime()
-                        .compiled_id()
-                        .and_then(super::aot::prewarm_hash_for),
-                    obarray,
-                ) {
+                if let Some(mut leaf) =
+                    super::aot::try_load_leaf_for(func, bypass_profit_gate, obarray)
+                {
                     // AOT leaves never inline → no inline deps to register. Their
                     // reloc consts are rooted via the COMPILED walk (R1c-8).
                     leaf.obs.id = id;

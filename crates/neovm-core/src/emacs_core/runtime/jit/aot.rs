@@ -1535,19 +1535,85 @@ pub const PRELOAD_MANIFEST_NAME: &str = "libneomacs-preload.manifest";
 /// compat arm: manifests are co-produced with the `.so` on every fresh-build and
 /// pinned to the pdump by the fingerprint interlock, so a live v1 manifest is
 /// stale by construction.
-const PRELOAD_MANIFEST_VERSION: u32 = 2;
+/// v3 (P4.2 A4): a member is classed `m` (profitable native, prewarmed from its
+/// first call) or `c` (call glue, served when the JIT would compile it).
+const PRELOAD_MANIFEST_VERSION: u32 = 3;
 
-/// One parsed v2 manifest pre-key (task #11): the cheap per-NAME discriminators
+/// A hashable loadup function's class in the preload manifest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PreloadClass {
+    /// `m`: in the preload and worth running native from its first call
+    /// (the JIT's profit gate would compile it: loops, or arithmetic not
+    /// outnumbered by calls).
+    Prewarm,
+    /// `c` (P4.2 A4): in the preload, but call glue the profit gate defers.
+    /// Running it native from call 1 only moved compiles forward (78 -> 235
+    /// not_profitable refusals when forced), so it is served when the JIT
+    /// would compile it: the AOT leaf replaces that compile.
+    AtTierUp,
+    /// `x`: hashable but not in the preload (outside the AOT subset).
+    NonMember,
+}
+
+impl PreloadClass {
+    fn letter(self) -> char {
+        match self {
+            Self::Prewarm => 'm',
+            Self::AtTierUp => 'c',
+            Self::NonMember => 'x',
+        }
+    }
+
+    fn from_letter(letter: &str) -> Option<Self> {
+        match letter {
+            "m" => Some(Self::Prewarm),
+            "c" => Some(Self::AtTierUp),
+            "x" => Some(Self::NonMember),
+            _ => None,
+        }
+    }
+
+    /// Whether the preload `.so` carries an entry for the function.
+    pub(crate) fn is_member(self) -> bool {
+        !matches!(self, Self::NonMember)
+    }
+}
+
+/// Which preload members run native from their first call
+/// (`NEOVM_AOT_PREWARM`, read once).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PrewarmPolicy {
+    /// `profitable` (default): only [`PreloadClass::Prewarm`] members; call
+    /// glue waits for the JIT's own tier-up (P4.2 A4).
+    Profitable,
+    /// `all`: every member, as before A4 (the single-build A/B arm).
+    All,
+}
+
+fn prewarm_policy() -> PrewarmPolicy {
+    #[cfg(test)]
+    if let Some(policy) = test_support::forced_prewarm_policy() {
+        return policy;
+    }
+    static POLICY: std::sync::OnceLock<PrewarmPolicy> = std::sync::OnceLock::new();
+    *POLICY.get_or_init(|| match std::env::var("NEOVM_AOT_PREWARM").as_deref() {
+        Ok("all") => PrewarmPolicy::All,
+        _ => PrewarmPolicy::Profitable,
+    })
+}
+
+/// One parsed manifest pre-key (task #11): the cheap per-NAME discriminators
 /// the prepopulate pass consults BEFORE paying the SHA-256 content hash.
-/// `member` distinguishes the emitted preload set (`m` lines) from dump-time
-/// hashable NON-members (`x` lines — the skip class: a verified `x` key means
-/// the dlsym membership probe would miss, so the hash can be skipped outright).
+/// `class` distinguishes the emitted preload set (`m` and `c` lines) from
+/// dump-time hashable NON-members (`x` lines — the skip class: a verified `x`
+/// key means the dlsym membership probe would miss, so the hash can be
+/// skipped outright).
 /// `hash` is the dump-time content hash (diagnostic: the runtime always
 /// recomputes the LIVE body's hash before consulting the dlsym gate, which stays
 /// the membership ground truth; the recorded hash only feeds drift tracing).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ManifestPreKey {
-    pub(crate) member: bool,
+    pub(crate) class: PreloadClass,
     pub(crate) ops_len: usize,
     pub(crate) arity: usize,
     pub(crate) hash: u128,
@@ -1594,11 +1660,11 @@ fn manifest_unescape_name(tok: &str) -> Option<String> {
     String::from_utf8(bytes).ok()
 }
 
-/// Render ONE v2 pre-key line: `leaf <m|x> <ops_len> <arity> <hash> <name>\n`.
+/// Render ONE pre-key line: `leaf <m|c|x> <ops_len> <arity> <hash> <name>\n`.
 /// The single source for the line format — the parser ([`parse_preload_manifest`])
 /// and the producer ([`build_and_link_preload`]) both go through it / its tests.
 fn manifest_leaf_line(
-    member: bool,
+    class: PreloadClass,
     ops_len: usize,
     arity: usize,
     hash: u128,
@@ -1606,7 +1672,7 @@ fn manifest_leaf_line(
 ) -> String {
     format!(
         "leaf {} {ops_len} {arity} {hash:032x} {}\n",
-        if member { 'm' } else { 'x' },
+        class.letter(),
         manifest_escape_name(name),
     )
 }
@@ -1645,11 +1711,7 @@ fn parse_preload_manifest(text: &str) -> ParsedPreloadManifest {
             "leaves" => declared_leaves = it.next().and_then(|v| v.parse().ok()),
             "leaf" => {
                 let parsed = (|| {
-                    let member = match it.next()? {
-                        "m" => true,
-                        "x" => false,
-                        _ => return None,
-                    };
+                    let class = PreloadClass::from_letter(it.next()?)?;
                     let ops_len: usize = it.next()?.parse().ok()?;
                     let arity: usize = it.next()?.parse().ok()?;
                     let hash = u128::from_str_radix(it.next()?, 16).ok()?;
@@ -1660,7 +1722,7 @@ fn parse_preload_manifest(text: &str) -> ParsedPreloadManifest {
                     Some((
                         name,
                         ManifestPreKey {
-                            member,
+                            class,
                             ops_len,
                             arity,
                             hash,
@@ -1730,14 +1792,14 @@ fn manifest_interlock_ok(parsed: &ParsedPreloadManifest) -> bool {
 /// whose manifest fingerprint ≠ the running pdump, so a foreign/stale preload is
 /// a clean skip→JIT, never a crash), the ABI_TAG, the manifest version, and (v2,
 /// task #11) one PRE-KEY line per hashable required-only loadup fn: NAME +
-/// ops-count + arity + content hash, classed `m` (emitted preload member) or `x`
-/// (hashable non-member). The `x` class is what the startup prepopulate pass
-/// skips WITHOUT hashing (previously it paid a SHA-256 for all ~2195 candidates
-/// to discover the ~1489 non-members); `m` lines double as the name-attributed
-/// replacement for v1's anonymous per-hash diagnostic listing. Dedup'd bodies
-/// (distinct names, identical body) each get their own `m` line sharing the
-/// hash. `ctx` is the final pdump loaded in-process (the loadup closure).
-/// Returns the build stats.
+/// ops-count + arity + content hash, classed (v3, P4.2 A4) `m` (emitted preload
+/// member, prewarmed), `c` (emitted member that is call glue, served at its
+/// tier-up) or `x` (hashable non-member). The `x` class is what the eager
+/// prepopulate pass skips WITHOUT hashing (previously it paid a SHA-256 for
+/// all ~2195 candidates to discover the ~1489 non-members); `m`/`c` lines are
+/// what startup marking streams. Dedup'd bodies (distinct names, identical
+/// body) each get their own member line sharing the hash. `ctx` is the final
+/// pdump loaded in-process (the loadup closure). Returns the build stats.
 pub fn build_and_link_preload(
     ctx: &crate::emacs_core::eval::Context,
     out_dir: &std::path::Path,
@@ -1758,8 +1820,17 @@ pub fn build_and_link_preload(
             continue;
         };
         let member = is_d0_aot_candidate(leaf.ops, leaf.constants, leaf.arity, Some(&ctx.obarray));
+        // P4.2 A4: call glue (the JIT's profit gate would defer it) waits for
+        // its tier-up; everything else is prewarmed from call 1.
+        let class = if !member {
+            PreloadClass::NonMember
+        } else if super::compile::body_is_call_heavy(leaf.ops, leaf.constants) {
+            PreloadClass::AtTierUp
+        } else {
+            PreloadClass::Prewarm
+        };
         prekey_lines.push_str(&manifest_leaf_line(
-            member,
+            class,
             leaf.ops.len(),
             leaf.arity,
             hash,
@@ -3912,7 +3983,7 @@ fn preload_manifest_matches(manifest_path: &std::path::Path) -> bool {
     manifest_interlock_ok(&parse_preload_manifest(&text))
 }
 
-/// Load the v2 pre-key map for the preload beside the running executable
+/// Load the pre-key map for the preload beside the running executable
 /// (task #11). `None` when there is no manifest, the interlock fails, or the
 /// pre-key section is absent/malformed — in every case the caller
 /// ([`prepopulate_aot_from_preload`]) falls back to the exact pre-v2 per-fn
@@ -3945,7 +4016,7 @@ fn load_preload_prekeys() -> Option<PreKeyMap> {
     parsed.prekeys
 }
 
-/// Stream the MEMBER pre-keys (`m` lines) of the preload manifest beside the
+/// Stream the MEMBER pre-keys (`m` and `c` lines) of the preload manifest beside the
 /// running executable into `f`, for startup marking: the interlock header is
 /// checked first (`false` = no manifest or a refused one, nothing streamed),
 /// then each member line is parsed in place, with no map and no per-name
@@ -3957,7 +4028,7 @@ fn for_each_preload_member(mut f: impl FnMut(&str, ManifestPreKey)) -> bool {
     #[cfg(test)]
     if let Some(injected) = test_support::injected_prekeys() {
         for (name, key) in &injected {
-            if key.member {
+            if key.class.is_member() {
                 f(name, *key);
             }
         }
@@ -3997,7 +4068,11 @@ fn for_each_manifest_member(text: &str, mut f: impl FnMut(&str, ManifestPreKey))
         return false;
     }
     for line in lines {
-        let Some(fields) = line.strip_prefix("leaf m ") else {
+        let (class, fields) = if let Some(fields) = line.strip_prefix("leaf m ") {
+            (PreloadClass::Prewarm, fields)
+        } else if let Some(fields) = line.strip_prefix("leaf c ") {
+            (PreloadClass::AtTierUp, fields)
+        } else {
             continue;
         };
         let mut it = fields.split_whitespace();
@@ -4017,7 +4092,7 @@ fn for_each_manifest_member(text: &str, mut f: impl FnMut(&str, ManifestPreKey))
             Some((
                 name,
                 ManifestPreKey {
-                    member: true,
+                    class,
                     ops_len,
                     arity,
                     hash,
@@ -4199,6 +4274,49 @@ pub(crate) fn try_load_leaf(
     };
     let unit = load_unit(content_hash)?;
     load_leaf_from_unit(&unit, content_hash, arity, constants, obarray)
+}
+
+/// The cache-miss AOT consult for `func` (called only when it is eligible:
+/// required-only, no patched prefix, never deoptimized). A preload member
+/// uses its stashed manifest hash. One that is not prewarmed — call glue
+/// (P4.2 A4), or a member whose prewarm mark was cleared — joins the JIT's
+/// own schedule: it is served only when the JIT would compile it now
+/// (`bypass_profit_gate` is set on a deferred body's re-attempt), so the AOT
+/// leaf replaces a compile instead of moving it forward.
+#[inline(never)]
+pub(crate) fn try_load_leaf_for(
+    func: &crate::emacs_core::bytecode::ByteCodeFunction,
+    bypass_profit_gate: bool,
+    obarray: Option<&crate::emacs_core::symbol::Obarray>,
+) -> Option<super::compile::CompiledLeaf> {
+    let rt = func.jit_runtime();
+    let stashed = rt.compiled_id().and_then(prewarm_hash_for);
+    if stashed.is_some()
+        && !rt.is_aot_prewarmed()
+        && !jit_would_compile_now(func.executable_ops(), &func.constants, bypass_profit_gate)
+    {
+        return None;
+    }
+    try_load_leaf(
+        func.executable_ops(),
+        &func.constants,
+        func.params.required.len(),
+        stashed,
+        obarray,
+    )
+}
+
+/// Whether the JIT's profitability gate lets a compile of this body through
+/// now: the gate is off, the body is not call-heavy, or this is the deferred
+/// re-attempt that bypasses it (`compile::body_is_jit_profitable`).
+pub(crate) fn jit_would_compile_now(
+    ops: &[Op],
+    constants: &[Value],
+    bypass_profit_gate: bool,
+) -> bool {
+    bypass_profit_gate
+        || !super::compile::jit_profit_gate_on()
+        || !super::compile::body_is_call_heavy(ops, constants)
 }
 
 /// [`try_load_leaf`]'s preload leg for a marked member whose manifest hash is
@@ -4513,12 +4631,17 @@ pub fn mark_preload_members_prewarmed(ctx: &crate::emacs_core::eval::Context) ->
         if key.arity != arity {
             return;
         }
+        // P4.2 A4: call glue is not prewarmed; its hash is still stashed so
+        // the consult serves it once the JIT would compile it.
+        let prewarm = key.class == PreloadClass::Prewarm || prewarm_policy() == PrewarmPolicy::All;
         match func_val.bytecode_data_if_materialized() {
             Some(bc) => {
                 if key.ops_len != bc.executable_ops().len() {
                     return;
                 }
-                bc.jit_runtime().mark_aot_prewarmed();
+                if prewarm {
+                    bc.jit_runtime().mark_aot_prewarmed();
+                }
                 PREWARM_HASHES.with(|m| {
                     m.borrow_mut()
                         .insert(bc.jit_runtime().compiled_id_or_assign(), key.hash)
@@ -4531,11 +4654,13 @@ pub fn mark_preload_members_prewarmed(ctx: &crate::emacs_core::eval::Context) ->
             // lands when the stub materializes, on its first use.
             None => {
                 let addr = func_val.as_veclike_ptr().expect("byte code") as usize;
-                PREWARM_STUBS.with(|m| m.borrow_mut().insert(addr, key.hash));
+                PREWARM_STUBS.with(|m| m.borrow_mut().insert(addr, (key.hash, prewarm)));
                 PREWARM_STUBS_PENDING.with(|p| p.set(true));
             }
         }
-        marked += 1;
+        if prewarm {
+            marked += 1;
+        }
     });
     (candidates, marked)
 }
@@ -4543,8 +4668,9 @@ pub fn mark_preload_members_prewarmed(ctx: &crate::emacs_core::eval::Context) ->
 std::thread_local! {
     /// Preload members marked while still lazy pdump stubs, by object
     /// address (the mapped image never moves): the manifest hash to stash
-    /// when the stub materializes ([`note_materialized_stub`]).
-    static PREWARM_STUBS: std::cell::RefCell<std::collections::HashMap<usize, u128>> =
+    /// when the stub materializes ([`note_materialized_stub`]), and whether
+    /// to prewarm it then.
+    static PREWARM_STUBS: std::cell::RefCell<std::collections::HashMap<usize, (u128, bool)>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
     /// Whether [`PREWARM_STUBS`] may hold an entry: the materializer's one
     /// test when AOT is off or every marked stub has materialized.
@@ -4567,13 +4693,13 @@ fn adopt_prewarmed_stub(value: Value) {
     let Some(addr) = value.as_veclike_ptr().map(|p| p as usize) else {
         return;
     };
-    let Some(hash) = PREWARM_STUBS.with(|m| {
+    let Some((hash, prewarm)) = PREWARM_STUBS.with(|m| {
         let mut m = m.borrow_mut();
-        let hash = m.remove(&addr);
+        let entry = m.remove(&addr);
         if m.is_empty() {
             PREWARM_STUBS_PENDING.with(|p| p.set(false));
         }
-        hash
+        entry
     }) else {
         return;
     };
@@ -4581,7 +4707,9 @@ fn adopt_prewarmed_stub(value: Value) {
         return;
     };
     let rt = bc.jit_runtime();
-    rt.mark_aot_prewarmed();
+    if prewarm {
+        rt.mark_aot_prewarmed();
+    }
     PREWARM_HASHES.with(|m| m.borrow_mut().insert(rt.compiled_id_or_assign(), hash));
 }
 
@@ -4685,7 +4813,7 @@ pub fn prepopulate_aot_from_preload(ctx: &crate::emacs_core::eval::Context) -> P
         if let Some(key) = prekeys
             .as_ref()
             .and_then(|map| map.get(crate::emacs_core::intern::resolve_name(name_id)))
-            && !key.member
+            && !key.class.is_member()
             && key.ops_len == ops.len()
             && key.arity == arity
         {
@@ -5260,6 +5388,19 @@ pub(crate) mod test_support {
         /// `leaf_content_hash` call counter (task #11 probe seam): lets a test
         /// assert the manifest pre-filter skipped a candidate WITHOUT hashing.
         static HASH_CALLS: Cell<usize> = const { Cell::new(0) };
+        /// A forced `NEOVM_AOT_PREWARM` policy (P4.2 A4).
+        static FORCED_PREWARM_POLICY: Cell<Option<super::PrewarmPolicy>> =
+            const { Cell::new(None) };
+    }
+
+    /// The forced prewarm policy, if a test set one.
+    pub(crate) fn forced_prewarm_policy() -> Option<super::PrewarmPolicy> {
+        FORCED_PREWARM_POLICY.with(Cell::get)
+    }
+
+    /// Force the prewarm policy for the rest of this thread (test only).
+    pub(crate) fn set_forced_prewarm_policy(policy: super::PrewarmPolicy) {
+        FORCED_PREWARM_POLICY.with(|c| c.set(Some(policy)));
     }
 
     /// The forced `aot_enabled()` value, if a test set one.
@@ -5279,6 +5420,7 @@ pub(crate) mod test_support {
         INJECTED_PRELOAD.with(|c| *c.borrow_mut() = None);
         INJECTED_PREKEYS.with(|c| *c.borrow_mut() = None);
         HASH_CALLS.with(|c| c.set(0));
+        FORCED_PREWARM_POLICY.with(|c| c.set(None));
     }
 
     /// Inject a pre-loaded unit for `content_hash` so `load_unit` returns it.

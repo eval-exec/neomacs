@@ -94,6 +94,7 @@
 //! |---|---|
 //! | `NEOVM_AOT` | `1`/`on`/`force` enables the AOT preload; `force` additionally warns when no usable preload loaded. |
 //! | `NEOVM_AOT_PGO` | `1`/`on`/`force` enables PGO collection for the AOT function set. |
+//! | `NEOVM_AOT_PREWARM` | `profitable` (default): of the preload's members only the manifest's `m` class (bodies the JIT's profit gate would compile) runs native from call 1; `c` call glue is served when the JIT would compile it, replacing that compile (P4.2 A4). `all`: every member from call 1, as before (single-build A/B). |
 
 #![cfg_attr(not(feature = "jit"), allow(dead_code))]
 
@@ -1219,6 +1220,12 @@ impl RuntimeState {
     pub(crate) fn mark_aot_prewarmed(&self) {
         self.aot_prewarmed
             .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Whether this function is marked to run a preload leaf from call 1.
+    pub(crate) fn is_aot_prewarmed(&self) -> bool {
+        self.aot_prewarmed
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     #[cfg(test)]
