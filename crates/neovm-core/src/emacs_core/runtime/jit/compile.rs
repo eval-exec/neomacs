@@ -1202,6 +1202,9 @@ fn compile_bytecode_function_inner(
         // find them.
         return Err(CompileError::TakesArguments);
     }
+    // Only a required-only lambda list can be a direct call's callee, so only
+    // such a body may take the register ABI (`LeafAbi::for_build`).
+    let _lambda_list = reg_abi::LambdaListScope::enter(nonrest == required && !has_rest);
     // Typed-MIR Tier-2: for pure required-only functions, build the SSA MIR and
     // lower it with fixnum UNBOXING (raw arithmetic, retag only at boundaries) —
     // faster than the baseline's per-op untag/retag. Fall back to the baseline on
@@ -3476,7 +3479,15 @@ pub fn lower_leaf_full_osr(
     // (`spec_slots`/`deopt_*`/`reloc_data`) are owned here, threaded in by
     // reference so their baked addresses stay stable, and moved into the
     // returned `CompiledLeaf` below.
-    let abi = LeafAbi::for_build(/*aot=*/ false, osr_pc.is_some(), arity);
+    let has_binds = leaf::body_has_binds(ops);
+    let has_handlers = leaf::body_has_handlers(ops);
+    let abi = LeafAbi::for_build(
+        /*aot=*/ false,
+        osr_pc.is_some(),
+        arity,
+        /*frameless=*/ !has_binds && !has_handlers,
+        dynamic_prefix,
+    );
     let defined = shared::define_jit_leaf(/*per_leaf_shims=*/ true, |sink| {
         build_leaf_fn(
             sink,
@@ -3534,23 +3545,8 @@ pub fn lower_leaf_full_osr(
         has_side_effects: false,
         // The baseline never inlines.
         inline_deps: Box::from([]),
-        has_binds: ops.iter().any(|o| {
-            matches!(
-                o,
-                Op::VarBind(_)
-                    | Op::Unbind(_)
-                    | Op::SaveCurrentBuffer
-                    | Op::SaveExcursion
-                    | Op::SaveRestriction
-                    | Op::UnwindProtectPop
-            )
-        }),
-        has_handlers: ops.iter().any(|o| {
-            matches!(
-                o,
-                Op::PushConditionCase(_) | Op::PushConditionCaseRaw(_) | Op::PushCatch(_)
-            )
-        }),
+        has_binds,
+        has_handlers,
         needs_vmctx: heap_inline::inline_heap_sites() > 0,
         spec_slots,
         // JIT bakes each site's `expected` as an iconst; no sidecar array needed.
@@ -3567,6 +3563,7 @@ pub fn lower_leaf_full_osr(
         retired: core::cell::Cell::new(false),
         spec_slot_kinds,
         abi,
+        entry_shape: EntryShape::of(abi, has_binds, has_handlers, /*has_sidecar=*/ false),
         entry,
         _backing: defined.backing,
     })
@@ -3676,23 +3673,8 @@ pub(crate) fn build_baseline_leaf_object<S: LeafSink>(
     Ok(BaselineAotMeta {
         arity,
         max_depth,
-        has_binds: ops.iter().any(|o| {
-            matches!(
-                o,
-                Op::VarBind(_)
-                    | Op::Unbind(_)
-                    | Op::SaveCurrentBuffer
-                    | Op::SaveExcursion
-                    | Op::SaveRestriction
-                    | Op::UnwindProtectPop
-            )
-        }),
-        has_handlers: ops.iter().any(|o| {
-            matches!(
-                o,
-                Op::PushConditionCase(_) | Op::PushConditionCaseRaw(_) | Op::PushCatch(_)
-            )
-        }),
+        has_binds: leaf::body_has_binds(ops),
+        has_handlers: leaf::body_has_handlers(ops),
         spec_sites: aot_spec_sites,
     })
 }

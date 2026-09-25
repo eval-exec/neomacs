@@ -261,9 +261,11 @@ pub(crate) fn emit_direct_bytecode_call(
     let leaf = fb
         .ins()
         .load(types::I64, flags, slot_v, SPEC_SLOT_LEAF_OFFSET as i32);
-    let aux = fb
+    // The key is the constant base with the register flag set.
+    let key = fb
         .ins()
         .load(types::I64, flags, slot_v, SPEC_SLOT_KEY_OFFSET as i32);
+    let aux = super::lowering::band_imm_p(fb, key, !(SpecSlot::KEY_FLAGS as i64));
     let sig = fb.import_signature(
         LeafAbi::Register {
             arity: site.nargs as u8,

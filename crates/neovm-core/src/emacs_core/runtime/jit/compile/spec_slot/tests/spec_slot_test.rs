@@ -21,11 +21,14 @@ fn the_four_words_sit_where_generated_code_reads_them() {
     let leaf = 0x7f00_0000_1000usize as *const CompiledLeaf;
     let consts = 0x7f00_0000_2000usize as *const Value;
     let entry = 0x7f00_0000_3000usize as *const u8;
-    slot.arm_leaf(leaf, consts, false, false);
+    slot.arm_leaf(leaf, consts, false, false, true);
     slot.arm_direct_entry(entry);
     assert_eq!(word_at(&slot, SPEC_SLOT_EPOCH_OFFSET), 0x1234);
     assert_eq!(word_at(&slot, SPEC_SLOT_LEAF_OFFSET), leaf as u64);
-    assert_eq!(word_at(&slot, SPEC_SLOT_KEY_OFFSET), consts as u64);
+    assert_eq!(
+        word_at(&slot, SPEC_SLOT_KEY_OFFSET),
+        consts as u64 | SpecSlot::KEY_REGISTER
+    );
     assert_eq!(word_at(&slot, SPEC_SLOT_DIRECT_ENTRY_OFFSET), entry as u64);
     assert_eq!(slot.direct_entry(), entry);
     // The clear drops all three leaf words (the direct entry first).
@@ -84,8 +87,9 @@ fn a_subr_general_slot_is_built_with_its_binding_and_the_others_empty() {
     }
 }
 
-/// The direct entry goes with a cached, exact-arity, frameless leaf: armed
-/// without one (a debug assertion) it would let a site enter nothing.
+/// The direct entry goes with a cached, exact-arity, frameless register-ABI
+/// leaf: armed without one (a debug assertion) it would let a site enter
+/// nothing, or a body of the other ABI.
 #[cfg(debug_assertions)]
 #[test]
 fn a_direct_entry_needs_its_leaf_and_a_frameless_key() {
@@ -98,11 +102,18 @@ fn a_direct_entry_needs_its_leaf_and_a_frameless_key() {
     );
     let leaf = 0x7f00_0000_1000usize as *const CompiledLeaf;
     let consts = 0x7f00_0000_2000usize as *const Value;
-    slot.arm_leaf(leaf, consts, false, true);
+    slot.arm_leaf(leaf, consts, false, true, false);
     assert!(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| slot.arm_direct_entry(entry)))
             .is_err(),
         "a framed leaf is never called directly"
+    );
+    slot.clear_leaf();
+    slot.arm_leaf(leaf, consts, false, false, false);
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| slot.arm_direct_entry(entry)))
+            .is_err(),
+        "a memory-ABI leaf is never called directly"
     );
     assert!(slot.direct_entry().is_null());
 }
@@ -115,9 +126,9 @@ fn arming_a_new_leaf_drops_the_old_leafs_direct_entry() {
     let leaf = 0x7f00_0000_1000usize as *const CompiledLeaf;
     let other = 0x7f00_0000_5000usize as *const CompiledLeaf;
     let consts = 0x7f00_0000_2000usize as *const Value;
-    slot.arm_leaf(leaf, consts, false, false);
+    slot.arm_leaf(leaf, consts, false, false, true);
     slot.arm_direct_entry(0x7f00_0000_3000usize as *const u8);
-    slot.arm_leaf(other, consts, false, false);
+    slot.arm_leaf(other, consts, false, false, true);
     assert!(slot.direct_entry().is_null());
     assert_eq!(slot.leaf_ptr(), other);
 }

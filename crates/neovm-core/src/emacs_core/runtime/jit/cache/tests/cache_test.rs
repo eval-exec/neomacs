@@ -749,7 +749,7 @@ fn unlink_spec_slots_to_clears_only_bytecode_slots_caching_the_dead_leaf() {
         .expect("compiles");
     let dead_ptr: *const CompiledLeaf = &dead;
     let slot = &leaf.spec_slots[0];
-    slot.arm_leaf(dead_ptr, std::ptr::null(), false, false);
+    slot.arm_leaf(dead_ptr, std::ptr::null(), false, false, false);
     assert_eq!(
         leaf.unlink_spec_slots_to(std::ptr::null()),
         0,
@@ -762,7 +762,7 @@ fn unlink_spec_slots_to_clears_only_bytecode_slots_caching_the_dead_leaf() {
     for kind in [SpecSlotKind::Subr, SpecSlotKind::Source] {
         leaf.spec_slot_kinds = Box::new([kind]);
         leaf.spec_slots[0].clear_leaf();
-        leaf.spec_slots[0].arm_leaf(dead_ptr, std::ptr::null(), false, false);
+        leaf.spec_slots[0].arm_leaf(dead_ptr, std::ptr::null(), false, false, false);
         assert_eq!(leaf.unlink_spec_slots_to(dead_ptr), 0);
         assert_eq!(
             leaf.spec_slots[0].leaf_ptr(),

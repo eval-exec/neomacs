@@ -84,27 +84,54 @@ fn rust_and_cranelift_agree_on_the_register_abi_for_every_arity() {
 }
 
 #[test]
-fn only_jit_non_osr_bodies_that_fit_take_the_register_abi() {
+fn only_bodies_a_direct_call_can_enter_take_the_register_abi() {
+    // Direct calls imply the register ABI: pin them off, so the ABI knob
+    // alone decides (the suite also runs with `NEOVM_JIT_DIRECT_CALL=on`).
+    force_direct_call_for_test(Some(false));
     force_register_abi_for_test(Some(true));
+    let build =
+        |aot, osr, arity, frameless, prefix| LeafAbi::for_build(aot, osr, arity, frameless, prefix);
     assert_eq!(
-        LeafAbi::for_build(false, false, 0),
+        build(false, false, 0, true, 0),
         LeafAbi::Register { arity: 0 }
     );
     assert_eq!(
-        LeafAbi::for_build(false, false, MAX_REG_ARGS),
+        build(false, false, MAX_REG_ARGS, true, 0),
         LeafAbi::Register {
             arity: MAX_REG_ARGS as u8
         }
     );
     assert_eq!(
-        LeafAbi::for_build(false, false, MAX_REG_ARGS + 1),
+        build(false, false, MAX_REG_ARGS + 1, true, 0),
         LeafAbi::Memory
     );
-    assert_eq!(LeafAbi::for_build(true, false, 1), LeafAbi::Memory, "AOT");
-    assert_eq!(LeafAbi::for_build(false, true, 1), LeafAbi::Memory, "OSR");
+    assert_eq!(build(true, false, 1, true, 0), LeafAbi::Memory, "AOT");
+    assert_eq!(build(false, true, 1, true, 0), LeafAbi::Memory, "OSR");
+    assert_eq!(build(false, false, 1, false, 0), LeafAbi::Memory, "framed");
+    assert_eq!(build(false, false, 1, true, 1), LeafAbi::Memory, "patched");
+    {
+        let _optional = LambdaListScope::enter(false);
+        assert_eq!(
+            build(false, false, 1, true, 0),
+            LeafAbi::Memory,
+            "&optional"
+        );
+    }
+    assert_eq!(
+        build(false, false, 1, true, 0),
+        LeafAbi::Register { arity: 1 },
+        "the scope restores"
+    );
     force_register_abi_for_test(Some(false));
-    assert_eq!(LeafAbi::for_build(false, false, 1), LeafAbi::Memory);
+    assert_eq!(build(false, false, 1, true, 0), LeafAbi::Memory);
+    force_direct_call_for_test(Some(true));
+    assert_eq!(
+        build(false, false, 1, true, 0),
+        LeafAbi::Register { arity: 1 },
+        "direct calls imply the register ABI"
+    );
     force_register_abi_for_test(None);
+    force_direct_call_for_test(None);
 }
 
 /// The functions of the differential: every arity up to one past the
@@ -223,6 +250,8 @@ fn a_body_answers_the_same_through_either_abi() {
     ];
     let ctx = std::ptr::from_mut(&mut ev);
     let mut register_leaves = 0;
+    // The ABI knob alone decides (direct calls would imply the register ABI).
+    force_direct_call_for_test(Some(false));
     for &(name, args) in calls {
         let sym = crate::emacs_core::intern::intern(name);
         let f = ev.obarray.symbol_function_id(sym).expect("defined");
@@ -231,7 +260,9 @@ fn a_body_answers_the_same_through_either_abi() {
         for on in [false, true] {
             force_register_abi_for_test(Some(on));
             let leaf = compile_bytecode_function_with(bc, Some(&ev.obarray)).expect("compiles");
-            let fits = leaf.arity <= MAX_REG_ARGS;
+            // Required parameters only: `&optional` and `&rest` bodies are
+            // never a direct call's callee (`LeafAbi::for_build`).
+            let fits = leaf.arity <= MAX_REG_ARGS && leaf.required == leaf.arity;
             assert_eq!(
                 leaf.abi,
                 if on && fits {
@@ -277,5 +308,6 @@ fn a_body_answers_the_same_through_either_abi() {
         assert_eq!(memory, register, "{name} {args:?}");
     }
     force_register_abi_for_test(None);
-    assert!(register_leaves >= 10, "the register ABI engaged");
+    force_direct_call_for_test(None);
+    assert!(register_leaves >= 9, "the register ABI engaged");
 }

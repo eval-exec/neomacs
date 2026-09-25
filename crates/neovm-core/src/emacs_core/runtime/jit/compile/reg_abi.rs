@@ -8,8 +8,9 @@
 //!   The arguments are read from the caller's words and the result written
 //!   through `out`.
 //! * **register** (`NEOVM_JIT_REG_ABI=on`, implied by
-//!   `NEOVM_JIT_DIRECT_CALL=on`; a JIT, non-OSR leaf of at most
-//!   [`MAX_REG_ARGS`] argument words): `fn(vmctx, aux, a0, .., a{k-1}) ->
+//!   `NEOVM_JIT_DIRECT_CALL=on`; a JIT, non-OSR, frameless, unpatched leaf
+//!   of at most [`MAX_REG_ARGS`] required parameters, the bodies a direct
+//!   call can enter: [`LeafAbi::for_build`]): `fn(vmctx, aux, a0, .., a{k-1}) ->
 //!   (value, status)`. `aux` is the executing callee's constant base (read
 //!   only by a `make-closure`-patched leaf, as the memory ABI's fourth word
 //!   is); the arguments arrive in registers (the fifth and sixth on the
@@ -40,12 +41,40 @@ pub(crate) enum LeafAbi {
 }
 
 impl LeafAbi {
-    /// The entry shape a JIT build gives a body of `arity` argument words:
-    /// register when the knob is on, the build is JIT (`!aot`), not an OSR
-    /// entry (whose "arguments" are an operand-stack snapshot of any
-    /// depth), and the words fit.
-    pub(crate) fn for_build(aot: bool, osr: bool, arity: usize) -> Self {
-        if !aot && !osr && arity <= MAX_REG_ARGS && jit_register_abi_on() {
+    /// The entry shape a build gives a body of `arity` argument words. The
+    /// register ABI's one use is to be entered by a direct call
+    /// (`direct_call`), so a body gets it only when the knob is on and a
+    /// direct call could enter it:
+    ///
+    /// * a JIT build (`!aot`), not an OSR entry (whose "arguments" are an
+    ///   operand-stack snapshot of any depth), and the words fit;
+    /// * `frameless`: no dynamic bindings and no handler frames, the bodies
+    ///   a direct call (and the spec shim's raw path) enters without a frame
+    ///   of its own. So a framed entry is always a memory entry, and the
+    ///   framed callers make no ABI test (`CompiledLeaf::call_premarshaled_consts`);
+    /// * `dynamic_prefix == 0`: not a `make-closure`-patched source, whose
+    ///   bodies are closures that `mapc`/`funcall` (Rust callers) run far
+    ///   more often than a symbol's function cell does;
+    /// * a lambda list of required parameters only ([`exact_lambda_list`]):
+    ///   a direct site calls with exactly that many arguments.
+    ///
+    /// Every other body keeps the memory ABI, and with it every Rust caller's
+    /// entry as before the register ABI existed.
+    pub(crate) fn for_build(
+        aot: bool,
+        osr: bool,
+        arity: usize,
+        frameless: bool,
+        dynamic_prefix: usize,
+    ) -> Self {
+        if !aot
+            && !osr
+            && arity <= MAX_REG_ARGS
+            && frameless
+            && dynamic_prefix == 0
+            && exact_lambda_list()
+            && jit_register_abi_on()
+        {
             LeafAbi::Register { arity: arity as u8 }
         } else {
             LeafAbi::Memory
@@ -78,6 +107,36 @@ impl LeafAbi {
             }
         }
         sig
+    }
+}
+
+std::thread_local! {
+    /// Whether the function being compiled on this thread takes required
+    /// parameters only (see [`LambdaListScope`]); true outside any scope.
+    static EXACT_LAMBDA_LIST: core::cell::Cell<bool> = const { core::cell::Cell::new(true) };
+}
+
+/// Whether the function being compiled takes required parameters only (no
+/// `&optional`, no `&rest`): `compile_bytecode_function` says so for its
+/// lowering ([`LambdaListScope`]); a lowering outside one (the tests'
+/// direct builds) counts as exact.
+pub(crate) fn exact_lambda_list() -> bool {
+    EXACT_LAMBDA_LIST.with(core::cell::Cell::get)
+}
+
+/// For its lifetime, the lambda-list fact [`LeafAbi::for_build`] reads
+/// ([`exact_lambda_list`]); the previous one is restored on drop.
+pub(crate) struct LambdaListScope(bool);
+
+impl LambdaListScope {
+    pub(crate) fn enter(exact: bool) -> Self {
+        Self(EXACT_LAMBDA_LIST.with(|c| c.replace(exact)))
+    }
+}
+
+impl Drop for LambdaListScope {
+    fn drop(&mut self) {
+        EXACT_LAMBDA_LIST.with(|c| c.set(self.0));
     }
 }
 

@@ -605,13 +605,77 @@ pub struct CompiledLeaf {
     pub(crate) retired: Cell<bool>,
     /// The entry's shape ([`LeafAbi`]): how every Rust caller passes the
     /// arguments and takes the answer. AOT and OSR leaves are always
-    /// [`LeafAbi::Memory`].
+    /// [`LeafAbi::Memory`], and so is every body with a frame of its own
+    /// (`LeafAbi::for_build`): a framed entry is always a memory entry.
     pub(crate) abi: LeafAbi,
+    /// How a native-to-native caller enters this body ([`EntryShape`]),
+    /// decided once from `abi` and the frame facts when the leaf is built.
+    pub(crate) entry_shape: EntryShape,
     // Field order matters for drop: `entry` points into `_backing`'s memory (the
     // JITModule's executable pages or the loaded `.so`'s code); keep `_backing`
     // alive — and dropped AFTER `entry` — as long as the handle exists.
     pub(crate) entry: *const u8,
     pub(crate) _backing: LeafBacking,
+}
+
+/// How a native-to-native caller that owns the frame bookkeeping (the spec
+/// shim, `cache::run_resolved_leaf_native`) enters a leaf: one byte decided
+/// when the leaf is built, so the hot memory-ABI entry is one compare, and
+/// no caller matches on the ABI per call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub(crate) enum EntryShape {
+    /// Frameless ([`CompiledLeaf::direct_call_eligible`]) with the memory
+    /// ABI: the raw entry, called in line
+    /// ([`CompiledLeaf::entry_call_raw_memory`]).
+    RawMemory = 0,
+    /// Frameless with the register ABI: the raw entry, called out of line
+    /// ([`CompiledLeaf::entry_call_raw_register`]).
+    RawRegister = 1,
+    /// Bindings, handler frames or an AOT sidecar: run under its own
+    /// `invoke_native` frame. Always the memory ABI (`LeafAbi::for_build`).
+    Framed = 2,
+}
+
+/// Whether a body makes dynamic bindings or saves state its frame exit
+/// restores (`CompiledLeaf::has_binds`).
+pub(crate) fn body_has_binds(ops: &[Op]) -> bool {
+    ops.iter().any(|o| {
+        matches!(
+            o,
+            Op::VarBind(_)
+                | Op::Unbind(_)
+                | Op::SaveCurrentBuffer
+                | Op::SaveExcursion
+                | Op::SaveRestriction
+                | Op::UnwindProtectPop
+        )
+    })
+}
+
+/// Whether a body registers handler frames (`CompiledLeaf::has_handlers`).
+pub(crate) fn body_has_handlers(ops: &[Op]) -> bool {
+    ops.iter().any(|o| {
+        matches!(
+            o,
+            Op::PushConditionCase(_) | Op::PushConditionCaseRaw(_) | Op::PushCatch(_)
+        )
+    })
+}
+
+impl EntryShape {
+    /// The shape of a leaf with `abi` and these frame facts.
+    pub(crate) fn of(abi: LeafAbi, has_binds: bool, has_handlers: bool, has_sidecar: bool) -> Self {
+        let framed = has_binds || has_handlers || has_sidecar;
+        match abi {
+            LeafAbi::Memory if framed => EntryShape::Framed,
+            LeafAbi::Memory => EntryShape::RawMemory,
+            LeafAbi::Register { .. } => {
+                assert!(!framed, "a framed body keeps the memory ABI");
+                EntryShape::RawRegister
+            }
+        }
+    }
 }
 
 impl core::fmt::Debug for CompiledLeaf {
@@ -856,6 +920,8 @@ impl CompiledLeaf {
             retired: Cell::new(false),
             spec_slot_kinds,
             abi: LeafAbi::Memory,
+            // The sidecar makes every AOT leaf framed.
+            entry_shape: EntryShape::Framed,
             entry,
             _backing: LeafBacking::Aot(backing),
         }
@@ -962,18 +1028,83 @@ impl CompiledLeaf {
         !self.has_binds && !self.has_handlers && self.sidecar.is_none()
     }
 
-    /// Raw native entry invocation for [`Self::direct_call_eligible`] bodies:
-    /// no bases snapshot, no `CURRENT_LEAF_BASES` publish, no bind/handler
-    /// frame bookkeeping — the caller owns all of that (its own
-    /// `invoke_native` published its bases; this callee runs inside that
-    /// extent). The caller must route non-OK statuses through the same
-    /// machinery `invoke_native` would (see `run_resolved_leaf_native`).
-    /// `consts` is the executing callee's constant base (see
-    /// [`call_consts`](Self::call_consts)).
+    /// Raw native entry invocation for a frameless memory-ABI body
+    /// ([`EntryShape::RawMemory`]): no bases snapshot, no
+    /// `CURRENT_LEAF_BASES` publish, no bind/handler frame bookkeeping — the
+    /// caller owns all of that (its own `invoke_native` published its bases;
+    /// this callee runs inside that extent). The caller must route non-OK
+    /// statuses through the same machinery `invoke_native` would (see
+    /// `run_resolved_leaf_native`). `consts` is the executing callee's
+    /// constant base (see [`call_consts`](Self::call_consts)).
+    ///
+    /// In line in its callers (the spec shim's fast path and
+    /// `run_resolved_leaf_native`): out of line it cost every native call a
+    /// frame of its own. The register-ABI twin is
+    /// [`Self::entry_call_raw_register`]; the callers choose by a test they
+    /// make anyway ([`EntryShape`], the spec slot's key flags).
     ///
     /// SAFETY: same contract as [`Self::call_premarshaled_consts`] — `args_ptr`
     /// addresses `self.arity` live tagged words, `vmctx` is the dormant
     /// seam Context.
+    #[inline(always)]
+    pub(crate) unsafe fn entry_call_raw_memory(
+        &self,
+        vmctx: *mut u8,
+        consts: *const Value,
+        args_ptr: *const i64,
+        out: &mut i64,
+    ) -> i64 {
+        debug_assert_eq!(self.entry_shape, EntryShape::RawMemory);
+        debug_assert!(
+            self.dynamic_prefix == 0 || !consts.is_null(),
+            "a dynamic-prefix leaf needs the callee's constant base"
+        );
+        // SAFETY: `entry` is finalized native code with the 4-param entry ABI
+        // (see `invoke_native`); a JIT leaf reads the 4th param only as its
+        // callee constant base, and only when it has a dynamic prefix.
+        unsafe {
+            let f: extern "C" fn(*mut u8, *const i64, *mut i64, *const LeafSidecar) -> i64 =
+                core::mem::transmute(self.entry);
+            f(
+                vmctx,
+                args_ptr,
+                out as *mut i64,
+                consts as *const LeafSidecar,
+            )
+        }
+    }
+
+    /// [`Self::entry_call_raw_memory`] for a frameless register-ABI body
+    /// ([`EntryShape::RawRegister`]): the arguments go in registers and the
+    /// answer comes back in two, `aux` being the constant base. Its callers
+    /// call it out of line, so the memory entry's callers keep their size.
+    ///
+    /// SAFETY: as [`Self::entry_call_raw_memory`].
+    #[inline]
+    pub(crate) unsafe fn entry_call_raw_register(
+        &self,
+        vmctx: *mut u8,
+        consts: *const Value,
+        args_ptr: *const i64,
+    ) -> super::reg_abi::NativeRet {
+        debug_assert_eq!(self.entry_shape, EntryShape::RawRegister);
+        let LeafAbi::Register { arity } = self.abi else {
+            unreachable!("a raw register entry has the register ABI")
+        };
+        // SAFETY: the register entry of exactly `arity` words, and
+        // `args_ptr` addresses them (the contract above); `aux` is the
+        // constant base, as the memory ABI's fourth word.
+        unsafe {
+            super::reg_abi::call_register_entry(self.entry, arity, vmctx, consts.cast(), args_ptr)
+        }
+    }
+
+    /// The raw entry of a frameless body of either ABI
+    /// ([`Self::direct_call_eligible`]), for the tests: the result bits
+    /// through `out`, the status returned.
+    ///
+    /// SAFETY: as [`Self::entry_call_raw_memory`].
+    #[cfg(test)]
     pub(crate) unsafe fn entry_call_raw_consts(
         &self,
         vmctx: *mut u8,
@@ -981,41 +1112,18 @@ impl CompiledLeaf {
         args_ptr: *const i64,
         out: &mut i64,
     ) -> i64 {
-        debug_assert!(self.direct_call_eligible());
-        debug_assert!(
-            self.dynamic_prefix == 0 || !consts.is_null(),
-            "a dynamic-prefix leaf needs the callee's constant base"
-        );
-        match self.abi {
-            // SAFETY: `entry` is finalized native code with the 4-param entry
-            // ABI (see `invoke_native`); a JIT leaf reads the 4th param only as
-            // its callee constant base, and only when it has a dynamic prefix.
-            LeafAbi::Memory => unsafe {
-                let f: extern "C" fn(*mut u8, *const i64, *mut i64, *const LeafSidecar) -> i64 =
-                    core::mem::transmute(self.entry);
-                f(
-                    vmctx,
-                    args_ptr,
-                    out as *mut i64,
-                    consts as *const LeafSidecar,
-                )
+        match self.entry_shape {
+            // SAFETY: the caller's contract.
+            EntryShape::RawMemory => unsafe {
+                self.entry_call_raw_memory(vmctx, consts, args_ptr, out)
             },
-            LeafAbi::Register { arity } => {
-                // SAFETY: the register entry of exactly `arity` words, and
-                // `args_ptr` addresses them (the contract above); `aux` is
-                // the constant base, as the memory ABI's fourth word.
-                let ret = unsafe {
-                    super::reg_abi::call_register_entry(
-                        self.entry,
-                        arity,
-                        vmctx,
-                        consts.cast(),
-                        args_ptr,
-                    )
-                };
+            EntryShape::RawRegister => {
+                // SAFETY: the caller's contract.
+                let ret = unsafe { self.entry_call_raw_register(vmctx, consts, args_ptr) };
                 *out = ret.value;
                 ret.status
             }
+            EntryShape::Framed => unreachable!("a framed body has no raw entry"),
         }
     }
 
@@ -1032,7 +1140,8 @@ impl CompiledLeaf {
     /// unpatched leaf (null constant base); only the JIT tests call it.
     #[cfg(test)]
     pub(crate) fn call_premarshaled(&self, vmctx: *mut u8, args_ptr: *const i64) -> NativeRun {
-        self.call_premarshaled_consts(vmctx, core::ptr::null(), args_ptr)
+        debug_assert!(!vmctx.is_null(), "native-to-native requires a Context");
+        self.invoke_native(vmctx, args_ptr, core::ptr::null())
     }
 
     /// Native-to-native fast path: invoke the body with `args_ptr` addressing
@@ -1049,6 +1158,11 @@ impl CompiledLeaf {
     /// path guarantees no GC safepoint runs in between: `maybe_quit` already
     /// returned `Ok` (which does not collect) and nothing allocates on a lisp
     /// heap before the entry consumes its args.
+    ///
+    /// For a FRAMED body ([`EntryShape::Framed`]: the spec shim's and
+    /// `run_resolved_leaf_native`'s framed halves), which always has the
+    /// memory ABI (`LeafAbi::for_build`), so it runs the memory entry with no
+    /// ABI test.
     pub(crate) fn call_premarshaled_consts(
         &self,
         vmctx: *mut u8,
@@ -1056,7 +1170,8 @@ impl CompiledLeaf {
         args_ptr: *const i64,
     ) -> NativeRun {
         debug_assert!(!vmctx.is_null(), "native-to-native requires a Context");
-        self.invoke_native(vmctx, args_ptr, consts)
+        debug_assert_eq!(self.entry_shape, EntryShape::Framed);
+        self.invoke_native_frame::<false, false>(vmctx, args_ptr, consts, None)
     }
 
     /// The post-marshaling tail shared by [`call`](Self::call) and
@@ -1065,6 +1180,10 @@ impl CompiledLeaf {
     /// outcome — precise-deopt capture (no frame unwind, ownership transfers to
     /// the resumed interpreter frame) or the `cleanup_bytecode_frame`-parity
     /// frame unwind on a normal/signal exit.
+    ///
+    /// The entry's ABI picks the specialization; the framed callers, whose
+    /// bodies always have the memory ABI, skip the test
+    /// ([`call_premarshaled_consts`](Self::call_premarshaled_consts)).
     #[inline(always)]
     pub(crate) fn invoke_native(
         &self,
@@ -1072,7 +1191,14 @@ impl CompiledLeaf {
         args_ptr: *const i64,
         consts: *const Value,
     ) -> NativeRun {
-        self.invoke_native_frame::<false>(vmctx, args_ptr, consts, None)
+        match self.abi {
+            LeafAbi::Memory => {
+                self.invoke_native_frame::<false, false>(vmctx, args_ptr, consts, None)
+            }
+            LeafAbi::Register { .. } => {
+                self.invoke_native_frame::<false, true>(vmctx, args_ptr, consts, None)
+            }
+        }
     }
 
     /// Enter at an OSR header with an interpreter-owned binding segment already
@@ -1087,18 +1213,26 @@ impl CompiledLeaf {
         consts: *const Value,
         bind_frame: Option<(usize, usize)>,
     ) -> NativeRun {
-        self.invoke_native_frame::<true>(vmctx, args_ptr, consts, bind_frame)
+        // An OSR entry always has the memory ABI (`LeafAbi::for_build`).
+        self.invoke_native_frame::<true, false>(vmctx, args_ptr, consts, bind_frame)
     }
 
     // Separate specializations keep OSR frame selection out of ordinary native
     // calls. Only the cold OSR entry supplies a borrowed binding segment.
-    fn invoke_native_frame<const OSR: bool>(
+    // `REGISTER` is the entry's ABI, fixed per specialization so a memory
+    // entry makes no ABI test.
+    fn invoke_native_frame<const OSR: bool, const REGISTER: bool>(
         &self,
         vmctx: *mut u8,
         args_ptr: *const i64,
         consts: *const Value,
         osr_bind_frame: Option<(usize, usize)>,
     ) -> NativeRun {
+        debug_assert_eq!(
+            matches!(self.abi, LeafAbi::Register { .. }),
+            REGISTER,
+            "the specialization is the entry's ABI"
+        );
         debug_assert!(
             self.dynamic_prefix == 0 || !consts.is_null(),
             "a dynamic-prefix leaf needs the callee's constant base"
@@ -1193,27 +1327,29 @@ impl CompiledLeaf {
         // execution (including the cold exit tail below, which can run Lisp
         // unwind forms), so a `cache::clear()` under a live leaf asserts.
         let _native_depth = super::super::cache::NativeDepthGuard::enter();
-        let mut status = match self.abi {
-            LeafAbi::Memory => unsafe {
+        let mut status = if REGISTER {
+            let LeafAbi::Register { arity } = self.abi else {
+                unreachable!("the register specialization has the register ABI")
+            };
+            // SAFETY: a JIT leaf (no sidecar), so `sidecar` is the callee
+            // constant base, the register ABI's `aux`; the entry takes
+            // exactly `arity` words, which `args_ptr` addresses.
+            let ret = unsafe {
+                super::reg_abi::call_register_entry(
+                    self.entry,
+                    arity,
+                    vmctx,
+                    sidecar.cast(),
+                    args_ptr,
+                )
+            };
+            out = ret.value;
+            ret.status
+        } else {
+            unsafe {
                 let f: extern "C" fn(*mut u8, *const i64, *mut i64, *const LeafSidecar) -> i64 =
                     core::mem::transmute(self.entry);
                 f(vmctx, args_ptr, &mut out as *mut i64, sidecar)
-            },
-            LeafAbi::Register { arity } => {
-                // SAFETY: a JIT leaf (no sidecar), so `sidecar` is the
-                // callee constant base, the register ABI's `aux`; the entry
-                // takes exactly `arity` words, which `args_ptr` addresses.
-                let ret = unsafe {
-                    super::reg_abi::call_register_entry(
-                        self.entry,
-                        arity,
-                        vmctx,
-                        sidecar.cast(),
-                        args_ptr,
-                    )
-                };
-                out = ret.value;
-                ret.status
             }
         };
         CURRENT_LEAF_BASES.with(|b| b.set(outer_bases));

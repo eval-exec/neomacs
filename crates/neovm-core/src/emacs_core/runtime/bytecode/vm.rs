@@ -7246,7 +7246,13 @@ impl<'a> Vm<'a> {
             } else {
                 core::ptr::null()
             };
-            slot.arm_leaf(ptr, direct, !passthrough, !leaf.direct_call_eligible());
+            slot.arm_leaf(
+                ptr,
+                direct,
+                !passthrough,
+                !leaf.direct_call_eligible(),
+                leaf.entry_shape == crate::emacs_core::jit::compile::EntryShape::RawRegister,
+            );
             // A compiled site may then call the leaf itself (S2.1b): its
             // register entry, armed last, for an exact-arity call of a
             // frameless body the shim would enter raw (the key's flags

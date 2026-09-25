@@ -2671,7 +2671,11 @@ pub(super) fn lower_mir_with_plan(
     // generated loads) stay stable and so the wrapper can move them into the
     // returned `CompiledLeaf`. A runtime-free body's own module registers no
     // shim symbols (it calls none).
-    let abi = super::LeafAbi::for_build(/*aot=*/ false, /*osr=*/ false, m.arity);
+    // A MIR body is frameless and never patched (see the leaf below).
+    let abi = super::LeafAbi::for_build(
+        /*aot=*/ false, /*osr=*/ false, m.arity, /*frameless=*/ true,
+        /*dynamic_prefix=*/ 0,
+    );
     let defined = super::shared::define_jit_leaf(plan.needs_rt, |sink| {
         build_mir_leaf_fn(
             sink,
@@ -2736,6 +2740,7 @@ pub(super) fn lower_mir_with_plan(
         retired: core::cell::Cell::new(false),
         spec_slot_kinds,
         abi,
+        entry_shape: super::EntryShape::of(abi, false, false, false),
         entry,
         _backing: defined.backing,
     })

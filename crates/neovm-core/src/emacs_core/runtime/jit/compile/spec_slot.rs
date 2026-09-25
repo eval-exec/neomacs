@@ -86,9 +86,9 @@ impl SpecCalleeKind {
 ///
 /// `direct_entry` is the key of a site that calls the leaf itself (a direct
 /// call, `NEOVM_JIT_DIRECT_CALL`): the leaf's register-ABI entry when the
-/// site may enter it with its arguments in registers and `direct_consts` as
-/// its `aux` word, else 0. Armed LAST and cleared FIRST, so a site that sees
-/// it set sees the leaf and key it goes with.
+/// site may enter it with its arguments in registers and `direct_consts`'s
+/// constant base as its `aux` word, else 0. Armed LAST and cleared FIRST, so
+/// a site that sees it set sees the leaf and key it goes with.
 #[repr(C)]
 pub(crate) struct SpecSlot {
     pub(super) epoch: AtomicU64,
@@ -157,12 +157,13 @@ impl SpecSlot {
     /// constant base when the leaf takes the site's call (the shim's
     /// fast-path key), null otherwise, with [`Self::KEY_SHORT_CALL`] set
     /// when the fast path builds the leaf's frame (a short call, nil-filled,
-    /// or a `&rest` leaf, its tail consed) and [`Self::KEY_FRAMED`] when the
-    /// leaf runs under its own native frame. The base is 8-byte aligned, so
-    /// the low bits are free; folding the two facts into the word the fast
-    /// path loads anyway keeps its pure, handler-free case at one test each
-    /// instead of the leaf's arity load and its three eligibility loads. Any
-    /// direct entry the slot held goes first.
+    /// or a `&rest` leaf, its tail consed), [`Self::KEY_FRAMED`] when the
+    /// leaf runs under its own native frame and [`Self::KEY_REGISTER`] when
+    /// its raw entry has the register ABI. The base is 8-byte aligned, so
+    /// the low bits are free; folding the facts into the word the fast path
+    /// loads anyway keeps its pure, handler-free, memory-ABI case at one
+    /// test each instead of the leaf's arity load, its three eligibility
+    /// loads and its ABI. Any direct entry the slot held goes first.
     #[inline(always)]
     pub(crate) fn arm_leaf(
         &self,
@@ -170,6 +171,7 @@ impl SpecSlot {
         direct_consts: *const Value,
         short_call: bool,
         framed: bool,
+        register: bool,
     ) {
         debug_assert!(!self.holds_subr_binding(), "arm_leaf on a subr site's slot");
         // The runtime arms a slot only after a clear (the entry is 0), but
@@ -184,6 +186,7 @@ impl SpecSlot {
             direct_consts as usize as u64
                 | if short_call { Self::KEY_SHORT_CALL } else { 0 }
                 | if framed { Self::KEY_FRAMED } else { 0 }
+                | if register { Self::KEY_REGISTER } else { 0 }
         };
         self.direct_consts.store(key, Ordering::Relaxed);
     }
@@ -199,8 +202,8 @@ impl SpecSlot {
         debug_assert!(!self.leaf_ptr().is_null(), "a direct entry needs its leaf");
         debug_assert_eq!(
             self.direct_consts.load(Ordering::Relaxed) & Self::KEY_FLAGS,
-            0,
-            "a direct call is exact-arity and frameless"
+            Self::KEY_REGISTER,
+            "a direct call is exact-arity, frameless, and enters the register ABI"
         );
         self.direct_entry
             .store(entry as usize as u64, Ordering::Relaxed);
@@ -213,8 +216,13 @@ impl SpecSlot {
     pub(crate) const KEY_SHORT_CALL: u64 = 1;
     /// `direct_consts` flag: the leaf runs under its own native frame.
     pub(crate) const KEY_FRAMED: u64 = 2;
+    /// `direct_consts` flag: the leaf is frameless with the register ABI
+    /// (`EntryShape::RawRegister`), so its raw entry is
+    /// `CompiledLeaf::entry_call_raw_register`. Never set with
+    /// [`Self::KEY_FRAMED`]: a framed body keeps the memory ABI.
+    pub(crate) const KEY_REGISTER: u64 = 4;
     /// The flag bits of the key; the rest is the constant base.
-    pub(crate) const KEY_FLAGS: u64 = 3;
+    pub(crate) const KEY_FLAGS: u64 = 7;
 
     /// Drop the cached leaf, and with it the direct entry and the fast-path
     /// key: the direct entry FIRST, so no site enters a leaf whose key is
@@ -279,9 +287,10 @@ pub(crate) static DIRECT_ENTRIES_ARMED: AtomicU64 = AtomicU64::new(0);
 /// register ABI for exactly `nargs` words (no `&optional` padding, no
 /// `&rest` list to build), runs frameless (no bindings, no handler frames,
 /// no AOT sidecar: what the shim enters raw), the key the shim uses is the
-/// plain constant base (the site passes it as `aux`), and the lean
-/// backtrace frame the site pushes has a probed layout. Anything else
-/// leaves the entry 0 and the site on the shim. Once per arming, so cold.
+/// constant base with no flag but [`SpecSlot::KEY_REGISTER`] (the site
+/// passes the base as `aux`), and the lean backtrace frame the site pushes
+/// has a probed layout. Anything else leaves the entry 0 and the site on
+/// the shim. Once per arming, so cold.
 #[cold]
 #[inline(never)]
 pub(crate) fn arm_direct_entry_if_eligible(slot: &SpecSlot, leaf: &CompiledLeaf, nargs: usize) {
@@ -294,7 +303,7 @@ pub(crate) fn arm_direct_entry_if_eligible(slot: &SpecSlot, leaf: &CompiledLeaf,
         && !leaf.has_rest
         && leaf.direct_call_eligible()
         && key != 0
-        && key & SpecSlot::KEY_FLAGS == 0
+        && key & SpecSlot::KEY_FLAGS == SpecSlot::KEY_REGISTER
         && super::jit_layout::backtrace_layout().is_some();
     if eligible {
         slot.arm_direct_entry(leaf.entry);
