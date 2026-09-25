@@ -1008,3 +1008,126 @@ fn bytecode_setq_takes_the_set_tier_on_both_engines() {
         );
     }
 }
+
+/// Bind VAR to VALUE in a fresh fixture whose caches were loaded for the home
+/// buffer, through the cached tier (`cached`) or the general `specbind`;
+/// `(tier answered, the specpdl entry pushed, what Lisp sees, what it sees
+/// after the unbind)`.
+fn bind_once(var: &str, value: Value, cached: bool) -> (bool, String, String, String) {
+    let mut ev = fixture();
+    set_var_cache_tiers_for_test(&VarCacheTier::ALL);
+    for &v in FIXTURE_VARS {
+        let _ = run(&mut ev, Engine::Interpreter, &Prog::read(), v, &[]);
+    }
+    let depth = ev.specpdl.len();
+    let id = intern(var);
+    let answered = if cached {
+        ev.specbind_cached(id, value)
+    } else {
+        ev.specbind_uncached(id, value).is_ok()
+    };
+    let entry = ev
+        .specpdl
+        .get(depth)
+        .map_or("none".to_string(), |entry| format!("{entry:?}"));
+    // Read in this buffer only, so the unbind below meets the caches the
+    // bind left.
+    let inside = eval(
+        &mut ev,
+        &format!(
+            "(list (condition-case nil {var} (void-variable 'void))
+                   (condition-case nil (default-value '{var}) (void-variable 'void)))"
+        ),
+    );
+    ev.unbind_to(depth);
+    let after = eval(&mut ev, &observe_form(var));
+    (answered, entry, inside, after)
+}
+
+/// The bind tier pushes the very entry the general `specbind` pushes
+/// (`LetLocal` for a buffer's own binding, `LetDefault` for the default, `Let`
+/// for a forwarder) and stores the same value, for every shape it takes;
+/// and it refuses every other shape without pushing or storing anything.
+#[test]
+fn bind_tier_pushes_the_general_paths_entry() {
+    let taken: &[(&str, Value)] = &[
+        ("vft-loc", Value::make_int(200)),
+        ("vft-locd", Value::make_int(200)),
+        ("vft-auto", Value::make_int(200)),
+        ("vft-lbool", Value::make_int(5)),
+        ("vft-lint", Value::make_int(200)),
+        ("vft-lobj", Value::make_int(200)),
+        ("vft-obj", Value::make_int(200)),
+        ("vft-bool", Value::make_int(5)),
+        ("vft-int", Value::make_int(200)),
+        ("case-fold-search", Value::make_int(200)),
+        ("gc-cons-threshold", Value::make_int(900_000)),
+    ];
+    for &(var, value) in taken {
+        let cached = bind_once(var, value, true);
+        let general = bind_once(var, value, false);
+        assert!(cached.0, "{var}: a cached shape");
+        assert_eq!(cached, general, "{var}: tier vs general specbind");
+    }
+    let refused: &[(&str, Value)] = &[
+        ("vft-plain", Value::make_int(200)),   // plain: the plain tier's
+        ("vft-kbd", Value::make_int(200)),     // a keyboard variable
+        ("vft-watched", Value::make_int(200)), // a watcher
+        ("vft-alias", Value::make_int(200)),   // an alias
+        ("fill-column", Value::make_int(200)), // a per-buffer slot
+        ("inhibit-quit", Value::T),            // host-projected
+        ("buffer-undo-list", Value::T),        // plain, host-projected
+        ("vft-int", Value::string("s")),       // the Int rule signals
+        ("vft-lint", Value::string("s")),      // likewise through the BLV
+    ];
+    for &(var, value) in refused {
+        let (answered, entry, _, _) = bind_once(var, value, true);
+        assert!(!answered, "{var}: the general path's");
+        assert_eq!(entry, "none", "{var}: nothing pushed");
+    }
+}
+
+/// Both engines' `varbind` takes the bind tier, with the entry kinds the
+/// shapes call for.
+#[test]
+fn bytecode_let_takes_the_bind_tier_on_both_engines() {
+    for &engine in ENGINES {
+        let mut ev = fixture();
+        set_var_cache_tiers_for_test(&VarCacheTier::ALL);
+        for &var in FIXTURE_VARS {
+            let _ = run(&mut ev, Engine::Interpreter, &Prog::read(), var, &[]);
+        }
+        eval_ok(&mut ev, "(fset 'vft-body (lambda () nil))");
+        reset_var_cache_events();
+        for var in ["vft-loc", "vft-locd", "vft-obj", "vft-int"] {
+            let got = run(
+                &mut ev,
+                engine,
+                &Prog::let_call(),
+                var,
+                &[Value::make_int(3)],
+            );
+            assert!(got.starts_with("(nil "), "{engine:?} {var}: {got}");
+        }
+        assert_eq!(
+            var_cache_event_count(VarCacheEvent::BindLetLocal),
+            1,
+            "{engine:?}"
+        );
+        assert_eq!(
+            var_cache_event_count(VarCacheEvent::BindLetDefault),
+            1,
+            "{engine:?}"
+        );
+        assert_eq!(
+            var_cache_event_count(VarCacheEvent::BindForwarded),
+            2,
+            "{engine:?}"
+        );
+        assert_eq!(
+            var_cache_event_count(VarCacheEvent::BindRefused),
+            0,
+            "{engine:?}"
+        );
+    }
+}

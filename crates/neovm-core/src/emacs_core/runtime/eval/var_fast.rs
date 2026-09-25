@@ -28,7 +28,7 @@
 use super::*;
 use crate::emacs_core::forward::{ForwardStore, LispBufferObjFwd, LispFwd, LispFwdType};
 use crate::emacs_core::symbol::{
-    LispSymbol, SYMCELL_INLINE_WRITE_MASK, SymbolRedirect, symcell_inline_write_value,
+    BlvCacheHit, LispSymbol, SYMCELL_INLINE_WRITE_MASK, SymbolRedirect, symcell_inline_write_value,
 };
 use std::sync::atomic::{AtomicU8, Ordering};
 
@@ -163,11 +163,19 @@ pub(crate) enum VarCacheEvent {
     SetForwarded,
     /// A buffer-local or forwarded `setq` the tier left to the general path.
     SetRefused,
+    /// `let` of a buffer-local variable with a binding here (`LetLocal`).
+    BindLetLocal,
+    /// `let` of a buffer-local variable's default (`LetDefault`).
+    BindLetDefault,
+    /// `let` of a forwarder that holds its own value (`Let`).
+    BindForwarded,
+    /// A buffer-local or forwarded `let` the tier left to the general path.
+    BindRefused,
 }
 
 #[cfg(any(test, feature = "vm-profile"))]
 impl VarCacheEvent {
-    pub(crate) const ALL: [Self; 8] = [
+    pub(crate) const ALL: [Self; 12] = [
         Self::ReadLocalized,
         Self::ReadForwarded,
         Self::ReadBufferSlot,
@@ -176,6 +184,10 @@ impl VarCacheEvent {
         Self::SetLocalizedDefault,
         Self::SetForwarded,
         Self::SetRefused,
+        Self::BindLetLocal,
+        Self::BindLetDefault,
+        Self::BindForwarded,
+        Self::BindRefused,
     ];
     const COUNT: usize = Self::ALL.len();
 
@@ -189,6 +201,10 @@ impl VarCacheEvent {
             Self::SetLocalizedDefault => "setq   localized, default",
             Self::SetForwarded => "setq   forwarded (Obj/Bool/Int/Kboard)",
             Self::SetRefused => "setq   refused -> general path",
+            Self::BindLetLocal => "let    localized, own binding (LetLocal)",
+            Self::BindLetDefault => "let    localized, default (LetDefault)",
+            Self::BindForwarded => "let    forwarded (Obj/Bool/Int)",
+            Self::BindRefused => "let    refused -> general path",
         }
     }
 }
@@ -423,6 +439,125 @@ impl Context {
         };
         fwd.commit(store);
         note(VarCacheEvent::SetForwarded);
+        true
+    }
+
+    /// GNU `specbind` -- bytecode `Bvarbind`, `let` -- of a buffer-local or
+    /// forwarded variable when the bind needs no swap-in, no watcher and no
+    /// type signal: the cache-hit prefix of `specbind_resolved`'s `Localized`
+    /// arm and its plain/forwarded tail.
+    ///
+    /// The symbol must pass [`SYMCELL_INLINE_WRITE_MASK`] (untrapped, not
+    /// flag-projected, interned). A bind republishes nothing but the
+    /// flag-projected mirrors (`sync_cached_runtime_binding_by_id`), so the
+    /// projection mask does not apply. Then:
+    /// - buffer-local, BLV loaded for the current buffer at the current
+    ///   epoch: record `LetLocal` (the buffer's own binding) or `LetDefault`
+    ///   (no binding, `valcell == defcell`) with the loaded cell's value, and
+    ///   store the value, through the BLV forwarder's type rule, into that
+    ///   cell -- what `find_symbol_value_in_buffer`,
+    ///   `has_per_buffer_binding` and `set_internal_localized (BIND)` do on
+    ///   such a hit (a bind never auto-creates).
+    /// - forwarded Obj/Bool/Int: record `Let` with the descriptor's value
+    ///   and take its typed store (GNU `SPECPDL_LET`, `do_specbind`).
+    ///
+    /// `false`, with nothing pushed or stored, for anything else -- a plain
+    /// cell, an alias, a per-buffer slot, a keyboard variable, a BLV miss,
+    /// a void old value, a value the type rule refuses (the general path
+    /// signals after its push) -- and when the `bind` tier is off.
+    #[inline(never)]
+    pub(crate) fn specbind_cached(&mut self, id: SymId, value: Value) -> bool {
+        if !var_cache_tier_on(VarCacheTier::Bind) {
+            return false;
+        }
+        let Some(sym) = self.obarray.get_by_id(id) else {
+            return false;
+        };
+        let window = sym.write_window() & SYMCELL_INLINE_WRITE_MASK;
+        // Everything the bind needs from the symbol is copied out here, so
+        // its borrow ends before the push.
+        let bound = if window == symcell_inline_write_value(SymbolRedirect::Localized) {
+            match self.buffers.current_buffer().map(|buf| buf.id) {
+                Some(buffer_id) => match sym.blv_cache_hit(buffer_id) {
+                    Some(hit) => self.specbind_localized_hit(id, buffer_id, hit, value),
+                    None => false,
+                },
+                None => false,
+            }
+        } else if window == symcell_inline_write_value(SymbolRedirect::Forwarded) {
+            match sym.forwarded_descriptor() {
+                Some(fwd) => self.specbind_forwarded_cached(id, fwd, value),
+                None => false,
+            }
+        } else {
+            return false;
+        };
+        if !bound {
+            note(VarCacheEvent::BindRefused);
+        }
+        bound
+    }
+
+    #[inline(always)]
+    fn specbind_localized_hit(
+        &mut self,
+        id: SymId,
+        buffer_id: crate::buffer::BufferId,
+        hit: BlvCacheHit,
+        value: Value,
+    ) -> bool {
+        let old = hit.valcell.cons_cdr();
+        if old.is_unbound() {
+            return false;
+        }
+        let Some(stored) = forward_rule(hit.fwd, value) else {
+            return false;
+        };
+        if hit.found {
+            self.push_specpdl_with(|| SpecBinding::LetLocal {
+                sym_id: id,
+                old_value: old,
+                buffer_id,
+            });
+            note(VarCacheEvent::BindLetLocal);
+        } else if hit.valcell.bits() == hit.defcell.bits() {
+            self.push_specpdl_with(|| SpecBinding::LetDefault {
+                sym_id: id,
+                old_value: SavedBindingValue::from_option(Some(old)),
+                buffer_id: SavedBufferId::from_option(Some(buffer_id)),
+            });
+            note(VarCacheEvent::BindLetDefault);
+        } else {
+            return false;
+        }
+        hit.valcell.set_cdr(stored);
+        true
+    }
+
+    #[inline(always)]
+    fn specbind_forwarded_cached(
+        &mut self,
+        id: SymId,
+        fwd: &'static LispFwd,
+        value: Value,
+    ) -> bool {
+        // A per-buffer slot binds `LetLocal`/`LetDefault` by its local flag;
+        // a keyboard variable is GNU's `where.kbd` binding.
+        if matches!(fwd.ty, LispFwdType::BufferObj | LispFwdType::KboardObj) {
+            return false;
+        }
+        let Some(old) = fwd.load().filter(|old| !old.is_unbound()) else {
+            return false;
+        };
+        let Ok(store) = fwd.store(value) else {
+            return false;
+        };
+        self.push_specpdl_with(|| SpecBinding::Let {
+            sym_id: id,
+            old_value: SavedBindingValue::from_option(Some(old)),
+        });
+        fwd.commit(store);
+        note(VarCacheEvent::BindForwarded);
         true
     }
 }

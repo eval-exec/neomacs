@@ -116,6 +116,19 @@ impl Context {
         if self.specbind_plain_untrapped_fast(sym_id, value) {
             return Ok(());
         }
+        // A buffer-local variable whose BLV cache is loaded for this buffer,
+        // or a forwarder holding its own value (P1.4 A3).
+        if self.specbind_cached(sym_id, value) {
+            return Ok(());
+        }
+        self.specbind_uncached(sym_id, value)
+    }
+
+    /// [`Self::specbind_resolved`] after both cached tiers have refused: the
+    /// general `specbind`. The JIT's `varbind` shim, which tries the tiers
+    /// itself before it roots VALUE, enters here directly.
+    #[inline(never)]
+    pub(crate) fn specbind_uncached(&mut self, sym_id: SymId, value: Value) -> Result<(), Flow> {
         if sym_id != buffer_undo_list_symbol()
             && let Some(sym) = self.obarray.get_by_id(sym_id)
             && sym.redirect() == crate::emacs_core::symbol::SymbolRedirect::Plainval

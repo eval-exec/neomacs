@@ -1105,13 +1105,17 @@ pub extern "C" fn neovm_jit_varbind(ctx: *mut u8, sym: i64, val: i64) -> i64 {
         // holds it from the swap on). Rooting it and going through the
         // general `try_specbind` cost more than the bind itself on a source
         // load, where nearly every `let` is of a plain global.
-        if ctx.specbind_plain_untrapped_fast(SymId(sym as u32), value) {
+        // Likewise a cached buffer-local or forwarded bind (P1.4 A3).
+        if ctx.specbind_plain_untrapped_fast(SymId(sym as u32), value)
+            || ctx.specbind_cached(SymId(sym as u32), value)
+        {
             ctx.jit_bind_stack.push(bind_depth);
             return STATUS_OK;
         }
         let saved = save_scratch_gc_roots();
         push_scratch_gc_root(value);
-        let status = match ctx.try_specbind(SymId(sym as u32), value) {
+        // Both tiers refused: the general `specbind`, without retrying them.
+        let status = match ctx.specbind_uncached(SymId(sym as u32), value) {
             Ok(()) => {
                 ctx.jit_bind_stack.push(bind_depth);
                 STATUS_OK
