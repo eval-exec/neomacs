@@ -409,6 +409,7 @@ impl TuiSession {
         pty.resize(pty_process::Size::new(terminal.rows, terminal.columns))
             .expect("resize pty");
         set_pty_erase_char(&pts, erase);
+        let damage_report_tag = recording_identity.damage_report_tag();
         let recording = SessionRecording::start(
             recording_policy,
             recording_root,
@@ -466,6 +467,11 @@ impl TuiSession {
             if let Some(value) = std::env::var_os(var) {
                 command = command.env(var, value);
             }
+        }
+        // NEOMACS_TTY_DAMAGE=verify appends the frames of every editor the
+        // suite starts to one report: name the test and session of each line.
+        if std::env::var_os("NEOMACS_TTY_DAMAGE_REPORT_FILE").is_some() {
+            command = command.env("NEOMACS_TTY_DAMAGE_REPORT_TAG", damage_report_tag);
         }
         for name in removed_environment {
             command = command.env_remove(name);

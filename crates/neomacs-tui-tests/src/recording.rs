@@ -125,6 +125,15 @@ impl RecordingIdentity {
         }
     }
 
+    /// The `NEOMACS_TTY_DAMAGE_REPORT_TAG` of the editor this identity
+    /// records: the test and the session, as one token.
+    pub(crate) fn damage_report_tag(&self) -> String {
+        format!("{}[{}]", self.test, self.session)
+            .chars()
+            .map(|ch| if ch.is_whitespace() { '_' } else { ch })
+            .collect()
+    }
+
     fn title(&self) -> String {
         format!("{} [{}]", self.test, self.session)
     }

@@ -995,3 +995,81 @@ fn a_removed_face_changes_the_frame_key_only_while_referenced() {
         Some(TtyFullFrameReason::FaceChange)
     );
 }
+
+/// A verify report line is whitespace-separated `key=value`s, one per line,
+/// naming the process and (when given) the test that wrote it.
+#[test]
+fn verify_report_line_renders_one_tagged_line() {
+    let line = VerifyReportLine {
+        frame: 7,
+        damage_frame: true,
+        touched: 3,
+        verify: TtyDamageVerifyTotals {
+            frames: 1,
+            damage_frames: 1,
+            false_negatives: 0,
+            screen_diff_rows: 1,
+            materialization_diff_rows: 2,
+            redundant_rewrite_rows: 4,
+            byte_diff_frames: 1,
+        },
+        full_bytes: 39,
+        damage_bytes: 54,
+    };
+    assert_eq!(
+        line.render(42, Some("tui windows::split below")),
+        "frame=7 kind=damage touched=3 false_negatives=0 screen_diff_rows=1 \
+         materialization_diff_rows=2 redundant_rewrite_rows=4 byte_diff=1 full_bytes=39 \
+         damage_bytes=54 pid=42 test=tui_windows::split_below\n"
+    );
+    assert!(line.render(42, None).ends_with(" pid=42\n"));
+    assert!(line.render(42, Some("")).ends_with(" pid=42\n"));
+}
+
+/// Editors of a parallel suite append to one report: every line must arrive
+/// whole (the old writer issued one `write` per formatted piece, and 152 of
+/// 14,432 lines of a TUI-suite report came out interleaved).
+#[test]
+fn verify_report_lines_from_concurrent_writers_never_interleave() {
+    let root = neomacs_infra::workspace_root().as_path().join("tmp");
+    std::fs::create_dir_all(&root).expect("workspace tmp directory");
+    let dir = tempfile::Builder::new()
+        .prefix("tty-damage-report.")
+        .tempdir_in(root)
+        .expect("workspace-local temp dir");
+    let path = dir.path().join("report.txt");
+    const WRITERS: u32 = 8;
+    const LINES: u64 = 400;
+    std::thread::scope(|scope| {
+        for writer in 0..WRITERS {
+            let path = &path;
+            scope.spawn(move || {
+                for frame in 1..=LINES {
+                    let line = VerifyReportLine {
+                        frame,
+                        damage_frame: frame % 2 == 0,
+                        touched: 50,
+                        verify: TtyDamageVerifyTotals::default(),
+                        full_bytes: 1450,
+                        damage_bytes: 1450,
+                    }
+                    .render(writer, Some("concurrent"));
+                    append_report_line(path, &line);
+                }
+            });
+        }
+    });
+    let text = std::fs::read_to_string(&path).expect("report written");
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), (WRITERS as u64 * LINES) as usize);
+    for line in lines {
+        let fields: Vec<&str> = line.split(' ').collect();
+        assert_eq!(fields.len(), 12, "malformed line {line:?}");
+        assert!(fields[0].starts_with("frame="), "{line:?}");
+        assert!(
+            fields[1] == "kind=damage" || fields[1] == "kind=full",
+            "{line:?}"
+        );
+        assert_eq!(fields[11], "test=concurrent", "{line:?}");
+    }
+}

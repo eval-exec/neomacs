@@ -1087,27 +1087,21 @@ impl TtyRif {
         if let Some(path) = std::env::var_os("NEOMACS_TTY_DAMAGE_REPORT_FILE")
             && !path.is_empty()
         {
-            use std::io::Write as _;
-            if let Ok(mut file) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
-            {
-                let _ = writeln!(
-                    file,
-                    "frame={} kind={} touched={} false_negatives={} screen_diff_rows={} materialization_diff_rows={} redundant_rewrite_rows={} byte_diff={} full_bytes={} damage_bytes={}",
-                    totals.frames,
-                    if damage_frame { "damage" } else { "full" },
-                    touched.iter().filter(|touched| **touched).count(),
-                    frame.false_negatives,
-                    frame.screen_diff_rows,
-                    frame.materialization_diff_rows,
-                    frame.redundant_rewrite_rows,
-                    frame.byte_diff_frames,
-                    self.output.len(),
-                    shadow.output.len(),
-                );
+            let line = VerifyReportLine {
+                frame: totals.frames,
+                damage_frame,
+                touched: touched.iter().filter(|touched| **touched).count(),
+                verify: frame,
+                full_bytes: self.output.len(),
+                damage_bytes: shadow.output.len(),
             }
+            .render(
+                std::process::id(),
+                std::env::var("NEOMACS_TTY_DAMAGE_REPORT_TAG")
+                    .ok()
+                    .as_deref(),
+            );
+            append_report_line(std::path::Path::new(&path), &line);
         }
     }
 
@@ -1139,6 +1133,72 @@ impl TtyRif {
     pub(super) fn forget_painted_state(&mut self) {
         self.damage.forget_painters();
         self.damage.frame = FrameKind::Full;
+    }
+}
+
+/// One frame of `NEOMACS_TTY_DAMAGE=verify`, as a line of
+/// `NEOMACS_TTY_DAMAGE_REPORT_FILE`.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct VerifyReportLine {
+    pub(super) frame: u64,
+    pub(super) damage_frame: bool,
+    pub(super) touched: usize,
+    pub(super) verify: TtyDamageVerifyTotals,
+    pub(super) full_bytes: usize,
+    pub(super) damage_bytes: usize,
+}
+
+impl VerifyReportLine {
+    /// The line, newline included. PID and TAG (`NEOMACS_TTY_DAMAGE_REPORT_TAG`,
+    /// which the TUI harness sets to the test's name) say which process
+    /// wrote it: every editor of a parallel test suite appends to one file.
+    pub(super) fn render(&self, pid: u32, tag: Option<&str>) -> String {
+        let mut line = format!(
+            "frame={} kind={} touched={} false_negatives={} screen_diff_rows={} materialization_diff_rows={} redundant_rewrite_rows={} byte_diff={} full_bytes={} damage_bytes={} pid={}",
+            self.frame,
+            if self.damage_frame { "damage" } else { "full" },
+            self.touched,
+            self.verify.false_negatives,
+            self.verify.screen_diff_rows,
+            self.verify.materialization_diff_rows,
+            self.verify.redundant_rewrite_rows,
+            self.verify.byte_diff_frames,
+            self.full_bytes,
+            self.damage_bytes,
+            pid,
+        );
+        if let Some(tag) = tag.filter(|tag| !tag.is_empty()) {
+            // One token: the line stays whitespace-separated `key=value`s.
+            line.push_str(" test=");
+            line.extend(
+                tag.chars()
+                    .map(|ch| if ch.is_whitespace() { '_' } else { ch }),
+            );
+        }
+        line.push('\n');
+        line
+    }
+}
+
+/// Append LINE to the report at PATH with a single `write` on a file opened
+/// with `O_APPEND`, so that lines from editors writing the same report
+/// concurrently never interleave (`writeln!` on a `File` issues one `write`
+/// per formatted piece).
+pub(super) fn append_report_line(path: &std::path::Path, line: &str) {
+    use std::io::Write as _;
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    else {
+        return;
+    };
+    if let Err(error) = file.write_all(line.as_bytes()) {
+        tracing::debug!(
+            target: "neomacs::tty_damage",
+            %error,
+            "NEOMACS_TTY_DAMAGE_REPORT_FILE: append failed"
+        );
     }
 }
 
