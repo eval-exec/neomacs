@@ -305,6 +305,30 @@ fn respond(
         (DeoptCause::Unattributed, DeoptEvent::Precise { pc, .. }) if at_limit(pc) => {
             (leaf.compiled_level.next(), Reprofile::Window)
         }
+        // A rerun carries no pc. The first reopens recording, so the
+        // interpreter's rerun of the whole body records what it meets. A MIR
+        // leaf is compiled only when every arithmetic site of its body read
+        // `FixnumOnly` (the float-site and generic-site tier gates), so any
+        // widened site after that means the rerun learned something:
+        // recompile, and the tier gates now route the body right. Otherwise
+        // (an overflow, a guard inside an inlined callee) back off to the
+        // baseline at the limit, whose deopts are precise and attributable.
+        (DeoptCause::Rerun, DeoptEvent::Rerun) => {
+            let n = leaf.obs.deopt_rerun.get();
+            if n == 1 {
+                rt.reopen_numeric_feedback();
+            }
+            if n >= 2
+                && leaf.tier() == super::compile::LeafTier::Mir
+                && any_arith_site_widened(func)
+            {
+                (ReoptLevel::Speculative, Reprofile::Window)
+            } else if n >= k.site_limit {
+                (ReoptLevel::BaselineOnly, Reprofile::Window)
+            } else {
+                return ReoptVerdict::Kept;
+            }
+        }
         // TypeError is bounded by the signal it precedes; the rest has not
         // reached its limit.
         _ => return ReoptVerdict::Kept,
@@ -328,6 +352,15 @@ fn respond(
         );
         ReoptVerdict::Kept
     }
+}
+
+/// Whether any arithmetic site of `func`'s body has left `FixnumOnly`.
+fn any_arith_site_widened(func: &ByteCodeFunction) -> bool {
+    let rt = func.jit_runtime();
+    func.executable_ops().iter().enumerate().any(|(pc, op)| {
+        Vm::arith_generic_kind(op).is_some()
+            && rt.numeric_feedback(pc) != NumericFeedback::FixnumOnly
+    })
 }
 
 /// The reoptimization knobs (see the `jit/mod.rs` knob table), resolved.

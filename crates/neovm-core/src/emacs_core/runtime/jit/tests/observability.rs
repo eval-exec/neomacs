@@ -26,6 +26,13 @@ fn install(ev: &mut Context, name: &str, f: ByteCodeFunction) -> Value {
     sym
 }
 
+/// Pin deopt reoptimization off (`NEOVM_JIT_REOPT=off`) on this thread.
+fn reopt_off() {
+    crate::emacs_core::jit::reopt::force_reopt_for_test(Some(
+        crate::emacs_core::jit::reopt::ReoptKnobs::off(),
+    ));
+}
+
 /// The cached leaf row for `id` in the given state.
 fn row_for(id: u64, state: cache::LeafState) -> cache::LeafRow {
     cache::leaf_report_rows()
@@ -64,6 +71,9 @@ fn jit_obs_precise_deopt_counts_per_leaf_and_pc() {
 fn jit_obs_tier_up_seam_deopt_is_counted_on_the_cached_leaf() {
     // Exact native outcomes: immune to a NEOVM_JIT_FORCE_DEOPT=1 suite run.
     crate::emacs_core::jit::compile::force_deopt_for_test(false);
+    // Counting only: deopt reoptimization would retire the deopting leaf
+    // (tested in `jit::reopt`), and these rows read the live one.
+    reopt_off();
     let mut ev = Context::new();
     let ctx = &mut ev as *mut Context;
     // (lambda (x) (+ x 1))
@@ -140,6 +150,9 @@ fn jit_obs_mir_rerun_deopt_counted() {
 fn jit_obs_direct_path_deopt_counted_once() {
     // Exact native outcomes: immune to a NEOVM_JIT_FORCE_DEOPT=1 suite run.
     crate::emacs_core::jit::compile::force_deopt_for_test(false);
+    // Counting only: deopt reoptimization would retire the deopting leaf
+    // (tested in `jit::reopt`), and these rows read the live one.
+    reopt_off();
     force_profit_gate_for_test(false);
     let mut ev = Context::new();
     // A multi-block callee, so the MIR inliner leaves the call in place:

@@ -644,3 +644,320 @@ fn osr_entry_guard_failures_reprofile_after_limit() {
     );
     force_reopt_for_test(None);
 }
+
+// --- Reruns, the MIR inline epoch and the backoff ladder. ---
+
+/// The cached leaf of `func`, if any.
+fn cached_leaf(
+    func: &ByteCodeFunction,
+) -> Option<&'static crate::emacs_core::jit::compile::CompiledLeaf> {
+    let id = func.jit_runtime().compiled_id()?;
+    // SAFETY: cached (or retired) leaves stay allocated for the test.
+    compiled_leaf_ptr_for_test(id).map(|p| unsafe { &*p })
+}
+
+/// A pure `(lambda (a b) (+ a b))` MIR leaf reruns from the start on a failed
+/// guard, which carries no pc. Floats: the first rerun reopens recording,
+/// the interpreter's rerun records the float, the second rerun sees a
+/// widened site and invalidates, and the recompile takes the baseline's f64
+/// path. Overflows record nothing: the reruns reach the site limit and the
+/// source backs off to the baseline, whose deopts are precise.
+#[test]
+fn mir_rerun_learns_or_escalates() {
+    force_deopt_for_test(false);
+    force_reopt_for_test(Some(knobs_with_heat(5)));
+    let mut ev = Context::new();
+    let plus = || {
+        function(
+            vec![Op::StackRef(1), Op::StackRef(1), Op::Add, Op::Return],
+            vec![],
+            2,
+        )
+    };
+    for (name, arg, want_level) in [
+        (
+            "reopt-rerun-float",
+            Value::make_float(1.5),
+            ReoptLevel::Speculative,
+        ),
+        (
+            "reopt-rerun-overflow",
+            Value::make_int(Value::MOST_POSITIVE_FIXNUM),
+            ReoptLevel::BaselineOnly,
+        ),
+    ] {
+        let sym = install(&mut ev, name, plus());
+        let callee = bytecode_of(&ev, sym);
+        callee.jit_runtime().set_hot_for_test();
+        // (lambda (x y) (<name> x y)), interpreted: its Bcall is the seam.
+        let caller = function(
+            vec![
+                Op::Constant(0),
+                Op::StackRef(2),
+                Op::StackRef(2),
+                Op::Call(2),
+                Op::Return,
+            ],
+            vec![sym],
+            2,
+        );
+        let mut call = |x: Value| {
+            let got = TestVm::from_context(&mut ev)
+                .execute(&caller, vec![x, Value::make_int(2)])
+                .expect("runs");
+            let want = TestVm::from_context(&mut ev)
+                .execute(&plus(), vec![x, Value::make_int(2)])
+                .expect("interp");
+            assert!(eql_value(&got, &want), "{got:?} != {want:?}");
+        };
+        call(Value::make_int(1));
+        let leaf = cached_leaf(callee).expect("compiled");
+        assert_eq!(
+            leaf.tier(),
+            crate::emacs_core::jit::compile::LeafTier::Mir,
+            "{name}"
+        );
+        let rt = callee.jit_runtime();
+        let mut calls = 0;
+        while rt.reopt_count() == 0 {
+            call(arg);
+            calls += 1;
+            assert!(calls <= ReoptKnobs::SITE_LIMIT, "{name}: never invalidated");
+        }
+        let expect_calls = if want_level == ReoptLevel::Speculative {
+            2
+        } else {
+            ReoptKnobs::SITE_LIMIT
+        };
+        assert_eq!(
+            calls, expect_calls,
+            "{name}: invalidated at the right rerun"
+        );
+        assert_eq!(rt.reopt_level(), want_level, "{name}");
+        assert_eq!(
+            cache_entry_kind_for_test(rt.compiled_id().unwrap()),
+            "deferred-reopt"
+        );
+        // The re-profile window, then the recompile.
+        let mut window = 0;
+        while cached_leaf(callee).is_none() {
+            call(arg);
+            window += 1;
+            assert!(window <= 20, "{name}: never recompiled");
+        }
+        let leaf = cached_leaf(callee).expect("recompiled");
+        assert_eq!(
+            leaf.tier(),
+            crate::emacs_core::jit::compile::LeafTier::Baseline,
+            "{name}: the recompile left the MIR tier"
+        );
+        assert_eq!(leaf.compiled_level, want_level);
+        // The steady state deopts no more: floats take the f64 path at
+        // once; an overflow, precise now, widens its site to the generic
+        // fallback after the site limit (one more invalidation).
+        for _ in 0..30 {
+            call(arg);
+        }
+        let deopts = stats::compile_stats_snapshot().deopts();
+        for _ in 0..10 {
+            call(arg);
+        }
+        assert_eq!(stats::compile_stats_snapshot().deopts(), deopts, "{name}");
+        assert!(rt.reopt_count() <= 2, "{name}: bounded");
+    }
+    force_reopt_for_test(None);
+}
+
+/// A MIR leaf that inlined a callee guards the GLOBAL `function_epoch` at
+/// each inlined call, so any unrelated function-cell write made it deopt at
+/// every call, forever. The first such deopt now rebuilds it against the
+/// current epoch, at once (no re-profile window).
+#[test]
+fn inline_epoch_moved_recompiles_once() {
+    force_deopt_for_test(false);
+    force_reopt_for_test(Some(knobs_with_heat(5)));
+    let mut ev = Context::new();
+    let ctx = &mut ev as *mut Context;
+    // (defun reopt-sq (x) (* x x))
+    let sq = install(
+        &mut ev,
+        "reopt-epoch-sq",
+        function(
+            vec![Op::StackRef(0), Op::Dup, Op::Mul, Op::Return],
+            vec![],
+            1,
+        ),
+    );
+    // (lambda (n) (let ((i 0) (s 0))
+    //   (while (< i n) (setq s (+ s (reopt-epoch-sq i))) (setq i (1+ i))) s))
+    let f = function(
+        vec![
+            Op::Constant(0),   // 0: i = 0         [n i]
+            Op::Constant(0),   // 1: s = 0         [n i s]
+            Op::StackRef(1),   // 2: header: i
+            Op::StackRef(3),   // 3: n
+            Op::Lss,           // 4
+            Op::GotoIfNil(16), // 5
+            Op::StackRef(0),   // 6: s
+            Op::Constant(1),   // 7: reopt-epoch-sq
+            Op::StackRef(3),   // 8: i
+            Op::Call(1),       // 9
+            Op::Add,           // 10
+            Op::StackSet(1),   // 11: s = s + i*i
+            Op::StackRef(1),   // 12: i
+            Op::Add1,          // 13
+            Op::StackSet(2),   // 14: i = i + 1
+            Op::Goto(2),       // 15
+            Op::StackRef(0),   // 16: s
+            Op::Return,        // 17
+        ],
+        vec![Value::make_int(0), sq],
+        1,
+    );
+    let v = Value::make_bytecode(f.clone());
+    let run = |n: i64| {
+        let bits = try_run_compiled(ctx, &f, v, &[Value::make_int(n)])
+            .expect("no signal")
+            .expect("precise: resumed, not rerun");
+        Value::from_bits(bits)
+    };
+    assert_eq!(run(4), Value::make_int(14)); // 0 + 1 + 4 + 9
+    let leaf = cached_leaf(&f).expect("compiled");
+    let armed = leaf
+        .inline_epoch()
+        .expect("the MIR tier inlined reopt-epoch-sq");
+    assert_eq!(leaf.tier(), crate::emacs_core::jit::compile::LeafTier::Mir);
+    // An unrelated function-cell write moves the global epoch.
+    let zz = Value::symbol("reopt-epoch-unrelated");
+    let ctx_w: *mut Context = ctx;
+    // SAFETY: the test owns `ev` and no native frame is live.
+    unsafe { &mut *ctx_w }
+        .obarray
+        .set_symbol_function_id(zz.as_symbol_id().unwrap(), Value::make_int(0));
+    let now = unsafe { &*ctx_w }.obarray.function_epoch();
+    assert_ne!(now, armed);
+    assert_eq!(run(4), Value::make_int(14), "the deopt resumes correctly");
+    assert_eq!(f.jit_runtime().reopt_count(), 1);
+    assert_eq!(
+        cache_entry_kind_for_test(f.jit_runtime().compiled_id().unwrap()),
+        "none",
+        "rebuilt on the next call, no window"
+    );
+    assert_eq!(run(4), Value::make_int(14));
+    let rebuilt = cached_leaf(&f).expect("recompiled");
+    assert_eq!(
+        rebuilt.inline_epoch(),
+        Some(now),
+        "armed at the current epoch"
+    );
+    let deopts = stats::compile_stats_snapshot().deopts();
+    assert_eq!(run(4), Value::make_int(14));
+    assert_eq!(stats::compile_stats_snapshot().deopts(), deopts);
+    force_reopt_for_test(None);
+}
+
+/// The backoff ladder under the stress knobs (`max_reopts` 1, site limit 1):
+/// each overflow at a new site invalidates, and past the first each one
+/// climbs a level — NoInline, BaselineOnly, Generic. At Generic the compiled
+/// leaf takes the fallback at every arithmetic site and never deopts; one
+/// more invalidation reaches Interpreter, where no entry or OSR compile
+/// happens.
+#[test]
+fn backoff_climbs_to_generic_then_interpreter() {
+    force_deopt_for_test(false);
+    force_reopt_for_test(Some(ReoptKnobs::stress()));
+    let mut ev = Context::new();
+    let ctx = &mut ev as *mut Context;
+    // (lambda (a b c d) (list (* a a) (* b b) (* c c) (* d d)))
+    let f = function(
+        vec![
+            Op::StackRef(3),
+            Op::Dup,
+            Op::Mul, // 2
+            Op::StackRef(3),
+            Op::Dup,
+            Op::Mul, // 5
+            Op::StackRef(3),
+            Op::Dup,
+            Op::Mul, // 8
+            Op::StackRef(3),
+            Op::Dup,
+            Op::Mul, // 11
+            Op::List(4),
+            Op::Return,
+        ],
+        vec![],
+        4,
+    );
+    let v = Value::make_bytecode(f.clone());
+    let rt = f.jit_runtime();
+    let one = Value::make_int(1);
+    let big = Value::make_int(3_037_000_500);
+    let run = |args: [Value; 4]| {
+        // Past any re-profile window: the next attempt recompiles.
+        rt.set_heat_for_test(rt.heat().saturating_add(10));
+        let got = try_run_compiled(ctx, &f, v, &args).expect("no signal");
+        let want = TestVm::from_context(unsafe { &mut *ctx })
+            .execute(&f, args.to_vec())
+            .expect("interp");
+        if let Some(bits) = got {
+            assert_eq!(
+                crate::emacs_core::print::print_value(&Value::from_bits(bits)),
+                crate::emacs_core::print::print_value(&want)
+            );
+        }
+    };
+    run([one; 4]);
+    let ladder = [
+        ([big, one, one, one], ReoptLevel::Speculative),
+        ([one, big, one, one], ReoptLevel::NoInline),
+        ([one, one, big, one], ReoptLevel::BaselineOnly),
+        ([one, one, one, big], ReoptLevel::Generic),
+    ];
+    for (i, (args, level)) in ladder.into_iter().enumerate() {
+        run([one; 4]); // recompile (the window is one call)
+        let leaf = cached_leaf(&f).expect("compiled");
+        assert!(leaf.compiled_level < level || i == 0);
+        run(args);
+        assert_eq!(rt.reopt_count(), i as u8 + 1);
+        assert_eq!(rt.reopt_level(), level);
+    }
+    run([one; 4]);
+    let leaf = cached_leaf(&f).expect("compiled at Generic");
+    assert_eq!(leaf.compiled_level, ReoptLevel::Generic);
+    assert_eq!(
+        leaf.tier(),
+        crate::emacs_core::jit::compile::LeafTier::Baseline
+    );
+    let deopts = stats::compile_stats_snapshot().deopts();
+    run([big; 4]);
+    run([Value::make_float(1.5), big, one, bignum_value()]);
+    assert_eq!(
+        stats::compile_stats_snapshot().deopts(),
+        deopts,
+        "the generic fallback takes every operand"
+    );
+    // One more invalidation (nothing at Generic deopts on its own).
+    crate::emacs_core::jit::cache::invalidate_for_reopt(
+        &f,
+        LeafOrigin::Entry,
+        ReoptLevel::Speculative,
+        Reprofile::Window,
+    );
+    assert_eq!(rt.reopt_level(), ReoptLevel::Interpreter);
+    let id = rt.compiled_id().unwrap();
+    assert_eq!(cache_entry_kind_for_test(id), "not-compilable");
+    assert!(matches!(
+        rt.dispatch_sized(f.executable_ops().len()),
+        crate::emacs_core::jit::Plan::Interpret
+    ));
+    assert_eq!(
+        try_run_compiled(ctx, &f, v, &[one; 4]).expect("no signal"),
+        None
+    );
+    force_reopt_for_test(None);
+}
+
+fn bignum_value() -> Value {
+    Value::make_integer_from_str_or_zero("100000000000000000000000")
+}
