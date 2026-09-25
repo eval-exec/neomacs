@@ -114,6 +114,42 @@ fn oracle_jit_running_function_survives_its_redefinition_and_a_collection() {
     crate::common::assert_oracle_parity_with_env_expect(form, JIT_ENV, expect);
 }
 
+/// O7: speculated calls of `&rest` callees -- short of the optionals, an
+/// empty tail, one and three tail elements, a callee with only `&rest` --
+/// bind what the interpreter binds, and the callee's frame records the
+/// called symbol with the call's own arguments (GNU `Bcall` records the
+/// call before `setup_frame` conses the tail, src/bytecode.c:795, :546).
+#[test]
+fn oracle_jit_speculated_rest_calls_bind_and_frame_like_the_interpreter() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let form = r#"(progn
+  (defvar neovm--o7-seen nil)
+  (defalias 'neovm--o7-f
+    (byte-compile
+     (lambda (a &optional b &rest r)
+       (when (eq a 'show)
+         (mapbacktrace
+          (lambda (_evald f args _flags)
+            (when (and (symbolp f) (null neovm--o7-seen)
+                       (string-prefix-p "neovm--o7-" (symbol-name f)))
+              (setq neovm--o7-seen (list f args))))))
+       (list a b r))))
+  (defalias 'neovm--o7-only (byte-compile (lambda (&rest r) (if r (length r) r))))
+  (defalias 'neovm--o7-call
+    (byte-compile
+     (lambda (x)
+       (list (neovm--o7-f x) (neovm--o7-f x 2) (neovm--o7-f x 2 3)
+             (neovm--o7-f x 2 3 4 5) (neovm--o7-only) (neovm--o7-only x x x x)))))
+  (defalias 'neovm--o7-five (byte-compile (lambda (x) (neovm--o7-f x 2 3 4 5))))
+  (dotimes (i 6000) (neovm--o7-call i) (neovm--o7-five i))
+  (list (neovm--o7-call 1)
+        (progn (setq neovm--o7-seen nil) (neovm--o7-five 'show) neovm--o7-seen)))"#;
+    let expect = expect_test::expect![[
+        r#""OK (((1 nil nil) (1 2 nil) (1 2 (3)) (1 2 (3 4 5)) nil 4) (neovm--o7-f (show 2 3 4 5)))""#
+    ]];
+    crate::common::assert_oracle_parity_with_env_expect(form, JIT_ENV, expect);
+}
+
 /// O8: a speculated call its callee's arity rejects signals GNU's
 /// `wrong-number-of-arguments` with the callee's frame already recorded --
 /// the called symbol and the call's arguments -- as `Bcall` records it

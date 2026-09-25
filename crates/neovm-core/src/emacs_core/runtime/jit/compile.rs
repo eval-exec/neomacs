@@ -1898,11 +1898,11 @@ const CBSYM_SPECIAL_NAMES: &[&str] = &[
 ///
 /// `direct_consts` is the shim's own fast-path key: the cached leaf's
 /// constant base when that leaf takes this site's call -- as the generated
-/// code laid it out, or with its missing `&optional` slots nil-filled into
-/// a frame buffer of at most [`FAST_PATH_MAX_ARITY`] words (no `&rest`) --
-/// 0 otherwise. With it set the shim enters the leaf without
-/// re-classifying the callee, the leaf or the call; it is armed together
-/// with `leaf` and cleared with it.
+/// code laid it out, or normalized into a frame buffer of at most
+/// [`FAST_PATH_MAX_ARITY`] words (missing `&optional` slots nil-filled, a
+/// `&rest` tail consed into the last slot) -- 0 otherwise. With it set the
+/// shim enters the leaf without re-classifying the callee, the leaf or the
+/// call; it is armed together with `leaf` and cleared with it.
 #[repr(C)]
 pub(crate) struct SpecSlot {
     epoch: AtomicU64,
@@ -1911,8 +1911,9 @@ pub(crate) struct SpecSlot {
 }
 
 /// Largest callee arity the spec shim's fast path frames itself (a short
-/// call to a callee with `&optional` slots is nil-filled into a buffer of
-/// this many words on the shim's stack); wider callees keep the slow half.
+/// call to a callee with `&optional` slots is nil-filled, and a `&rest`
+/// callee's tail consed, into a buffer of this many words on the shim's
+/// stack); wider callees keep the slow half.
 pub(crate) const FAST_PATH_MAX_ARITY: usize = 16;
 
 impl SpecSlot {
@@ -1934,8 +1935,9 @@ impl SpecSlot {
     /// Cache `leaf` for the armed callee; `direct_consts` is the callee's
     /// constant base when the leaf takes the site's call (the shim's
     /// fast-path key), null otherwise, with [`Self::KEY_SHORT_CALL`] set
-    /// when the call is short of the leaf's arity (nil-filled by the fast
-    /// path) and [`Self::KEY_FRAMED`] when the leaf runs under its own
+    /// when the fast path builds the leaf's frame (a short call, nil-filled,
+    /// or a `&rest` leaf, its tail consed) and [`Self::KEY_FRAMED`] when the
+    /// leaf runs under its own
     /// native frame. The base is 8-byte aligned, so the low bits are free;
     /// folding the two facts into the word the fast path loads anyway
     /// keeps its pure, handler-free case at one test each instead of the
@@ -1961,7 +1963,10 @@ impl SpecSlot {
         self.direct_consts.store(key, Ordering::Relaxed);
     }
 
-    /// `direct_consts` flag: the site's call is short of the leaf's arity.
+    /// `direct_consts` flag: the site's call is not the leaf's frame as laid
+    /// out -- short of its arity (nil-filled `&optional` slots) or to a
+    /// `&rest` leaf (the tail consed into its last slot) -- so the fast path
+    /// builds the frame in a buffer of [`FAST_PATH_MAX_ARITY`] words.
     pub(crate) const KEY_SHORT_CALL: u64 = 1;
     /// `direct_consts` flag: the leaf runs under its own native frame.
     pub(crate) const KEY_FRAMED: u64 = 2;
@@ -4912,6 +4917,9 @@ mod spec_frame_tests;
 #[cfg(test)]
 #[path = "tests/spec_gate.rs"]
 mod spec_gate_tests;
+#[cfg(test)]
+#[path = "tests/spec_rest_calls.rs"]
+mod spec_rest_call_tests;
 #[cfg(test)]
 #[path = "tests/stack_guard.rs"]
 mod stack_guard_tests;

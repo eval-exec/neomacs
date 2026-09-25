@@ -1030,9 +1030,11 @@ fn stack_call_from_native(
 /// re-classifies
 /// nothing: the callee, the leaf and the argument shape were classified
 /// once, when the slot was armed (`Vm::call_armed_callee_native`), another
-/// 20 instructions a call. Everything else -- the first call through a
-/// site, a re-validation, a callee that needs marshaling, the debugger, the
-/// depth floor, a non-OK native exit -- takes the contained slow half,
+/// 20 instructions a call. A short call or a `&rest` callee has its frame
+/// built in a buffer here ([`spec_rest_frame`] conses the tail). Everything
+/// else -- the first call through a site, a re-validation, a callee wider
+/// than that buffer, the debugger, the depth floor, a non-OK native exit --
+/// takes the contained slow half,
 /// [`call_spec_slow`] / [`call_spec_finish`], which is the reference
 /// protocol unchanged.
 ///
@@ -1107,12 +1109,18 @@ pub extern "C" fn neovm_jit_call_spec(
         } else {
             let arity = leaf.arity;
             let buf = padded.as_mut_ptr() as *mut i64;
-            // SAFETY: nargs < arity <= FAST_PATH_MAX_ARITY (the arming
-            // condition), and args_ptr addresses `nargs` words.
-            unsafe {
-                core::ptr::copy_nonoverlapping(args_ptr, buf, nargs);
-                for i in nargs..arity {
-                    *buf.add(i) = Value::NIL.bits() as i64;
+            if leaf.has_rest {
+                // SAFETY: arity <= FAST_PATH_MAX_ARITY (the arming
+                // condition), and args_ptr addresses `nargs` words.
+                unsafe { spec_rest_frame(ctx_ref, args_ptr, nargs, arity - 1, buf) };
+            } else {
+                // SAFETY: nargs < arity <= FAST_PATH_MAX_ARITY (the arming
+                // condition), and args_ptr addresses `nargs` words.
+                unsafe {
+                    core::ptr::copy_nonoverlapping(args_ptr, buf, nargs);
+                    for i in nargs..arity {
+                        *buf.add(i) = Value::NIL.bits() as i64;
+                    }
                 }
             }
             buf as *const i64
@@ -1176,6 +1184,51 @@ pub extern "C" fn neovm_jit_call_spec(
         nargs as usize,
         out,
     )
+}
+
+/// The spec fast path's frame for a `&rest` callee of `nonrest + 1` slots:
+/// the given words, nil for each missing `&optional` slot, and the words
+/// past `nonrest` as a fresh list in the last slot -- what the slow half's
+/// `marshal_and_run` builds, and the interpreter's `run_frame` (GNU
+/// `setup_frame`'s `Flist`, src/bytecode.c:545-546). Every `cl-generic`
+/// dispatcher takes its arguments this way (`(arg &rest args)`), and
+/// before this each of its calls took the whole contained slow half.
+///
+/// The list needs no root: allocation never collects, and nothing between
+/// it and the callee's entry reading its frame reaches a safe point; the
+/// elements are the call's arguments, which its backtrace frame roots.
+/// Allocation cannot unwind either (the generated code's own `cons` shim
+/// allocates uncontained), so the fast path stays outside a containment
+/// frame. Out of line: the pure pass-through is the path that must stay
+/// small.
+///
+/// SAFETY: `args_ptr` addresses `nargs` valid words and `buf` has room for
+/// `nonrest + 1` words.
+#[inline(never)]
+unsafe fn spec_rest_frame(
+    ctx: &mut Context,
+    args_ptr: *const i64,
+    nargs: usize,
+    nonrest: usize,
+    buf: *mut i64,
+) {
+    let fixed = nargs.min(nonrest);
+    // SAFETY: per the contract, `fixed <= nargs` words are readable and
+    // `nonrest + 1` writable.
+    unsafe {
+        core::ptr::copy_nonoverlapping(args_ptr, buf, fixed);
+        for i in fixed..nonrest {
+            *buf.add(i) = Value::NIL.bits() as i64;
+        }
+        let rest = if nargs > nonrest {
+            let tail =
+                core::slice::from_raw_parts(args_ptr.add(nonrest) as *const Value, nargs - nonrest);
+            ctx.tagged_heap.list_from_slice(tail)
+        } else {
+            Value::NIL
+        };
+        *buf.add(nonrest) = rest.bits() as i64;
+    }
 }
 
 /// The fast path's framed entry, under a containment frame of its own: a
