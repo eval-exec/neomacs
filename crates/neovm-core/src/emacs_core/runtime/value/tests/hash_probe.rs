@@ -71,17 +71,17 @@ fn probe_hash_and_equivalence_match_the_materialized_key() {
             .map(|v| v.to_hash_key_swp(&test, false))
             .collect();
         for (i, value) in values.iter().enumerate() {
-            let Some(probe) = ValueKeyProbe::new(*value, test, false) else {
+            let Some(hasher) = probe_hasher(*value, test, false) else {
                 continue;
             };
             assert_eq!(
-                fx_hash(&probe),
+                hasher.finish(),
                 fx_hash(&keys[i]),
                 "hash stream differs for {value:?} under {test:?}"
             );
             for (j, key) in keys.iter().enumerate() {
                 assert_eq!(
-                    hashbrown::Equivalent::equivalent(&probe, key),
+                    value_matches(*value, test, key),
                     keys[i] == *key,
                     "equivalence differs for {value:?} vs {:?} under {test:?}",
                     values[j]
@@ -94,7 +94,7 @@ fn probe_hash_and_equivalence_match_the_materialized_key() {
 #[test]
 fn probe_admits_structural_shapes_and_declines_the_rest() {
     let values = corpus();
-    let supported = |v: &Value, test| ValueKeyProbe::new(*v, test, false).is_some();
+    let supported = |v: &Value, test| probe_hasher(*v, test, false).is_some();
     // Everything keys by identity under `eq`, so every value is admitted.
     assert!(values.iter().all(|v| supported(v, HashTableTest::Eq)));
     // Under `equal`, vectors and 250-deep lists take the materializing path.
@@ -114,6 +114,35 @@ fn probe_admits_structural_shapes_and_declines_the_rest() {
         HashTableTest::Equal
     ));
     assert!(supported(&Value::string("s"), HashTableTest::Equal));
+}
+
+/// The probe follows a list's cdr in a loop, not a call per element: the
+/// longest list the probe admits (200 conses; one more and a cons would sit
+/// at depth 200, where the probe declines) hashes and matches on a thread
+/// whose stack would not hold a frame per cons, and a 4,000-element list is
+/// declined there without walking past depth 200.
+#[test]
+fn a_long_list_probe_does_not_recurse_per_cdr() {
+    let longest = list(&vec![Value::fixnum(7); FAST_PROBE_MAX_DEPTH]);
+    let too_long = list(&vec![Value::fixnum(7); 4_000]);
+    let test = HashTableTest::Equal;
+    let key = longest.to_hash_key_swp(&test, false);
+    let expected = fx_hash(&key);
+    let probe = std::thread::scope(|scope| {
+        std::thread::Builder::new()
+            .stack_size(16 * 1024)
+            .spawn_scoped(scope, || {
+                (
+                    probe_hasher(longest, test, false).map(|hasher| hasher.finish()),
+                    value_matches(longest, test, &key),
+                    probe_hasher(too_long, test, false).is_none(),
+                )
+            })
+            .expect("spawn a small-stack thread")
+            .join()
+            .expect("the probe fits a 16 KiB stack")
+    });
+    assert_eq!(probe, (Some(expected), true, true));
 }
 
 #[test]
