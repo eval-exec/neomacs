@@ -74,8 +74,8 @@
 //!   them element by element, return the Lisp's closure and count
 //!   mismatches; `NEOVM_CCONV_MEMO_STRICT=1` (and test builds) panic on one.
 //!
-//! `NEOVM_CCONV_FAST` (read once per process; `on` or `1` enables, default
-//! off) serves the untrimmed case natively (S0.6): when the environment
+//! `NEOVM_CCONV_FAST` (read once per process; on by default, `off` or `0`
+//! disables) serves the untrimmed case natively (S0.6): when the environment
 //! binds no lexical variable, or the body starts with
 //! `:closure-dont-trim-context` followed by more forms, cconv.el:923-949
 //! only asserts `(consp body)` and `(listp args)`, drops the marker, and
@@ -158,11 +158,13 @@ const FAST_UNREAD: u8 = 0xff;
 
 static CCONV_FAST: AtomicU8 = AtomicU8::new(FAST_UNREAD);
 
-/// Whether a value of `NEOVM_CCONV_FAST` enables the native untrimmed path.
+/// Whether a value of `NEOVM_CCONV_FAST` enables the native untrimmed path:
+/// on unless explicitly `0`/`off`/`false`/`no` (the default since the same
+/// verify soak and board A/B that turned the memo on).
 pub(crate) fn parse_cconv_fast_knob(value: Option<&str>) -> bool {
-    matches!(
+    !matches!(
         value.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
-        Some("1" | "on" | "true" | "yes")
+        Some("0" | "off" | "false" | "no")
     )
 }
 

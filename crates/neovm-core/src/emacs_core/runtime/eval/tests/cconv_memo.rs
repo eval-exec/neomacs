@@ -1176,7 +1176,7 @@ fn untrimmed_transcript(eval: &mut Context) -> Vec<String> {
 #[test]
 fn fast_knob_values() {
     crate::test_utils::init_test_tracing();
-    assert!(!parse_cconv_fast_knob(None));
+    assert!(parse_cconv_fast_knob(None));
     assert!(!parse_cconv_fast_knob(Some("off")));
     assert!(!parse_cconv_fast_knob(Some("0")));
     assert!(parse_cconv_fast_knob(Some("on")));
