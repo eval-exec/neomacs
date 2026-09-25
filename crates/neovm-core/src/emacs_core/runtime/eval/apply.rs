@@ -477,6 +477,7 @@ impl Context {
     /// specpdl entries of the top — GNU `record_in_backtrace`'s FUNCTION, as
     /// called (a symbol for `(foo ...)`). Read-only and cold: copies no
     /// arguments (the JIT names a leaf it is about to compile with this).
+    #[cfg(feature = "jit")]
     pub(crate) fn innermost_backtrace_function(&self, max_scan: usize) -> Option<Value> {
         self.specpdl
             .iter()
