@@ -721,8 +721,16 @@ impl RuntimeState {
     /// any leaf compiled for that id assumed the narrower prefix (it may have
     /// baked a slot that is now per-instance) and must be evicted by the
     /// caller before the next dispatch.
+    ///
+    /// Every instance of a prototype patches the same width, so the common
+    /// case is a plain load that finds the prefix already recorded; only a
+    /// widening pays the read-modify-write.
+    #[inline]
     pub fn note_patched_prefix(&self, n: usize) -> Option<u64> {
         let n = u32::try_from(n).unwrap_or(u32::MAX);
+        if n <= self.patched_prefix.load(Ordering::Relaxed) {
+            return None;
+        }
         let prev = self.patched_prefix.fetch_max(n, Ordering::Relaxed);
         if n > prev {
             // The caller evicts the cached verdict for this id; forget ours

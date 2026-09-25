@@ -6275,44 +6275,46 @@ pub(crate) fn builtin_make_closure(args: &[Value]) -> EvalResult {
     let prototype = &args[0];
     let closure_vars = &args[1..];
 
-    let bc = prototype
-        .get_bytecode_data()
-        .ok_or_else(|| {
-            signal(
-                LispCondition::WrongTypeArgument,
-                vec![Value::symbol("byte-code-function-p"), args[0]],
-            )
-        })?
-        .clone();
+    let proto = prototype.get_bytecode_data().ok_or_else(|| {
+        signal(
+            LispCondition::WrongTypeArgument,
+            vec![Value::symbol("byte-code-function-p"), args[0]],
+        )
+    })?;
 
-    let mut new_bc = bc;
-
-    if let Some(env_val) = new_bc.env {
+    if let Some(env_val) = proto.env {
         // NeoVM-compiled: replace first N values in env alist
+        let mut new_bc = proto.clone();
         new_bc.env = Some(replace_env_alist_values(env_val, closure_vars));
-    } else {
-        // GNU .elc: replace first N entries in constants vector
-        if closure_vars.len() > new_bc.constants.len() {
-            return Err(signal(
-                "error",
-                vec![Value::string("Closure vars do not fit in constvec")],
-            ));
-        }
-        for (i, var) in closure_vars.iter().enumerate() {
-            new_bc.constants[i] = *var;
-        }
-        // The instance shares the prototype's tiering state (jit::Runtime);
-        // record how many leading constant slots are per-instance so a shared
-        // native leaf reads them through the executing callee instead of
-        // baking the prototype's `V0..Vn` placeholders — and drop any leaf
-        // compiled under a narrower prefix.
-        #[cfg(feature = "jit")]
-        if let Some(id) = new_bc.jit_runtime().note_patched_prefix(closure_vars.len()) {
-            crate::emacs_core::jit::cache::evict_compiled(id);
-        }
+        return Ok(Value::make_bytecode(new_bc));
     }
 
-    Ok(Value::make_bytecode(new_bc))
+    // GNU .elc: a fresh constant vector (GNU copies it per call too — the
+    // captured prefix is per instance), built in one pass: the captured
+    // values, then the prototype's tail.
+    let proto_constants = proto.constants.as_slice();
+    if closure_vars.len() > proto_constants.len() {
+        return Err(signal(
+            "error",
+            vec![Value::string("Closure vars do not fit in constvec")],
+        ));
+    }
+    let mut constants = Vec::with_capacity(proto_constants.len());
+    constants.extend_from_slice(closure_vars);
+    constants.extend_from_slice(&proto_constants[closure_vars.len()..]);
+    // The instance shares the prototype's tiering state (jit::Runtime);
+    // record how many leading constant slots are per-instance so a shared
+    // native leaf reads them through the executing callee instead of baking
+    // the prototype's `V0..Vn` placeholders — and drop any leaf compiled
+    // under a narrower prefix.
+    #[cfg(feature = "jit")]
+    if let Some(id) = proto.jit_runtime().note_patched_prefix(closure_vars.len()) {
+        crate::emacs_core::jit::cache::evict_compiled(id);
+    }
+
+    Ok(Value::make_bytecode(
+        proto.clone_with_constants(constants.into()),
+    ))
 }
 
 /// Replace the first N values in a cons alist with closure_vars.

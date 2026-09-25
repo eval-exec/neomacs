@@ -292,6 +292,20 @@ pub(crate) fn bytecode_function_clone_count_for_test() -> usize {
 
 impl Clone for ByteCodeFunction {
     fn clone(&self) -> Self {
+        self.clone_with_constants(self.constants.clone())
+    }
+}
+
+impl ByteCodeFunction {
+    /// A copy of this function whose constant pool is `constants` instead of
+    /// a copy of this one's — `make-closure`'s instance, which builds its
+    /// pool (captured prefix, then the prototype's tail) in one pass rather
+    /// than copying the prototype's and overwriting the prefix. Every other
+    /// field is [`Clone`]'s.
+    pub(crate) fn clone_with_constants(
+        &self,
+        constants: crate::tagged::header::LispValueVec,
+    ) -> Self {
         #[cfg(test)]
         BYTECODE_FUNCTION_CLONE_COUNT.fetch_add(1, Ordering::Relaxed);
 
@@ -309,7 +323,7 @@ impl Clone for ByteCodeFunction {
             ops: self.ops.clone(),
             ops_sealed: self.ops_sealed,
             stack_verified: self.stack_verified,
-            constants: self.constants.clone(),
+            constants,
             max_stack: self.max_stack,
             params: self.params.clone(),
             arglist: self.arglist,
