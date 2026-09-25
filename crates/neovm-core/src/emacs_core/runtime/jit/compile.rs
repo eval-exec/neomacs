@@ -4756,6 +4756,9 @@ mod observability_tests;
 mod osr_binding_tests;
 
 #[cfg(test)]
+#[path = "tests/eq_swp_prefilter.rs"]
+mod eq_swp_prefilter_tests;
+#[cfg(test)]
 #[path = "tests/fixnum_comparisons.rs"]
 mod fixnum_comparison_tests;
 #[cfg(test)]

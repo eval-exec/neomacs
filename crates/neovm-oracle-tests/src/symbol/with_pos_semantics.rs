@@ -129,3 +129,65 @@ fn oracle_read_symbols_with_positions_records_source_offsets() {
     ]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
+
+/// Byte-compiled `eq` and `symbolp` (GNU `Beq`/`Bsymbolp`: `EQ` and
+/// `SYMBOLP`, which see through a symbol-with-pos only while
+/// `symbols-with-pos-enabled`) over every pair of a symbol-with-pos, bare
+/// symbol, and non-symbol matrix.  The loop calls each compiled function
+/// thousands of times, so an engine that tiers hot functions answers from
+/// both tiers; every round must give the same matrix.
+const BYTE_COMPILED_EQ_SYMBOLP_FORM: &str = r#"
+(let* ((sp-a (position-symbol 'neomacs--oracle-bc-eq 10))
+       (sp-b (position-symbol 'neomacs--oracle-bc-eq 20))
+       (sp-c (position-symbol 'neomacs--oracle-bc-other 10))
+       (f-eq (byte-compile (lambda (a b) (eq a b))))
+       (f-symbolp (byte-compile (lambda (x) (symbolp x))))
+       (vals (list sp-a sp-b sp-c 'neomacs--oracle-bc-eq
+                   'neomacs--oracle-bc-other nil t 7 1.5 "s" [1 2]
+                   (cons 1 2) (record 'neomacs--oracle-bc-record 1)))
+       (matrix (lambda ()
+                 (list
+                  (mapconcat
+                   (lambda (a)
+                     (mapconcat (lambda (b) (if (funcall f-eq a b) "1" "0"))
+                                vals ""))
+                   vals " ")
+                  (mapconcat (lambda (x) (if (funcall f-symbolp x) "1" "0"))
+                             vals ""))))
+       (rounds (lambda ()
+                 (let (seen)
+                   (dotimes (_ 12)
+                     (push (funcall matrix) seen))
+                   (list (length (delete-dups (copy-sequence seen)))
+                         (car seen))))))
+  (list (compiled-function-p f-eq)
+        (compiled-function-p f-symbolp)
+        (let ((symbols-with-pos-enabled nil)) (funcall rounds))
+        (let ((symbols-with-pos-enabled t)) (funcall rounds))))
+"#;
+
+#[test]
+fn oracle_byte_compiled_eq_and_symbolp_see_symbols_with_pos() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK (t t (1 (\"1000000000000 0100000000000 0010000000000 0001000000000 0000100000000 0000010000000 0000001000000 0000000100000 0000000010000 0000000001000 0000000000100 0000000000010 0000000000001\" \"0001111000000\")) (1 (\"1101000000000 1101000000000 0010100000000 1101000000000 0010100000000 0000010000000 0000001000000 0000000100000 0000000010000 0000000001000 0000000000100 0000000000010 0000000000001\" \"1111111000000\")))""#
+    ]];
+    crate::common::assert_oracle_parity_expect(BYTE_COMPILED_EQ_SYMBOLP_FORM, expect);
+}
+
+/// [`oracle_byte_compiled_eq_and_symbolp_see_symbols_with_pos`] with every
+/// function compiled at its first call.
+#[test]
+fn oracle_byte_compiled_eq_and_symbolp_see_symbols_with_pos_jit_threshold_1() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let expect = expect_test::expect![[
+        r#""OK (t t (1 (\"1000000000000 0100000000000 0010000000000 0001000000000 0000100000000 0000010000000 0000001000000 0000000100000 0000000010000 0000000001000 0000000000100 0000000000010 0000000000001\" \"0001111000000\")) (1 (\"1101000000000 1101000000000 0010100000000 1101000000000 0010100000000 0000010000000 0000001000000 0000000100000 0000000010000 0000000001000 0000000000100 0000000000010 0000000000001\" \"1111111000000\")))""#
+    ]];
+    crate::common::assert_oracle_parity_with_env_expect(
+        BYTE_COMPILED_EQ_SYMBOLP_FORM,
+        &[("NEOVM_JIT_THRESHOLD", "1")],
+        expect,
+    );
+}

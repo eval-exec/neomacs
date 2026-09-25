@@ -926,19 +926,41 @@ pub(crate) fn register_shims(builder: &mut cranelift_jit::JITBuilder) {
 #[path = "shims/tests/shim_table_test.rs"]
 mod shim_table_tests;
 
+#[cfg(test)]
+thread_local! {
+    /// Test hook: calls that reached `neovm_jit_eq_slow` — generated code
+    /// calls it only when an operand is a veclike (the inline prefilter).
+    pub(crate) static EQ_SLOW_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Test hook: calls that reached `neovm_jit_symbolp_slow` — generated
+    /// code calls it only for a veclike operand (the inline prefilter).
+    pub(crate) static SYMBOLP_SLOW_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Slow path for `eq` when the raw bits differ: only `symbols-with-pos` can
 /// still make two differing values `eq`. Read-only on the Context; never
 /// allocates, GCs, or signals — a plain value-returning helper.
+///
+/// Generated code calls this only when at least one operand carries the
+/// veclike tag (a symbol-with-pos is a veclike); AOT objects built before
+/// that prefilter call it for every mismatch, which answers the same.
 ///
 /// SAFETY: same vmctx contract as [`neovm_jit_call`], but only a shared read.
 #[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
 #[unsafe(no_mangle)]
 pub extern "C" fn neovm_jit_eq_slow(ctx: *mut u8, a: i64, b: i64) -> i64 {
+    #[cfg(test)]
+    EQ_SLOW_CALLS.with(|c| c.set(c.get() + 1));
     let a = Value::from_bits(a as usize);
     let b = Value::from_bits(b as usize);
     // SAFETY: seam-provided dormant Context; read-only access.
     let ctx = unsafe { &*(ctx as *const Context) };
     let eq = ctx.symbols_with_pos_enabled && crate::emacs_core::value::eq_value_swp(&a, &b, true);
+    // The inline prefilter's premise: two differing values neither of which
+    // is a veclike are never `eq`, whatever `symbols-with-pos-enabled` says.
+    debug_assert!(
+        !eq || a.bits() == b.bits() || a.is_veclike() || b.is_veclike(),
+        "differing non-veclike values came out eq: the JIT prefilter is unsound"
+    );
     (if eq {
         Value::T.bits()
     } else {
@@ -954,6 +976,8 @@ pub extern "C" fn neovm_jit_eq_slow(ctx: *mut u8, a: i64, b: i64) -> i64 {
 #[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
 #[unsafe(no_mangle)]
 pub extern "C" fn neovm_jit_symbolp_slow(ctx: *mut u8, v: i64) -> i64 {
+    #[cfg(test)]
+    SYMBOLP_SLOW_CALLS.with(|c| c.set(c.get() + 1));
     let v = Value::from_bits(v as usize);
     // SAFETY: seam-provided dormant Context; read-only access.
     let ctx = unsafe { &*(ctx as *const Context) };
