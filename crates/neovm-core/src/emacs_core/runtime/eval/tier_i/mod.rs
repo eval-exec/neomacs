@@ -274,6 +274,9 @@ pub(crate) enum TierIEvent {
     Untrusted,
     /// A compiled form was dispatched by the tree walker (an island).
     Island,
+    /// A call through a function alias ran the full resolution's tail
+    /// natively.
+    AliasCall,
     /// The heat-only entries were forgotten at their cap.
     HeatCleared,
 }

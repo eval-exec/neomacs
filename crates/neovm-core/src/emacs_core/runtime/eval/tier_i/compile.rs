@@ -74,7 +74,31 @@ pub(super) struct FormNode {
     pub(super) tail: Value,
     /// The head's class, stamped with the function epoch it was read at.
     pub(super) head_cache: Cell<(u64, FormHead)>,
+    /// For a head whose cell is an alias (`not` -> `null`): what the tree
+    /// walker's full resolution reaches, stamped with the function epoch.
+    pub(super) alias_cache: Cell<(u64, AliasTarget)>,
     pub(super) op: Op,
+}
+
+/// What `eval_sub_cons_dispatch`'s full resolution does with a head whose
+/// function cell is a symbol, for the shapes the executor mirrors: the
+/// resolved function is not an autoload, a special form or a macro.
+#[derive(Clone, Copy)]
+pub(super) enum AliasTarget {
+    /// Anything else: the tree walker's dispatch.
+    None,
+    /// A builtin with a fixed-arity native function (`subr_entry_from_value`
+    /// and `subr_entry_uses_fixed_value_call`).
+    Subr {
+        func: Value,
+        /// The subr's own symbol (`subr_entry_from_value`'s).
+        sym: SymId,
+        entry: SubrEntry,
+    },
+    /// A byte-code object.
+    ByteCode(Value),
+    /// An interpreted closure.
+    Lambda(Value),
 }
 
 /// What a form node does once its head is confirmed.
@@ -467,6 +491,7 @@ impl Compiler<'_> {
             head_id,
             tail,
             head_cache: Cell::new((EMPTY_HEAD_EPOCH, class)),
+            alias_cache: Cell::new((EMPTY_HEAD_EPOCH, AliasTarget::None)),
             op,
         }))
     }

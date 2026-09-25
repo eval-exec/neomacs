@@ -35,7 +35,9 @@
 //! environment, which is `assq`'s answer; with no lexically bound candidate
 //! the tree walker's lookup runs.
 
-use super::compile::{CondClause, FormNode, LetOp, Node, Op, Seq, SetqPair, Slot, VarNode};
+use super::compile::{
+    AliasTarget, CondClause, FormNode, LetOp, Node, Op, Seq, SetqPair, Slot, VarNode,
+};
 use super::*;
 
 /// What [`Context::ti_lexical_cell`] knows about a symbol's lexical cell.
@@ -496,7 +498,20 @@ impl Context {
                         None => self.apply_closure_from_bc_stack(func, first_arg, nargs),
                     }
                 }
-                HeadClass::SpecialForm(_) | HeadClass::Slow => {
+                HeadClass::Slow => match self.ti_alias_target(f, func) {
+                    AliasTarget::None => {
+                        self.ti_island(act, original_fun, original_args, outer_bt_count)
+                    }
+                    target => self.ti_alias_call(
+                        act,
+                        target,
+                        original_fun,
+                        original_args,
+                        outer_bt_count,
+                        args,
+                    ),
+                },
+                HeadClass::SpecialForm(_) => {
                     self.ti_island(act, original_fun, original_args, outer_bt_count)
                 }
             },
@@ -510,6 +525,122 @@ impl Context {
                 _ => self.ti_island(act, original_fun, original_args, outer_bt_count),
             },
         }
+    }
+
+    /// What the full resolution of `eval_sub_cons_dispatch` reaches from the
+    /// head's cell FUNC, when that is an alias the executor mirrors; re-read
+    /// when the function epoch moved (every step reads function cells).
+    #[inline]
+    fn ti_alias_target(&self, f: &FormNode, func: Value) -> AliasTarget {
+        let epoch = self.obarray.function_epoch();
+        let (stamp, target) = f.alias_cache.get();
+        if stamp == epoch {
+            return target;
+        }
+        let target = self.ti_resolve_alias(func);
+        f.alias_cache.set((epoch, target));
+        target
+    }
+
+    /// The resolution itself, step for step: `indirect_function_id` of the
+    /// symbol in the cell, then no autoload, no special form, no macro, and
+    /// the callable shapes the dispatch's tail handles directly.
+    #[cold]
+    #[inline(never)]
+    fn ti_resolve_alias(&self, func: Value) -> AliasTarget {
+        let Some(alias_id) = func.as_symbol_id() else {
+            return AliasTarget::None;
+        };
+        let Some(resolved) = self.obarray.indirect_function_id(alias_id) else {
+            return AliasTarget::None;
+        };
+        if super::super::super::autoload::is_autoload_value(&resolved)
+            || resolved.is_macro()
+            || cons_head_symbol_id(&resolved) == Some(macro_symbol())
+            || !self.function_value_is_callable(&resolved)
+        {
+            return AliasTarget::None;
+        }
+        if let Some(target) = resolved.as_subr_id()
+            && self.subr_is_special_form_id(target)
+        {
+            return AliasTarget::None;
+        }
+        if let Some((sym, entry)) = subr_entry_from_value(resolved) {
+            if entry.dispatch_kind != SubrDispatchKind::SpecialForm
+                && Self::subr_entry_uses_fixed_value_call(entry)
+            {
+                return AliasTarget::Subr {
+                    func: resolved,
+                    sym,
+                    entry,
+                };
+            }
+            return AliasTarget::None;
+        }
+        match resolved.veclike_type() {
+            Some(VecLikeType::ByteCode) => AliasTarget::ByteCode(resolved),
+            Some(VecLikeType::Lambda) => AliasTarget::Lambda(resolved),
+            _ => AliasTarget::None,
+        }
+    }
+
+    /// The tail of `eval_sub_cons_dispatch`'s full resolution for a head that
+    /// is an alias of TARGET: the arity check against the surface symbol for
+    /// a builtin, the up-front `list_length` for the rest, the arguments on
+    /// the operand stack under the resolved function, and the call.
+    fn ti_alias_call(
+        &mut self,
+        act: &Act,
+        target: AliasTarget,
+        original_fun: Value,
+        original_args: Value,
+        outer_bt_count: usize,
+        args: &Seq,
+    ) -> EvalResult {
+        self.tier_i.stats.note(TierIEvent::AliasCall);
+        let func = match target {
+            AliasTarget::Subr { func, sym, entry } => {
+                let numargs = match list_length(&original_args) {
+                    Some(n) => n,
+                    None => return Err(self.listp_error(original_args)),
+                };
+                let min = entry.min_args as usize;
+                let max_ok = match entry.max_args {
+                    Some(m) => numargs <= m as usize,
+                    None => true,
+                };
+                if numargs < min || !max_ok {
+                    return Err(signal(
+                        LispCondition::WrongNumberOfArguments,
+                        vec![original_fun, Value::fixnum(numargs as i64)],
+                    ));
+                }
+                let (first_arg, nargs) =
+                    self.ti_call_args_onto_stack(act, func, original_args, args)?;
+                self.set_backtrace_args_evalled_bc_span(outer_bt_count, first_arg, nargs);
+                return self
+                    .dispatch_subr_entry_from_bc_stack(entry, first_arg, nargs)
+                    .unwrap_or_else(|| {
+                        Err(signal(
+                            LispCondition::VoidFunction,
+                            vec![Value::from_sym_id(sym)],
+                        ))
+                    });
+            }
+            AliasTarget::ByteCode(func) | AliasTarget::Lambda(func) => func,
+            AliasTarget::None => unreachable!("an alias the executor does not mirror"),
+        };
+        if list_length(&original_args).is_none() {
+            return Err(self.listp_error(original_args));
+        }
+        let (first_arg, nargs) = self.ti_call_args_onto_stack(act, func, original_args, args)?;
+        self.set_backtrace_args_evalled_bc_span(outer_bt_count, first_arg, nargs);
+        if let Some(bc_data) = func.get_bytecode_data() {
+            return self.execute_bytecode_call_from_stack(bc_data, first_arg, nargs, func);
+        }
+        let args = LispArgVec::from_slice(&self.bc_buf[first_arg..first_arg + nargs]);
+        self.funcall_general_untraced(func, args)
     }
 
     /// `eval_call_args_onto_stack`.

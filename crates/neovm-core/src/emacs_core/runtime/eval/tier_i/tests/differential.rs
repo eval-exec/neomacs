@@ -173,6 +173,44 @@ fn environment_facts_free_variables_and_special_declarations() {
 }
 
 #[test]
+fn calls_through_function_aliases() {
+    let eval = assert_same(
+        r#"
+(defun ti-al-target (x) (list 'target x))
+(defalias 'ti-al-lambda 'ti-al-target)
+(defalias 'ti-al-chain 'ti-al-lambda)
+(defalias 'ti-al-last 'last)
+(defun ti-aliases (x)
+  (list (not x) (null x) (string= "a" "a") (string< "a" "b")
+        (ti-al-lambda x) (ti-al-chain x) (ti-al-last (list 1 2 x))
+        (condition-case e (eval '(not)) (error e))
+        (condition-case e (funcall (lambda () (not 1 2))) (error e))
+        (condition-case e (ti-al-lambda) (error (car e)))))
+(list (ti-aliases 1) (ti-aliases nil))
+(defalias 'ti-al-lambda (lambda (x) (list 'redefined x)))
+(list (ti-aliases 2))
+(defalias 'ti-al-target (lambda (x) (list 'retargeted x)))
+(defalias 'ti-al-lambda 'ti-al-target)
+(list (ti-aliases 3))
+(defmacro ti-al-mac (x) `(list 'mac ,x))
+(defalias 'ti-al-to-mac 'ti-al-mac)
+(let ((internal-make-interpreted-closure-function nil))
+  (defun ti-al-use-mac (x) (ti-al-to-mac x)))
+(list (ti-al-use-mac 1) (ti-al-use-mac 2))
+(defalias 'ti-al-to-mac 'ti-al-target)
+(list (ti-al-use-mac 3))
+(fset 'ti-al-target nil)
+(condition-case e (ti-aliases 4) (error e))
+"#,
+    );
+    assert!(
+        eval.tier_i.stats().count(TierIEvent::AliasCall) > 10,
+        "{}",
+        eval.tier_i.stats().report()
+    );
+}
+
+#[test]
 fn errors_and_their_data() {
     assert_same(
         r#"
