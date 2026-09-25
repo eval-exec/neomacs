@@ -76,10 +76,25 @@ impl SiteRetreat {
         self.0.load(Ordering::Relaxed) & bit as u16 != 0
     }
 
-    /// Deopts counted at this pc: the high byte, saturating at 255. Nothing
-    /// counts yet; P2.1's deopt history is its writer.
+    /// Deopts counted at this pc: the high byte, saturating at 255. Written
+    /// by [`Self::note_deopt`] (P2.1's deopt history).
     pub(crate) fn count(&self) -> u8 {
         (self.0.load(Ordering::Relaxed) >> Self::COUNT_SHIFT) as u8
+    }
+
+    /// Count one precise deopt at this pc (saturating) and return the new
+    /// count. The history outlives every leaf of the source: a leaf's own
+    /// `LeafObs` counts go with the leaf when it is replaced.
+    pub(crate) fn note_deopt(&self) -> u8 {
+        let word = self.0.load(Ordering::Relaxed);
+        let count = (word >> Self::COUNT_SHIFT) as u8;
+        if count == u8::MAX {
+            return count;
+        }
+        // The mutator is the only writer; `set` ORs bits in with a
+        // read-modify-write, which this add of the high byte cannot lose.
+        self.0.fetch_add(1 << Self::COUNT_SHIFT, Ordering::Relaxed);
+        count + 1
     }
 
     /// The bits that are on, in [`RetreatBit::ALL`] order.

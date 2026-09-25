@@ -1376,6 +1376,29 @@ impl RuntimeState {
         self.site_retreat.has(pc, retreat::RetreatBit::NoInline)
     }
 
+    /// Count one precise deopt at `pc` in this source's persistent deopt
+    /// history (P2.1 C2); returns the new count (saturating at 255, 0 for a
+    /// pc outside the body the table was sized for).
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    pub(crate) fn note_deopt_history(&self, pc: usize, ops_len: usize) -> u8 {
+        self.site_retreat
+            .site(pc, ops_len)
+            .map_or(0, retreat::SiteRetreat::note_deopt)
+    }
+
+    /// Precise deopts ever counted at `pc` of this source, across all of its
+    /// leaves (0 before the first; a read never allocates).
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "consumer: the T2 retreat (P2.1 C9-C11)")
+    )]
+    #[inline]
+    pub(crate) fn deopt_history(&self, pc: usize) -> u8 {
+        self.site_retreat
+            .get(pc)
+            .map_or(0, retreat::SiteRetreat::count)
+    }
+
     /// Empty the interpreter's direct-entry leaf slot: only this source's
     /// slot can hold this source's leaf, so an invalidation disarms it here
     /// instead of bumping the global `cache::leaf_slot_epoch`.

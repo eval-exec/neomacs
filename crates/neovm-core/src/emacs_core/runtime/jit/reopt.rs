@@ -405,6 +405,12 @@ pub(crate) fn note_deopt(
         } => classify(ctx, func.executable_ops(), leaf, origin, pc, stack),
     };
     super::stats::record_deopt(cause, origin.is_osr());
+    // The persistent per-pc history (P2.1 C2): every precise deopt counts,
+    // whatever the policy below does with it. A rerun carries no pc.
+    if let DeoptEvent::Precise { pc, .. } = event {
+        func.jit_runtime()
+            .note_deopt_history(pc, func.executable_ops().len());
+    }
     tracing::trace!(
         target: "neovm_jit::deopt",
         id = leaf.obs.id,
