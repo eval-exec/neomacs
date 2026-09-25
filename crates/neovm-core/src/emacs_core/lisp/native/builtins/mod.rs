@@ -655,6 +655,9 @@ mod fixed_arity_hot_subrs;
 mod replace_region_contents_test;
 
 #[cfg(test)]
+#[path = "tests/make_byte_code_literals.rs"]
+mod make_byte_code_literals_test;
+#[cfg(test)]
 #[path = "tests/make_closure_instance.rs"]
 mod make_closure_instance_test;
 

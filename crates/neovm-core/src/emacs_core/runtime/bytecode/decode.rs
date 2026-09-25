@@ -18,7 +18,7 @@ use super::opcode::Op;
 use crate::emacs_core::value::{Value, ValueKind};
 
 /// Errors that can occur during GNU bytecode decoding.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DecodeError {
     /// Unknown or unimplemented opcode byte.
     UnknownOpcode(u8, usize),
@@ -506,8 +506,8 @@ impl InstrStarts {
 
 /// Receiver of one pass over a GNU bytecode string ([`walk_gnu_bytecode`]).
 ///
-/// The decoder ([`RawOpSink`]) materializes the instructions; a validator
-/// keeps only what the jump-target check needs. Both run the ONE walker
+/// The decoder ([`RawOpSink`]) materializes the instructions; the validator
+/// ([`ValidateSink`]) keeps only what the jump-target check needs. Both run the ONE walker
 /// below, so there is one opcode table and what they accept cannot drift
 /// apart.
 trait DecodeSink {
@@ -890,12 +890,101 @@ impl DecodeSink for RawOpSink {
     }
 }
 
+/// A jump the validator saw: its byte-offset target and the byte offset of
+/// the jumping instruction (for the error).
+struct ValidatedJump {
+    target: usize,
+    source_byte: usize,
+}
+
+/// [`DecodeSink`] of the validator: one bit per byte offset that starts an
+/// instruction, and every jump in instruction order — exactly what the
+/// decoder's jump patching checks, and nothing it would build.
+struct ValidateSink {
+    starts: Vec<u64>,
+    jumps: Vec<ValidatedJump>,
+}
+
+impl ValidateSink {
+    fn new(bytecode_len: usize) -> Self {
+        Self {
+            // Offsets 0..=len: a jump may target the end of the stream.
+            starts: vec![0; bytecode_len / 64 + 1],
+            jumps: Vec::new(),
+        }
+    }
+
+    #[inline]
+    fn is_start(&self, byte_offset: usize) -> bool {
+        self.starts
+            .get(byte_offset / 64)
+            .is_some_and(|word| (word >> (byte_offset % 64)) & 1 != 0)
+    }
+}
+
+impl DecodeSink for ValidateSink {
+    #[inline]
+    fn start(&mut self, byte_offset: usize, _instr_idx: usize) {
+        self.starts[byte_offset / 64] |= 1 << (byte_offset % 64);
+    }
+
+    #[inline]
+    fn op(&mut self, _op: Op) {}
+
+    #[inline]
+    fn builtin(&mut self, _name: &'static str, _arg_count: u8) {}
+
+    #[inline]
+    fn jump(&mut self, _kind: JumpKind, target: usize, source_byte: usize) {
+        self.jumps.push(ValidatedJump {
+            target,
+            source_byte,
+        });
+    }
+}
+
+/// Accept or reject `bytecodes` exactly as
+/// [`decode_gnu_bytecode_with_offset_map`] does — the same walk, then the
+/// same jump-target check in the same order, so the same first
+/// [`DecodeError`] — without building a single instruction.
+///
+/// `make-byte-code` needs only the verdict: under the lazy policy the
+/// instructions are decoded at first execution, and most compiled
+/// functions a load constructs never run.
+pub(crate) fn validate_gnu_bytecode(bytecodes: &[u8]) -> Result<(), DecodeError> {
+    let mut sink = ValidateSink::new(bytecodes.len());
+    walk_gnu_bytecode(bytecodes, &mut sink)?;
+    for jump in &sink.jumps {
+        // `patch_jumps`: a target must start an instruction, or be the end
+        // of the stream (a fall-through past the last instruction).
+        if !sink.is_start(jump.target) && jump.target != bytecodes.len() {
+            return Err(DecodeError::InvalidJumpTarget {
+                target_byte_offset: jump.target,
+                source_byte_offset: jump.source_byte,
+            });
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+static FULL_DECODE_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Test-only: how many instruction-building decodes (eager or deferred) ran
+/// on any thread so far.
+#[cfg(test)]
+pub(crate) fn full_decode_count_for_test() -> usize {
+    FULL_DECODE_COUNT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 // Pass one intentionally returns its three coupled decode artifacts together.
 #[allow(clippy::type_complexity)]
 fn decode_pass1(
     bytecodes: &[u8],
     _constants: &mut Vec<Value>,
 ) -> Result<(Vec<RawOp>, InstrStarts, Vec<JumpPatch>), DecodeError> {
+    #[cfg(test)]
+    FULL_DECODE_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut sink = RawOpSink {
         // Every instruction is at least one byte, so this is an upper bound.
         ops: Vec::with_capacity(bytecodes.len()),

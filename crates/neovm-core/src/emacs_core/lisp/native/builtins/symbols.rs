@@ -5894,8 +5894,9 @@ fn make_byte_code_from_parts_with_slots(
     extra_slots: &[Value],
 ) -> EvalResult {
     use crate::emacs_core::bytecode::ByteCodeFunction;
+    use crate::emacs_core::bytecode::chunk::eager_gnu_bytecode;
     use crate::emacs_core::bytecode::decode::{
-        decode_gnu_bytecode_with_offset_map, parse_arglist_value,
+        decode_gnu_bytecode_with_offset_map, parse_arglist_value, validate_gnu_bytecode,
     };
 
     if !valid_closure_arglist(*arglist)
@@ -5939,14 +5940,25 @@ fn make_byte_code_from_parts_with_slots(
         *constant = try_convert_nested_compiled_literal(*constant);
     }
 
-    // 4. Decode GNU bytecodes
-    let (ops, gnu_byte_offset_map) =
-        decode_gnu_bytecode_with_offset_map(&raw_bytes, &mut constants).map_err(|e| {
-            signal(
-                "error",
-                vec![Value::string(format!("bytecode decode error: {}", e))],
-            )
-        })?;
+    // 4. Check the GNU bytecode. GNU's `Fmake_byte_code` never inspects
+    // it; Neomacs executes decoded instructions, so it rejects bytecode it
+    // cannot decode here, at construction (a deliberate, memory-safe
+    // divergence). Under the default lazy policy the instructions are
+    // decoded at first execution (`defer_gnu_decode` below), so only
+    // validate: the decoder's own walk and jump checks, the same errors,
+    // no instructions built. The eager policy keeps them resident.
+    let (ops, gnu_byte_offset_map) = if eager_gnu_bytecode() {
+        decode_gnu_bytecode_with_offset_map(&raw_bytes, &mut constants)
+            .map(|(ops, offset_map)| (ops, Some(offset_map)))
+    } else {
+        validate_gnu_bytecode(&raw_bytes).map(|()| (Vec::new(), None))
+    }
+    .map_err(|e| {
+        signal(
+            "error",
+            vec![Value::string(format!("bytecode decode error: {}", e))],
+        )
+    })?;
 
     // 5. Extract maxdepth
     let max_stack = match maxdepth.kind() {
@@ -5974,9 +5986,10 @@ fn make_byte_code_from_parts_with_slots(
     let mut bc = ByteCodeFunction {
         source_id: crate::emacs_core::bytecode::fresh_bytecode_source_id(),
         ops,
-        // The instructions above came straight from the sealing decoder;
-        // the stack proof is recomputed below once every shape field
-        // (params/lexical/arglist/env/max_stack) is in place.
+        // Eager instructions came straight from the sealing decoder; the
+        // stack proof is recomputed below once every shape field
+        // (params/lexical/arglist/env/max_stack) is in place. The lazy
+        // policy's `defer_gnu_decode` resets both for its empty `ops`.
         ops_sealed: true,
         stack_verified: false,
         constants: constants.into(),
@@ -5987,7 +6000,7 @@ fn make_byte_code_from_parts_with_slots(
         // bytecode and a list arglist for old dynamically-bound bytecode.
         lexical: matches!(arglist.kind(), ValueKind::Fixnum(_)),
         env: None,
-        gnu_byte_offset_map: Some(gnu_byte_offset_map),
+        gnu_byte_offset_map,
         // Preserve original GNU-format bytes so `(aref FN 1)` returns the
         // bytecode string.  Required for `byte-compile-make-closure` which
         // reads the bytes via aref and passes them back to `make-byte-code`
@@ -6107,6 +6120,16 @@ pub(crate) fn try_convert_nested_compiled_literal(val: Value) -> Value {
 }
 
 fn try_convert_hash_table_literal(val: Value) -> Option<Value> {
+    // Every cons constant of every loaded function comes through here; only
+    // a `(make-hash-table-from-literal ...)` form can convert, so reject any
+    // other head before copying the list out.
+    if !(val.is_cons()
+        && val
+            .cons_car()
+            .is_symbol_named("make-hash-table-from-literal"))
+    {
+        return None;
+    }
     let form = list_to_vec(&val)?;
     if form.len() != 2 {
         return None;

@@ -341,3 +341,243 @@ fn parse_arglist_value_int() {
     assert_eq!(params.optional.len(), 1);
     assert!(params.rest.is_none());
 }
+
+// ---------------------------------------------------------------------------
+// validate_gnu_bytecode: the decoder's verdict without its instructions
+// ---------------------------------------------------------------------------
+
+/// The decoder's verdict on `bytes`: `Ok` or its first error.
+fn decode_verdict(bytes: &[u8]) -> Result<(), DecodeError> {
+    let mut constants = Vec::new();
+    decode_gnu_bytecode_with_offset_map(bytes, &mut constants).map(|_| ())
+}
+
+fn assert_same_verdict(bytes: &[u8]) {
+    assert_eq!(
+        validate_gnu_bytecode(bytes),
+        decode_verdict(bytes),
+        "validator and decoder disagree on {bytes:?}"
+    );
+}
+
+#[test]
+fn validate_matches_decode_on_every_error_kind() {
+    crate::test_utils::init_test_tracing();
+    let cases: &[(&[u8], Result<(), DecodeError>)] = &[
+        (&[], Ok(())),
+        (&[192, 135], Ok(())),
+        // Unused and obsolete opcodes.
+        (&[192, 128], Err(DecodeError::UnknownOpcode(128, 1))),
+        (&[51], Err(DecodeError::UnknownOpcode(51, 0))),
+        (&[141], Err(DecodeError::ObsoleteOpcode(141, 0))),
+        (&[192, 144, 135], Err(DecodeError::ObsoleteOpcode(144, 1))),
+        // Operands past the end: fetch1 and fetch2.
+        (&[6], Err(DecodeError::UnexpectedEnd(0))),
+        (&[192, 7, 1], Err(DecodeError::UnexpectedEnd(1))),
+        (&[130, 0], Err(DecodeError::UnexpectedEnd(0))),
+        // A jump to an instruction start, and to the end of the stream.
+        (&[192, 131, 5, 0, 193, 135], Ok(())),
+        (&[130, 3, 0], Ok(())),
+        // A jump into the middle of an instruction, and past the end.
+        (
+            &[192, 131, 3, 0, 193, 135],
+            Err(DecodeError::InvalidJumpTarget {
+                target_byte_offset: 3,
+                source_byte_offset: 1,
+            }),
+        ),
+        (
+            &[130, 4, 0],
+            Err(DecodeError::InvalidJumpTarget {
+                target_byte_offset: 4,
+                source_byte_offset: 0,
+            }),
+        ),
+        // Two bad jumps: the first in instruction order is reported.
+        (
+            &[130, 9, 0, 130, 2, 0, 135],
+            Err(DecodeError::InvalidJumpTarget {
+                target_byte_offset: 9,
+                source_byte_offset: 0,
+            }),
+        ),
+        // A bad jump before an undecodable instruction: the walk fails first.
+        (&[130, 9, 0, 128], Err(DecodeError::UnknownOpcode(128, 3))),
+        // Handler pushes are jumps too.
+        (
+            &[49, 1, 0, 135],
+            Err(DecodeError::InvalidJumpTarget {
+                target_byte_offset: 1,
+                source_byte_offset: 0,
+            }),
+        ),
+        (&[50, 3, 0, 135], Ok(())),
+    ];
+    for (bytes, want) in cases {
+        assert_eq!(&decode_verdict(bytes), want, "decoder on {bytes:?}");
+        assert_eq!(
+            &validate_gnu_bytecode(bytes),
+            want,
+            "validator on {bytes:?}"
+        );
+    }
+}
+
+/// xorshift64*: a fixed-seed generator, so a failure reproduces.
+struct Prng(u64);
+
+impl Prng {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    fn below(&mut self, n: u64) -> u64 {
+        self.next() % n
+    }
+}
+
+#[test]
+fn validate_matches_decode_on_random_byte_strings() {
+    crate::test_utils::init_test_tracing();
+    let mut rng = Prng(0x9E37_79B9_7F4A_7C15);
+    let mut accepted = 0usize;
+    for _ in 0..100_000 {
+        let len = rng.below(40) as usize;
+        let mut bytes = Vec::with_capacity(len);
+        while bytes.len() < len {
+            // Bias toward jumps with in-range targets, so jump checks run
+            // (and sometimes pass) instead of every string dying early.
+            match rng.below(4) {
+                0 => {
+                    bytes.push(130 + rng.below(5) as u8);
+                    bytes.push(rng.below(len as u64 + 2) as u8);
+                    bytes.push(0);
+                }
+                1 => bytes.push(192 + rng.below(64) as u8),
+                _ => bytes.push(rng.below(256) as u8),
+            }
+        }
+        assert_same_verdict(&bytes);
+        accepted += usize::from(validate_gnu_bytecode(&bytes).is_ok());
+    }
+    assert!(accepted > 1_000, "the corpus must exercise acceptance too");
+}
+
+/// Every compiled function a bootstrapped runtime holds (the preloaded
+/// `.elc` files, plus bytecomp, byte-opt and cl-lib), nested closure
+/// prototypes included, and truncations and bit flips of each.
+#[test]
+fn validate_matches_decode_on_real_elc_functions() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = crate::test_utils::runtime_startup_context();
+    let functions = eval
+        .eval_str(
+            "(progn (require 'bytecomp) (require 'byte-opt) (require 'cl-lib)
+               (let (acc)
+                 (mapatoms (lambda (s)
+                             (when (and (fboundp s)
+                                        (byte-code-function-p (symbol-function s)))
+                               (push (symbol-function s) acc))))
+                 acc))",
+        )
+        .expect("collect compiled functions");
+    crate::emacs_core::eval::push_scratch_gc_root(functions);
+
+    let mut bodies: Vec<Vec<u8>> = Vec::new();
+    let mut pending: Vec<Value> = crate::emacs_core::value::list_to_vec(&functions).unwrap();
+    let mut seen = std::collections::HashSet::new();
+    while let Some(f) = pending.pop() {
+        if !seen.insert(f.bits()) {
+            continue;
+        }
+        let data = f.get_bytecode_data().expect("byte-code function");
+        if let Some(bytes) = &data.gnu_bytecode_bytes {
+            bodies.push(bytes.to_vec());
+        }
+        pending.extend(
+            data.constants
+                .iter()
+                .copied()
+                .filter(|c| c.get_bytecode_data().is_some()),
+        );
+    }
+    assert!(bodies.len() > 2_000, "only {} bodies", bodies.len());
+
+    let mut rng = Prng(0xD1B5_4A32_D192_ED03);
+    for body in &bodies {
+        assert_eq!(validate_gnu_bytecode(body), Ok(()), "{body:?}");
+        assert_same_verdict(body);
+        if body.is_empty() {
+            continue;
+        }
+        for _ in 0..6 {
+            let cut = rng.below(body.len() as u64) as usize;
+            assert_same_verdict(&body[..cut]);
+            let mut flipped = body.clone();
+            let at = rng.below(body.len() as u64) as usize;
+            flipped[at] ^= 1 << rng.below(8);
+            assert_same_verdict(&flipped);
+        }
+    }
+}
+
+/// `make-byte-code` validates without decoding: constructing a function
+/// builds no instructions, its first call decodes it exactly once, and a
+/// malformed body is still refused at construction with the decoder's
+/// error text.
+#[test]
+fn make_byte_code_decodes_lazily_at_first_execution() {
+    crate::test_utils::init_test_tracing();
+    if crate::emacs_core::bytecode::chunk::eager_gnu_bytecode() {
+        return;
+    }
+    let mut eval = crate::emacs_core::eval::Context::new();
+    let full = super::full_decode_count_for_test;
+    let lazy = crate::emacs_core::bytecode::chunk::lazy_gnu_decode_count_for_test;
+
+    let (full0, lazy0) = (full(), lazy());
+    let made = eval
+        .eval_str(
+            "(setq mbc-made (list (make-byte-code 0 \"\\300\\207\" [mbc-ran] 1)
+                                  (make-byte-code 0 \"\\300\\301\\\\\\207\" [3 4] 2)))",
+        )
+        .expect("make-byte-code");
+    crate::emacs_core::eval::push_scratch_gc_root(made);
+    assert_eq!(full() - full0, 0, "construction must not decode");
+    assert_eq!(lazy() - lazy0, 0);
+    for f in crate::emacs_core::value::list_to_vec(&made).unwrap() {
+        let data = f.get_bytecode_data().unwrap();
+        assert!(data.ops.is_empty());
+        assert!(data.lazy_gnu_code.is_some());
+    }
+
+    assert_eq!(
+        eval.eval_str("(funcall (car mbc-made))").unwrap(),
+        Value::symbol("mbc-ran")
+    );
+    assert_eq!((full() - full0, lazy() - lazy0), (1, 1));
+    assert_eq!(
+        eval.eval_str("(funcall (car mbc-made))").unwrap(),
+        Value::symbol("mbc-ran")
+    );
+    assert_eq!((full() - full0, lazy() - lazy0), (1, 1), "decoded once");
+    assert_eq!(
+        eval.eval_str("(funcall (car (cdr mbc-made)))").unwrap(),
+        Value::fixnum(7)
+    );
+    assert_eq!((full() - full0, lazy() - lazy0), (2, 2));
+
+    let refused = eval.eval_str(
+        "(condition-case err (make-byte-code 0 \"\\202\\011\\000\\207\" [] 1)
+           (error err))",
+    );
+    assert_eq!(
+        crate::emacs_core::error::format_eval_result(&refused),
+        "OK (error \"bytecode decode error: jump target byte offset 9 not found \
+         (from instruction at byte 0)\")"
+    );
+    assert_eq!(full() - full0, 2, "refusal must not decode either");
+}
