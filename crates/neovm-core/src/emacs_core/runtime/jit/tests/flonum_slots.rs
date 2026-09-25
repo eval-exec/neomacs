@@ -744,3 +744,98 @@ fn a_handler_sees_boxed_flonums() {
         assert_eq!(ev.jit_root_stack_top, 0);
     }
 }
+
+#[test]
+fn a_variable_read_keeps_flonums_unboxed_and_its_handler_boxes_them() {
+    let mut ev = Context::new();
+    ev.eval_str(
+        "(defvar flonum-plain-var 0.5) \
+         (defvaralias 'flonum-alias-var 'flonum-plain-var)",
+    )
+    .expect("define the variables");
+    // (lambda (a b) (let ((x (* a b))) (+ x VAR))): the inline cell read
+    // for a plain variable, the `neovm_jit_varref` shim for an alias.
+    for var in ["flonum-plain-var", "flonum-alias-var"] {
+        let f = float_fn(
+            2,
+            vec![
+                Op::StackRef(1),
+                Op::StackRef(1),
+                Op::Mul,
+                Op::VarRef(0),
+                Op::Add,
+                Op::Return,
+            ],
+            vec![Value::symbol(var)],
+            &[2, 4],
+        );
+        let mut consed = Vec::new();
+        for mode in [FlonumMode::Off, FlonumMode::OpLocal, FlonumMode::Resident] {
+            let (leaf, census) = compile_in(mode, &f);
+            if mode != FlonumMode::Off {
+                assert_eq!(
+                    (census.results, census.escape_boxes),
+                    (2, 1),
+                    "{var} {mode:?}: the product crosses the read unboxed"
+                );
+            }
+            let before = floats_consed(&ev);
+            let args = [Value::make_float(1.5), Value::make_float(2.0)];
+            let got = ok_value(leaf.call(&mut ev as *mut Context as *mut u8, &args));
+            assert_eq!(float_of(got), 3.5, "{var} {mode:?}");
+            consed.push(floats_consed(&ev) - before);
+        }
+        assert_eq!(
+            consed,
+            vec![consed[0], consed[0] - 1, consed[0] - 1],
+            "{var}: the product is never boxed"
+        );
+    }
+
+    // A void variable signals from the read's slow path inside a
+    // condition-case: the handler reads one box for both slots.
+    let conditions = ev.eval_str("'(error)").expect("conditions");
+    let f = float_fn(
+        2,
+        vec![
+            Op::Constant(0),
+            Op::Constant(0),
+            Op::Constant(1),
+            Op::PushConditionCaseRaw(15),
+            Op::StackRef(3),
+            Op::StackRef(3),
+            Op::Mul,
+            Op::Dup,
+            Op::StackSet(3),
+            Op::Dup,
+            Op::StackSet(2),
+            Op::Pop,
+            Op::VarRef(2),
+            Op::PopHandler,
+            Op::Return,
+            Op::Pop,
+            Op::StackRef(1),
+            Op::StackRef(1),
+            Op::List(2),
+            Op::Return,
+        ],
+        vec![
+            Value::make_float(0.0),
+            conditions,
+            Value::symbol("flonum-void-var"),
+        ],
+        &[6],
+    );
+    for mode in [FlonumMode::OpLocal, FlonumMode::Resident] {
+        let (leaf, census) = compile_in(mode, &f);
+        assert_eq!(census.results, 1, "{mode:?}");
+        assert_eq!(census.escape_boxes, 0, "{mode:?}: the read keeps it");
+        assert_eq!(census.cold_boxes, 1, "{mode:?}: the handler entry boxes it");
+        let args = [Value::make_float(1.5), Value::make_float(2.0)];
+        let got = ok_value(leaf.call(&mut ev as *mut Context as *mut u8, &args));
+        let items = crate::emacs_core::value::list_to_vec(&got).expect("(list x y)");
+        assert_eq!(float_of(items[0]), 3.0, "{mode:?}");
+        assert_eq!(items[0].bits(), items[1].bits(), "{mode:?}: one object");
+        assert_eq!(ev.jit_root_stack_top, 0);
+    }
+}

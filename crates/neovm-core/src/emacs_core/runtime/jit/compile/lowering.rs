@@ -6216,9 +6216,6 @@ fn lower_simple_op_arms(
             // redirects); can signal void-variable. Reads are idempotent, so
             // this neither poisons nor guards.
             let rt = rt.ok_or(CompileError::UnsupportedOp("variable"))?;
-            // The slow path below roots the stack and snapshots it for a
-            // handler as tagged values: box the flonums first.
-            box_all_flonums(fb, Some(rt), stack, reps);
             let sym = const_sym_id(constants, *idx)?;
             let sym_v = materialize_op_sym_id(fb, reloc_base, reloc_index, sym);
             // GNU's `Bvarref` reads a plain symbol's value cell inline; so does
@@ -6328,8 +6325,10 @@ fn lower_simple_op_arms(
             fb.seal_block(slow);
             let carry_fast = rootwin_carry_snapshot();
             // Reading a variable leaves the residual stack unchanged. Keep
-            // its integers raw across the inline read and the continuation;
-            // only the fallback needs tagged roots and a signal snapshot.
+            // its integers raw and its floats unboxed across the inline read
+            // and the continuation; only the fallback needs tagged roots
+            // (a flonum is no reference: it is skipped) and a signal
+            // snapshot (whose handler entry boxes a flonum).
             let mut tagged = std::borrow::Cow::Borrowed(stack.as_slice());
             let mut tagged_reps = std::borrow::Cow::Borrowed(reps.as_slice());
             for (i, &rep) in reps.iter().enumerate() {
@@ -6341,7 +6340,7 @@ fn lower_simple_op_arms(
             let saved = if tagged.is_empty() {
                 CondRoots::NONE
             } else {
-                emit_cond_residual_roots_pre(fb, rt, &tagged)
+                emit_model_roots_pre(fb, rt, &tagged, &tagged_reps)
             };
             let vmctx = fb.use_var(rt.vmctx_var);
             let out_addr = fb.ins().stack_addr(rt.ptr_ty, rt.call_result_slot, 0);
