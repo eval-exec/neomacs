@@ -531,7 +531,8 @@ fn both_tag_test(
 
 /// Box an `f64` result back into a tagged Lisp float.
 pub(crate) fn box_float(fb: &mut FunctionBuilder, rt: &RtCtx, v: ClifValue) -> ClifValue {
-    let call = fb.ins().call(rt.refs.make_float, &[v]);
+    let make_float = rt.refs.get(fb.func, Shim::MakeFloat);
+    let call = fb.ins().call(make_float, &[v]);
     fb.inst_results(call)[0]
 }
 
@@ -1710,7 +1711,8 @@ pub(crate) fn emit_root_window_stores(
     fb.ins().brif(fits, store_blk, &[], grow_blk, &[]);
     fb.switch_to_block(grow_blk);
     fb.seal_block(grow_blk);
-    fb.ins().call(rt.refs.rootwin_grow, &[vmctx, need]);
+    let rootwin_grow = rt.refs.get(fb.func, Shim::RootwinGrow);
+    fb.ins().call(rootwin_grow, &[vmctx, need]);
     fb.ins().jump(store_blk, &[]);
     fb.switch_to_block(store_blk);
     fb.seal_block(store_blk);
@@ -2105,7 +2107,7 @@ pub(crate) fn mir_deopt_block(
                         allocator: rt
                             .ok_or(CompileError::UnsupportedOp("mir-cons-deopt-no-rt"))?
                             .refs
-                            .cons,
+                            .get(fb.func, Shim::Cons),
                     });
                 }
             } else {
@@ -2540,8 +2542,8 @@ pub(super) fn lower_mir_with_plan(
     let setup_phase = super::super::stats::enter_phase(super::super::stats::CompilePhase::Setup);
     let mut builder = JITBuilder::with_isa(jit_isa()?, default_libcall_names());
     if plan.needs_rt {
-        // The shims the calls-slice + cons allocation reference; declare_rt_refs
-        // declares the full import set but Cranelift resolves only referenced ones.
+        // The shims the calls-slice + cons allocation reference; the leaf
+        // declares the shim set but Cranelift resolves only referenced ones.
         // Every shim, from the one table (see `super::shims::JIT_SHIM_TABLE`).
         super::shims::register_shims(&mut builder);
     }
@@ -3029,19 +3031,22 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
             })
             .collect();
 
-        // Runtime context for polls, calls and allocation. declare_rt_refs
-        // declares the full import set; only referenced shims are resolved.
+        // Runtime context for polls, calls and allocation. The sink's module
+        // declares the shim set; each shim is imported on first use.
         let mut rt = if plan.needs_rt {
             // Qualified ordinary calls and named builtins share the baseline
             // emitter. AOT plans have no ordinary call slots yet.
-            let refs = declare_rt_refs(
-                sink.module(),
+            let groups = super::ShimGroups {
+                subr_spec: plan.spec_sites.values().any(|s| s.kind.is_round1_subr()),
+                cbsym_spec: plan.has_named_builtin,
+            };
+            let refs = super::RtRefs::new(
+                sink.shim_ids(call_conv, ptr_ty, groups)?,
+                groups,
                 fb.func,
                 call_conv,
                 ptr_ty,
-                plan.spec_sites.values().any(|s| s.kind.is_round1_subr()),
-                plan.has_named_builtin,
-            )?;
+            );
             let vmctx_var = fb.declare_var(ptr_ty);
             let call_args_slot = fb.create_sized_stack_slot(StackSlotData::new(
                 StackSlotKind::ExplicitSlot,
@@ -3567,11 +3572,9 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
                         let args_addr = fb.ins().stack_addr(rt.ptr_ty, rt.call_args_slot, 0);
                         let out_addr = fb.ins().stack_addr(rt.ptr_ty, rt.call_result_slot, 0);
                         let n_val = fb.ins().iconst(types::I64, n as i64);
-                        let shim = if is_apply {
-                            rt.refs.apply
-                        } else {
-                            rt.refs.call
-                        };
+                        let shim = rt
+                            .refs
+                            .get(fb.func, if is_apply { Shim::Apply } else { Shim::Call });
                         let call = fb
                             .ins()
                             .call(shim, &[vmctx, func_val, args_addr, n_val, out_addr]);
@@ -3610,7 +3613,8 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
                         // `neovm_jit_cons`), so nothing live across it can be
                         // collected. Infallible + context-free (no status, no
                         // vmctx) — no STATUS branch / signal exit.
-                        let call = fb.ins().call(rt.refs.cons, &[car_v, cdr_v]);
+                        let cons = rt.refs.get(fb.func, Shim::Cons);
+                        let call = fb.ins().call(cons, &[car_v, cdr_v]);
                         let result = fb.inst_results(call)[0];
                         cval[r] = Some(result);
                         cval_raw[r] = false;
@@ -4120,11 +4124,35 @@ pub(crate) fn emit_entry_count(
 /// sharing the file (a parallel test run) interleave whole records, never
 /// fragments of them: a before/after comparison can then sort the records.
 pub(crate) fn dump_clif(func: &cranelift_codegen::ir::Function, header: &str) {
+    #[cfg(test)]
+    if let Some(forced) = CLIF_DUMP_TEST_OVERRIDE.with(|p| p.borrow().clone()) {
+        if let Some(path) = forced {
+            append_clif_record(&path, func, header);
+        }
+        return;
+    }
     use std::sync::OnceLock;
     static PATH: OnceLock<Option<String>> = OnceLock::new();
     let Some(path) = PATH.get_or_init(|| std::env::var("NEOVM_JIT_DUMP_CLIF").ok()) else {
         return;
     };
+    append_clif_record(path, func, header);
+}
+
+#[cfg(test)]
+thread_local! {
+    static CLIF_DUMP_TEST_OVERRIDE: std::cell::RefCell<Option<Option<String>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Point the CLIF dump at `path` (or turn it off) for compiles on this
+/// thread (tests only), without the process-global environment variable.
+#[cfg(test)]
+pub(crate) fn force_clif_dump_for_test(path: Option<String>) {
+    CLIF_DUMP_TEST_OVERRIDE.with(|p| *p.borrow_mut() = Some(path));
+}
+
+fn append_clif_record(path: &str, func: &cranelift_codegen::ir::Function, header: &str) {
     use std::io::Write;
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
@@ -4160,7 +4188,8 @@ pub(crate) fn emit_hoisted_root_window_prologue(
     fb.ins().brif(fits, cont_blk, &[], grow_blk, &[]);
     fb.switch_to_block(grow_blk);
     fb.seal_block(grow_blk);
-    fb.ins().call(rt.refs.rootwin_grow, &[vmctx, need_max]);
+    let rootwin_grow = rt.refs.get(fb.func, Shim::RootwinGrow);
+    fb.ins().call(rootwin_grow, &[vmctx, need_max]);
     fb.ins().jump(cont_blk, &[]);
     fb.switch_to_block(cont_blk);
     fb.seal_block(cont_blk);
@@ -4224,7 +4253,7 @@ fn lower_bcall_leaf_site(
     stack.truncate(args_at - 1);
     let subr_spec = rt
         .refs
-        .call_subr_spec
+        .try_get(fb.func, Shim::CallSubrSpec)
         .ok_or(CompileError::UnsupportedOp("subr-spec-refs"))?;
     let tramp = leaf_abi::bcall_trampoline(leaf.id)
         .ok_or(CompileError::UnsupportedOp("bcall-leaf-trampoline"))?;
@@ -4379,10 +4408,10 @@ fn lower_bcall_leaf_site(
         emit_model_roots_pre(fb, rt, stack, reps)
     };
     let vmctx_gen = fb.use_var(rt.vmctx_var);
-    let gen_call = fb.ins().call(
-        rt.refs.call,
-        &[vmctx_gen, func_val, args_addr, n_val, out_addr],
-    );
+    let call = rt.refs.get(fb.func, Shim::Call);
+    let gen_call = fb
+        .ins()
+        .call(call, &[vmctx_gen, func_val, args_addr, n_val, out_addr]);
     let gen_status = fb.inst_results(gen_call)[0];
     emit_cond_residual_roots_post(fb, rt, saved_gen);
     rootwin_carry_meet(&carry_ref);
@@ -4411,414 +4440,6 @@ fn lower_bcall_leaf_site(
     stack.push(fb.use_var(res));
     leaf_abi::note_bcall_site(leaf.id);
     Ok(())
-}
-
-/// Callable references to every runtime shim, declared into one function.
-pub(crate) struct RtRefs {
-    pub(crate) rootwin_grow: FuncRef,
-    pub(crate) cons: FuncRef,
-    /// Boxes an `f64` computed in a register (`neovm_jit_make_float`).
-    pub(crate) make_float: FuncRef,
-    /// The generic fallback of an arithmetic site whose feedback says the
-    /// fixnum path misses (`neovm_jit_arith_generic`).
-    pub(crate) arith_generic: FuncRef,
-    pub(crate) call: FuncRef,
-    pub(crate) apply: FuncRef,
-    pub(crate) eq_slow: FuncRef,
-    pub(crate) symbolp_slow: FuncRef,
-    pub(crate) varref: FuncRef,
-    pub(crate) varset: FuncRef,
-    pub(crate) varbind: FuncRef,
-    pub(crate) unbind: FuncRef,
-    pub(crate) backedge: FuncRef,
-    pub(crate) save_current_buffer: FuncRef,
-    pub(crate) save_excursion: FuncRef,
-    pub(crate) save_restriction: FuncRef,
-    pub(crate) unwind_protect: FuncRef,
-    pub(crate) throw_flow: FuncRef,
-    pub(crate) integerp_slow: FuncRef,
-    pub(crate) numberp_slow: FuncRef,
-    pub(crate) builtin1: FuncRef,
-    pub(crate) builtin2: FuncRef,
-    pub(crate) builtin3: FuncRef,
-    /// `Op::Aref` (`neovm_jit_aref`): the element's bits or `VALUE_SHIM_SIGNAL`.
-    pub(crate) aref: FuncRef,
-    /// `Op::Aset` (`neovm_jit_aset`): the value's bits or a `VALUE_SHIM_*` word.
-    pub(crate) aset: FuncRef,
-    /// `Op::Memq` (`neovm_jit_memq`): the tail's bits or `VALUE_SHIM_SIGNAL`.
-    pub(crate) memq: FuncRef,
-    /// `Op::Assq` (`neovm_jit_assq`): the entry's bits or `VALUE_SHIM_SIGNAL`.
-    pub(crate) assq: FuncRef,
-    /// `Op::Setcar` (`neovm_jit_setcar`): the new car's bits or
-    /// `VALUE_SHIM_SIGNAL`.
-    pub(crate) setcar: FuncRef,
-    /// `Op::Setcdr` (`neovm_jit_setcdr`): the new cdr's bits or
-    /// `VALUE_SHIM_SIGNAL`.
-    pub(crate) setcdr: FuncRef,
-    pub(crate) push_cc: FuncRef,
-    pub(crate) push_cc_raw: FuncRef,
-    pub(crate) push_catch: FuncRef,
-    pub(crate) pop_handler: FuncRef,
-    pub(crate) match_handler: FuncRef,
-    pub(crate) switch_lookup: FuncRef,
-    pub(crate) switch_stale: FuncRef,
-    pub(crate) list: FuncRef,
-    pub(crate) builtin_slice: FuncRef,
-    pub(crate) named_builtin: FuncRef,
-    pub(crate) save_window_excursion: FuncRef,
-    pub(crate) call_spec: FuncRef,
-    /// The three subr-speculation shims (Gap 1), declared ONLY when the body
-    /// actually has subr-kind spec sites (`declare_rt_refs`' `subr_spec`
-    /// flag). `None` otherwise — in particular for EVERY AOT build
-    /// (`build_baseline_leaf_object` compiles with an empty site map), so an
-    /// AOT object can never acquire an import of these JIT-only shims (they
-    /// are deliberately NOT in `shim_names.rs`, and
-    /// `assert_aot_imports_exported` refuses foreign imports at emit time).
-    pub(crate) call_subr_spec: Option<FuncRef>,
-    pub(crate) pred_spec: Option<FuncRef>,
-    pub(crate) eq_incl_props_spec: Option<FuncRef>,
-    /// `neovm_jit_arith_spec` (logand/logior/logxor intrinsic). Declared under the
-    /// same `subr_spec` flag as the round-1 subr shims (see `is_round1_subr`).
-    pub(crate) arith_spec: Option<FuncRef>,
-    /// The R2 CallBuiltinSym intrinsic shims — Tier-B dispatch-skip
-    /// ([`neovm_jit_cbsym_spec`]) + Tier-A GC-free read
-    /// ([`neovm_jit_cbsym_read`]), declared ONLY when the body has a CBSym-kind
-    /// spec site (`declare_rt_refs`' `cbsym_spec` flag). UNLIKE the round-1 subr
-    /// shims (still `Some(obarray)`-gated), CBSym classification is obarray-free,
-    /// so these ARE declared for AOT baseline leaves too (increment A) — both are
-    /// exported (`shim_names.rs`) and bind against the host at `dlopen`. `None`
-    /// when the body has no CBSym-kind site.
-    pub(crate) cbsym_spec: Option<FuncRef>,
-    pub(crate) cbsym_read: Option<FuncRef>,
-    /// The calling convention of every shim above: a site that calls a
-    /// leaf builtin's trampoline by address (`call_indirect`) builds its
-    /// signature with it.
-    pub(crate) call_conv: cranelift_codegen::isa::CallConv,
-}
-
-/// Declare the runtime-shim imports into `module`/`func` and return the callable
-/// refs. The matching addresses are registered on the `JITBuilder` in
-/// [`lower_leaf`] via `builder.symbol(...)` (the JIT seam); under AOT the same
-/// `Linkage::Import` declarations resolve via the dynamic loader instead.
-///
-/// Generic over the module type (`M: Module`) so it serves both the `JITModule`
-/// JIT path and the future `ObjectModule` AOT path with no change — it only
-/// calls `Module::declare_function`, a trait method available on both.
-///
-/// `subr_spec`: declare the three round-1 subr-speculation shims (Gap 1) — still
-/// JIT-only (their `find_spec_sites` pass requires `Some(obarray)`, i.e. never
-/// AOT — increment B), so those names (absent from `shim_names.rs`) are never
-/// DECLARED into an `ObjectModule`, independent of whether unreferenced
-/// declarations would reach the emitted object.
-/// `cbsym_spec`: declare the R2 CallBuiltinSym intrinsic shims (Tier-A read +
-/// Tier-B dispatch-skip). CBSym classification is obarray-free, so as of increment
-/// A this flag is TRUE for AOT baseline leaves too — the shims ARE in
-/// `shim_names.rs` (exported + salted) and resolve at `dlopen`.
-/// Both flags are set by `build_leaf_fn` from the body's actual spec sites.
-pub(crate) fn declare_rt_refs<M: Module>(
-    module: &mut M,
-    func: &mut Function,
-    call_conv: cranelift_codegen::isa::CallConv,
-    ptr_ty: Type,
-    subr_spec: bool,
-    cbsym_spec: bool,
-) -> Result<RtRefs, CompileError> {
-    let i64t = types::I64;
-    let mut sig_rootwin_grow = Signature::new(call_conv); // (vmctx, need) -> ()
-    sig_rootwin_grow.params.push(AbiParam::new(ptr_ty));
-    sig_rootwin_grow.params.push(AbiParam::new(i64t));
-    let mut sig_cons = Signature::new(call_conv); // (i64, i64) -> i64
-    sig_cons.params.push(AbiParam::new(i64t));
-    sig_cons.params.push(AbiParam::new(i64t));
-    sig_cons.returns.push(AbiParam::new(i64t));
-    // (vmctx, func_bits, args_ptr, nargs, out_ptr) -> status
-    let mut sig_call = Signature::new(call_conv);
-    sig_call.params.push(AbiParam::new(ptr_ty));
-    sig_call.params.push(AbiParam::new(i64t));
-    sig_call.params.push(AbiParam::new(ptr_ty));
-    sig_call.params.push(AbiParam::new(i64t));
-    sig_call.params.push(AbiParam::new(ptr_ty));
-    sig_call.returns.push(AbiParam::new(i64t));
-    // (vmctx, a, b) -> t/nil bits
-    let mut sig_eq = Signature::new(call_conv);
-    sig_eq.params.push(AbiParam::new(ptr_ty));
-    sig_eq.params.push(AbiParam::new(i64t));
-    sig_eq.params.push(AbiParam::new(i64t));
-    sig_eq.returns.push(AbiParam::new(i64t));
-    // (vmctx, v) -> t/nil bits
-    let mut sig_symp = Signature::new(call_conv);
-    sig_symp.params.push(AbiParam::new(ptr_ty));
-    sig_symp.params.push(AbiParam::new(i64t));
-    sig_symp.returns.push(AbiParam::new(i64t));
-
-    let declare = |module: &mut M, name: &str, sig: &Signature| {
-        module
-            .declare_function(name, Linkage::Import, sig)
-            .map_err(|e| CompileError::Backend(BackendError::Define(e.to_string())))
-    };
-
-    let rootwin_grow_id = declare(module, "neovm_jit_rootwin_grow", &sig_rootwin_grow)?;
-    let cons_id = declare(module, "neovm_jit_cons", &sig_cons)?;
-    let mut sig_make_float = Signature::new(call_conv); // (f64) -> i64
-    sig_make_float.params.push(AbiParam::new(types::F64));
-    sig_make_float.returns.push(AbiParam::new(i64t));
-    let make_float_id = declare(module, "neovm_jit_make_float", &sig_make_float)?;
-    // (vmctx, kind, a, b, out_ptr) -> status
-    let mut sig_arith_generic = Signature::new(call_conv);
-    sig_arith_generic.params.push(AbiParam::new(ptr_ty));
-    sig_arith_generic.params.push(AbiParam::new(i64t));
-    sig_arith_generic.params.push(AbiParam::new(i64t));
-    sig_arith_generic.params.push(AbiParam::new(i64t));
-    sig_arith_generic.params.push(AbiParam::new(ptr_ty));
-    sig_arith_generic.returns.push(AbiParam::new(i64t));
-    let arith_generic_id = declare(module, "neovm_jit_arith_generic", &sig_arith_generic)?;
-    let call_id = declare(module, "neovm_jit_call", &sig_call)?;
-    let apply_id = declare(module, "neovm_jit_apply", &sig_call)?;
-    let eq_id = declare(module, "neovm_jit_eq_slow", &sig_eq)?;
-    let symp_id = declare(module, "neovm_jit_symbolp_slow", &sig_symp)?;
-    // (vmctx, sym_id, out_ptr) -> status
-    let mut sig_varref = Signature::new(call_conv);
-    sig_varref.params.push(AbiParam::new(ptr_ty));
-    sig_varref.params.push(AbiParam::new(i64t));
-    sig_varref.params.push(AbiParam::new(ptr_ty));
-    sig_varref.returns.push(AbiParam::new(i64t));
-    // (vmctx, sym_id, val) -> status
-    let mut sig_varset = Signature::new(call_conv);
-    sig_varset.params.push(AbiParam::new(ptr_ty));
-    sig_varset.params.push(AbiParam::new(i64t));
-    sig_varset.params.push(AbiParam::new(i64t));
-    sig_varset.returns.push(AbiParam::new(i64t));
-    let varref_id = declare(module, "neovm_jit_varref", &sig_varref)?;
-    let varset_id = declare(module, "neovm_jit_varset", &sig_varset)?;
-    // (vmctx, sym_id, val) -> status
-    let mut sig_varbind = Signature::new(call_conv);
-    sig_varbind.params.push(AbiParam::new(ptr_ty));
-    sig_varbind.params.push(AbiParam::new(i64t));
-    sig_varbind.params.push(AbiParam::new(i64t));
-    sig_varbind.returns.push(AbiParam::new(i64t));
-    // (vmctx, n) -> status
-    let mut sig_unbind = Signature::new(call_conv);
-    sig_unbind.params.push(AbiParam::new(ptr_ty));
-    sig_unbind.params.push(AbiParam::new(i64t));
-    sig_unbind.returns.push(AbiParam::new(i64t));
-    let varbind_id = declare(module, "neovm_jit_varbind", &sig_varbind)?;
-    let unbind_id = declare(module, "neovm_jit_unbind", &sig_unbind)?;
-    // (vmctx) -> status
-    let mut sig_backedge = Signature::new(call_conv);
-    sig_backedge.params.push(AbiParam::new(ptr_ty));
-    sig_backedge.returns.push(AbiParam::new(i64t));
-    let backedge_id = declare(module, "neovm_jit_backedge", &sig_backedge)?;
-    // (vmctx) -> ()  — the infallible Save* records.
-    let mut sig_save = Signature::new(call_conv);
-    sig_save.params.push(AbiParam::new(ptr_ty));
-    let scb_id = declare(module, "neovm_jit_save_current_buffer", &sig_save)?;
-    let sexc_id = declare(module, "neovm_jit_save_excursion", &sig_save)?;
-    let sres_id = declare(module, "neovm_jit_save_restriction", &sig_save)?;
-    // (vmctx, forms) -> ()  — unwind-protect record (infallible). Keep this
-    // distinct from the now-fallible unbind ABI above.
-    let mut sig_unwind_protect = Signature::new(call_conv);
-    sig_unwind_protect.params.push(AbiParam::new(ptr_ty));
-    sig_unwind_protect.params.push(AbiParam::new(i64t));
-    let up_id = declare(module, "neovm_jit_unwind_protect", &sig_unwind_protect)?;
-    // (tag, value) -> ()  — context-free Flow stash.
-    let mut sig_throw = Signature::new(call_conv);
-    sig_throw.params.push(AbiParam::new(i64t));
-    sig_throw.params.push(AbiParam::new(i64t));
-    let throw_id = declare(module, "neovm_jit_throw", &sig_throw)?;
-    // (v) -> t/nil bits  — context-free predicates.
-    let mut sig_pred1 = Signature::new(call_conv);
-    sig_pred1.params.push(AbiParam::new(i64t));
-    sig_pred1.returns.push(AbiParam::new(i64t));
-    let intp_id = declare(module, "neovm_jit_integerp_slow", &sig_pred1)?;
-    let nump_id = declare(module, "neovm_jit_numberp_slow", &sig_pred1)?;
-    // (vmctx, idx, a[, b[, c]], out_ptr) -> status — generic direct builtins.
-    let mut sig_b1 = Signature::new(call_conv);
-    sig_b1.params.push(AbiParam::new(ptr_ty));
-    sig_b1.params.push(AbiParam::new(i64t));
-    sig_b1.params.push(AbiParam::new(i64t));
-    sig_b1.params.push(AbiParam::new(ptr_ty));
-    sig_b1.returns.push(AbiParam::new(i64t));
-    let mut sig_b2 = sig_b1.clone();
-    sig_b2.params.insert(3, AbiParam::new(i64t));
-    let mut sig_b3 = sig_b2.clone();
-    sig_b3.params.insert(4, AbiParam::new(i64t));
-    let b1_id = declare(module, "neovm_jit_builtin1", &sig_b1)?;
-    let b2_id = declare(module, "neovm_jit_builtin2", &sig_b2)?;
-    let b3_id = declare(module, "neovm_jit_builtin3", &sig_b3)?;
-    // (vmctx, array, index) -> element bits | VALUE_SHIM_SIGNAL
-    let mut sig_aref = Signature::new(call_conv);
-    sig_aref.params.push(AbiParam::new(ptr_ty));
-    sig_aref.params.push(AbiParam::new(i64t));
-    sig_aref.params.push(AbiParam::new(i64t));
-    sig_aref.returns.push(AbiParam::new(i64t));
-    // (vmctx, array, index, value) -> value bits | VALUE_SHIM_*
-    let mut sig_aset = sig_aref.clone();
-    sig_aset.params.push(AbiParam::new(i64t));
-    let aref_id = declare(module, "neovm_jit_aref", &sig_aref)?;
-    let aset_id = declare(module, "neovm_jit_aset", &sig_aset)?;
-    let memq_id = declare(module, "neovm_jit_memq", &sig_aref)?;
-    let assq_id = declare(module, "neovm_jit_assq", &sig_aref)?;
-    let setcar_id = declare(module, "neovm_jit_setcar", &sig_aref)?;
-    let setcdr_id = declare(module, "neovm_jit_setcdr", &sig_aref)?;
-    // (vmctx, target, stack_len) -> ()  — condition-case push (infallible).
-    let mut sig_pcc = Signature::new(call_conv);
-    sig_pcc.params.push(AbiParam::new(ptr_ty));
-    sig_pcc.params.push(AbiParam::new(i64t));
-    sig_pcc.params.push(AbiParam::new(i64t));
-    // (vmctx, target, stack_len, conditions/tag) -> ()
-    let mut sig_pcc_raw = sig_pcc.clone();
-    sig_pcc_raw.params.push(AbiParam::new(i64t));
-    let pcc_id = declare(module, "neovm_jit_push_cc", &sig_pcc)?;
-    let pcc_raw_id = declare(module, "neovm_jit_push_cc_raw", &sig_pcc_raw)?;
-    let pcatch_id = declare(module, "neovm_jit_push_catch", &sig_pcc_raw)?;
-    let pop_handler_id = declare(module, "neovm_jit_pop_handler", &sig_save)?;
-    // (vmctx, ours, out_ptr) -> matched ordinal or -1.
-    let match_id = declare(module, "neovm_jit_match_handler", &sig_varref)?;
-    // (vmctx, dispatch, table) -> raw target addr / miss / stale.
-    let switch_id = declare(module, "neovm_jit_switch", &sig_eq)?;
-    // () -> ()  — stash the stale-table signal.
-    let sig_void = Signature::new(call_conv);
-    let switch_stale_id = declare(module, "neovm_jit_switch_stale", &sig_void)?;
-    // (args_ptr, nargs) -> list bits  — infallible n-ary list builder.
-    let mut sig_list = Signature::new(call_conv);
-    sig_list.params.push(AbiParam::new(ptr_ty));
-    sig_list.params.push(AbiParam::new(i64t));
-    sig_list.returns.push(AbiParam::new(i64t));
-    let list_id = declare(module, "neovm_jit_list", &sig_list)?;
-    // (idx, args_ptr, nargs, out_ptr) -> status  — slice-shaped builtins.
-    let mut sig_slice = Signature::new(call_conv);
-    sig_slice.params.push(AbiParam::new(i64t));
-    sig_slice.params.push(AbiParam::new(ptr_ty));
-    sig_slice.params.push(AbiParam::new(i64t));
-    sig_slice.params.push(AbiParam::new(ptr_ty));
-    sig_slice.returns.push(AbiParam::new(i64t));
-    let slice_id = declare(module, "neovm_jit_builtin_slice", &sig_slice)?;
-    // (vmctx, variant, sym, args_ptr, nargs, out_ptr) -> status.
-    let mut sig_named = Signature::new(call_conv);
-    sig_named.params.push(AbiParam::new(ptr_ty));
-    sig_named.params.push(AbiParam::new(i64t));
-    sig_named.params.push(AbiParam::new(i64t));
-    sig_named.params.push(AbiParam::new(ptr_ty));
-    sig_named.params.push(AbiParam::new(i64t));
-    sig_named.params.push(AbiParam::new(ptr_ty));
-    sig_named.returns.push(AbiParam::new(i64t));
-    let named_id = declare(module, "neovm_jit_named_builtin", &sig_named)?;
-    // (vmctx, body, out_ptr) -> status.
-    let swe_id = declare(module, "neovm_jit_save_window_excursion", &sig_varref)?;
-    // (vmctx, sym, expected, slot_ptr, args_ptr, nargs, out_ptr) -> status.
-    let mut sig_spec = Signature::new(call_conv);
-    sig_spec.params.push(AbiParam::new(ptr_ty));
-    sig_spec.params.push(AbiParam::new(i64t));
-    sig_spec.params.push(AbiParam::new(i64t));
-    sig_spec.params.push(AbiParam::new(i64t));
-    sig_spec.params.push(AbiParam::new(ptr_ty));
-    sig_spec.params.push(AbiParam::new(i64t));
-    sig_spec.params.push(AbiParam::new(ptr_ty));
-    sig_spec.returns.push(AbiParam::new(i64t));
-    let call_spec_id = declare(module, "neovm_jit_call_spec", &sig_spec)?;
-    // Gap 1: the subr-speculation shims, JIT-only (see the `subr_spec` doc).
-    // call_subr_spec shares sig_spec's shape; pred/eq share one 7-param shape:
-    // (vmctx, k1, k2, k3, k4, k5, out_ptr) -> status
-    //   pred: (vmctx, kind, sym, expected, slot_ptr, a, out_ptr)
-    //   eq:   (vmctx, sym, expected, slot_ptr, a, b, out_ptr)
-    // arith adds one word for the second arg (kind + 2 args):
-    //   arith: (vmctx, kind, sym, expected, slot_ptr, a, b, out_ptr)
-    let subr_spec_refs = if subr_spec {
-        let mut sig_pred = Signature::new(call_conv);
-        sig_pred.params.push(AbiParam::new(ptr_ty));
-        for _ in 0..5 {
-            sig_pred.params.push(AbiParam::new(i64t));
-        }
-        sig_pred.params.push(AbiParam::new(ptr_ty));
-        sig_pred.returns.push(AbiParam::new(i64t));
-        let mut sig_arith = Signature::new(call_conv);
-        sig_arith.params.push(AbiParam::new(ptr_ty)); // vmctx
-        for _ in 0..6 {
-            // kind, sym, expected, slot_ptr, a, b
-            sig_arith.params.push(AbiParam::new(i64t));
-        }
-        sig_arith.params.push(AbiParam::new(ptr_ty)); // out
-        sig_arith.returns.push(AbiParam::new(i64t));
-        let subr_id = declare(module, "neovm_jit_call_subr_spec", &sig_spec)?;
-        let pred_id = declare(module, "neovm_jit_pred_spec", &sig_pred)?;
-        let eq_id = declare(module, "neovm_jit_eq_incl_props_spec", &sig_pred)?;
-        let arith_id = declare(module, "neovm_jit_arith_spec", &sig_arith)?;
-        Some((subr_id, pred_id, eq_id, arith_id))
-    } else {
-        None
-    };
-    // R2 CallBuiltinSym intrinsic shims (JIT-only, see doc). Tier-B dispatch-skip
-    // shares `sig_call`'s shape (vmctx, sym, args_ptr, nargs, out_ptr) -> status;
-    // Tier-A read adds a leading `which` discriminant
-    // (vmctx, which, sym, args_ptr, nargs, out_ptr) -> status.
-    let (cbsym_spec_id, cbsym_read_id) = if cbsym_spec {
-        let mut sig_read = Signature::new(call_conv);
-        sig_read.params.push(AbiParam::new(ptr_ty)); // vmctx
-        sig_read.params.push(AbiParam::new(i64t)); // which
-        sig_read.params.push(AbiParam::new(i64t)); // sym
-        sig_read.params.push(AbiParam::new(ptr_ty)); // args_ptr
-        sig_read.params.push(AbiParam::new(i64t)); // nargs
-        sig_read.params.push(AbiParam::new(ptr_ty)); // out
-        sig_read.returns.push(AbiParam::new(i64t));
-        (
-            Some(declare(module, "neovm_jit_cbsym_spec", &sig_call)?),
-            Some(declare(module, "neovm_jit_cbsym_read", &sig_read)?),
-        )
-    } else {
-        (None, None)
-    };
-
-    Ok(RtRefs {
-        rootwin_grow: module.declare_func_in_func(rootwin_grow_id, func),
-        cons: module.declare_func_in_func(cons_id, func),
-        make_float: module.declare_func_in_func(make_float_id, func),
-        arith_generic: module.declare_func_in_func(arith_generic_id, func),
-        call: module.declare_func_in_func(call_id, func),
-        apply: module.declare_func_in_func(apply_id, func),
-        eq_slow: module.declare_func_in_func(eq_id, func),
-        symbolp_slow: module.declare_func_in_func(symp_id, func),
-        varref: module.declare_func_in_func(varref_id, func),
-        varset: module.declare_func_in_func(varset_id, func),
-        varbind: module.declare_func_in_func(varbind_id, func),
-        unbind: module.declare_func_in_func(unbind_id, func),
-        backedge: module.declare_func_in_func(backedge_id, func),
-        save_current_buffer: module.declare_func_in_func(scb_id, func),
-        save_excursion: module.declare_func_in_func(sexc_id, func),
-        save_restriction: module.declare_func_in_func(sres_id, func),
-        unwind_protect: module.declare_func_in_func(up_id, func),
-        throw_flow: module.declare_func_in_func(throw_id, func),
-        integerp_slow: module.declare_func_in_func(intp_id, func),
-        numberp_slow: module.declare_func_in_func(nump_id, func),
-        builtin1: module.declare_func_in_func(b1_id, func),
-        builtin2: module.declare_func_in_func(b2_id, func),
-        builtin3: module.declare_func_in_func(b3_id, func),
-        aref: module.declare_func_in_func(aref_id, func),
-        aset: module.declare_func_in_func(aset_id, func),
-        memq: module.declare_func_in_func(memq_id, func),
-        assq: module.declare_func_in_func(assq_id, func),
-        setcar: module.declare_func_in_func(setcar_id, func),
-        setcdr: module.declare_func_in_func(setcdr_id, func),
-        push_cc: module.declare_func_in_func(pcc_id, func),
-        push_cc_raw: module.declare_func_in_func(pcc_raw_id, func),
-        push_catch: module.declare_func_in_func(pcatch_id, func),
-        pop_handler: module.declare_func_in_func(pop_handler_id, func),
-        match_handler: module.declare_func_in_func(match_id, func),
-        switch_lookup: module.declare_func_in_func(switch_id, func),
-        switch_stale: module.declare_func_in_func(switch_stale_id, func),
-        list: module.declare_func_in_func(list_id, func),
-        builtin_slice: module.declare_func_in_func(slice_id, func),
-        named_builtin: module.declare_func_in_func(named_id, func),
-        save_window_excursion: module.declare_func_in_func(swe_id, func),
-        call_spec: module.declare_func_in_func(call_spec_id, func),
-        call_subr_spec: subr_spec_refs.map(|(id, _, _, _)| module.declare_func_in_func(id, func)),
-        pred_spec: subr_spec_refs.map(|(_, id, _, _)| module.declare_func_in_func(id, func)),
-        eq_incl_props_spec: subr_spec_refs
-            .map(|(_, _, id, _)| module.declare_func_in_func(id, func)),
-        arith_spec: subr_spec_refs.map(|(_, _, _, id)| module.declare_func_in_func(id, func)),
-        cbsym_spec: cbsym_spec_id.map(|id| module.declare_func_in_func(id, func)),
-        cbsym_read: cbsym_read_id.map(|id| module.declare_func_in_func(id, func)),
-        call_conv,
-    })
 }
 
 /// The per-leaf cells a precise-deopt exit writes through before returning
@@ -5039,7 +4660,7 @@ pub(crate) fn emit_pending_deopts(
     fb: &mut FunctionBuilder,
     refs: DeoptRefs,
     pending: &mut Vec<PendingDeopt>,
-    float_boxer: Option<FuncRef>,
+    float_boxer: Option<&RtRefs>,
 ) {
     LAST_IR_STATS.with(|c| {
         let (i, b, sites, slots) = c.get();
@@ -5268,9 +4889,8 @@ pub(crate) fn emit_pending_dispatches(
         let vmctx = fb.use_var(rt.vmctx_var);
         let ours = fb.ins().iconst(types::I64, pd.handlers.len() as i64);
         let out_addr = fb.ins().stack_addr(rt.ptr_ty, rt.call_result_slot, 0);
-        let call = fb
-            .ins()
-            .call(rt.refs.match_handler, &[vmctx, ours, out_addr]);
+        let match_handler = rt.refs.get(fb.func, Shim::MatchHandler);
+        let call = fb.ins().call(match_handler, &[vmctx, ours, out_addr]);
         let idx = fb.inst_results(call)[0];
         emit_cond_residual_roots_post(fb, rt, saved);
         // Compare chain over the (small) static handler list: shim ordinal
@@ -5292,14 +4912,7 @@ pub(crate) fn emit_pending_dispatches(
             fb.seal_block(hit);
             let mut boxed: SmallVec<[(ClifValue, ClifValue); 8]> = SmallVec::new();
             for (j, &v) in pd.stack.iter().take(push_depth).enumerate() {
-                let v = snapshot_slot_tagged(
-                    fb,
-                    Some(rt.refs.make_float),
-                    &mut boxed,
-                    v,
-                    pd.reps[j],
-                    false,
-                );
+                let v = snapshot_slot_tagged(fb, Some(&rt.refs), &mut boxed, v, pd.reps[j], false);
                 fb.def_var(vars[j], v);
             }
             let err = fb
@@ -5433,7 +5046,7 @@ fn flonum_census_note(update: impl FnOnce(&mut FlonumCensus)) {
 /// `cold` marks the diamond's blocks cold (a deopt exit).
 pub(crate) fn box_flonum_value(
     fb: &mut FunctionBuilder,
-    make_float: FuncRef,
+    refs: &RtRefs,
     tag: ClifValue,
     f64: ClifValue,
     kind: FlonumKind,
@@ -5441,6 +5054,7 @@ pub(crate) fn box_flonum_value(
 ) -> ClifValue {
     match kind {
         FlonumKind::Float => {
+            let make_float = refs.get(fb.func, Shim::MakeFloat);
             let call = fb.ins().call(make_float, &[f64]);
             fb.inst_results(call)[0]
         }
@@ -5457,6 +5071,7 @@ pub(crate) fn box_flonum_value(
             fb.ins().brif(is_float, box_b, &[], merge, &[]);
             fb.switch_to_block(box_b);
             fb.seal_block(box_b);
+            let make_float = refs.get(fb.func, Shim::MakeFloat);
             let call = fb.ins().call(make_float, &[f64]);
             let boxed = fb.inst_results(call)[0];
             fb.def_var(out, boxed);
@@ -5477,7 +5092,7 @@ pub(crate) fn box_flonum_value(
 /// never inside one arm of an op's own branching.
 pub(crate) fn box_flonum_slot(
     fb: &mut FunctionBuilder,
-    make_float: FuncRef,
+    refs: &RtRefs,
     stack: &mut [ClifValue],
     reps: &mut [SlotRep],
     k: usize,
@@ -5486,7 +5101,7 @@ pub(crate) fn box_flonum_slot(
     let SlotRep::Flonum { f64, kind } = key else {
         return stack[k];
     };
-    let boxed = box_flonum_value(fb, make_float, stack[k], f64, kind, false);
+    let boxed = box_flonum_value(fb, refs, stack[k], f64, kind, false);
     for s in 0..stack.len() {
         if reps[s] == key {
             stack[s] = boxed;
@@ -5521,7 +5136,7 @@ pub(crate) fn box_all_flonums(
     for k in 0..stack.len() {
         if reps[k].is_flonum() {
             let rt = rt.expect("a flonum implies the runtime refs (float sites declare them)");
-            box_flonum_slot(fb, rt.refs.make_float, stack, reps, k);
+            box_flonum_slot(fb, &rt.refs, stack, reps, k);
         }
     }
 }
@@ -5541,7 +5156,7 @@ pub(crate) fn materialize_model_stack(
             SlotRep::RawFixnum => stack_force_tagged(fb, stack, reps, k),
             SlotRep::Flonum { .. } => {
                 let rt = rt.expect("a flonum implies the runtime refs (float sites declare them)");
-                box_flonum_slot(fb, rt.refs.make_float, stack, reps, k);
+                box_flonum_slot(fb, &rt.refs, stack, reps, k);
             }
         }
     }
@@ -5587,7 +5202,7 @@ pub(crate) fn emit_model_roots_pre(
 /// share one object (the pattern of the MIR virtual-cons rebuild).
 fn snapshot_slot_tagged(
     fb: &mut FunctionBuilder,
-    make_float: Option<FuncRef>,
+    refs: Option<&RtRefs>,
     boxed: &mut SmallVec<[(ClifValue, ClifValue); 8]>,
     v: ClifValue,
     rep: SlotRep,
@@ -5600,9 +5215,8 @@ fn snapshot_slot_tagged(
             if let Some(&(_, b)) = boxed.iter().find(|&&(key, _)| key == f64) {
                 return b;
             }
-            let make_float =
-                make_float.expect("a flonum implies the runtime refs (float sites declare them)");
-            let b = box_flonum_value(fb, make_float, v, f64, kind, cold);
+            let refs = refs.expect("a flonum implies the runtime refs (float sites declare them)");
+            let b = box_flonum_value(fb, refs, v, f64, kind, cold);
             boxed.push((f64, b));
             flonum_census_note(|c| c.cold_boxes += 1);
             b
@@ -5825,8 +5439,9 @@ fn lower_generic_arith_site(
     let kind_v = fb.ins().iconst(types::I64, kind as i64);
     let second = if nargs == 2 { operands[1] } else { operands[0] };
     let out_addr = fb.ins().stack_addr(rt.ptr_ty, rt.call_result_slot, 0);
+    let arith_generic = rt.refs.get(fb.func, Shim::ArithGeneric);
     let call = fb.ins().call(
-        rt.refs.arith_generic,
+        arith_generic,
         &[vmctx, kind_v, operands[0], second, out_addr],
     );
     let status = fb.inst_results(call)[0];
@@ -6189,7 +5804,7 @@ fn prepare_op_operands(
         for k in at..stack.len() {
             if reps[k].is_flonum() {
                 let rt = rt.expect("a flonum implies the runtime refs (float sites declare them)");
-                box_flonum_slot(fb, rt.refs.make_float, stack, reps, k);
+                box_flonum_slot(fb, &rt.refs, stack, reps, k);
             }
         }
         return Ok(at);
@@ -6444,7 +6059,8 @@ fn lower_simple_op_arms(
                 fb.set_cold_block(slow);
             }
             let vmctx = fb.use_var(rt.vmctx_var);
-            let call = fb.ins().call(rt.refs.eq_slow, &[vmctx, a, b]);
+            let eq_slow = rt.refs.get(fb.func, Shim::EqSlow);
+            let call = fb.ins().call(eq_slow, &[vmctx, a, b]);
             let slow_res = fb.inst_results(call)[0];
             fb.def_var(res, slow_res);
             fb.ins().jump(merge, &[]);
@@ -6496,7 +6112,8 @@ fn lower_simple_op_arms(
                 fb.set_cold_block(slow);
             }
             let vmctx = fb.use_var(rt.vmctx_var);
-            let call = fb.ins().call(rt.refs.symbolp_slow, &[vmctx, a]);
+            let symbolp_slow = rt.refs.get(fb.func, Shim::SymbolpSlow);
+            let call = fb.ins().call(symbolp_slow, &[vmctx, a]);
             let slow_res = fb.inst_results(call)[0];
             fb.def_var(res, slow_res);
             fb.ins().jump(merge, &[]);
@@ -6697,11 +6314,14 @@ fn lower_simple_op_arms(
             // through the context-free slow shim.
             let rt = rt.ok_or(CompileError::UnsupportedOp("predicate"))?;
             let a = stack.pop().ok_or(CompileError::StackUnderflow)?;
-            let shim = if matches!(op, Op::Integerp) {
-                rt.refs.integerp_slow
-            } else {
-                rt.refs.numberp_slow
-            };
+            let shim = rt.refs.get(
+                fb.func,
+                if matches!(op, Op::Integerp) {
+                    Shim::IntegerpSlow
+                } else {
+                    Shim::NumberpSlow
+                },
+            );
             let res = fb.declare_var(types::I64);
             let fast = fb.create_block();
             let slow = fb.create_block();
@@ -6862,7 +6482,8 @@ fn lower_simple_op_arms(
             };
             let vmctx = fb.use_var(rt.vmctx_var);
             let out_addr = fb.ins().stack_addr(rt.ptr_ty, rt.call_result_slot, 0);
-            let call = fb.ins().call(rt.refs.varref, &[vmctx, sym_v, out_addr]);
+            let varref = rt.refs.get(fb.func, Shim::Varref);
+            let call = fb.ins().call(varref, &[vmctx, sym_v, out_addr]);
             let status = fb.inst_results(call)[0];
             emit_cond_residual_roots_post(fb, rt, saved);
             rootwin_carry_meet(&carry_fast);
@@ -6896,7 +6517,8 @@ fn lower_simple_op_arms(
             };
             let vmctx = fb.use_var(rt.vmctx_var);
             let sym_v = materialize_op_sym_id(fb, reloc_base, reloc_index, sym);
-            let call = fb.ins().call(rt.refs.varset, &[vmctx, sym_v, val]);
+            let varset = rt.refs.get(fb.func, Shim::Varset);
+            let call = fb.ins().call(varset, &[vmctx, sym_v, val]);
             let status = fb.inst_results(call)[0];
             emit_cond_residual_roots_post(fb, rt, saved);
             let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack, reps);
@@ -6913,9 +6535,9 @@ fn lower_simple_op_arms(
             // (apply spreads its last argument inside the runtime).
             let rt = rt.ok_or(CompileError::UnsupportedOp("call"))?;
             let shim = if matches!(op, Op::Apply(_)) {
-                rt.refs.apply
+                Shim::Apply
             } else {
-                rt.refs.call
+                Shim::Call
             };
             let n = *n as usize;
             if stack.len() < n + 1 {
@@ -7142,8 +6764,9 @@ fn lower_simple_op_arms(
                     let exp_v =
                         materialize_spec_expected(fb, aot, spec_expected_base, expected, slot_idx);
                     let slot_v = materialize_spec_slot(fb, aot, spec_slot_base, slot_ptr, slot_idx);
+                    let call_spec = rt.refs.get(fb.func, Shim::CallSpec);
                     fb.ins().call(
-                        rt.refs.call_spec,
+                        call_spec,
                         &[vmctx, sym_v, exp_v, slot_v, args_addr, n_val, out_addr],
                     )
                 }
@@ -7164,7 +6787,7 @@ fn lower_simple_op_arms(
                         (SpecCalleeKind::SubrGeneral, _) => {
                             let f = rt
                                 .refs
-                                .call_subr_spec
+                                .try_get(fb.func, Shim::CallSubrSpec)
                                 .ok_or(CompileError::UnsupportedOp("subr-spec-refs"))?;
                             fb.ins().call(
                                 f,
@@ -7182,7 +6805,7 @@ fn lower_simple_op_arms(
                         ) => {
                             let f = rt
                                 .refs
-                                .pred_spec
+                                .try_get(fb.func, Shim::PredSpec)
                                 .ok_or(CompileError::UnsupportedOp("subr-spec-refs"))?;
                             let kind_v = fb.ins().iconst(
                                 types::I64,
@@ -7205,7 +6828,7 @@ fn lower_simple_op_arms(
                         (SpecCalleeKind::EqInclProps, Some(args)) => {
                             let f = rt
                                 .refs
-                                .eq_incl_props_spec
+                                .try_get(fb.func, Shim::EqInclPropsSpec)
                                 .ok_or(CompileError::UnsupportedOp("subr-spec-refs"))?;
                             fb.ins().call(
                                 f,
@@ -7215,7 +6838,7 @@ fn lower_simple_op_arms(
                         (SpecCalleeKind::ArithIntrinsic { op }, Some(args)) => {
                             let f = rt
                                 .refs
-                                .arith_spec
+                                .try_get(fb.func, Shim::ArithSpec)
                                 .ok_or(CompileError::UnsupportedOp("subr-spec-refs"))?;
                             let kind_v = fb.ins().iconst(types::I64, op as i64);
                             // lognot is 1-arg: pass a dummy `b` (the shim ignores it
@@ -7232,9 +6855,11 @@ fn lower_simple_op_arms(
                         _ => return Err(CompileError::UnsupportedOp("subr-spec-shape")),
                     }
                 }
-                None => fb
-                    .ins()
-                    .call(shim, &[vmctx, func_val, args_addr, n_val, out_addr]),
+                None => {
+                    let shim = rt.refs.get(fb.func, shim);
+                    fb.ins()
+                        .call(shim, &[vmctx, func_val, args_addr, n_val, out_addr])
+                }
             };
             let status = fb.inst_results(call)[0];
             emit_cond_residual_roots_post(fb, rt, saved);
@@ -7280,6 +6905,7 @@ fn lower_simple_op_arms(
                     emit_model_roots_pre(fb, rt, stack, reps)
                 };
                 let vmctx_gen = fb.use_var(rt.vmctx_var);
+                let shim = rt.refs.get(fb.func, shim);
                 let call_gen = fb
                     .ins()
                     .call(shim, &[vmctx_gen, func_val, args_addr, n_val, out_addr]);
@@ -7319,7 +6945,8 @@ fn lower_simple_op_arms(
             // No rooting at all: the cons shim is pure allocation and never
             // reaches a GC safe point (see `neovm_jit_cons`), so neither
             // car/cdr nor the residual operand stack can be collected under it.
-            let call = fb.ins().call(rt.refs.cons, &[car, cdr]);
+            let cons = rt.refs.get(fb.func, Shim::Cons);
+            let call = fb.ins().call(cons, &[car, cdr]);
             let result = fb.inst_results(call)[0];
             stack.push(result);
         }
@@ -7343,7 +6970,8 @@ fn lower_simple_op_arms(
             } else {
                 emit_model_roots_pre(fb, rt, stack, reps)
             };
-            let call = fb.ins().call(rt.refs.varbind, &[vmctx, sym_v, val]);
+            let varbind = rt.refs.get(fb.func, Shim::Varbind);
+            let call = fb.ins().call(varbind, &[vmctx, sym_v, val]);
             let status = fb.inst_results(call)[0];
             emit_cond_residual_roots_post(fb, rt, saved);
             let cont = fb.create_block();
@@ -7367,7 +6995,8 @@ fn lower_simple_op_arms(
             } else {
                 emit_model_roots_pre(fb, rt, stack, reps)
             };
-            let call = fb.ins().call(rt.refs.unbind, &[vmctx, n_v]);
+            let unbind = rt.refs.get(fb.func, Shim::Unbind);
+            let call = fb.ins().call(unbind, &[vmctx, n_v]);
             let status = fb.inst_results(call)[0];
             emit_cond_residual_roots_post(fb, rt, saved);
             let cont = fb.create_block();
@@ -7383,11 +7012,12 @@ fn lower_simple_op_arms(
             // shims); restored by the matching Unbind or the frame unwind.
             let rt = rt.ok_or(CompileError::UnsupportedOp("variable"))?;
             let shim = match op {
-                Op::SaveCurrentBuffer => rt.refs.save_current_buffer,
-                Op::SaveExcursion => rt.refs.save_excursion,
-                Op::SaveRestriction => rt.refs.save_restriction,
+                Op::SaveCurrentBuffer => Shim::SaveCurrentBuffer,
+                Op::SaveExcursion => Shim::SaveExcursion,
+                Op::SaveRestriction => Shim::SaveRestriction,
                 _ => unreachable!("matched Save* above"),
             };
+            let shim = rt.refs.get(fb.func, shim);
             let vmctx = fb.use_var(rt.vmctx_var);
             fb.ins().call(shim, &[vmctx]);
         }
@@ -7397,7 +7027,8 @@ fn lower_simple_op_arms(
             let rt = rt.ok_or(CompileError::UnsupportedOp("variable"))?;
             let forms = stack.pop().ok_or(CompileError::StackUnderflow)?;
             let vmctx = fb.use_var(rt.vmctx_var);
-            fb.ins().call(rt.refs.unwind_protect, &[vmctx, forms]);
+            let unwind_protect = rt.refs.get(fb.func, Shim::UnwindProtect);
+            fb.ins().call(unwind_protect, &[vmctx, forms]);
         }
         Op::SaveWindowExcursion => {
             // Evaluate the popped body under a window-configuration
@@ -7412,9 +7043,10 @@ fn lower_simple_op_arms(
             };
             let vmctx = fb.use_var(rt.vmctx_var);
             let out_addr = fb.ins().stack_addr(rt.ptr_ty, rt.call_result_slot, 0);
+            let save_window_excursion = rt.refs.get(fb.func, Shim::SaveWindowExcursion);
             let call = fb
                 .ins()
-                .call(rt.refs.save_window_excursion, &[vmctx, body, out_addr]);
+                .call(save_window_excursion, &[vmctx, body, out_addr]);
             let status = fb.inst_results(call)[0];
             emit_cond_residual_roots_post(fb, rt, saved);
             let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack, reps);
@@ -7460,10 +7092,10 @@ fn lower_simple_op_arms(
                 None
             };
             let vmctx = fb.use_var(rt.vmctx_var);
-            let call = fb.ins().call(
-                rt.refs.aset,
-                &[vmctx, operands[0], operands[1], operands[2]],
-            );
+            let aset = rt.refs.get(fb.func, Shim::Aset);
+            let call = fb
+                .ins()
+                .call(aset, &[vmctx, operands[0], operands[1], operands[2]]);
             let word = fb.inst_results(call)[0];
             fb.def_var(res, word);
             let cont = fb.create_block();
@@ -7504,8 +7136,9 @@ fn lower_simple_op_arms(
             let args_addr = fb.ins().stack_addr(rt.ptr_ty, rt.call_args_slot, 0);
             let n_val = fb.ins().iconst(types::I64, 3);
             let out_addr = fb.ins().stack_addr(rt.ptr_ty, rt.call_result_slot, 0);
+            let named_builtin = rt.refs.get(fb.func, Shim::NamedBuiltin);
             let call_gen = fb.ins().call(
-                rt.refs.named_builtin,
+                named_builtin,
                 &[vmctx_gen, variant_gen, sym_gen, args_addr, n_val, out_addr],
             );
             let status_gen = fb.inst_results(call_gen)[0];
@@ -7643,7 +7276,7 @@ fn lower_simple_op_arms(
                 generic_fallback = Some(fb.create_block());
                 let f = rt
                     .refs
-                    .cbsym_read
+                    .try_get(fb.func, Shim::CbsymRead)
                     .ok_or(CompileError::UnsupportedOp("cbsym-read-refs"))?;
                 let which_v = fb.ins().iconst(types::I64, which as i64);
                 Some(
@@ -7654,7 +7287,7 @@ fn lower_simple_op_arms(
                 generic_fallback = Some(fb.create_block());
                 let f = rt
                     .refs
-                    .cbsym_spec
+                    .try_get(fb.func, Shim::CbsymSpec)
                     .ok_or(CompileError::UnsupportedOp("cbsym-spec-refs"))?;
                 Some(
                     fb.ins()
@@ -7662,8 +7295,9 @@ fn lower_simple_op_arms(
                 )
             } else {
                 let variant_v = fb.ins().iconst(types::I64, variant);
+                let named_builtin = rt.refs.get(fb.func, Shim::NamedBuiltin);
                 Some(fb.ins().call(
-                    rt.refs.named_builtin,
+                    named_builtin,
                     &[vmctx, variant_v, sym_v, args_addr, n_val, out_addr],
                 ))
             };
@@ -7703,8 +7337,9 @@ fn lower_simple_op_arms(
                 };
                 let vmctx_gen = fb.use_var(rt.vmctx_var);
                 let variant_gen = fb.ins().iconst(types::I64, variant);
+                let named_builtin = rt.refs.get(fb.func, Shim::NamedBuiltin);
                 let call_gen = fb.ins().call(
-                    rt.refs.named_builtin,
+                    named_builtin,
                     &[vmctx_gen, variant_gen, sym_v, args_addr, n_val, out_addr],
                 );
                 let status_gen = fb.inst_results(call_gen)[0];
@@ -7747,7 +7382,8 @@ fn lower_simple_op_arms(
             };
             let args_addr = fb.ins().stack_addr(rt.ptr_ty, rt.call_args_slot, 0);
             let n_val = fb.ins().iconst(types::I64, n as i64);
-            let call = fb.ins().call(rt.refs.list, &[args_addr, n_val]);
+            let list = rt.refs.get(fb.func, Shim::List);
+            let call = fb.ins().call(list, &[args_addr, n_val]);
             let result = fb.inst_results(call)[0];
             emit_cond_residual_roots_post(fb, rt, saved);
             stack.push(result);
@@ -7777,9 +7413,10 @@ fn lower_simple_op_arms(
                 let args_addr = fb.ins().stack_addr(rt.ptr_ty, rt.call_args_slot, 0);
                 let n_val = fb.ins().iconst(types::I64, nargs as i64);
                 let out_addr = fb.ins().stack_addr(rt.ptr_ty, rt.call_result_slot, 0);
+                let builtin_slice = rt.refs.get(fb.func, Shim::BuiltinSlice);
                 let call = fb
                     .ins()
-                    .call(rt.refs.builtin_slice, &[idx_v, args_addr, n_val, out_addr]);
+                    .call(builtin_slice, &[idx_v, args_addr, n_val, out_addr]);
                 let status = fb.inst_results(call)[0];
                 emit_cond_residual_roots_post(fb, rt, saved);
                 let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack, reps);
@@ -7832,14 +7469,15 @@ fn lower_simple_op_arms(
                 return Ok(());
             }
             let value_shim = match other {
-                Op::Aref => Some(rt.refs.aref),
-                Op::Memq => Some(rt.refs.memq),
-                Op::Assq => Some(rt.refs.assq),
-                Op::Setcar => Some(rt.refs.setcar),
-                Op::Setcdr => Some(rt.refs.setcdr),
+                Op::Aref => Some(Shim::Aref),
+                Op::Memq => Some(Shim::Memq),
+                Op::Assq => Some(Shim::Assq),
+                Op::Setcar => Some(Shim::Setcar),
+                Op::Setcdr => Some(Shim::Setcdr),
                 _ => None,
             };
             if let Some(value_shim) = value_shim {
+                let value_shim = rt.refs.get(fb.func, value_shim);
                 // `neovm_jit_aref`/`_memq`/`_assq`/`_setcar`/`_setcdr` answer
                 // the result's bits or VALUE_SHIM_SIGNAL (tag 0b001, never a
                 // Lisp value). GC-free like the pure table entries they stand
@@ -7920,11 +7558,14 @@ fn lower_simple_op_arms(
             let vmctx = fb.use_var(rt.vmctx_var);
             let idx_v = fb.ins().iconst(types::I64, idx as i64);
             let out_addr = fb.ins().stack_addr(rt.ptr_ty, rt.call_result_slot, 0);
-            let shim = match arity {
-                1 => rt.refs.builtin1,
-                2 => rt.refs.builtin2,
-                _ => rt.refs.builtin3,
-            };
+            let shim = rt.refs.get(
+                fb.func,
+                match arity {
+                    1 => Shim::Builtin1,
+                    2 => Shim::Builtin2,
+                    _ => Shim::Builtin3,
+                },
+            );
             let mut call_args = vec![vmctx, idx_v];
             call_args.extend(operands);
             call_args.push(out_addr);

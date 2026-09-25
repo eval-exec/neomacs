@@ -301,3 +301,141 @@ fn jit_pipeline_isa_cache_is_code_identical() {
     assert_eq!(fresh.len(), corpus().len(), "{fresh:?}");
     assert_eq!(fresh, cached);
 }
+
+/// The CLIF text of every function `compile` lowers on this thread (the
+/// `NEOVM_JIT_DUMP_CLIF` capture), one entry per function.
+fn captured_clif(compile: impl FnOnce()) -> Vec<String> {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("leaves.clif");
+    lowering::force_clif_dump_for_test(Some(path.to_string_lossy().into_owned()));
+    compile();
+    lowering::force_clif_dump_for_test(None);
+    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    text.split("\n;; ")
+        .filter(|chunk| !chunk.trim().is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// How many external functions a CLIF function declares (`fnN = ...`).
+fn imported_functions(clif: &str) -> usize {
+    clif.lines()
+        .filter(|line| {
+            let line = line.trim_start();
+            line.starts_with("fn")
+                && line
+                    .split_once(" = ")
+                    .is_some_and(|(name, _)| name[2..].bytes().all(|b| b.is_ascii_digit()))
+        })
+        .count()
+}
+
+/// Every [`Shim`] name is the exported symbol the JIT table registers (so
+/// the JIT resolves it) and, except the JIT-only speculation shims, one an
+/// AOT object may import.
+#[test]
+fn jit_pipeline_shim_table_names_every_registered_shim() {
+    use strum::IntoEnumIterator;
+    let registered: std::collections::HashSet<&str> =
+        JIT_SHIM_TABLE.iter().map(|(name, _)| *name).collect();
+    let mut symbols = std::collections::HashSet::new();
+    for shim in Shim::iter() {
+        assert!(
+            registered.contains(shim.symbol()),
+            "{shim:?} ({}) is not in JIT_SHIM_TABLE",
+            shim.symbol()
+        );
+        assert!(symbols.insert(shim.symbol()), "{shim:?} named twice");
+        let sig = shim.signature(
+            cranelift_codegen::isa::CallConv::SystemV,
+            cranelift_codegen::ir::types::I64,
+        );
+        assert!(sig.returns.len() <= 1, "{shim:?}");
+    }
+}
+
+/// A body imports only the shims it calls: `(cons x x)` carries one
+/// external function lazily and the whole base set eagerly — and the
+/// machine code of the corpus is identical either way.
+#[test]
+fn jit_pipeline_lazy_shim_import_keeps_only_used_imports() {
+    force_deopt_for_test(false);
+    let cons_body = || {
+        let mut ev = Context::new();
+        let ctx = &mut ev as *mut Context;
+        let f = function(
+            vec![Op::StackRef(0), Op::Dup, Op::Cons, Op::Return],
+            vec![],
+            1,
+        );
+        assert!(cache::resolve_compiled_leaf_ptr(ctx, &f).is_some());
+    };
+    shim_refs::force_lazy_shims_for_test(true);
+    let lazy = captured_clif(cons_body);
+    shim_refs::force_lazy_shims_for_test(false);
+    let eager = captured_clif(cons_body);
+    assert_eq!(lazy.len(), 1, "{lazy:?}");
+    assert_eq!(eager.len(), 1, "{eager:?}");
+    assert_eq!(imported_functions(&lazy[0]), 1, "{}", lazy[0]);
+    assert!(
+        imported_functions(&eager[0]) >= 41,
+        "eager imports the whole base set: {}",
+        eager[0]
+    );
+
+    shim_refs::force_lazy_shims_for_test(false);
+    let eager_code = compile_corpus();
+    shim_refs::force_lazy_shims_for_test(true);
+    let lazy_code = compile_corpus();
+    assert_eq!(eager_code.len(), corpus().len());
+    assert_eq!(
+        eager_code, lazy_code,
+        "import order changes no machine code"
+    );
+}
+
+/// The optional speculation groups stay refused when the body has no such
+/// site, even from a module that declared them: `try_get` answers `None`.
+#[test]
+fn jit_pipeline_optional_shim_groups_follow_the_leaf_not_the_module() {
+    use cranelift_codegen::ir::{Function, Signature, UserFuncName};
+    use cranelift_codegen::isa::CallConv;
+    let mut module = {
+        let _scope = lowering::RegallocScope::enter(lowering::RegallocChoice::Fast);
+        let mut builder = cranelift_jit::JITBuilder::with_isa(
+            lowering::jit_isa().expect("isa"),
+            cranelift_module::default_libcall_names(),
+        );
+        register_shims(&mut builder);
+        cranelift_jit::JITModule::new(builder)
+    };
+    let every = ShimGroups {
+        subr_spec: true,
+        cbsym_spec: true,
+    };
+    let ids = ShimIds::declare(&mut module, CallConv::SystemV, types::I64, every).expect("ids");
+    let again = ShimIds::declare(&mut module, CallConv::SystemV, types::I64, every).expect("ids");
+    assert_eq!(
+        ids.get(Shim::CallSpec),
+        again.get(Shim::CallSpec),
+        "declaring is idempotent per module"
+    );
+    shim_refs::force_lazy_shims_for_test(true);
+    let mut func =
+        Function::with_name_signature(UserFuncName::user(0, 0), Signature::new(CallConv::SystemV));
+    let base_only = ShimGroups {
+        subr_spec: false,
+        cbsym_spec: false,
+    };
+    let refs = RtRefs::new(ids, base_only, &mut func, CallConv::SystemV, types::I64);
+    assert_eq!(
+        func.dfg.ext_funcs.len(),
+        0,
+        "lazy: nothing imported up front"
+    );
+    assert!(refs.try_get(&mut func, Shim::CallSubrSpec).is_none());
+    assert!(refs.try_get(&mut func, Shim::CbsymRead).is_none());
+    let cons = refs.get(&mut func, Shim::Cons);
+    assert_eq!(refs.get(&mut func, Shim::Cons), cons, "imported once");
+    assert_eq!(func.dfg.ext_funcs.len(), 1);
+}

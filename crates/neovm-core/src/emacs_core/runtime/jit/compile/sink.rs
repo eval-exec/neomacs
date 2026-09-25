@@ -44,6 +44,18 @@ pub(crate) trait LeafSink {
     /// The declaration module: target configuration and shim imports.
     fn module(&mut self) -> &mut Self::Module;
 
+    /// The module's shim `FuncId`s covering `groups` (P2.4 B3). The default
+    /// declares them now (idempotent per module); a long-lived sink returns
+    /// the set it declared once.
+    fn shim_ids(
+        &mut self,
+        call_conv: cranelift_codegen::isa::CallConv,
+        ptr_ty: cranelift_codegen::ir::Type,
+        groups: super::ShimGroups,
+    ) -> Result<super::ShimIds, CompileError> {
+        super::ShimIds::declare(self.module(), call_conv, ptr_ty, groups)
+    }
+
     /// A `FunctionBuilderContext` for the next function. The default is a
     /// fresh one; a long-lived sink hands out its cleared scratch state.
     fn take_builder_context(&mut self) -> FunctionBuilderContext {

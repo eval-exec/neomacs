@@ -1543,7 +1543,7 @@ impl SpecCalleeKind {
     }
 
     /// The three round-1 direct-SUBR speculation kinds that make
-    /// `declare_rt_refs` pull in the JIT-only `neovm_jit_{call_subr,pred,eq_incl_props}_spec`
+    /// the leaf's shim imports pull in the JIT-only `neovm_jit_{call_subr,pred,eq_incl_props}_spec`
     /// shims. CBSym kinds are deliberately excluded — they declare their own
     /// shims off a separate flag so a CBSym-only body never imports the
     /// `Op::Call` spec shims.
@@ -3251,7 +3251,8 @@ fn emit_backedge_jump_with_args(
         emit_cond_residual_roots_pre(fb, rt, vals)
     };
     let vmctx = fb.use_var(rt.vmctx_var);
-    let call = fb.ins().call(rt.refs.backedge, &[vmctx]);
+    let backedge = rt.refs.get(fb.func, Shim::Backedge);
+    let call = fb.ins().call(backedge, &[vmctx]);
     let status = fb.inst_results(call)[0];
     emit_cond_residual_roots_post(fb, rt, saved);
     let tagged_reps = vec![SlotRep::Tagged; vals.len()];
@@ -3891,14 +3892,17 @@ fn build_leaf_fn<S: LeafSink>(
             // this for the baseline `ObjectModule` and the two shims become imports
             // resolved against the host at `dlopen`.
             let cbsym_spec = spec_sites.values().any(|site| site.kind.is_cbsym());
-            let refs = declare_rt_refs(
-                sink.module(),
+            let groups = ShimGroups {
+                subr_spec,
+                cbsym_spec,
+            };
+            let refs = RtRefs::new(
+                sink.shim_ids(call_conv, ptr_ty, groups)?,
+                groups,
                 fb.func,
                 call_conv,
                 ptr_ty,
-                subr_spec,
-                cbsym_spec,
-            )?;
+            );
             let vmctx_var = fb.declare_var(ptr_ty);
             let max_call_args = ops
                 .iter()
@@ -4249,7 +4253,7 @@ fn build_leaf_fn<S: LeafSink>(
                         && reps[top].is_flonum()
                     {
                         let rt = rt.as_ref().expect("a flonum implies the runtime refs");
-                        box_flonum_slot(&mut fb, rt.refs.make_float, &mut stack, &mut reps, top);
+                        box_flonum_slot(&mut fb, &rt.refs, &mut stack, &mut reps, top);
                     }
                     retag_raw_fixnums(&mut fb, &mut stack, &mut reps);
                 }
@@ -4271,7 +4275,8 @@ fn build_leaf_fn<S: LeafSink>(
                         let value = stack.pop().ok_or(CompileError::StackUnderflow)?;
                         let tag = stack.pop().ok_or(CompileError::StackUnderflow)?;
                         let rt = rt.as_ref().ok_or(CompileError::UnsupportedOp("throw"))?;
-                        fb.ins().call(rt.refs.throw_flow, &[tag, value]);
+                        let throw_flow = rt.refs.get(fb.func, Shim::ThrowFlow);
+                        fb.ins().call(throw_flow, &[tag, value]);
                         let se = signal_target_for_site(
                             &mut fb,
                             &mut signal_exit,
@@ -4525,19 +4530,20 @@ fn build_leaf_fn<S: LeafSink>(
                         match op {
                             Op::PushConditionCase(_) => {
                                 let d_v = fb.ins().iconst(types::I64, stack.len() as i64);
-                                fb.ins().call(rt_ref.refs.push_cc, &[vmctx, t_v, d_v]);
+                                let push_cc = rt_ref.refs.get(fb.func, Shim::PushCc);
+                                fb.ins().call(push_cc, &[vmctx, t_v, d_v]);
                             }
                             Op::PushConditionCaseRaw(_) => {
                                 let conditions = stack.pop().ok_or(CompileError::StackUnderflow)?;
                                 let d_v = fb.ins().iconst(types::I64, stack.len() as i64);
-                                fb.ins()
-                                    .call(rt_ref.refs.push_cc_raw, &[vmctx, t_v, d_v, conditions]);
+                                let push_cc_raw = rt_ref.refs.get(fb.func, Shim::PushCcRaw);
+                                fb.ins().call(push_cc_raw, &[vmctx, t_v, d_v, conditions]);
                             }
                             Op::PushCatch(_) => {
                                 let tag = stack.pop().ok_or(CompileError::StackUnderflow)?;
                                 let d_v = fb.ins().iconst(types::I64, stack.len() as i64);
-                                fb.ins()
-                                    .call(rt_ref.refs.push_catch, &[vmctx, t_v, d_v, tag]);
+                                let push_catch = rt_ref.refs.get(fb.func, Shim::PushCatch);
+                                fb.ins().call(push_catch, &[vmctx, t_v, d_v, tag]);
                             }
                             _ => unreachable!("matched Push* above"),
                         }
@@ -4565,7 +4571,8 @@ fn build_leaf_fn<S: LeafSink>(
                         // runtime frame and the static tracking entry.
                         let rt_ref = rt.as_ref().ok_or(CompileError::UnsupportedOp("handler"))?;
                         let vmctx = fb.use_var(rt_ref.vmctx_var);
-                        fb.ins().call(rt_ref.refs.pop_handler, &[vmctx]);
+                        let pop_handler = rt_ref.refs.get(fb.func, Shim::PopHandler);
+                        fb.ins().call(pop_handler, &[vmctx]);
                         handlers
                             .pop()
                             .ok_or(CompileError::UnsupportedOp("unbalanced-pophandler"))?;
@@ -4635,7 +4642,7 @@ fn build_leaf_fn<S: LeafSink>(
                 &mut fb,
                 deopt_refs,
                 &mut pending_deopt,
-                rt.as_ref().map(|rt| rt.refs.make_float),
+                rt.as_ref().map(|rt| &rt.refs),
             );
             // Fill the handler-dispatch blocks queued by this block's signal
             // sites (the builder can switch blocks now that it's terminated).
@@ -4712,6 +4719,9 @@ pub use shims::*;
 
 pub(crate) mod sink;
 pub(crate) use sink::{LeafEntry, LeafSink};
+
+pub(crate) mod shim_refs;
+pub(crate) use shim_refs::{RtRefs, Shim, ShimGroups, ShimIds};
 
 mod dispatch;
 pub use dispatch::*;

@@ -22,7 +22,7 @@
 
 use super::lowering::{self, RtCtx};
 use super::{
-    HandlerStatic, JIT_SWITCH_MISS, JIT_SWITCH_STALE, PendingDispatch, emit_backedge_jump,
+    HandlerStatic, JIT_SWITCH_MISS, JIT_SWITCH_STALE, PendingDispatch, Shim, emit_backedge_jump,
 };
 use crate::emacs_core::bytecode::Op;
 use crate::emacs_core::eval::Context;
@@ -172,9 +172,8 @@ pub(crate) fn emit_switch_dispatch(
     // made may have a compare still to come, so they are filled at the end.
     let fill_each = inline.is_none();
     let vmctx = fb.use_var(rt.vmctx_var);
-    let call = fb
-        .ins()
-        .call(rt.refs.switch_lookup, &[vmctx, dispatch, table]);
+    let switch_lookup = rt.refs.get(fb.func, Shim::SwitchLookup);
+    let call = fb.ins().call(switch_lookup, &[vmctx, dispatch, table]);
     let addr = fb.inst_results(call)[0];
     let is_miss = lowering::icmp_imm_p(fb, IntCC::Equal, addr, JIT_SWITCH_MISS);
     let chain = fb.create_block();
@@ -200,7 +199,8 @@ pub(crate) fn emit_switch_dispatch(
     // Exhausted: a hit whose address is not in the static set.
     fb.switch_to_block(cur);
     fb.seal_block(cur);
-    fb.ins().call(rt.refs.switch_stale, &[]);
+    let switch_stale = rt.refs.get(fb.func, Shim::SwitchStale);
+    fb.ins().call(switch_stale, &[]);
     fb.ins().jump(stale, &[]);
     if !fill_each {
         landings.fill_pending(fb);
