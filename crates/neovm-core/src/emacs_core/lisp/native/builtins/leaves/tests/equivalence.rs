@@ -449,7 +449,7 @@ fn get_char_property_leaf_matches_the_builtin() {
 /// Variables of every shape the read tiers distinguish: plain (bound, nil,
 /// void), buffer-local (`make-variable-buffer-local`; `make-local-variable` in one buffer),
 /// an alias, per-buffer forwarded slots (local and not), forwarders that
-/// hold their own value (int, bool, object), the dedicated
+/// hold their own value (int, bool, object, per-keyboard), the dedicated
 /// `buffer-undo-list`, nil, t, a keyword, a symbol with position, and
 /// non-symbols.
 const VARIABLES: &[&str] = &[
@@ -465,6 +465,8 @@ const VARIABLES: &[&str] = &[
     "'gc-cons-threshold",
     "'debug-on-error",
     "'load-path",
+    "'last-command",
+    "'prefix-arg",
     "'buffer-undo-list",
     "'buffer-file-name",
     "nil",

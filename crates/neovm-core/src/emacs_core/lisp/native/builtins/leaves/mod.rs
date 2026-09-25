@@ -178,8 +178,18 @@ pub(crate) static SYMBOL_VALUE: LeafSpec = LeafSpec::new(
 );
 
 pub(crate) fn symbol_value(ctx: &Context, symbol_value: Value) -> LeafResult {
+    use crate::emacs_core::symbol::SymbolRedirect;
     let symbol = expect_symbol_id_checked(&symbol_value, ctx.symbols_with_pos_enabled)?;
-    if let Some(value) = ctx.read_var_cached(symbol) {
+    // Only a buffer-local or forwarded variable has a cached tier: a plain
+    // one (the common case) goes straight to the reference, which reads its
+    // cell (`read_var_cached`'s own refusal costs ~35 instructions a call).
+    if ctx.obarray.get_by_id(symbol).is_some_and(|s| {
+        matches!(
+            s.redirect(),
+            SymbolRedirect::Localized | SymbolRedirect::Forwarded
+        )
+    }) && let Some(value) = ctx.read_var_cached(symbol)
+    {
         return Ok(value);
     }
     match ctx.visible_runtime_variable_value_by_id(symbol)? {
