@@ -855,8 +855,8 @@ pub(crate) fn evict_compiled(id: u64) {
 ///
 /// O(spec slots on the thread): about 10K relaxed loads for 2,000 leaves of
 /// 5 slots each. Used where a leaf stops being current: the deopt
-/// invalidation (`jit::reopt`) and, later, a re-tier or a per-symbol resync.
-/// Must run outside any `COMPILED`/`OSR_CACHE` borrow.
+/// invalidation (`jit::reopt`), the re-tier (`try_run_compiled`) and, later,
+/// a per-symbol resync. Must run outside any `COMPILED`/`OSR_CACHE` borrow.
 pub(crate) fn unlink_spec_slots(dead: *const CompiledLeaf) -> usize {
     let mut cleared = 0;
     COMPILED.with(|c| {
@@ -1559,6 +1559,9 @@ pub fn try_run_compiled(
             );
         }
     }
+    // The fast-allocator leaf a re-tier retires, to unlink from its callers
+    // once the cache borrow ends.
+    let mut retiered: Option<Rc<CompiledLeaf>> = None;
     let leaf: Option<Rc<CompiledLeaf>> = COMPILED.with(|cache| {
         let mut cache = cache.borrow_mut();
         // SAFETY: the seam-provided Context is dormant for the whole native
@@ -1595,6 +1598,9 @@ pub fn try_run_compiled(
             && forced_regalloc().is_none()
             && super::retier_heat().is_some_and(|at| func.jit_runtime().heat() >= at);
         if retier {
+            if let Some(CacheEntry::Compiled(old)) = cache.get(id) {
+                retiered = Some(Rc::clone(old));
+            }
             cache.remove(id);
         }
         if retier {
@@ -1705,6 +1711,15 @@ pub fn try_run_compiled(
             _ => None,
         }
     });
+    // A re-tier retires the fast-allocator leaf without moving the function
+    // epoch, so every caller's spec slot armed with it would keep calling
+    // it -- valid code, but the full allocator's smaller frame and better
+    // code never reached them. Point them back at the cache: their next
+    // call resolves the full leaf.
+    if let Some(old) = retiered {
+        let unlinked = unlink_spec_slots(Rc::as_ptr(&old));
+        tracing::debug!(target: "neovm_jit", id, unlinked, "re-tier unlinked the fast leaf");
+    }
     // Execute OUTSIDE the cache borrow (see `CacheEntry::Compiled`).
     match leaf {
         None => Ok(None),

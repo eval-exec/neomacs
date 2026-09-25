@@ -87,6 +87,80 @@ fn fast_leaf_retiers_to_full_once_hot() {
     );
 }
 
+/// A re-tier retires the fast-allocator leaf without moving the function
+/// epoch, so a caller's spec slot armed with it kept calling it for good.
+/// The re-tier unlinks it: the caller's next call resolves the full leaf.
+#[test]
+fn retier_unlinks_the_fast_leaf_from_callers_spec_slots() {
+    if forced_regalloc().is_some() {
+        return; // the A/B knob overrides the policy
+    }
+    let Some(retier_at) = crate::emacs_core::jit::retier_heat() else {
+        return; // NEOVM_JIT_RETIER_FACTOR=0
+    };
+    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+    let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let ctx = &mut ev as *mut crate::emacs_core::eval::Context;
+    // (defalias 'neovm--rt-callee (lambda () 7)): straight-line, so fast.
+    let seven = Value::make_int(7);
+    let callee = Value::make_bytecode(nullary_fn(vec![Op::Constant(0), Op::Return], vec![seven]));
+    let callee_sym = crate::emacs_core::intern::intern("neovm--rt-callee");
+    ev.obarray.set_symbol_function_id(callee_sym, callee);
+    // (lambda () (neovm--rt-callee)): a speculated call site.
+    let mut caller = nullary_fn(
+        vec![Op::Constant(0), Op::Call(0), Op::Return],
+        vec![Value::from_sym_id(callee_sym)],
+    );
+    caller.lexical = true;
+    let caller = Value::make_bytecode(caller);
+    crate::emacs_core::eval::push_scratch_gc_root(callee);
+    crate::emacs_core::eval::push_scratch_gc_root(caller);
+    let callee_data = callee.get_bytecode_data().expect("byte-code");
+    let caller_data = caller.get_bytecode_data().expect("byte-code");
+    let run_caller = || try_run_compiled(ctx, caller_data, caller, &[]).unwrap();
+    assert_eq!(run_caller(), Some(seven.bits()), "compiles the caller");
+    assert_eq!(run_caller(), Some(seven.bits()), "arms its slot");
+    let callee_id = callee_data
+        .jit_runtime()
+        .compiled_id()
+        .expect("callee compiled");
+    let caller_id = caller_data
+        .jit_runtime()
+        .compiled_id()
+        .expect("caller compiled");
+    assert_eq!(
+        compiled_regalloc_for_test(callee_id),
+        Some(RegallocChoice::Fast)
+    );
+    let fast = compiled_leaf_ptr_for_test(callee_id).expect("callee leaf");
+    // SAFETY: cached leaves stay allocated (retired ones too) until `clear`.
+    let slot = |_: ()| unsafe {
+        let caller_leaf = &*compiled_leaf_ptr_for_test(caller_id).expect("caller leaf");
+        assert_eq!(caller_leaf.spec_slots.len(), 1, "one speculated site");
+        caller_leaf.spec_slots[0].leaf_ptr()
+    };
+    assert_eq!(slot(()), fast, "the caller's site calls the fast leaf");
+    // The callee turns hot through the dispatcher: rebuilt with the full
+    // allocator.
+    callee_data.jit_runtime().set_heat_for_test(retier_at);
+    assert_eq!(
+        try_run_compiled(ctx, callee_data, callee, &[]).unwrap(),
+        Some(seven.bits())
+    );
+    assert_eq!(
+        compiled_regalloc_for_test(callee_id),
+        Some(RegallocChoice::Full)
+    );
+    let full = compiled_leaf_ptr_for_test(callee_id).expect("callee leaf");
+    assert_ne!(full, fast);
+    assert!(
+        slot(()).is_null(),
+        "the re-tier unlinked the retired fast leaf"
+    );
+    assert_eq!(run_caller(), Some(seven.bits()));
+    assert_eq!(slot(()), full, "the caller's next call armed the full leaf");
+}
+
 /// A body the profitability gate refuses is DEFERRED, not vetoed, when the
 /// factor is set: the dispatcher interprets it without probing until its
 /// heat reaches the deferral point, then the compile runs with the gate
