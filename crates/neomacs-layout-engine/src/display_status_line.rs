@@ -37,6 +37,11 @@ use crate::display_source::DisplayItemSource;
 use crate::display_source_resolver::DisplaySourceFaceScope;
 use crate::font::metrics::FontMetricsService;
 use crate::frame_face_arena::FrameFaceAttempt;
+use crate::incremental_layout::chrome_memo::{
+    CHROME_MEMO_HITS, CHROME_MEMO_VERIFY_MISMATCHES, ChromeMemo, ChromeMemoMode,
+    ChromeRowFingerprint, ChromeRowInputs, chrome_memo_mode, encode_symbol_values,
+    record_fingerprint,
+};
 use crate::neovm_bridge::LayoutVar;
 use crate::output::builder::DisplayOutputBuilder;
 use crate::presentation::presented_pointer_map::{
@@ -52,7 +57,7 @@ use neomacs_display_protocol::frame_chrome::{
     BandRect, ChromeAction, ChromeHitRegion, InteractionId,
 };
 use neomacs_display_protocol::glyph_matrix::{
-    Glyph, GlyphArea, GlyphRow, GlyphStringId, GlyphType,
+    Glyph, GlyphArea, GlyphRow, GlyphStringId, GlyphType, MatrixRow,
 };
 use neomacs_display_protocol::types::{Color, FaceId, Rect};
 use neomacs_display_protocol::{
@@ -67,6 +72,7 @@ use neovm_core::emacs_core::keymap::{KeymapMarker, MenuItemProperty, is_list_key
 use neovm_core::emacs_core::value::list_to_vec;
 use neovm_core::emacs_core::xdisp::{ModeLineDisplayOutput, ModeLineDisplaySourceSpan};
 use neovm_core::keyboard::{PresentedMouseArea, PresentedMouseTarget};
+use neovm_core::window::DisplayRowSnapshot;
 use neovm_core::window::{FrameId, WindowId};
 use neovm_core::window::{PresentedWindowChromeArea, PresentedWindowChromeString};
 use std::collections::{HashMap, HashSet};
@@ -1188,6 +1194,9 @@ pub(crate) struct WindowChromeRowsRenderState<'state, 'services, 'face> {
     output_emitter: &'state mut WindowOutputEmitter,
     evaluator: &'state mut Context,
     render_services: ChromeRowRenderServices<'services, 'face>,
+    /// `NEOMACS_CHROME_MEMO`: the previous frame's rows this frame's
+    /// evaluations may render from.
+    memo: Option<&'state ChromeMemo>,
 }
 
 impl<'state, 'services, 'face> WindowChromeRowsRenderState<'state, 'services, 'face> {
@@ -1196,12 +1205,14 @@ impl<'state, 'services, 'face> WindowChromeRowsRenderState<'state, 'services, 'f
         output_emitter: &'state mut WindowOutputEmitter,
         evaluator: &'state mut Context,
         render_services: ChromeRowRenderServices<'services, 'face>,
+        memo: Option<&'state ChromeMemo>,
     ) -> Self {
         Self {
             output,
             output_emitter,
             evaluator,
             render_services,
+            memo,
         }
     }
 
@@ -1243,11 +1254,148 @@ impl<'state, 'services, 'face> WindowChromeRowsRenderState<'state, 'services, 'f
             self.evaluator,
             neovm_core::window::WindowId(request.window_id),
         );
+        let memo_mode = chrome_memo_mode();
+        let memo_hit = if memo_mode.enabled() {
+            self.memoize_chrome_row(&request, rules.is_some())
+        } else {
+            None
+        };
+        if memo_mode == ChromeMemoMode::On
+            && let Some((index, row, snapshot)) = memo_hit
+        {
+            let height = self.install_memo_row(&request, index, row, snapshot);
+            neovm_core::emacs_core::eval::restore_scratch_gc_roots(saved_roots);
+            return Some(height);
+        }
         let rendered = request
             .into_render_request(self.render_services.face_ids())
             .render_and_apply(self, anchor, rules);
+        if let Some((index, row, _)) = memo_hit {
+            self.verify_memo_row(index, &row);
+        }
         neovm_core::emacs_core::eval::restore_scratch_gc_roots(saved_roots);
         rendered
+    }
+
+    /// P3.5 E2: fingerprint this evaluated chrome row, record it for the next
+    /// frame, and return the previous frame's row when it was rendered from
+    /// an equal fingerprint.
+    #[inline(never)]
+    fn memoize_chrome_row(
+        &mut self,
+        request: &WindowChromeDisplayRowRequest<'face>,
+        automatic_composition: bool,
+    ) -> Option<(usize, MatrixRow, DisplayRowSnapshot)> {
+        let fingerprint = self.chrome_row_fingerprint(request, automatic_composition);
+        let hit = match (self.memo, fingerprint.as_ref()) {
+            (Some(memo), Some(fingerprint)) => memo
+                .hit(fingerprint)
+                .map(|hit| (hit.index, hit.row.clone(), hit.snapshot.clone())),
+            _ => None,
+        };
+        if tracing::enabled!(target: "neomacs::chrome_memo", tracing::Level::DEBUG) {
+            let miss = match (self.memo, fingerprint.as_ref(), hit.is_some()) {
+                (_, _, true) => "",
+                (None, _, false) => "no memo in this frame",
+                (Some(_), None, false) => "not memoizable",
+                (Some(memo), Some(fingerprint), false) => memo.miss_reason(fingerprint),
+            };
+            tracing::debug!(
+                target: "neomacs::chrome_memo",
+                window = request.window_id,
+                kind = ?request.kind,
+                hit = hit.is_some(),
+                miss,
+                "chrome memo"
+            );
+        }
+        record_fingerprint(request.window_id as i64, request.kind, fingerprint);
+        hit
+    }
+
+    fn chrome_row_fingerprint(
+        &self,
+        request: &WindowChromeDisplayRowRequest<'face>,
+        automatic_composition: bool,
+    ) -> Option<ChromeRowFingerprint> {
+        let symbol_values = encode_symbol_values(
+            request
+                .symbol_values
+                .iter()
+                .map(|(name, value)| (name.as_str(), *value)),
+        )?;
+        ChromeRowFingerprint::capture(
+            ChromeRowInputs {
+                kind: request.kind,
+                display_row_index: request.display_row_index,
+                bounds: request.bounds,
+                text_area_left_px: request.text_area_left_px,
+                selected: request.selected,
+                metrics: request.metrics,
+                tab_policy: request.tab_policy.clone(),
+                base_face: request.base_face.clone(),
+                image_scale_environment: request.image_scale_environment,
+                glyphless_table_bits: request.tty_glyphless_char_display.table_bits(),
+                automatic_composition,
+                face_change_count: self.evaluator.face_change_count,
+                char_table_revision: neovm_core::window::CharTableLayoutRevision::current(),
+                media_generation: self.evaluator.media_generation(),
+                symbol_values,
+            },
+            &request.formatted,
+        )
+    }
+
+    /// Install the memo's row for this evaluation: the three effects of
+    /// `render_and_apply` -- the row, its snapshot, and the chrome string
+    /// sources, which come from THIS evaluation so mouse targets see this
+    /// frame's `help-echo` and keymaps. Face ids were admitted with the
+    /// replay's retained faces.
+    fn install_memo_row(
+        &mut self,
+        request: &WindowChromeDisplayRowRequest<'face>,
+        index: usize,
+        row: MatrixRow,
+        snapshot: DisplayRowSnapshot,
+    ) -> f32 {
+        let chrome_strings = WindowChromeStringSources::new(
+            presented_window_chrome_area(request.kind),
+            &request.formatted,
+        );
+        self.output_emitter
+            .replace_chrome_area_strings(chrome_strings.area, chrome_strings.presented);
+        let height = row.height_px;
+        self.output
+            .builder()
+            .install_finalized_output_row(index, row);
+        self.output_emitter.push_reused_chrome(vec![snapshot]);
+        CHROME_MEMO_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        height
+    }
+
+    /// `NEOMACS_CHROME_MEMO=verify`: the row just rendered must equal the
+    /// memo's.
+    #[cold]
+    #[inline(never)]
+    fn verify_memo_row(&mut self, index: usize, memo_row: &MatrixRow) {
+        CHROME_MEMO_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        // The row hash is computed when the frame is sealed; the memo row
+        // carries its sealed hash and the fresh row does not have one yet.
+        let rendered = self.output.builder().current_window_row(index).map(|row| {
+            let mut row = row.clone();
+            row.hash = memo_row.hash;
+            row
+        });
+        if rendered.as_ref() != Some(memo_row.as_ref()) {
+            CHROME_MEMO_VERIFY_MISMATCHES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            tracing::warn!(
+                target: "neomacs::chrome_memo",
+                index,
+                rendered = ?rendered,
+                memo = ?memo_row.as_ref(),
+                "chrome memo verify: the memo row differs from the rendered row"
+            );
+        }
     }
 }
 

@@ -1337,6 +1337,12 @@ pub(crate) struct TtyGlyphlessCharDisplay {
 }
 
 impl TtyGlyphlessCharDisplay {
+    /// The identity of the captured table, for a memo key; its contents are
+    /// covered by the character-table revision.
+    pub(crate) fn table_bits(self) -> Option<usize> {
+        self.table.map(Value::bits)
+    }
+
     pub(crate) fn capture<B: LayoutBufferView + ?Sized>(buffer: &B) -> Self {
         let table = buffer_local_value(buffer, LayoutVar::GlyphlessCharDisplay).filter(|value| {
             value

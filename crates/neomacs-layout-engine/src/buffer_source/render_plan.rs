@@ -63,15 +63,24 @@ use neovm_core::window::{FrameId, WindowId};
 /// retains and rebuilds chrome.
 enum WindowChromeRowSource<'chrome> {
     Recompute,
+    /// Rebuild from live Lisp, but install the previous row wherever the
+    /// evaluation renders the same (`NEOMACS_CHROME_MEMO`).
+    RecomputeWithMemo(&'chrome crate::incremental_layout::chrome_memo::ChromeMemo),
     Retained(&'chrome RetainedChrome),
     PreserveReservedMetrics(WindowChromeMetrics),
 }
 
-impl<'chrome> From<Option<&'chrome RetainedChrome>> for WindowChromeRowSource<'chrome> {
-    fn from(retained: Option<&'chrome RetainedChrome>) -> Self {
-        match retained {
-            Some(chrome) => Self::Retained(chrome),
-            None => Self::Recompute,
+impl<'chrome> WindowChromeRowSource<'chrome> {
+    /// A replay's chrome source: its retained chrome, else its memo, else a
+    /// plain rebuild.
+    fn for_replay(
+        retained: Option<&'chrome RetainedChrome>,
+        memo: Option<&'chrome crate::incremental_layout::chrome_memo::ChromeMemo>,
+    ) -> Self {
+        match (retained, memo) {
+            (Some(chrome), _) => Self::Retained(chrome),
+            (None, Some(memo)) => Self::RecomputeWithMemo(memo),
+            (None, None) => Self::Recompute,
         }
     }
 }
@@ -98,21 +107,28 @@ fn render_or_retain_window_chrome(
     render_services: ChromeRowRenderServices<'_, '_>,
     source: WindowChromeRowSource<'_>,
 ) -> Result<WindowChromeMetrics, LogicalInputsChanged> {
-    match source {
-        WindowChromeRowSource::Recompute => match render_window_chrome_rows(
-            output,
-            output_emitter,
-            evaluator,
-            request,
-            render_services,
-        ) {
-            WindowChromeRowsRenderOutcome::Rendered(metrics) => Ok(metrics),
-            WindowChromeRowsRenderOutcome::SourceInvalidated => Err(LogicalInputsChanged),
-        },
-        WindowChromeRowSource::Retained(chrome) => Ok(
-            crate::window_output::install_retained_window_chrome(output, output_emitter, chrome),
-        ),
-        WindowChromeRowSource::PreserveReservedMetrics(metrics) => Ok(metrics),
+    let memo = match source {
+        WindowChromeRowSource::Recompute => None,
+        WindowChromeRowSource::RecomputeWithMemo(memo) => Some(memo),
+        WindowChromeRowSource::Retained(chrome) => {
+            return Ok(crate::window_output::install_retained_window_chrome(
+                output,
+                output_emitter,
+                chrome,
+            ));
+        }
+        WindowChromeRowSource::PreserveReservedMetrics(metrics) => return Ok(metrics),
+    };
+    match render_window_chrome_rows(
+        output,
+        output_emitter,
+        evaluator,
+        request,
+        render_services,
+        memo,
+    ) {
+        WindowChromeRowsRenderOutcome::Rendered(metrics) => Ok(metrics),
+        WindowChromeRowsRenderOutcome::SourceInvalidated => Err(LogicalInputsChanged),
     }
 }
 
@@ -773,6 +789,7 @@ impl BufferSourceOutputSetup {
         if let Some(mut replay) = cursor_only {
             // Taken before the replay's rows are moved into the grid below.
             let retained_chrome = replay.chrome.take();
+            let chrome_memo = replay.chrome_memo.take();
             let mut output_emitter = output.begin_text_window_output(self.begin_request);
 
             // Capture the point glyph's metrics from the new cursor row before the
@@ -945,7 +962,7 @@ impl BufferSourceOutputSetup {
                 evaluator,
                 chrome_request,
                 render_services.reborrow(),
-                retained_chrome.as_ref().into(),
+                WindowChromeRowSource::for_replay(retained_chrome.as_ref(), chrome_memo.as_ref()),
             ) {
                 Ok(metrics) => metrics,
                 Err(changed) => return changed.into(),
@@ -991,6 +1008,7 @@ impl BufferSourceOutputSetup {
         // re-walk chrome. Byte-identical to a full rebuild of the scrolled window.
         if let Some(mut scroll) = scroll {
             let retained_chrome = scroll.chrome.take();
+            let chrome_memo = scroll.chrome_memo.take();
             // Window-relative y past which a row is not visible.
             let visible_bottom = geometry.visibility_bottom_y - params.bounds.y;
             // P3.5 G2: arm the walk to stop where it synchronizes with the
@@ -1308,7 +1326,7 @@ impl BufferSourceOutputSetup {
                 evaluator,
                 chrome_request,
                 render_services.reborrow(),
-                retained_chrome.as_ref().into(),
+                WindowChromeRowSource::for_replay(retained_chrome.as_ref(), chrome_memo.as_ref()),
             ) {
                 Ok(metrics) => metrics,
                 Err(changed) => return changed.into(),

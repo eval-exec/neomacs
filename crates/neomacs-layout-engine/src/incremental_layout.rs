@@ -31,6 +31,7 @@ use neomacs_display_protocol::types::Rect;
 use neovm_core::buffer::position::LispCharPos1;
 use neovm_core::window::{DisplayPointSnapshot, DisplayRowSnapshot};
 
+pub(crate) mod chrome_memo;
 pub(crate) mod edit_sync;
 pub(crate) mod mode_line_gate;
 
@@ -483,6 +484,10 @@ pub struct RetainedWindowMatrix {
     /// to a clean buffer. It is a comparison rather than a trigger because
     /// nothing at edit time knows the flag changed value.
     pub(crate) chrome_modified_flag: bool,
+    /// `NEOMACS_CHROME_MEMO`: the fingerprints this matrix's chrome rows were
+    /// rendered from; `None` with the knob off or when no row could be
+    /// fingerprinted.
+    pub(crate) chrome_fingerprints: Option<std::sync::Arc<[chrome_memo::ChromeRowFingerprint]>>,
 }
 
 /// Why a window could not take the cursor-only fast path.
@@ -548,6 +553,9 @@ pub struct CursorOnlyReplay {
     /// `None` when the chrome must be regenerated. Filled by the engine, which
     /// owns the dirty flags; the builder always produces `None`.
     pub chrome: Option<RetainedChrome>,
+    /// `NEOMACS_CHROME_MEMO`: the previous chrome rows and fingerprints,
+    /// when `chrome` is `None` and the chrome is evaluated this frame.
+    pub(crate) chrome_memo: Option<chrome_memo::ChromeMemo>,
     /// The authoritative cursor identities from the retained display, when
     /// point is unchanged. The renderer-facing placement and GNU live-window
     /// output coordinate travel as one value so replay cannot collapse them.
@@ -648,6 +656,10 @@ pub struct ScrollReplay {
     /// `None` when the chrome must be regenerated. Filled by the engine, which
     /// owns the dirty flags; the builders always produce `None`.
     pub chrome: Option<RetainedChrome>,
+    /// `NEOMACS_CHROME_MEMO`: the previous chrome rows and fingerprints,
+    /// for a frame that evaluates the chrome (including one whose
+    /// `one_line_contract` breaks).
+    pub(crate) chrome_memo: Option<chrome_memo::ChromeMemo>,
     /// `NEOMACS_MODE_LINE_GATE=gnu`: what the walked cursor line must look
     /// like for the retained `chrome` to stand (GNU's `display_line` result
     /// checks for optimization 1). The render drops the chrome and evaluates
@@ -848,20 +860,21 @@ fn referenced_face_ids<'a>(rows: impl IntoIterator<Item = &'a GlyphRow>) -> Vec<
 /// (`install_measured_window_display_row` -> `install_faces`), so a skip that
 /// forgot this would leave the mode line's face IDs dangling in the frame's
 /// face table — glyphs correct, colors arbitrary.
-fn chrome_face_ids(chrome: Option<&RetainedChrome>) -> impl Iterator<Item = &GlyphRow> {
+fn chrome_face_ids<'a>(
+    chrome: Option<&'a RetainedChrome>,
+    memo: Option<&'a chrome_memo::ChromeMemo>,
+) -> impl Iterator<Item = &'a GlyphRow> {
     chrome
         .into_iter()
         .flat_map(|chrome| chrome.rows.iter().map(|(_, row)| row.as_ref()))
+        .chain(memo.into_iter().flat_map(chrome_memo::ChromeMemo::rows))
 }
 
 impl CursorOnlyReplay {
     pub(crate) fn retained_face_ids(&self) -> Vec<FaceId> {
-        referenced_face_ids(
-            self.body_rows
-                .iter()
-                .map(|(_, row)| row.as_ref())
-                .chain(chrome_face_ids(self.chrome.as_ref())),
-        )
+        referenced_face_ids(self.body_rows.iter().map(|(_, row)| row.as_ref()).chain(
+            chrome_face_ids(self.chrome.as_ref(), self.chrome_memo.as_ref()),
+        ))
     }
 }
 
@@ -879,7 +892,10 @@ impl ScrollReplay {
                 .iter()
                 .map(|(_, row)| row.as_ref())
                 .chain(sync_rows)
-                .chain(chrome_face_ids(self.chrome.as_ref())),
+                .chain(chrome_face_ids(
+                    self.chrome.as_ref(),
+                    self.chrome_memo.as_ref(),
+                )),
         )
     }
 }
@@ -935,6 +951,17 @@ impl RetainedWindowMatrix {
                 &self.display_snapshot,
             ),
         })
+    }
+
+    /// The memo a replay that evaluates this window's chrome may render
+    /// from (`NEOMACS_CHROME_MEMO`): the retained chrome rows with the
+    /// fingerprints they were rendered from.
+    pub(crate) fn chrome_memo(&self) -> Option<chrome_memo::ChromeMemo> {
+        let fingerprints = self.chrome_fingerprints.clone()?;
+        Some(chrome_memo::ChromeMemo::new(
+            self.retained_chrome()?,
+            fingerprints,
+        ))
     }
 
     /// Whether a CURSOR-ONLY replay of this window may skip its chrome walk.
@@ -1165,6 +1192,7 @@ impl RetainedWindowMatrix {
             // Chrome is decided separately, by the engine, because the decision
             // needs the chrome dirty flags off the evaluator. `None` = walk.
             chrome: None,
+            chrome_memo: None,
             retained_cursor: (self.key.point == curr.point)
                 .then(|| {
                     self.presented_cursor
@@ -1254,6 +1282,7 @@ impl RetainedWindowMatrix {
                 bound_walk: false,
                 expected_walk: None,
                 chrome: None,
+                chrome_memo: None,
                 one_line_contract: None,
                 sync: Some(plan),
                 edit: false,
@@ -1323,6 +1352,7 @@ impl RetainedWindowMatrix {
             bound_walk: false,
             expected_walk: None,
             chrome: None,
+            chrome_memo: None,
             one_line_contract: None,
             sync: None,
             edit: false,
@@ -1554,6 +1584,7 @@ impl RetainedWindowMatrix {
                 bound_walk: false,
                 expected_walk: None,
                 chrome: None,
+                chrome_memo: None,
                 one_line_contract: None,
                 sync: Some(plan),
                 edit: true,
@@ -1759,6 +1790,7 @@ impl RetainedWindowMatrix {
                         row_count: span_count,
                     }),
                     chrome: None,
+                    chrome_memo: None,
                     one_line_contract: None,
                     sync: None,
                     edit: true,
@@ -1786,6 +1818,7 @@ impl RetainedWindowMatrix {
             bound_walk: false,
             expected_walk: None,
             chrome: None,
+            chrome_memo: None,
             one_line_contract: None,
             sync: None,
             edit: true,
@@ -1850,6 +1883,11 @@ pub struct LayoutStats {
     /// Mini-windows that stood still this frame: every row reused through the
     /// cursor-only replay (`NEOMACS_LAYOUT_MINI_STILL`).
     pub mini_window_still: usize,
+    /// Chrome rows evaluated this frame but installed from the previous
+    /// frame's row because the evaluation rendered the same
+    /// (`NEOMACS_CHROME_MEMO`). They are still counted in
+    /// `relaid_chrome_rows`: the mode line WAS evaluated.
+    pub chrome_memo_hits: usize,
 }
 
 #[cfg(test)]

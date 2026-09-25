@@ -1711,6 +1711,13 @@ impl LayoutEngine {
             // observed by the accepted redisplay, not once per discarded
             // geometry attempt.
             face_resolver.clear_diagnostics();
+            // P3.5 E2: the fingerprints committed with a window's chrome must
+            // be the ones its ACCEPTED rows were rendered from, so the record
+            // is per attempt (the generation record above is per frame). A
+            // nested synchronous query renders no chrome and keeps it.
+            if query_window.is_none() {
+                crate::incremental_layout::chrome_memo::reset_fingerprint_record();
+            }
             let attempt_topology_generation =
                 evaluator.frame_manager().window_topology_generation();
 
@@ -3002,6 +3009,25 @@ impl LayoutEngine {
                                 .buffer_manager()
                                 .get(neovm_core::buffer::BufferId(key.buffer_id))
                                 .is_some_and(|buffer| buffer.is_modified()),
+                            // P3.5 E2: what this chrome was rendered from. A
+                            // window that skipped its chrome keeps the rows,
+                            // so it keeps their fingerprints too.
+                            chrome_fingerprints: if chrome_generation
+                                .contains_key(&window_id.get())
+                            {
+                                crate::incremental_layout::chrome_memo::chrome_memo_mode()
+                                    .enabled()
+                                    .then(|| {
+                                        crate::incremental_layout::chrome_memo::recorded_fingerprints(
+                                            window_id.get(),
+                                        )
+                                    })
+                                    .flatten()
+                            } else {
+                                self.retained_window_matrices
+                                    .get(&window_id)
+                                    .and_then(|prev| prev.chrome_fingerprints.clone())
+                            },
                         },
                     );
                 }
@@ -3061,6 +3087,8 @@ impl LayoutEngine {
         self.layout_stats.buffer_text_cow_copies =
             neovm_core::buffer::text_snapshot::take_buffer_text_cow_copies();
         self.layout_stats.reused_chrome_rows = reused_chrome;
+        self.layout_stats.chrome_memo_hits =
+            crate::incremental_layout::chrome_memo::take_chrome_memo_hits();
         // `relaid_chrome_rows` accumulated EVERY enabled chrome row above,
         // reused or not. Reused rows were never walked, so take them back out.
         self.layout_stats.relaid_chrome_rows = self
@@ -3083,7 +3111,7 @@ impl LayoutEngine {
             {
                 let _ = writeln!(
                     f,
-                    "full={} cursor_only={} scroll={} edit={} relaid_body={} relaid_chrome={} reused={} reused_shifted={} reused_chrome={} snapshots={} compose_bytes={} text_cow_copies={} mini_still={}",
+                    "full={} cursor_only={} scroll={} edit={} relaid_body={} relaid_chrome={} reused={} reused_shifted={} reused_chrome={} snapshots={} compose_bytes={} text_cow_copies={} mini_still={} chrome_memo={}",
                     s.full_windows,
                     s.cursor_only_windows,
                     s.scroll_windows,
@@ -3097,6 +3125,7 @@ impl LayoutEngine {
                     s.composition_bytes_scanned,
                     s.buffer_text_cow_copies,
                     s.mini_window_still,
+                    s.chrome_memo_hits,
                 );
             }
         }
@@ -3273,6 +3302,8 @@ impl LayoutEngine {
             crate::neovm_bridge::CHROME_ROWS_REUSED
                 .fetch_add(chrome.rows.len(), std::sync::atomic::Ordering::Relaxed);
             replay.chrome = Some(chrome);
+        } else if crate::incremental_layout::chrome_memo::chrome_memo_mode().enabled() {
+            replay.chrome_memo = prev.chrome_memo();
         }
         Some(replay)
     }
@@ -3299,7 +3330,13 @@ impl LayoutEngine {
         // `chrome` at `None` is that decision. (GNU agrees from the other side —
         // its scroll commands all call `wset_update_mode_line`, window.c:6279,
         // 6418, 6603, 6864.)
-        prev.scroll_replay(&curr_key)
+        let mut replay = prev.scroll_replay(&curr_key)?;
+        // P3.5 E2: the scrolled chrome is evaluated; it may still render the
+        // string it showed (the `%p` of a long buffer rarely moves).
+        if crate::incremental_layout::chrome_memo::chrome_memo_mode().enabled() {
+            replay.chrome_memo = prev.chrome_memo();
+        }
+        Some(replay)
     }
 
     /// Phase 3: if this window's previous-frame matrix can be reused after a
@@ -3484,6 +3521,14 @@ impl LayoutEngine {
             replay.chrome = Some(chrome);
         } else {
             replay.one_line_contract = None;
+        }
+        // P3.5 E2: a frame that evaluates the chrome -- including one whose
+        // one-line contract breaks after the walk -- may render it from the
+        // memo.
+        if (replay.chrome.is_none() || replay.one_line_contract.is_some())
+            && crate::incremental_layout::chrome_memo::chrome_memo_mode().enabled()
+        {
+            replay.chrome_memo = prev.chrome_memo();
         }
         Some(replay)
     }

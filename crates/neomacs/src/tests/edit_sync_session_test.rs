@@ -23,7 +23,7 @@ use neovm_core::emacs_core::load::create_bootstrap_evaluator_cached_with_feature
 const COLS: usize = 100;
 const ROWS: usize = 36;
 
-const SOURCE: &str = r#"(progn
+pub(super) const SOURCE: &str = r#"(progn
   (switch-to-buffer (get-buffer-create "sync.el"))
   (erase-buffer)
   (dotimes (i 60)
@@ -34,7 +34,7 @@ const SOURCE: &str = r#"(progn
   (forward-line 11)
   (end-of-line))"#;
 
-struct Session {
+pub(super) struct Session {
     eval: Context,
     incremental: TtyRif,
     damage: TtyRif,
@@ -42,6 +42,11 @@ struct Session {
 
 impl Session {
     fn new() -> Self {
+        Self::with_knobs(&[])
+    }
+
+    /// A session with these knobs set on top of the P3.5 U3.7 ones.
+    pub(super) fn with_knobs(knobs: &[(&str, &str)]) -> Self {
         neovm_core::logging::init_for_tests();
         // SAFETY: nextest runs every test in its own process, and nothing has
         // read these knobs yet.
@@ -50,6 +55,9 @@ impl Session {
             std::env::set_var("NEOMACS_LAYOUT_MINI_STILL", "on");
             std::env::set_var("NEOMACS_MODE_LINE_GATE", "gnu");
             std::env::set_var("NEOMACS_LAYOUT_SCROLL_BACK", "on");
+            for (name, value) in knobs {
+                std::env::set_var(name, value);
+            }
         }
         let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"])
             .expect("cached bootstrap evaluator");
@@ -73,7 +81,7 @@ impl Session {
 
     /// Lay out one frame incrementally, render it, and compare the screen
     /// with a fresh runtime's full layout of the same state.
-    fn frame(&mut self, label: &str) -> LayoutStats {
+    pub(super) fn frame(&mut self, label: &str) -> LayoutStats {
         let (root, children) = run_tty_layout_tree(&mut self.eval).expect("a TTY presentation");
         let stats = REDISPLAY_RUNTIME.with(RedisplayRuntime::last_layout_stats);
         for rif in [&mut self.incremental, &mut self.damage] {
@@ -112,7 +120,7 @@ impl Session {
         stats
     }
 
-    fn step(&mut self, label: &str, lisp: &str) -> LayoutStats {
+    pub(super) fn step(&mut self, label: &str, lisp: &str) -> LayoutStats {
         self.eval
             .eval_str(lisp)
             .unwrap_or_else(|error| panic!("{label}: {lisp}: {error:?}"));
