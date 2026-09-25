@@ -1,5 +1,6 @@
 //! Bool oracle parity tests.
 
+mod packed_representation;
 mod vector_comprehensive;
 mod vector_edge_semantics;
 mod vector_operations;
