@@ -7096,6 +7096,10 @@ impl crate::emacs_core::eval::Context {
         if self.command_loop.idle_start_time.is_some() {
             return;
         }
+        // Install the background compiles that finished (P2.4): a leaf whose
+        // function is not called again would otherwise stay pending.
+        #[cfg(feature = "jit")]
+        crate::emacs_core::jit::cache::drain_ready_pending();
         let now = std::time::Instant::now();
         self.command_loop.idle_start_time = Some(now);
         self.command_loop.last_idle_start_time = Some(now);

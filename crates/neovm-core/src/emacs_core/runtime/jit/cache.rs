@@ -65,6 +65,10 @@ enum CacheEntry {
     /// heat at which the compile is retried (`RuntimeState::
     /// profit_deferred_heat`).
     Deferred(DeferReason),
+    /// A compile whose backend runs elsewhere (`jit::bg`): interpreted until
+    /// a probe installs its leaf. The pending leaf's reloc constants are GC
+    /// roots like a compiled leaf's; dropping the entry cancels the job.
+    Pending(Box<super::bg::PendingJob>),
 }
 
 /// Dense per-thread compiled-leaf store indexed by `compiled_id`. Ids are
@@ -136,6 +140,12 @@ impl DenseCache {
         if let Some(CacheEntry::Compiled(old)) = self.slots[idx].replace(entry) {
             fold_dropped_leaf(&old);
         }
+    }
+
+    /// Take `id`'s entry out, leaving the slot empty (no retire: the caller
+    /// owns what it took).
+    fn take(&mut self, id: u64) -> Option<CacheEntry> {
+        self.slots.get_mut(id as usize).and_then(Option::take)
     }
 
     /// `entry(id).or_insert_with(f)` equivalent.
@@ -759,17 +769,32 @@ fn compile_cache_entry(
     // Per-function entry names (perf map, CLIF/asm dumps), only when asked.
     let _label = stats::naming_enabled()
         .then(|| stats::perf_map::LeafLabelScope::enter(id, name_hint, func));
+    // A tier-up may leave its backend to run elsewhere (`jit::bg`); the
+    // front below is the stall either way.
+    let defer = super::bg::DeferScope::enter(super::bg::JobClass::for_origin(request.origin));
     let clock = stats::CompileClock::start(request.origin);
     let result = compile_bytecode_function_requested(func, obarray, request);
+    drop(defer);
+    let mut deferred = super::bg::take_deferred();
     let elapsed = clock.finish(result.is_ok());
     stats::record_compile(elapsed, func.executable_ops().len(), &result);
+    if result.is_err()
+        && let Some(code) = deferred.take()
+    {
+        code.cancel();
+    }
     match result {
         Ok(mut leaf) => {
             leaf.obs.id = id;
             leaf.compiled_level = rt.reopt_level();
             leaf.obs.note_compile_time(elapsed);
+            // Registered when the front finishes, so a redefinition of an
+            // inlined callee removes a pending leaf as it would a compiled one.
             register_inline_deps(id, &leaf);
-            CacheEntry::Compiled(Rc::new(leaf))
+            match deferred {
+                None => CacheEntry::Compiled(Rc::new(leaf)),
+                Some(code) => CacheEntry::Pending(super::bg::PendingJob::new(id, leaf, code, rt)),
+            }
         }
         Err(CompileError::NotProfitable) if super::profit_defer_factor() != 0 => {
             // Not a verdict, a deferral: come back once the body has the
@@ -1043,27 +1068,48 @@ pub(crate) fn invalidate_for_reopt(
     rt.reopen_numeric_feedback();
     rt.clear_aot_prewarmed();
     rt.disarm_leaf_slot();
+    // A pending compile (`jit::bg`) read the feedback being widened, as
+    // the entry leaf did: it is dropped (its job cancelled) where the leaf
+    // would be retired. Its hold before the job, for an immediate recompile.
+    let mut dropped_pending_hold: Option<u32> = None;
     let retired_entry = COMPILED.with(|c| {
         let Ok(mut c) = c.try_borrow_mut() else {
             tracing::warn!(target: "neovm_jit::reopt", id, "cache borrowed; entry kept");
             return None;
         };
-        let old = match c.get(id) {
-            Some(CacheEntry::Compiled(l)) => Rc::clone(l),
+        let (old, earned) = match c.get(id) {
+            Some(CacheEntry::Compiled(l)) => (
+                Some(Rc::clone(l)),
+                (l.regalloc, l.profit_gate_bypassed, l.call_heavy),
+            ),
+            Some(CacheEntry::Pending(job)) => {
+                dropped_pending_hold = Some(job.saved_hold());
+                let l = job.leaf();
+                (None, (l.regalloc, l.profit_gate_bypassed, l.call_heavy))
+            }
             _ => return None,
         };
         let next = match (level, reprofile) {
             (ReoptLevel::Interpreter, _) => Some(CacheEntry::NotCompilable),
             (_, Reprofile::Immediate) => None,
             (_, Reprofile::Window) => Some(CacheEntry::Deferred(DeferReason::Reoptimize {
-                regalloc: old.regalloc,
-                profit_gate_bypassed: old.profit_gate_bypassed,
-                call_heavy: old.call_heavy,
+                regalloc: earned.0,
+                profit_gate_bypassed: earned.1,
+                call_heavy: earned.2,
             })),
         };
         c.retire_and_replace(id, next);
-        Some(old)
+        old
     });
+    if let Some(hold) = dropped_pending_hold {
+        forget_inline_deps(id);
+        match reprofile {
+            Reprofile::Window if level != ReoptLevel::Interpreter => {
+                rt.defer_tier_up(rt.heat().saturating_add(knobs.heat).max(1));
+            }
+            Reprofile::Window | Reprofile::Immediate => rt.defer_tier_up(hold),
+        }
+    }
     let osr: Vec<Rc<CompiledLeaf>> = OSR_CACHE.with(|c| {
         let Ok(mut c) = c.try_borrow_mut() else {
             return Vec::new();
@@ -1170,6 +1216,7 @@ pub(crate) fn cache_entry_kind_for_test(id: u64) -> &'static str {
         Some(CacheEntry::NotCompilable) => "not-compilable",
         Some(CacheEntry::Deferred(DeferReason::NotProfitable)) => "deferred",
         Some(CacheEntry::Deferred(DeferReason::Reoptimize { .. })) => "deferred-reopt",
+        Some(CacheEntry::Pending(_)) => "pending",
         None => "none",
     })
 }
@@ -1361,8 +1408,14 @@ pub(crate) fn collect_jit_reloc_gc_roots(roots: &mut Vec<Value>) {
     COMPILED.with(|c| {
         let cache = c.borrow();
         for entry in cache.values() {
-            if let CacheEntry::Compiled(leaf) = entry {
-                roots.extend_from_slice(leaf.reloc_values());
+            match entry {
+                CacheEntry::Compiled(leaf) => roots.extend_from_slice(leaf.reloc_values()),
+                // A pending leaf's code will load these once installed (its
+                // front already assigned their reloc slots), and nothing else
+                // may keep them alive meanwhile: its source may die, and an
+                // inlined callee may be redefined.
+                CacheEntry::Pending(job) => roots.extend_from_slice(job.leaf().reloc_values()),
+                CacheEntry::NotCompilable | CacheEntry::Deferred(_) => {}
             }
         }
         // RETIRED leaves too. A retired leaf stays allocated because an
@@ -1400,7 +1453,8 @@ pub(crate) fn compiled_cache_probe() -> (usize, usize) {
             .values()
             .map(|entry| match entry {
                 CacheEntry::Compiled(leaf) => leaf.reloc_values().len(),
-                _ => 0,
+                CacheEntry::Pending(job) => job.leaf().reloc_values().len(),
+                CacheEntry::NotCompilable | CacheEntry::Deferred(_) => 0,
             })
             .sum();
         let retired: usize = cache.retired.iter().map(|l| l.reloc_values().len()).sum();
@@ -1507,6 +1561,91 @@ pub(crate) fn clear() {
     REDEFINED_PINS.with(|pins| pins.borrow_mut().clear());
 }
 
+/// A tier-up probe of `id`'s pending compile (`jit::bg`): the installed leaf
+/// when its backend finished, else `None` (interpret this call) with the
+/// function held in the interpreter for the job's next backoff.
+#[cold]
+#[inline(never)]
+fn probe_pending(
+    cache: &mut DenseCache,
+    id: u64,
+    func: &ByteCodeFunction,
+) -> Option<Rc<CompiledLeaf>> {
+    let rt = func.jit_runtime();
+    match cache.get(id) {
+        Some(CacheEntry::Pending(job)) if job.is_ready() => install_pending(cache, id, Some(rt)),
+        Some(CacheEntry::Pending(job)) => {
+            job.wait(rt);
+            None
+        }
+        _ => None,
+    }
+}
+
+/// Install `id`'s ready pending job: its leaf becomes the `Compiled` entry,
+/// a failed backend makes the body `NotCompilable` (as a failed in-line
+/// compile does), and a stale leaf leaves the entry empty for the next hot
+/// call to compile again. `rt`: the function's runtime, when the caller has
+/// it (see `bg::install`).
+fn install_pending(
+    cache: &mut DenseCache,
+    id: u64,
+    rt: Option<&super::RuntimeState>,
+) -> Option<Rc<CompiledLeaf>> {
+    let Some(CacheEntry::Pending(job)) = cache.take(id) else {
+        unreachable!("install only a pending entry")
+    };
+    match super::bg::install(job, rt) {
+        Ok(leaf) => {
+            let leaf = Rc::new(leaf);
+            cache.insert(id, CacheEntry::Compiled(Rc::clone(&leaf)));
+            Some(leaf)
+        }
+        Err(super::bg::Discard::Rejected) => {
+            forget_inline_deps(id);
+            if let Some(rt) = rt {
+                rt.mark_native_rejected(rejection_epoch());
+            }
+            cache.insert(id, CacheEntry::NotCompilable);
+            None
+        }
+        Err(super::bg::Discard::Stale(_)) => {
+            forget_inline_deps(id);
+            None
+        }
+    }
+}
+
+/// Install every ready pending job of `cache` (see [`drain_ready_pending`]).
+#[cold]
+#[inline(never)]
+fn drain_ready_in(cache: &mut DenseCache) {
+    super::bg::drain_pending_ids(|id| match cache.get(id) {
+        Some(CacheEntry::Pending(job)) if job.is_ready() => {
+            install_pending(cache, id, None);
+            false
+        }
+        Some(CacheEntry::Pending(_)) => true,
+        _ => false,
+    });
+}
+
+/// Install every pending compile of this thread whose backend finished, so
+/// the leaf of a function that is not called again is not left pending
+/// (and its job's result is not held forever). Runs at command-loop idle
+/// and before each cache-miss compile; a no-op with nothing pending, and
+/// when the cache is borrowed.
+pub(crate) fn drain_ready_pending() {
+    if super::bg::pending_count() == 0 {
+        return;
+    }
+    COMPILED.with(|c| {
+        if let Ok(mut cache) = c.try_borrow_mut() {
+            drain_ready_in(&mut cache);
+        }
+    });
+}
+
 /// Tier-up entry point: run `func`'s body as native code if possible.
 ///
 /// - `Ok(Some(bits))` — native code produced the result (raw tagged bits).
@@ -1603,7 +1742,17 @@ pub fn try_run_compiled(
             Some(CacheEntry::Compiled(l)) => {
                 (Some(l.regalloc), l.profit_gate_bypassed, l.call_heavy)
             }
-            _ => (None, false, false),
+            Some(CacheEntry::Pending(_)) => {
+                return probe_pending(&mut cache, id, func).filter(|leaf| leaf.accepts(args.len()));
+            }
+            Some(CacheEntry::NotCompilable | CacheEntry::Deferred(_)) => (None, false, false),
+            None => {
+                // A miss compiles below: install what finished meanwhile.
+                if super::bg::pending_count() != 0 {
+                    drain_ready_in(&mut cache);
+                }
+                (None, false, false)
+            }
         };
         // A call-heavy body stays on the fast allocator however hot it gets:
         // its time is in its shim calls, not in the code around them.
@@ -1874,6 +2023,11 @@ pub(crate) fn resolve_compiled_leaf_ptr(
     }
     COMPILED.with(|cache| {
         let mut cache = cache.borrow_mut();
+        // A pending compile: install it if its backend finished, else take
+        // the strict path meanwhile (the entry answers `None` below).
+        if matches!(cache.get(id), Some(CacheEntry::Pending(job)) if job.is_ready()) {
+            install_pending(&mut cache, id, Some(func.jit_runtime()));
+        }
         match cache.get_or_insert_with(id, || {
             // SAFETY: same dormant-Context contract as try_run_compiled.
             let obarray = (!ctx.is_null()).then(|| unsafe { &(*ctx).obarray });

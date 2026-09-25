@@ -916,6 +916,11 @@ impl RuntimeState {
         self.profit_deferred_heat.store(heat, Ordering::Relaxed);
     }
 
+    /// The heat this body's tier-up is deferred to (0 = not deferred).
+    pub(crate) fn deferred_heat(&self) -> u32 {
+        self.profit_deferred_heat.load(Ordering::Relaxed)
+    }
+
     /// Whether a profitability deferral is still holding at heat `now`.
     #[inline]
     fn tier_up_deferred(&self, now: u32) -> bool {

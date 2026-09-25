@@ -245,6 +245,20 @@ pub(super) fn define_split(
             .expect("a finished leaf build hands over its function");
         JobPayload::package(captured, &shared.shims, choice)
     };
+    // A compile the cache lets defer leaves its leaf pending: the entry
+    // stays null until a probe installs the backend's (`jit::bg`). Only a
+    // portable payload may go: another module could not link the rest.
+    if payload.portable
+        && let Some(class) = crate::emacs_core::jit::bg::defer_class()
+    {
+        crate::emacs_core::jit::bg::defer_in_line(class, || {
+            jit.define_payload(payload).map(|code| code.entry as usize)
+        });
+        return Ok(JitDefined {
+            entry: std::ptr::null(),
+            backing: LeafBacking::Shared,
+        });
+    }
     let code = jit.define_payload(payload)?;
     Ok(JitDefined {
         entry: code.entry,

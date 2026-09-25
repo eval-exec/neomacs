@@ -17,8 +17,9 @@ use std::sync::OnceLock;
 use super::perf_map::LabelTier;
 
 /// The disassembly of the function just defined on this thread, waiting for
-/// its wrapper to learn the finalized address.
-struct PendingAsm {
+/// its wrapper to learn the finalized address. A backend on another thread
+/// hands it over with [`take_stashed`] / [`restash`] (`jit::bg`).
+pub(crate) struct PendingAsm {
     vcode: String,
     size: usize,
 }
@@ -72,6 +73,18 @@ pub(crate) fn stash(ctx: &cranelift_codegen::Context) {
         vcode: code.vcode.clone().unwrap_or_default(),
         size: code.code_buffer().len(),
     };
+    PENDING.with(|p| *p.borrow_mut() = Some(pending));
+}
+
+/// Take this thread's stashed disassembly, to flush it where the leaf is
+/// installed (a background backend compiled it; `jit::bg`).
+pub(crate) fn take_stashed() -> Option<PendingAsm> {
+    PENDING.with(|p| p.borrow_mut().take())
+}
+
+/// Stash a disassembly another thread took ([`take_stashed`]) for the next
+/// [`flush`] on this one.
+pub(crate) fn restash(pending: PendingAsm) {
     PENDING.with(|p| *p.borrow_mut() = Some(pending));
 }
 
