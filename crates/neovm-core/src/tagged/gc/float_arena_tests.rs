@@ -386,10 +386,13 @@ fn concurrent_claim_arm_defers_mid_cycle_float_pages() {
     // a launch would carry.
     let job = ConcurrentClaimJob {
         parity: !heap.mark_parity,
-        string_page_bases: std::sync::Arc::new(rustc_hash::FxHashSet::default()),
-        float_page_bases: std::sync::Arc::new(snap),
-        vector_page_bases: std::sync::Arc::new(rustc_hash::FxHashSet::default()),
-        bytecode_page_bases: std::sync::Arc::new(rustc_hash::FxHashSet::default()),
+        pages: PageSnapshot::BaseSets {
+            cons: rustc_hash::FxHashSet::default(),
+            string: rustc_hash::FxHashSet::default(),
+            float: snap,
+            vector: rustc_hash::FxHashSet::default(),
+            bytecode: rustc_hash::FxHashSet::default(),
+        },
         dump_lo: usize::MAX,
         dump_hi: 0,
         drop_dump_children: false,

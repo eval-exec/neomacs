@@ -22,11 +22,15 @@
 //! only ever appended while a mark runs, and released only after the sweep,
 //! which a new mark never overlaps, so during a mark every entry of a block
 //! or page that existed at its start handshake is stable, and one created
-//! since has an index at or above that class's count then.
+//! since has an index at or above that class's count then — which is how
+//! the GC thread tells snapshot pages from mid-cycle ones
+//! ([`PageSnapshot::ChunkMap`]).
 //!
 //! **Readers.** The mutator's ownership oracles (`owns_*_object`,
-//! `mark_cons_slow`, `is_value_marked`), with `Acquire` loads. The map is
-//! shared through an `Arc` with the arenas that write their pages.
+//! `mark_cons_slow`, `is_value_marked`) and the GC thread's claim
+//! classification (`Acquire` loads). The map is shared through an `Arc`;
+//! the job holds a clone, and the heap outlives any job (its drop joins a
+//! running mark first).
 //!
 //! Behind `NEOVM_GC_CHUNK_MAP=1` (`knobs.rs`); off, the heap has no map and
 //! the per-class `FxHashMap` registries answer, as before. The registries
@@ -54,6 +58,9 @@ pub(crate) enum ChunkClass {
     Marker = 10,
     Bignum = 11,
 }
+
+/// Number of [`ChunkClass`] values (the size of per-class tables).
+pub(crate) const CHUNK_CLASS_COUNT: usize = ChunkClass::Bignum as usize + 1;
 
 /// A granule's class and block/page index, packed in one word.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -195,6 +202,62 @@ impl Drop for ChunkMap {
             if !leaf.is_null() {
                 // SAFETY: allocated in `set` with this layout, freed once.
                 unsafe { alloc::dealloc(leaf as *mut u8, Layout::new::<ChunkLeaf>()) };
+            }
+        }
+    }
+}
+
+/// The GC thread's ownership snapshot for one concurrent mark: which cons
+/// blocks and which string, float, vector and byte-code pages existed at
+/// the world-stopped start handshake. A value in one of them is an owned
+/// object of that class the marker may mark or claim; anything else (a
+/// block or page created since, the image, a boxed object) defers to the
+/// termination.
+pub(super) enum PageSnapshot {
+    /// Per-class base-address sets captured at the handshake
+    /// (`NEOVM_GC_CHUNK_MAP` off). O(blocks + pages) to build, one hash
+    /// probe per test.
+    BaseSets {
+        cons: FxHashSet<usize>,
+        string: FxHashSet<usize>,
+        float: FxHashSet<usize>,
+        vector: FxHashSet<usize>,
+        bytecode: FxHashSet<usize>,
+    },
+    /// The live chunk map, plus each class's block or page count at the
+    /// handshake: a granule is in the snapshot iff its class matches and its
+    /// index is below that count (see the module doc for why).
+    ChunkMap {
+        map: std::sync::Arc<ChunkMap>,
+        start_count: [usize; CHUNK_CLASS_COUNT],
+    },
+}
+
+impl PageSnapshot {
+    /// Is `addr` inside a snapshot block or page of `class`?
+    #[inline(always)]
+    pub(super) fn contains(&self, class: ChunkClass, addr: usize) -> bool {
+        match self {
+            PageSnapshot::BaseSets {
+                cons,
+                string,
+                float,
+                vector,
+                bytecode,
+            } => {
+                let base = addr & !(OBJECT_PAGE_ALIGN - 1);
+                match class {
+                    ChunkClass::Cons => cons.contains(&base),
+                    ChunkClass::String => string.contains(&base),
+                    ChunkClass::Float => float.contains(&base),
+                    ChunkClass::Vector => vector.contains(&base),
+                    ChunkClass::ByteCode => bytecode.contains(&base),
+                    _ => false,
+                }
+            }
+            PageSnapshot::ChunkMap { map, start_count } => {
+                let entry = map.get(addr);
+                entry.is(class) && entry.index() < start_count[class as usize]
             }
         }
     }

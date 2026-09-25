@@ -176,73 +176,17 @@ impl TaggedHeap {
     }
 
     pub(crate) fn launch_concurrent_mark(&mut self) {
-        // Immutable snapshot of owned cons-block bases — read-only on the GC
-        // thread. New blocks allocated during marking are absent, which is fine:
-        // their conses allocate-black and never enter the GC's gray queue.
-        let conssnap_t0 = std::time::Instant::now();
-        let mut owned =
-            FxHashSet::with_capacity_and_hasher(self.cons_blocks.len(), Default::default());
-        for block in &self.cons_blocks {
-            owned.insert(block.base_addr());
-        }
-        // CONCURRENT STRING MARKING claim oracle (stage 3): capture the
-        // string arena's page bases at this same world-stopped instant
-        // (retired pages included — their tenured strings are claim-benign).
-        // Built alongside the cons `owned_bases` so both snapshots share the
-        // immutability argument: pages created after this point are absent
-        // and their strings DEFER (fail-safe). Timed within the conssnap
-        // handshake slot (same ownership-snapshot phase).
-        let mut string_bases =
-            FxHashSet::with_capacity_and_hasher(self.string_arena.pages.len(), Default::default());
-        for page in &self.string_arena.pages {
-            string_bases.insert(page.base_addr());
-        }
-        self.handshake.last_start_conssnap_us = conssnap_t0.elapsed().as_micros() as u64;
-        self.handshake.probe_cons_blocks = self.cons_blocks.len();
-        // CONCURRENT FLOAT CLAIMS (task 01) claim oracle: capture the float
-        // arena's page bases at this same world-stopped instant (retired
-        // pages included — their tenured floats recognize-and-drop at the
-        // claim arm). Same immutability + Arc-publication argument as
-        // `string_page_bases`; pages created after this point are absent and
-        // their floats DEFER (fail-safe). O(pages); own handshake timer.
-        let floatsnap_t0 = std::time::Instant::now();
-        let mut float_bases =
-            FxHashSet::with_capacity_and_hasher(self.float_arena.pages.len(), Default::default());
-        for page in &self.float_arena.pages {
-            float_bases.insert(page.base_addr());
-        }
-        self.handshake.last_start_floatsnap_us = floatsnap_t0.elapsed().as_micros() as u64;
-        // CONCURRENT VECTOR-HEADER CLAIMS (task 01) claim oracle: capture
-        // the vector arena's page bases at this same world-stopped instant
-        // (retired pages included — tenured vectors recognize-and-drop at
-        // the claim arm). Same discipline as the float/string snapshots.
-        // O(pages); own handshake timer, distinct from the Tier-B backing
-        // `vecsnap` below.
-        let vecbasesnap_t0 = std::time::Instant::now();
-        let mut vector_bases =
-            FxHashSet::with_capacity_and_hasher(self.vector_arena.pages.len(), Default::default());
-        for page in &self.vector_arena.pages {
-            vector_bases.insert(page.base_addr());
-        }
-        self.handshake.last_start_vecbasesnap_us = vecbasesnap_t0.elapsed().as_micros() as u64;
-        // CONCURRENT BYTECODE CLAIMS (task 01) claim oracle: capture the
-        // bytecode arena's page bases at this same world-stopped instant
-        // (retired pages included — tenured bytecode recognize-and-drops at
-        // the claim arm). Same discipline as the float/vector snapshots.
-        // O(pages); own handshake timer.
-        let bcsnap_t0 = std::time::Instant::now();
-        let mut bytecode_bases = FxHashSet::with_capacity_and_hasher(
-            self.bytecode_arena.pages.len(),
-            Default::default(),
-        );
-        for page in &self.bytecode_arena.pages {
-            bytecode_bases.insert(page.base_addr());
-        }
-        self.handshake.last_start_bcsnap_us = bcsnap_t0.elapsed().as_micros() as u64;
+        // The GC thread's ownership snapshot of this world-stopped instant:
+        // the cons blocks and the string, float, vector and bytecode pages
+        // that exist now (retired pages included — their tenured objects are
+        // claim-benign). Blocks and pages created during the mark are absent,
+        // which is fail-safe: their objects allocate black and whatever the
+        // marker meets there defers to the termination.
+        let pages = self.page_snapshot_for_mark();
         let vecsnap_t0 = std::time::Instant::now();
         // Stage 2 Tier B CONCURRENT VECTOR SCAN: snapshot every
         // OWNED/Mapped vector backing AT THIS world-stopped point (same instant the
-        // cons `owned_bases` snapshot is taken and the roots are seeded), so the GC
+        // page snapshot is taken and the roots are seeded), so the GC
         // thread can trace vectors concurrently instead of deferring them to the STW
         // termination. Vectors are heap-side, so capture directly here (no eval.rs
         // seam, unlike the Context-side obarray). Task #7 stage 2a (Fix A): iterate
@@ -350,14 +294,10 @@ impl TaggedHeap {
         self.publish_barrier_window();
         let job = ConcurrentMarkJob {
             gray,
-            owned_bases: std::sync::Arc::new(owned),
             claims: ConcurrentClaimJob {
                 // Mandated carry: the GC thread claims at THIS cycle's parity.
                 parity: self.mark_parity,
-                string_page_bases: std::sync::Arc::new(string_bases),
-                float_page_bases: std::sync::Arc::new(float_bases),
-                vector_page_bases: std::sync::Arc::new(vector_bases),
-                bytecode_page_bases: std::sync::Arc::new(bytecode_bases),
+                pages,
                 dump_lo: self.dump_addr_lo,
                 dump_hi: self.dump_addr_hi,
                 drop_dump_children: self.first_cycle_concurrent,
@@ -389,6 +329,64 @@ impl TaggedHeap {
         // Pacer: open this cycle's mark window (closed by `incremental_finish`).
         self.pace_mark_start = Some(std::time::Instant::now());
         self.pace_mark_start_bytes = self.bytes_since_gc;
+    }
+
+    /// The ownership snapshot a concurrent mark starting now hands the GC
+    /// thread (`chunk_map::PageSnapshot`). Without the chunk map: the base
+    /// addresses of every cons block and string, float, vector and bytecode
+    /// page, each class timed into its handshake slot. With it: the map and
+    /// each class's count, O(1).
+    pub(super) fn page_snapshot_for_mark(&mut self) -> PageSnapshot {
+        if let Some(map) = self.chunk_map.as_ref() {
+            let mut start_count = [0usize; CHUNK_CLASS_COUNT];
+            start_count[ChunkClass::Cons as usize] = self.cons_blocks.len();
+            start_count[ChunkClass::String as usize] = self.string_arena.pages.len();
+            start_count[ChunkClass::Float as usize] = self.float_arena.pages.len();
+            start_count[ChunkClass::Vector as usize] = self.vector_arena.pages.len();
+            start_count[ChunkClass::ByteCode as usize] = self.bytecode_arena.pages.len();
+            self.handshake.last_start_conssnap_us = 0;
+            self.handshake.last_start_floatsnap_us = 0;
+            self.handshake.last_start_vecbasesnap_us = 0;
+            self.handshake.last_start_bcsnap_us = 0;
+            self.handshake.probe_cons_blocks = self.cons_blocks.len();
+            return PageSnapshot::ChunkMap {
+                map: map.clone(),
+                start_count,
+            };
+        }
+        fn bases<T: PagedObject>(arena: &ObjectArena<T>) -> FxHashSet<usize> {
+            let mut set =
+                FxHashSet::with_capacity_and_hasher(arena.pages.len(), Default::default());
+            for page in &arena.pages {
+                set.insert(page.base_addr());
+            }
+            set
+        }
+        let conssnap_t0 = std::time::Instant::now();
+        let mut cons =
+            FxHashSet::with_capacity_and_hasher(self.cons_blocks.len(), Default::default());
+        for block in &self.cons_blocks {
+            cons.insert(block.base_addr());
+        }
+        let string = bases(&self.string_arena);
+        self.handshake.last_start_conssnap_us = conssnap_t0.elapsed().as_micros() as u64;
+        self.handshake.probe_cons_blocks = self.cons_blocks.len();
+        let floatsnap_t0 = std::time::Instant::now();
+        let float = bases(&self.float_arena);
+        self.handshake.last_start_floatsnap_us = floatsnap_t0.elapsed().as_micros() as u64;
+        let vecbasesnap_t0 = std::time::Instant::now();
+        let vector = bases(&self.vector_arena);
+        self.handshake.last_start_vecbasesnap_us = vecbasesnap_t0.elapsed().as_micros() as u64;
+        let bcsnap_t0 = std::time::Instant::now();
+        let bytecode = bases(&self.bytecode_arena);
+        self.handshake.last_start_bcsnap_us = bcsnap_t0.elapsed().as_micros() as u64;
+        PageSnapshot::BaseSets {
+            cons,
+            string,
+            float,
+            vector,
+            bytecode,
+        }
     }
 
     /// Stop the GC thread and fold its residual work back into the gray queue so

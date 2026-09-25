@@ -22,15 +22,13 @@ unsafe impl Send for HeapPtr {}
 pub(super) struct ConcurrentMarkJob {
     /// Root snapshot, moved out of the heap's gray queue at the start handshake.
     pub(super) gray: Vec<TaggedValue>,
-    /// Base addresses of every owned cons block at the snapshot (immutable,
-    /// read-only on the GC thread). A cons whose block base is here is markable
-    /// via block arithmetic; others (mapped/dump, or new blocks) are deferred.
-    pub(super) owned_bases: std::sync::Arc<FxHashSet<usize>>,
-    /// CONCURRENT CLAIM DISPATCHER state (per-kind page-base snapshots,
-    /// cycle parity, dump span, claim counters) for
+    /// CONCURRENT CLAIM DISPATCHER state (the start handshake's page
+    /// snapshot, cycle parity, dump span, claim counters) for
     /// `concurrent_try_mark_owned`. Grouped in a sub-struct so the scan
     /// closures below — which mutably borrow `gray` — can borrow it
-    /// disjointly. The cons arm reads the dump span from here too.
+    /// disjointly. The cons arm reads the dump span and the cons blocks of
+    /// the snapshot from here too: a cons in a snapshot block is markable via
+    /// block arithmetic; others (mapped/dump, or new blocks) are deferred.
     pub(super) claims: ConcurrentClaimJob,
     /// Overwritten children appended by the mutator's SATB barrier; drained here.
     pub(super) satb: std::sync::Arc<std::sync::Mutex<Vec<TaggedValue>>>,
@@ -85,8 +83,8 @@ pub(super) struct ConcurrentMarkJob {
 /// `concurrent_try_mark_owned` needs to classify + claim a discovered value
 /// on the GC thread. All snapshots are captured at the world-stopped start
 /// handshake (immutable, read-only on the GC thread — the live registries /
-/// bitmaps belong to the mutator) and published through the same
-/// `Arc`/channel happens-before as the cons `owned_bases`.
+/// bitmaps belong to the mutator) and published through the job's
+/// channel happens-before.
 pub(super) struct ConcurrentClaimJob {
     /// THIS cycle's young non-cons mark parity, captured at launch. The GC
     /// thread's claims must mark to the CURRENT parity ("marked" ≡ bit
@@ -94,51 +92,23 @@ pub(super) struct ConcurrentClaimJob {
     /// only flip point and the next one cannot run before this mark joins),
     /// so the captured value is valid for the job's whole lifetime.
     pub(super) parity: bool,
-    /// CONCURRENT STRING MARKING claim oracle (stage 3): the base address of
-    /// every STRING ARENA PAGE at the world-stopped start handshake.
-    /// Snapshot-hit ⇒ an owned page string ⇒ claim-eligible; MISS ⇒ DEFER,
-    /// which is fail-safe for everything else: pages created mid-cycle
-    /// (their strings are born-at-parity anyway), mapped (pdump) strings
-    /// (marked via the side-table bool — claiming their `GcHeader` bit would
-    /// skip the mapped mark + interval trace at termination, a UAF of their
-    /// interval children), and any residual `Box` string (none are allocated
-    /// anymore, but a miss merely defers). A page base can never collide
-    /// with non-page memory: a page owns its whole 64KB span exclusively.
-    pub(super) string_page_bases: std::sync::Arc<FxHashSet<usize>>,
-    /// CONCURRENT FLOAT CLAIMS (task 01): the base address of every FLOAT
-    /// ARENA PAGE at the world-stopped start handshake (retired pages
-    /// included — their tenured floats short-circuit to drop). Same
-    /// discipline as `string_page_bases`: HIT ⇒ owned page float ⇒
-    /// claim-eligible; MISS ⇒ DEFER (fail-safe for mid-cycle pages, mapped
-    /// (pdump) floats — which mark via the heap's `mapped_float_ranges` side
-    /// bitmaps only the mutator may touch — and any residual `Box` float).
-    pub(super) float_page_bases: std::sync::Arc<FxHashSet<usize>>,
-    /// CONCURRENT VECTOR-HEADER CLAIMS (task 01): the base address of every
-    /// VECTOR ARENA PAGE at the world-stopped start handshake (retired pages
-    /// included). A page is homogeneous (`VectorObj` slots only), so a HIT
-    /// both proves ownership AND classifies the veclike as a plain Vector
-    /// without reading its header. MISS ⇒ DEFER: mapped (pdump) vectors
-    /// (side-table marks + termination `trace_veclike`), any residual `Box`
-    /// vector (none are constructible today — `alloc_vector` is the single
-    /// Vector chokepoint — but a miss merely defers), and vectors in pages
-    /// created mid-cycle. See the claim arm for why page-hit vectors may be
-    /// claimed without deferring their CURRENT backing to the termination.
-    pub(super) vector_page_bases: std::sync::Arc<FxHashSet<usize>>,
-    /// CONCURRENT BYTECODE CLAIMS (task 01, finishing arm): the base address
-    /// of every BYTECODE ARENA PAGE at the world-stopped start handshake
-    /// (retired pages included — their tenured bytecode short-circuits to
-    /// drop at the arm). Same discipline as `vector_page_bases`: a page is
-    /// homogeneous (384-byte `ByteCodeObj` slots only), so a HIT both proves
-    /// ownership AND classifies the veclike as ByteCode without reading its
-    /// header. MISS ⇒ DEFER (fail-safe): mapped/dump-span bytecode (marks
-    /// live in mutator-only side tables; termination `trace_veclike`), any
-    /// residual `Box` bytecode (none are constructible — `alloc_bytecode` is
-    /// the single ByteCode chokepoint — but a miss merely defers), and
-    /// bytecode in pages created mid-cycle. Unlike vectors (children covered
-    /// by the Tier-B backing scan), a claimed bytecode's children are
-    /// GRAY-PUSHED by the claim arm itself — see the load-bearing
-    /// immutability comment there.
-    pub(super) bytecode_page_bases: std::sync::Arc<FxHashSet<usize>>,
+    /// OWNERSHIP SNAPSHOT (`chunk_map::PageSnapshot`): the cons blocks and
+    /// the STRING, FLOAT, VECTOR and BYTECODE arena pages that existed at the
+    /// world-stopped start handshake (retired pages included — their tenured
+    /// objects short-circuit to drop at the arms). A HIT both proves
+    /// ownership and classifies the value (a block or page owns its whole
+    /// 64 KiB granule and is homogeneous), without reading any header. MISS ⇒
+    /// DEFER, which is fail-safe for everything else: blocks and pages
+    /// created mid-cycle (their objects are born at the cycle parity, or
+    /// allocate-black), mapped (pdump) objects (marked via mutator-only side
+    /// tables — claiming their `GcHeader` bit would skip the mapped mark and
+    /// the termination's trace, a UAF of their children), and residual `Box`
+    /// objects. Either the per-class base sets captured at the handshake or
+    /// the chunk map plus the per-class counts then (`NEOVM_GC_CHUNK_MAP`).
+    /// See the claim arms for why a page-hit vector may be claimed without
+    /// deferring its CURRENT backing, and why a claimed bytecode's children
+    /// are gray-pushed by the arm itself.
+    pub(super) pages: PageSnapshot,
     /// Dump (pdump mmap) address span. The cons arm skips conses inside
     /// (permanent-black; young children come from the remembered set); the
     /// subr arm defers span-inside veclikes (every MAPPED veclike
@@ -256,11 +226,11 @@ pub(super) unsafe fn atomic_mark_owned_cons_ptr(ptr: *const ConsCell) -> bool {
 /// STW termination exactly as before. Called at all three discovery sinks
 /// (gray drain, obarray scan, vector-backing scan).
 ///
-/// OWNERSHIP — a START-HANDSHAKE IMMUTABLE PAGE-BASE SNAPSHOT (stage 3;
-/// replaces float-v1's dump-span test): all owned strings live in STRING
-/// ARENA PAGES, and `string_page_bases` captures every string page base at
-/// the world-stopped launch (same `Arc` publication as the cons
-/// `owned_bases`). Snapshot-hit ⇒ this is an owned page string (a 64KB page
+/// OWNERSHIP — THE START-HANDSHAKE PAGE SNAPSHOT (stage 3; replaces
+/// float-v1's dump-span test): all owned strings live in STRING ARENA
+/// PAGES, and `pages` knows every string page that existed at the
+/// world-stopped launch (`PageSnapshot`, published with the job).
+/// Snapshot-hit ⇒ this is an owned page string (a 64KB page
 /// owns its whole span exclusively, so no mapped or foreign address can mask
 /// to a registered base) ⇒ claim-eligible. MISS ⇒ DEFER — fail-safe for
 /// every other population: pages created mid-cycle (their strings are
@@ -301,7 +271,7 @@ pub(super) unsafe fn atomic_mark_owned_cons_ptr(ptr: *const ConsCell) -> bool {
 #[inline]
 pub(super) fn concurrent_try_mark_string(
     val: TaggedValue,
-    string_page_bases: &FxHashSet<usize>,
+    pages: &PageSnapshot,
     parity: bool,
     str_claimed: &AtomicUsize,
 ) -> bool {
@@ -309,8 +279,7 @@ pub(super) fn concurrent_try_mark_string(
     let Some(ptr) = val.as_string_ptr() else {
         return false; // malformed value — let the termination's mark_value decide
     };
-    let base = (ptr as usize) & !(OBJECT_PAGE_ALIGN - 1);
-    if !string_page_bases.contains(&base) {
+    if !pages.contains(ChunkClass::String, ptr as usize) {
         return false; // snapshot MISS: mid-cycle page / mapped / residual — defer
     }
     // Owned page string. Read the interval pointer WORD only (see doc above).
@@ -393,12 +362,7 @@ pub(super) fn concurrent_try_mark_owned(
         return true;
     }
     if val.is_string() {
-        return concurrent_try_mark_string(
-            val,
-            &job.string_page_bases,
-            job.parity,
-            &job.str_claimed,
-        );
+        return concurrent_try_mark_string(val, &job.pages, job.parity, &job.str_claimed);
     }
     if val.is_float() {
         // CONCURRENT FLOAT CLAIMS (task 01): a float has ZERO Lisp children
@@ -409,8 +373,7 @@ pub(super) fn concurrent_try_mark_owned(
         let Some(ptr) = val.as_float_ptr() else {
             return false; // malformed value — let the termination decide
         };
-        let base = (ptr as usize) & !(OBJECT_PAGE_ALIGN - 1);
-        if !job.float_page_bases.contains(&base) {
+        if !job.pages.contains(ChunkClass::Float, ptr as usize) {
             // Snapshot MISS: mid-cycle page (born-at-parity anyway), mapped
             // (pdump) float (marks via the mutator-only side ranges), or a
             // residual Box float — DEFER, fail-safe.
@@ -484,7 +447,7 @@ pub(super) fn concurrent_try_mark_owned(
         // marks. Their backing is absent from this cycle's Tier-B snapshot,
         // which is exactly the allocate-black story vectors already had.
         let base = addr & !(OBJECT_PAGE_ALIGN - 1);
-        if job.vector_page_bases.contains(&base) {
+        if job.pages.contains(ChunkClass::Vector, addr) {
             // Page vectors are 64-byte slots; a page-hit veclike value must
             // decode to a slot boundary (page-homogeneity argument above).
             debug_assert_eq!(
@@ -556,7 +519,7 @@ pub(super) fn concurrent_try_mark_owned(
         //      bytecode against fresh marks. This is the vector arm's
         //      reused-slot argument verbatim, minus post-publish insertions
         //      into the bytecode itself — immutability rules those out.
-        if job.bytecode_page_bases.contains(&base) {
+        if job.pages.contains(ChunkClass::ByteCode, addr) {
             // Page bytecode is 384-byte slots; a page-hit veclike value
             // must decode to a slot boundary (page-homogeneity argument).
             debug_assert_eq!(
@@ -908,8 +871,7 @@ pub(super) fn run_concurrent_mark(mut job: ConcurrentMarkJob) {
                 if addr >= job.claims.dump_lo && addr < job.claims.dump_hi {
                     continue; // dump cons: permanent black, children via remembered set
                 }
-                let base = addr & !(CONS_BLOCK_ALIGN - 1);
-                if !job.owned_bases.contains(&base) {
+                if !job.claims.pages.contains(ChunkClass::Cons, addr) {
                     // Mapped (non-dump) or new-block cons — let the mutator's
                     // termination mark it through the full `mark_value` path.
                     job.deferred.lock().unwrap().push(val);
@@ -944,8 +906,7 @@ pub(super) fn run_concurrent_mark(mut job: ConcurrentMarkJob) {
                         if caddr >= job.claims.dump_lo && caddr < job.claims.dump_hi {
                             break; // dump cons: permanent black
                         }
-                        let cbase = caddr & !(CONS_BLOCK_ALIGN - 1);
-                        if !job.owned_bases.contains(&cbase) {
+                        if !job.claims.pages.contains(ChunkClass::Cons, caddr) {
                             job.deferred.lock().unwrap().push(cdr);
                             break;
                         }

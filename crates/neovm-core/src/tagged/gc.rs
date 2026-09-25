@@ -2515,7 +2515,7 @@ mod jit_state;
 mod knobs;
 
 mod chunk_map;
-use chunk_map::{ChunkClass, ChunkEntry, ChunkMap};
+use chunk_map::{CHUNK_CLASS_COUNT, ChunkClass, ChunkEntry, ChunkMap, PageSnapshot};
 
 mod census;
 #[cfg(test)]
@@ -2561,8 +2561,8 @@ mod bignum_arena_tests;
 #[path = "gc/tests/census_tests.rs"]
 mod census_tests;
 /// The chunk map: the radix, its entries through page and block creation,
-/// release and re-indexing, the oracles against the registries, and
-/// concurrent cycles with it on.
+/// release and re-indexing, the oracles against the registries, the GC
+/// thread's snapshot semantics, and concurrent cycles classified through it.
 #[cfg(test)]
 #[path = "gc/tests/chunk_map_tests.rs"]
 mod chunk_map_tests;

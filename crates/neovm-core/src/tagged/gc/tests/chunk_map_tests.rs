@@ -1,8 +1,9 @@
 //! The chunk map (`chunk_map.rs`): the radix itself, its entries for every
 //! block and page class through creation, release and re-indexing, the
-//! ownership oracles answering exactly as the per-class registries do, and
-//! concurrent cycles with it on (a TSan surface: the mutator adds pages
-//! under a running marker).
+//! ownership oracles answering exactly as the per-class registries do, the
+//! GC thread's snapshot semantics, and concurrent cycles classified through
+//! it (a TSan surface: the GC thread reads the map while the mutator adds
+//! pages).
 
 use super::fake_image::FakeImage;
 use super::knobs::set_chunk_map_for_test;
@@ -162,6 +163,7 @@ fn entries_pack_class_and_index() {
         }
     }
     assert_eq!(ChunkEntry::NONE.class(), ChunkClass::None);
+    assert_eq!(CHUNK_CLASS_COUNT, 12);
 }
 
 /// Every block and page class is registered with its class and its index
@@ -311,6 +313,31 @@ fn released_cons_blocks_leave_the_map() {
     assert!(heap.is_value_marked(root));
 }
 
+/// The GC thread's snapshot: a page created after the start handshake is not
+/// in it, whatever its class, while every page that existed then is.
+#[test]
+fn a_page_created_after_the_snapshot_is_not_in_it() {
+    let mut heap = chunk_heap();
+    let old_float = heap.alloc_float(1.0);
+    let old_cons = heap.alloc_cons(TaggedValue::NIL, TaggedValue::NIL);
+    let snapshot = heap.page_snapshot_for_mark();
+    assert!(matches!(snapshot, PageSnapshot::ChunkMap { .. }));
+    let pages_before = heap.float_arena.pages.len();
+    let mut new_float = old_float;
+    while heap.float_arena.pages.len() == pages_before {
+        new_float = heap.alloc_float(2.0);
+    }
+    assert!(snapshot.contains(ChunkClass::Float, addr_of(old_float)));
+    assert!(!snapshot.contains(ChunkClass::Float, addr_of(new_float)));
+    assert!(snapshot.contains(ChunkClass::Cons, addr_of(old_cons)));
+    // The right class only.
+    assert!(!snapshot.contains(ChunkClass::String, addr_of(old_float)));
+    assert!(!snapshot.contains(ChunkClass::Cons, addr_of(old_float)));
+    // Classes the GC thread never claims are never in it.
+    let lambda = heap.alloc_lambda(vec![TaggedValue::NIL]);
+    assert!(!snapshot.contains(ChunkClass::Lambda, addr_of(lambda)));
+}
+
 fn run_concurrent_cycle(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
     heap.concurrent_begin();
     for &root in roots {
@@ -332,9 +359,9 @@ fn run_concurrent_cycle(heap: &mut TaggedHeap, roots: &[TaggedValue]) {
     assert!(!heap.sweep_in_progress());
 }
 
-/// Concurrent cycles with the map on keep every live object of every class
-/// and free the garbage, while the mutator adds blocks and pages under the
-/// running marker.
+/// Concurrent cycles classified through the map keep every live object of
+/// every class and free the garbage, while the mutator adds blocks and
+/// pages under the running marker (the TSan surface for the map's readers).
 #[test]
 fn chunk_map_concurrent_cycles_keep_the_live_set_while_pages_grow() {
     let mut heap = chunk_heap();

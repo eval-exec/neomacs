@@ -447,10 +447,13 @@ fn concurrent_claim_arm_defers_mid_cycle_bytecode_pages() {
     // before launching, so claim at the flipped value).
     let job = ConcurrentClaimJob {
         parity: !heap.mark_parity,
-        string_page_bases: std::sync::Arc::new(rustc_hash::FxHashSet::default()),
-        float_page_bases: std::sync::Arc::new(rustc_hash::FxHashSet::default()),
-        vector_page_bases: std::sync::Arc::new(rustc_hash::FxHashSet::default()),
-        bytecode_page_bases: std::sync::Arc::new(snap),
+        pages: PageSnapshot::BaseSets {
+            cons: rustc_hash::FxHashSet::default(),
+            string: rustc_hash::FxHashSet::default(),
+            float: rustc_hash::FxHashSet::default(),
+            vector: rustc_hash::FxHashSet::default(),
+            bytecode: snap,
+        },
         dump_lo: usize::MAX,
         dump_hi: 0,
         drop_dump_children: false,
