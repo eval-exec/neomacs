@@ -9549,6 +9549,9 @@ pub(crate) fn match_pattern(
     ))
 }
 
+#[path = "dfa.rs"]
+pub(crate) mod dfa;
+
 #[cfg(test)]
 #[path = "tests/emacs.rs"]
 mod tests;
