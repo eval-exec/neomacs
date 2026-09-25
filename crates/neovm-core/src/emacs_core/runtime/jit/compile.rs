@@ -75,7 +75,7 @@ use cranelift_codegen::ir::{
     AbiParam, Block, BlockArg, FuncRef, Function, InstBuilder, MemFlagsData, Signature, StackSlot,
     StackSlotData, StackSlotKind, Type, UserFuncName, types,
 };
-use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
+use cranelift_frontend::{FunctionBuilder, Variable};
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{Linkage, Module, default_libcall_names};
 use smallvec::SmallVec;
@@ -3692,8 +3692,8 @@ pub(crate) struct BaselineAotMeta {
 ///
 /// Returns the [`BaselineAotMeta`] for the descriptor.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn build_baseline_leaf_object<M: Module>(
-    module: &mut M,
+pub(crate) fn build_baseline_leaf_object<S: LeafSink>(
+    sink: &mut S,
     ops: &[Op],
     constants: &[Value],
     arity: usize,
@@ -3738,7 +3738,7 @@ pub(crate) fn build_baseline_leaf_object<M: Module>(
     });
     let max_depth = cfg.max_depth;
     build_leaf_fn(
-        module,
+        sink,
         ops,
         constants,
         arity,
@@ -3786,11 +3786,13 @@ pub(crate) fn build_baseline_leaf_object<M: Module>(
 
 /// Module-generic build seam for [`lower_leaf_full`]: sets up the leaf ABI
 /// signature, lowers the bytecode `ops` through a `FunctionBuilder`, then
-/// declares + defines the function into `module`, returning its `FuncId`. CLIF
-/// output is byte-identical to the previous in-line lowering (pure extraction).
+/// hands the function to `sink` ([`LeafSink::define_leaf`]), returning its
+/// `FuncId`. CLIF output is byte-identical to the previous in-line lowering
+/// (pure extraction).
 ///
-/// Generic over `M: Module` so the same lowering drives the `JITModule` JIT
-/// path today and an `ObjectModule` AOT path later, unchanged. The
+/// Generic over the sink so the same lowering drives the JIT (a per-leaf
+/// `JITModule` or the persistent per-thread backend) and the `ObjectModule`
+/// AOT path, unchanged. The
 /// address-stable buffers (`spec_slots`/`deopt_spill`/`deopt_meta`/`reloc_data`)
 /// are borrowed: their addresses are baked into the generated code, and the
 /// caller retains ownership to move them into the `CompiledLeaf`.
@@ -3801,8 +3803,8 @@ pub(crate) fn build_baseline_leaf_object<M: Module>(
 ///   * `finalize_definitions()` — AOT: `ObjectModule::finish()`.
 ///   * `get_finalized_function` — AOT: `dlsym` of the exported entry symbol.
 #[allow(clippy::too_many_arguments)]
-fn build_leaf_fn<M: Module>(
-    module: &mut M,
+fn build_leaf_fn<S: LeafSink>(
+    sink: &mut S,
     ops: &[Op],
     constants: &[Value],
     arity: usize,
@@ -3847,7 +3849,7 @@ fn build_leaf_fn<M: Module>(
     lowering::imm_pool_reset();
     LAST_IR_STATS.with(|c| c.set((0, 0, 0, 0)));
     lowering::flonum_census_reset();
-    let frontend_config = module.target_config();
+    let frontend_config = sink.module().target_config();
     let call_conv = frontend_config.default_call_conv;
     let ptr_ty = frontend_config.pointer_type();
 
@@ -3867,7 +3869,7 @@ fn build_leaf_fn<M: Module>(
     sig.returns.push(AbiParam::new(types::I64));
 
     let mut func = Function::with_name_signature(UserFuncName::user(0, 0), sig.clone());
-    let mut fbctx = FunctionBuilderContext::new();
+    let mut fbctx = sink.take_builder_context();
     {
         let mut fb = FunctionBuilder::new(&mut func, &mut fbctx);
 
@@ -3889,9 +3891,8 @@ fn build_leaf_fn<M: Module>(
             // this for the baseline `ObjectModule` and the two shims become imports
             // resolved against the host at `dlopen`.
             let cbsym_spec = spec_sites.values().any(|site| site.kind.is_cbsym());
-            // `module` is already `&mut M`; reborrow it for the call.
             let refs = declare_rt_refs(
-                &mut *module,
+                sink.module(),
                 fb.func,
                 call_conv,
                 ptr_ty,
@@ -4661,6 +4662,7 @@ fn build_leaf_fn<M: Module>(
         fb.seal_all_blocks();
         fb.finalize(frontend_config);
     }
+    sink.return_builder_context(fbctx);
     LAST_IR_STATS.with(|c| {
         let (_, _, sites, slots) = c.get();
         c.set((
@@ -4671,36 +4673,24 @@ fn build_leaf_fn<M: Module>(
         ));
     });
 
-    let fid = module
-        .declare_function(entry_name, entry_linkage, &sig)
-        .map_err(|e| CompileError::Backend(BackendError::Define(e.to_string())))?;
-    let mut ctx = module.make_context();
-    ctx.func = func;
-    note_clif_size(&ctx.func);
+    note_clif_size(&func);
     let (rw_emitted, rw_elided) = lowering::rootwin_counters();
     lowering::dump_clif(
-        &ctx.func,
+        &func,
         &format!(
             "baseline ops={} rw_stores={rw_emitted} rw_elided={rw_elided} entry={entry_name}",
             ops.len()
         ),
     );
-    // NEOVM_JIT_DUMP_ASM: Cranelift renders its disassembly only when asked.
-    let disasm = super::stats::asm_dump::want_disasm(aot);
-    if disasm {
-        ctx.set_disasm(true);
-    }
-    let codegen_phase = super::stats::enter_phase(super::stats::CompilePhase::Codegen);
-    module
-        .define_function(fid, &mut ctx)
-        .map_err(|e| CompileError::Backend(BackendError::Define(e.to_string())))?;
-    drop(codegen_phase);
-    if disasm {
-        super::stats::asm_dump::stash(&ctx);
-    }
-    module.clear_context(&mut ctx);
-
-    Ok(fid)
+    sink.define_leaf(
+        LeafEntry {
+            name: entry_name,
+            linkage: entry_linkage,
+            signature: &sig,
+        },
+        func,
+        super::stats::asm_dump::want_disasm(aot),
+    )
 }
 
 mod knobs;
@@ -4719,6 +4709,9 @@ pub use lowering::*;
 
 mod shims;
 pub use shims::*;
+
+pub(crate) mod sink;
+pub(crate) use sink::{LeafEntry, LeafSink};
 
 mod dispatch;
 pub use dispatch::*;

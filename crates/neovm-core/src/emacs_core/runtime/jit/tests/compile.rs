@@ -1,5 +1,6 @@
 use super::*;
 use crate::emacs_core::value::LambdaParams;
+use cranelift_frontend::FunctionBuilderContext;
 
 fn nullary() -> ByteCodeFunction {
     ByteCodeFunction::new(LambdaParams {

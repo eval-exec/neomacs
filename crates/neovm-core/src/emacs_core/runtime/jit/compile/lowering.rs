@@ -2931,8 +2931,9 @@ pub(crate) fn const_relocs_for_aot(v: Value) -> bool {
 }
 
 /// Module-generic build seam for [`lower_mir_with_plan`]: sets up the leaf ABI
-/// signature, lowers the MIR through a `FunctionBuilder`, then declares +
-/// defines the function into `module`, returning its `FuncId`. CLIF output is
+/// signature, lowers the MIR through a `FunctionBuilder`, then hands the
+/// function to `sink` ([`super::LeafSink::define_leaf`]), returning its
+/// `FuncId`. CLIF output is
 /// byte-identical to the previous in-line lowering — this is a pure extraction.
 ///
 /// Generic over `M: Module` so the same lowering drives the `JITModule` JIT
@@ -2955,8 +2956,8 @@ pub(crate) fn const_relocs_for_aot(v: Value) -> bool {
 /// path passes a unique `("__neovm_aot_{hash}_{tag}", Linkage::Export)` so the
 /// `.o` exports a symbol the loader can `dlsym`.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn build_mir_leaf_fn<M: Module>(
-    module: &mut M,
+pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
+    sink: &mut S,
     m: &mir::MirFunction,
     deopt_spill: &[core::cell::Cell<i64>],
     deopt_meta: &DeoptCells,
@@ -2995,7 +2996,7 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
     // reported the PREVIOUS baseline compile's IR stats.
     LAST_IR_STATS.with(|c| c.set((0, 0, 0, 0)));
 
-    let frontend_config = module.target_config();
+    let frontend_config = sink.module().target_config();
     let call_conv = frontend_config.default_call_conv;
     let ptr_ty = frontend_config.pointer_type();
 
@@ -3011,7 +3012,7 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
     sig.returns.push(AbiParam::new(types::I64));
 
     let mut func = Function::with_name_signature(UserFuncName::user(0, 0), sig.clone());
-    let mut fbctx = FunctionBuilderContext::new();
+    let mut fbctx = sink.take_builder_context();
     {
         let mut fb = FunctionBuilder::new(&mut func, &mut fbctx);
 
@@ -3034,7 +3035,7 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
             // Qualified ordinary calls and named builtins share the baseline
             // emitter. AOT plans have no ordinary call slots yet.
             let refs = declare_rt_refs(
-                &mut *module,
+                sink.module(),
                 fb.func,
                 call_conv,
                 ptr_ty,
@@ -3806,6 +3807,7 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
         fb.seal_all_blocks();
         fb.finalize(frontend_config);
     }
+    sink.return_builder_context(fbctx);
     LAST_IR_STATS.with(|c| {
         let (_, _, sites, slots) = c.get();
         c.set((
@@ -3827,29 +3829,16 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
         ),
     );
 
-    let fid = module
-        .declare_function(entry_name, entry_linkage, &sig)
-        .map_err(|e| CompileError::Backend(BackendError::Define(e.to_string())))?;
-    let mut ctx = module.make_context();
-    ctx.func = func;
-    super::note_clif_size(&ctx.func);
-    // NEOVM_JIT_DUMP_ASM: Cranelift renders its disassembly only when asked.
-    let disasm = super::super::stats::asm_dump::want_disasm(aot);
-    if disasm {
-        ctx.set_disasm(true);
-    }
-    let codegen_phase =
-        super::super::stats::enter_phase(super::super::stats::CompilePhase::Codegen);
-    module
-        .define_function(fid, &mut ctx)
-        .map_err(|e| CompileError::Backend(BackendError::Define(e.to_string())))?;
-    drop(codegen_phase);
-    if disasm {
-        super::super::stats::asm_dump::stash(&ctx);
-    }
-    module.clear_context(&mut ctx);
-
-    Ok(fid)
+    super::note_clif_size(&func);
+    sink.define_leaf(
+        super::LeafEntry {
+            name: entry_name,
+            linkage: entry_linkage,
+            signature: &sig,
+        },
+        func,
+        super::super::stats::asm_dump::want_disasm(aot),
+    )
 }
 
 /// Per-function runtime-call machinery: shim references plus the vmctx variable
