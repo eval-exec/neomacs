@@ -222,6 +222,8 @@ const BARRIER_CACHE_SLOTS: usize = 64;
 thread_local! {
     /// Writes the barrier's thread-local rejects passed on to the heap.
     static RECORD_HEAP_WRITE_CALLS: Cell<usize> = const { Cell::new(0) };
+    /// Writes the barrier's inline gate sent to its outlined part.
+    static BARRIER_SLOW_CALLS: Cell<usize> = const { Cell::new(0) };
 }
 
 /// The write-barrier caches' slot for an owner's bits (heap addresses are
@@ -1448,11 +1450,34 @@ impl TaggedHeap {
         // (a heap owner inside the dump address span) just adds a redundant
         // root; a false negative would be a use-after-free, so the span test
         // must cover every mapped object (see `register_mapped_*`).
+        debug_assert!(
+            self.partition_dump || !self.value_is_tenured(record.owner),
+            "a tenured owner without the dump partition: the barrier window \
+             would miss it ({:?})",
+            record.owner,
+        );
+        #[cfg(debug_assertions)]
+        if !record.owner.is_cons()
+            && !self.owner_is_mapped(record.owner)
+            && let Some(addr) = Self::value_heap_addr(record.owner)
+        {
+            // SAFETY: a non-cons heap value points at a live `GcHeader`.
+            let remembered = unsafe {
+                (*(addr as *const GcHeader))
+                    .remembered
+                    .load(Ordering::Relaxed)
+            };
+            debug_assert!(
+                !remembered || self.mapped_remembered.contains(&record.owner.bits()),
+                "a remembered header whose owner is not in the remembered set: {:?}",
+                record.owner,
+            );
+        }
         if self.partition_dump
             && (self.owner_is_mapped(record.owner) || self.value_is_tenured(record.owner))
         {
             let bits = record.owner.bits();
-            self.mapped_remembered.insert(bits);
+            self.remember_owner(record.owner);
             // Arm the barrier's repeat-owner reject: this entry is permanent,
             // so the partition-only path can skip the same owner's next write.
             TAGGED_HEAP_REMEMBERED_CACHE.with(|slots| slots[barrier_cache_slot(bits)].set(bits));
@@ -1476,6 +1501,27 @@ impl TaggedHeap {
         }
         if self.write_tracking_mode == WriteTrackingMode::OwnersAndRecords {
             self.dirty_writes.push(record);
+        }
+    }
+
+    /// Add `owner` to the dump remembered set — THE insert every site uses,
+    /// so the header's `remembered` byte is set exactly when (and only
+    /// after) the owner is in the set. The set is append-only and tenured
+    /// objects are never freed, so the bit can never outlive its fact; a
+    /// spurious bit would let the inline barrier skip an owner whose young
+    /// children nothing re-seeds (a use-after-free), which is why no other
+    /// code writes it. Image owners are left alone: they sit in the barrier
+    /// window, so their byte is never read.
+    pub(super) fn remember_owner(&mut self, owner: TaggedValue) {
+        self.mapped_remembered.insert(owner.bits());
+        if owner.is_cons() || self.owner_is_mapped(owner) {
+            return;
+        }
+        if let Some(addr) = Self::value_heap_addr(owner) {
+            // SAFETY: a non-cons heap value points at a live `GcHeader`.
+            let header = unsafe { &*(addr as *const GcHeader) };
+            debug_assert!(header.tenured, "only tenured owners are remembered");
+            header.remembered.store(true, Ordering::Relaxed);
         }
     }
 

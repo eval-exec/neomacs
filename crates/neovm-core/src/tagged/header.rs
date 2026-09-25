@@ -180,9 +180,21 @@ pub struct GcHeader {
     /// never swept; mutations of them are caught by the write barrier. Occupies
     /// padding between `kind` and `next`, so the header does not grow.
     pub tenured: bool,
+    /// Remembered: this (tenured) object is already in the heap's dump
+    /// remembered set (`TaggedHeap::mapped_remembered`), so a write by it has
+    /// nothing left for the partition-only write barrier to record. Set ONLY
+    /// by `TaggedHeap::remember_owner`, right after the insert; the set is
+    /// never cleared and tenured objects are never freed, so a set bit
+    /// cannot outlive its fact. Never read for mapped objects (they sit in
+    /// the barrier window) and always `false` for young ones. Atomic, and a
+    /// byte of its own, so the mutator's store cannot race the GC thread's
+    /// claim-time `tenured` read. Occupies padding too (byte 3).
+    pub remembered: AtomicBool,
     /// Intrusive linked list of all GC-managed objects (for sweep).
     pub next: *mut GcHeader,
 }
+
+const _: () = assert!(std::mem::size_of::<GcHeader>() == 16);
 
 impl GcHeader {
     pub fn new(kind: HeapObjectKind) -> Self {
@@ -196,8 +208,21 @@ impl GcHeader {
             marked: AtomicBool::new(false),
             kind,
             tenured: false,
+            remembered: AtomicBool::new(false),
             next: std::ptr::null_mut(),
         }
+    }
+
+    /// Whether a write by the (non-cons, outside-the-window) owner whose
+    /// header is at `header` must reach the heap: it is tenured and the
+    /// remembered set has not recorded it yet.
+    ///
+    /// # Safety
+    ///
+    /// `header` must point at a live `GcHeader`.
+    #[inline(always)]
+    pub(crate) unsafe fn needs_remembering(header: *const GcHeader) -> bool {
+        unsafe { (*header).tenured && !(*header).remembered.load(Ordering::Relaxed) }
     }
 
     /// Read the RAW mark-parity bit (relaxed). Only meaningful compared

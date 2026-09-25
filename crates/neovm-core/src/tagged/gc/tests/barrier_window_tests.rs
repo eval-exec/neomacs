@@ -1,7 +1,9 @@
 //! The write barrier's owner window (`barrier_window.rs`) against the gate it
 //! replaced: in every collector state and for every kind of owner, a store
 //! reaches `record_heap_write` exactly when the old three-flag gate sent it
-//! there, and leaves the remembered set exactly as the old one did.
+//! there — except a write by a tenured owner its header already marks
+//! remembered, whose heap call was a no-op insert — and leaves the
+//! remembered set exactly as the old one did.
 
 use super::*;
 use crate::tagged::header::{ConsCdrOrNext, LispValueVec, VecLikeHeader, VecLikeType, VectorObj};
@@ -36,6 +38,30 @@ fn old_gate_reaches_heap(owner: TaggedValue) -> bool {
 
 fn record_calls() -> usize {
     RECORD_HEAP_WRITE_CALLS.with(|c| c.get())
+}
+
+fn slow_calls() -> usize {
+    BARRIER_SLOW_CALLS.with(|c| c.get())
+}
+
+/// The header's `remembered` byte of a non-cons owner.
+fn header_remembered(owner: TaggedValue) -> bool {
+    let addr = owner.bits() & !crate::tagged::value::TAG_MASK;
+    unsafe {
+        (*(addr as *const GcHeader))
+            .remembered
+            .load(Ordering::Relaxed)
+    }
+}
+
+/// A tenured owner outside the window that its header already marks
+/// remembered: the old gate sent its writes to the heap only to re-insert an
+/// owner the set already holds; the inline gate stops them.
+fn remembered_outside_window(heap: &TaggedHeap, owner: TaggedValue) -> bool {
+    !owner.is_cons()
+        && !published_barrier_window().covers(owner.bits() & !7)
+        && header_remembered(owner)
+        && heap.mapped_remembered.contains(&owner.bits())
 }
 
 /// A fake image cons, registered the way the pdump loader registers one
@@ -79,8 +105,10 @@ fn store_into(heap: &mut TaggedHeap, owner: TaggedValue) {
 /// the heap is reached exactly when the old gate said so.
 fn assert_matches_old_gate(heap: &mut TaggedHeap, what: &str, owner: TaggedValue) {
     for round in 0..2 {
-        let expected = old_gate_reaches_heap(owner);
+        let remembered = remembered_outside_window(heap, owner);
+        let expected = old_gate_reaches_heap(owner) && !remembered;
         let before = record_calls();
+        let set_before = heap.mapped_remembered.len();
         store_into(heap, owner);
         assert_eq!(
             record_calls() - before,
@@ -89,6 +117,9 @@ fn assert_matches_old_gate(heap: &mut TaggedHeap, what: &str, owner: TaggedValue
              (window {:?})",
             published_barrier_window(),
         );
+        if remembered {
+            assert_eq!(heap.mapped_remembered.len(), set_before);
+        }
     }
 }
 
@@ -323,4 +354,74 @@ fn the_window_covers_exactly_its_span() {
     assert!(w.covers(0x1ff8));
     assert!(!w.covers(0x2000));
     assert_eq!(BarrierWindow::span(0x2000, 0x1000), BarrierWindow::NONE);
+}
+
+/// The header bit follows the remembered set: set by the barrier's first
+/// write of a tenured owner and by the promotion scan for a tenured owner
+/// born with a young child, never for an image owner, never for a young
+/// one. From then on the owner's writes never leave the inline gate.
+#[test]
+fn the_remembered_bit_is_set_exactly_when_the_owner_is_remembered() {
+    crate::test_utils::init_test_tracing();
+    let mut heap = TaggedHeap::new();
+    set_tagged_heap(&mut heap);
+    let image = mapped_vector(&mut heap);
+    let quiet = heap.alloc_vector(vec![TaggedValue::NIL; 2]);
+    let young_child = heap.alloc_cons(TaggedValue::fixnum(1), TaggedValue::NIL);
+    let parent = heap.alloc_vector(vec![young_child, TaggedValue::NIL]);
+    let root = heap.alloc_cons(quiet, TaggedValue::NIL);
+    let root = heap.alloc_cons(parent, root);
+    for owner in [image, quiet, parent] {
+        assert!(!header_remembered(owner), "{owner:?} starts unremembered");
+    }
+    heap.collect_exact(std::iter::once(root));
+
+    // Promotion: the scan remembers the tenured owner holding a young cons.
+    assert!(heap.value_is_tenured(parent));
+    assert!(heap.mapped_remembered.contains(&parent.bits()));
+    assert!(header_remembered(parent), "the promotion scan sets the bit");
+    // A tenured owner with no young child is tenured but not remembered.
+    assert!(heap.value_is_tenured(quiet));
+    assert!(!heap.mapped_remembered.contains(&quiet.bits()));
+    assert!(!header_remembered(quiet));
+
+    // Its first write leaves the gate once and remembers it; the rest stay
+    // inline.
+    let before = slow_calls();
+    store_into(&mut heap, quiet);
+    assert_eq!(
+        slow_calls() - before,
+        1,
+        "the first write takes the slow path"
+    );
+    assert!(heap.mapped_remembered.contains(&quiet.bits()));
+    assert!(
+        header_remembered(quiet),
+        "the barrier's insert sets the bit"
+    );
+    // Even with the thread-local remembered cache gone, a remembered owner
+    // never leaves the inline gate again.
+    set_tagged_heap(&mut heap);
+    let before = slow_calls();
+    for _ in 0..8 {
+        store_into(&mut heap, quiet);
+        store_into(&mut heap, parent);
+    }
+    assert_eq!(slow_calls(), before, "remembered owners stay inline");
+
+    // An image owner is remembered by its writes but its header is left
+    // alone: it sits in the window, so the byte is never read.
+    let before = slow_calls();
+    store_into(&mut heap, image);
+    assert_eq!(slow_calls() - before, 1, "an image owner is in the window");
+    assert!(heap.mapped_remembered.contains(&image.bits()));
+    assert!(!header_remembered(image));
+
+    // A young owner is never remembered.
+    let young = heap.alloc_vector(vec![TaggedValue::NIL; 2]);
+    let before = slow_calls();
+    store_into(&mut heap, young);
+    assert_eq!(slow_calls(), before);
+    assert!(!header_remembered(young));
+    assert!(!heap.mapped_remembered.contains(&young.bits()));
 }

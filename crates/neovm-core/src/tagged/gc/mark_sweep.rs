@@ -378,7 +378,7 @@ impl TaggedHeap {
         for ptr in veclike {
             if self.veclike_has_young_child(ptr) {
                 let value = unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) };
-                self.mapped_remembered.insert(value.bits());
+                self.remember_owner(value);
             }
         }
         // -- mapped conses --
@@ -394,7 +394,7 @@ impl TaggedHeap {
                 let cdr = unsafe { (*cell).load_cdr() };
                 if self.is_heap_young(car) || self.is_heap_young(cdr) {
                     let value = unsafe { TaggedValue::from_cons_ptr(cell) };
-                    self.mapped_remembered.insert(value.bits());
+                    self.remember_owner(value);
                 }
             }
         }
@@ -409,7 +409,7 @@ impl TaggedHeap {
             }
             if roots.iter().any(|r| self.is_heap_young(*r)) {
                 let value = unsafe { TaggedValue::from_string_ptr(ptr) };
-                self.mapped_remembered.insert(value.bits());
+                self.remember_owner(value);
             }
         }
         // -- tenured heap objects (old generation) --
@@ -469,7 +469,7 @@ impl TaggedHeap {
                 },
                 HeapObjectKind::Float => return,
             };
-            self.mapped_remembered.insert(value.bits());
+            self.remember_owner(value);
         }
     }
 

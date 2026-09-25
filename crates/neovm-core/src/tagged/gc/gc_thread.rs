@@ -1125,7 +1125,9 @@ pub fn note_heap_slot_write(
 /// tenured, so the only thing the partition-only barrier could record for it
 /// is a mapped (in-span) owner — and any other heap value points at a
 /// `GcHeader` whose `tenured` byte is what `value_is_tenured` reads, so only
-/// a tenured owner can have something to record.
+/// a tenured owner can have something to record, and only once: its
+/// `remembered` byte says the remembered set already holds it (the set is
+/// append-only, so that insert has nothing more to add).
 ///
 /// Case by case against the gate this replaced (three thread-local flags, a
 /// span test for conses, then the outlined `barrier_needs_heap`): a
@@ -1145,9 +1147,10 @@ fn barrier_gate(owner: TaggedValue) -> bool {
     }
     // SAFETY: a non-cons heap value points at a live `GcHeader`-prefixed
     // object (arena, boxed, leaked static or mapped); only its `tenured`
-    // byte is read, which nothing writes outside the stop-the-world
-    // promotion.
-    !owner.is_cons() && unsafe { (*(addr as *const GcHeader)).tenured }
+    // byte (written only by the stop-the-world promotion) and its
+    // `remembered` byte (written only by `remember_owner`, on this thread)
+    // are read.
+    !owner.is_cons() && unsafe { GcHeader::needs_remembering(addr as *const GcHeader) }
 }
 
 /// The barrier's outlined part: build the record and ask the heap.
@@ -1159,6 +1162,8 @@ fn note_heap_write_slow(
     slot: Option<usize>,
     value: Option<TaggedValue>,
 ) {
+    #[cfg(test)]
+    BARRIER_SLOW_CALLS.with(|calls| calls.set(calls.get() + 1));
     let record = HeapWriteRecord {
         owner,
         kind,
