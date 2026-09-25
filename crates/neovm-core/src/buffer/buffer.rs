@@ -4276,6 +4276,20 @@ impl Buffer {
         let z = self.text.char_count().get() as i64;
         self.text
             .note_changed_char_region(range.start().get() as i64, range.end().get() as i64, z);
+        // GNU's `modify_text_properties` never runs for an empty range
+        // (`put-text-property` returns first), so neither does its shifted
+        // `BEG_UNCHANGED` accounting.
+        if range.start() < range.end() {
+            self.text
+                .note_changed_property_start(range.start().get() as i64);
+        }
+    }
+
+    /// GNU `BEG_UNCHANGED` for this buffer: the unchanged-prefix char count
+    /// with property changes shifted one char earlier, as GNU's
+    /// `text_outside_line_unchanged_p` sees it. `None` when nothing changed.
+    pub fn gnu_beg_unchanged(&self) -> Option<i64> {
+        self.text.gnu_beg_unchanged()
     }
 
     pub fn save_modified_tick(&self) -> i64 {

@@ -806,6 +806,15 @@ pub struct LayoutEngine {
     /// span is the keystroke's damage, not the jit-lock chunk the
     /// fontification pass is about to rewrite. Keyed by buffer id.
     pre_fontify_dirty_spans: rustc_hash::FxHashMap<u64, Option<(i64, i64)>>,
+    /// GNU `BEG_UNCHANGED` per dirty buffer, snapshotted with
+    /// [`Self::pre_fontify_dirty_spans`]: the same prefix, but with property
+    /// changes counted one char early (textprop.c:87). Only the mode-line
+    /// gate (`NEOMACS_MODE_LINE_GATE=gnu`) reads it.
+    pre_fontify_gnu_beg_unchanged: rustc_hash::FxHashMap<u64, i64>,
+    /// GNU `consider_all_windows_p` as `bset_redisplay` raises it for this
+    /// frame: a buffer changed that a non-selected window shows, or that two
+    /// windows show (xdisp.c:886-898). Computed in Phase A.
+    frame_other_windows_changed: bool,
     /// Phase 3 below-reuse switch (default true). The localized edit fast path
     /// reuses the rows BELOW the dirty span too (charpos-shifted, same pixel_y),
     /// relaying ONLY the edited line — but ONLY for a simple insert that provably
@@ -1366,6 +1375,8 @@ impl LayoutEngine {
             scroll_window_ids: rustc_hash::FxHashMap::default(),
             edit_window_ids: rustc_hash::FxHashMap::default(),
             pre_fontify_dirty_spans: rustc_hash::FxHashMap::default(),
+            pre_fontify_gnu_beg_unchanged: rustc_hash::FxHashMap::default(),
+            frame_other_windows_changed: false,
             allow_below_reuse: true,
             layout_stats: LayoutStats::default(),
         }
@@ -1396,6 +1407,8 @@ impl LayoutEngine {
             scroll_window_ids: rustc_hash::FxHashMap::default(),
             edit_window_ids: rustc_hash::FxHashMap::default(),
             pre_fontify_dirty_spans: rustc_hash::FxHashMap::default(),
+            pre_fontify_gnu_beg_unchanged: rustc_hash::FxHashMap::default(),
+            frame_other_windows_changed: false,
             allow_below_reuse: true,
             layout_stats: LayoutStats::default(),
         }
@@ -1820,14 +1833,42 @@ impl LayoutEngine {
             // the span repaints via jit-lock's deferred contextual pass
             // (jit-lock-context-timer), same as GNU.
             self.pre_fontify_dirty_spans.clear();
+            self.pre_fontify_gnu_beg_unchanged.clear();
             for params in &window_params_list {
                 let buf_id = neovm_core::buffer::BufferId(params.buffer_id);
                 if let Some(buffer) = evaluator.buffer_manager().get(buf_id) {
                     self.pre_fontify_dirty_spans
                         .entry(params.buffer_id)
                         .or_insert_with(|| buffer.changed_char_range());
+                    if let Some(beg) = buffer.gnu_beg_unchanged() {
+                        self.pre_fontify_gnu_beg_unchanged
+                            .insert(params.buffer_id, beg);
+                    }
                 }
             }
+            // `bset_redisplay` (xdisp.c:886-898) turns any change to a buffer
+            // shown in a non-selected window, or in two windows, into
+            // `windows_or_buffers_changed`, which disables GNU's one-line
+            // optimization for the whole redisplay. The mini-window is left
+            // out: echo-area text reaches it through `echo_area_display`.
+            self.frame_other_windows_changed = window_params_list
+                .iter()
+                .filter(|params| !params.is_minibuffer())
+                .any(|params| {
+                    let dirty = self
+                        .pre_fontify_dirty_spans
+                        .get(&params.buffer_id)
+                        .is_some_and(Option::is_some);
+                    dirty
+                        && (!params.selected
+                            || window_params_list
+                                .iter()
+                                .filter(|other| {
+                                    !other.is_minibuffer() && other.buffer_id == params.buffer_id
+                                })
+                                .count()
+                                > 1)
+                });
 
             self.reset_frame_attempt_state();
             let mut face_attempt = committed_face_arena.begin_attempt();
@@ -3391,25 +3432,88 @@ impl LayoutEngine {
             }
             return None;
         };
-        if prev.chrome_reusable_after_edit(
-            &replay,
-            damage,
-            chrome_reuse_context(params, evaluator),
-            |from, to| {
-                (from.max(0)..to.max(0)).any(|cp| {
-                    let byte = buffer.char_pos_to_emacs_byte_pos_clamped(
-                        neovm_core::buffer::CharPos0::new(cp as usize),
-                    );
-                    buffer.char_at_emacs_byte_pos(byte) == Some('\n')
-                })
-            },
-        ) && let Some(chrome) = prev.retained_chrome()
-        {
+        let keep_chrome = match crate::incremental_layout::mode_line_gate::mode_line_gate() {
+            crate::incremental_layout::mode_line_gate::ModeLineGate::Legacy => prev
+                .chrome_reusable_after_edit(
+                    &replay,
+                    damage,
+                    chrome_reuse_context(params, evaluator),
+                    |from, to| {
+                        (from.max(0)..to.max(0)).any(|cp| {
+                            let byte = buffer.char_pos_to_emacs_byte_pos_clamped(
+                                neovm_core::buffer::CharPos0::new(cp as usize),
+                            );
+                            buffer.char_at_emacs_byte_pos(byte) == Some('\n')
+                        })
+                    },
+                ),
+            crate::incremental_layout::mode_line_gate::ModeLineGate::Gnu => {
+                self.gnu_edit_chrome_decision(prev, &curr_key, &mut replay, params, evaluator)
+            }
+        };
+        if keep_chrome && let Some(chrome) = prev.retained_chrome() {
             crate::neovm_bridge::CHROME_ROWS_REUSED
                 .fetch_add(chrome.rows.len(), std::sync::atomic::Ordering::Relaxed);
             replay.chrome = Some(chrome);
+        } else {
+            replay.one_line_contract = None;
         }
         Some(replay)
+    }
+
+    /// `NEOMACS_MODE_LINE_GATE=gnu`: GNU's optimization-1 decision for an
+    /// edit replay's chrome. On a keep, the replay carries the post-walk
+    /// contract the render must verify before the retained chrome stands.
+    #[cold]
+    #[inline(never)]
+    fn gnu_edit_chrome_decision(
+        &self,
+        prev: &RetainedWindowMatrix,
+        curr_key: &RetainedWindowKey,
+        replay: &mut ScrollReplay,
+        params: &WindowParams,
+        evaluator: &neovm_core::emacs_core::Context,
+    ) -> bool {
+        use crate::incremental_layout::mode_line_gate::{
+            EditFrameFacts, ModeLineDecision, decide_edit_chrome,
+        };
+        let Some(buffer) = evaluator
+            .buffer_manager()
+            .get(neovm_core::buffer::BufferId(params.buffer_id))
+        else {
+            return false;
+        };
+        let Some((dirty_start, dirty_end)) = self
+            .pre_fontify_dirty_spans
+            .get(&params.buffer_id)
+            .copied()
+            .flatten()
+        else {
+            return false;
+        };
+        let beg_unchanged = self
+            .pre_fontify_gnu_beg_unchanged
+            .get(&params.buffer_id)
+            .copied()
+            .unwrap_or(dirty_start);
+        let frame = EditFrameFacts {
+            chrome: chrome_reuse_context(params, evaluator),
+            selected: params.selected,
+            shows_current_buffer: evaluator.buffer_manager().current_buffer_id()
+                == Some(neovm_core::buffer::BufferId(params.buffer_id)),
+            other_windows_changed: self.frame_other_windows_changed,
+            beg_unchanged,
+            dirty_end,
+        };
+        let decision = decide_edit_chrome(prev, curr_key, replay, frame, buffer);
+        tracing::debug!(window = params.window_id, ?decision, "mode-line gate (gnu)");
+        match decision {
+            ModeLineDecision::KeepRetained(contract) => {
+                replay.one_line_contract = Some(contract);
+                true
+            }
+            ModeLineDecision::Evaluate(_) => false,
+        }
     }
 
     #[allow(clippy::too_many_arguments)]

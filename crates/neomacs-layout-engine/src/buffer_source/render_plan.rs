@@ -1153,6 +1153,27 @@ impl BufferSourceOutputSetup {
             // own row may re-install the retained chrome, while a genuine scroll
             // never may (its `%p` moved). The discriminator is in
             // `RetainedWindowMatrix::chrome_reusable_after_edit`.
+            //
+            // Under `NEOMACS_MODE_LINE_GATE=gnu` the plan-time decision is only
+            // half of GNU's: optimization 1 also requires `display_line` to
+            // produce the line it expected (xdisp.c:17678-17690), else `goto
+            // cancel` and the full redisplay draws the mode line.
+            let retained_chrome = match (retained_chrome, scroll.one_line_contract) {
+                (Some(chrome), Some(contract))
+                    if !contract
+                        .holds_for(output.builder().current_window_row(contract.row_index)) =>
+                {
+                    tracing::debug!(
+                        window = params.window_id,
+                        reason = ?crate::incremental_layout::mode_line_gate::ModeLineEvaluateReason::LineChanged,
+                        "mode-line gate (gnu): the walked line broke optimization 1"
+                    );
+                    crate::neovm_bridge::CHROME_ROWS_REUSED
+                        .fetch_sub(chrome.rows.len(), std::sync::atomic::Ordering::Relaxed);
+                    None
+                }
+                (chrome, _) => chrome,
+            };
             let freshness_before_chrome =
                 match freshness_before_window_chrome(evaluator, publish_request.frame_id(), params)
                 {

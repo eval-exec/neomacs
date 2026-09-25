@@ -4,6 +4,8 @@ use crate::buffer::{CharRange, LispCharPos1};
 use crate::emacs_core::value::ValueKind;
 use crate::heap_types::{LispString, OverlayData};
 
+mod gnu_beg_unchanged_test;
+
 #[test]
 fn forwarded_slot_predicates_are_closed_typed_contracts() {
     use BufferSlotPredicate::{

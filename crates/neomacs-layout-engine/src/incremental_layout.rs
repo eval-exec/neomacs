@@ -31,6 +31,8 @@ use neomacs_display_protocol::types::Rect;
 use neovm_core::buffer::position::LispCharPos1;
 use neovm_core::window::{DisplayPointSnapshot, DisplayRowSnapshot};
 
+pub(crate) mod mode_line_gate;
+
 /// How a window's layout was produced this cycle.
 ///
 /// Phase 0a only ever produces [`LayoutClass::Full`]; the classifier that
@@ -645,6 +647,11 @@ pub struct ScrollReplay {
     /// `None` when the chrome must be regenerated. Filled by the engine, which
     /// owns the dirty flags; the builders always produce `None`.
     pub chrome: Option<RetainedChrome>,
+    /// `NEOMACS_MODE_LINE_GATE=gnu`: what the walked cursor line must look
+    /// like for the retained `chrome` to stand (GNU's `display_line` result
+    /// checks for optimization 1). The render drops the chrome and evaluates
+    /// the mode line when the walk breaks it. `None` = no post-walk check.
+    pub(crate) one_line_contract: Option<mode_line_gate::OneLineContract>,
     /// Sealed frame-face generation that owns every ID in `reused_rows`.
     pub(crate) face_generation: FrameFaceGeneration,
 }
@@ -1241,6 +1248,7 @@ impl RetainedWindowMatrix {
             bound_walk: false,
             expected_walk: None,
             chrome: None,
+            one_line_contract: None,
             face_generation: self.face_generation,
         })
     }
@@ -1602,6 +1610,7 @@ impl RetainedWindowMatrix {
                         row_count: span_count,
                     }),
                     chrome: None,
+                    one_line_contract: None,
                     face_generation: self.face_generation,
                 });
             }
@@ -1626,6 +1635,7 @@ impl RetainedWindowMatrix {
             bound_walk: false,
             expected_walk: None,
             chrome: None,
+            one_line_contract: None,
             face_generation: self.face_generation,
         })
     }

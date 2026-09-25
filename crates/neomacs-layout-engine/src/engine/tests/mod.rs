@@ -36,6 +36,7 @@ mod display_motion;
 #[path = "../../engine_layout_validity_test.rs"]
 mod layout_validity;
 mod mini_window_still_test;
+mod mode_line_gate_engine_test;
 mod text_snapshot_cow_test;
 
 fn test_image_load(id: u32) -> neomacs_display_protocol::ImageLoadToken {

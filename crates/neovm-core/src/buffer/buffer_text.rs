@@ -268,6 +268,18 @@ struct BufferTextStorage {
     beg_unchanged: i64,
     /// GNU `END_UNCHANGED` analog: chars at the buffer END unchanged since ack.
     end_unchanged: i64,
+    /// The start of the earliest TEXT-PROPERTY change since the ack, as a
+    /// char count from the buffer start (`i64::MAX` = none). GNU records a
+    /// property change over `[b, e)` as starting one char EARLIER
+    /// (`modify_text_properties` runs `BUF_COMPUTE_UNCHANGED (buf, b - 1, e)`,
+    /// textprop.c:87), and that one char is what makes a jit-lock
+    /// `fontified nil` write from the start of the line fail
+    /// `text_outside_line_unchanged_p` -- i.e. what decides whether GNU's
+    /// one-line optimization redraws the mode line. `beg_unchanged` above
+    /// deliberately does not apply the shift (the layout engine widens by its
+    /// own box-topology lookbehind); this field lets the mode-line gate
+    /// reproduce GNU's accounting exactly.
+    prop_beg_unchanged: i64,
     save_modified_tick: i64,
     /// Copy-on-write text-property table. Shared via `Rc` so a layout snapshot
     /// (`BufferText::clone` / `Buffer::text_snapshot`, taken every redisplay)
@@ -463,6 +475,7 @@ impl Clone for BufferTextStorage {
             props_modified_tick: self.props_modified_tick,
             beg_unchanged: self.beg_unchanged,
             end_unchanged: self.end_unchanged,
+            prop_beg_unchanged: self.prop_beg_unchanged,
             save_modified_tick: self.save_modified_tick,
             text_props: self.text_props.clone(),
             // Chain head intentionally not cloned: chain pointers are unique
@@ -542,6 +555,7 @@ impl BufferText {
                 props_modified_tick: 1,
                 beg_unchanged: i64::MAX,
                 end_unchanged: i64::MAX,
+                prop_beg_unchanged: i64::MAX,
                 save_modified_tick: 1,
                 text_props: Rc::new(TextPropertyTable::new()),
                 markers_head: std::ptr::null_mut(),
@@ -1463,6 +1477,14 @@ impl BufferText {
         storage.end_unchanged = storage.end_unchanged.min((old_z - end).max(0));
     }
 
+    /// Record the start of a non-empty text-PROPERTY change for the GNU
+    /// `BEG_UNCHANGED` accounting (see `prop_beg_unchanged`). The caller also
+    /// folds the change into the ordinary accumulator.
+    pub fn note_changed_property_start(&self, start: i64) {
+        let mut storage = self.storage.borrow_mut();
+        storage.prop_beg_unchanged = storage.prop_beg_unchanged.min(start.max(0));
+    }
+
     /// Reset the unchanged-region accumulator to "fully unchanged" — the
     /// redisplay ack, performed at the committed (accepted) layout break, NOT on
     /// a retry/`continue` (which would under-invalidate, spec §6).
@@ -1470,6 +1492,23 @@ impl BufferText {
         let mut storage = self.storage.borrow_mut();
         storage.beg_unchanged = i64::MAX;
         storage.end_unchanged = i64::MAX;
+        storage.prop_beg_unchanged = i64::MAX;
+    }
+
+    /// GNU's `BEG_UNCHANGED` as a char count, with property changes counted
+    /// from one char before their start exactly as `modify_text_properties`
+    /// does (textprop.c:87). `None` when nothing changed since the ack.
+    pub fn gnu_beg_unchanged(&self) -> Option<i64> {
+        let storage = self.storage.borrow();
+        if storage.beg_unchanged == i64::MAX && storage.end_unchanged == i64::MAX {
+            return None;
+        }
+        let props = if storage.prop_beg_unchanged == i64::MAX {
+            i64::MAX
+        } else {
+            (storage.prop_beg_unchanged - 1).max(0)
+        };
+        Some(storage.beg_unchanged.min(props))
     }
 
     /// The accumulated dirty char range `[beg, end)` since the last ack, or

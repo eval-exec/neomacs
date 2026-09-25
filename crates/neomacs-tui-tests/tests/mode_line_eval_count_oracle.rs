@@ -13,8 +13,9 @@
 //! Both editors run the same probe on a 40x120 pty and exit; batch mode has
 //! no redisplay and cannot answer this.
 //!
-//! Today's gate is pinned with the divergences it is known to have, so a
-//! change shows up here.
+//! The comparison runs under `NEOMACS_MODE_LINE_GATE=gnu`. The default
+//! (`legacy`) gate is pinned separately with the divergences it is known to
+//! have, so a change to either shows up here.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -123,9 +124,20 @@ fn neomacs_counts(gate: &str) -> String {
     run_probe("Neomacs", program, &[], &[("NEOMACS_MODE_LINE_GATE", gate)])
 }
 
-/// Today's divergences, recorded so that a change is visible: at the end of
-/// the buffer GNU keeps the mode line on the delete (and with font-lock off
-/// on both halves of the cycle); neomacs evaluates.
+#[test]
+fn mode_line_eval_counts_match_gnu_under_the_gnu_gate() {
+    let gnu = gnu_counts();
+    let neo = neomacs_counts("gnu");
+    assert_eq!(
+        neo, gnu,
+        "mode-line :eval counts diverge from GNU\nGNU:\n{gnu}\nNeomacs:\n{neo}"
+    );
+}
+
+/// The default (`legacy`) gate's divergences, recorded so that a change is
+/// visible: at the end of the buffer GNU keeps the mode line on the delete
+/// (and with font-lock off on both halves of the cycle); the legacy gate
+/// evaluates.
 #[test]
 fn mode_line_eval_counts_under_the_legacy_gate_diverge_only_where_recorded() {
     let gnu = gnu_counts();

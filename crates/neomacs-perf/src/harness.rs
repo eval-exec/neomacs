@@ -1418,6 +1418,9 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     "NEOMACS_LAYOUT_MINI_STILL",
     // The visible automatic-composition scan's ASCII fast path and memo: `on`.
     "NEOMACS_COMPOSITION_FASTPATH",
+    // P3.5 U3.7. An edit frame's mode line by GNU's optimization-1 guard:
+    // `legacy` (default) or `gnu`.
+    "NEOMACS_MODE_LINE_GATE",
     // U2.8 builtin front-end diets: `=off` restores the general search,
     // syntax and text-property paths for a same-binary board A/B.
     "NEOVM_BUILTIN_FRONTEND",
