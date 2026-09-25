@@ -212,3 +212,34 @@ fn only_bodies_that_can_reenter_lisp_are_guarded() {
     }
     assert!(!super::stack_guard::body_may_reenter_lisp(&pure.ops));
 }
+
+/// T11 under the register leaf ABI (`reg_abi`, S2.1a): a body with no `out`
+/// word compares its stack pointer instead, parks `aux` and its argument
+/// registers across the measuring call, and signals the same error; a
+/// stale limit still measures and runs the leaf.
+#[test]
+fn the_register_abi_entry_guard_signals_and_measures_like_the_memory_one() {
+    crate::test_utils::init_test_tracing();
+    force_register_abi_for_test(Some(true));
+    let mut ev = crate::test_utils::runtime_startup_context();
+    let guards = stack_guards_emitted_for_test();
+    warm_deep(&mut ev);
+    assert!(stack_guards_emitted_for_test() > guards, "guarded");
+    let sym = crate::emacs_core::intern::intern("neovm--sg-deep");
+    let f = ev.obarray.symbol_function_id(sym).expect("defined");
+    let id = f
+        .get_bytecode_data()
+        .expect("byte-code")
+        .jit_runtime()
+        .compiled_id_or_assign();
+    let leaf = crate::emacs_core::jit::cache::compiled_leaf_ptr_for_test(id).expect("compiled");
+    // SAFETY: a cached leaf, alive while the cache holds it.
+    assert_eq!(unsafe { (*leaf).abi }, LeafAbi::Register { arity: 1 });
+    assert_eq!(recurse_without_depth_limit(&mut ev), OVERFLOW);
+    still_runs(&mut ev);
+    ev.jit_stack_limit = usize::MAX;
+    let v = ev.eval_str("(neovm--sg-deep 1000)").expect("runs");
+    assert_eq!(print_value(&v), "1000");
+    ev.refresh_jit_stack_limit();
+    force_register_abi_for_test(None);
+}

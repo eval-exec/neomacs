@@ -12,19 +12,20 @@
 //! The test compares the leaf's `out` pointer -- the result slot of its
 //! caller, a word of the calling frame for every native caller -- against
 //! `Context::jit_stack_limit`: a load, a compare and a branch, where reading
-//! the stack pointer would add a move. The cold side calls
+//! the stack pointer would add a move. A register-ABI body (`reg_abi`) has
+//! no `out` word and compares its stack pointer. The cold side calls
 //! `neovm_jit_stack_check`, which measures the real stack: exhausted, the
 //! error is stashed and the leaf returns `STATUS_SIGNAL`; otherwise the
 //! limit names another segment (or `out` is not on this stack), and the
 //! leaf runs.
 
-use super::Shim;
 use super::lowering::RtCtx;
+use super::{LeafAbi, Shim};
 use crate::emacs_core::bytecode::Op;
 use crate::emacs_core::eval::Context;
 use cranelift_codegen::ir::Value as ClifValue;
 use cranelift_codegen::ir::condcodes::IntCC;
-use cranelift_codegen::ir::{BlockArg, InstBuilder, MemFlagsData, types};
+use cranelift_codegen::ir::{BlockArg, InstBuilder, MemFlagsData};
 use cranelift_frontend::FunctionBuilder;
 
 /// Whether `op` can run arbitrary Lisp, and so continue a recursion: a call,
@@ -58,36 +59,49 @@ pub(crate) fn ctx_stack_limit_offset() -> i32 {
 }
 
 /// Byte offset of [`Context::jit_stack_scratch`], where the guard's cold
-/// side parks the entry parameters across its call.
+/// side parks the entry parameters after the vmctx across its call.
 pub(crate) fn ctx_stack_scratch_offset() -> i32 {
     core::mem::offset_of!(Context, jit_stack_scratch) as i32
 }
 
 /// Emit the guard as the first code of the entry block, whose parameters
-/// are `params` (`vmctx, args, out, sidecar`), and leave the builder in the
-/// body block that follows it. Returns the body block's parameters, the same
-/// four values, for the rest of the entry code to use.
+/// are `params` (`vmctx, args, out, sidecar` for the memory ABI; `vmctx,
+/// aux, a0..` for the register ABI), and leave the builder in the body block
+/// that follows it. Returns the body block's parameters, the same values, for
+/// the rest of the entry code to use.
 ///
-/// Below the limit the cold side parks `args, out, sidecar` in the
-/// Context's scratch words, calls `neovm_jit_stack_check`, and on its
-/// go-ahead (the vmctx back) reloads them into the body, so no value lives
-/// across the call and the hot path keeps the entry registers; on null (the
-/// error stashed) it returns `STATUS_SIGNAL`. The shim runs no Lisp and no
-/// compiled code, so nothing else writes the scratch words meanwhile.
+/// The memory ABI compares its `out` pointer, a word of the calling frame;
+/// the register ABI has none and compares the stack pointer, a little lower
+/// (a slightly earlier signal, never a later one). Below the limit the cold
+/// side parks the parameters after `vmctx` in the Context's scratch words,
+/// calls `neovm_jit_stack_check`, and on its go-ahead (the vmctx back)
+/// reloads them into the body, so no value lives across the call and the
+/// hot path keeps the entry registers; on null (the error stashed) it
+/// returns `STATUS_SIGNAL`. The shim runs no Lisp and no compiled code, so
+/// nothing else writes the scratch words meanwhile.
 pub(crate) fn emit_entry_stack_guard(
     fb: &mut FunctionBuilder,
     rt: &RtCtx,
-    params: [ClifValue; 4],
-) -> [ClifValue; 4] {
+    abi: LeafAbi,
+    params: &[ClifValue],
+) -> Vec<ClifValue> {
     #[cfg(any(test, debug_assertions))]
     STACK_GUARDS_EMITTED.with(|c| c.set(c.get() + 1));
-    let [vmctx, _, out_ptr, _] = params;
+    debug_assert!(
+        params.len() <= 1 + crate::emacs_core::eval::native_stack::JIT_STACK_SCRATCH_WORDS,
+        "the scratch holds every parameter after the vmctx"
+    );
+    let vmctx = params[0];
     let ptr_ty = rt.ptr_ty;
     let trusted = MemFlagsData::trusted();
     let limit = fb
         .ins()
         .load(ptr_ty, trusted, vmctx, ctx_stack_limit_offset());
-    let low = fb.ins().icmp(IntCC::UnsignedLessThan, out_ptr, limit);
+    let probe = match abi {
+        LeafAbi::Memory => params[2],
+        LeafAbi::Register { .. } => fb.ins().get_stack_pointer(ptr_ty),
+    };
+    let low = fb.ins().icmp(IntCC::UnsignedLessThan, probe, limit);
     let check = fb.create_block();
     let body = fb.create_block();
     for _ in 0..params.len() {
@@ -112,8 +126,7 @@ pub(crate) fn emit_entry_stack_guard(
     fb.ins().brif(resumed_ctx, resume, &[], fail, &[]);
     fb.switch_to_block(fail);
     fb.seal_block(fail);
-    let signal = fb.ins().iconst(types::I64, super::STATUS_SIGNAL);
-    fb.ins().return_(&[signal]);
+    super::reg_abi::emit_leaf_return(fb, abi, None, None, super::STATUS_SIGNAL);
     fb.switch_to_block(resume);
     fb.seal_block(resume);
     let mut cold: Vec<BlockArg> = vec![BlockArg::Value(resumed_ctx)];
@@ -126,8 +139,7 @@ pub(crate) fn emit_entry_stack_guard(
     fb.ins().jump(body, &cold);
     fb.switch_to_block(body);
     fb.seal_block(body);
-    let p = fb.block_params(body);
-    [p[0], p[1], p[2], p[3]]
+    fb.block_params(body).to_vec()
 }
 
 #[cfg(any(test, debug_assertions))]

@@ -194,8 +194,10 @@ impl ClifBlock<'_> {
             .insts
             .iter()
             .find_map(|line| line.trim().strip_prefix("return "))?;
-        // `return v11  ; v11 = 2`: the value is the first token.
-        let value = ret.split_whitespace().next()?;
+        // `return v11  ; v11 = 2`: the status is the last returned word,
+        // under either entry ABI (the register ABI returns `value, status`).
+        let ret = ret.split(';').next()?;
+        let value = ret.rsplit(',').next()?.trim();
         self.insts.iter().find_map(|line| {
             let (lhs, rhs) = line.trim().split_once(" = ")?;
             (lhs == value)

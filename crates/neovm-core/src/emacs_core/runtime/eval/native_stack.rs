@@ -47,6 +47,11 @@ use super::Context;
 /// segments only below 128 KiB.
 pub(crate) const JIT_STACK_RED_ZONE: usize = 1024 * 1024;
 
+/// Words of [`Context::jit_stack_scratch`]: an entry's parameters after the
+/// vmctx, the memory ABI's three (`args`, `out`, `sidecar`) or the register
+/// ABI's `aux` and up to six arguments.
+pub(crate) const JIT_STACK_SCRATCH_WORDS: usize = 7;
+
 /// The [`Context::jit_stack_limit`] for the stack segment the calling thread
 /// runs on now: the segment's low end plus [`JIT_STACK_RED_ZONE`], or 0 when
 /// stacker cannot tell the segment's bounds (no guard; never a false signal).

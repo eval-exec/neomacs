@@ -3476,6 +3476,7 @@ pub fn lower_leaf_full_osr(
     // (`spec_slots`/`deopt_*`/`reloc_data`) are owned here, threaded in by
     // reference so their baked addresses stay stable, and moved into the
     // returned `CompiledLeaf` below.
+    let abi = LeafAbi::for_build(/*aot=*/ false, osr_pc.is_some(), arity);
     let defined = shared::define_jit_leaf(/*per_leaf_shims=*/ true, |sink| {
         build_leaf_fn(
             sink,
@@ -3499,6 +3500,7 @@ pub fn lower_leaf_full_osr(
             osr_pc,
             dynamic_prefix,
             obs.entry_counter(),
+            abi,
         )
     })?;
     let entry = defined.entry;
@@ -3564,6 +3566,7 @@ pub fn lower_leaf_full_osr(
         compiled_level: crate::emacs_core::jit::ReoptLevel::Speculative,
         retired: core::cell::Cell::new(false),
         spec_slot_kinds,
+        abi,
         entry,
         _backing: defined.backing,
     })
@@ -3667,7 +3670,8 @@ pub(crate) fn build_baseline_leaf_object<S: LeafSink>(
         Linkage::Export,
         /*osr_pc=*/ None, // OSR is JIT-only
         /*dynamic_prefix=*/ 0, // AOT never targets a patched source
-        /*entry_counter=*/ None, // AOT code never counts entries
+        /*entry_counter=*/ None,            // AOT code never counts entries
+        LeafAbi::Memory, // AOT keeps the memory ABI
     )?;
     Ok(BaselineAotMeta {
         arity,
@@ -3752,7 +3756,14 @@ fn build_leaf_fn<S: LeafSink>(
     // leaf's `LeafObs::entries` cell, incremented first thing in the entry
     // block (`lowering::emit_entry_count`). `None` = no counter at all.
     entry_counter: Option<&core::cell::Cell<u64>>,
+    // The entry's shape (`reg_abi`): the memory ABI for AOT and OSR, the
+    // register ABI for an eligible JIT body when the knob is on.
+    abi: LeafAbi,
 ) -> Result<cranelift_module::FuncId, CompileError> {
+    debug_assert!(
+        abi == LeafAbi::Memory || (!aot && osr_pc.is_none()),
+        "AOT and OSR entries keep the memory ABI"
+    );
     let variable_raw = uniform_raw_osr_slots(cfg, known_fixnum_slots, osr_pc);
     let has_raw_slots = variable_raw.iter().any(|&raw| raw);
     lowering::imm_pool_reset();
@@ -3771,13 +3782,10 @@ fn build_leaf_fn<S: LeafSink>(
     // `take_pending_flow`). `vmctx` is only used by runtime-call shims.
     // Unified 4-param entry ABI: fn(vmctx, args, out, sidecar) -> status (see
     // build_mir_leaf_fn). JIT (`aot=false`) declares but ignores `sidecar` (bases
-    // stay `iconst`); AOT (`aot=true`) reads its reloc/deopt bases from it.
-    let mut sig = Signature::new(call_conv);
-    sig.params.push(AbiParam::new(ptr_ty)); // vmctx
-    sig.params.push(AbiParam::new(ptr_ty)); // args
-    sig.params.push(AbiParam::new(ptr_ty)); // out
-    sig.params.push(AbiParam::new(ptr_ty)); // sidecar (*const LeafSidecar)
-    sig.returns.push(AbiParam::new(types::I64));
+    // stay `iconst`); AOT (`aot=true`) reads its reloc/deopt bases from it. The
+    // register ABI (`reg_abi`) takes the arguments as parameters instead and
+    // returns (value, status).
+    let sig = abi.signature(call_conv, ptr_ty);
 
     let mut func = Function::with_name_signature(UserFuncName::user(0, 0), sig.clone());
     let mut fbctx = sink.take_builder_context();
@@ -3885,10 +3893,7 @@ fn build_leaf_fn<S: LeafSink>(
             debug_assert!(!aot, "AOT code never counts entries");
             lowering::emit_entry_count(&mut fb, ptr_ty, counter);
         }
-        let entry_params = {
-            let p = fb.block_params(entry);
-            [p[0], p[1], p[2], p[3]]
-        };
+        let entry_params = fb.block_params(entry).to_vec();
         // A function entry that can re-enter Lisp signals "Bytecode stack
         // overflow" before the native stack runs out (`stack_guard`); the
         // rest of the entry code then runs in the block after the guard, on
@@ -3896,11 +3901,22 @@ fn build_leaf_fn<S: LeafSink>(
         // interpreter frame it continues was entered through a probed path.
         let entry_params = match rt.as_ref() {
             Some(rt) if osr_pc.is_none() && stack_guard::body_may_reenter_lisp(ops) => {
-                stack_guard::emit_entry_stack_guard(&mut fb, rt, entry_params)
+                stack_guard::emit_entry_stack_guard(&mut fb, rt, abi, &entry_params)
             }
             _ => entry_params,
         };
-        let [vmctx_param, args_ptr, out_ptr, fourth_param] = entry_params;
+        // Memory: `[vmctx, args, out, sidecar]`. Register: `[vmctx, aux,
+        // a0..]`, `aux` taking the sidecar word's place (a JIT body reads it
+        // only as its callee constant base) and no `args`/`out` at all.
+        let (vmctx_param, args_ptr, out_ptr, fourth_param) = match abi {
+            LeafAbi::Memory => (
+                entry_params[0],
+                Some(entry_params[1]),
+                Some(entry_params[2]),
+                entry_params[3],
+            ),
+            LeafAbi::Register { .. } => (entry_params[0], None, None, entry_params[1]),
+        };
         // R2-E: the 4th entry param (the per-thread `*const LeafSidecar`). Read only
         // in AOT mode; JIT ignores it. The entry block dominates every block, so a
         // base materialized here is valid in any (incl. cold deopt) block.
@@ -4013,7 +4029,9 @@ fn build_leaf_fn<S: LeafSink>(
                 );
             }
         }
-        fb.def_var(out_var, out_ptr);
+        if let Some(out_ptr) = out_ptr {
+            fb.def_var(out_var, out_ptr);
+        }
         if let Some(slot) = backedge_counter {
             // The interpreter starts quitcounter at 1.
             let one = fb.ins().iconst(types::I64, 1);
@@ -4028,12 +4046,16 @@ fn build_leaf_fn<S: LeafSink>(
             None => (arity, block_for[&0]),
         };
         for (i, var) in vars.iter().take(seed_count).enumerate() {
-            let v = fb.ins().load(
-                types::I64,
-                MemFlagsData::trusted(),
-                args_ptr,
-                (i * 8) as i32,
-            );
+            let v = match args_ptr {
+                Some(args_ptr) => fb.ins().load(
+                    types::I64,
+                    MemFlagsData::trusted(),
+                    args_ptr,
+                    (i * 8) as i32,
+                ),
+                // Register ABI: the arguments are the entry's parameters.
+                None => entry_params[2 + i],
+            };
             fb.def_var(*var, v);
         }
         // A live OSR snapshot is an additional predecessor of the header.
@@ -4072,7 +4094,7 @@ fn build_leaf_fn<S: LeafSink>(
             }
         }
         // An OSR entry snapshot is all tagged: no flonum crosses an edge.
-        emit_pending_deopts(&mut fb, deopt_refs, &mut entry_deopts, None);
+        emit_pending_deopts(&mut fb, deopt_refs, &mut entry_deopts, None, abi);
 
         for (leader_index, &l) in cfg.leaders.iter().enumerate() {
             let blk = block_for[&l];
@@ -4200,10 +4222,8 @@ fn build_leaf_fn<S: LeafSink>(
                 match op {
                     Op::Return => {
                         let result = stack.pop().ok_or(CompileError::StackUnderflow)?;
-                        let out = fb.use_var(out_var);
-                        fb.ins().store(MemFlagsData::trusted(), result, out, 0);
-                        let one = fb.ins().iconst(types::I64, 1);
-                        fb.ins().return_(&[one]);
+                        let out = out_ptr.map(|_| fb.use_var(out_var));
+                        reg_abi::emit_leaf_return(&mut fb, abi, out, Some(result), STATUS_OK);
                         terminated = true;
                         break;
                     }
@@ -4597,6 +4617,7 @@ fn build_leaf_fn<S: LeafSink>(
                 deopt_refs,
                 &mut pending_deopt,
                 rt.as_ref().map(|rt| &rt.refs),
+                abi,
             );
             // Fill the handler-dispatch blocks queued by this block's signal
             // sites (the builder can switch blocks now that it's terminated).
@@ -4617,8 +4638,7 @@ fn build_leaf_fn<S: LeafSink>(
         if let Some(sb) = signal_exit {
             fb.switch_to_block(sb);
             cold_exits::mark_exit_cold(&mut fb, sb, cold_exits::ColdExit::Signal);
-            let code = fb.ins().iconst(types::I64, STATUS_SIGNAL);
-            fb.ins().return_(&[code]);
+            reg_abi::emit_leaf_return(&mut fb, abi, None, None, STATUS_SIGNAL);
         }
 
         fb.seal_all_blocks();
@@ -4686,6 +4706,8 @@ mod dispatch;
 pub use dispatch::*;
 
 pub(crate) mod jit_layout;
+pub(crate) mod reg_abi;
+pub(crate) use reg_abi::LeafAbi;
 pub(crate) mod spec_slot;
 pub(crate) use spec_slot::{FAST_PATH_MAX_ARITY, SpecSlot, SpecSlotKind, spec_slot_kinds_of};
 pub(crate) mod stack_guard;

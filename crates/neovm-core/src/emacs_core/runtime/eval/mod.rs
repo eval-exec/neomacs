@@ -3479,9 +3479,9 @@ pub struct Context {
     /// can re-enter Lisp is entered, or 0 for no guard. Read by generated
     /// code via a compile-time field offset.
     pub(crate) jit_stack_limit: usize,
-    /// Where that guard's cold side parks a leaf's `args`, `out` and
-    /// `sidecar` entry parameters across its measuring call.
-    pub(crate) jit_stack_scratch: [usize; 3],
+    /// Where that guard's cold side parks a leaf's entry parameters after
+    /// the vmctx across its measuring call.
+    pub(crate) jit_stack_scratch: [usize; native_stack::JIT_STACK_SCRATCH_WORDS],
     /// Frame metadata for each active bytecode invocation.
     /// Each entry records where the frame's stack region starts in bc_buf
     /// and the function object (so GC can trace its constants).

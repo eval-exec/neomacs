@@ -603,6 +603,10 @@ pub struct CompiledLeaf {
     /// (`cache::collect_jit_reloc_gc_roots` walks the retired list).
     /// Never cleared: a retired leaf is never cached again.
     pub(crate) retired: Cell<bool>,
+    /// The entry's shape ([`LeafAbi`]): how every Rust caller passes the
+    /// arguments and takes the answer. AOT and OSR leaves are always
+    /// [`LeafAbi::Memory`].
+    pub(crate) abi: LeafAbi,
     // Field order matters for drop: `entry` points into `_backing`'s memory (the
     // JITModule's executable pages or the loaded `.so`'s code); keep `_backing`
     // alive — and dropped AFTER `entry` — as long as the handle exists.
@@ -851,6 +855,7 @@ impl CompiledLeaf {
             compiled_level: crate::emacs_core::jit::ReoptLevel::Speculative,
             retired: Cell::new(false),
             spec_slot_kinds,
+            abi: LeafAbi::Memory,
             entry,
             _backing: LeafBacking::Aot(backing),
         }
@@ -981,18 +986,36 @@ impl CompiledLeaf {
             self.dynamic_prefix == 0 || !consts.is_null(),
             "a dynamic-prefix leaf needs the callee's constant base"
         );
-        // SAFETY: `entry` is finalized native code with the 4-param entry ABI
-        // (see `invoke_native`); a JIT leaf reads the 4th param only as its
-        // callee constant base, and only when it has a dynamic prefix.
-        unsafe {
-            let f: extern "C" fn(*mut u8, *const i64, *mut i64, *const LeafSidecar) -> i64 =
-                core::mem::transmute(self.entry);
-            f(
-                vmctx,
-                args_ptr,
-                out as *mut i64,
-                consts as *const LeafSidecar,
-            )
+        match self.abi {
+            // SAFETY: `entry` is finalized native code with the 4-param entry
+            // ABI (see `invoke_native`); a JIT leaf reads the 4th param only as
+            // its callee constant base, and only when it has a dynamic prefix.
+            LeafAbi::Memory => unsafe {
+                let f: extern "C" fn(*mut u8, *const i64, *mut i64, *const LeafSidecar) -> i64 =
+                    core::mem::transmute(self.entry);
+                f(
+                    vmctx,
+                    args_ptr,
+                    out as *mut i64,
+                    consts as *const LeafSidecar,
+                )
+            },
+            LeafAbi::Register { arity } => {
+                // SAFETY: the register entry of exactly `arity` words, and
+                // `args_ptr` addresses them (the contract above); `aux` is
+                // the constant base, as the memory ABI's fourth word.
+                let ret = unsafe {
+                    super::reg_abi::call_register_entry(
+                        self.entry,
+                        arity,
+                        vmctx,
+                        consts.cast(),
+                        args_ptr,
+                    )
+                };
+                *out = ret.value;
+                ret.status
+            }
         }
     }
 
@@ -1170,10 +1193,28 @@ impl CompiledLeaf {
         // execution (including the cold exit tail below, which can run Lisp
         // unwind forms), so a `cache::clear()` under a live leaf asserts.
         let _native_depth = super::super::cache::NativeDepthGuard::enter();
-        let mut status = unsafe {
-            let f: extern "C" fn(*mut u8, *const i64, *mut i64, *const LeafSidecar) -> i64 =
-                core::mem::transmute(self.entry);
-            f(vmctx, args_ptr, &mut out as *mut i64, sidecar)
+        let mut status = match self.abi {
+            LeafAbi::Memory => unsafe {
+                let f: extern "C" fn(*mut u8, *const i64, *mut i64, *const LeafSidecar) -> i64 =
+                    core::mem::transmute(self.entry);
+                f(vmctx, args_ptr, &mut out as *mut i64, sidecar)
+            },
+            LeafAbi::Register { arity } => {
+                // SAFETY: a JIT leaf (no sidecar), so `sidecar` is the
+                // callee constant base, the register ABI's `aux`; the entry
+                // takes exactly `arity` words, which `args_ptr` addresses.
+                let ret = unsafe {
+                    super::reg_abi::call_register_entry(
+                        self.entry,
+                        arity,
+                        vmctx,
+                        sidecar.cast(),
+                        args_ptr,
+                    )
+                };
+                out = ret.value;
+                ret.status
+            }
         };
         CURRENT_LEAF_BASES.with(|b| b.set(outer_bases));
         // Sentinel discipline: a contained panic always routes the generated

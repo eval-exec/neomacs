@@ -654,3 +654,38 @@ pub(crate) fn jit_cold_exits() -> ColdExitsMode {
 pub(crate) fn jit_cold_exits_on() -> bool {
     jit_cold_exits() != ColdExitsMode::Off
 }
+
+#[cfg(test)]
+std::thread_local! {
+    static REG_ABI_TEST_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// Force the register leaf ABI on/off for compiles on the current thread
+/// (tests only); `None` returns to the environment's.
+#[cfg(test)]
+pub(crate) fn force_register_abi_for_test(on: Option<bool>) {
+    REG_ABI_TEST_OVERRIDE.with(|c| c.set(on));
+}
+
+fn knob_on(name: &str) -> bool {
+    matches!(
+        std::env::var(name).ok().as_deref(),
+        Some("1" | "on" | "true" | "yes")
+    )
+}
+
+/// JIT leaf bodies of at most `reg_abi::MAX_REG_ARGS` argument words take
+/// them in registers and return `(value, status)` (`reg_abi`, design
+/// `p1-1-direct-native-calls` §3.2). Default OFF; `NEOVM_JIT_REG_ABI=on`
+/// turns it on. Off, every entry keeps the memory ABI, CLIF-identical to
+/// the lowering before the register ABI existed: the single-build A/B. Read
+/// at compile time only.
+pub(crate) fn jit_register_abi_on() -> bool {
+    #[cfg(test)]
+    if let Some(on) = REG_ABI_TEST_OVERRIDE.with(|c| c.get()) {
+        return on;
+    }
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| knob_on("NEOVM_JIT_REG_ABI"))
+}

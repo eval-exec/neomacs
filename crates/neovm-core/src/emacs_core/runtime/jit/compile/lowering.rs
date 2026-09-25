@@ -2671,6 +2671,7 @@ pub(super) fn lower_mir_with_plan(
     // generated loads) stay stable and so the wrapper can move them into the
     // returned `CompiledLeaf`. A runtime-free body's own module registers no
     // shim symbols (it calls none).
+    let abi = super::LeafAbi::for_build(/*aot=*/ false, /*osr=*/ false, m.arity);
     let defined = super::shared::define_jit_leaf(plan.needs_rt, |sink| {
         build_mir_leaf_fn(
             sink,
@@ -2684,6 +2685,7 @@ pub(super) fn lower_mir_with_plan(
             Linkage::Local,
             /*aot=*/ false,
             obs.entry_counter(),
+            abi,
         )
     })?;
 
@@ -2733,6 +2735,7 @@ pub(super) fn lower_mir_with_plan(
         compiled_level: crate::emacs_core::jit::ReoptLevel::Speculative,
         retired: core::cell::Cell::new(false),
         spec_slot_kinds,
+        abi,
         entry,
         _backing: defined.backing,
     })
@@ -3038,7 +3041,14 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
     aot: bool,
     // JIT only, and only under entry counting: see `build_leaf_fn`.
     entry_counter: Option<&core::cell::Cell<u64>>,
+    // The entry's shape (`reg_abi`): memory for AOT, register for an
+    // eligible JIT body when the knob is on.
+    abi: super::LeafAbi,
 ) -> Result<cranelift_module::FuncId, CompileError> {
+    debug_assert!(
+        abi == super::LeafAbi::Memory || !aot,
+        "AOT entries keep the memory ABI"
+    );
     imm_pool_reset();
     guards_emitted_reset();
     rootwin_counters_reset();
@@ -3070,12 +3080,9 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
     // `sidecar` param is the per-(thread,leaf) base block (LeafSidecar). AOT code
     // reads its bases from it (`aot=true`); JIT code declares it but never reads
     // it (`aot=false`, bases stay `iconst`), so the dispatch passes null.
-    let mut sig = Signature::new(call_conv);
-    sig.params.push(AbiParam::new(ptr_ty)); // vmctx (unused for pure)
-    sig.params.push(AbiParam::new(ptr_ty)); // args
-    sig.params.push(AbiParam::new(ptr_ty)); // out
-    sig.params.push(AbiParam::new(ptr_ty)); // sidecar (*const LeafSidecar)
-    sig.returns.push(AbiParam::new(types::I64));
+    // The register ABI (`reg_abi`) takes the arguments as parameters instead
+    // and returns (value, status).
+    let sig = abi.signature(call_conv, ptr_ty);
 
     let mut func = Function::with_name_signature(UserFuncName::user(0, 0), sig.clone());
     let mut fbctx = sink.take_builder_context();
@@ -3202,20 +3209,27 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
             debug_assert!(!aot, "AOT code never counts entries");
             emit_entry_count(&mut fb, ptr_ty, counter);
         }
-        let entry_params = {
-            let p = fb.block_params(entry);
-            [p[0], p[1], p[2], p[3]]
-        };
+        let entry_params = fb.block_params(entry).to_vec();
         // A body that can re-enter Lisp guards the native stack at entry
         // (`stack_guard`); the rest of the entry code then runs in the block
         // after the guard, on its parameters.
         let entry_params = match rt.as_ref() {
             Some(rt) if plan.stack_guard => {
-                super::stack_guard::emit_entry_stack_guard(&mut fb, rt, entry_params)
+                super::stack_guard::emit_entry_stack_guard(&mut fb, rt, abi, &entry_params)
             }
             _ => entry_params,
         };
-        let [vmctx_param, args_ptr, out_ptr, fourth_param] = entry_params;
+        // Memory: `[vmctx, args, out, sidecar]`. Register: `[vmctx, aux,
+        // a0..]` (`aux` in the sidecar word's place; no `args`, no `out`).
+        let (vmctx_param, args_ptr, out_ptr, fourth_param) = match abi {
+            super::LeafAbi::Memory => (
+                entry_params[0],
+                Some(entry_params[1]),
+                Some(entry_params[2]),
+                entry_params[3],
+            ),
+            super::LeafAbi::Register { .. } => (entry_params[0], None, None, entry_params[1]),
+        };
         // The arguments first: nothing below writes the caller's argument
         // slot, and read here the pointer to it dies at once, instead of
         // staying live across the root-window prologue's cold grow call
@@ -3224,12 +3238,16 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
         let load_args = |fb: &mut FunctionBuilder| -> Vec<BlockArg> {
             (0..m.arity)
                 .map(|i| {
-                    let v = fb.ins().load(
-                        types::I64,
-                        MemFlagsData::trusted(),
-                        args_ptr,
-                        (i * 8) as i32,
-                    );
+                    let v = match args_ptr {
+                        Some(args_ptr) => fb.ins().load(
+                            types::I64,
+                            MemFlagsData::trusted(),
+                            args_ptr,
+                            (i * 8) as i32,
+                        ),
+                        // Register ABI: the arguments are the parameters.
+                        None => entry_params[2 + i],
+                    };
                     BlockArg::Value(v)
                 })
                 .collect()
@@ -3763,10 +3781,7 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
             match &blk.term {
                 MirTerm::Return(v) => {
                     let rv = mir_as_tagged(&mut fb, &cval, &cval_raw, *v)?;
-                    let out = out_ptr;
-                    fb.ins().store(MemFlagsData::trusted(), rv, out, 0);
-                    let ok = fb.ins().iconst(types::I64, STATUS_OK);
-                    fb.ins().return_(&[ok]);
+                    super::reg_abi::emit_leaf_return(&mut fb, abi, out_ptr, Some(rv), STATUS_OK);
                 }
                 MirTerm::Goto { target, args } => {
                     // Cross-block args are tagged (block params are tagged).
@@ -3885,15 +3900,14 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
         if let Some(db) = deopt {
             fb.switch_to_block(db);
             super::cold_exits::mark_exit_cold(&mut fb, db, super::cold_exits::ColdExit::Rerun);
-            let code = fb.ins().iconst(types::I64, STATUS_DEOPT);
-            fb.ins().return_(&[code]);
+            super::reg_abi::emit_leaf_return(&mut fb, abi, None, None, STATUS_DEOPT);
         }
 
         // Per-site precise-deopt blocks (call-bearing bodies): spill the captured
         // framestate (retagging raw slots in the cold block) + return STATUS_DEOPT_AT.
         // No-op for pure bodies (pending is empty).
         // The MIR tier has no float sites (`gate:float-site`), so no flonums.
-        emit_pending_deopts(&mut fb, deopt_refs, &mut pending, None);
+        emit_pending_deopts(&mut fb, deopt_refs, &mut pending, None, abi);
 
         // Signal propagation from a call: return STATUS_SIGNAL (the Flow is stashed
         // in the Context by the shim). No binds/handlers to unwind — build_mir bails
@@ -3902,8 +3916,7 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
             fb.switch_to_block(se);
             fb.seal_block(se);
             super::cold_exits::mark_exit_cold(&mut fb, se, super::cold_exits::ColdExit::Signal);
-            let code = fb.ins().iconst(types::I64, STATUS_SIGNAL);
-            fb.ins().return_(&[code]);
+            super::reg_abi::emit_leaf_return(&mut fb, abi, None, None, STATUS_SIGNAL);
         }
 
         fb.seal_all_blocks();
@@ -4834,6 +4847,7 @@ pub(crate) fn emit_pending_deopts(
     refs: DeoptRefs,
     pending: &mut Vec<PendingDeopt>,
     float_boxer: Option<&RtRefs>,
+    abi: super::LeafAbi,
 ) {
     LAST_IR_STATS.with(|c| {
         let (i, b, sites, slots) = c.get();
@@ -4851,7 +4865,7 @@ pub(crate) fn emit_pending_deopts(
     let tail = if pending.is_empty() {
         None
     } else {
-        super::cold_exits::shared_deopt_tail(fb, |fb| deopt_tail(fb, refs))
+        super::cold_exits::shared_deopt_tail(fb, |fb| deopt_tail(fb, refs, abi))
     };
     for pd in pending.drain(..) {
         fb.switch_to_block(pd.block);
@@ -4947,20 +4961,20 @@ pub(crate) fn emit_pending_deopts(
         let h_v = fb.ins().iconst(types::I64, pd.handlers_len as i64);
         fb.ins()
             .store(MemFlagsData::trusted(), h_v, meta_handlers, 0);
-        let code = fb.ins().iconst(types::I64, STATUS_DEOPT_AT);
-        fb.ins().return_(&[code]);
+        super::reg_abi::emit_leaf_return(fb, abi, None, None, STATUS_DEOPT_AT);
     }
     cold.end(fb, None);
 }
 
 /// Build the function's shared precise-deopt tail
 /// (`NEOVM_JIT_COLD_EXITS=share`): `(pc, depth, handlers)` block parameters
-/// stored in the leaf's cells, then [`STATUS_DEOPT_AT`]. Every site has
-/// spilled its framestate before it jumps here. The tail is left unsealed:
+/// stored in the leaf's cells, then [`STATUS_DEOPT_AT`] through the entry's
+/// `abi`. Every site has spilled its framestate before it jumps here. The
+/// tail is left unsealed:
 /// its predecessors arrive with every later site, and the builder seals all
 /// blocks at the end (it reads no variable, so sealing late changes
 /// nothing). Must be called between filled blocks.
-fn deopt_tail(fb: &mut FunctionBuilder, refs: DeoptRefs) -> Block {
+fn deopt_tail(fb: &mut FunctionBuilder, refs: DeoptRefs, abi: super::LeafAbi) -> Block {
     let tail = fb.create_block();
     let pc_v = fb.append_block_param(tail, types::I64);
     let depth_v = fb.append_block_param(tail, types::I64);
@@ -4989,8 +5003,7 @@ fn deopt_tail(fb: &mut FunctionBuilder, refs: DeoptRefs) -> Block {
         .store(MemFlagsData::trusted(), depth_v, meta_depth, 0);
     fb.ins()
         .store(MemFlagsData::trusted(), h_v, meta_handlers, 0);
-    let code = fb.ins().iconst(types::I64, STATUS_DEOPT_AT);
-    fb.ins().return_(&[code]);
+    super::reg_abi::emit_leaf_return(fb, abi, None, None, STATUS_DEOPT_AT);
     tail
 }
 
