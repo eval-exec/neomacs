@@ -1400,7 +1400,7 @@ fn ccl_execute_on_string_quit_interrupts_before_the_first_instruction() {
             .iter()
             .all(|slot| slot.is_nil())
     );
-    assert!(flag.load(std::sync::atomic::Ordering::Relaxed));
+    assert!(flag.is_requested());
 }
 
 #[test]

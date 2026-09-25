@@ -28,19 +28,11 @@ pub(crate) const CONTEXT_BUFFERS_OFFSET: usize = std::mem::offset_of!(Context, b
 pub(crate) const CONTEXT_QUIT_REQUESTED_OFFSET: usize =
     std::mem::offset_of!(Context, quit_requested);
 
-/// How far past the pointer an `Arc<AtomicBool>` holds its flag sits, probed
-/// on a live `Arc` (the pointer names the shared allocation, whose layout std
+/// How far past the pointer a [`QuitRequest`] holds its flag sits, probed on a
+/// live request (the pointer names the shared allocation, whose layout std
 /// does not promise). `None` when the probe cannot find it.
 pub(crate) fn arc_atomic_bool_data_offset() -> Option<usize> {
-    let arc = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    // SAFETY: an `Arc` is exactly one non-null pointer word.
-    let inner: usize = unsafe { std::mem::transmute_copy(&arc) };
-    let data = std::sync::Arc::as_ptr(&arc) as usize;
-    const _: () = assert!(
-        std::mem::size_of::<std::sync::Arc<std::sync::atomic::AtomicBool>>()
-            == std::mem::size_of::<usize>()
-    );
-    data.checked_sub(inner).filter(|&off| off < 64)
+    QuitRequest::raised_flag_offset()
 }
 
 /// The gate's membership as one bit per symbol id, resolved against the

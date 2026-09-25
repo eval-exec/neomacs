@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use neovm_core::emacs_core::eval::QuitRequest;
 use neovm_core::emacs_core::process::WaitNotifier;
 use neovm_core::emacs_core::terminal::pure::{
     OpenedTtyFrameHost, TerminalHost, TtyFrameHostFactory, TtyFrameOpenRequest, TtyFrameSize,
@@ -125,7 +126,7 @@ pub struct SecondaryTtyFactory {
     registry: SecondaryTtyRegistry,
     input_tx: crossbeam_channel::Sender<InputEvent>,
     notifier: Option<WaitNotifier>,
-    quit_requested: Arc<AtomicBool>,
+    quit_requested: QuitRequest,
 }
 
 impl SecondaryTtyFactory {
@@ -133,7 +134,7 @@ impl SecondaryTtyFactory {
         registry: SecondaryTtyRegistry,
         input_tx: crossbeam_channel::Sender<InputEvent>,
         notifier: Option<WaitNotifier>,
-        quit_requested: Arc<AtomicBool>,
+        quit_requested: QuitRequest,
     ) -> Self {
         Self {
             registry,
@@ -152,7 +153,7 @@ impl TtyFrameHostFactory for SecondaryTtyFactory {
                 &request,
                 self.input_tx.clone(),
                 self.notifier.clone(),
-                Arc::clone(&self.quit_requested),
+                self.quit_requested.clone(),
             )?;
             let terminal_id = request.terminal_id();
             let mut sessions = self
@@ -330,7 +331,7 @@ impl SecondaryTtySession {
         request: &TtyFrameOpenRequest,
         input_tx: crossbeam_channel::Sender<InputEvent>,
         notifier: Option<WaitNotifier>,
-        quit_requested: Arc<AtomicBool>,
+        quit_requested: QuitRequest,
     ) -> Result<
         (
             Self,
@@ -462,7 +463,7 @@ fn read_secondary_tty(
     initial_size: TtyFrameSize,
     input_tx: crossbeam_channel::Sender<InputEvent>,
     notifier: Option<WaitNotifier>,
-    quit_requested: Arc<AtomicBool>,
+    quit_requested: QuitRequest,
     stop: Arc<AtomicBool>,
     paused: Arc<AtomicBool>,
 ) {
@@ -557,7 +558,7 @@ fn read_secondary_tty(
         }
         let bytes = bytes[..read as usize].to_vec();
         if bytes.contains(&0x07) {
-            quit_requested.store(true, Ordering::Relaxed);
+            quit_requested.request();
         }
         if !publish_input(
             &input_tx,

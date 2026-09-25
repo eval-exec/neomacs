@@ -1,11 +1,10 @@
 #[cfg(unix)]
 #[test]
 fn opened_secondary_tty_reads_bytes_for_its_own_frame_and_uses_device_size() {
+    use neovm_core::emacs_core::eval::QuitRequest;
     use std::fs::{File, OpenOptions};
     use std::io::Write;
     use std::os::fd::AsRawFd;
-    use std::sync::Arc;
-    use std::sync::atomic::AtomicBool;
     use std::time::Duration;
 
     let mut master = File::from(
@@ -45,7 +44,7 @@ fn opened_secondary_tty_reads_bytes_for_its_own_frame_and_uses_device_size() {
     .expect("valid request");
     let (tx, rx) = crossbeam_channel::bounded(8);
     let (session, opened_size, _) =
-        super::SecondaryTtySession::open(&request, tx, None, Arc::new(AtomicBool::new(false)))
+        super::SecondaryTtySession::open(&request, tx, None, QuitRequest::new())
             .expect("open secondary TTY");
 
     assert_eq!(opened_size.columns(), 119);
@@ -94,8 +93,8 @@ fn padded_secondary_terminal_renders_and_resumes_with_its_attached_device() {
     if super::super::terminal_capabilities::tests::run_native_fixture_child() {
         return;
     }
+    use neovm_core::emacs_core::eval::QuitRequest;
     use std::fs::File;
-    use std::sync::{Arc, atomic::AtomicBool};
     let master = File::from(
         rustix::pty::openpt(rustix::pty::OpenptFlags::RDWR | rustix::pty::OpenptFlags::NOCTTY)
             .unwrap(),
@@ -128,8 +127,7 @@ fn padded_secondary_terminal_renders_and_resumes_with_its_attached_device() {
     .unwrap();
     let (tx, _rx) = crossbeam_channel::bounded(8);
     let (mut session, _, _) =
-        super::SecondaryTtySession::open(&request, tx, None, Arc::new(AtomicBool::new(false)))
-            .unwrap();
+        super::SecondaryTtySession::open(&request, tx, None, QuitRequest::new()).unwrap();
     drop(slave);
     for _ in 0..2 {
         super::super::tty_output::paint_to(

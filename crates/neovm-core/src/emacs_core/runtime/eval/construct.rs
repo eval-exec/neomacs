@@ -2234,7 +2234,7 @@ impl Context {
             command_loop,
             input_rx: None,
             eval_task_rx: None,
-            quit_requested: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            quit_requested: QuitRequest::new(),
             redisplay_fn: None,
             frame_snapshot_fn: None,
             window_layout_query_adapter: WindowLayoutQueryAdapter::Unavailable,

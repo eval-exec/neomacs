@@ -420,7 +420,7 @@ impl Context {
         // (regex matcher, other long-running scans) can poll it
         // without `&mut Context` access.
         QUIT_REQUESTED_TLS.with(|cell| {
-            *cell.borrow_mut() = Some(std::sync::Arc::clone(&self.quit_requested));
+            *cell.borrow_mut() = Some(self.quit_requested.clone());
         });
     }
 

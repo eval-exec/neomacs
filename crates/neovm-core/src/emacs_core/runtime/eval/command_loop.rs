@@ -633,14 +633,10 @@ impl Context {
             let quit_flag = self.quit_flag_value();
             let is_while_no_input =
                 !throw_on_input.is_nil() && equal_value(&quit_flag, &throw_on_input, 0);
-            let quit_pending = !quit_flag.is_nil()
-                || self
-                    .quit_requested
-                    .load(std::sync::atomic::Ordering::Relaxed);
+            let quit_pending = !quit_flag.is_nil() || self.quit_requested.is_requested();
             if quit_pending && !is_while_no_input {
                 self.set_quit_flag_value(Value::NIL);
-                self.quit_requested
-                    .store(false, std::sync::atomic::Ordering::Relaxed);
+                self.quit_requested.clear();
                 if keys.is_empty() {
                     let quit_char = Value::fixnum(self.quit_char());
                     self.push_unread_command_event(quit_char);
@@ -2594,9 +2590,7 @@ impl Context {
         !crate::emacs_core::profiler::profiler_sample_due()
             && !crate::emacs_core::os_signal::pending()
             && self.quit_flag.is_nil()
-            && !self
-                .quit_requested
-                .load(std::sync::atomic::Ordering::Relaxed)
+            && !self.quit_requested.is_requested()
             && (self.throw_on_input.is_nil() || !self.has_throw_on_input_poll_source())
     }
 
@@ -2616,9 +2610,7 @@ impl Context {
         // relaxed `'static` load here -- GNU's own hot-path shape and cost.
         if self.quit_flag.is_nil()
             && !crate::emacs_core::os_signal::pending()
-            && !self
-                .quit_requested
-                .load(std::sync::atomic::Ordering::Relaxed)
+            && !self.quit_requested.is_requested()
             && (self.throw_on_input.is_nil() || !self.has_throw_on_input_poll_source())
         {
             return Ok(());
@@ -2637,12 +2629,8 @@ impl Context {
         // keystroke while the evaluator is busy (e.g. deep in bytecode
         // and not reading from `input_rx`). See
         // `Context::quit_requested` for the design rationale.
-        if self
-            .quit_requested
-            .load(std::sync::atomic::Ordering::Relaxed)
-            && self
-                .quit_requested
-                .swap(false, std::sync::atomic::Ordering::Relaxed)
+        if self.quit_requested.is_requested()
+            && self.quit_requested.take()
             && self.quit_flag.is_nil()
         {
             self.set_quit_flag_value(Value::T);
@@ -2777,8 +2765,7 @@ impl Context {
         // key-consumption helper so every read path (channel or unread queue)
         // is covered. Skipped under while-no-input so its throw still fires.
         if !is_while_no_input {
-            self.quit_requested
-                .store(false, std::sync::atomic::Ordering::Relaxed);
+            self.quit_requested.clear();
         }
     }
 

@@ -3722,14 +3722,14 @@ fn run_gui_evaluator_worker(
     let display_input_rx = emacs_comms.input_rx;
     let mut font_changes = font_observer.take_changes();
     let primary_window_size_for_input = Arc::clone(&primary_window_size);
-    let quit_requested = Arc::clone(&evaluator.quit_requested);
+    let quit_requested = evaluator.quit_requested.clone();
     // Cross-platform wakeup: wake the evaluator's wait loop AFTER queueing input
     // so it drains the channel immediately. Correct ordering (post-send) and
     // works on every OS, unlike the Unix-only wakeup pipe.
     let input_notifier = evaluator.wait_notifier();
     let secondary_input_tx = input_tx.clone();
     let secondary_input_notifier = input_notifier.clone();
-    let secondary_quit_requested = Arc::clone(&quit_requested);
+    let secondary_quit_requested = quit_requested.clone();
     std::thread::Builder::new()
         .name("input-bridge".to_string())
         .spawn(move || {
@@ -3783,7 +3783,7 @@ fn run_gui_evaluator_worker(
                         );
                     }
                     if kb_event.requests_default_quit() {
-                        quit_requested.store(true, std::sync::atomic::Ordering::Relaxed);
+                        quit_requested.request();
                     }
                     if input_tx.send(kb_event).is_err() {
                         evaluator_disconnected = true;
@@ -4425,13 +4425,13 @@ pub fn run(mode: RuntimeMode) {
         // synchronous keystroke path (`keyboard.c:3812` sets Vquit_flag
         // immediately); Rust can't longjmp into the evaluator, so we
         // poll an atomic instead.
-        let quit_requested = Arc::clone(&evaluator.quit_requested);
+        let quit_requested = evaluator.quit_requested.clone();
         // Cross-platform wakeup (post-send): see the matching comment on the
         // other input-bridge path.
         let input_notifier = evaluator.wait_notifier();
         let secondary_input_tx = input_tx.clone();
         let secondary_input_notifier = input_notifier.clone();
-        let secondary_quit_requested = Arc::clone(&quit_requested);
+        let secondary_quit_requested = quit_requested.clone();
         std::thread::Builder::new()
             .name("input-bridge".to_string())
             .spawn(move || {
@@ -4452,7 +4452,7 @@ pub fn run(mode: RuntimeMode) {
                             );
                         }
                         if kb_event.requests_default_quit() {
-                            quit_requested.store(true, std::sync::atomic::Ordering::Relaxed);
+                            quit_requested.request();
                         }
                         if input_tx.send(kb_event).is_err() {
                             evaluator_disconnected = true;

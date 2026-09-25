@@ -7369,8 +7369,7 @@ fn wait_until_honors_pending_quit_request_promptly() {
 
     // Simulate the input-bridge thread flagging a pending C-g while the
     // evaluator is blocked in a wait.
-    ev.quit_requested
-        .store(true, std::sync::atomic::Ordering::Relaxed);
+    ev.quit_requested.request();
 
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     let start = std::time::Instant::now();
@@ -7390,7 +7389,7 @@ fn wait_until_honors_pending_quit_request_promptly() {
     );
     // The atomic must be drained so a subsequent poll doesn't re-fire.
     assert!(
-        !ev.quit_requested.load(std::sync::atomic::Ordering::Relaxed),
+        !ev.quit_requested.is_requested(),
         "quit_requested should be cleared after the wait drains it"
     );
 }
@@ -7409,8 +7408,7 @@ fn wait_until_respects_inhibit_quit() {
     // field stays in sync (GNU's specbind of Qinhibit_quit).
     ev.eval_str("(setq inhibit-quit t)")
         .expect("bind inhibit-quit");
-    ev.quit_requested
-        .store(true, std::sync::atomic::Ordering::Relaxed);
+    ev.quit_requested.request();
 
     let deadline = std::time::Instant::now() + Duration::from_millis(50);
     ev.wait_until(deadline)

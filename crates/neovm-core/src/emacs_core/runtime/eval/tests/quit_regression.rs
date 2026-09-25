@@ -16,8 +16,6 @@
 //!    arrives while an `unwind-protect` CLEANUP clause is running
 //!    must not interrupt cleanup. Mirrors GNU `eval.c:3909,3927-3928`.
 
-use std::sync::atomic::Ordering;
-
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::value::Value;
 use crate::test_utils::runtime_startup_context;
@@ -112,7 +110,7 @@ fn quit_requested_atomic_is_drained_into_flag() {
 
     // Simulate input-bridge flipping the atomic while the evaluator
     // is blocked.
-    ctx.quit_requested.store(true, Ordering::Relaxed);
+    ctx.quit_requested.request();
 
     // Run a bytecode-reaching form. The first `maybe_quit` poll must
     // observe the atomic, promote it to `Vquit_flag`, and signal.
@@ -128,7 +126,7 @@ fn quit_requested_atomic_is_drained_into_flag() {
     // The atomic must have been drained so a subsequent `maybe_quit`
     // doesn't re-fire spuriously.
     assert!(
-        !ctx.quit_requested.load(Ordering::Relaxed),
+        !ctx.quit_requested.is_requested(),
         "quit_requested should be cleared after maybe_quit drains it"
     );
 }
@@ -189,7 +187,7 @@ fn regex_search_promotes_quit_to_signal() {
     .ok();
 
     // Simulate the bridge thread raising quit.
-    ctx.quit_requested.store(true, Ordering::Relaxed);
+    ctx.quit_requested.request();
 
     // Any regex builtin should surface the quit — not "search-failed" —
     // once the post-matcher `maybe_quit` runs.
@@ -276,7 +274,7 @@ fn single_keyboard_quit_does_not_leave_pending_quit_request() {
         .kboard
         .unread_events
         .push_back(Value::fixnum(7));
-    ev.quit_requested.store(true, Ordering::Relaxed);
+    ev.quit_requested.request();
 
     // Read the key sequence: the C-g must come back as an ordinary key
     // bound to keyboard-quit (NOT short-circuit into a quit signal).
@@ -296,7 +294,7 @@ fn single_keyboard_quit_does_not_leave_pending_quit_request() {
 
     // The atomic must have been cleared by consuming the C-g as a key.
     assert!(
-        !ev.quit_requested.load(Ordering::Relaxed),
+        !ev.quit_requested.is_requested(),
         "consuming the C-g as a key must clear the quit_requested atomic so \
          no second, spurious quit is pending (the double-quit bug)"
     );

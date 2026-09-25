@@ -491,7 +491,7 @@ thread_local! {
     /// check without threading `&mut Context` through their signature.
     /// Mirrors the call site shape of GNU's `maybe_quit()` — reachable
     /// from anywhere without an explicit context pointer.
-    static QUIT_REQUESTED_TLS: RefCell<Option<std::sync::Arc<std::sync::atomic::AtomicBool>>> = const { RefCell::new(None) };
+    static QUIT_REQUESTED_TLS: RefCell<Option<QuitRequest>> = const { RefCell::new(None) };
 }
 
 /// Check whether a quit is pending without needing `&mut Context`.
@@ -503,18 +503,19 @@ pub(crate) fn tls_quit_pending() -> bool {
     QUIT_REQUESTED_TLS.with(|cell| {
         cell.borrow()
             .as_ref()
-            .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
+            .is_some_and(QuitRequest::is_requested)
     })
 }
 
 /// Install a quit-request flag for the current thread. CCL polls this the
 /// way GNU's driver polls `Vquit_flag`. The flag is not cleared by CCL.
 #[cfg(test)]
-pub(crate) fn install_quit_requested_for_test(
-    pending: bool,
-) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
-    let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(pending));
-    QUIT_REQUESTED_TLS.with(|cell| *cell.borrow_mut() = Some(std::sync::Arc::clone(&flag)));
+pub(crate) fn install_quit_requested_for_test(pending: bool) -> QuitRequest {
+    let flag = QuitRequest::new();
+    if pending {
+        flag.request();
+    }
+    QUIT_REQUESTED_TLS.with(|cell| *cell.borrow_mut() = Some(flag.clone()));
     flag
 }
 
@@ -3202,7 +3203,7 @@ pub struct Context {
     /// across owned borrows, so we use an atomic flag and rely on
     /// `maybe_quit` polling from `eval_sub` / `Ffuncall` / the bytecode
     /// VM to pick it up.
-    pub quit_requested: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub quit_requested: QuitRequest,
     /// Redisplay callback — called before blocking for input in `read_char()`.
     ///
     /// In GNU Emacs, `read_char()` calls `redisplay()` directly (keyboard.c
@@ -7284,6 +7285,9 @@ fn value_list_to_values(list: &Value) -> LispArgVec {
 // Tests
 // ---------------------------------------------------------------------------
 mod gc_pacing;
+
+mod attention;
+pub use attention::QuitRequest;
 
 pub(crate) mod runtime_projection;
 
