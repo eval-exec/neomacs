@@ -711,6 +711,144 @@ impl SearchRegisters {
     }
 }
 
+impl SearchRegisters {
+    /// Publish a string search's registers (filled by
+    /// [`string_search_compiled_into`]) as match data over SEARCHED, in
+    /// place when TARGET already holds string match data, and answer where
+    /// the match starts: what `string-match` returns. `None` for TARGET
+    /// (INHIBIT-MODIFY, `inhibit-changing-match-data`) publishes nothing.
+    pub(crate) fn publish_string_into(
+        &self,
+        searched: SearchedString,
+        target: Option<&mut Option<MatchData>>,
+    ) -> CharPos0 {
+        let SearchRegistersKind::Engine { regs, offset } = &self.0 else {
+            unreachable!("a string search fills engine registers");
+        };
+        debug_assert_eq!(*offset, 0, "string registers count from the string's start");
+        let string = searched.as_lisp_string();
+        // As `EngineMatchData::publish_string`: an all-ASCII or unibyte
+        // string's byte offsets are its character offsets.
+        let identity = string
+            .map(|s| !s.is_multibyte() || s.schars() == s.sbytes())
+            .unwrap_or(true);
+        let to_char = |byte: i64| -> usize {
+            let byte = byte as usize;
+            if identity {
+                return byte;
+            }
+            let string = string.expect("non-identity conversion has a string");
+            match &searched {
+                SearchedString::Heap(value) => {
+                    crate::emacs_core::string_pos_cache::string_byte_to_char(*value, string, byte)
+                }
+                SearchedString::Owned(_) => string.byte_to_char_pos(byte),
+            }
+        };
+        let start = CharPos0::new(to_char(regs.start[0]));
+        let Some(target) = target else {
+            return start;
+        };
+        let fill = |groups: &mut smallvec::SmallVec<
+            [Option<CharRange>; GNU_SEARCH_REGS_BASE_CAPACITY],
+        >| {
+            let capacity = gnu_search_regs_capacity(regs.num_regs());
+            groups.reserve(capacity);
+            for (&group_start, &group_end) in regs.start.iter().zip(regs.end.iter()) {
+                groups.push((group_start >= 0 && group_end >= 0).then(|| {
+                    CharRange::new(
+                        CharPos0::new(to_char(group_start)),
+                        CharPos0::new(to_char(group_end)),
+                    )
+                }));
+            }
+            groups.resize(groups.len().max(capacity), None);
+        };
+        if let Some(match_data) = target
+            && let MatchDataKind::StringChars {
+                groups,
+                searched: previous,
+            } = &mut match_data.kind
+        {
+            groups.clear();
+            fill(groups);
+            *previous = Some(searched);
+            #[cfg(debug_assertions)]
+            {
+                match_data.read_mask = Default::default();
+            }
+            return start;
+        }
+        let mut groups = smallvec::SmallVec::new();
+        fill(&mut groups);
+        *target = Some(MatchData {
+            kind: MatchDataKind::StringChars {
+                groups,
+                searched: Some(searched),
+            },
+            #[cfg(debug_assertions)]
+            read_mask: Default::default(),
+        });
+        start
+    }
+}
+
+/// Compile PATTERN for a search over STRING, through the pattern cache,
+/// exactly as `string_search_full_with_case_fold_source_lisp_pattern_posix_
+/// syntax` compiles it: SYNTAX supplies only the cache key (the current
+/// buffer's syntax table) and the table a `[[:word:]]` fastmap is baked
+/// against.
+pub(crate) fn compile_string_search_pattern(
+    pattern: &LispString,
+    string: &LispString,
+    case_fold: bool,
+    posix: bool,
+    translation_table: Option<super::value::Value>,
+    syntax: &dyn SyntaxLookup,
+) -> Result<Rc<CompiledPattern>, String> {
+    compile_lisp_pattern_with_posix_translation(
+        pattern,
+        case_fold,
+        posix,
+        string.is_multibyte(),
+        translation_table,
+        syntax,
+    )
+}
+
+/// `string-match`'s search for a pattern the caller compiled
+/// ([`compile_string_search_pattern`]): the matcher run of
+/// `string_search_full_with_case_fold_source_lisp_pattern_posix_syntax`,
+/// its registers left in OUT for [`SearchRegisters::publish_string_into`].
+pub(crate) fn string_search_compiled_into(
+    compiled: &CompiledPattern,
+    string: &LispString,
+    start: usize,
+    syntax: &dyn SyntaxLookup,
+    out: &mut SearchRegisters,
+) -> Result<bool, String> {
+    if start > string.byte_len() {
+        return Ok(false);
+    }
+    let text_bytes = string.as_bytes();
+    let range = (text_bytes.len() - start) as isize;
+    if let Some((_pos, regs)) = regex_emacs::re_search(
+        compiled,
+        text_bytes,
+        start,
+        range,
+        syntax,
+        STRING_MATCH_AT_DOT_UNREACHABLE,
+    ) {
+        out.0 = SearchRegistersKind::Engine { regs, offset: 0 };
+        Ok(true)
+    } else if regex_emacs::take_matcher_overflow() {
+        Err(regex_emacs::MATCHER_OVERFLOW_MESSAGE.to_string())
+    } else {
+        Ok(false)
+    }
+}
+
 /// [`EngineMatchData::fill_buffer_groups`] of
 /// [`buffer_engine_match_data_from_registers`]`(REGS, OFFSET)`, in one pass:
 /// each participating register pair converted straight to Lisp positions of

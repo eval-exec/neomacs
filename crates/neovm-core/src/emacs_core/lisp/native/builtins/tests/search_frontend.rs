@@ -72,6 +72,36 @@ const LOOKING_AT_MATRIX: &str = r#"
   (nreverse out))
 "#;
 
+/// `string-match` over ASCII, multibyte, unibyte and propertized strings.
+const STRING_MATCH_MATRIX: &str = r#"
+(let ((out nil)
+      (propertized (let ((s (copy-sequence "ab-cd ef")))
+                     (put-text-property 2 3 'syntax-table (string-to-syntax "w") s)
+                     s)))
+  (dolist (mode '(fundamental-mode emacs-lisp-mode))
+    (with-temp-buffer
+      (funcall mode)
+      (dolist (lookup '(nil t))
+        (setq-local parse-sexp-lookup-properties lookup)
+        (dolist (string (list "foo bar baz" "ÀÉ 漢字 abc_def"
+                              (string-to-unibyte "ab\377cd") propertized ""))
+          (dolist (re '("" "a" "b\\w+" "\\_<[a-z]+\\_>" "\\s-+" "[[:space:]]" "\\bcd"
+                        "\\(a\\)?\\(b\\)?" "\\ca" "\\cC" "[" "z\\'" "\\w-\\w"))
+            (dolist (start '(nil 0 1 -1 5 100))
+              (dolist (inhibit-arg '(nil t))
+                (dolist (fold '(nil t))
+                  (dolist (inhibit '(nil t))
+                    (set-match-data (list 1 1))
+                    (let ((case-fold-search fold)
+                          (inhibit-changing-match-data inhibit))
+                      (push (list mode lookup re start inhibit-arg fold inhibit
+                                  (condition-case err (string-match re string start inhibit-arg)
+                                    (error (list 'signal err)))
+                                  (match-data t))
+                            out)))))))))))
+  (nreverse out))
+"#;
+
 fn run_matrix(frontend: bool) -> Vec<String> {
     run_form(SEARCH_MATRIX, frontend)
 }
@@ -129,6 +159,25 @@ fn fast_looking_at_answers_like_the_general_path() {
         general.len()
     );
     assert!(fast_calls < general.len(), "every call took the fast path");
+}
+
+#[test]
+fn fast_string_match_answers_like_the_general_path() {
+    crate::test_utils::init_test_tracing();
+    let general = run_form(STRING_MATCH_MATRIX, false);
+    let before = super::FRONTEND_FAST_CALLS.with(|calls| calls.get());
+    let fast = run_form(STRING_MATCH_MATRIX, true);
+    let fast_calls = super::FRONTEND_FAST_CALLS.with(|calls| calls.get()) - before;
+    assert_eq!(general.len(), fast.len());
+    assert!(general.len() > 10_000, "{} rows", general.len());
+    for (index, (general, fast)) in general.iter().zip(&fast).enumerate() {
+        assert_eq!(fast, general, "row {index} differs");
+    }
+    assert!(
+        fast_calls > general.len() / 2,
+        "only {fast_calls} of {} calls took the fast path",
+        general.len()
+    );
 }
 
 #[test]

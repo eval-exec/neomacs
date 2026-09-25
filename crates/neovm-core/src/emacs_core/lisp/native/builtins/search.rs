@@ -2156,6 +2156,10 @@ pub(crate) fn builtin_string_match_slice(
     let case_fold = dynamic_or_global_symbol_value(eval, SearchStateVariable::CaseFoldSearch)
         .map(|v| !v.is_nil())
         .unwrap_or(true);
+    if let Some(result) = string_match_fast(eval, args, case_fold) {
+        eval.maybe_quit()?;
+        return result;
+    }
     // The canon TABLE only: regexp compile builds (and caches) the actual
     // CaseTranslation; constructing its 1KB memo per call was pure waste.
     let case_translation_table = if case_fold {
@@ -2185,6 +2189,119 @@ pub(crate) fn builtin_string_match_slice(
     // Promote a TLS-detected quit (see `builtin_re_search_forward`).
     eval.maybe_quit()?;
     result
+}
+
+/// U2.8 front end of `string-match` over two strings: GNU `string_match_1`
+/// compiles once and matches. The general path reads the three
+/// word-boundary tables and snapshots the property resolver before it knows
+/// whether the pattern reads syntax, builds the match data by value through
+/// a heap vector, and moves it into the evaluator's slot.
+///
+/// This probes the pattern cache first -- keyed exactly as the search keys
+/// it -- reads the word-boundary tables and the string's syntax properties
+/// only for a pattern that reads syntax (the category table stays: `\cC`
+/// reads it without reading syntax), matches with that pattern, and
+/// publishes the registers into the match data in place. `None` sends
+/// anything but a well-formed call over two strings to the general path;
+/// errors come out in the general path's order.
+fn string_match_fast(
+    eval: &mut super::eval::Context,
+    args: &[Value],
+    case_fold: bool,
+) -> Option<EvalResult> {
+    if !crate::emacs_core::eval::builtin_frontend_on()
+        || !(2..=4).contains(&args.len())
+        || !args[0].is_string()
+        || !args[1].is_string()
+    {
+        return None;
+    }
+    let case_translation_table = if case_fold {
+        match crate::emacs_core::casetab::current_case_canon_table(eval) {
+            Ok(table) => Some(table),
+            Err(flow) => return Some(Err(flow)),
+        }
+    } else {
+        None
+    };
+    let current_buffer = eval.buffers.current_buffer();
+    let syntax_table = current_buffer.map(crate::emacs_core::syntax::SyntaxTable::for_buffer);
+    let category_table =
+        match crate::emacs_core::category::active_category_table_for_buffer(current_buffer) {
+            Ok(table) => Some(table),
+            Err(flow) => return Some(Err(flow)),
+        };
+    let inhibit_changing = read_inhibit_changing_match_data(eval);
+    let inhibit_modify = args.get(3).is_some_and(|v| v.is_truthy());
+    let pattern = args[0].as_lisp_string()?;
+    let string = args[1].as_lisp_string()?;
+    let start = match crate::emacs_core::search::normalize_lisp_string_value_start_arg(
+        args[1],
+        args.get(2),
+    ) {
+        Ok(start) => start,
+        Err(flow) => return Some(Err(flow)),
+    };
+    let compiled = {
+        // The cache key and a `[[:word:]]` fastmap depend on the base syntax
+        // table alone, so the key lookup needs neither the word-boundary
+        // tables nor the property resolver.
+        let key_lookup = string_regexp_syntax_lookup(
+            syntax_table.as_ref(),
+            category_table,
+            crate::emacs_core::regex_emacs::WordBoundaryLookup::default(),
+            string,
+            crate::emacs_core::syntax::SyntaxProperties::Ignore,
+        );
+        match super::regex::compile_string_search_pattern(
+            pattern,
+            string,
+            case_fold,
+            false,
+            case_translation_table,
+            key_lookup.as_lookup(),
+        ) {
+            Ok(compiled) => compiled,
+            Err(msg) => return Some(Err(regex_error_signal(msg))),
+        }
+    };
+    let (word_boundary, syntax_properties) = if compiled.uses_syntax {
+        (
+            current_word_boundary_lookup(eval),
+            current_string_match_syntax_properties(eval, &eval.obarray, &eval.buffers, args.get(1)),
+        )
+    } else {
+        (
+            crate::emacs_core::regex_emacs::WordBoundaryLookup::default(),
+            crate::emacs_core::syntax::SyntaxProperties::Ignore,
+        )
+    };
+    let lookup = string_regexp_syntax_lookup(
+        syntax_table.as_ref(),
+        category_table,
+        word_boundary,
+        string,
+        syntax_properties,
+    );
+    let mut regs = super::regex::SearchRegisters::default();
+    let found = super::regex::string_search_compiled_into(
+        &compiled,
+        string,
+        start,
+        lookup.as_lookup(),
+        &mut regs,
+    );
+    note_frontend_fast_call();
+    Some(match found {
+        Ok(true) => {
+            let target = (!inhibit_modify && !inhibit_changing).then_some(&mut eval.match_data);
+            let start =
+                regs.publish_string_into(super::regex::SearchedString::Heap(args[1]), target);
+            Ok(Value::fixnum(start.get() as i64))
+        }
+        Ok(false) => Ok(Value::NIL),
+        Err(msg) => Err(regex_error_signal(msg)),
+    })
 }
 
 #[allow(clippy::too_many_arguments)] // match-time Lisp state stays explicit at this seam
