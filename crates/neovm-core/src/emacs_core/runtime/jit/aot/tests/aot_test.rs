@@ -12,7 +12,7 @@ fn object_emits_with_exported_entry_and_imported_shims() {
     // Fixnum constants need no reloc vector, keeping this body minimal.
     let ops = [Op::Constant(0), Op::Constant(1), Op::Cons, Op::Return];
     let constants = [Value::make_int(1), Value::make_int(2)];
-    let m = mir::build_mir(&ops, &constants, 0).expect("build_mir for cons body");
+    let m = mir::build_mir(&ops, &constants, None, 0).expect("build_mir for cons body");
 
     let entry = "__neovm_aot_test_cons";
     let bytes = build_object_for_leaf(&m, entry).expect("emit object");
@@ -110,7 +110,7 @@ fn aot_pure_arith_leaf_matches_jit_via_dlopen() {
     // 1-arg pure body: (+ arg 5). No heap consts, no calls, no deopt buffers.
     let ops = [Op::Constant(0), Op::Add, Op::Return];
     let constants = [Value::make_int(5)];
-    let m = mir::build_mir(&ops, &constants, 1).expect("build_mir add body");
+    let m = mir::build_mir(&ops, &constants, None, 1).expect("build_mir add body");
 
     // Reference: the JIT leaf for the same MIR.
     let jit_leaf = super::super::compile::lower_mir_pure(&m).expect("JIT lowers");
@@ -261,7 +261,7 @@ fn content_hash_stable_and_discriminating() {
 /// the function's own constant objects, re-collected in emit-time order.
 #[cfg(target_os = "linux")]
 fn live_reloc_for(ops: &[Op], constants: &[Value], arity: usize) -> Vec<Value> {
-    let m = mir::build_mir(ops, constants, arity).expect("mir for live reloc");
+    let m = mir::build_mir(ops, constants, None, arity).expect("mir for live reloc");
     collect_reloc_consts(&m)
 }
 
@@ -295,7 +295,7 @@ fn assert_aot_matches_interp_and_jit(ops: &[Op], constants: &[Value], nargs: usi
     .expect("load leaf from unit");
 
     // Reference: JIT leaf for the same MIR.
-    let m = mir::build_mir(ops, constants, nargs).expect("mir");
+    let m = mir::build_mir(ops, constants, None, nargs).expect("mir");
     let jit_leaf = super::super::compile::lower_mir_pure(&m).expect("jit lowers");
 
     // Reference: the interpreter (the oracle).
@@ -355,7 +355,7 @@ fn assert_aot_matches_interp_and_jit(ops: &[Op], constants: &[Value], nargs: usi
 #[test]
 fn aot_mir_emit_refuses_bodies_that_would_use_the_adapter() {
     let pure = [Op::StackRef(0), Op::Add1, Op::Return];
-    let m = mir::build_mir(&pure, &[], 1).expect("builds");
+    let m = mir::build_mir(&pure, &[], None, 1).expect("builds");
     assert!(!uses_mir_adapter(&m));
     assert!(
         prepare_leaf_emit(&pure, &[], 1)
@@ -364,7 +364,7 @@ fn aot_mir_emit_refuses_bodies_that_would_use_the_adapter() {
         "a shim-free body is still an AOT MIR leaf"
     );
     let with_length = [Op::StackRef(0), Op::Length, Op::Return];
-    let m = mir::build_mir(&with_length, &[], 1).expect("builds");
+    let m = mir::build_mir(&with_length, &[], None, 1).expect("builds");
     assert!(uses_mir_adapter(&m));
     assert!(
         prepare_leaf_emit(&with_length, &[], 1)
@@ -373,7 +373,8 @@ fn aot_mir_emit_refuses_bodies_that_would_use_the_adapter() {
         "a body with an adapter op stays out of the AOT MIR tier"
     );
     let with_call = [Op::Constant(0), Op::Call(0), Op::Return];
-    let m = mir::build_mir(&with_call, &[Value::symbol("jit-aot-callee")], 0).expect("builds");
+    let m =
+        mir::build_mir(&with_call, &[Value::symbol("jit-aot-callee")], None, 0).expect("builds");
     assert!(
         !uses_mir_adapter(&m),
         "Call/Apply keep their pre-adapter AOT admission"
@@ -1894,4 +1895,45 @@ fn pgo_jit_set_and_wrapper_default_off() {
         "the core drains the same hot leaf when explicitly targeted"
     );
     super::super::cache::clear();
+}
+
+/// An AOT leaf carries no GNU byte-offset map, so a `switch` jump table's
+/// byte offsets could not be resolved on the AOT paths: both entry points
+/// turn a Switch body away (JIT-only) before any analysis reads the table.
+#[test]
+fn aot_switch_bodies_stay_jit_only() {
+    use crate::emacs_core::value::HashTableTest;
+    let table = Value::hash_table(HashTableTest::Eq);
+    let _ = table.with_hash_table_mut(|ht| {
+        let key = Value::symbol("jit-aot-sw").to_hash_key(&ht.test);
+        // Byte offset 8: past the end if read as an instruction index.
+        ht.insert(key, Value::symbol("jit-aot-sw"), Value::fixnum(8));
+    });
+    let ops = vec![
+        Op::StackRef(0),
+        Op::Constant(0),
+        Op::Switch,
+        Op::Constant(1),
+        Op::Return,
+        Op::Constant(2),
+        Op::Return,
+    ];
+    let constants = vec![table, Value::make_int(10), Value::make_int(20)];
+    assert!(aot_body_has_switch(&ops));
+    assert!(matches!(
+        compile_leaf_to_object(&ops, &constants, 1, None),
+        Ok(None)
+    ));
+    let leaf = LoadupLeaf {
+        name: "jit-aot-switch".to_string(),
+        ops: Box::leak(ops.into_boxed_slice()),
+        constants: Box::leak(constants.into_boxed_slice()),
+        arity: 1,
+    };
+    let (_, stats) =
+        build_preload_object(std::slice::from_ref(&leaf), None).expect("build preload object");
+    assert_eq!(
+        (stats.candidates, stats.prepared, stats.skipped_unsupported),
+        (1, 0, 1)
+    );
 }

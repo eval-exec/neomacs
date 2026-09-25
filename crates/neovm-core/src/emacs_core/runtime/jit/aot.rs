@@ -1042,7 +1042,10 @@ fn prepare_leaf_emit(
     let Some(content_hash) = leaf_content_hash(ops, constants, arity) else {
         return Ok(None); // a constant outside the recipe subset.
     };
-    let m = match mir::build_mir(ops, constants, arity) {
+    // Index-addressed: the entry points turned every Switch body away (see
+    // `aot_body_has_switch`), so no jump table needs the missing offset map.
+    debug_assert!(!aot_body_has_switch(ops), "AOT emit of a Switch body");
+    let m = match mir::build_mir(ops, constants, None, arity) {
         Ok(m) => m,
         Err(_) => return Ok(None), // not MIR-lowerable → JIT-only.
     };
@@ -1097,6 +1100,16 @@ fn prepare_leaf_emit(
     }))
 }
 
+/// Whether `ops` has a `switch`. An AOT leaf is identified by its ops,
+/// constants and arity alone and carries no GNU byte-offset map, so a jump
+/// table's byte offsets cannot be resolved to instruction indices on the AOT
+/// paths. Neither AOT tier emits a Switch body (MIR does not model the op and
+/// [`baseline_is_aot_runnable`] rejects it), so the AOT entry points turn one
+/// away before any analysis could read its table as instruction indices.
+pub(crate) fn aot_body_has_switch(ops: &[Op]) -> bool {
+    ops.iter().any(|op| matches!(op, Op::Switch))
+}
+
 pub(crate) fn compile_leaf_to_object(
     ops: &[Op],
     constants: &[Value],
@@ -1106,6 +1119,9 @@ pub(crate) fn compile_leaf_to_object(
     // keeps the MIR-first routing unchanged.
     obarray: Option<&crate::emacs_core::symbol::Obarray>,
 ) -> Result<Option<(Vec<u8>, u128)>, CompileError> {
+    if aot_body_has_switch(ops) {
+        return Ok(None); // JIT-only (see `aot_body_has_switch`).
+    }
     // TIER-PIVOT (increment B2): a body with ≥1 `Op::Call` subr/bytecode spec site
     // MUST emit via the BASELINE tier — the MIR tier never bakes those spec fast
     // paths, and the LOAD path (`live_reloc_for_emit_tier`) mirrors this so both
@@ -1264,6 +1280,10 @@ pub fn build_preload_object(
         ..Default::default()
     };
     for leaf in leaves {
+        if aot_body_has_switch(leaf.ops) {
+            stats.skipped_unsupported += 1; // JIT-only (see `aot_body_has_switch`).
+            continue;
+        }
         // TIER-PIVOT (increment B2): a spec-bearing body MUST go BASELINE (only it
         // bakes the `Op::Call` spec fast paths; the load path mirrors this). Try the
         // MIR tier first ONLY when not spec-forced (same routing as
@@ -1921,7 +1941,7 @@ fn testkit_mir_cons_reconstruction_case(dir: &std::path::Path, singleton: bool) 
         f.ops.splice(5..7, [Op::List(1)]);
     }
     f.seal_hand_assembled_ops();
-    let m = mir::build_mir(&f.ops, &f.constants, 2).unwrap();
+    let m = mir::build_mir(&f.ops, &f.constants, None, 2).unwrap();
     assert_eq!(
         super::compile::plan_mir_leaf(&m)
             .cons_repl
@@ -2817,7 +2837,7 @@ pub fn testkit_baseline_op_symbol_reloc_selftest(dir: &std::path::Path) -> Resul
     // "G-serves-from-JIT" gotcha). Emit-all-first guarantees both are indexed.
     for b in &bodies {
         // Must route through the BASELINE tier (not MIR) for the fix to be tested.
-        if let Ok(m) = mir::build_mir(&b.ops, &b.constants, b.arity)
+        if let Ok(m) = mir::build_mir(&b.ops, &b.constants, None, b.arity)
             && mir_is_aot_runnable(&m)
         {
             return Err(format!(

@@ -45,7 +45,7 @@ fn mir_cons_precise_frames_preserve_aliases_and_completed_effects() {
         vec![Value::make_int(7), Value::symbol("mir-rebuild-v")],
         2,
     );
-    let m = mir::build_mir(&f.ops, &f.constants, 2).unwrap();
+    let m = mir::build_mir(&f.ops, &f.constants, None, 2).unwrap();
     let plan = plan_mir_leaf(&m);
     assert!(plan.precise);
     assert_eq!(plan.cons_repl.iter().filter(|c| c.is_some()).count(), 2);
@@ -179,7 +179,7 @@ fn mir_singleton_precise_frames_preserve_aliases_and_completed_effects() {
         vec![Value::make_int(7), Value::symbol("mir-list-v")],
         2,
     );
-    let m = mir::build_mir(&f.ops, &f.constants, 2).unwrap();
+    let m = mir::build_mir(&f.ops, &f.constants, None, 2).unwrap();
     assert_eq!(
         plan_mir_leaf(&m).cons_repl.iter().flatten().count(),
         2,
@@ -219,7 +219,7 @@ fn mir_singleton_escaping_lists_preserve_freshness_elements_and_mutation() {
     let mut ev = Context::new();
     let element = ev.eval_str("(list \"payload\")").unwrap();
     let f = function(vec![Op::StackRef(0), Op::List(1), Op::Return], vec![], 1);
-    let m = mir::build_mir(&f.ops, &f.constants, 1).unwrap();
+    let m = mir::build_mir(&f.ops, &f.constants, None, 1).unwrap();
     let leaf = lower_mir_pure(&m).unwrap();
     let ctx = &mut ev as *mut Context as *mut u8;
     let mut lists = Vec::new();
@@ -249,7 +249,7 @@ fn mir_singleton_escaping_lists_preserve_freshness_elements_and_mutation() {
         vec![],
         2,
     );
-    let m = mir::build_mir(&f.ops, &f.constants, 2).unwrap();
+    let m = mir::build_mir(&f.ops, &f.constants, None, 2).unwrap();
     let leaf = lower_mir_pure(&m).unwrap();
     let NativeRun::Ok(bits) = leaf.call(ctx, &[Value::NIL, element]) else {
         panic!("mutating an escaping singleton must run natively")
@@ -267,7 +267,7 @@ fn mir_empty_list_preserves_the_residual_stack() {
         (vec![Op::List(0), Op::Return], Value::NIL),
         (vec![Op::List(0), Op::Pop, Op::Return], element),
     ] {
-        let m = mir::build_mir(&ops, &[], 1).unwrap();
+        let m = mir::build_mir(&ops, &[], None, 1).unwrap();
         assert!(!plan_mir_leaf(&m).needs_rt);
         let leaf = lower_mir_pure(&m).unwrap();
         assert_eq!(
@@ -296,7 +296,7 @@ fn mir_singleton_precise_frame_preserves_a_heap_element() {
         vec![Value::make_int(7), Value::symbol("mir-list-heap-v")],
         1,
     );
-    let m = mir::build_mir(&f.ops, &f.constants, 1).unwrap();
+    let m = mir::build_mir(&f.ops, &f.constants, None, 1).unwrap();
     assert_eq!(plan_mir_leaf(&m).cons_repl.iter().flatten().count(), 1);
     let leaf = lower_mir_pure(&m).unwrap();
     let float = ev.eval_str("1.5").unwrap();

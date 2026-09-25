@@ -87,7 +87,8 @@ fn a_mir_eligible_float_loop_keeps_the_guard_on_its_cold_add1() {
     );
 
     // (b) The MIR-level fact, independent of which tier the gate picks.
-    let m = mir::build_mir_with_feedback(&ops, &bc.constants, 2, &|pc| snapshot[pc])
+    let map = bc.executable_gnu_byte_offset_map();
+    let m = mir::build_mir_with_feedback(&ops, &bc.constants, map, 2, &|pc| snapshot[pc])
         .expect("probe builds as MIR");
     let float_bins: Vec<&mir::MirInst> = m
         .blocks

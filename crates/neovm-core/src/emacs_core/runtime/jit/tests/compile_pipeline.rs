@@ -521,7 +521,7 @@ fn jit_pipeline_leaf_records_its_mir_verdict() {
         verdict(&throw_if()),
         (
             "baseline",
-            Some("build:UnsupportedOp(\"mir-unmodelled-control\")".to_string())
+            Some("build:UnsupportedOp(\"mir-unmodelled-control:Throw\")".to_string())
         )
     );
 }

@@ -134,7 +134,7 @@ fn jit_obs_mir_rerun_deopt_counted() {
     // Exact native outcomes: immune to a NEOVM_JIT_FORCE_DEOPT=1 suite run.
     crate::emacs_core::jit::compile::force_deopt_for_test(false);
     let ops = vec![Op::StackRef(1), Op::StackRef(1), Op::Add, Op::Return];
-    let m = mir::build_mir(&ops, &[], 2).expect("builds");
+    let m = mir::build_mir(&ops, &[], None, 2).expect("builds");
     let leaf = lower_mir_pure(&m).expect("lowers");
     assert_eq!(
         leaf.call_for_test(&[Value::string("x"), Value::make_int(2)]),
@@ -506,7 +506,7 @@ fn jit_obs_entry_counter_absent_by_default() {
     assert_eq!(on.obs.entries.get(), 1);
 
     let mir_ops = vec![Op::StackRef(1), Op::StackRef(1), Op::Add, Op::Return];
-    let m = mir::build_mir(&mir_ops, &[], 2).expect("builds");
+    let m = mir::build_mir(&mir_ops, &[], None, 2).expect("builds");
     force_entry_count(false);
     let off = lower_mir_pure(&m).expect("lowers");
     force_entry_count(true);

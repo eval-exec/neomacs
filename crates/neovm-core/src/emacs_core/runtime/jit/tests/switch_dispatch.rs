@@ -94,3 +94,51 @@ fn pcase_dispatch_answers_every_value_shape_like_the_interpreter() {
     let answer = native_matches_interpreter(&mut ev, f, input, "value shapes");
     assert_eq!(answer, "(0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 4 3 2 1)");
 }
+
+/// The elb-pcase kernel as the real byte compiler emits it: its `equal` jump
+/// table holds GNU byte offsets, so MIR must build it against the offset
+/// map, as the baseline does. With the map the builder reaches the Switch
+/// and names it (no tier change: the op is still unmodelled); read as
+/// instruction indices, the same offsets failed as a stack-model error.
+#[test]
+fn elb_pcase_mir_build_resolves_the_jump_table_through_the_offset_map() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = crate::test_utils::runtime_startup_context();
+    let f = byte_compile(&mut ev, ELB_PCASE);
+    let data = f.get_bytecode_data().expect("byte-code function");
+    let ops = data.executable_ops();
+    let map = data.executable_gnu_byte_offset_map();
+    assert!(map.is_some(), "real bytecode carries its offset map");
+    let arity = data.params.required.len();
+    assert!(matches!(
+        mir::build_mir(ops, &data.constants, map, arity),
+        Err(CompileError::UnsupportedOp("mir-unmodelled-control:Switch"))
+    ));
+    let unmapped = mir::build_mir(ops, &data.constants, None, arity);
+    assert!(
+        matches!(
+            unmapped,
+            Err(CompileError::BadOperand
+                | CompileError::StackUnderflow
+                | CompileError::UnsupportedOp(
+                    "inconsistent stack depth" | "mir-unreachable-block"
+                ))
+        ),
+        "byte offsets read as indices: {unmapped:?}"
+    );
+    // Through the tier-up: still a baseline leaf, whose verdict now names
+    // the Switch.
+    crate::emacs_core::jit::stats::force_observe_for_test(
+        crate::emacs_core::jit::stats::ObserveOverride {
+            stats: true,
+            naming: false,
+            entry_count: false,
+        },
+    );
+    let leaf = compile_bytecode_function_with(data, Some(&ev.obarray)).expect("compiles");
+    assert_eq!(leaf.tier().name(), "baseline");
+    assert_eq!(
+        leaf.obs.mir_verdict.as_deref(),
+        Some("build:UnsupportedOp(\"mir-unmodelled-control:Switch\")")
+    );
+}

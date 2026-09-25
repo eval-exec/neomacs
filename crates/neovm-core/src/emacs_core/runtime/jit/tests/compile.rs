@@ -521,7 +521,7 @@ fn jit_matches_interpreter_on_if_branch() {
             arg.bits()
         );
         // Also via the typed-MIR Tier-2 path (lower_mir_pure control flow).
-        let mir = mir::build_mir(&ops, &constants, 1).expect("MIR builds the if");
+        let mir = mir::build_mir(&ops, &constants, None, 1).expect("MIR builds the if");
         let mleaf = lower_mir_pure(&mir).expect("MIR lowers the if");
         let ctx_ptr = &mut eval as *mut Context as *mut u8;
         let NativeRun::Ok(bits) = mleaf.call(ctx_ptr, &[arg]) else {
@@ -642,7 +642,7 @@ fn compiles_countdown_loop_matches_interpreter() {
         );
         // Also via the typed-MIR Tier-2 path (lower_mir_pure loops/back-edges).
         // Hard failures: a MIR build/lowering regression must not pass silently.
-        let mir = mir::build_mir(&ops, &constants, 1).expect("MIR builds the loop");
+        let mir = mir::build_mir(&ops, &constants, None, 1).expect("MIR builds the loop");
         let mleaf = lower_mir_pure(&mir).expect("MIR lowers the loop");
         let ctx_ptr = &mut eval as *mut Context as *mut u8;
         let NativeRun::Ok(bits) = mleaf.call(ctx_ptr, &[Value::make_int(n)]) else {
@@ -683,7 +683,7 @@ fn mir_merge_phi_matches_interpreter() {
             let mut vm = Vm::from_context(&mut eval);
             vm.execute(&f, vec![c]).expect("interp diamond").bits()
         };
-        let mir = mir::build_mir(&ops, &constants, 1).expect("MIR builds the diamond");
+        let mir = mir::build_mir(&ops, &constants, None, 1).expect("MIR builds the diamond");
         let mleaf = lower_mir_pure(&mir).expect("MIR lowers the diamond");
         let ctx_ptr = &mut eval as *mut Context as *mut u8;
         let NativeRun::Ok(bits) = mleaf.call(ctx_ptr, &[c]) else {
@@ -733,7 +733,7 @@ fn mir_probe_a_emits_one_tag_guard_per_iteration() {
         Op::Return,
     ];
     let constants = [Value::make_int(0)];
-    let mir = mir::build_mir(&ops, &constants, 2).expect("MIR builds probe-a");
+    let mir = mir::build_mir(&ops, &constants, None, 2).expect("MIR builds probe-a");
     let mleaf = lower_mir_pure(&mir).expect("MIR lowers probe-a");
     assert_eq!(
         super::lowering::guards_emitted(),
@@ -806,7 +806,7 @@ fn mir_known_boolean_keeps_its_guard() {
         Op::Add1,
         Op::Return,
     ];
-    let mir = mir::build_mir(&ops, &[], 2).expect("MIR builds");
+    let mir = mir::build_mir(&ops, &[], None, 2).expect("MIR builds");
     let mleaf = lower_mir_pure(&mir).expect("MIR lowers");
     assert_eq!(
         super::lowering::guards_emitted(),
@@ -917,7 +917,7 @@ fn mir_rooting_skip_on_an_inferred_fixnum_param_across_an_allocating_call() {
     ];
     f.constants = vec![Value::make_int(1), Value::make_int(2), g_sym, sq_sym].into();
     f.max_stack = 16;
-    let mir = mir::build_mir(&f.ops, &f.constants, 1).expect("MIR builds F");
+    let mir = mir::build_mir(&f.ops, &f.constants, None, 1).expect("MIR builds F");
     let merge = mir
         .blocks
         .iter()
@@ -932,7 +932,7 @@ fn mir_rooting_skip_on_an_inferred_fixnum_param_across_an_allocating_call() {
     // so drive the MIR lowering directly: inline sq as the production path
     // would, then lower what is left.
     let mut mir = mir;
-    let sq_mir = mir::build_mir(&[Op::Dup, Op::Mul, Op::Return], &[], 1).expect("sq builds");
+    let sq_mir = mir::build_mir(&[Op::Dup, Op::Mul, Op::Return], &[], None, 1).expect("sq builds");
     let n = mir::inline_pure_single_block_callees(
         &mut mir,
         &|_, v| (v.bits() == sq_sym.bits()).then(|| sq_mir.clone()),
@@ -1012,7 +1012,8 @@ fn mir_multi_phi_merge_matches_interpreter() {
             let mut vm = Vm::from_context(&mut eval);
             vm.execute(&f, vec![c]).expect("interp multi-phi").bits()
         };
-        let mir = mir::build_mir(&ops, &constants, 1).expect("MIR builds the two-phi diamond");
+        let mir =
+            mir::build_mir(&ops, &constants, None, 1).expect("MIR builds the two-phi diamond");
         let mleaf = lower_mir_pure(&mir).expect("MIR lowers the two-phi diamond");
         let ctx_ptr = &mut eval as *mut Context as *mut u8;
         let NativeRun::Ok(bits) = mleaf.call(ctx_ptr, &[c]) else {
@@ -1040,11 +1041,12 @@ fn inline_pure_callee_lowers_and_runs() {
     let sq_ops = [Op::Dup, Op::Mul, Op::Return];
     let caller_ops = [Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
     let caller_consts = [sq_sym];
-    let mut m = mir::build_mir(&caller_ops, &caller_consts, 1).expect("caller MIR builds");
+    let mut m = mir::build_mir(&caller_ops, &caller_consts, None, 1).expect("caller MIR builds");
     let n = mir::inline_pure_single_block_callees(
         &mut m,
         &|_, v| {
-            (v.bits() == sq_sym.bits()).then(|| mir::build_mir(&sq_ops, &[], 1).expect("sq builds"))
+            (v.bits() == sq_sym.bits())
+                .then(|| mir::build_mir(&sq_ops, &[], None, 1).expect("sq builds"))
         },
         16,
         &mut Vec::new(),
@@ -1153,7 +1155,7 @@ fn mir_call_lowering_runs_a_non_inlined_call() {
         Op::Return,
     ];
     let f_consts = [c_sym];
-    let m = mir::build_mir(&f_ops, &f_consts, 1).expect("F builds");
+    let m = mir::build_mir(&f_ops, &f_consts, None, 1).expect("F builds");
     let leaf = lower_mir_pure(&m).expect("F lowers (non-inlined call + precise deopt)");
     assert!(
         leaf.has_side_effects,
@@ -1346,7 +1348,7 @@ fn mir_scalar_replaces_non_escaping_cons() {
         Op::Car,
         Op::Return,
     ];
-    let m = mir::build_mir(&ops, &[], 2).expect("builds");
+    let m = mir::build_mir(&ops, &[], None, 2).expect("builds");
     let leaf = lower_mir_pure(&m).expect("scalar-replaced cons lowers (no bail)");
     assert!(
         !leaf.has_side_effects,
@@ -1368,7 +1370,7 @@ fn mir_allocates_escaping_cons() {
     let mut ev = Context::new();
     let ctx = &mut ev as *mut Context;
     let ops = [Op::StackRef(1), Op::StackRef(1), Op::Cons, Op::Return];
-    let m = mir::build_mir(&ops, &[], 2).expect("builds");
+    let m = mir::build_mir(&ops, &[], None, 2).expect("builds");
     let leaf = lower_mir_pure(&m).expect("escaping cons lowers (no bail)");
     assert!(
         !leaf.has_side_effects,
@@ -2659,7 +2661,7 @@ fn mir_pure_lowering_matches_interpreter() {
     ];
 
     for (ops, constants, arity, args) in cases {
-        let mir = mir::build_mir(&ops, &constants, arity).expect("MIR builds");
+        let mir = mir::build_mir(&ops, &constants, None, arity).expect("MIR builds");
         let leaf = lower_mir_pure(&mir).expect("MIR lowers (pure subset)");
 
         // Interpreter oracle.
@@ -2697,7 +2699,7 @@ fn mir_pure_lowering_matches_interpreter() {
 fn mir_pure_lowering_deopts_on_nonfixnum() {
     // (lambda (a b) (+ a b)) called with a string -> the fixnum guard fails.
     let ops = vec![Op::StackRef(1), Op::StackRef(1), Op::Add, Op::Return];
-    let mir = mir::build_mir(&ops, &[], 2).expect("builds");
+    let mir = mir::build_mir(&ops, &[], None, 2).expect("builds");
     let leaf = lower_mir_pure(&mir).expect("lowers");
     assert_eq!(
         leaf.call_for_test(&[Value::string("x"), Value::make_int(2)]),
@@ -2715,7 +2717,7 @@ fn mir_pure_lowering_handles_a_call() {
     use crate::emacs_core::eval::Context;
     // (lambda () (foo)) — has a Call (opaque) -> lowered.
     let ops = vec![Op::Constant(0), Op::Call(0), Op::Return];
-    let mir = mir::build_mir(&ops, &[Value::symbol("foo")], 0).expect("MIR builds");
+    let mir = mir::build_mir(&ops, &[Value::symbol("foo")], None, 0).expect("MIR builds");
     let leaf = lower_mir_pure(&mir).expect("a call lowers via the calls-slice");
     assert!(
         leaf.has_side_effects,
@@ -2723,7 +2725,7 @@ fn mir_pure_lowering_handles_a_call() {
     );
     // (lambda (a b) (eq a b)) — Eq lowers through the adapter.
     let eq_ops = vec![Op::StackRef(1), Op::StackRef(1), Op::Eq, Op::Return];
-    let eq_mir = mir::build_mir(&eq_ops, &[], 2).expect("eq MIR builds");
+    let eq_mir = mir::build_mir(&eq_ops, &[], None, 2).expect("eq MIR builds");
     let eq_leaf = lower_mir_pure(&eq_mir).expect("eq lowers via the adapter");
     assert!(
         !eq_leaf.has_side_effects,
@@ -2816,7 +2818,7 @@ fn mir_hoists_the_root_window_across_shim_sites() {
         churn_sym,
         Value::symbol("jit-mir-hoist-var"),
     ];
-    let mir = mir::build_mir(&ops, &constants, 1).expect("MIR builds");
+    let mir = mir::build_mir(&ops, &constants, None, 1).expect("MIR builds");
     let plan = super::lowering::plan_mir_leaf(&mir);
     assert_eq!(plan.rooting_sites, 3);
     let leaf = lower_mir_pure(&mir).expect("lowers");
@@ -2868,7 +2870,7 @@ fn mir_fixnum_residual_is_never_root_stored() {
         Value::symbol("jit-carry-l"),
         Value::symbol("jit-carry-f"),
     ];
-    let mir = mir::build_mir(&ops, &constants, 0).expect("MIR builds");
+    let mir = mir::build_mir(&ops, &constants, None, 0).expect("MIR builds");
     assert_eq!(super::lowering::plan_mir_leaf(&mir).rooting_sites, 3);
     lower_mir_pure(&mir).expect("lowers");
     assert_eq!(
@@ -2902,7 +2904,7 @@ fn mir_store_record_is_truncated_to_each_sites_count() {
         Op::Return,
     ];
     let constants = [Value::symbol("jit-carry-l"), Value::symbol("jit-carry-f")];
-    let mir = mir::build_mir(&ops, &constants, 1).expect("MIR builds");
+    let mir = mir::build_mir(&ops, &constants, None, 1).expect("MIR builds");
     lower_mir_pure(&mir).expect("lowers");
     assert_eq!(
         super::lowering::rootwin_counters(),
@@ -3504,7 +3506,7 @@ fn tier_gate_sends_a_loop_with_a_shim_op_to_the_baseline() {
     f.ops = loop_ops.clone();
     f.constants = vec![Value::make_int(0)].into();
     f.max_stack = 16;
-    let mir = mir::build_mir(&loop_ops, &f.constants, 2).expect("MIR builds");
+    let mir = mir::build_mir(&loop_ops, &f.constants, None, 2).expect("MIR builds");
     assert!(
         lower_mir_pure(&mir).is_ok(),
         "the MIR lowering accepts the loop, so the gate is what rejects it"
@@ -3544,7 +3546,7 @@ fn tier_gate_sends_a_loop_with_a_shim_op_to_the_baseline() {
     h.ops = self_loop.clone();
     h.constants = vec![Value::make_int(0)].into();
     h.max_stack = 16;
-    let mir = mir::build_mir(&self_loop, &h.constants, 2).expect("MIR builds the self-loop");
+    let mir = mir::build_mir(&self_loop, &h.constants, None, 2).expect("MIR builds the self-loop");
     assert!(
         super::lowering::plan_mir_leaf(&mir).has_backedge,
         "block 0 jumps to itself"
@@ -3678,7 +3680,7 @@ fn mir_cons_only_body_does_not_hoist() {
     let mut ev = crate::emacs_core::eval::Context::new();
     let ctx = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     let ops = vec![Op::StackRef(1), Op::StackRef(1), Op::Cons, Op::Return];
-    let mir = mir::build_mir(&ops, &[], 2).expect("MIR builds");
+    let mir = mir::build_mir(&ops, &[], None, 2).expect("MIR builds");
     let plan = super::lowering::plan_mir_leaf(&mir);
     assert!(plan.needs_rt && plan.rooting_sites == 0 && !plan.precise);
     let leaf = lower_mir_pure(&mir).expect("lowers");
@@ -3708,7 +3710,7 @@ fn mir_adapter_lowers_a_variable_read() {
     let ctx = &mut ev as *mut Context as *mut u8;
     let sym = Value::symbol("jit-mir-adapter-var");
     let ops = vec![Op::VarRef(0), Op::Return];
-    let mir = mir::build_mir(&ops, &[sym], 0).expect("MIR builds");
+    let mir = mir::build_mir(&ops, &[sym], None, 0).expect("MIR builds");
     let leaf = lower_mir_pure(&mir).expect("VarRef lowers via the adapter");
     assert!(leaf.has_side_effects, "an Opaque body is precise");
     assert_eq!(leaf.call(ctx, &[]), NativeRun::Signal, "unbound: signals");
@@ -3745,7 +3747,7 @@ fn mir_adapter_deopt_after_a_varset_resumes_past_it() {
         Op::Add1,
         Op::Return,
     ];
-    let mir = mir::build_mir(&ops, &[Value::make_int(7), sym], 1).expect("MIR builds");
+    let mir = mir::build_mir(&ops, &[Value::make_int(7), sym], None, 1).expect("MIR builds");
     let leaf = lower_mir_pure(&mir).expect("VarSet lowers via the adapter");
     match leaf.call(ctx, &[Value::make_int(5)]) {
         NativeRun::DeoptAt(resume) => {
@@ -3783,7 +3785,7 @@ fn mir_adapter_sizes_the_args_slot_for_a_wide_list() {
         Op::List(5),
         Op::Return,
     ];
-    let mir = mir::build_mir(&ops, &[], 1).expect("MIR builds");
+    let mir = mir::build_mir(&ops, &[], None, 1).expect("MIR builds");
     assert_eq!(super::lowering::plan_mir_leaf(&mir).max_call_args, 5);
     let leaf = lower_mir_pure(&mir).expect("List lowers via the adapter");
     let NativeRun::Ok(bits) = leaf.call(ctx, &[Value::make_int(9)]) else {
@@ -3828,7 +3830,7 @@ fn mir_adapter_keeps_conses_real_across_a_shim() {
         Op::Return,
     ];
     let constants = [Value::make_int(4096), Value::make_int(0)];
-    let mir = mir::build_mir(&ops, &constants, 2).expect("MIR builds");
+    let mir = mir::build_mir(&ops, &constants, None, 2).expect("MIR builds");
     let plan = super::lowering::plan_mir_leaf(&mir);
     assert!(plan.has_opaque && plan.precise);
     assert!(
@@ -6419,7 +6421,7 @@ fn fuzz_straightline_bodies_match_interpreter() {
         // Also exercise the typed-MIR Tier-2 path (build_mir + lower_mir_pure)
         // on the same body, skipping bodies the pure subset bails on. Localizes
         // lower_mir_pure miscompiles (the module-test failures under MIR wiring).
-        if let Ok(mir) = mir::build_mir(&ops, &constants, 0)
+        if let Ok(mir) = mir::build_mir(&ops, &constants, None, 0)
             && let Ok(mleaf) = lower_mir_pure(&mir)
         {
             match mleaf.call(ctx_ptr, &[]) {
@@ -6615,7 +6617,7 @@ fn fuzz_varset_bodies_match_interpreter_state() {
             seed,
             "baseline",
         );
-        if let Ok(mir) = mir::build_mir(&ops, &constants, 0)
+        if let Ok(mir) = mir::build_mir(&ops, &constants, None, 0)
             && let Ok(mleaf) = lower_mir_pure(&mir)
         {
             check_state_contract(

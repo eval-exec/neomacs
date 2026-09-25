@@ -6,7 +6,7 @@ use crate::emacs_core::bytecode::opcode::Op;
 fn builds_add_body() {
     // (lambda (a b) (+ a b)): StackRef(1) StackRef(1) Add Return.
     let ops = vec![Op::StackRef(1), Op::StackRef(1), Op::Add, Op::Return];
-    let mir = build_mir(&ops, &[], 2).expect("builds");
+    let mir = build_mir(&ops, &[], None, 2).expect("builds");
     assert_eq!(mir.arity, 2);
     assert_eq!(mir.blocks.len(), 1, "one block");
     let blk = &mir.blocks[0];
@@ -40,7 +40,7 @@ fn builds_branch_body_matching_cfg() {
     ];
     let constants = vec![Value::make_int(2)];
     let cfg = analyze_cfg(&ops, &constants, None, 1).unwrap();
-    let mir = build_mir(&ops, &constants, 1).expect("builds");
+    let mir = build_mir(&ops, &constants, None, 1).expect("builds");
     // One MIR block per bytecode leader, same leaders.
     assert_eq!(mir.blocks.len(), cfg.leaders.len());
     for blk in &mir.blocks {
@@ -76,7 +76,7 @@ fn builds_loop_with_backedge() {
         Op::Return,
     ];
     let constants = vec![Value::make_int(0)];
-    let mir = build_mir(&ops, &constants, 1).expect("builds");
+    let mir = build_mir(&ops, &constants, None, 1).expect("builds");
     // The backedge block ends in a Goto back to block0.
     let has_backedge = mir
         .blocks
@@ -90,7 +90,7 @@ fn builds_loop_with_backedge() {
 fn opaque_op_preserves_stack() {
     // (lambda (s) (length s)): StackRef(0) Length Return.
     let ops = vec![Op::StackRef(0), Op::Length, Op::Return];
-    let mir = build_mir(&ops, &[], 1).expect("builds");
+    let mir = build_mir(&ops, &[], None, 1).expect("builds");
     let blk = &mir.blocks[0];
     // Length is opaque (one operand -> one result).
     assert!(
@@ -114,7 +114,7 @@ fn zero_result_opaque_op_is_not_dropped() {
     // (setq v 7): Constant 7, Dup (the setq return value), VarSet v, Return.
     let ops = vec![Op::Constant(1), Op::Dup, Op::VarSet(0), Op::Return];
     let constants = vec![Value::symbol("v"), Value::make_int(7)];
-    let mir = build_mir(&ops, &constants, 0).expect("builds");
+    let mir = build_mir(&ops, &constants, None, 0).expect("builds");
     assert!(
         mir.blocks
             .iter()
@@ -131,21 +131,21 @@ fn zero_result_opaque_op_is_not_dropped() {
 }
 
 /// `build_mir`'s own unmodelled-control bail: a `Throw` body passes
-/// `analyze_cfg` (which treats Throw as a terminator) but the Phase 4a MIR
-/// builder defers it.
+/// `analyze_cfg` (which treats Throw as a terminator) but the MIR builder
+/// defers it, keyed by the op.
 #[test]
 fn bails_on_unmodelled_control() {
     // tag, value, Throw — analyze_cfg accepts (Throw terminates); MIR bails.
     let ops = vec![Op::Constant(0), Op::Constant(1), Op::Throw];
     let constants = vec![Value::symbol("tag"), Value::make_int(1)];
     assert!(matches!(
-        build_mir(&ops, &constants, 0),
-        Err(CompileError::UnsupportedOp("mir-unmodelled-control"))
+        build_mir(&ops, &constants, None, 0),
+        Err(CompileError::UnsupportedOp("mir-unmodelled-control:Throw"))
     ));
     // A non-constant-table Switch is caught earlier, by analyze_cfg — also
     // not buildable, which is all Phase 4a needs.
     let sw = vec![Op::Nil, Op::Nil, Op::Switch, Op::Nil, Op::Return];
-    assert!(build_mir(&sw, &[], 0).is_err());
+    assert!(build_mir(&sw, &[], None, 0).is_err());
 }
 
 #[test]
@@ -163,7 +163,7 @@ fn mir_inst_pre_stack_captures_inst_less_folds() {
         Op::Return,
     ];
     let constants = vec![Value::make_int(10), Value::make_int(20)];
-    let mir = build_mir(&ops, &constants, 0).expect("builds");
+    let mir = build_mir(&ops, &constants, None, 0).expect("builds");
     let add = mir
         .blocks
         .iter()
@@ -200,10 +200,13 @@ fn inline_composes_substitutions_for_returned_params() {
         Op::Return,
     ];
     let constants = vec![id_sym];
-    let mut m = build_mir(&caller_ops, &constants, 1).expect("caller builds");
+    let mut m = build_mir(&caller_ops, &constants, None, 1).expect("caller builds");
     let n = inline_pure_single_block_callees(
         &mut m,
-        &|_, v| (v.bits() == id_sym.bits()).then(|| build_mir(&id_ops, &[], 1).expect("id builds")),
+        &|_, v| {
+            (v.bits() == id_sym.bits())
+                .then(|| build_mir(&id_ops, &[], None, 1).expect("id builds"))
+        },
         8,
         &mut Vec::new(),
     );
@@ -227,14 +230,14 @@ fn cons_scalar_repl_finds_only_non_escaping_conses() {
         Op::Car,
         Op::Return,
     ];
-    let m = build_mir(&ops, &[], 2).expect("builds");
+    let m = build_mir(&ops, &[], None, 2).expect("builds");
     assert!(
         cons_scalar_repl_targets(&m).iter().any(|r| r.is_some()),
         "(car (cons a b)) cons is scalar-replaceable"
     );
     // A RETURNED cons escapes -> not replaceable.
     let ops2 = [Op::StackRef(1), Op::StackRef(1), Op::Cons, Op::Return];
-    let m2 = build_mir(&ops2, &[], 2).expect("builds");
+    let m2 = build_mir(&ops2, &[], None, 2).expect("builds");
     assert!(
         cons_scalar_repl_targets(&m2).iter().all(|r| r.is_none()),
         "a returned cons escapes"
@@ -257,7 +260,7 @@ fn bails_on_unreachable_block() {
     ];
     let constants = vec![Value::make_int(7)];
     assert!(matches!(
-        build_mir(&ops, &constants, 0),
+        build_mir(&ops, &constants, None, 0),
         Err(CompileError::UnsupportedOp("mir-unreachable-block"))
     ));
 }
@@ -312,7 +315,7 @@ fn float_feedback_bin_result_is_typed_any() {
             NumericFeedback::FixnumOnly
         }
     };
-    let m = build_mir_with_feedback(&ops, &constants, 2, &fb).expect("builds");
+    let m = build_mir_with_feedback(&ops, &constants, None, 2, &fb).expect("builds");
     let adds = bin_insts(&m);
     assert_eq!(adds.len(), 1);
     assert_eq!(adds[0].pc, 8);
@@ -329,7 +332,7 @@ fn float_feedback_bin_result_is_typed_any() {
         .find(|i| matches!(i.op, MirOp::Unary(UnaryKind::Add1, _)))
         .expect("the 1+");
     assert_eq!(add1.ty, LispType::Fixnum, "1+ has no float lowering");
-    let blind = build_mir(&ops, &constants, 2).expect("builds");
+    let blind = build_mir(&ops, &constants, None, 2).expect("builds");
     assert_eq!(bin_insts(&blind)[0].ty, LispType::Fixnum);
 }
 
@@ -350,11 +353,12 @@ fn float_rule_covers_add_sub_mul_div_per_site() {
         Op::Div, // pc 8
         Op::Return,
     ];
-    let all = build_mir_with_feedback(&ops, &[], 2, &|_| NumericFeedback::Float).expect("builds");
+    let all =
+        build_mir_with_feedback(&ops, &[], None, 2, &|_| NumericFeedback::Float).expect("builds");
     let tys: Vec<LispType> = bin_insts(&all).iter().map(|i| i.ty).collect();
     assert_eq!(tys, vec![LispType::Any; 4]);
     for float_pc in [2usize, 4, 6, 8] {
-        let m = build_mir_with_feedback(&ops, &[], 2, &|pc| {
+        let m = build_mir_with_feedback(&ops, &[], None, 2, &|pc| {
             if pc == float_pc {
                 NumericFeedback::Float
             } else {
@@ -395,7 +399,8 @@ fn rem_max_min_unary_ignore_float_feedback() {
         Op::Negate,
         Op::Return,
     ];
-    let m = build_mir_with_feedback(&ops, &[], 2, &|_| NumericFeedback::Float).expect("builds");
+    let m =
+        build_mir_with_feedback(&ops, &[], None, 2, &|_| NumericFeedback::Float).expect("builds");
     for inst in &m.blocks[0].insts {
         if matches!(inst.op, MirOp::Bin(..) | MirOp::Unary(..)) {
             assert_eq!(inst.ty, LispType::Fixnum, "{:?}", inst.op);
@@ -410,7 +415,7 @@ fn rem_max_min_unary_ignore_float_feedback() {
 fn infers_probe_a_loop_params() {
     let ops = probe_a_ops();
     let constants = vec![Value::make_int(0)];
-    let m = build_mir(&ops, &constants, 2).expect("builds");
+    let m = build_mir(&ops, &constants, None, 2).expect("builds");
     let ty = infer_value_types(&m);
     assert_eq!(m.blocks.len(), 4);
     for blk in &m.blocks[1..] {
@@ -451,7 +456,7 @@ fn merge_of_fixnum_and_nil_is_any() {
         Op::Return,
     ];
     let constants = vec![Value::make_int(0), Value::make_int(9), Value::NIL];
-    let m = build_mir(&ops, &constants, 0).expect("builds");
+    let m = build_mir(&ops, &constants, None, 0).expect("builds");
     let ty = infer_value_types(&m);
     let merge = m
         .blocks
@@ -479,7 +484,7 @@ fn block_zero_loop_header_param_stays_any() {
         Op::Return,
     ];
     let constants = vec![Value::make_int(0)];
-    let m = build_mir(&ops, &constants, 1).expect("builds");
+    let m = build_mir(&ops, &constants, None, 1).expect("builds");
     let ty = infer_value_types(&m);
     assert_eq!(ty[m.blocks[0].params[0].0 as usize], LispType::Any);
     // The exit block's param is fed only by block 0's param: Any too.
@@ -501,7 +506,7 @@ fn float_feedback_keeps_header_param_any() {
             NumericFeedback::FixnumOnly
         }
     };
-    let m = build_mir_with_feedback(&ops, &constants, 2, &fb).expect("builds");
+    let m = build_mir_with_feedback(&ops, &constants, None, 2, &fb).expect("builds");
     let ty = infer_value_types(&m);
     for blk in &m.blocks[1..] {
         let got: Vec<LispType> = blk.params.iter().map(|p| ty[p.0 as usize]).collect();
@@ -546,7 +551,7 @@ fn inlined_callee_result_flows_fixnum_into_header() {
         Op::Return,
     ];
     let constants = vec![Value::make_int(1), Value::make_int(0), sq_sym];
-    let mut m = build_mir(&caller_ops, &constants, 1).expect("caller builds");
+    let mut m = build_mir(&caller_ops, &constants, None, 1).expect("caller builds");
     let header = m
         .blocks
         .iter()
@@ -560,7 +565,10 @@ fn inlined_callee_result_flows_fixnum_into_header() {
     );
     let n = inline_pure_single_block_callees(
         &mut m,
-        &|_, v| (v.bits() == sq_sym.bits()).then(|| build_mir(&sq_ops, &[], 1).expect("sq builds")),
+        &|_, v| {
+            (v.bits() == sq_sym.bits())
+                .then(|| build_mir(&sq_ops, &[], None, 1).expect("sq builds"))
+        },
         8,
         &mut Vec::new(),
     );
@@ -603,4 +611,97 @@ fn never_needs_gc_root_matches_runtime_skip_set() {
             "{ty:?} is ambiguous — runtime tag test, neither skip nor unconditional push"
         );
     }
+}
+
+/// An `eq` jump table mapping `sym` to each GNU byte offset in `offsets`.
+fn jump_table(entries: &[(&str, i64)]) -> Value {
+    use crate::emacs_core::value::HashTableTest;
+    let table = Value::hash_table(HashTableTest::Eq);
+    let _ = table.with_hash_table_mut(|ht| {
+        for &(sym, offset) in entries {
+            let key = Value::symbol(sym).to_hash_key(&ht.test);
+            ht.insert(key, Value::symbol(sym), Value::fixnum(offset));
+        }
+    });
+    table
+}
+
+/// A `switch` jump table holds GNU BYTE offsets; only the body's offset map
+/// turns them into instruction indices (a multi-byte op earlier in the body,
+/// a `goto` or a 2-byte constant, puts them past the index). With the map
+/// the builder sees the baseline's CFG and stops at the one op it does not
+/// model, the Switch itself; the leaders are exactly the resolved targets.
+#[test]
+fn switch_body_resolves_targets_through_the_gnu_offset_map() {
+    use crate::emacs_core::bytecode::chunk::GnuByteOffsetMapEntry;
+    // (lambda (x) (pcase x ('a 20) ('b 30) (_ 10))), byte offsets 8 and 12
+    // naming instructions 5 and 7.
+    let ops = vec![
+        Op::StackRef(0), // 0: [x x]
+        Op::Constant(0), // 1: [x x table]
+        Op::Switch,      // 2: [x]
+        Op::Constant(1), // 3: miss: 10
+        Op::Return,      // 4
+        Op::Constant(2), // 5: byte 8: 20
+        Op::Return,      // 6
+        Op::Constant(3), // 7: byte 12: 30
+        Op::Return,      // 8
+    ];
+    let constants = vec![
+        jump_table(&[("jit-sw-a", 8), ("jit-sw-b", 12)]),
+        Value::make_int(10),
+        Value::make_int(20),
+        Value::make_int(30),
+    ];
+    let map = vec![
+        GnuByteOffsetMapEntry::new(8, 5),
+        GnuByteOffsetMapEntry::new(12, 7),
+    ];
+    let cfg = analyze_cfg(&ops, &constants, Some(&map), 1).expect("the baseline's CFG");
+    let mut targets = cfg.switch_targets[&2].clone();
+    targets.sort();
+    assert_eq!(targets, [(8, 5), (12, 7)]);
+    assert_eq!(cfg.leaders, [0, 3, 5, 7]);
+    assert!(matches!(
+        build_mir(&ops, &constants, Some(&map), 1),
+        Err(CompileError::UnsupportedOp("mir-unmodelled-control:Switch"))
+    ));
+    // Without the map byte offset 12 reads as an instruction index past the
+    // end: the pre-fix `BadOperand`.
+    assert!(matches!(
+        build_mir(&ops, &constants, None, 1),
+        Err(CompileError::BadOperand)
+    ));
+}
+
+/// The other face of the same bug: a byte offset that, read as an index,
+/// lands mid-expression enters that instruction at the switch's depth while
+/// its fall-through predecessor enters it one deeper, the pre-fix
+/// "inconsistent stack depth" (elb-pcase's kernel failed exactly so).
+#[test]
+fn switch_byte_offset_read_as_an_index_was_a_stack_model_error() {
+    use crate::emacs_core::bytecode::chunk::GnuByteOffsetMapEntry;
+    let ops = vec![
+        Op::StackRef(0), // 0: [x x]
+        Op::Constant(0), // 1: [x x table]
+        Op::Switch,      // 2: [x]
+        Op::Constant(1), // 3: miss: [x 10]
+        Op::Return,      // 4: (byte offset 4 read as an index lands here)
+        Op::Constant(2), // 5: byte 4: [x 20]
+        Op::Return,      // 6
+    ];
+    let constants = vec![
+        jump_table(&[("jit-sw-a", 4)]),
+        Value::make_int(10),
+        Value::make_int(20),
+    ];
+    let map = vec![GnuByteOffsetMapEntry::new(4, 5)];
+    assert!(matches!(
+        build_mir(&ops, &constants, None, 1),
+        Err(CompileError::UnsupportedOp("inconsistent stack depth"))
+    ));
+    assert!(matches!(
+        build_mir(&ops, &constants, Some(&map), 1),
+        Err(CompileError::UnsupportedOp("mir-unmodelled-control:Switch"))
+    ));
 }

@@ -1158,7 +1158,13 @@ fn resolve_inline_callee(ob: &Obarray, sym: Value) -> Option<mir::MirFunction> {
     }) {
         return None;
     }
-    mir::build_mir(bc.executable_ops(), &bc.constants, bc.params.required.len()).ok()
+    mir::build_mir(
+        bc.executable_ops(),
+        &bc.constants,
+        bc.executable_gnu_byte_offset_map(),
+        bc.params.required.len(),
+    )
+    .ok()
 }
 
 fn compile_bytecode_function_inner(
@@ -1218,7 +1224,15 @@ fn compile_bytecode_function_inner(
     let mir_phase = enter_phase(CompilePhase::MirBuild);
     let mir_built =
         (!has_rest && f.params.optional.is_empty() && dynamic_prefix == 0 && !reopt_gate).then(
-            || mir::build_mir_with_feedback(ops, constants, native_arity, &active_numeric_feedback),
+            || {
+                mir::build_mir_with_feedback(
+                    ops,
+                    constants,
+                    f.executable_gnu_byte_offset_map(),
+                    native_arity,
+                    &active_numeric_feedback,
+                )
+            },
         );
     if let Some(built) = mir_built
         && let Ok(mut mir) = built.inspect_err(|e| {
@@ -2325,6 +2339,8 @@ pub(crate) fn has_op_call_spec_sites(
     arity: usize,
     obarray: &Obarray,
 ) -> bool {
+    // No offset map on the AOT paths: they turn Switch bodies away first.
+    debug_assert!(!super::aot::aot_body_has_switch(ops));
     let Ok(cfg) = analyze_cfg(ops, constants, None, arity) else {
         return false;
     };
@@ -3719,6 +3735,8 @@ pub(crate) fn build_baseline_leaf_object<S: LeafSink>(
     // entries emitted); `None` → CBSym-only (increment A, obarray-free).
     obarray: Option<&Obarray>,
 ) -> Result<BaselineAotMeta, CompileError> {
+    // No offset map: `baseline_is_aot_runnable` admits no Switch body.
+    debug_assert!(!super::aot::aot_body_has_switch(ops));
     let cfg = analyze_cfg(ops, constants, None, arity)?;
     let known_fixnum_slots = compute_known_fixnum_slots(ops, constants, &cfg);
     let n = ops.len();

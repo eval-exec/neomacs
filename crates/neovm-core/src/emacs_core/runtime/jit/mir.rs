@@ -31,6 +31,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use super::compile::{CompileError, analyze_cfg, simple_effect};
+use crate::emacs_core::bytecode::chunk::GnuByteOffsetMapEntry;
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::jit::NumericFeedback;
 use crate::emacs_core::value::Value;
@@ -339,6 +340,16 @@ impl Builder {
 /// Deliberately mirrors [`super::compile::analyze_cfg`]'s block + terminator
 /// model so the two agree on structure (a later phase will assert this).
 ///
+/// `offset_map` is the body's GNU byte-offset map
+/// (`ByteCodeFunction::executable_gnu_byte_offset_map`), exactly what the
+/// baseline passes to `analyze_cfg`: a `switch` jump table holds GNU BYTE
+/// offsets, and only the map turns them into instruction indices. `None`
+/// means the ops are index-addressed (a hand-built body, whose tables hold
+/// instruction indices). Passing `None` for real bytecode read each table's
+/// byte offsets as indices, so a switch body failed as a stack-model error
+/// (`BadOperand`, `StackUnderflow`, "inconsistent stack depth") or an
+/// orphaned `mir-unreachable-block` instead of its real reason.
+///
 /// Feedback-blind: every arithmetic site is typed as if `FixnumOnly`. Exact
 /// for a callee resolved for inlining and for the AOT path, because every MIR
 /// `Bin` guards both operands and range-checks its result — the value IS a
@@ -347,9 +358,12 @@ impl Builder {
 pub fn build_mir(
     ops: &[Op],
     constants: &[Value],
+    offset_map: Option<&[GnuByteOffsetMapEntry]>,
     arity: usize,
 ) -> Result<MirFunction, CompileError> {
-    build_mir_with_feedback(ops, constants, arity, &|_| NumericFeedback::FixnumOnly)
+    build_mir_with_feedback(ops, constants, offset_map, arity, &|_| {
+        NumericFeedback::FixnumOnly
+    })
 }
 
 /// [`build_mir`] with the body's per-site numeric feedback.
@@ -367,12 +381,13 @@ pub fn build_mir(
 pub fn build_mir_with_feedback(
     ops: &[Op],
     constants: &[Value],
+    offset_map: Option<&[GnuByteOffsetMapEntry]>,
     arity: usize,
     feedback: &dyn Fn(usize) -> NumericFeedback,
 ) -> Result<MirFunction, CompileError> {
-    // Reuse the baseline CFG analysis (block leaders + entry stack depths).
-    // No GNU byte-offset map: a `Switch` here bails anyway (unmodelled in 4a).
-    let cfg = analyze_cfg(ops, constants, None, arity)?;
+    // Reuse the baseline CFG analysis (block leaders + entry stack depths),
+    // with the baseline's GNU byte-offset map (see `build_mir`).
+    let cfg = analyze_cfg(ops, constants, offset_map, arity)?;
     let n = ops.len();
 
     let mut b = Builder {
@@ -489,15 +504,15 @@ pub fn build_mir_with_feedback(
                     });
                     break;
                 }
-                // Unmodelled-in-4a control flow: bail (the baseline tier handles
-                // these functions).
+                // Unmodelled control flow: bail, keyed by the op (the
+                // baseline tier handles these functions).
                 Op::Switch
                 | Op::Throw
                 | Op::PushConditionCase(_)
                 | Op::PushConditionCaseRaw(_)
                 | Op::PushCatch(_)
                 | Op::PopHandler => {
-                    return Err(CompileError::UnsupportedOp("mir-unmodelled-control"));
+                    return Err(CompileError::UnsupportedOp(unmodelled_control_key(op)));
                 }
                 _ => {
                     // Snapshot the pre-op stack (the accurate model stack, incl. the
@@ -562,6 +577,20 @@ pub fn build_mir_with_feedback(
         constants: constants.into(),
         inline_epoch: None,
     })
+}
+
+/// The bail key of a control op the builder does not model, naming the op
+/// so the census tells a Switch body from a handler body.
+fn unmodelled_control_key(op: &Op) -> &'static str {
+    match op {
+        Op::Switch => "mir-unmodelled-control:Switch",
+        Op::Throw => "mir-unmodelled-control:Throw",
+        Op::PushConditionCase(_) => "mir-unmodelled-control:PushConditionCase",
+        Op::PushConditionCaseRaw(_) => "mir-unmodelled-control:PushConditionCaseRaw",
+        Op::PushCatch(_) => "mir-unmodelled-control:PushCatch",
+        Op::PopHandler => "mir-unmodelled-control:PopHandler",
+        _ => "mir-unmodelled-control",
+    }
 }
 
 /// Lower one non-terminator opcode into MIR instruction(s), updating the model
