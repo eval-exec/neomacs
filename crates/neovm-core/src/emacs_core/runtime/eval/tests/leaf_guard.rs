@@ -30,7 +30,8 @@ fn leaf_active_asserts_at_every_safe_point() {
     crate::test_utils::init_test_tracing();
     let mut ctx = Context::new();
     let car = Value::symbol("car");
-    let cases: Vec<(&str, Box<dyn FnOnce(&mut Context)>)> = vec![
+    type GuardedEntry = Box<dyn FnOnce(&mut Context)>;
+    let cases: Vec<(&str, GuardedEntry)> = vec![
         (
             "funcall",
             Box::new(move |ctx: &mut Context| {

@@ -168,6 +168,8 @@ impl Drop for OwnedStringDataGuard<'_> {
     }
 }
 
+// Read only by the JIT's inline string paths.
+#[cfg_attr(not(feature = "jit"), allow(dead_code))]
 impl LispString {
     // -- Layout for compiled code -----------------------------------------
     //
@@ -190,7 +192,9 @@ impl LispString {
         std::mem::offset_of!(LispString, storage_capacity);
     /// `size_byte` of a normally allocated unibyte string (GNU's `-1`).
     pub(crate) const JIT_SIZE_BYTE_UNIBYTE: i64 = SIZE_BYTE_UNIBYTE_NORMAL;
+}
 
+impl LispString {
     // -- Constructors --------------------------------------------------------
 
     fn normalize_size_byte(size_byte: i64, static_rodata: bool) -> i64 {

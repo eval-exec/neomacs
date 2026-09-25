@@ -435,7 +435,9 @@ fn bcall_leaf_sites_match_the_protocol_call() {
     )
     .expect("setup");
     let ctx_ptr = &mut ev as *mut Context as *mut u8;
-    let cases: &[(&str, LeafId, &[&str], &[&str], &[&str])] = &[
+    /// `(builtin, leaf, first args, second args, third args)`.
+    type BcallCase<'a> = (&'a str, LeafId, &'a [&'a str], &'a [&'a str], &'a [&'a str]);
+    let cases: &[BcallCase] = &[
         (
             "gethash",
             LeafId::Gethash,
