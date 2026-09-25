@@ -22,7 +22,6 @@ use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
 
 use super::ReoptLevel;
 use super::compile::{
@@ -418,6 +417,21 @@ fn compile_osr_leaf(
     name_hint: Option<SymId>,
 ) -> Option<OsrEntry> {
     record_compiled_obarray(Some(obarray));
+    let clock = stats::CompileClock::start(stats::CompileOrigin::Osr);
+    let entry = compile_osr_leaf_timed(obarray, func, osr_pc, id, name_hint);
+    clock.finish(entry.is_some());
+    entry
+}
+
+/// [`compile_osr_leaf`]'s body, inside its compile clock.
+fn compile_osr_leaf_timed(
+    obarray: &Obarray,
+    func: &ByteCodeFunction,
+    osr_pc: usize,
+    id: u64,
+    name_hint: Option<SymId>,
+) -> Option<OsrEntry> {
+    let gate_phase = stats::enter_phase(stats::CompilePhase::Gate);
     let dbg = std::env::var_os("NEOMACS_OSR_DEBUG").is_some();
     // Deopt reoptimization gave up on this source: no native code at all.
     if func.jit_runtime().reopt_level() == ReoptLevel::Interpreter {
@@ -477,6 +491,8 @@ fn compile_osr_leaf(
     let _numeric = super::compile::publish_numeric_feedback(func);
     let _label = stats::naming_enabled()
         .then(|| stats::perf_map::LeafLabelScope::enter(id, name_hint, func));
+    drop(gate_phase);
+    let lower_phase = stats::enter_phase(stats::CompilePhase::Lower);
     let mut leaf = match super::compile::lower_leaf_full_osr(
         ops,
         &func.constants,
@@ -494,6 +510,7 @@ fn compile_osr_leaf(
             return None;
         }
     };
+    drop(lower_phase);
     if dbg {
         eprintln!("OSR_DEBUG compiled: pc={osr_pc} depth={entry_depth} binds={bind_depth}");
     }
@@ -731,9 +748,10 @@ fn compile_cache_entry(
     // Per-function entry names (perf map, CLIF/asm dumps), only when asked.
     let _label = stats::naming_enabled()
         .then(|| stats::perf_map::LeafLabelScope::enter(id, name_hint, func));
-    let started = Instant::now();
+    let clock = stats::CompileClock::start(request.origin);
     let result = compile_bytecode_function_requested(func, obarray, request);
-    stats::record_compile(started.elapsed(), func.executable_ops().len(), &result);
+    let elapsed = clock.finish(result.is_ok());
+    stats::record_compile(elapsed, func.executable_ops().len(), &result);
     match result {
         Ok(mut leaf) => {
             leaf.obs.id = id;
@@ -1151,6 +1169,7 @@ pub(crate) fn compile_and_cache_jit_leaf(
         CompileRequest {
             regalloc: RegallocPolicy::Auto,
             bypass_profit_gate: false,
+            origin: stats::CompileOrigin::AotDrain,
         },
         None,
     );
@@ -1543,6 +1562,13 @@ pub fn try_run_compiled(
         let request = CompileRequest {
             regalloc: policy,
             bypass_profit_gate,
+            origin: if retier {
+                stats::CompileOrigin::Retier
+            } else if deferred.is_some() {
+                stats::CompileOrigin::DeferralExpired
+            } else {
+                stats::CompileOrigin::Dispatch
+            },
         };
         match cache.get_or_insert_with(id, || {
             // R1c-6: consult AOT FIRST (additive — a miss/error falls through to
@@ -1746,6 +1772,7 @@ pub(crate) fn resolve_compiled_leaf_ptr(
                 CompileRequest {
                     regalloc: RegallocPolicy::Auto,
                     bypass_profit_gate: false,
+                    origin: stats::CompileOrigin::FirstSight,
                 },
                 name_hint,
             )

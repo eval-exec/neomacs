@@ -78,6 +78,7 @@ fn jit_final_report_renders_every_section() {
         tags,
         [
             "neovm-jit-final",
+            "neovm-jit-final-phases",
             "neovm-jit-final-mir-bails",
             "neovm-jit-final-inline",
             "neovm-jit-final-runs",
@@ -94,6 +95,12 @@ fn jit_final_report_renders_every_section() {
     assert!(
         head.contains("| since_command_loop: compiles=4 ok=4 native_entries=100 "),
         "{head}"
+    );
+    assert_eq!(
+        body_of(&lines, ReportTag::FinalPhases),
+        "origin[-] phase_us[gate=0,mir_build=0,fuse=0,lower=0,setup=0,codegen=0,finalize=0,other=0] \
+         phase_total_us=0",
+        "no origin rows and no split: every field still prints"
     );
     assert_eq!(
         body_of(&lines, ReportTag::FinalMirBails),

@@ -738,6 +738,7 @@ pub(crate) fn compile_bytecode_function_tiered(
         CompileRequest {
             regalloc: policy,
             bypass_profit_gate: false,
+            origin: super::stats::CompileOrigin::Direct,
         },
     )
 }
@@ -751,6 +752,8 @@ pub struct CompileRequest {
     /// re-attempt of a call-heavy body that has since proven hot enough to
     /// amortize its compile (`RuntimeState::profit_deferred_heat`).
     pub bypass_profit_gate: bool,
+    /// Why the compile runs (the `[neovm-jit-*phases]` origin rows).
+    pub(crate) origin: super::stats::CompileOrigin,
 }
 
 thread_local! {
@@ -969,6 +972,7 @@ pub fn compile_bytecode_function_requested(
     obarray: Option<&Obarray>,
     request: CompileRequest,
 ) -> Result<CompiledLeaf, CompileError> {
+    let gate_phase = super::stats::enter_phase(super::stats::CompilePhase::Gate);
     // Publish this body's per-site operand types and no-inline call sites
     // for the whole compile, before anything below reads them.
     let _numeric = publish_numeric_feedback(f);
@@ -983,6 +987,7 @@ pub fn compile_bytecode_function_requested(
         BYPASS_PROFIT_GATE.with(|b| b.replace(request.bypass_profit_gate)),
         ACTIVE_CALL_HEAVY.with(|b| b.replace(call_heavy)),
     );
+    drop(gate_phase);
     struct Restore((bool, bool));
     impl Drop for Restore {
         fn drop(&mut self) {
@@ -994,6 +999,7 @@ pub fn compile_bytecode_function_requested(
     let started = std::time::Instant::now();
     let result = compile_bytecode_function_inner(f, obarray);
     if jit_profile_path().is_some() {
+        let _phase = super::stats::enter_phase(super::stats::CompilePhase::Other);
         jit_profile_emit(f, obarray, result.as_ref(), started.elapsed(), call_heavy);
     }
     result
@@ -1139,6 +1145,8 @@ fn compile_bytecode_function_inner(
     f: &ByteCodeFunction,
     obarray: Option<&Obarray>,
 ) -> Result<CompiledLeaf, CompileError> {
+    use super::stats::{CompilePhase, enter_phase};
+    let gate_phase = enter_phase(CompilePhase::Gate);
     let ops = f.executable_ops();
     let required = f.params.required.len();
     let nonrest = required + f.params.optional.len();
@@ -1186,6 +1194,8 @@ fn compile_bytecode_function_inner(
     if reopt_gate {
         super::stats::record_mir(super::stats::MirFunnel::GateReopt);
     }
+    drop(gate_phase);
+    let mir_phase = enter_phase(CompilePhase::MirBuild);
     let mir_built =
         (!has_rest && f.params.optional.is_empty() && dynamic_prefix == 0 && !reopt_gate).then(
             || mir::build_mir_with_feedback(ops, constants, native_arity, &active_numeric_feedback),
@@ -1279,6 +1289,7 @@ fn compile_bytecode_function_inner(
         } else {
             None
         };
+        let lower_phase = reject.is_none().then(|| enter_phase(CompilePhase::Lower));
         if let Some(key) = reject {
             super::stats::record_mir_bail(key);
             super::stats::record_mir(super::stats::MirFunnel::TierRejected);
@@ -1296,12 +1307,15 @@ fn compile_bytecode_function_inner(
             leaf.inline_deps = inlined_syms.into();
             return Ok(leaf);
         }
+        drop(lower_phase);
     }
+    drop(mir_phase);
     // Splice constant-bytecode callees into the body before any of the
     // baseline's analyses run, so the CFG, the known-fixnum fixpoint, call
     // speculation and the per-slot variables all see one fused function
     // (`inline::fuse_calls`). The profitability gate below then judges the
     // fused shape: a body whose calls are gone is no longer call-dominated.
+    let fuse_phase = enter_phase(CompilePhase::Fuse);
     let fused = inline::jit_inline_on()
         .then(|| {
             let caller_feedback: Vec<_> = (0..ops.len()).map(active_numeric_feedback).collect();
@@ -1319,12 +1333,16 @@ fn compile_bytecode_function_inner(
         Some(fused) => (fused.ops.as_slice(), fused.constants.as_slice()),
         None => (ops, constants),
     };
+    drop(fuse_phase);
     // The MIR tier above already claimed any body its inlining/unboxing makes
     // worthwhile. What's left goes to the baseline, whose per-op call shims aren't
     // worth it for a call-dominated body — keep those on the interpreter.
+    let gate_phase = enter_phase(CompilePhase::Gate);
     if !body_is_jit_profitable(ops, constants) {
         return Err(CompileError::NotProfitable);
     }
+    drop(gate_phase);
+    let _lower_phase = enter_phase(CompilePhase::Lower);
     let _fused_scope = fused.clone().map(inline::FusedScope::enter);
     let _fused_feedback = fused
         .as_ref()
@@ -3513,10 +3531,12 @@ pub fn lower_leaf_full_osr(
     // effects. The real headroom is semantic (unboxing/inlining), which needs
     // an MIR-level optimizing Tier-2; opt_level="speed" belongs there, not at
     // this tier where it would only cost compile time.
+    let setup_phase = super::stats::enter_phase(super::stats::CompilePhase::Setup);
     let mut builder = JITBuilder::with_isa(jit_isa()?, default_libcall_names());
     // Every shim, from the one table (see `shims::JIT_SHIM_TABLE`).
     shims::register_shims(&mut builder);
     let mut module = JITModule::new(builder);
+    drop(setup_phase);
     // has_backedge + needs_rt via the shared single-source helpers (R2-E) — same
     // logic as before, just factored so the baseline-AOT emit can reuse it.
     let has_backedge = baseline_has_backedge(ops, &cfg);
@@ -3565,11 +3585,13 @@ pub fn lower_leaf_full_osr(
     )?;
 
     // --- JIT-only module epilogue (the wrapper). ----------------------------
+    let finalize_phase = super::stats::enter_phase(super::stats::CompilePhase::Finalize);
     module
         .finalize_definitions()
         .map_err(|e| CompileError::Backend(BackendError::Finalize(e.to_string())))?;
 
     let entry = module.get_finalized_function(fid);
+    drop(finalize_phase);
     super::stats::asm_dump::flush(&super::stats::asm_dump::AsmLeafInfo {
         tier: match osr_pc {
             Some(pc) => super::stats::perf_map::LabelTier::Osr(pc),
@@ -4668,9 +4690,11 @@ fn build_leaf_fn<M: Module>(
     if disasm {
         ctx.set_disasm(true);
     }
+    let codegen_phase = super::stats::enter_phase(super::stats::CompilePhase::Codegen);
     module
         .define_function(fid, &mut ctx)
         .map_err(|e| CompileError::Backend(BackendError::Define(e.to_string())))?;
+    drop(codegen_phase);
     if disasm {
         super::stats::asm_dump::stash(&ctx);
     }
@@ -4705,6 +4729,9 @@ mod arith_generic_integer_tests;
 #[cfg(test)]
 #[path = "tests/array_shims.rs"]
 mod array_shim_tests;
+#[cfg(test)]
+#[path = "tests/compile_pipeline.rs"]
+mod compile_pipeline_tests;
 #[cfg(test)]
 #[path = "tests/inline.rs"]
 mod inline_tests;

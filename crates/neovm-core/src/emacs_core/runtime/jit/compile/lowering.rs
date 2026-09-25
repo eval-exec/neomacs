@@ -2537,6 +2537,7 @@ pub(super) fn lower_mir_with_plan(
     // host addresses (AOT replaces this with `Linkage::Import` + dlopen);
     // `JITModule::new` (AOT: `ObjectModule::new`); `finalize_definitions` +
     // `get_finalized_function` below (AOT: `ObjectModule::finish()` + `dlsym`).
+    let setup_phase = super::super::stats::enter_phase(super::super::stats::CompilePhase::Setup);
     let mut builder = JITBuilder::with_isa(jit_isa()?, default_libcall_names());
     if plan.needs_rt {
         // The shims the calls-slice + cons allocation reference; declare_rt_refs
@@ -2545,6 +2546,7 @@ pub(super) fn lower_mir_with_plan(
         super::shims::register_shims(&mut builder);
     }
     let mut module = JITModule::new(builder);
+    drop(setup_phase);
 
     // Precise-deopt spill buffer + cells, sized to the deepest pre-op operand stack
     // (the framestate a post-call guard spills). Empty/inert for pure bodies (which
@@ -2615,10 +2617,13 @@ pub(super) fn lower_mir_with_plan(
     )?;
 
     // --- JIT-only module epilogue (the wrapper). ----------------------------
+    let finalize_phase =
+        super::super::stats::enter_phase(super::super::stats::CompilePhase::Finalize);
     module
         .finalize_definitions()
         .map_err(|e| CompileError::Backend(BackendError::Finalize(e.to_string())))?;
     let entry = module.get_finalized_function(fid);
+    drop(finalize_phase);
     super::super::stats::asm_dump::flush(&super::super::stats::asm_dump::AsmLeafInfo {
         tier: super::super::stats::perf_map::LabelTier::Mir,
         entry_name,
@@ -3775,9 +3780,12 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
     if disasm {
         ctx.set_disasm(true);
     }
+    let codegen_phase =
+        super::super::stats::enter_phase(super::super::stats::CompilePhase::Codegen);
     module
         .define_function(fid, &mut ctx)
         .map_err(|e| CompileError::Backend(BackendError::Define(e.to_string())))?;
+    drop(codegen_phase);
     if disasm {
         super::super::stats::asm_dump::stash(&ctx);
     }

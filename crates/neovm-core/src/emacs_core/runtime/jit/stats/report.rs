@@ -6,7 +6,7 @@
 //! lines stay the record for a process that dies by a signal.
 
 use super::epoch::EpochCounters;
-use super::{CompileStats, ReportTag, format_summary};
+use super::{CompileStats, ReportTag, format_phases, format_summary};
 use crate::emacs_core::jit::compile::LeafTotals;
 
 /// How many leaves each ranked leaf section prints.
@@ -174,6 +174,7 @@ impl FinalReport {
             ));
         }
         lines.push((ReportTag::Final, head));
+        lines.push((ReportTag::FinalPhases, format_phases(&self.compile)));
         lines.push((ReportTag::FinalMirBails, or_dash(&self.mir_bails)));
         lines.push((ReportTag::FinalInline, or_dash(&self.inline)));
         let (mut entries_all, mut deopt_at, mut deopt_rerun, mut signals) = (

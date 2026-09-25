@@ -24,6 +24,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use super::compile::{CompileError, CompiledLeaf, LeafTotals};
+pub(crate) use phases::{CompileClock, CompileOrigin, CompilePhase, enter_phase};
 
 /// Upper bounds (exclusive, µs) of the first seven histogram buckets; the
 /// eighth bucket is everything >= 10ms.
@@ -109,6 +110,14 @@ pub(crate) struct CompileStats {
     /// Deopts of a leaf already stale (retired): its callers were unlinked,
     /// nothing invalidated.
     pub reopt_stale: u64,
+    /// Per-[`CompileOrigin`] compile counts, successes and stall µs. Unlike
+    /// `total_compiles` this includes OSR compiles (origin `osr`), so the
+    /// rows sum to `total_compiles`/`total_us` plus the OSR row.
+    pub origins: [phases::OriginStats; <CompileOrigin as strum::EnumCount>::COUNT],
+    /// Per-[`CompilePhase`] ns of every compile timed under the phase split
+    /// (`NEOVM_JIT_COMPILE_STATS`); zero when the split was off. Sums to the
+    /// origin rows' µs of those compiles.
+    pub phase_ns: [u64; <CompilePhase as strum::EnumCount>::COUNT],
 }
 
 /// Number of deopt census buckets.
@@ -123,6 +132,16 @@ impl CompileStats {
         let mut histogram_us = [0u64; 8];
         for (i, slot) in histogram_us.iter_mut().enumerate() {
             *slot = d(self.histogram_us[i], base.histogram_us[i]);
+        }
+        let mut origins = self.origins;
+        for (now, then) in origins.iter_mut().zip(base.origins.iter()) {
+            now.count = d(now.count, then.count);
+            now.ok = d(now.ok, then.ok);
+            now.us = d(now.us, then.us);
+        }
+        let mut phase_ns = self.phase_ns;
+        for (now, then) in phase_ns.iter_mut().zip(base.phase_ns.iter()) {
+            *now = d(*now, *then);
         }
         CompileStats {
             total_compiles: d(self.total_compiles, base.total_compiles),
@@ -151,6 +170,8 @@ impl CompileStats {
             deopt_osr: d(self.deopt_osr, base.deopt_osr),
             reopt_levels: std::array::from_fn(|i| d(self.reopt_levels[i], base.reopt_levels[i])),
             reopt_stale: d(self.reopt_stale, base.reopt_stale),
+            origins,
+            phase_ns,
         }
     }
 
@@ -355,6 +376,12 @@ pub(crate) enum ReportTag {
     /// (`NEOVM_JIT_LEAF`); printed only when a leaf site was compiled.
     #[strum(serialize = "neovm-jit-final-builtin-leaves")]
     FinalBuiltinLeaves,
+    /// Periodic compile origins and phase split (every 64 compiles).
+    #[strum(serialize = "neovm-jit-phases")]
+    Phases,
+    /// Exit report: compile origins and phase split.
+    #[strum(serialize = "neovm-jit-final-phases")]
+    FinalPhases,
 }
 
 /// The process-wide report sink, chosen once from `NEOVM_JIT_STATS_FILE`.
@@ -463,6 +490,7 @@ pub(super) fn record_compile(
     });
     if summary_enabled() && stats.total_compiles.is_multiple_of(64) {
         report_line(ReportTag::Compile, &format_summary(&stats));
+        report_line(ReportTag::Phases, &format_phases(&stats));
         // The fuser records at compile time, so its census belongs with the
         // compile summary: the dispatch-cadence print below can miss a body
         // whose calls the fuser removed, since it then stops dispatching.
@@ -513,6 +541,41 @@ pub(crate) fn format_deopt_causes(s: &CompileStats) -> String {
         .map(|(name, n)| format!("{name}={n}"))
         .collect();
     parts.join(" ")
+}
+
+/// Fold one compile's origin row and, when the phase split ran, its
+/// per-phase ns into this thread's aggregates ([`CompileClock::finish`]).
+pub(super) fn record_origin_and_phases(
+    origin: CompileOrigin,
+    ok: bool,
+    elapsed: Duration,
+    split_ns: Option<&[u64; <CompilePhase as strum::EnumCount>::COUNT]>,
+) {
+    STATS.with(|s| {
+        let mut stats = s.get();
+        let row = &mut stats.origins[origin as usize];
+        row.count += 1;
+        row.ok += u64::from(ok);
+        row.us += elapsed.as_micros() as u64;
+        if let Some(split) = split_ns {
+            for (total, ns) in stats.phase_ns.iter_mut().zip(split.iter()) {
+                *total += ns;
+            }
+        }
+        s.set(stats);
+    });
+}
+
+/// One-line rendering of the origin rows and the phase split:
+/// `origin[dispatch=count/ok/µs,...] phase_us[gate=..,...,other=..]
+/// phase_total_us=N`. The phase fields are zero unless the split was on.
+pub(crate) fn format_phases(s: &CompileStats) -> String {
+    let phase_total_us = s.phase_ns.iter().sum::<u64>() / 1_000;
+    format!(
+        "origin[{}] phase_us[{}] phase_total_us={phase_total_us}",
+        phases::render_origins(&s.origins),
+        phases::render_phase_us(&s.phase_ns),
+    )
 }
 
 /// Record a cache miss served from the AOT store — a pre-warmed leaf, no JIT
@@ -933,6 +996,7 @@ pub(crate) fn reset_compile_stats() {
 pub(crate) mod asm_dump;
 pub(crate) mod epoch;
 pub(crate) mod perf_map;
+pub(crate) mod phases;
 mod report;
 
 pub(crate) use epoch::{note_function_cell_unchanged, note_function_epoch_bump};
@@ -956,3 +1020,7 @@ mod perf_map_tests;
 #[cfg(test)]
 #[path = "stats/tests/asm_dump_test.rs"]
 mod asm_dump_tests;
+
+#[cfg(test)]
+#[path = "stats/tests/phases_test.rs"]
+mod phases_tests;
