@@ -23,6 +23,8 @@ fn printed(ctx: &mut Context, src: &str) -> String {
 
 /// `(lambda (x) (+ x V0))` as GNU compiles it: dup, constant 0, plus, return.
 const ADDER: &str = "(make-byte-code 257 \"\\211\\300\\\\\\207\" [3] 3)";
+/// [`ADDER`] as the reader reads it from an `.elc` file.
+const ADDER_LITERAL: &str = "#[257 \"\\211\\300\\\\\\207\" [3] 3]";
 /// `(lambda () (list V0 V1 tail))` over `[V0 V1 tail]`, with a docstring.
 const PROTO: &str = "(make-byte-code 0 \"\\300\\301\\302E\\207\" [V0 V1 csi-tail] 3 \"Doc.\")";
 
@@ -63,7 +65,9 @@ fn aref_slots_1_and_2_are_the_same_objects_on_every_read() {
 #[test]
 fn slot_objects_are_created_lazily() {
     let mut ctx = Context::new();
-    let f = eval(&mut ctx, ADDER);
+    // A reader literal (as `.elc` loading makes them): no Lisp object for
+    // slots 1 and 2 exists until something reads them.
+    let f = eval(&mut ctx, ADDER_LITERAL);
     assert_eq!(
         f.bytecode_slot_object_if_created(ByteCodeSlotObject::Code),
         None
@@ -242,4 +246,22 @@ fn aset_into_the_constants_vector_is_not_seen_by_either_tier() {
             let _ = (jit, bc);
         }
     }
+}
+
+/// `make-byte-code`'s result holds the very string and vector it was given,
+/// as GNU's does; a pool the construction converted keeps its own vector.
+#[test]
+fn make_byte_code_keeps_the_given_code_string_and_constants_vector() {
+    let mut ctx = Context::new();
+    assert_eq!(
+        printed(
+            &mut ctx,
+            "(let* ((s (unibyte-string 192 135)) (v (vector 42)) \
+                    (f (make-byte-code 0 s v 1))) \
+               (list (eq (aref f 1) s) (eq (aref f 2) v) (funcall f) \
+                     (progn (aset v 0 43) (aref (aref f 2) 0)) (funcall f)))"
+        ),
+        // GNU: (t t 42 43 43); the last is P3.2 L4b (not seen by code).
+        "(t t 42 43 42)"
+    );
 }

@@ -5755,7 +5755,35 @@ pub(crate) fn builtin_make_byte_code(args: Vec<Value>) -> EvalResult {
         ));
     }
 
-    make_byte_code_from_slots(&args)
+    let function = make_byte_code_from_slots(&args)?;
+    adopt_make_byte_code_slot_objects(function, args[1], args[2]);
+    Ok(function)
+}
+
+/// GNU's `make-byte-code` result IS a vector of its arguments, so
+/// `(aref f 1)` and `(aref f 2)` are the very string and vector passed in.
+/// Keep them as the function's slot objects (`Value::bytecode_slot_object`):
+/// the string always (its bytes are the function's), the vector only when
+/// its elements are exactly the pool the function runs from (construction
+/// converts nested compiled literals, which would make them differ). Neither
+/// is read by code afterwards, so a later `aset` into them is still not seen
+/// by the function (P3.2 L4b).
+fn adopt_make_byte_code_slot_objects(function: Value, code: Value, constants: Value) {
+    use crate::tagged::mutate::install_bytecode_slot_object;
+    let Some(bc) = function.get_bytecode_data() else {
+        return;
+    };
+    if bc.gnu_bytecode_bytes.is_some() {
+        install_bytecode_slot_object(function, ByteCodeSlotObject::Code, code);
+    }
+    let pool = bc.constants.as_slice();
+    if bc.env.is_none()
+        && constants.as_vector_data().is_some_and(|items| {
+            items.len() == pool.len() && items.iter().zip(pool).all(|(a, b)| a.bits() == b.bits())
+        })
+    {
+        install_bytecode_slot_object(function, ByteCodeSlotObject::Constants, constants);
+    }
 }
 
 pub(crate) fn make_byte_code_from_slots(slots: &[Value]) -> EvalResult {

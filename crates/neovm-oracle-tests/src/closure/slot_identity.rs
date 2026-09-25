@@ -107,3 +107,34 @@ fn oracle_closure_docstring_slot_is_eq_stable() {
     let expect = expect_test::expect![[r#""OK (t t \"Doc.\")""#]];
     crate::common::assert_oracle_divergence_expect(form, expect);
 }
+
+/// `make-byte-code` returns a closure whose slots 1 and 2 ARE the string and
+/// vector it was given.
+#[test]
+fn oracle_make_byte_code_slots_are_its_arguments() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let form = r#"
+(let* ((s (unibyte-string 192 135)) (v (vector 42))
+       (f (make-byte-code 0 s v 1)))
+  (list (eq (aref f 1) s) (eq (aref f 2) v) (funcall f)))
+"#;
+
+    let expect = expect_test::expect![[r#""OK (t t 42)""#]];
+    crate::common::assert_oracle_parity_expect(form, expect);
+}
+
+/// Expected failure until P3.2 L4b: an `aset` into the vector given to
+/// `make-byte-code` changes what the function returns in GNU.
+#[test]
+fn oracle_make_byte_code_constants_aset_is_seen_by_the_function() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    let form = r#"
+(let* ((v (vector 42)) (f (make-byte-code 0 (unibyte-string 192 135) v 1)))
+  (list (funcall f) (progn (aset v 0 43) (funcall f))))
+"#;
+
+    let expect = expect_test::expect![[r#""OK (42 43)""#]];
+    crate::common::assert_oracle_divergence_expect(form, expect);
+}
