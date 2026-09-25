@@ -125,7 +125,7 @@ fn knob_off_emits_no_intrinsic() {
         .iter()
         .map(|&w| intrinsic_sites_for_test(w))
         .collect();
-    for (op, nargs) in [(Op::Length, 1), (Op::SymbolValue, 1)] {
+    for (op, nargs) in [(Op::Length, 1), (Op::Nth, 2), (Op::SymbolValue, 1)] {
         compile_with(&opcode_fn(op, nargs), LeafKnob::DEFAULT, IntrinsicKnob::OFF);
     }
     let after: Vec<u64> = Intrinsic::ALL
@@ -198,6 +198,86 @@ fn length_intrinsic_matches_blength() {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// I4: nth, nthcdr, elt at a constant index.
+// ---------------------------------------------------------------------------
+
+/// `(lambda (l) (OP K l))`, or `(lambda (l) (elt l K))`.
+fn constant_index_fn(op: Op, k: Value) -> ByteCodeFunction {
+    let ops = if op == Op::Elt {
+        vec![Op::StackRef(0), Op::Constant(0), op, Op::Return]
+    } else {
+        vec![Op::Constant(0), Op::StackRef(1), op, Op::Return]
+    };
+    lexical_fn(1, ops, vec![k])
+}
+
+/// Every constant index 0..=6 (the unrolled 0..=4 and two that emit
+/// nothing) over list shapes, natively against the opcode arm.
+#[test]
+fn constant_index_intrinsics_match_their_opcode_arms() {
+    let mut ev = Context::new();
+    let ctx_ptr = &mut ev as *mut Context as *mut u8;
+    let lists = operands(
+        &mut ev,
+        &[
+            "nil",
+            "'(a)",
+            "'(a b c)",
+            "'(a b c d e f)",
+            "'(a . b)",
+            "'(a b . c)",
+            "'(a b c . d)",
+            "(let ((l (list 1 2))) (setcdr (cdr l) l) l)",
+            "[1 2 3 4 5 6]",
+            "\"abcdef\"",
+            "5",
+            "'x",
+        ],
+    );
+    for (op, id, which) in [
+        (Op::Nth, LeafId::Nth, Intrinsic::Nth),
+        (Op::Nthcdr, LeafId::Nthcdr, Intrinsic::Nthcdr),
+        (Op::Elt, LeafId::Elt, Intrinsic::Elt),
+    ] {
+        for k in 0..=6i64 {
+            let f = constant_index_fn(op.clone(), Value::fixnum(k));
+            for leaf_knob in LEAF_KNOBS {
+                let sites0 = intrinsic_sites_for_test(which);
+                let leaf = compile_with(&f, leaf_knob, IntrinsicKnob::ALL);
+                let emitted = intrinsic_sites_for_test(which) - sites0;
+                assert_eq!(emitted, u64::from(k <= NTH_INLINE_MAX), "{op:?} {k}");
+                let mut inline_answers = 0;
+                for &l in &lists {
+                    let what = format!("({op:?} {k} {}) {leaf_knob:?}", show(l));
+                    let want = interpret(&mut ev, &f, vec![l]);
+                    let calls0 = leaf_trampoline_calls(id);
+                    assert_eq!(native(ctx_ptr, &leaf, &[l], &what), want, "{what}");
+                    if leaf_knob.opcode && leaf_trampoline_calls(id) == calls0 {
+                        inline_answers += 1;
+                    }
+                }
+                if leaf_knob.opcode && emitted == 1 {
+                    // Proper lists and nil at least are answered inline.
+                    assert!(inline_answers >= 3, "{op:?} {k}: {inline_answers}");
+                }
+            }
+        }
+    }
+}
+
+/// A dynamic index emits nothing: the site is the leaf call alone.
+#[test]
+fn a_dynamic_index_emits_no_intrinsic() {
+    let sites0 = intrinsic_sites_for_test(Intrinsic::Nth);
+    compile_with(
+        &opcode_fn(Op::Nth, 2),
+        LeafKnob::DEFAULT,
+        IntrinsicKnob::ALL,
+    );
+    assert_eq!(intrinsic_sites_for_test(Intrinsic::Nth), sites0);
 }
 
 // ---------------------------------------------------------------------------

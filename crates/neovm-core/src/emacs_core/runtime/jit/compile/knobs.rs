@@ -383,6 +383,9 @@ pub(crate) struct IntrinsicKnob {
     /// I3: `Op::Length` of nil, a short proper list, a string, a plain
     /// vector or record.
     pub(crate) length: bool,
+    /// I4: `Op::Nth`/`Op::Nthcdr`/`Op::Elt` of a list at a constant index
+    /// in `0..=4`.
+    pub(crate) nth: bool,
     /// I6: `Op::SymbolValue` of a bare symbol with a plain, bound cell.
     pub(crate) symbol_value: bool,
 }
@@ -390,15 +393,17 @@ pub(crate) struct IntrinsicKnob {
 impl IntrinsicKnob {
     pub(crate) const OFF: Self = Self {
         length: false,
+        nth: false,
         symbol_value: false,
     };
     pub(crate) const ALL: Self = Self {
         length: true,
+        nth: true,
         symbol_value: true,
     };
 
     /// Unset/`off`/`0`: nothing; `on`/`1`/`all`: every intrinsic; otherwise
-    /// a comma list of `length`, `symbol-value`.
+    /// a comma list of `length`, `nth`, `symbol-value`.
     pub(crate) fn parse(value: Option<&str>) -> Self {
         let Some(value) = value.map(str::trim) else {
             return Self::OFF;
@@ -412,12 +417,13 @@ impl IntrinsicKnob {
         for part in value.split(',').map(str::trim) {
             match part {
                 "length" => knob.length = true,
+                "nth" => knob.nth = true,
                 "symbol-value" => knob.symbol_value = true,
                 other => tracing::warn!(
                     target: "neovm_jit",
                     part = other,
                     "NEOVM_JIT_INTRINSICS: unknown part ignored \
-                     (expected length, symbol-value)"
+                     (expected length, nth, symbol-value)"
                 ),
             }
         }

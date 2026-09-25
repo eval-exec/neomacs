@@ -1,5 +1,6 @@
 //! CLIF intrinsics for leaf builtins (design `p1-2-builtin-intrinsics` §2.7):
-//! I3 `length`, I6 `symbol-value`.
+//! I3 `length`, I4 `nth`/`nthcdr`/`elt` at a constant small index, I6
+//! `symbol-value`.
 //!
 //! Each is a PREFIX of its opcode site: the common shape is answered inline,
 //! and every other shape falls through -- never to a deopt -- into the code
@@ -30,18 +31,32 @@ use cranelift_codegen::ir::{Block, InstBuilder, MemFlagsData, types};
 pub(crate) enum Intrinsic {
     /// I3: `Op::Length`.
     Length,
+    /// I4: `Op::Nth` at a constant index.
+    Nth,
+    /// I4: `Op::Nthcdr` at a constant count.
+    Nthcdr,
+    /// I4: `Op::Elt` of a list at a constant index.
+    Elt,
     /// I6: `Op::SymbolValue`.
     SymbolValue,
 }
 
 impl Intrinsic {
     pub(crate) const COUNT: usize = Intrinsic::SymbolValue as usize + 1;
-    pub(crate) const ALL: [Intrinsic; Intrinsic::COUNT] =
-        [Intrinsic::Length, Intrinsic::SymbolValue];
+    pub(crate) const ALL: [Intrinsic; Intrinsic::COUNT] = [
+        Intrinsic::Length,
+        Intrinsic::Nth,
+        Intrinsic::Nthcdr,
+        Intrinsic::Elt,
+        Intrinsic::SymbolValue,
+    ];
 
     pub(crate) const fn name(self) -> &'static str {
         match self {
             Intrinsic::Length => "length",
+            Intrinsic::Nth => "nth",
+            Intrinsic::Nthcdr => "nthcdr",
+            Intrinsic::Elt => "elt",
             Intrinsic::SymbolValue => "symbol-value",
         }
     }
@@ -50,6 +65,9 @@ impl Intrinsic {
     pub(crate) fn of(op: &Op) -> Option<Intrinsic> {
         Some(match op {
             Op::Length => Intrinsic::Length,
+            Op::Nth => Intrinsic::Nth,
+            Op::Nthcdr => Intrinsic::Nthcdr,
+            Op::Elt => Intrinsic::Elt,
             Op::SymbolValue => Intrinsic::SymbolValue,
             _ => return None,
         })
@@ -61,6 +79,7 @@ impl Intrinsic {
     pub(crate) const fn enabled(self, knob: super::IntrinsicKnob) -> bool {
         match self {
             Intrinsic::Length => knob.length,
+            Intrinsic::Nth | Intrinsic::Nthcdr | Intrinsic::Elt => knob.nth,
             Intrinsic::SymbolValue => knob.symbol_value,
         }
     }
@@ -107,6 +126,8 @@ pub(crate) fn render_intrinsic_stats() -> Vec<String> {
 /// site's call (which walks it from the start, with its cycle check). A
 /// circular list never ends the walk, so it always reaches the call.
 pub(crate) const LENGTH_INLINE_STEPS: i64 = 64;
+/// The largest constant index I4 unrolls.
+pub(crate) const NTH_INLINE_MAX: i64 = 4;
 
 /// An emitted prefix: its hits define `res` and jump to `merge`; the builder
 /// is left in the (sealed) miss block, where the site's call follows and
@@ -141,6 +162,9 @@ pub(crate) fn emit_prefix(
     let miss = fb.create_block();
     let emitted = match which {
         Intrinsic::Length => emit_length(fb, operands[0], res, merge, miss),
+        Intrinsic::Nth | Intrinsic::Nthcdr | Intrinsic::Elt => {
+            emit_nth(fb, which, operands[0], operands[1], res, merge, miss)
+        }
         Intrinsic::SymbolValue => emit_symbol_value(fb, rt, operands[0], res, merge, miss),
     };
     if !emitted {
@@ -399,6 +423,124 @@ fn plain_vector_len(fb: &mut FunctionBuilder, x: ClifValue, miss: Block) -> Opti
     fb.switch_to_block(plain);
     fb.seal_block(plain);
     Some(len)
+}
+
+// ---------------------------------------------------------------------------
+// I4: nth, nthcdr, elt at a constant index.
+// ---------------------------------------------------------------------------
+
+/// `Bnth`, `Bnthcdr` and `Belt` of a list at a constant index `k` in
+/// `0..=NTH_INLINE_MAX`, as an unrolled cdr chain. Operands are `[n, list]`
+/// for `nth`/`nthcdr` and `[sequence, n]` for `elt`. A dynamic or larger
+/// index emits nothing.
+///
+/// - `nth` (`bytecode_nth_values`): walk while the count is positive and the
+///   tail a cons; then the tail's car if a cons, nil if nil; any other tail
+///   goes to `miss`, where the call signals (`listp TAIL`).
+/// - `nthcdr` (`builtin_nthcdr_values`): each step takes the cdr of a cons,
+///   answers nil at a nil tail, and leaves any other tail to `miss` (the
+///   call signals); after `k` steps the tail itself, whatever it is.
+/// - `elt` (`bytecode_elt_values`, GNU `Belt`): a cons sequence walks as
+///   `nth`; nil is nil at any index; anything else (a vector, a string, a
+///   non-sequence) goes to `miss`.
+fn emit_nth(
+    fb: &mut FunctionBuilder,
+    which: Intrinsic,
+    a: ClifValue,
+    b: ClifValue,
+    res: Variable,
+    merge: Block,
+    miss: Block,
+) -> bool {
+    let (index, list) = match which {
+        Intrinsic::Elt => (b, a),
+        _ => (a, b),
+    };
+    let Some(bits) = constant_bits(fb, index) else {
+        return false;
+    };
+    let index = Value::from_bits(bits as usize);
+    let Some(k) = index
+        .as_fixnum()
+        .filter(|k| (0..=NTH_INLINE_MAX).contains(k))
+    else {
+        return false;
+    };
+    let nil = Value::NIL.bits() as i64;
+    let nil_v = fb.ins().iconst(types::I64, nil);
+    if which == Intrinsic::Elt {
+        // Only a cons takes `Belt`'s list walk; nil is nil at any index.
+        let is_cons = has_tag(fb, list, TAG_CONS);
+        let walk = fb.create_block();
+        let not_cons = fb.create_block();
+        fb.ins().brif(is_cons, walk, &[], not_cons, &[]);
+        fb.switch_to_block(not_cons);
+        fb.seal_block(not_cons);
+        let is_nil = icmp_imm_p(fb, IntCC::Equal, list, nil);
+        let nil_blk = fb.create_block();
+        fb.ins().brif(is_nil, nil_blk, &[], miss, &[]);
+        fb.switch_to_block(nil_blk);
+        fb.seal_block(nil_blk);
+        hit(fb, res, merge, nil_v);
+        fb.switch_to_block(walk);
+        fb.seal_block(walk);
+    }
+    if which == Intrinsic::Nthcdr {
+        let mut t = list;
+        for _ in 0..k {
+            let is_cons = has_tag(fb, t, TAG_CONS);
+            let next = fb.create_block();
+            let not_cons = fb.create_block();
+            fb.ins().brif(is_cons, next, &[], not_cons, &[]);
+            fb.switch_to_block(not_cons);
+            fb.seal_block(not_cons);
+            let is_nil = icmp_imm_p(fb, IntCC::Equal, t, nil);
+            let nil_blk = fb.create_block();
+            fb.ins().brif(is_nil, nil_blk, &[], miss, &[]);
+            fb.switch_to_block(nil_blk);
+            fb.seal_block(nil_blk);
+            hit(fb, res, merge, nil_v);
+            fb.switch_to_block(next);
+            fb.seal_block(next);
+            t = cons_field(fb, t, true);
+        }
+        hit(fb, res, merge, t);
+        return true;
+    }
+    // `nth` and a cons `elt`: stop at the first non-cons tail, then CAR.
+    let last = fb.create_block();
+    fb.append_block_param(last, types::I64);
+    let mut t = list;
+    for _ in 0..k {
+        let is_cons = has_tag(fb, t, TAG_CONS);
+        let next = fb.create_block();
+        fb.ins()
+            .brif(is_cons, next, &[], last, &[BlockArg::Value(t)]);
+        fb.switch_to_block(next);
+        fb.seal_block(next);
+        t = cons_field(fb, t, true);
+    }
+    fb.ins().jump(last, &[BlockArg::Value(t)]);
+    fb.switch_to_block(last);
+    fb.seal_block(last);
+    let tail = fb.block_params(last)[0];
+    let is_cons = has_tag(fb, tail, TAG_CONS);
+    let car_blk = fb.create_block();
+    let not_cons = fb.create_block();
+    fb.ins().brif(is_cons, car_blk, &[], not_cons, &[]);
+    fb.switch_to_block(car_blk);
+    fb.seal_block(car_blk);
+    let car = cons_field(fb, tail, false);
+    hit(fb, res, merge, car);
+    fb.switch_to_block(not_cons);
+    fb.seal_block(not_cons);
+    let is_nil = icmp_imm_p(fb, IntCC::Equal, tail, nil);
+    let nil_blk = fb.create_block();
+    fb.ins().brif(is_nil, nil_blk, &[], miss, &[]);
+    fb.switch_to_block(nil_blk);
+    fb.seal_block(nil_blk);
+    hit(fb, res, merge, nil_v);
+    true
 }
 
 // ---------------------------------------------------------------------------
