@@ -4676,6 +4676,18 @@ fn build_leaf_fn<S: LeafSink>(
                                 site.kind,
                             )
                         });
+                        // A tail call's residual is dead: the emitter sees
+                        // the call's own operands only, so it roots nothing.
+                        let dead = lowering::tail_call_dead_residuals(
+                            other,
+                            ops.get(i + 1),
+                            !handlers.is_empty(),
+                            spec.map(|(_, _, _, _, kind)| kind),
+                            stack.len(),
+                        )
+                        .unwrap_or(0);
+                        let residual: Vec<ClifValue> = stack.drain(..dead).collect();
+                        let residual_reps: Vec<SlotRep> = reps.drain(..dead).collect();
                         lower_simple_op(
                             &mut fb,
                             i,
@@ -4698,6 +4710,8 @@ fn build_leaf_fn<S: LeafSink>(
                             dynamic_prefix,
                             consts_base,
                         )?;
+                        stack.splice(0..0, residual);
+                        reps.splice(0..0, residual_reps);
                         // `lower_simple_op` keeps `reps` in lockstep with `stack`
                         // (it re-syncs after a non-unboxing op itself).
                     }
@@ -4907,6 +4921,9 @@ mod switch_dispatch_tests;
 #[cfg(test)]
 #[path = "tests/switch_inline.rs"]
 mod switch_inline_tests;
+#[cfg(test)]
+#[path = "tests/tail_calls.rs"]
+mod tail_call_tests;
 #[cfg(test)]
 #[path = "tests/compile.rs"]
 mod tests;

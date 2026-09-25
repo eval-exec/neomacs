@@ -1886,6 +1886,10 @@ pub(crate) fn lower_mir_inst_via_baseline(
     aot: bool,
     max_call_args: usize,
     spec: Option<(u32, u64, i64, usize, SpecCalleeKind)>,
+    // The op is its block's last and the block returns its result
+    // (`tail_call_dead_residuals` decides whether the residual may go
+    // unrooted).
+    returns_result: bool,
 ) -> Result<(), CompileError> {
     use mir::MirOp;
     let bail = |key: String| {
@@ -1959,8 +1963,18 @@ pub(crate) fn lower_mir_inst_via_baseline(
             // call site's), and `callee_inlinable` admits none: a tripwire.
             return bail("adapter:operand-mismatch".to_string());
         }
-        let mut v = Vec::with_capacity(base);
-        for &pv in &inst.pre_stack {
+        // A tail call's residual is dead (a MIR leaf has no handlers): the
+        // emitter sees only the call's own operands, so it roots nothing.
+        let dead = tail_call_dead_residuals(
+            op,
+            returns_result.then_some(&Op::Return),
+            false,
+            spec.map(|(_, _, _, _, kind)| kind),
+            base,
+        )
+        .unwrap_or(0);
+        let mut v = Vec::with_capacity(base - dead);
+        for &pv in &inst.pre_stack[dead..] {
             debug_assert!(
                 cons_repl[pv.0 as usize].is_none(),
                 "no elided cons in an Opaque body's framestate"
@@ -3491,6 +3505,7 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
                                     aot,
                                     plan.max_call_args,
                                     None,
+                                    false,
                                 )?;
                                 continue;
                             }
@@ -3713,6 +3728,10 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
                                     site.kind,
                                 )
                             }),
+                            blk.insts
+                                .last()
+                                .is_some_and(|last| std::ptr::eq(last, inst))
+                                && matches!(blk.term, MirTerm::Return(v) if v == inst.result),
                         )?;
                     }
                 }
@@ -5728,6 +5747,43 @@ fn lower_float_site_arith(
 /// (the live CLIF SSA values within the current basic block). Terminators
 /// (`Return`/`Goto`/`GotoIf*`) are handled by the block lowerer before this.
 #[allow(clippy::too_many_arguments)]
+/// How many residual operand-stack slots a call at `pc` leaves dead, when
+/// the call is in tail position: an `Op::Call`/`Op::Apply` whose next op is
+/// `Return`, with no handler frame active in the function (a signal would
+/// dispatch to its block with the whole stack) and not a bit-op intrinsic
+/// site (the inline form deopts with the whole stack as its framestate).
+/// Nothing after such a call reads the slots below its callee: the return
+/// takes the call's result, the frame unbinds on its own, and the callee's
+/// arguments are rooted by its backtrace frame. So they need no GC root
+/// across the call, which is the whole cost of rooting them (design
+/// `p1-1-direct-native-calls` §3.8.4). `None`: not a tail call.
+pub(crate) fn tail_call_dead_residuals(
+    op: &Op,
+    next: Option<&Op>,
+    handlers_active: bool,
+    spec: Option<SpecCalleeKind>,
+    stack_len: usize,
+) -> Option<usize> {
+    let (Op::Call(n) | Op::Apply(n)) = op else {
+        return None;
+    };
+    if next != Some(&Op::Return)
+        || handlers_active
+        || matches!(spec, Some(SpecCalleeKind::ArithIntrinsic { .. }))
+    {
+        return None;
+    }
+    #[cfg(any(test, debug_assertions))]
+    TAIL_CALLS_UNROOTED.with(|c| c.set(c.get() + 1));
+    stack_len.checked_sub(*n as usize + 1)
+}
+
+#[cfg(any(test, debug_assertions))]
+thread_local! {
+    /// Tail calls lowered without rooting their dead residuals (tests).
+    pub(crate) static TAIL_CALLS_UNROOTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub(crate) fn lower_simple_op(
     fb: &mut FunctionBuilder,
     pc: usize,
