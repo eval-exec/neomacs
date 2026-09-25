@@ -427,6 +427,6 @@ fn op_is_inline_heap_site(
         Op::Setcar | Op::Setcdr | Op::Aset => jit_inline_heap_write_on(),
         Op::Cons => inline_alloc,
         Op::Add | Op::Sub | Op::Mul | Op::Div => inline_alloc && float_site(pc),
-        _ => false,
+        _ => super::inline_vars::op_reads_heap_window(op),
     }
 }

@@ -551,6 +551,18 @@ fn unbind_sites(
 // Emission helpers
 // ---------------------------------------------------------------------------
 
+/// Whether the baseline lowers OP with an inline variable write that reads
+/// the heap's barrier window (`heap_inline::hoist_heap_ptr` counts these
+/// with its own sites). JIT only.
+pub(crate) fn op_reads_heap_window(op: &Op) -> bool {
+    let knob = jit_inline_vars();
+    match op {
+        Op::VarSet(_) => knob.set,
+        Op::VarBind(_) | Op::Unbind(_) => knob.bind,
+        _ => false,
+    }
+}
+
 /// Which inline op a site is (the test census).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -664,17 +676,19 @@ fn window_is(fb: &mut FunctionBuilder, cell: ClifValue, redirect: SymbolRedirect
     eq_imm(fb, bits, i64::from(symcell_inline_write_value(redirect)))
 }
 
-/// The heap's published barrier window (`JitHeapState`).
+/// The heap's published barrier window (`JitHeapState`): its length, loaded
+/// at once, and the heap its start is loaded from when a cons store needs
+/// it (a symbol-cell or forwarder store tests the length only).
 #[derive(Clone, Copy)]
 struct Window {
-    lo: ClifValue,
+    heap: ClifValue,
     len: ClifValue,
 }
 
 fn barrier_window(fb: &mut FunctionBuilder, rt: &RtCtx) -> Window {
     let heap = super::heap_inline::heap_ptr(fb, rt);
     Window {
-        lo: load_word(fb, heap, HEAP_JIT_BARRIER_LO),
+        heap,
         len: load_word(fb, heap, HEAP_JIT_BARRIER_LEN),
     }
 }
@@ -694,8 +708,9 @@ fn cons_store_ok(
     cons: ClifValue,
     remembered: Option<usize>,
 ) -> ClifValue {
+    let lo = load_word(fb, window.heap, HEAP_JIT_BARRIER_LO);
     let owner = iadd_imm_p(fb, cons, -(TAG_CONS as i64));
-    let offset = fb.ins().isub(owner, window.lo);
+    let offset = fb.ins().isub(owner, lo);
     let outside = fb
         .ins()
         .icmp(IntCC::UnsignedGreaterThanOrEqual, offset, window.len);
