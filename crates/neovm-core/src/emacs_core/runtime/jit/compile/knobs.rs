@@ -439,6 +439,41 @@ impl IntrinsicKnob {
 
 #[cfg(test)]
 std::thread_local! {
+    static LEAF_EFFECTS_TEST_OVERRIDE: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Force `NEOVM_JIT_LEAF_EFFECTS` on the current thread (tests only);
+/// `None` returns to the environment's.
+#[cfg(test)]
+pub(crate) fn force_leaf_effects_for_test(on: Option<bool>) {
+    LEAF_EFFECTS_TEST_OVERRIDE.with(|c| c.set(on));
+}
+
+/// `NEOVM_JIT_LEAF_EFFECTS=on` (design `p1-2-builtin-intrinsics` §2.8,
+/// commit 11): an opcode site whose whole lowering is a leaf or a GC-free
+/// shim (`calls::opcode_site_effects` excludes MAY_GC, MAY_REENTER and
+/// MAY_DEOPT) no longer keeps a looping body out of the MIR tier
+/// (`gate:loop-opaque`), and in a MIR leaf it is no safepoint: the values
+/// live across it stay raw and unrooted. Default off; read at compile time
+/// (unset/`off` admits and lowers exactly as before).
+pub(crate) fn jit_leaf_effects_on() -> bool {
+    #[cfg(test)]
+    if let Some(on) = LEAF_EFFECTS_TEST_OVERRIDE.with(|c| c.get()) {
+        return on;
+    }
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        matches!(
+            std::env::var("NEOVM_JIT_LEAF_EFFECTS").ok().as_deref(),
+            Some("1" | "on" | "true" | "yes")
+        )
+    })
+}
+
+#[cfg(test)]
+std::thread_local! {
     static INTRINSIC_KNOB_TEST_OVERRIDE: std::cell::Cell<Option<IntrinsicKnob>> =
         const { std::cell::Cell::new(None) };
 }

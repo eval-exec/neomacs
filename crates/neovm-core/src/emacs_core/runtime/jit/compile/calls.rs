@@ -49,6 +49,56 @@ pub(crate) fn named_builtin_call(op: &Op) -> Option<NamedBuiltinCall> {
     })
 }
 
+/// The whole-call effects of an opcode site's lowering (design
+/// `p1-2-builtin-intrinsics` §2.8): the declared effects of the leaf it
+/// runs when that lowering is a leaf trampoline or a GC-free shim -- a value
+/// shim (`aref`, `memq`, `assq`, `setcar`, `setcdr`) or a `JitBuiltin*Pure`
+/// table entry, each a `&Context` body that cannot collect, run Lisp or
+/// deopt -- and `UNKNOWN` for anything else (an op that is not a direct
+/// builtin, or a rooted table entry such as `string=` without its leaf).
+/// Intrinsic prefixes (`intrinsics`) only read, so they add nothing.
+pub(crate) fn opcode_site_effects(op: &Op, aot: bool) -> Effects {
+    use crate::emacs_core::subr::leaf::LeafId;
+    if let Some(id) = super::leaf_abi::opcode_leaf_site(op, aot) {
+        return id.spec().effects;
+    }
+    let gc_free = match op {
+        Op::Aref | Op::Memq | Op::Assq | Op::Setcar | Op::Setcdr => true,
+        _ => match super::dispatch::direct_builtin_spec(op) {
+            Some((1, idx)) => super::dispatch::JIT_BUILTIN1_PURE[idx].is_some(),
+            Some((2, idx)) => super::dispatch::JIT_BUILTIN2_PURE[idx].is_some(),
+            _ => false,
+        },
+    };
+    if !gc_free {
+        return Effects::UNKNOWN;
+    }
+    // The value shims of `memq`/`assq` run those leaves' bodies.
+    let leaf = match op {
+        Op::Memq => Some(LeafId::Memq),
+        Op::Assq => Some(LeafId::Assq),
+        _ => super::leaf_abi::opcode_leaf(op),
+    };
+    match (leaf, op) {
+        (Some(id), _) => id.spec().effects,
+        (None, Op::Setcar | Op::Setcdr | Op::Nreverse) => {
+            Effects::WRITE_HEAP.with(Effects::MAY_SIGNAL)
+        }
+        (None, _) => Effects::READ_HEAP.with(Effects::MAY_SIGNAL),
+    }
+}
+
+/// Whether an opcode site is a leaf call in the MIR tier's sense: its
+/// lowering cannot collect, run Lisp or deopt, so a loop may contain it and
+/// the values live across it need no roots (`NEOVM_JIT_LEAF_EFFECTS`).
+pub(crate) fn opcode_site_is_leaf_call(op: &Op, aot: bool) -> bool {
+    !opcode_site_effects(op, aot).intersects(
+        Effects::MAY_GC
+            .with(Effects::MAY_REENTER)
+            .with(Effects::MAY_DEOPT),
+    )
+}
+
 /// Select the same named-builtin specialization for baseline JIT, MIR and
 /// AOT. These bytecodes name the static builtin table and bypass function-cell
 /// advice/redefinition. Every generated fast path rechecks the live entry;
@@ -101,3 +151,7 @@ pub(super) fn cbsym_spec_kind(sym: SymId, _nargs: usize) -> Option<SpecCalleeKin
     // specials above and entries without a Rust function pointer.
     entry.function.map(|_| SpecCalleeKind::CbsymTierB)
 }
+
+#[cfg(test)]
+#[path = "../tests/mir_leaf_effects.rs"]
+mod mir_leaf_effects_tests;

@@ -1959,7 +1959,12 @@ pub(crate) fn lower_mir_inst_via_baseline(
         needs,
         "operand count follows simple_effect: {op:?}"
     );
-    let safepoint = matches!(inst.op, MirOp::Opaque { .. });
+    // `NEOVM_JIT_LEAF_EFFECTS` (JIT only): a leaf call is no safepoint, so
+    // the values live across it keep their representation and roots.
+    let safepoint = matches!(inst.op, MirOp::Opaque { .. })
+        && !(!aot
+            && super::jit_leaf_effects_on()
+            && super::calls::opcode_site_is_leaf_call(op, aot));
     debug_assert!(
         !safepoint || needs <= max_call_args,
         "the call-args slot ({max_call_args} words) holds this op's {needs} operands: {op:?}"
@@ -2515,10 +2520,15 @@ fn plan_mir_leaf_with_spec(
             &i.op, MirOp::Opaque { op, .. } if super::named_builtin_call(op).is_some()
         )
     });
+    // `NEOVM_JIT_LEAF_EFFECTS`: a leaf call (no GC, Lisp or deopt in its
+    // whole lowering) qualifies too. The plan is the JIT's (AOT never reads
+    // this admission bit).
+    let leaf_effects = super::jit_leaf_effects_on();
     let has_unqualified_adapter = insts().any(|i| {
         matches!(
             &i.op, MirOp::Opaque { op, .. } if !spec_sites.contains_key(&i.pc) && !super::named_builtin_call(op)
                 .is_some_and(|call| call.fast_effects.is_read_only())
+                && !(leaf_effects && super::calls::opcode_site_is_leaf_call(op, false))
         )
     });
     // Any op that goes through a runtime shim: an `Opaque`, an `Eq` (the
