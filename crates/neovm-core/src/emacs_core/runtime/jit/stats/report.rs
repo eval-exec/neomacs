@@ -35,6 +35,8 @@ pub(crate) struct LeafReportRow {
     /// `pc` when the pc indexes the named function's body.
     pub(crate) deopt_pcs: Vec<(u32, u64, Option<String>)>,
     pub(crate) deopt_pc_overflow: u64,
+    /// The compile stall that produced the leaf, µs (0 = unknown).
+    pub(crate) compile_us: u32,
 }
 
 impl LeafReportRow {
@@ -42,7 +44,7 @@ impl LeafReportRow {
         self.deopt_at + self.deopt_rerun
     }
 
-    fn render(&self) -> String {
+    pub(crate) fn render(&self) -> String {
         let osr = self
             .osr_pc
             .map_or_else(|| "-".to_string(), |pc| pc.to_string());
@@ -69,7 +71,7 @@ impl LeafReportRow {
         };
         format!(
             "id={} name={} tier={} state={} osr_pc={osr} entries={entries} deopt_at={} \
-             deopt_rerun={} signals={} regalloc={} clif={} pcs={pcs}",
+             deopt_rerun={} signals={} regalloc={} clif={} compile_us={} pcs={pcs}",
             self.id,
             self.name.as_deref().unwrap_or("-"),
             self.tier,
@@ -79,6 +81,7 @@ impl LeafReportRow {
             self.signals,
             self.regalloc,
             self.clif_insts,
+            self.compile_us,
         )
     }
 }
@@ -86,18 +89,28 @@ impl LeafReportRow {
 /// The leaves worth a line: the top [`LEAF_ROWS_PER_SECTION`] by deopts
 /// (only those that deopted), most first, then the top
 /// [`LEAF_ROWS_PER_SECTION`] of the rest by native entries (only those
-/// entered). Ties break by id.
+/// entered), then the top [`LEAF_ROWS_PER_SECTION`] of the rest by compile
+/// stall (the compiles that may never pay back). Ties break by id.
 pub(crate) fn ranked_leaves(rows: &[LeafReportRow]) -> Vec<&LeafReportRow> {
     let mut by_deopts: Vec<&LeafReportRow> = rows.iter().filter(|r| r.deopts() > 0).collect();
     by_deopts.sort_by(|a, b| b.deopts().cmp(&a.deopts()).then(a.id.cmp(&b.id)));
     by_deopts.truncate(LEAF_ROWS_PER_SECTION);
+    let listed =
+        |listed: &[&LeafReportRow], r: &LeafReportRow| listed.iter().any(|d| std::ptr::eq(*d, r));
     let mut by_entries: Vec<&LeafReportRow> = rows
         .iter()
-        .filter(|r| r.entries > 0 && !by_deopts.iter().any(|d| std::ptr::eq(*d, *r)))
+        .filter(|r| r.entries > 0 && !listed(&by_deopts, r))
         .collect();
     by_entries.sort_by(|a, b| b.entries.cmp(&a.entries).then(a.id.cmp(&b.id)));
     by_entries.truncate(LEAF_ROWS_PER_SECTION);
     by_deopts.extend(by_entries);
+    let mut by_compile: Vec<&LeafReportRow> = rows
+        .iter()
+        .filter(|r| r.compile_us > 0 && !listed(&by_deopts, r))
+        .collect();
+    by_compile.sort_by(|a, b| b.compile_us.cmp(&a.compile_us).then(a.id.cmp(&b.id)));
+    by_compile.truncate(LEAF_ROWS_PER_SECTION);
+    by_deopts.extend(by_compile);
     by_deopts
 }
 

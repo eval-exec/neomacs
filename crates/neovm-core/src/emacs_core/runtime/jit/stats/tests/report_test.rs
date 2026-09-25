@@ -129,11 +129,11 @@ fn jit_final_report_renders_every_section() {
         leaf_lines,
         [
             "id=37 name=j4-add tier=mir state=live osr_pc=- entries=6000000 deopt_at=5999998 \
-             deopt_rerun=0 signals=0 regalloc=fast clif=58 pcs=12:5999998/Mul,other:3",
+             deopt_rerun=0 signals=0 regalloc=fast clif=58 compile_us=0 pcs=12:5999998/Mul,other:3",
             "id=39 name=j4-add tier=mir state=retired osr_pc=- entries=0 deopt_at=0 \
-             deopt_rerun=2 signals=0 regalloc=fast clif=58 pcs=-",
+             deopt_rerun=2 signals=0 regalloc=fast clif=58 compile_us=0 pcs=-",
             "id=38 name=j4-add tier=mir state=live osr_pc=- entries=77 deopt_at=0 \
-             deopt_rerun=0 signals=0 regalloc=fast clif=58 pcs=-",
+             deopt_rerun=0 signals=0 regalloc=fast clif=58 compile_us=0 pcs=-",
         ],
         "the leaves that deopted, most first, then the rest by entries"
     );
@@ -201,6 +201,7 @@ fn leaf_row(id: u64, deopt_at: u64, deopt_rerun: u64) -> LeafReportRow {
             Vec::new()
         },
         deopt_pc_overflow: if deopt_at > 0 { 3 } else { 0 },
+        compile_us: 0,
     }
 }
 
@@ -374,5 +375,37 @@ fn jit_final_report_prints_the_builtin_leaf_census_when_present() {
         without
             .iter()
             .all(|(t, _)| *t != ReportTag::FinalBuiltinLeaves)
+    );
+}
+
+/// After the deopt and entry sections, the costliest remaining compiles
+/// print (a leaf that cost much and ran little is a compile that never paid
+/// back), never repeating a listed leaf and skipping unknown stalls.
+#[test]
+fn jit_final_report_leaf_rows_then_by_compile_stall() {
+    let mut rows: Vec<LeafReportRow> = (1..=40)
+        .map(|id| LeafReportRow {
+            compile_us: id as u32 * 100,
+            ..leaf_row(id, 0, 0)
+        })
+        .collect();
+    rows[39].entries = 5; // id 40: entered, so listed by entries first
+    rows.push(leaf_row(41, 0, 0)); // compile_us 0: unknown, never listed
+    let ranked = ranked_leaves(&rows);
+    let ids: Vec<u64> = ranked.iter().map(|r| r.id).collect();
+    assert_eq!(ids[0], 40, "the entries section first");
+    assert_eq!(
+        &ids[1..4],
+        &[39, 38, 37],
+        "then by compile stall, costliest first"
+    );
+    assert_eq!(ids.len(), 1 + super::report::LEAF_ROWS_PER_SECTION);
+    assert!(!ids.contains(&41));
+    assert!(
+        ranked[1]
+            .render()
+            .contains(" clif=58 compile_us=3900 pcs=-"),
+        "{}",
+        ranked[1].render()
     );
 }

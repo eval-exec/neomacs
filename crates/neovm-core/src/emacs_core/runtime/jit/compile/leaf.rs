@@ -287,6 +287,10 @@ pub(crate) struct LeafObs {
     /// Precise-deopt resume pcs with counts, at most [`Self::MAX_DEOPT_PCS`]
     /// distinct ones.
     deopt_pcs: RefCell<SmallVec<[(u32, u64); 4]>>,
+    /// The compile stall that produced this leaf, in µs (0 = built outside
+    /// the cache seams). With `entries`, it says which compiles never paid
+    /// back.
+    pub(crate) compile_us: Cell<u32>,
     /// Precise deopts at a pc beyond the first [`Self::MAX_DEOPT_PCS`].
     deopt_pc_overflow: Cell<u64>,
 }
@@ -306,7 +310,14 @@ impl LeafObs {
             signals: Cell::new(0),
             deopt_pcs: RefCell::new(SmallVec::new()),
             deopt_pc_overflow: Cell::new(0),
+            compile_us: Cell::new(0),
         })
+    }
+
+    /// Record the compile stall that produced this leaf.
+    pub(crate) fn note_compile_time(&self, elapsed: std::time::Duration) {
+        self.compile_us
+            .set(u32::try_from(elapsed.as_micros()).unwrap_or(u32::MAX));
     }
 
     /// The cell the generated prologue increments, when this leaf was
@@ -371,6 +382,7 @@ impl LeafObs {
             signals: self.signals.get(),
             deopt_pcs,
             deopt_pc_overflow: self.deopt_pc_overflow.get(),
+            compile_us: self.compile_us.get(),
         }
     }
 }
@@ -388,6 +400,7 @@ pub(crate) struct LeafObsSnapshot {
     /// `(pc, count)`, most frequent first.
     pub(crate) deopt_pcs: Vec<(u32, u64)>,
     pub(crate) deopt_pc_overflow: u64,
+    pub(crate) compile_us: u32,
 }
 
 /// Summed counters of leaves a cache dropped (a heap-swap `clear`, an OSR

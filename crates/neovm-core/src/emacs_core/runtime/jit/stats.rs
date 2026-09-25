@@ -945,6 +945,7 @@ fn leaf_report_rows(
                 signals: row.obs.signals,
                 deopt_pcs,
                 deopt_pc_overflow: row.obs.deopt_pc_overflow,
+                compile_us: row.obs.compile_us,
             }
         })
         .collect();

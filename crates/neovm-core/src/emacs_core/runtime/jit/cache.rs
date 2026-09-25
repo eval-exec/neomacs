@@ -419,7 +419,10 @@ fn compile_osr_leaf(
     record_compiled_obarray(Some(obarray));
     let clock = stats::CompileClock::start(stats::CompileOrigin::Osr);
     let entry = compile_osr_leaf_timed(obarray, func, osr_pc, id, name_hint);
-    clock.finish(entry.is_some());
+    let elapsed = clock.finish(entry.is_some());
+    if let Some(entry) = &entry {
+        entry.leaf.obs.note_compile_time(elapsed);
+    }
     entry
 }
 
@@ -756,6 +759,7 @@ fn compile_cache_entry(
         Ok(mut leaf) => {
             leaf.obs.id = id;
             leaf.compiled_level = rt.reopt_level();
+            leaf.obs.note_compile_time(elapsed);
             register_inline_deps(id, &leaf);
             CacheEntry::Compiled(Rc::new(leaf))
         }

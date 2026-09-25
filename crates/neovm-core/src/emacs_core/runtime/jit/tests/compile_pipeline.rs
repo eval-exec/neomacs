@@ -70,6 +70,14 @@ fn jit_pipeline_dispatch_compile_is_split_by_phase() {
         "split {split_us}us vs stall {}us",
         s.total_us
     );
+    // The leaf remembers its own stall for the exit report's leaf rows.
+    let id = f.jit_runtime().compiled_id().expect("compiled");
+    let row = cache::leaf_report_rows()
+        .0
+        .into_iter()
+        .find(|r| r.id == id)
+        .expect("cached leaf row");
+    assert_eq!(u64::from(row.obs.compile_us), s.total_us);
 }
 
 /// A spec site's first call into an uncompiled callee is a `first_sight`
