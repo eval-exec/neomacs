@@ -189,10 +189,6 @@ impl SpecSlot {
     /// Arm the direct entry of the leaf [`Self::arm_leaf`] just cached:
     /// written last, after the leaf and the key it goes with.
     #[inline]
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "consumer: spec slots arm a direct entry (S2.1b)")
-    )]
     pub(crate) fn arm_direct_entry(&self, entry: *const u8) {
         debug_assert!(
             !self.holds_subr_binding(),
@@ -268,6 +264,40 @@ impl SpecSlot {
             SymId(self.direct_consts.load(Ordering::Relaxed) as u32),
             self.leaf.load(Ordering::Relaxed),
         )
+    }
+}
+
+/// Direct entries armed (tests and debug builds: engagement evidence).
+#[cfg(any(test, debug_assertions))]
+pub(crate) static DIRECT_ENTRIES_ARMED: AtomicU64 = AtomicU64::new(0);
+
+/// Arm `slot`'s direct entry for `leaf`, which [`SpecSlot::arm_leaf`] just
+/// cached for a call of `nargs` arguments, when a compiled site may enter
+/// the leaf itself (S2.1b, `NEOVM_JIT_DIRECT_CALL`): the leaf has the
+/// register ABI for exactly `nargs` words (no `&optional` padding, no
+/// `&rest` list to build), runs frameless (no bindings, no handler frames,
+/// no AOT sidecar: what the shim enters raw), the key the shim uses is the
+/// plain constant base (the site passes it as `aux`), and the lean
+/// backtrace frame the site pushes has a probed layout. Anything else
+/// leaves the entry 0 and the site on the shim. Once per arming, so cold.
+#[cold]
+#[inline(never)]
+pub(crate) fn arm_direct_entry_if_eligible(slot: &SpecSlot, leaf: &CompiledLeaf, nargs: usize) {
+    let key = slot.direct_consts.load(Ordering::Relaxed);
+    let eligible = leaf.abi
+        == (LeafAbi::Register {
+            arity: nargs.min(u8::MAX as usize) as u8,
+        })
+        && leaf.arity == nargs
+        && !leaf.has_rest
+        && leaf.direct_call_eligible()
+        && key != 0
+        && key & SpecSlot::KEY_FLAGS == 0
+        && super::jit_layout::backtrace_layout().is_some();
+    if eligible {
+        slot.arm_direct_entry(leaf.entry);
+        #[cfg(any(test, debug_assertions))]
+        DIRECT_ENTRIES_ARMED.fetch_add(1, Ordering::Relaxed);
     }
 }
 

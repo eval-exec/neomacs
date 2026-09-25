@@ -607,10 +607,6 @@ impl BacktraceLayout {
 }
 
 /// [`BacktraceLayout`], probed once; `None` turns direct calls off.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "consumer: the direct call site (S2.1c)")
-)]
 pub(crate) fn backtrace_layout() -> Option<BacktraceLayout> {
     static LAYOUT: OnceLock<Option<BacktraceLayout>> = OnceLock::new();
     *LAYOUT.get_or_init(|| {

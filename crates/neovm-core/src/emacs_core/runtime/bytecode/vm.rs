@@ -7247,6 +7247,13 @@ impl<'a> Vm<'a> {
                 core::ptr::null()
             };
             slot.arm_leaf(ptr, direct, !passthrough, !leaf.direct_call_eligible());
+            // A compiled site may then call the leaf itself (S2.1b): its
+            // register entry, armed last, for an exact-arity call of a
+            // frameless body the shim would enter raw (the key's flags
+            // clear). Knob-gated; nothing reads it but a direct site.
+            if crate::emacs_core::jit::compile::jit_direct_call_on() {
+                crate::emacs_core::jit::compile::arm_direct_entry_if_eligible(slot, leaf, nargs);
+            }
             bc
         } else {
             // A cached leaf is the proof that `get_bytecode_data` once ran

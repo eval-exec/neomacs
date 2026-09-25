@@ -4709,7 +4709,9 @@ pub(crate) mod jit_layout;
 pub(crate) mod reg_abi;
 pub(crate) use reg_abi::LeafAbi;
 pub(crate) mod spec_slot;
-pub(crate) use spec_slot::{FAST_PATH_MAX_ARITY, SpecSlot, SpecSlotKind, spec_slot_kinds_of};
+pub(crate) use spec_slot::{
+    FAST_PATH_MAX_ARITY, SpecSlot, SpecSlotKind, arm_direct_entry_if_eligible, spec_slot_kinds_of,
+};
 pub(crate) mod stack_guard;
 
 pub(crate) mod cold_exits;
@@ -4759,6 +4761,9 @@ mod osr_binding_tests;
 mod shared_module_tests;
 pub(crate) mod switch_dispatch;
 
+#[cfg(test)]
+#[path = "tests/direct_call.rs"]
+mod direct_call_tests;
 #[cfg(test)]
 #[path = "tests/eq_swp_prefilter.rs"]
 mod eq_swp_prefilter_tests;
