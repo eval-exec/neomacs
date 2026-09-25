@@ -592,6 +592,19 @@ const _: () = {
     assert!(core::mem::size_of::<LispSymbol>() == 32);
 };
 
+/// What a `Localized` symbol's BLV cache holds when it is loaded for one
+/// buffer at the current structural epoch: GNU `swap_in_symval_forwarding`'s
+/// early-out (`blv->where` is already the buffer), the one hit rule that
+/// `read_localized_symbol_for_buffer`, `has_per_buffer_binding` and
+/// `set_internal_localized_with` each apply before trusting the cache.
+/// Copied out by value, so no borrow of the BLV record outlives the read.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct BlvCacheHit {
+    /// The `(SYMBOL . VALUE)` cell loaded for the buffer: its local binding
+    /// or the default cell.
+    pub(crate) valcell: Value,
+}
+
 /// Mirrors GNU `swap_in_symval_forwarding` (`src/data.c:1539-1571`).
 ///
 /// Loads the BLV's `valcell` from the current buffer's
@@ -822,6 +835,45 @@ impl LispSymbol {
     #[inline]
     pub fn trapped_write(&self) -> SymbolTrappedWrite {
         self.flags.trapped_write()
+    }
+
+    /// The BLV cache of a `Localized` symbol when it is loaded for BUFFER at
+    /// the current epoch (see [`BlvCacheHit`]); `None` for a miss or any
+    /// other redirect.
+    #[inline]
+    pub(crate) fn blv_cache_hit(&self, buffer: crate::buffer::BufferId) -> Option<BlvCacheHit> {
+        if self.flags.redirect() != SymbolRedirect::Localized {
+            return None;
+        }
+        // SAFETY: redirect=Localized selects the BLV arm, a record
+        // `make_symbol_localized` allocated and the obarray owns for its
+        // lifetime; the evaluator thread is its only writer and nothing is
+        // written while this shared borrow lives.
+        let blv = unsafe { &*self.val.blv };
+        if blv.alist_epoch != blv_alist_epoch() || blv.where_buf_id != buffer.0 {
+            return None;
+        }
+        debug_assert_eq!(
+            blv.where_buf.as_buffer_id().map_or(NO_WHERE_BUF, |b| b.0),
+            blv.where_buf_id,
+            "a BLV writer bypassed set_where"
+        );
+        Some(BlvCacheHit {
+            valcell: blv.valcell,
+        })
+    }
+
+    /// The descriptor of a `Forwarded` symbol; `None` for any other redirect.
+    #[inline]
+    pub(crate) fn forwarded_descriptor(
+        &self,
+    ) -> Option<&'static crate::emacs_core::forward::LispFwd> {
+        if self.flags.redirect() != SymbolRedirect::Forwarded {
+            return None;
+        }
+        // SAFETY: redirect=Forwarded selects the `fwd` arm, a descriptor
+        // `install_*fwd` leaked.
+        Some(unsafe { &*self.val.fwd })
     }
 
     #[inline]
@@ -3404,34 +3456,14 @@ impl Obarray {
                     match fwd.ty {
                         LispFwdType::BufferObj => {
                             let buf_fwd = unsafe { &*(fwd as *const _ as *const LispBufferObjFwd) };
-                            let off = buf_fwd.offset as usize;
-                            let flags_idx = buf_fwd.local_flags_idx;
-                            // Conditional slot: gate on local_flags.
-                            // GNU uses a separate `local_flags_idx`
-                            // counter, but NeoMacs reuses `offset`
-                            // as the bit index since both fit in
-                            // BUFFER_SLOT_COUNT.
-                            if flags_idx >= 0 {
-                                let bit_set = (current_buffer_local_flags >> (off as u32)) & 1 != 0;
-                                if bit_set
-                                    && let Some(slots) = current_buffer_slots
-                                    && off < slots.len()
-                                {
-                                    return Some(slots[off]);
-                                }
-                                // Fall through to defaults.
-                                if let Some(defaults) = buffer_defaults
-                                    && off < defaults.len()
-                                {
-                                    return Some(defaults[off]);
-                                }
-                                return Some(buf_fwd.default);
-                            }
-                            // Always-local: slots are authoritative.
-                            return Some(match current_buffer_slots {
-                                Some(slots) if off < slots.len() => slots[off],
-                                _ => buf_fwd.default,
-                            });
+                            // Shared with the cached read tier
+                            // (`Context::read_var_cached`), so the two
+                            // cannot drift.
+                            return Some(buf_fwd.value_in(
+                                current_buffer_slots,
+                                current_buffer_local_flags,
+                                buffer_defaults,
+                            ));
                         }
                         // `Int`, `Bool`, `Obj` and `KboardObj` keep their
                         // storage in the descriptor, so none of the buffer

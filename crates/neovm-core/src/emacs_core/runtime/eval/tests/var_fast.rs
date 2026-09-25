@@ -14,7 +14,10 @@
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::bytecode::{ByteCodeFunction, Vm};
 use crate::emacs_core::error::Flow;
-use crate::emacs_core::eval::Context;
+use crate::emacs_core::eval::{
+    Context, VarCacheEvent, VarCacheTier, parse_var_cache_knob, reset_var_cache_events,
+    set_var_cache_tiers_for_test, var_cache_census_report, var_cache_event_count,
+};
 use crate::emacs_core::intern::intern;
 use crate::emacs_core::print::print_value;
 use crate::emacs_core::value::{LambdaParams, Value};
@@ -739,4 +742,166 @@ fn every_scenario_agrees_on_both_engines() {
     for &scenario in SCENARIOS {
         let _ = assert_engines_agree(scenario);
     }
+}
+
+// ---------------------------------------------------------------------------
+// The cached tiers (P1.4 Stage A)
+// ---------------------------------------------------------------------------
+
+/// SCENARIO's transcript on ENGINE with exactly TIERS enabled.
+fn transcript_with(engine: Engine, scenario: Scenario, tiers: &[VarCacheTier]) -> Vec<String> {
+    set_var_cache_tiers_for_test(tiers);
+    transcript(engine, scenario)
+}
+
+/// The cached tiers change nothing Lisp can see: on each engine, SCENARIO's
+/// transcript with every tier on is the transcript with every tier off (the
+/// general paths alone).
+fn assert_tiers_change_nothing(scenario: Scenario) {
+    for &engine in ENGINES {
+        let off = transcript_with(engine, scenario, &[]);
+        let on = transcript_with(engine, scenario, &VarCacheTier::ALL);
+        for (a, b) in off.iter().zip(&on) {
+            assert_eq!(a, b, "{scenario:?} on {engine:?}: tiers off vs on");
+        }
+    }
+}
+
+#[test]
+fn cached_tiers_change_no_transcript() {
+    for &scenario in SCENARIOS {
+        assert_tiers_change_nothing(scenario);
+    }
+}
+
+#[test]
+fn var_cache_knob_parses_every_spelling() {
+    let all = parse_var_cache_knob(None);
+    assert_eq!(parse_var_cache_knob(Some("1")), all);
+    assert_eq!(parse_var_cache_knob(Some("on")), all);
+    assert_eq!(parse_var_cache_knob(Some("all")), all);
+    assert_eq!(parse_var_cache_knob(Some("0")), 0);
+    assert_eq!(parse_var_cache_knob(Some("off")), 0);
+    assert_eq!(parse_var_cache_knob(Some("none")), 0);
+    let read_set = parse_var_cache_knob(Some("read,set"));
+    assert_ne!(read_set, 0);
+    assert_ne!(read_set, all);
+    assert_eq!(
+        parse_var_cache_knob(Some("read, set,bogus")),
+        read_set,
+        "an unknown word is ignored"
+    );
+    assert_eq!(
+        parse_var_cache_knob(Some("read,set,bind,unbind")),
+        all,
+        "the four tiers are all of them"
+    );
+}
+
+/// `read_var_cached` answers every buffer-local variable whose cache is
+/// loaded for the current buffer, every forwarder and every per-buffer slot
+/// exactly as the general path reads it, and refuses the rest: plain and
+/// aliased symbols, a cache loaded for another buffer or before a structural
+/// alist change, a void binding, and everything while its tier is off.
+#[test]
+fn read_tier_answers_cached_shapes_and_refuses_the_rest() {
+    let mut ev = fixture();
+    set_var_cache_tiers_for_test(&VarCacheTier::ALL);
+    // The general path reads (and swaps in) each variable first.
+    let general: Vec<(&str, String)> = FIXTURE_VARS
+        .iter()
+        .map(|&var| {
+            (
+                var,
+                run(&mut ev, Engine::Interpreter, &Prog::read(), var, &[]),
+            )
+        })
+        .collect();
+    reset_var_cache_events();
+    let cached =
+        |ev: &Context, name: &str| ev.read_var_cached(intern(name)).map(|v| print_value(&v));
+    for (var, want) in &general {
+        match *var {
+            "vft-plain" | "vft-alias" | "buffer-undo-list" => {
+                assert_eq!(cached(&ev, var), None, "{var}: not a cached shape")
+            }
+            _ => assert_eq!(cached(&ev, var).as_deref(), Some(want.as_str()), "{var}"),
+        }
+    }
+    // BLV hits: vft-loc, -locd, -auto, -lbool, -lint, -lobj, -watched and
+    // case-fold-search; forwarders: vft-obj, -bool, -int, -kbd,
+    // gc-cons-threshold, inhibit-quit; one per-buffer slot.
+    assert_eq!(var_cache_event_count(VarCacheEvent::ReadLocalized), 8);
+    assert_eq!(var_cache_event_count(VarCacheEvent::ReadForwarded), 6);
+    assert_eq!(var_cache_event_count(VarCacheEvent::ReadBufferSlot), 1);
+    assert_eq!(var_cache_event_count(VarCacheEvent::ReadRefused), 0);
+    // A cache loaded for another buffer is a miss; the general path's swap-in
+    // makes the next read a hit.
+    eval_ok(&mut ev, "(set-buffer vft-other)");
+    assert_eq!(cached(&ev, "vft-locd"), None);
+    assert_eq!(var_cache_event_count(VarCacheEvent::ReadRefused), 1);
+    assert_eq!(eval(&mut ev, "vft-locd"), "21");
+    assert_eq!(cached(&ev, "vft-locd").as_deref(), Some("21"));
+    // A structural alist change (the kill bumps the epoch) is a miss.
+    eval_ok(&mut ev, "(kill-local-variable 'vft-locd)");
+    assert_eq!(cached(&ev, "vft-locd"), None);
+    assert_eq!(eval(&mut ev, "vft-locd"), "20");
+    // A void binding is refused: the general path signals.
+    eval_ok(&mut ev, "(set-buffer vft-home)");
+    eval_ok(&mut ev, "(makunbound 'vft-loc)");
+    let _ = eval(&mut ev, "(condition-case nil vft-loc (void-variable nil))");
+    if cached(&ev, "vft-loc").is_some() {
+        assert_eq!(
+            cached(&ev, "vft-loc"),
+            Some(run(
+                &mut ev,
+                Engine::Interpreter,
+                &Prog::read(),
+                "vft-loc",
+                &[]
+            )),
+            "a cached answer must be the general path's"
+        );
+    } else {
+        assert!(
+            run(&mut ev, Engine::Interpreter, &Prog::read(), "vft-loc", &[])
+                .starts_with("ERR void-variable")
+        );
+    }
+    // Tier off: nothing is answered.
+    set_var_cache_tiers_for_test(&[VarCacheTier::Set, VarCacheTier::Bind, VarCacheTier::Unbind]);
+    assert_eq!(cached(&ev, "vft-obj"), None);
+    assert_eq!(cached(&ev, "vft-lbool"), None);
+    assert!(var_cache_census_report("test").contains("enabled: set,bind,unbind"));
+}
+
+/// The JIT reads buffer-local and forwarded variables through the read tier
+/// (the interpreter keeps its own opcode arm), with the answers the
+/// interpreter gives.
+#[cfg(feature = "jit")]
+#[test]
+fn jit_reads_take_the_read_tier() {
+    let mut ev = fixture();
+    set_var_cache_tiers_for_test(&VarCacheTier::ALL);
+    // Load every BLV cache for this buffer through the general path.
+    let general: Vec<String> = FIXTURE_VARS
+        .iter()
+        .map(|&var| run(&mut ev, Engine::Interpreter, &Prog::read(), var, &[]))
+        .collect();
+    reset_var_cache_events();
+    let again: Vec<String> = FIXTURE_VARS
+        .iter()
+        .map(|&var| run(&mut ev, Engine::Interpreter, &Prog::read(), var, &[]))
+        .collect();
+    assert_eq!(general, again);
+    assert_eq!(var_cache_event_count(VarCacheEvent::ReadLocalized), 0);
+    let native: Vec<String> = FIXTURE_VARS
+        .iter()
+        .map(|&var| run(&mut ev, Engine::Jit, &Prog::read(), var, &[]))
+        .collect();
+    assert_eq!(general, native);
+    assert_eq!(var_cache_event_count(VarCacheEvent::ReadLocalized), 8);
+    assert_eq!(var_cache_event_count(VarCacheEvent::ReadForwarded), 6);
+    assert_eq!(var_cache_event_count(VarCacheEvent::ReadBufferSlot), 1);
+    assert_eq!(var_cache_event_count(VarCacheEvent::ReadRefused), 0);
 }

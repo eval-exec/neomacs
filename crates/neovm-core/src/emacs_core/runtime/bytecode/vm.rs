@@ -242,6 +242,7 @@ pub(crate) mod vm_profile {
         CALL_SITES.with(|c| c.borrow_mut().clear());
         VARREF_COUNTS.with(|c| c.borrow_mut().clear());
         VARREF_ALIAS.with(|c| *c.borrow_mut() = 0);
+        crate::emacs_core::eval::reset_var_cache_events();
     }
 
     /// Format the OP-MIX + SUBR-MIX (with the per-builtin entry split) into a
@@ -438,6 +439,8 @@ pub(crate) mod vm_profile {
                 classes[0], classes[1], classes[2], classes[3], classes[4], classes[5]
             );
         }
+        // --- VAR-CACHE: the P1.4 Stage A cached variable tiers ---
+        out.push_str(&crate::emacs_core::eval::var_cache_census_report(label));
         out
     }
 

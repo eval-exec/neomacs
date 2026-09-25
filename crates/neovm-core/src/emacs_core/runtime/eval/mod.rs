@@ -7291,6 +7291,15 @@ mod macroexpand;
 
 mod specpdl;
 
+mod var_fast;
+#[cfg(test)]
+pub(crate) use var_fast::{
+    VarCacheEvent, VarCacheTier, parse_var_cache_knob, reset_var_cache_events,
+    set_var_cache_tiers_for_test, var_cache_census_report, var_cache_event_count,
+};
+#[cfg(feature = "vm-profile")]
+pub(crate) use var_fast::{reset_var_cache_events, var_cache_census_report};
+
 mod special_forms;
 
 mod apply;

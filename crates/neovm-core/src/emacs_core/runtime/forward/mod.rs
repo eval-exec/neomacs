@@ -596,6 +596,48 @@ pub struct LispBufferObjFwd {
     pub default: Value,
 }
 
+impl LispBufferObjFwd {
+    /// GNU `do_symval_forwarding`'s `Lisp_Fwd_Buffer_Obj` arm plus
+    /// `PER_BUFFER_VALUE_P` (`src/data.c:1345-1350`, `buffer.h:1640`): the
+    /// value this slot reads in the buffer whose slot array is SLOTS and whose
+    /// conditional-local bits are LOCAL_FLAGS, falling back to DEFAULTS (the
+    /// shared `buffer_defaults`) and then to the descriptor's own default.
+    ///
+    /// Always-local slots (`local_flags_idx < 0`) read the buffer's slot
+    /// unconditionally; conditional ones only while the buffer's bit is set.
+    /// No current buffer is SLOTS `None` (and no flag set).
+    #[inline]
+    pub(crate) fn value_in(
+        &self,
+        slots: Option<&[Value]>,
+        local_flags: u64,
+        defaults: Option<&[Value]>,
+    ) -> Value {
+        let off = self.offset as usize;
+        if self.local_flags_idx >= 0 {
+            // NeoMacs reuses `offset` as the local-flags bit index; both fit
+            // in BUFFER_SLOT_COUNT.
+            let bit_set = (local_flags >> (off as u32)) & 1 != 0;
+            if bit_set
+                && let Some(slots) = slots
+                && off < slots.len()
+            {
+                return slots[off];
+            }
+            if let Some(defaults) = defaults
+                && off < defaults.len()
+            {
+                return defaults[off];
+            }
+            return self.default;
+        }
+        match slots {
+            Some(slots) if off < slots.len() => slots[off],
+            _ => self.default,
+        }
+    }
+}
+
 /// `Lisp_Kboard_Objfwd`: forward to a per-keyboard slot (`src/lisp.h:3490-3495`).
 ///
 /// GNU's descriptor holds `offsetof (KBOARD, vname_)` and

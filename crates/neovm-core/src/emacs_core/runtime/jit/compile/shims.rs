@@ -1026,6 +1026,13 @@ pub extern "C" fn neovm_jit_varref(ctx: *mut u8, sym: i64, out: *mut i64) -> i64
                 return STATUS_OK;
             }
         }
+        // A buffer-local variable whose BLV cache is loaded for this buffer,
+        // a forwarder, a per-buffer slot: still no Vm (P1.4 A1).
+        if let Some(value) = ctx.read_var_cached(sym_id) {
+            // SAFETY: `out` is the generated code's result stack slot.
+            unsafe { *out = value.bits() as i64 };
+            return STATUS_OK;
+        }
         let mut vm = Vm::from_context(ctx);
         match vm.varref_for_jit(sym_id) {
             Ok(value) => {
