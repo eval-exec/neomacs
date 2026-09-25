@@ -291,6 +291,10 @@ pub(crate) struct LeafObs {
     /// the cache seams). With `entries`, it says which compiles never paid
     /// back.
     pub(crate) compile_us: Cell<u32>,
+    /// Why the MIR tier did or did not take this leaf's body
+    /// (`stats::verdict`), recorded only under a report knob; `None` = no
+    /// knob, or a compile that never reached the MIR tier (OSR, AOT).
+    pub(crate) mir_verdict: Option<Box<str>>,
     /// Precise deopts at a pc beyond the first [`Self::MAX_DEOPT_PCS`].
     deopt_pc_overflow: Cell<u64>,
 }
@@ -311,6 +315,7 @@ impl LeafObs {
             deopt_pcs: RefCell::new(SmallVec::new()),
             deopt_pc_overflow: Cell::new(0),
             compile_us: Cell::new(0),
+            mir_verdict: None,
         })
     }
 
@@ -383,6 +388,7 @@ impl LeafObs {
             deopt_pcs,
             deopt_pc_overflow: self.deopt_pc_overflow.get(),
             compile_us: self.compile_us.get(),
+            mir_verdict: self.mir_verdict.clone(),
         }
     }
 }
@@ -401,6 +407,7 @@ pub(crate) struct LeafObsSnapshot {
     pub(crate) deopt_pcs: Vec<(u32, u64)>,
     pub(crate) deopt_pc_overflow: u64,
     pub(crate) compile_us: u32,
+    pub(crate) mir_verdict: Option<Box<str>>,
 }
 
 /// Summed counters of leaves a cache dropped (a heap-swap `clear`, an OSR

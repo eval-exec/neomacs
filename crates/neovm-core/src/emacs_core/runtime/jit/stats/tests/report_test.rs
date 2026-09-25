@@ -128,11 +128,12 @@ fn jit_final_report_renders_every_section() {
     assert_eq!(
         leaf_lines,
         [
-            "id=37 name=j4-add tier=mir state=live osr_pc=- entries=6000000 deopt_at=5999998 \
-             deopt_rerun=0 signals=0 regalloc=fast clif=58 compile_us=0 pcs=12:5999998/Mul,other:3",
-            "id=39 name=j4-add tier=mir state=retired osr_pc=- entries=0 deopt_at=0 \
+            "id=37 name=j4-add tier=mir mir=taken state=live osr_pc=- entries=6000000 \
+             deopt_at=5999998 deopt_rerun=0 signals=0 regalloc=fast clif=58 compile_us=0 \
+             pcs=12:5999998/Mul,other:3",
+            "id=39 name=j4-add tier=mir mir=taken state=retired osr_pc=- entries=0 deopt_at=0 \
              deopt_rerun=2 signals=0 regalloc=fast clif=58 compile_us=0 pcs=-",
-            "id=38 name=j4-add tier=mir state=live osr_pc=- entries=77 deopt_at=0 \
+            "id=38 name=j4-add tier=mir mir=taken state=live osr_pc=- entries=77 deopt_at=0 \
              deopt_rerun=0 signals=0 regalloc=fast clif=58 compile_us=0 pcs=-",
         ],
         "the leaves that deopted, most first, then the rest by entries"
@@ -202,7 +203,36 @@ fn leaf_row(id: u64, deopt_at: u64, deopt_rerun: u64) -> LeafReportRow {
         },
         deopt_pc_overflow: if deopt_at > 0 { 3 } else { 0 },
         compile_us: 0,
+        mir: Some("taken".into()),
     }
+}
+
+/// Each leaf row names the MIR verdict of the compile that produced it, as
+/// one token right after the tier; a leaf without one (no report knob at its
+/// compile, an OSR or AOT leaf) prints `-`.
+#[test]
+fn jit_final_report_leaf_row_renders_the_mir_verdict() {
+    let bailed = LeafReportRow {
+        tier: "baseline",
+        mir: Some("build:UnsupportedOp(\"mir-unmodelled-control:Switch\")".into()),
+        ..leaf_row(7, 0, 0)
+    };
+    assert_eq!(
+        bailed.render(),
+        "id=7 name=j4-add tier=baseline mir=build:UnsupportedOp(\"mir-unmodelled-control:Switch\") \
+         state=live osr_pc=- entries=0 deopt_at=0 deopt_rerun=0 signals=0 regalloc=fast clif=58 \
+         compile_us=0 pcs=-"
+    );
+    let osr = LeafReportRow {
+        tier: "osr",
+        mir: None,
+        ..leaf_row(8, 0, 0)
+    };
+    assert!(
+        osr.render().contains(" tier=osr mir=- state="),
+        "{}",
+        osr.render()
+    );
 }
 
 /// Leaves rank by deopts (precise plus rerun), most first, ties by id, and
@@ -347,6 +377,7 @@ fn jit_final_report_collects_named_leaves_from_a_context() {
     let (pc, n, op) = &row.deopt_pcs[0];
     assert_eq!((*pc, *n), (4, 1), "{row:?}");
     assert_eq!(op.as_deref(), Some("Add"));
+    assert!(row.mir.is_some(), "the compile's MIR verdict: {row:?}");
     let lines = report.render();
     assert!(
         lines.iter().any(|(tag, body)| *tag == ReportTag::FinalLeaf

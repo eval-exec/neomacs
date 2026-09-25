@@ -457,3 +457,82 @@ pub(super) fn compile_corpus_for_test() -> Vec<String> {
 pub(super) fn corpus_len_for_test() -> usize {
     corpus().len()
 }
+
+/// `(lambda (x &optional y) (+ x 1))`: a baseline leaf, kept off MIR by the
+/// `&optional` pre-build gate.
+fn optional_add1() -> ByteCodeFunction {
+    let mut f = function(
+        vec![Op::StackRef(1), Op::Constant(0), Op::Add, Op::Return],
+        vec![Value::make_int(1)],
+        1,
+    );
+    f.params.optional = vec![SymId(9)];
+    f
+}
+
+/// `(lambda (x) (if x (throw 'jit-tag 1) 2))`: MIR's builder does not model
+/// `throw`, the baseline does.
+fn throw_if() -> ByteCodeFunction {
+    function(
+        vec![
+            Op::StackRef(0),  // 0
+            Op::GotoIfNil(5), // 1
+            Op::Constant(0),  // 2: 'jit-tag
+            Op::Constant(1),  // 3: 1
+            Op::Throw,        // 4
+            Op::Constant(2),  // 5: 2
+            Op::Return,       // 6
+        ],
+        vec![
+            Value::symbol("jit-tag"),
+            Value::make_int(1),
+            Value::make_int(2),
+        ],
+        1,
+    )
+}
+
+/// Under a report knob every compile records why the MIR tier did or did not
+/// take its body, on the leaf it produced (`mir=` on `[neovm-jit-final-leaf]`).
+#[test]
+fn jit_pipeline_leaf_records_its_mir_verdict() {
+    force_deopt_for_test(false);
+    observe_stats();
+    let verdict = |f: &ByteCodeFunction| {
+        let leaf = compile_bytecode_function_with(f, None).expect("compiles");
+        (
+            leaf.tier().name(),
+            leaf.obs.mir_verdict.as_deref().map(str::to_string),
+        )
+    };
+    assert_eq!(verdict(&add1()), ("mir", Some("taken".to_string())));
+    assert_eq!(
+        verdict(&optional_add1()),
+        ("baseline", Some("gate_opt".to_string()))
+    );
+    let mut rest = optional_add1();
+    rest.params.rest = Some(SymId(10));
+    assert_eq!(
+        verdict(&rest),
+        ("baseline", Some("gate_rest+gate_opt".to_string())),
+        "every pre-build gate that trips, in the funnel's order"
+    );
+    assert_eq!(
+        verdict(&throw_if()),
+        (
+            "baseline",
+            Some("build:UnsupportedOp(\"mir-unmodelled-control\")".to_string())
+        )
+    );
+}
+
+/// With every report knob off no verdict is recorded at all.
+#[test]
+fn jit_pipeline_no_mir_verdict_without_a_report_knob() {
+    force_deopt_for_test(false);
+    stats::force_observe_for_test(stats::ObserveOverride::default());
+    for f in [add1(), optional_add1(), throw_if()] {
+        let leaf = compile_bytecode_function_with(&f, None).expect("compiles");
+        assert_eq!(leaf.obs.mir_verdict, None);
+    }
+}

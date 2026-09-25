@@ -37,6 +37,9 @@ pub(crate) struct LeafReportRow {
     pub(crate) deopt_pc_overflow: u64,
     /// The compile stall that produced the leaf, µs (0 = unknown).
     pub(crate) compile_us: u32,
+    /// Why the MIR tier did or did not take the leaf's body (a report token,
+    /// see `stats::verdict`); `None` prints `-`.
+    pub(crate) mir: Option<Box<str>>,
 }
 
 impl LeafReportRow {
@@ -70,11 +73,12 @@ impl LeafReportRow {
             "-".to_string()
         };
         format!(
-            "id={} name={} tier={} state={} osr_pc={osr} entries={entries} deopt_at={} \
+            "id={} name={} tier={} mir={} state={} osr_pc={osr} entries={entries} deopt_at={} \
              deopt_rerun={} signals={} regalloc={} clif={} compile_us={} pcs={pcs}",
             self.id,
             self.name.as_deref().unwrap_or("-"),
             self.tier,
+            self.mir.as_deref().unwrap_or("-"),
             self.state,
             self.deopt_at,
             self.deopt_rerun,

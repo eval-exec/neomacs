@@ -221,12 +221,16 @@ pub(crate) fn inline_census_summary(n: usize) -> String {
     })
 }
 
-/// Record one MIR-tier bail reason (compile-time only; never on a hot path).
+/// Record one MIR-tier bail reason (compile-time only; never on a hot path):
+/// the census key, and the compile's per-leaf verdict ([`verdict`]).
 pub(crate) fn record_mir_bail(reason: String) {
-    if !summary_enabled() {
+    if !report_requested() {
         return;
     }
-    MIR_BAIL_REASONS.with(|m| *m.borrow_mut().entry(reason).or_insert(0) += 1);
+    verdict::note(|v| v.bail(&reason));
+    if summary_enabled() {
+        MIR_BAIL_REASONS.with(|m| *m.borrow_mut().entry(reason).or_insert(0) += 1);
+    }
 }
 
 /// Top-N MIR bail reasons, most frequent first, for the summary line.
@@ -257,6 +261,20 @@ pub(crate) enum MirFunnel {
     InlinedCallees(u64),
 }
 
+impl MirFunnel {
+    /// The pre-build gate's name in the per-leaf verdict (the `mir[...]`
+    /// summary's field name), or `None` for a stage that is not one.
+    fn verdict_gate(self) -> Option<&'static str> {
+        match self {
+            MirFunnel::GateOptional => Some("gate_opt"),
+            MirFunnel::GateRest => Some("gate_rest"),
+            MirFunnel::GatePrefix => Some("gate_prefix"),
+            MirFunnel::GateReopt => Some("gate_reopt"),
+            _ => None,
+        }
+    }
+}
+
 /// Record one MIR-funnel event. Compile-time only (once per compile attempt),
 /// so this is never on a hot path.
 pub(crate) fn record_mir(stage: MirFunnel) {
@@ -275,6 +293,11 @@ pub(crate) fn record_mir(stage: MirFunnel) {
         }
         c.set(s);
     });
+    if let Some(gate) = stage.verdict_gate() {
+        verdict::note(|v| v.gate(gate));
+    } else if matches!(stage, MirFunnel::Taken) {
+        verdict::note(|v| v.taken());
+    }
 }
 
 thread_local! {
@@ -946,6 +969,7 @@ fn leaf_report_rows(
                 deopt_pcs,
                 deopt_pc_overflow: row.obs.deopt_pc_overflow,
                 compile_us: row.obs.compile_us,
+                mir: row.obs.mir_verdict,
             }
         })
         .collect();
@@ -1003,6 +1027,7 @@ pub(crate) mod epoch;
 pub(crate) mod perf_map;
 pub(crate) mod phases;
 mod report;
+pub(crate) mod verdict;
 
 pub(crate) use epoch::{note_function_cell_unchanged, note_function_epoch_bump};
 
@@ -1029,3 +1054,7 @@ mod asm_dump_tests;
 #[cfg(test)]
 #[path = "stats/tests/phases_test.rs"]
 mod phases_tests;
+
+#[cfg(test)]
+#[path = "stats/tests/verdict_test.rs"]
+mod verdict_tests;

@@ -256,7 +256,9 @@ pub fn compile_bytecode_function(f: &ByteCodeFunction) -> Result<CompiledLeaf, C
 /// `compile_us` = wall time of the attempt; `clif_*` = the Cranelift IR the
 /// body lowered to, 0 if it did not; `compiled_id` = the cache id, `-` if
 /// none; `tier` = `baseline`/`mir` or `-`; `name` = the perf-map label's
-/// function name, commas as `;`). At exit the report appends one
+/// function name, commas as `;`), each followed by a
+/// `#mir,compiled_id,verdict` row (`stats::verdict`: why the MIR tier did or
+/// did not take the body). At exit the report appends one
 /// `#leaf,compiled_id,name,tier,osr_pc,entries,deopt_at,deopt_rerun,signals,
 /// top_deopt_pc` row per leaf (`stats::report_at_exit`), joinable on
 /// `compiled_id`. Used to justify (or
@@ -370,6 +372,7 @@ fn jit_profile_emit(
     result: Result<&CompiledLeaf, &CompileError>,
     elapsed: std::time::Duration,
     call_heavy: bool,
+    mir_verdict: Option<&str>,
 ) {
     let Some(path) = jit_profile_path() else {
         return;
@@ -465,7 +468,7 @@ fn jit_profile_emit(
     let tier = result.map_or("-", |l| l.tier().name());
     let name = super::stats::perf_map::active_label_name()
         .map_or_else(|| "-".to_string(), |n| n.replace(',', ";"));
-    let line = format!(
+    let mut line = format!(
         "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
         ops.len(),
         arith,
@@ -489,6 +492,10 @@ fn jit_profile_emit(
         tier,
         name,
     );
+    line.push_str(&super::stats::verdict::profile_row(
+        &compiled_id,
+        mir_verdict,
+    ));
     use std::io::Write;
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
@@ -997,10 +1004,23 @@ pub fn compile_bytecode_function_requested(
     }
     let _restore = Restore(outer);
     let started = std::time::Instant::now();
-    let result = compile_bytecode_function_inner(f, obarray);
+    super::stats::verdict::begin();
+    let mut result = compile_bytecode_function_inner(f, obarray);
+    let mir_verdict = super::stats::verdict::take();
+    if let Ok(leaf) = &mut result {
+        leaf.obs.mir_verdict = mir_verdict.clone();
+    }
     if jit_profile_path().is_some() {
         let _phase = super::stats::enter_phase(super::stats::CompilePhase::Other);
-        jit_profile_emit(f, obarray, result.as_ref(), started.elapsed(), call_heavy);
+        let elapsed = started.elapsed();
+        jit_profile_emit(
+            f,
+            obarray,
+            result.as_ref(),
+            elapsed,
+            call_heavy,
+            mir_verdict.as_deref(),
+        );
     }
     result
 }
