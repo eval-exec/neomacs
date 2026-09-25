@@ -5,6 +5,44 @@
 
 use super::*;
 
+/// Push the entry MAKE builds onto SPECPDL, constructed in its final slot.
+///
+/// `Vec::push(entry)` evaluates the entry before its capacity check, and
+/// because growing may unwind, LLVM parks the 32-byte `SpecBinding` in a stack
+/// temporary written with narrow stores, then copies it into the slot with
+/// 16-byte loads -- one store-forwarding block per push (1.02 per dynamic
+/// `let`, one per `mapc` callback frame). Growing first and then writing
+/// MAKE's value straight into the spare slot removes the temporary.
+///
+/// MAKE must build exactly one variant: branching between variants inside it
+/// joins the aggregates and brings the temporary back. Branch outside and call
+/// this once per arm.
+#[inline(always)]
+pub(crate) fn push_specpdl_entry_with(
+    specpdl: &mut Vec<SpecBinding>,
+    make: impl FnOnce() -> SpecBinding,
+) {
+    let len = specpdl.len();
+    if len == specpdl.capacity() {
+        grow_specpdl_for_push(specpdl);
+    }
+    // SAFETY: `len < capacity` was just ensured, so the slot at `len` is spare
+    // capacity; it is fully written before the length grows over it. MAKE
+    // cannot reach SPECPDL (it is exclusively borrowed here), and if MAKE
+    // panics nothing has been published.
+    unsafe {
+        specpdl.as_mut_ptr().add(len).write(make());
+        specpdl.set_len(len + 1);
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn grow_specpdl_for_push(specpdl: &mut Vec<SpecBinding>) {
+    // Amortized doubling, as `Vec::push` grows.
+    specpdl.reserve(1);
+}
+
 impl Context {
     // Shared runtime write path for symbol-cell mutation. This mirrors GNU
     // `set_internal` after lexical handling has already been decided.
@@ -12,6 +50,12 @@ impl Context {
     // -----------------------------------------------------------------------
     // specbind / unbind_to — GNU Emacs specpdl-style dynamic variable binding
     // -----------------------------------------------------------------------
+
+    /// [`push_specpdl_entry_with`] on this context's specpdl.
+    #[inline(always)]
+    pub(crate) fn push_specpdl_with(&mut self, make: impl FnOnce() -> SpecBinding) {
+        push_specpdl_entry_with(&mut self.specpdl, make);
+    }
 
     pub(super) fn run_specbind_watcher(
         &mut self,
@@ -52,7 +96,7 @@ impl Context {
         let Some(old) = self.obarray.swap_plain_untrapped_value_id(sym_id, value) else {
             return false;
         };
-        self.specpdl.push(SpecBinding::Let {
+        self.push_specpdl_with(|| SpecBinding::Let {
             sym_id,
             old_value: SavedBindingValue::from_plain(old),
         });
@@ -83,7 +127,7 @@ impl Context {
             let trapped =
                 sym.trapped_write() == crate::emacs_core::symbol::SymbolTrappedWrite::Trapped;
             debug_assert_eq!(trapped, self.watchers.has_watchers(sym_id));
-            self.specpdl.push(SpecBinding::Let { sym_id, old_value });
+            self.push_specpdl_with(|| SpecBinding::Let { sym_id, old_value });
             if trapped {
                 self.run_specbind_watcher(sym_id, value, "let")?;
             }
@@ -108,7 +152,7 @@ impl Context {
                 .get(buf_id)
                 .map(|buf| buf.get_undo_list())
                 .unwrap_or(Value::NIL);
-            self.specpdl.push(SpecBinding::LetLocal {
+            self.push_specpdl_with(|| SpecBinding::LetLocal {
                 sym_id: resolved,
                 old_value,
                 buffer_id: buf_id,
@@ -177,7 +221,7 @@ impl Context {
                             .get(buf_id)
                             .map(|b| b.slots[off])
                             .unwrap_or(Value::NIL);
-                        self.specpdl.push(SpecBinding::LetLocal {
+                        self.push_specpdl_with(|| SpecBinding::LetLocal {
                             sym_id: resolved,
                             old_value: old_val,
                             buffer_id: buf_id,
@@ -209,7 +253,7 @@ impl Context {
                         } else {
                             Some(buf_fwd.default)
                         };
-                        self.specpdl.push(SpecBinding::LetDefault {
+                        self.push_specpdl_with(|| SpecBinding::LetDefault {
                             sym_id: resolved,
                             old_value: SavedBindingValue::from_option(old_default),
                             buffer_id: SavedBufferId::from_option(buf_id_opt),
@@ -267,13 +311,13 @@ impl Context {
                 .obarray
                 .has_per_buffer_binding(resolved, cur_val, alist);
             if has_local_binding {
-                self.specpdl.push(SpecBinding::LetLocal {
+                self.push_specpdl_with(|| SpecBinding::LetLocal {
                     sym_id: resolved,
                     old_value: old_val,
                     buffer_id: buf_id,
                 });
             } else {
-                self.specpdl.push(SpecBinding::LetDefault {
+                self.push_specpdl_with(|| SpecBinding::LetDefault {
                     sym_id: resolved,
                     old_value: SavedBindingValue::from_option(Some(old_val)),
                     buffer_id: SavedBufferId::from_option(Some(buf_id)),
@@ -315,7 +359,7 @@ impl Context {
         // symbols (Int/Bool/Obj/Kboard) still take it so `(let
         // ((gc-cons-threshold "x")) ...)` keeps signaling before the body.
         let old_value = self.obarray.symbol_value_id(resolved).copied();
-        self.specpdl.push(SpecBinding::Let {
+        self.push_specpdl_with(|| SpecBinding::Let {
             sym_id: resolved,
             old_value: SavedBindingValue::from_option(old_value),
         });

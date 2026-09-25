@@ -130,81 +130,35 @@ impl Context {
 
     #[inline(always)]
     pub(crate) fn push_backtrace_frame(&mut self, function: Value, args: &[Value]) {
+        // Each arm builds its entry in the specpdl slot itself
+        // (`push_specpdl_with`): `Vec::push` copied it there from a stack
+        // temporary, a store-forwarding stall on every callback frame.
         match args {
             [arg] => {
                 let arg = *arg;
-                // SAFETY: the returned slot is written before it is committed.
-                unsafe {
-                    let slot = self.reserve_specpdl_slot();
-                    slot.write(SpecBinding::Backtrace1 {
-                        function,
-                        arg,
-                        debug_on_exit: false,
-                    });
-                    self.commit_specpdl_slot();
-                }
+                self.push_specpdl_with(|| SpecBinding::Backtrace1 {
+                    function,
+                    arg,
+                    debug_on_exit: false,
+                });
             }
             [arg0, arg1] => {
                 let (arg0, arg1) = (*arg0, *arg1);
-                // SAFETY: the returned slot is written before it is committed.
-                unsafe {
-                    let slot = self.reserve_specpdl_slot();
-                    slot.write(SpecBinding::Backtrace2 {
-                        function,
-                        arg0,
-                        arg1,
-                    });
-                    self.commit_specpdl_slot();
-                }
+                self.push_specpdl_with(|| SpecBinding::Backtrace2 {
+                    function,
+                    arg0,
+                    arg1,
+                });
             }
             _ => {
                 let args = self.backtrace_args_from_slice(args);
-                // SAFETY: the returned slot is written before it is committed.
-                unsafe {
-                    let slot = self.reserve_specpdl_slot();
-                    slot.write(SpecBinding::Backtrace {
-                        function,
-                        args,
-                        debug_on_exit: false,
-                    });
-                    self.commit_specpdl_slot();
-                }
+                self.push_specpdl_with(|| SpecBinding::Backtrace {
+                    function,
+                    args,
+                    debug_on_exit: false,
+                });
             }
         }
-    }
-
-    /// The specpdl's next (uninitialised) slot, with capacity ensured.
-    ///
-    /// For hot frame pushes: build the entry directly in its final slot.
-    /// `Vec::push` takes the 32-byte `SpecBinding` by value, and LLVM
-    /// materialises it in a stack temporary with narrow stores, then copies
-    /// it with 16-byte loads -- a store-forwarding stall on every push
-    /// (`apply1_bytecode`'s callback frame: one per `mapc` callback).
-    ///
-    /// # Safety
-    /// The caller must `write` a complete entry to the returned pointer and
-    /// then call [`Self::commit_specpdl_slot`], with no other specpdl access
-    /// in between.
-    #[inline(always)]
-    unsafe fn reserve_specpdl_slot(&mut self) -> *mut SpecBinding {
-        let len = self.specpdl.len();
-        if len == self.specpdl.capacity() {
-            self.specpdl.reserve(1);
-        }
-        // SAFETY: capacity for one more entry was just ensured.
-        unsafe { self.specpdl.as_mut_ptr().add(len) }
-    }
-
-    /// Grow the specpdl over the slot [`Self::reserve_specpdl_slot`] handed
-    /// out.
-    ///
-    /// # Safety
-    /// That slot must have been fully written.
-    #[inline(always)]
-    unsafe fn commit_specpdl_slot(&mut self) {
-        let len = self.specpdl.len();
-        // SAFETY: caller contract -- the entry at `len` is initialised.
-        unsafe { self.specpdl.set_len(len + 1) }
     }
 
     /// Backtrace push for a native (JIT) caller: args live in the generated
@@ -836,7 +790,7 @@ impl Context {
 
     pub(crate) fn record_native_unwind(&mut self, action: NativeUnwindAction) -> NativeUnwindToken {
         let index = self.specpdl.len();
-        self.specpdl.push(SpecBinding::NativeUnwind { action });
+        self.push_specpdl_with(|| SpecBinding::NativeUnwind { action });
         NativeUnwindToken { index }
     }
 
@@ -851,7 +805,7 @@ impl Context {
     }
 
     pub(crate) fn push_specpdl_root(&mut self, value: Value) {
-        self.specpdl.push(SpecBinding::GcRoot { value });
+        self.push_specpdl_with(|| SpecBinding::GcRoot { value });
     }
 
     /// Push a GcRoot whose value can be UPDATED in place: one reusable root
@@ -861,7 +815,7 @@ impl Context {
     /// collection, which exact-GC stress mode turns into minutes.
     pub(crate) fn push_specpdl_root_slot(&mut self, value: Value) -> SpecpdlRootSlot {
         let index = self.specpdl.len();
-        self.specpdl.push(SpecBinding::GcRoot { value });
+        self.push_specpdl_with(|| SpecBinding::GcRoot { value });
         SpecpdlRootSlot { index }
     }
 
@@ -3311,7 +3265,7 @@ impl Context {
         // Root the function value on the specpdl so GC can trace it
         // (keeping body, env, and params alive through the call).
         let root_count = self.specpdl.len();
-        self.specpdl.push(SpecBinding::GcRoot { value: func_value });
+        self.push_specpdl_with(|| SpecBinding::GcRoot { value: func_value });
         // A lexical closure, in GNU `funcall_lambda`'s shape: the formals
         // are consed onto the captured environment in a local, which is then
         // installed with one `LexicalEnv` entry (GNU's one `specbind` of
@@ -3326,7 +3280,7 @@ impl Context {
         }
         if raw_cons_lambda {
             let old_lexenv = std::mem::replace(&mut self.lexenv, Value::NIL);
-            self.specpdl.push(SpecBinding::LexicalEnv { old_lexenv });
+            self.push_specpdl_with(|| SpecBinding::LexicalEnv { old_lexenv });
         }
 
         let call_state = match self.begin_lambda_call(func_value, arglist, env, &args) {
@@ -3418,7 +3372,7 @@ impl Context {
     pub(super) fn run_lexical_closure_body(&mut self, new_env: Value, body: Value) -> EvalResult {
         let count = self.specpdl.len();
         let old_lexenv = std::mem::replace(&mut self.lexenv, new_env);
-        self.specpdl.push(SpecBinding::LexicalEnv { old_lexenv });
+        self.push_specpdl_with(|| SpecBinding::LexicalEnv { old_lexenv });
         let result = self.eval_lambda_body_value(body);
         let result = self.rewrap_thread_blocked_in_lexenv(result);
         self.unbind_lexenv_frame(count, result)

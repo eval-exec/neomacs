@@ -2860,9 +2860,9 @@ impl<'a> Vm<'a> {
                     // Push BEFORE assigning: the entry keeps the caller's
                     // lexenv alist GC-traced while ctx.lexenv points at the
                     // closure env.
-                    self.ctx.specpdl.push(SpecBinding::LexicalEnv {
-                        old_lexenv: self.ctx.lexenv,
-                    });
+                    let old_lexenv = self.ctx.lexenv;
+                    self.ctx
+                        .push_specpdl_with(|| SpecBinding::LexicalEnv { old_lexenv });
                     self.ctx.lexenv = env;
                 }
                 let result = self.run_loop(
@@ -2973,9 +2973,9 @@ impl<'a> Vm<'a> {
             use crate::emacs_core::eval::SpecBinding;
             if let Some(env) = func.env {
                 // Push BEFORE assigning (see the params_on_stack branch).
-                self.ctx.specpdl.push(SpecBinding::LexicalEnv {
-                    old_lexenv: self.ctx.lexenv,
-                });
+                let old_lexenv = self.ctx.lexenv;
+                self.ctx
+                    .push_specpdl_with(|| SpecBinding::LexicalEnv { old_lexenv });
                 self.ctx.lexenv = env;
             }
         }
@@ -5701,9 +5701,10 @@ impl<'a> Vm<'a> {
                             .current_mut()
                             .bind_stack
                             .push(self.ctx.specpdl.len());
-                        self.ctx.specpdl.push(SpecBinding::UnwindProtect {
+                        let lexenv = self.ctx.lexenv;
+                        self.ctx.push_specpdl_with(|| SpecBinding::UnwindProtect {
                             forms: cleanup,
-                            lexenv: self.ctx.lexenv,
+                            lexenv,
                         });
                     }
                     Op::Throw => {

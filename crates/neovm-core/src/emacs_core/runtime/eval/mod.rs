@@ -3768,9 +3768,8 @@ pub(crate) fn begin_eval_with_lexical_arg_in_state(
     // automatically, providing unwind-safe cleanup on non-local exits.
     let specpdl_count = specpdl.len();
     if let Some(env) = lexenv_value {
-        specpdl.push(SpecBinding::LexicalEnv {
-            old_lexenv: *lexenv,
-        });
+        let old_lexenv = *lexenv;
+        self::specpdl::push_specpdl_entry_with(specpdl, || SpecBinding::LexicalEnv { old_lexenv });
         *lexenv = env;
     }
     Ok(ActiveEvalLexicalArgState { specpdl_count })
@@ -4612,7 +4611,7 @@ impl Context {
             // GNU funcall_lambda computes a nil local `lexenv` for a
             // dynamically scoped lambda and saves the caller's lexical
             // environment before evaluating its body.
-            self.specpdl.push(SpecBinding::LexicalEnv { old_lexenv });
+            self.push_specpdl_with(|| SpecBinding::LexicalEnv { old_lexenv });
         }
 
         if let Err(flow) = self.bind_lambda_args_from_arglist(fun, arglist, args) {

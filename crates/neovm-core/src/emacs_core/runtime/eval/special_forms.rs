@@ -320,7 +320,7 @@ impl Context {
         // mode, so unbind_to restores it regardless of what the body does.
         // Matches GNU's specbind(Qinternal_interpreter_environment).
         if use_lexical {
-            self.specpdl.push(SpecBinding::LexicalEnv {
+            self.push_specpdl_with(|| SpecBinding::LexicalEnv {
                 old_lexenv: lexenv_at_entry,
             });
         }
@@ -384,9 +384,8 @@ impl Context {
         // Mirrors GNU Flet_star: specbind(Qinternal_interpreter_environment, lexenv)
         // before any per-variable specbinds. unbind_to pops everything.
         if use_lexical {
-            self.specpdl.push(SpecBinding::LexicalEnv {
-                old_lexenv: self.lexenv,
-            });
+            let old_lexenv = self.lexenv;
+            self.push_specpdl_with(|| SpecBinding::LexicalEnv { old_lexenv });
         }
 
         let temp_scope = self.save_eval_temp_roots();
@@ -925,9 +924,10 @@ impl Context {
         let body = tail.cons_car();
         let cleanup_forms = tail.cons_cdr();
         let specpdl_count = self.specpdl.len();
-        self.specpdl.push(SpecBinding::UnwindProtect {
+        let lexenv = self.lexenv;
+        self.push_specpdl_with(|| SpecBinding::UnwindProtect {
             forms: cleanup_forms,
-            lexenv: self.lexenv,
+            lexenv,
         });
         let result = self.eval_sub(body);
         self.unbind_to_with_result(specpdl_count, result)
@@ -1050,9 +1050,8 @@ impl Context {
                         && !self.lexenv_declares_special_cached_in(self.lexenv, var_id);
                     let specpdl_count = self.specpdl.len();
                     if use_lexical_binding {
-                        self.specpdl.push(SpecBinding::LexicalEnv {
-                            old_lexenv: self.lexenv,
-                        });
+                        let old_lexenv = self.lexenv;
+                        self.push_specpdl_with(|| SpecBinding::LexicalEnv { old_lexenv });
                         let binding = Value::make_cons(lexenv_binding_symbol_value(var_id), value);
                         self.lexenv = Value::make_cons(binding, self.lexenv);
                     } else if bind_var && let Err(flow) = self.try_specbind(var_id, value) {
@@ -1090,9 +1089,8 @@ impl Context {
                     if use_lexical_binding {
                         // Match GNU: specbind the lexenv, then cons the
                         // binding directly.
-                        self.specpdl.push(SpecBinding::LexicalEnv {
-                            old_lexenv: self.lexenv,
-                        });
+                        let old_lexenv = self.lexenv;
+                        self.push_specpdl_with(|| SpecBinding::LexicalEnv { old_lexenv });
                         let binding =
                             Value::make_cons(lexenv_binding_symbol_value(var_id), binding_value);
                         self.lexenv = Value::make_cons(binding, self.lexenv);
@@ -1154,9 +1152,8 @@ impl Context {
         });
 
         let specpdl_count = self.specpdl.len();
-        self.specpdl.push(SpecBinding::LexicalEnv {
-            old_lexenv: self.lexenv,
-        });
+        let old_lexenv = self.lexenv;
+        self.push_specpdl_with(|| SpecBinding::LexicalEnv { old_lexenv });
         self.lexenv = lexenv;
         let thread_id = self.threads.current_thread_id();
         let pending = self.threads.take_pending_thread_signal(thread_id);
@@ -1697,9 +1694,8 @@ impl Context {
                         // unwind instead of leaking a spurious "Recursive
                         // require" entry.
                         let spec_entry = self.specpdl.len();
-                        self.specpdl.push(SpecBinding::RequireStack {
-                            len: self.require_stack.len(),
-                        });
+                        let len = self.require_stack.len();
+                        self.push_specpdl_with(|| SpecBinding::RequireStack { len });
                         self.require_stack.push(sym_id);
                         let result =
                             super::super::autoload::with_implicit_load_state(self, |eval| {
