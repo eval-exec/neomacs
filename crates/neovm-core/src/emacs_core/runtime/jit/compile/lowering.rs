@@ -932,6 +932,196 @@ fn emit_inline_aref(
     true
 }
 
+/// I1 (design `p1-2-builtin-intrinsics` §2.7): `aref` of a string whose
+/// characters are one byte each -- unibyte, or multibyte with as many bytes
+/// as characters (all ASCII) -- at an in-range fixnum index, read inline:
+/// exactly `aref_fast`'s string arm (the rule is documented with the layout
+/// constants on `LispString`). Branches to `slow` when any test fails;
+/// on success defines `res` as the tagged character and jumps to `merge`.
+/// JIT only (baked layout offsets). About a dozen instructions where the
+/// shim call cost ~65 (dhrystone indexes strings 90M times).
+fn emit_inline_string_aref(
+    fb: &mut FunctionBuilder,
+    array: ClifValue,
+    index: ClifValue,
+    slow: Block,
+    res: Variable,
+    merge: Block,
+) -> bool {
+    use crate::heap_types::LispString;
+    use crate::tagged::header::StringObj;
+    let base = core::mem::offset_of!(StringObj, data);
+    let flags = MemFlagsData::trusted();
+    let tag = band_imm_p(fb, array, TAG_MASK as i64);
+    let is_string = icmp_imm_p(fb, IntCC::Equal, tag, TAG_STRING as i64);
+    let index_tag = band_imm_p(fb, index, FIXNUM_CHECK_MASK as i64);
+    let is_fixnum = icmp_imm_p(fb, IntCC::Equal, index_tag, FIXNUM_CHECK_VALUE as i64);
+    let shapes = fb.ins().band(is_string, is_fixnum);
+    let typed = fb.create_block();
+    fb.ins().brif(shapes, typed, &[], slow, &[]);
+    fb.switch_to_block(typed);
+    fb.seal_block(typed);
+    let object = band_imm_p(fb, array, !(TAG_MASK as i64));
+    let size = fb.ins().load(
+        types::I64,
+        flags,
+        object,
+        (base + LispString::JIT_SIZE_OFFSET) as i32,
+    );
+    let size_byte = fb.ins().load(
+        types::I64,
+        flags,
+        object,
+        (base + LispString::JIT_SIZE_BYTE_OFFSET) as i32,
+    );
+    let i = sshr_imm_p(fb, index, FIXNUM_SHIFT as i64);
+    // Unsigned: a negative index is out of range too.
+    let in_range = fb.ins().icmp(IntCC::UnsignedLessThan, i, size);
+    let unibyte = icmp_imm_p(fb, IntCC::SignedLessThan, size_byte, 0);
+    let all_ascii = fb.ins().icmp(IntCC::Equal, size_byte, size);
+    let one_byte_chars = fb.ins().bor(unibyte, all_ascii);
+    let ok = fb.ins().band(in_range, one_byte_chars);
+    let load = fb.create_block();
+    fb.ins().brif(ok, load, &[], slow, &[]);
+    fb.switch_to_block(load);
+    fb.seal_block(load);
+    let data = fb.ins().load(
+        types::I64,
+        flags,
+        object,
+        (base + LispString::JIT_DATA_OFFSET) as i32,
+    );
+    let at = fb.ins().iadd(data, i);
+    let byte = fb.ins().uload8(types::I64, flags, at, 0);
+    let shifted = ishl_imm_p(fb, byte, FIXNUM_SHIFT as i64);
+    let character = bor_imm_p(fb, shifted, FIXNUM_CHECK_VALUE as i64);
+    fb.def_var(res, character);
+    fb.ins().jump(merge, &[]);
+    super::leaf_abi::note_string_inline_site(super::leaf_abi::StringInline::Aref);
+    #[cfg(debug_assertions)]
+    STRING_AREF_INLINE_EMITTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    true
+}
+
+/// I2: `aset` of a character into a string without changing its width,
+/// inline -- exactly `aset_fast`'s string arm where it stores in place:
+/// owned storage (a borrowed or read-only string is copied by the shim
+/// first), an in-range fixnum index, and a fixnum VALUE that is a byte
+/// (0..=255) for a normally allocated unibyte string or ASCII (0..=127) for
+/// an all-ASCII multibyte one. Guarded first by the shim's own `aset`
+/// redefinition gate (`Context::aset_fast_path_epoch` equal to the
+/// obarray's function epoch): a miss calls the shim, which re-validates.
+/// No write barrier: string bytes hold no references. Branches to `slow`
+/// on any miss; on success defines `res` as VALUE and jumps to `merge`.
+fn emit_inline_string_aset(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    operands: [ClifValue; 3],
+    slow: Block,
+    res: Variable,
+    merge: Block,
+) -> bool {
+    use crate::emacs_core::symbol::OBARRAY_FUNCTION_EPOCH_OFFSET;
+    use crate::heap_types::LispString;
+    use crate::tagged::header::StringObj;
+    let [array, index, value] = operands;
+    let base = core::mem::offset_of!(StringObj, data);
+    let flags = MemFlagsData::trusted();
+    let vmctx = fb.use_var(rt.vmctx_var);
+    let epoch = fb.ins().load(
+        types::I64,
+        flags,
+        vmctx,
+        (core::mem::offset_of!(Context, obarray) + OBARRAY_FUNCTION_EPOCH_OFFSET) as i32,
+    );
+    // `Cell<u64>` is `repr(transparent)` over the word.
+    let gate = fb.ins().load(
+        types::I64,
+        flags,
+        vmctx,
+        core::mem::offset_of!(Context, aset_fast_path_epoch) as i32,
+    );
+    let gated = fb.ins().icmp(IntCC::Equal, epoch, gate);
+    let tag = band_imm_p(fb, array, TAG_MASK as i64);
+    let is_string = icmp_imm_p(fb, IntCC::Equal, tag, TAG_STRING as i64);
+    let index_tag = band_imm_p(fb, index, FIXNUM_CHECK_MASK as i64);
+    let index_fixnum = icmp_imm_p(fb, IntCC::Equal, index_tag, FIXNUM_CHECK_VALUE as i64);
+    let value_tag = band_imm_p(fb, value, FIXNUM_CHECK_MASK as i64);
+    let value_fixnum = icmp_imm_p(fb, IntCC::Equal, value_tag, FIXNUM_CHECK_VALUE as i64);
+    let shapes = fb.ins().band(is_string, index_fixnum);
+    let shapes = fb.ins().band(shapes, value_fixnum);
+    let shapes = fb.ins().band(shapes, gated);
+    let typed = fb.create_block();
+    fb.ins().brif(shapes, typed, &[], slow, &[]);
+    fb.switch_to_block(typed);
+    fb.seal_block(typed);
+    let object = band_imm_p(fb, array, !(TAG_MASK as i64));
+    let size = fb.ins().load(
+        types::I64,
+        flags,
+        object,
+        (base + LispString::JIT_SIZE_OFFSET) as i32,
+    );
+    let size_byte = fb.ins().load(
+        types::I64,
+        flags,
+        object,
+        (base + LispString::JIT_SIZE_BYTE_OFFSET) as i32,
+    );
+    let capacity = fb.ins().load(
+        types::I64,
+        flags,
+        object,
+        (base + LispString::JIT_STORAGE_CAPACITY_OFFSET) as i32,
+    );
+    let i = sshr_imm_p(fb, index, FIXNUM_SHIFT as i64);
+    let code = sshr_imm_p(fb, value, FIXNUM_SHIFT as i64);
+    // Unsigned: a negative index or code is out of range too.
+    let in_range = fb.ins().icmp(IntCC::UnsignedLessThan, i, size);
+    let owned = icmp_imm_p(fb, IntCC::NotEqual, capacity, 0);
+    let unibyte = icmp_imm_p(
+        fb,
+        IntCC::Equal,
+        size_byte,
+        LispString::JIT_SIZE_BYTE_UNIBYTE,
+    );
+    let byte = icmp_imm_p(fb, IntCC::UnsignedLessThanOrEqual, code, 0xff);
+    let unibyte_fits = fb.ins().band(unibyte, byte);
+    let all_ascii = fb.ins().icmp(IntCC::Equal, size_byte, size);
+    let ascii = icmp_imm_p(fb, IntCC::UnsignedLessThanOrEqual, code, 0x7f);
+    let ascii_fits = fb.ins().band(all_ascii, ascii);
+    let fits = fb.ins().bor(unibyte_fits, ascii_fits);
+    let ok = fb.ins().band(in_range, owned);
+    let ok = fb.ins().band(ok, fits);
+    let store = fb.create_block();
+    fb.ins().brif(ok, store, &[], slow, &[]);
+    fb.switch_to_block(store);
+    fb.seal_block(store);
+    let data = fb.ins().load(
+        rt.ptr_ty,
+        flags,
+        object,
+        (base + LispString::JIT_DATA_OFFSET) as i32,
+    );
+    let at = fb.ins().iadd(data, i);
+    fb.ins().istore8(flags, code, at, 0);
+    fb.def_var(res, value);
+    fb.ins().jump(merge, &[]);
+    super::leaf_abi::note_string_inline_site(super::leaf_abi::StringInline::Aset);
+    #[cfg(debug_assertions)]
+    STRING_ASET_INLINE_EMITTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    true
+}
+
+/// How many I1/I2 sites were emitted (debug builds): a correctness test
+/// alone cannot tell the inline path from the shim.
+#[cfg(debug_assertions)]
+pub(crate) static STRING_AREF_INLINE_EMITTED: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+#[cfg(debug_assertions)]
+pub(crate) static STRING_ASET_INLINE_EMITTED: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
 /// `type-of` / `cl-type-of` of a record, answered inline at an armed spec
 /// site: `record_type_of`, which is slot 0, or slot 1 of slot 0 when slot 0
 /// is itself a record of two or more slots (an EIEIO object's class). The
@@ -7191,13 +7381,27 @@ fn lower_simple_op_arms(
             let at = stack.len() - 3;
             let operands = [stack[at], stack[at + 1], stack[at + 2]];
             stack.truncate(at);
+            let res = fb.declare_var(types::I64);
+            // `NEOVM_JIT_LEAF=string` (I2): a same-width byte store into a
+            // string's owned storage, inline, behind the shim's own `aset`
+            // redefinition gate; everything else calls the shim.
+            let inline_string = if !aot && super::jit_leaf_knob().string {
+                let merge = fb.create_block();
+                let slow = fb.create_block();
+                emit_inline_string_aset(fb, rt, operands, slow, res, merge).then(|| {
+                    fb.switch_to_block(slow);
+                    fb.seal_block(slow);
+                    merge
+                })
+            } else {
+                None
+            };
             let vmctx = fb.use_var(rt.vmctx_var);
             let call = fb.ins().call(
                 rt.refs.aset,
                 &[vmctx, operands[0], operands[1], operands[2]],
             );
             let word = fb.inst_results(call)[0];
-            let res = fb.declare_var(types::I64);
             fb.def_var(res, word);
             let cont = fb.create_block();
             let sentinel = fb.create_block();
@@ -7258,6 +7462,14 @@ fn lower_simple_op_arms(
 
             fb.switch_to_block(cont);
             fb.seal_block(cont);
+            if let Some(merge) = inline_string {
+                // The inline store stored nothing the root window tracks
+                // and started no activation: the continuation keeps the
+                // shim path's store record.
+                fb.ins().jump(merge, &[]);
+                fb.switch_to_block(merge);
+                fb.seal_block(merge);
+            }
             stack.push(fb.use_var(res));
         }
         Op::CallBuiltin(..) | Op::CallBuiltinSym(..) => {
@@ -7573,7 +7785,7 @@ fn lower_simple_op_arms(
                 // JIT `aref` of a plain vector or record at an in-range fixnum
                 // index reads the slot inline and calls the shim for anything
                 // else (see `emit_inline_aref`).
-                let inline_aref = if matches!(other, Op::Aref) && !aot && jit_inline_aref_on() {
+                let mut inline_aref = if matches!(other, Op::Aref) && !aot && jit_inline_aref_on() {
                     let merge = fb.create_block();
                     let slow = fb.create_block();
                     let res = fb.declare_var(types::I64);
@@ -7585,6 +7797,18 @@ fn lower_simple_op_arms(
                 } else {
                     None
                 };
+                // `NEOVM_JIT_LEAF=string` (I1): a one-byte-per-character
+                // string's character, inline, where the vector test failed.
+                if matches!(other, Op::Aref) && !aot && super::jit_leaf_knob().string {
+                    let (merge, res) = inline_aref
+                        .unwrap_or_else(|| (fb.create_block(), fb.declare_var(types::I64)));
+                    let slow = fb.create_block();
+                    if emit_inline_string_aref(fb, operands[0], operands[1], slow, res, merge) {
+                        fb.switch_to_block(slow);
+                        fb.seal_block(slow);
+                        inline_aref = Some((merge, res));
+                    }
+                }
                 let vmctx = fb.use_var(rt.vmctx_var);
                 let call = fb
                     .ins()

@@ -376,6 +376,8 @@ pub extern "C" fn neovm_jit_aref(ctx: *mut u8, array: i64, index: i64) -> i64 {
 thread_local! {
     /// Test hook: how many times compiled code called `neovm_jit_aref`.
     pub(crate) static AREF_SHIM_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Test hook: how many times compiled code called `neovm_jit_aset`.
+    pub(crate) static ASET_SHIM_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -619,6 +621,8 @@ fn aset_fast(array: Value, index: Value, value: Value) -> bool {
 #[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
 #[unsafe(no_mangle)]
 pub extern "C" fn neovm_jit_aset(ctx: *mut u8, array: i64, index: i64, value: i64) -> i64 {
+    #[cfg(test)]
+    ASET_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     let array = Value::from_bits(array as usize);
     let index = Value::from_bits(index as usize);
     let value = Value::from_bits(value as usize);

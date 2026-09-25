@@ -169,6 +169,28 @@ impl Drop for OwnedStringDataGuard<'_> {
 }
 
 impl LispString {
+    // -- Layout for compiled code -----------------------------------------
+    //
+    // `#[repr(C)]` pins these. The JIT's inline string `aref`/`aset`
+    // (`lowering::emit_inline_string_aref`/`_aset`) read the fields through
+    // them and must answer exactly as `aref_fast`/`aset_fast` do: a
+    // character is one stored byte when the string is unibyte (`size_byte <
+    // 0`) or multibyte with `size_byte == size` (all ASCII), and a byte may
+    // be stored in place only into owned storage (`storage_capacity != 0`) of
+    // a normally allocated unibyte string or an all-ASCII multibyte one.
+
+    /// Offset of the character count (`schars`).
+    pub(crate) const JIT_SIZE_OFFSET: usize = std::mem::offset_of!(LispString, size);
+    /// Offset of `size_byte`: the byte count, or a negative unibyte marker.
+    pub(crate) const JIT_SIZE_BYTE_OFFSET: usize = std::mem::offset_of!(LispString, size_byte);
+    /// Offset of the byte pointer.
+    pub(crate) const JIT_DATA_OFFSET: usize = std::mem::offset_of!(LispString, data);
+    /// Offset of the owned-storage capacity (zero for borrowed bytes).
+    pub(crate) const JIT_STORAGE_CAPACITY_OFFSET: usize =
+        std::mem::offset_of!(LispString, storage_capacity);
+    /// `size_byte` of a normally allocated unibyte string (GNU's `-1`).
+    pub(crate) const JIT_SIZE_BYTE_UNIBYTE: i64 = SIZE_BYTE_UNIBYTE_NORMAL;
+
     // -- Constructors --------------------------------------------------------
 
     fn normalize_size_byte(size_byte: i64, static_rodata: bool) -> i64 {

@@ -67,6 +67,21 @@ impl LeafSiteStats {
 pub(crate) static LEAF_STATS: [LeafSiteStats; LeafId::COUNT] =
     [const { LeafSiteStats::new() }; LeafId::COUNT];
 
+/// The string intrinsics (I1/I2, `NEOVM_JIT_LEAF=string`), for the census.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StringInline {
+    Aref,
+    Aset,
+}
+
+/// Inline string `aref`/`aset` sites emitted, indexed by [`StringInline`].
+pub(crate) static STRING_INLINE_SITES: [AtomicU64; 2] = [AtomicU64::new(0), AtomicU64::new(0)];
+
+/// Count an emitted string intrinsic site.
+pub(crate) fn note_string_inline_site(which: StringInline) {
+    STRING_INLINE_SITES[which as usize].fetch_add(1, Ordering::Relaxed);
+}
+
 #[cfg(test)]
 thread_local! {
     /// Test hook: trampoline entries per leaf on this thread (any outcome).
@@ -97,6 +112,15 @@ pub(crate) fn render_leaf_stats() -> String {
                 "{}:opcode_sites={o},bcall_sites={b},generic={g},signal={x},guard_miss={m}",
                 spec.name
             ));
+        }
+    }
+    for (which, name) in [
+        (StringInline::Aref, "string-aref"),
+        (StringInline::Aset, "string-aset"),
+    ] {
+        let sites = STRING_INLINE_SITES[which as usize].load(Ordering::Relaxed);
+        if sites > 0 {
+            out.push(format!("{name}:inline_sites={sites}"));
         }
     }
     out.join(" ")

@@ -751,7 +751,11 @@ fn compiled_aref_reads_plain_vectors_and_records_inline() {
     let mut eval = Context::new();
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let f = aref_fn();
+    // The vector path alone: `NEOVM_JIT_LEAF=string` would inline the
+    // string case too (`string_intrinsics_stay_off_the_shims`).
+    force_leaf_knob_for_test(Some(LeafKnob::OFF));
     let leaf = compile_bytecode_function(&f).expect("aref compiles");
+    force_leaf_knob_for_test(None);
     let cases: &[(&str, &str, bool)] = &[
         ("(vector 10 20 30)", "1", true),
         ("(vector 'x)", "0", true),
@@ -852,4 +856,209 @@ fn list_stores_match_the_interpreter_natively() {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// String intrinsics (I1/I2, `NEOVM_JIT_LEAF=string`).
+// ---------------------------------------------------------------------------
+
+fn compile_string_knob(f: &ByteCodeFunction) -> CompiledLeaf {
+    force_leaf_knob_for_test(Some(LeafKnob {
+        string: true,
+        ..LeafKnob::OFF
+    }));
+    let leaf = compile_bytecode_function(f).expect("compiles");
+    force_leaf_knob_for_test(None);
+    leaf
+}
+
+/// The whole array × index (× value) matrix with the string intrinsics
+/// emitted: the same result or signal, and the same array afterwards, as
+/// the interpreter's opcode arm. Both intrinsics were emitted.
+#[test]
+fn string_intrinsics_match_the_interpreter_natively() {
+    #[cfg(debug_assertions)]
+    use super::lowering::{STRING_AREF_INLINE_EMITTED, STRING_ASET_INLINE_EMITTED};
+    let mut eval = Context::new();
+    let ctx_ptr = &mut eval as *mut Context as *mut u8;
+    let aref = aref_fn();
+    let aset = aset_fn();
+    #[cfg(debug_assertions)]
+    let (aref0, aset0) = (
+        STRING_AREF_INLINE_EMITTED.load(Ordering::Relaxed),
+        STRING_ASET_INLINE_EMITTED.load(Ordering::Relaxed),
+    );
+    let aref_leaf = compile_string_knob(&aref);
+    let aset_leaf = compile_string_knob(&aset);
+    #[cfg(debug_assertions)]
+    {
+        assert!(STRING_AREF_INLINE_EMITTED.load(Ordering::Relaxed) > aref0);
+        assert!(STRING_ASET_INLINE_EMITTED.load(Ordering::Relaxed) > aset0);
+    }
+    let mut checked = 0;
+    for array_src in ARRAYS {
+        for index_src in INDICES {
+            let what = format!("(aref {array_src} {index_src})");
+            let fresh = |eval: &mut Context| {
+                let pair = eval
+                    .eval_str(&format!("(cons {array_src} {index_src})"))
+                    .expect("operands");
+                vec![pair.cons_car(), pair.cons_cdr()]
+            };
+            let args = fresh(&mut eval);
+            let want = interpret(&mut eval, &aref, args);
+            let args = fresh(&mut eval);
+            assert_eq!(native(ctx_ptr, &aref_leaf, &args, &what), want, "{what}");
+            for value_src in VALUES {
+                let what = format!("(aset {array_src} {index_src} {value_src})");
+                let fresh = |eval: &mut Context| {
+                    let triple = eval
+                        .eval_str(&format!("(list {array_src} {index_src} {value_src})"))
+                        .expect("operands");
+                    crate::emacs_core::value::list_to_vec(&triple).expect("list")
+                };
+                let args = fresh(&mut eval);
+                let array = args[0];
+                let want = interpret(&mut eval, &aset, args);
+                let want_array = describe(array);
+                let args = fresh(&mut eval);
+                let array = args[0];
+                assert_eq!(native(ctx_ptr, &aset_leaf, &args, &what), want, "{what}");
+                assert_eq!(describe(array), want_array, "{what}: the array afterwards");
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 4000, "checked {checked}");
+}
+
+/// The shapes a string loop takes never reach a shim: reading and storing
+/// bytes of a unibyte string and ASCII of an all-ASCII multibyte one.
+/// Everything else does -- a width change, a non-ASCII string, a bad index.
+#[test]
+fn string_intrinsics_stay_off_the_shims() {
+    use super::dispatch::{AREF_SHIM_CALLS, ASET_SHIM_CALLS};
+    let mut eval = Context::new();
+    let ctx_ptr = &mut eval as *mut Context as *mut u8;
+    let aref_leaf = compile_string_knob(&aref_fn());
+    let aset_leaf = compile_string_knob(&aset_fn());
+    // The `aset` gate is armed per function epoch by the shim's first call
+    // (`aset_regate`), as for the vector fast path.
+    let warm = eval.eval_str("(make-string 1 ?a)").expect("warm-up string");
+    crate::emacs_core::eval::push_scratch_gc_root(warm);
+    let _ = native(
+        ctx_ptr,
+        &aset_leaf,
+        &[warm, Value::fixnum(0), Value::fixnum(98)],
+        "arm",
+    );
+    let inline_cases: &[(&str, i64, i64)] = &[
+        ("(make-string 4 ?a)", 3, 255),
+        ("(make-string 4 ?a)", 0, 0),
+        ("(string-to-unibyte \"a\\377c\")", 1, 7),
+        ("(string-to-multibyte (make-string 4 ?a))", 2, 127),
+    ];
+    for &(src, index, code) in inline_cases {
+        let s = eval.eval_str(src).expect("string");
+        crate::emacs_core::eval::push_scratch_gc_root(s);
+        let (i, v) = (Value::fixnum(index), Value::fixnum(code));
+        AREF_SHIM_CALLS.with(|c| c.set(0));
+        ASET_SHIM_CALLS.with(|c| c.set(0));
+        assert_eq!(
+            native(ctx_ptr, &aset_leaf, &[s, i, v], "aset"),
+            code.to_string()
+        );
+        assert_eq!(
+            native(ctx_ptr, &aref_leaf, &[s, i], "aref"),
+            code.to_string()
+        );
+        assert_eq!(AREF_SHIM_CALLS.with(|c| c.get()), 0, "{src}: aref inline");
+        assert_eq!(ASET_SHIM_CALLS.with(|c| c.get()), 0, "{src}: aset inline");
+    }
+    let shim_cases: &[(&str, i64, i64)] = &[
+        // A width change and a non-ASCII string.
+        ("(string-to-multibyte (make-string 4 ?a))", 1, 200),
+        ("(copy-sequence \"a\u{3b2}c\")", 0, 65),
+        // Out of range.
+        ("(make-string 4 ?a)", 4, 65),
+        ("(make-string 4 ?a)", -1, 65),
+        ("(make-string 4 ?a)", 0, 256),
+    ];
+    for &(src, index, code) in shim_cases {
+        let s = eval.eval_str(src).expect("string");
+        crate::emacs_core::eval::push_scratch_gc_root(s);
+        let (i, v) = (Value::fixnum(index), Value::fixnum(code));
+        ASET_SHIM_CALLS.with(|c| c.set(0));
+        let _ = native(ctx_ptr, &aset_leaf, &[s, i, v], "aset");
+        assert_eq!(
+            ASET_SHIM_CALLS.with(|c| c.get()),
+            1,
+            "{src} {index} {code}: aset shim"
+        );
+    }
+    let s = eval
+        .eval_str("(copy-sequence \"a\u{3b2}c\")")
+        .expect("string");
+    AREF_SHIM_CALLS.with(|c| c.set(0));
+    assert_eq!(
+        native(ctx_ptr, &aref_leaf, &[s, Value::fixnum(1)], "aref"),
+        "946"
+    );
+    assert_eq!(
+        AREF_SHIM_CALLS.with(|c| c.get()),
+        1,
+        "a non-ASCII string: aref shim"
+    );
+}
+
+/// A redefined `aset` runs from an inline string site exactly when the
+/// interpreter runs it: the inline path checks the shim's own gate.
+#[test]
+fn a_redefined_aset_runs_from_an_inline_string_site() {
+    use super::dispatch::ASET_SHIM_CALLS;
+    let mut eval = Context::new();
+    let ctx_ptr = &mut eval as *mut Context as *mut u8;
+    let aset = aset_fn();
+    let aset_leaf = compile_string_knob(&aset);
+    let s = eval.eval_str("(make-string 2 ?a)").expect("s");
+    crate::emacs_core::eval::push_scratch_gc_root(s);
+    assert_eq!(
+        native(
+            ctx_ptr,
+            &aset_leaf,
+            &[s, Value::fixnum(0), Value::fixnum(66)],
+            "aset"
+        ),
+        "66"
+    );
+    eval.eval_str(
+        "(progn
+           (defvar strshim-orig (symbol-function 'aset))
+           (defvar strshim-calls 0)
+           (fset 'aset (lambda (a i v)
+                         (setq strshim-calls (1+ strshim-calls))
+                         (funcall strshim-orig a i (1+ v)))))",
+    )
+    .expect("redefine");
+    ASET_SHIM_CALLS.with(|c| c.set(0));
+    assert_eq!(
+        native(
+            ctx_ptr,
+            &aset_leaf,
+            &[s, Value::fixnum(1), Value::fixnum(66)],
+            "aset"
+        ),
+        "67"
+    );
+    assert_eq!(
+        ASET_SHIM_CALLS.with(|c| c.get()),
+        1,
+        "the gate sent it to the shim"
+    );
+    assert_eq!(print_value(&s), "\"BC\"");
+    assert_eq!(
+        print_value(&eval.eval_str("strshim-calls").expect("calls")),
+        "1"
+    );
+    eval.eval_str("(fset 'aset strshim-orig)").expect("restore");
 }
