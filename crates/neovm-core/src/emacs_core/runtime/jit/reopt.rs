@@ -258,10 +258,6 @@ fn respond(
     event: DeoptEvent<'_>,
     cause: DeoptCause,
 ) -> ReoptVerdict {
-    // The OSR leaves' response lands with the OSR re-entry.
-    if origin.is_osr() {
-        return ReoptVerdict::Kept;
-    }
     let rt = func.jit_runtime();
     let ops_len = func.executable_ops().len();
     let k = knobs();
@@ -290,6 +286,20 @@ fn respond(
         // Rebuilding against the current epoch is all it needs.
         (DeoptCause::InlineEpochMoved, DeoptEvent::Precise { .. }) => {
             (ReoptLevel::Speculative, Reprofile::Immediate)
+        }
+        // An OSR entry guard refused the live stack: a slot the leaf's
+        // analysis proved fixnum holds something else. The first refusal
+        // reopens recording, so the loop the interpreter now runs records
+        // what feeds that slot; at the limit the leaf goes.
+        (DeoptCause::OsrEntry, DeoptEvent::Precise { pc, .. }) => {
+            let n = u32::try_from(pc).map_or(0, |pc| leaf.obs.deopt_count_at(pc));
+            if n == 1 {
+                rt.reopen_numeric_feedback();
+            }
+            if n < k.site_limit {
+                return ReoptVerdict::Kept;
+            }
+            (ReoptLevel::Speculative, Reprofile::Window)
         }
         // A guard nothing above attributes: nothing to widen, so climb.
         (DeoptCause::Unattributed, DeoptEvent::Precise { pc, .. }) if at_limit(pc) => {

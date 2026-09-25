@@ -453,3 +453,194 @@ fn force_deopt_harness_keeps_reopt_inert() {
     force_deopt_for_test(false);
     force_reopt_for_test(None);
 }
+
+// --- OSR: an invalidated OSR leaf may be re-entered. ---
+
+use std::sync::atomic::Ordering as AtomicOrdering;
+
+/// Pc of the `*` in [`osr_switch`].
+const OSR_MUL_PC: usize = 16;
+/// The loop header of [`osr_switch`].
+const OSR_HEADER: usize = 3;
+
+/// The design's P2 probe: `(lambda (n k) (let ((i 0) (s 0) (x 1))
+///   (while (< i n) (when (= i k) (setq x 1.5)) (setq s (+ s (* x 2)))
+///     (setq i (1+ i))) s))` — a loop whose operands switch from fixnums to
+/// floats at iteration `k`.
+fn osr_switch() -> ByteCodeFunction {
+    function(
+        vec![
+            Op::Constant(0),   // 0: i = 0              [n k i]
+            Op::Constant(0),   // 1: s = 0              [n k i s]
+            Op::Constant(1),   // 2: x = 1              [n k i s x]
+            Op::StackRef(2),   // 3: OSR_HEADER: i
+            Op::StackRef(5),   // 4: n
+            Op::Lss,           // 5
+            Op::GotoIfNil(23), // 6
+            Op::StackRef(2),   // 7: i
+            Op::StackRef(4),   // 8: k
+            Op::Eqlsign,       // 9
+            Op::GotoIfNil(13), // 10
+            Op::Constant(2),   // 11: 1.5
+            Op::StackSet(1),   // 12: x = 1.5
+            Op::StackRef(1),   // 13: s
+            Op::StackRef(1),   // 14: x
+            Op::Constant(3),   // 15: 2
+            Op::Mul,           // 16: OSR_MUL_PC
+            Op::Add,           // 17
+            Op::StackSet(2),   // 18: s = s + x*2
+            Op::StackRef(2),   // 19: i
+            Op::Add1,          // 20
+            Op::StackSet(3),   // 21: i = i + 1
+            Op::Goto(3),       // 22
+            Op::StackRef(1),   // 23: s
+            Op::Return,        // 24
+        ],
+        vec![
+            Value::make_int(0),
+            Value::make_int(1),
+            Value::make_float(1.5),
+            Value::make_int(2),
+        ],
+        2,
+    )
+}
+
+fn osr_transfers() -> u64 {
+    crate::emacs_core::jit::cache::OSR_TRANSFER_COUNT.load(AtomicOrdering::Relaxed)
+}
+
+/// P2: an OSR'd loop whose operands switch to floats deopted once and then
+/// interpreted the rest of the loop. Now the deopt widens the site and
+/// retires the OSR leaf, and the next hot back-edge transfers into a leaf
+/// compiled from the widened feedback, which finishes the loop natively.
+#[test]
+fn osr_float_switch_reenters_native() {
+    force_deopt_for_test(false);
+    force_reopt_for_test(Some(knobs_with_heat(5)));
+    let mut ev = Context::new();
+    let (n, k) = (Value::make_int(20_000), Value::make_int(1_000));
+    let want = TestVm::from_context(&mut ev)
+        .execute(&osr_switch(), vec![n, k])
+        .expect("interp run");
+    crate::emacs_core::jit::force_osr_for_test(true);
+    let f = osr_switch();
+    f.jit_runtime().set_hot_for_test();
+    let before = osr_transfers();
+    let got = TestVm::from_context(&mut ev)
+        .execute(&f, vec![n, k])
+        .expect("OSR run");
+    let transfers = osr_transfers() - before;
+    crate::emacs_core::jit::force_osr_for_test(false);
+    assert!(eql_value(&got, &want), "OSR {got:?} != interp {want:?}");
+    let rt = f.jit_runtime();
+    assert_eq!(rt.numeric_feedback(OSR_MUL_PC), NumericFeedback::Float);
+    assert_eq!(rt.reopt_count(), 1, "one invalidation");
+    assert_eq!(transfers, 2, "the first transfer and the re-entry");
+    assert!(
+        crate::emacs_core::jit::cache::osr_entry_cached(&f, OSR_HEADER),
+        "the re-entered leaf is cached"
+    );
+    force_reopt_for_test(None);
+}
+
+/// An OSR deopt that invalidates nothing (an overflow below the site limit)
+/// still latches the frame onto the interpreter: one transfer only.
+#[test]
+fn osr_deopt_without_invalidation_latches() {
+    force_deopt_for_test(false);
+    force_reopt_for_test(Some(knobs_with_heat(5)));
+    // (lambda (start n) (let ((i 0) (x start))
+    //   (while (< i n) (setq i (1+ i)) (setq x (1+ x))) i))
+    let f = function(
+        vec![
+            Op::Constant(0),
+            Op::StackRef(2),
+            Op::StackRef(1), // 2: header
+            Op::StackRef(3),
+            Op::Lss,
+            Op::GotoIfNil(13),
+            Op::StackRef(1),
+            Op::Add1,
+            Op::StackSet(2),
+            Op::StackRef(0),
+            Op::Add1, // 10: overflows mid-loop
+            Op::StackSet(1),
+            Op::Goto(2),
+            Op::StackRef(1),
+            Op::Return,
+        ],
+        vec![Value::make_int(0)],
+        2,
+    );
+    let mut ev = Context::new();
+    crate::emacs_core::jit::force_osr_for_test(true);
+    f.jit_runtime().set_hot_for_test();
+    let before = osr_transfers();
+    let start = Value::make_int(Value::MOST_POSITIVE_FIXNUM - 1500);
+    let got = TestVm::from_context(&mut ev)
+        .execute(&f, vec![start, Value::make_int(2000)])
+        .expect("runs");
+    crate::emacs_core::jit::force_osr_for_test(false);
+    assert_eq!(got, Value::make_int(2000));
+    assert_eq!(osr_transfers() - before, 1, "latched after the deopt");
+    assert_eq!(f.jit_runtime().reopt_count(), 0);
+    force_reopt_for_test(None);
+}
+
+/// An OSR entry guard that keeps refusing the live stack at the header
+/// reopens recording at the first refusal and retires the OSR leaf at the
+/// site limit, so the next transfer compiles against what the loop records.
+#[test]
+fn osr_entry_guard_failures_reprofile_after_limit() {
+    force_deopt_for_test(false);
+    force_reopt_for_test(Some(knobs_with_heat(5)));
+    let mut ev = Context::new();
+    let ctx = &mut ev as *mut Context;
+    // (lambda (n) (let ((i 0)) (while (< i n) (setq i (1+ i))) i)): `i` is
+    // proven fixnum at the header, so the entry guards it.
+    let lp = function(
+        vec![
+            Op::Constant(0),
+            Op::StackRef(0), // 1: header
+            Op::StackRef(2),
+            Op::Lss,
+            Op::GotoIfNil(9),
+            Op::StackRef(0),
+            Op::Add1,
+            Op::StackSet(1),
+            Op::Goto(1),
+            Op::Return,
+        ],
+        vec![Value::make_int(0)],
+        1,
+    );
+    let rt = lp.jit_runtime();
+    let snapshot = [Value::make_int(10), Value::make_float(1.5)];
+    let transfer = || match crate::emacs_core::jit::cache::try_run_osr(ctx, &lp, 1, &snapshot, &[])
+    {
+        Some(crate::emacs_core::jit::compile::NativeRun::DeoptAt(resume)) => {
+            assert_eq!(resume.pc, 1, "rejected at the header");
+            assert_eq!(resume.stack, snapshot, "with the untouched snapshot");
+        }
+        other => panic!("expected the entry guard's deopt, got {other:?}"),
+    };
+    rt.note_numeric_feedback_consumed();
+    transfer();
+    assert!(
+        rt.wants_numeric_feedback(),
+        "the first refusal reopens recording"
+    );
+    assert_eq!(rt.reopt_count(), 0);
+    for _ in 2..ReoptKnobs::SITE_LIMIT {
+        transfer();
+        assert!(crate::emacs_core::jit::cache::osr_entry_cached(&lp, 1));
+    }
+    transfer();
+    assert_eq!(rt.reopt_count(), 1, "invalidated at the limit");
+    assert!(
+        !crate::emacs_core::jit::cache::osr_entry_cached(&lp, 1),
+        "the OSR leaf is gone"
+    );
+    force_reopt_for_test(None);
+}

@@ -889,14 +889,28 @@ impl InterpreterResumePoint {
     }
 }
 
-/// The outcome of [`Vm::osr_transfer`]. Word-sized, so the driver's frame
+/// Whether the loop may transfer into native code again after an
+/// [`OsrOutcome::Interpret`].
+#[cfg(feature = "jit")]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OsrRetry {
+    /// Latch the frame onto the interpreter: nothing transferred, or the
+    /// OSR leaf that deopted is still cached (it would deopt again).
+    Latch,
+    /// The precise deopt's invalidation dropped the OSR leaf (`jit::reopt`):
+    /// a later hot back-edge may transfer into one compiled from the widened
+    /// feedback. Bounded: invalidations per source are bounded.
+    Allowed,
+}
+
+/// The outcome of [`Vm::osr_transfer`]. Two words, so the driver's frame
 /// carries no `EvalResult` slot for it.
 #[cfg(feature = "jit")]
 enum OsrOutcome {
     /// Interpret on from `pc`: the branch target when nothing transferred or
     /// a plain deopt ran no side effect, the deopt pc when a precise deopt's
     /// captured state was installed in the frame.
-    Interpret { pc: usize },
+    Interpret { pc: usize, retry: OsrRetry },
     /// The function ran to completion, with this value.
     Returned(Value),
     /// The function exited nonlocally; the flow is stashed
@@ -3559,7 +3573,12 @@ impl<'a> Vm<'a> {
             Some(NativeRun::Ok(bits)) => return OsrOutcome::Returned(Value::from_bits(bits)),
             Some(NativeRun::Signal) => return OsrOutcome::Exited,
             Some(NativeRun::DeoptAt(resume)) => resume,
-            Some(NativeRun::Deopt) | None => return OsrOutcome::Interpret { pc: target },
+            Some(NativeRun::Deopt) | None => {
+                return OsrOutcome::Interpret {
+                    pc: target,
+                    retry: OsrRetry::Latch,
+                };
+            }
         };
         let DeoptResume {
             pc,
@@ -3578,7 +3597,15 @@ impl<'a> Vm<'a> {
             self.ctx.bc_buf.extend_from_slice(&stack);
             bind_stack.clear();
             bind_stack.extend_from_slice(&binds);
-            return OsrOutcome::Interpret { pc };
+            // The frame owns its evolved state again, so a later transfer is
+            // the same operation as a first one; allowed only when the deopt
+            // retired the OSR leaf it ran.
+            let retry = if crate::emacs_core::jit::cache::osr_entry_cached(func, target) {
+                OsrRetry::Latch
+            } else {
+                OsrRetry::Allowed
+            };
+            return OsrOutcome::Interpret { pc, retry };
         }
         match self.ctx.grow_eval_stack(|ctx| {
             Vm::from_context(ctx).run_resumed_frame_latched(
@@ -4005,12 +4032,12 @@ impl<'a> Vm<'a> {
                             {
                                 cursor.publish(&mut self.ctx);
                                 match self.osr_transfer(func, frame_base, target, aux_stack) {
-                                    OsrOutcome::Interpret { pc } => {
+                                    OsrOutcome::Interpret { pc, retry } => {
                                         // Not transferred, a plain deopt, or a precise
                                         // deopt installed in place: this frame's state
-                                        // is current. Interpret on from `pc`; don't
-                                        // retry.
-                                        osr_tried = true;
+                                        // is current. Interpret on from `pc`; retry
+                                        // only after an invalidation.
+                                        osr_tried = retry == OsrRetry::Latch;
                                         cursor = StackCursor::acquire(&mut self.ctx);
                                         pc_local = pc;
                                     }

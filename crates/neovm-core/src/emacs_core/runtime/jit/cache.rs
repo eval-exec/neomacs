@@ -884,6 +884,18 @@ pub(crate) fn leaf_is_current(
     }
 }
 
+/// Whether `(func, osr_pc)` has an OSR cache entry (positive or negative) on
+/// this thread. `Vm::osr_transfer` asks after a transfer whose precise deopt
+/// it installed in place: an entry the deopt's invalidation dropped means
+/// the next hot back-edge may transfer again, into a leaf compiled from the
+/// widened feedback, instead of latching the loop onto the interpreter.
+pub(crate) fn osr_entry_cached(func: &ByteCodeFunction, osr_pc: usize) -> bool {
+    let Some(id) = func.jit_runtime().compiled_id() else {
+        return false;
+    };
+    OSR_CACHE.with(|c| c.borrow().contains_key(&(id, osr_pc)))
+}
+
 /// Deopt-driven invalidation of `func`'s compiled code on this thread
 /// (`jit::reopt`), after its feedback was widened. Counts the invalidation
 /// toward the source's backoff, makes the interpreter record feedback
