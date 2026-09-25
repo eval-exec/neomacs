@@ -1334,3 +1334,5 @@ fn anchor_table_stays_sorted_bounded_and_exact_across_a_front_insert() {
         assert_eq!(byte_pos_to_char_pos(&text, b), c, "byte->char at byte {b}");
     }
 }
+
+mod cow_snapshot_test;

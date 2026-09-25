@@ -1403,6 +1403,9 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     // compilation census alone cannot explain why that loop stays interpreted.
     // Capture the opt-in rejection trace in the editor's stderr artifact.
     "NEOMACS_OSR_DEBUG",
+    // P3.5 redisplay knobs (same-binary A/B; each defaults to the old path).
+    // Buffer-text snapshots: `copy` (default) or `share` (copy-on-write).
+    "NEOMACS_TEXT_SNAPSHOT",
 ];
 
 pub(crate) fn configure_benchmark_environment(command: &mut Command, sandbox: &MelpaSandbox) {

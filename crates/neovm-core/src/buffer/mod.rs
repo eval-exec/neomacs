@@ -13,6 +13,7 @@ pub mod position;
 pub mod shared;
 pub mod text;
 pub mod text_props;
+pub mod text_snapshot;
 pub mod undo;
 pub mod visited_file_modtime;
 

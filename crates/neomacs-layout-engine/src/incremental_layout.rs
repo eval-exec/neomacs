@@ -1679,6 +1679,11 @@ pub struct LayoutStats {
     /// what is visible. Bytes rather than characters so the instrument stays
     /// O(1).
     pub composition_bytes_scanned: usize,
+    /// Copy-on-write copies of buffer text since the previous accepted frame
+    /// (`neovm_core::buffer::text_snapshot`). A snapshot that outlived its
+    /// layout makes the next edit copy the whole buffer; steady-state typing
+    /// under `NEOMACS_TEXT_SNAPSHOT=share` must keep this at 0.
+    pub buffer_text_cow_copies: usize,
 }
 
 impl LayoutStats {

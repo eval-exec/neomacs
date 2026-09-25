@@ -2977,6 +2977,8 @@ impl LayoutEngine {
             crate::neovm_bridge::take_snapshot_work();
         self.layout_stats.buffer_snapshots_built = snapshots;
         self.layout_stats.composition_bytes_scanned = composition_bytes;
+        self.layout_stats.buffer_text_cow_copies =
+            neovm_core::buffer::text_snapshot::take_buffer_text_cow_copies();
         self.layout_stats.reused_chrome_rows = reused_chrome;
         // `relaid_chrome_rows` accumulated EVERY enabled chrome row above,
         // reused or not. Reused rows were never walked, so take them back out.
@@ -3000,7 +3002,7 @@ impl LayoutEngine {
             {
                 let _ = writeln!(
                     f,
-                    "full={} cursor_only={} scroll={} edit={} relaid_body={} relaid_chrome={} reused={} reused_shifted={} reused_chrome={} snapshots={} compose_bytes={}",
+                    "full={} cursor_only={} scroll={} edit={} relaid_body={} relaid_chrome={} reused={} reused_shifted={} reused_chrome={} snapshots={} compose_bytes={} text_cow_copies={}",
                     s.full_windows,
                     s.cursor_only_windows,
                     s.scroll_windows,
@@ -3012,6 +3014,7 @@ impl LayoutEngine {
                     s.reused_chrome_rows,
                     s.buffer_snapshots_built,
                     s.composition_bytes_scanned,
+                    s.buffer_text_cow_copies,
                 );
             }
         }

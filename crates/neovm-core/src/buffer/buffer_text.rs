@@ -227,7 +227,13 @@ impl SingleBytePositionSpan {
 
 struct BufferTextStorage {
     metrics: TextMetrics,
-    backend: TextBackend,
+    /// Copy-on-write text bytes, the same pattern as `text_props`. Under
+    /// `NEOMACS_TEXT_SNAPSHOT=share` a layout snapshot shares them with an
+    /// `Rc` bump; every mutation goes through [`backend_mut`], which copies
+    /// only while a snapshot still holds the old bytes (counted by
+    /// `text_snapshot::buffer_text_cow_copies`). `Rc` has no `DerefMut`, so
+    /// the compiler forces every mutation site through that one function.
+    backend: Rc<TextBackend>,
     content_epoch: u64,
     virtual_gap: GapCompatState,
     modified_tick: i64,
@@ -324,6 +330,16 @@ impl BufferTextStorage {
     }
 }
 
+/// The live backend, for a mutation. Copies the bytes first when a snapshot
+/// still shares them (see `BufferTextStorage::backend`).
+#[inline]
+fn backend_mut(backend: &mut Rc<TextBackend>) -> &mut TextBackend {
+    if Rc::strong_count(backend) != 1 || Rc::weak_count(backend) != 0 {
+        super::text_snapshot::note_buffer_text_cow_copy(backend.metrics().emacs_byte_len().get());
+    }
+    Rc::make_mut(backend)
+}
+
 fn emacs_multibyte_candidate_len(lead: u8) -> usize {
     if lead < 0x80 || (0x80..0xC0).contains(&lead) {
         1
@@ -392,9 +408,25 @@ fn multibyte_chunk_contains_char_code(chunk: &[u8], code: u32, carry: &mut Vec<u
 
 impl Clone for BufferTextStorage {
     fn clone(&self) -> Self {
+        let share = super::text_snapshot::text_snapshot_mode()
+            == super::text_snapshot::TextSnapshotMode::Share;
+        // `copy` keeps the old snapshot exactly: its own bytes and a copy of
+        // the scan-anchor ring. `share` bumps the bytes' `Rc` and starts the
+        // snapshot with an empty ring (up to 4,096 anchors, rebuilt on demand
+        // like `syntax_safe_positions`); `pos_cache` still seeds it.
+        let (backend, anchor_cache, anchor_cache_key, anchor_cache_cursor) = if share {
+            (Rc::clone(&self.backend), Vec::new(), 0, 0)
+        } else {
+            (
+                Rc::new(TextBackend::clone(&self.backend)),
+                self.anchor_cache.borrow().clone(),
+                self.anchor_cache_key.get(),
+                self.anchor_cache_cursor.get(),
+            )
+        };
         Self {
             metrics: self.metrics,
-            backend: self.backend.clone(),
+            backend,
             content_epoch: self.content_epoch,
             virtual_gap: self.virtual_gap,
             modified_tick: self.modified_tick,
@@ -410,9 +442,9 @@ impl Clone for BufferTextStorage {
             markers_head: std::ptr::null_mut(),
             pos_cache: self.pos_cache.clone(),
             single_byte_span: self.single_byte_span.clone(),
-            anchor_cache: self.anchor_cache.clone(),
-            anchor_cache_key: self.anchor_cache_key.clone(),
-            anchor_cache_cursor: self.anchor_cache_cursor.clone(),
+            anchor_cache: RefCell::new(anchor_cache),
+            anchor_cache_key: Cell::new(anchor_cache_key),
+            anchor_cache_cursor: Cell::new(anchor_cache_cursor),
             syntax_run_memo: self.syntax_run_memo.clone(),
             syntax_run_memo_cursor: self.syntax_run_memo_cursor.clone(),
             syntax_byte_run_memo: self.syntax_byte_run_memo.clone(),
@@ -469,7 +501,7 @@ impl BufferText {
         Self {
             storage: Rc::new(RefCell::new(BufferTextStorage {
                 metrics,
-                backend,
+                backend: Rc::new(backend),
                 content_epoch: 1,
                 virtual_gap,
                 modified_tick: 1,
@@ -829,8 +861,9 @@ impl BufferText {
         }
         let gap_compat = storage.gap_compat_state();
         let snapshot = storage.backend.snapshot();
-        storage.backend =
-            TextBackend::from_snapshot_with_gap_compat_state(snapshot, kind, gap_compat);
+        storage.backend = Rc::new(TextBackend::from_snapshot_with_gap_compat_state(
+            snapshot, kind, gap_compat,
+        ));
         storage.virtual_gap = gap_compat;
         Self::finish_backend_shape_change(&mut storage);
     }
@@ -844,7 +877,7 @@ impl BufferText {
         if storage.backend.is_multibyte() == multibyte {
             return;
         }
-        storage.backend.set_multibyte(multibyte);
+        backend_mut(&mut storage.backend).set_multibyte(multibyte);
         Self::finish_backend_content_mutation(&mut storage);
     }
 
@@ -966,10 +999,15 @@ impl BufferText {
     /// (like GNU `move_gap`, which runs freely during "read-only"
     /// searches).
     pub(crate) fn try_make_emacs_byte_range_contiguous(&self, range: EmacsByteRange) -> bool {
-        self.storage
-            .borrow_mut()
-            .backend
-            .try_make_emacs_byte_range_contiguous(range)
+        let mut storage = self.storage.borrow_mut();
+        // Already one piece (or a chunked backend, which never moves
+        // anything): no mutation, so a shared snapshot is not copied.
+        if storage.backend.has_contiguous_emacs_byte_range(range)
+            || storage.backend.real_gap_compat_state().is_none()
+        {
+            return storage.backend.has_contiguous_emacs_byte_range(range);
+        }
+        backend_mut(&mut storage.backend).try_make_emacs_byte_range_contiguous(range)
     }
 
     pub(crate) fn with_contiguous_emacs_byte_range<R>(
@@ -1149,9 +1187,7 @@ impl BufferText {
         }
         let mut storage = self.storage.borrow_mut();
         Self::note_virtual_gap_insert(&mut storage, pos, extent);
-        storage
-            .backend
-            .insert_measured_emacs_bytes(pos, bytes, extent);
+        backend_mut(&mut storage.backend).insert_measured_emacs_bytes(pos, bytes, extent);
         Self::finish_backend_content_mutation_with_edit(
             &mut storage,
             PositionEdit::insert(pos, extent),
@@ -1164,7 +1200,7 @@ impl BufferText {
         }
         let mut storage = self.storage.borrow_mut();
         Self::note_virtual_gap_delete(&mut storage, range);
-        storage.backend.delete_measured_range(range);
+        backend_mut(&mut storage.backend).delete_measured_range(range);
         Self::finish_backend_content_mutation_with_edit(
             &mut storage,
             PositionEdit::replace(range, TextExtent::ZERO),
@@ -1177,7 +1213,7 @@ impl BufferText {
         }
         let mut storage = self.storage.borrow_mut();
         Self::note_virtual_gap_replace(&mut storage, replacement);
-        storage.backend.replace_measured_range(replacement, bytes);
+        backend_mut(&mut storage.backend).replace_measured_range(replacement, bytes);
         Self::finish_backend_content_mutation_with_edit(
             &mut storage,
             PositionEdit::replace(replacement.old_range(), replacement.new_extent()),
@@ -1199,9 +1235,7 @@ impl BufferText {
         );
         let mut storage = self.storage.borrow_mut();
         Self::note_virtual_gap_same_len_replace(&mut storage, replacement, bytes);
-        storage
-            .backend
-            .replace_same_len_measured_range(replacement, bytes);
+        backend_mut(&mut storage.backend).replace_same_len_measured_range(replacement, bytes);
         Self::finish_backend_content_mutation_with_edit(
             &mut storage,
             PositionEdit::replace(replacement.old_range(), replacement.new_extent()),
@@ -1431,7 +1465,11 @@ impl BufferText {
     ) {
         let mut storage = self.storage.borrow_mut();
         let kind = storage.backend.kind();
-        storage.backend = TextBackend::from_emacs_bytes(text.as_bytes(), text.is_multibyte(), kind);
+        storage.backend = Rc::new(TextBackend::from_emacs_bytes(
+            text.as_bytes(),
+            text.is_multibyte(),
+            kind,
+        ));
         Self::finish_backend_content_mutation(&mut storage);
         storage.virtual_gap = Self::initial_virtual_gap_for_backend(
             &storage.backend,
