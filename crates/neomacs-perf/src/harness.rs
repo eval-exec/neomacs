@@ -1416,6 +1416,8 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     "NEOMACS_PRESENT_CHROME_POS",
     // The mini-window stands still when what it shows is unchanged: `on`.
     "NEOMACS_LAYOUT_MINI_STILL",
+    // The visible automatic-composition scan's ASCII fast path and memo: `on`.
+    "NEOMACS_COMPOSITION_FASTPATH",
 ];
 
 pub(crate) fn configure_benchmark_environment(command: &mut Command, sandbox: &MelpaSandbox) {

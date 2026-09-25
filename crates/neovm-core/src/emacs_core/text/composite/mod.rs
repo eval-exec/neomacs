@@ -851,6 +851,60 @@ pub fn automatic_composition_spans(
 /// composition rules in composition-function-table" (composite.c:1597).
 pub const MAX_AUTO_COMPOSITION_LOOKBACK: usize = 3;
 
+/// `NEOMACS_COMPOSITION_FASTPATH` (P3.5 F): the visible scan returns at once
+/// for pure-ASCII text when no ASCII character has a rule, and otherwise is
+/// memoized per buffer. Read once per process; default off.
+pub mod fast_path {
+    use std::cell::Cell;
+    use std::sync::OnceLock;
+
+    thread_local! {
+        static OVERRIDE: Cell<Option<bool>> = const { Cell::new(None) };
+    }
+
+    /// Force the fast path on or off on this thread; `None` returns to the
+    /// knob. For tests, including other crates' (the layout engine).
+    pub fn set_override(enabled: Option<bool>) {
+        OVERRIDE.with(|cell| cell.set(enabled));
+    }
+
+    /// Whether the fast path is on.
+    #[inline]
+    pub fn enabled() -> bool {
+        if let Some(enabled) = OVERRIDE.with(|cell| cell.get()) {
+            return enabled;
+        }
+        static ENABLED: OnceLock<bool> = OnceLock::new();
+        *ENABLED.get_or_init(|| {
+            matches!(
+                std::env::var("NEOMACS_COMPOSITION_FASTPATH")
+                    .ok()
+                    .map(|value| value.trim().to_ascii_lowercase())
+                    .as_deref(),
+                Some("on" | "1" | "true" | "yes")
+            )
+        })
+    }
+}
+
+/// Whether no ASCII character has an automatic-composition rule in TABLE, so
+/// that text with no byte >= 0x80 composes nothing: the scan triggers only on
+/// a character whose entry is non-nil, and rules for non-ASCII triggers
+/// (keycaps U+20E3, variation selectors U+FE0F, marks) need that non-ASCII
+/// character inside the scanned text. Something that is not a char-table
+/// composes nothing either. This is the scan's own ASCII row
+/// (`select_automatic_composition_spans`), read the same way.
+pub fn ascii_has_no_composition_rules(table: Value) -> bool {
+    if !super::chartable::is_char_table(&table) {
+        return true;
+    }
+    (0..128).all(|ch| {
+        super::chartable::ct_lookup(&table, ch)
+            .unwrap_or(Value::NIL)
+            .is_nil()
+    })
+}
+
 /// The rule table and buffer-owned regexp classification used by GNU's
 /// `fast_looking_at`, even when the displayed object is a Lisp string.
 ///

@@ -2335,6 +2335,13 @@ pub struct Buffer {
             std::rc::Rc<Vec<crate::emacs_core::composite::AutomaticCompositionSpan>>,
         )>,
     >,
+    /// Memo of the visible-range scan (`NEOMACS_COMPOSITION_FASTPATH`).
+    pub(crate) automatic_composition_visible_cache: std::cell::RefCell<
+        Option<(
+            AutomaticCompositionVisibleKey,
+            std::rc::Rc<Vec<crate::emacs_core::composite::AutomaticCompositionSpan>>,
+        )>,
+    >,
     /// Shared undo owner for this text.
     pub(crate) undo_state: SharedUndoState,
     /// Handle on the editor's ONE saved point-before-command-or-undo, GNU's
@@ -2365,6 +2372,22 @@ pub struct AutomaticCompositionKey {
     props_tick: i64,
     table: usize,
     syntax_table: usize,
+}
+
+/// Everything the visible-range composition scan reads: the text and its
+/// properties (ticks), the rule table (identity, plus the global char-table
+/// write tick for edits of it or of the syntax and category tables), the
+/// buffer's syntax and category tables, and the scanned range.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AutomaticCompositionVisibleKey {
+    chars_tick: i64,
+    props_tick: i64,
+    table: usize,
+    syntax_table: usize,
+    category_table: usize,
+    char_table_tick: u64,
+    start: usize,
+    end: usize,
 }
 
 impl Buffer {
@@ -2534,6 +2557,7 @@ impl Buffer {
             overlay_modified_tick: 1,
             overlay_digest_cache: std::cell::Cell::new(None),
             automatic_composition_cache: std::cell::RefCell::new(None),
+            automatic_composition_visible_cache: std::cell::RefCell::new(None),
             undo_state: SharedUndoState::new(),
             saved_point_before_command,
         }
@@ -2568,6 +2592,7 @@ impl Buffer {
             overlay_modified_tick: parts.overlay_modified_tick,
             overlay_digest_cache: std::cell::Cell::new(None),
             automatic_composition_cache: std::cell::RefCell::new(None),
+            automatic_composition_visible_cache: std::cell::RefCell::new(None),
             undo_state: parts.undo_state,
             saved_point_before_command: parts.saved_point_before_command,
         }
@@ -4306,17 +4331,53 @@ impl Buffer {
             self.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(start)),
             self.char_pos_to_emacs_byte_pos_clamped(CharPos0::new(end)),
         );
+        let fast = crate::emacs_core::composite::fast_path::enabled();
+        let key = fast.then(|| AutomaticCompositionVisibleKey {
+            chars_tick: self.chars_modified_tick(),
+            props_tick: self.props_modified_tick(),
+            table: composition_function_table.bits(),
+            syntax_table: self.slots[BUFFER_SLOT_SYNTAX_TABLE.index()].bits(),
+            category_table: self.slots[BUFFER_SLOT_CATEGORY_TABLE.index()].bits(),
+            char_table_tick: crate::emacs_core::chartable::char_table_write_tick(),
+            start,
+            end,
+        });
+        if let Some(key) = key {
+            if let Some((cached_key, spans)) =
+                self.automatic_composition_visible_cache.borrow().as_ref()
+                && *cached_key == key
+            {
+                return std::rc::Rc::clone(spans);
+            }
+            // Pure ASCII with no ASCII rule composes nothing: skip the copy
+            // and the per-character walk (see the predicate's doc).
+            if self.text.emacs_byte_range_is_ascii(byte_range)
+                && crate::emacs_core::composite::ascii_has_no_composition_rules(
+                    composition_function_table,
+                )
+            {
+                let spans = std::rc::Rc::new(Vec::new());
+                *self.automatic_composition_visible_cache.borrow_mut() =
+                    Some((key, std::rc::Rc::clone(&spans)));
+                return spans;
+            }
+        }
         let text = self.buffer_substring_range(byte_range);
         crate::emacs_core::composite::BYTES_SCANNED
             .fetch_add(text.len(), std::sync::atomic::Ordering::Relaxed);
-        std::rc::Rc::new(
+        let spans = std::rc::Rc::new(
             crate::emacs_core::composite::automatic_composition_spans_in(
                 self,
                 composition_function_table,
                 &text,
                 start,
             ),
-        )
+        );
+        if let Some(key) = key {
+            *self.automatic_composition_visible_cache.borrow_mut() =
+                Some((key, std::rc::Rc::clone(&spans)));
+        }
+        spans
     }
 
     pub fn increment_overlay_modified_tick(&mut self) {

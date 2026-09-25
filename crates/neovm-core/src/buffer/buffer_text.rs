@@ -986,6 +986,17 @@ impl BufferText {
             .for_each_emacs_byte_range_chunk(range, f)
     }
 
+    /// Whether every byte of RANGE is below 0x80, read in place.
+    pub(crate) fn emacs_byte_range_is_ascii(&self, range: EmacsByteRange) -> bool {
+        self.for_each_emacs_byte_range_chunk(
+            range,
+            |chunk| {
+                if chunk.is_ascii() { Ok(()) } else { Err(()) }
+            },
+        )
+        .is_ok()
+    }
+
     pub(crate) fn has_contiguous_emacs_byte_range(&self, range: EmacsByteRange) -> bool {
         self.storage
             .borrow()

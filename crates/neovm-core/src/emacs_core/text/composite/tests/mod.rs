@@ -1217,3 +1217,120 @@ fn bounded_scan_finds_the_same_spans_as_the_whole_text_scan() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// NEOMACS_COMPOSITION_FASTPATH (P3.5 F)
+// ---------------------------------------------------------------------------
+
+/// The visible scan with the fast path gives what the scan without it gives,
+/// for pure ASCII (no rule), ASCII with a rule on an ASCII trigger, and
+/// non-ASCII compositions, and its memo follows text, table and range.
+#[test]
+fn visible_scan_fast_path_matches_the_full_scan() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = super::super::eval::Context::new();
+    let table = eval.visible_variable_value_or_nil("composition-function-table");
+    let javanese = Value::vector(vec![
+        Value::string(r##"[ꦏ-ꦲ]ꦶ"##),
+        Value::fixnum(1),
+        Value::symbol("font-shape-gstring"),
+    ]);
+    crate::emacs_core::chartable::builtin_set_char_table_range(
+        vec![table, Value::fixnum(0xA9B6), Value::list(vec![javanese])],
+        Some(&eval.obarray),
+    )
+    .expect("install Javanese composition rule");
+    let buffer_id = eval.buffers.current_buffer().expect("current buffer").id();
+
+    let spans = |eval: &super::super::eval::Context, fast: bool, first: usize, budget: usize| {
+        fast_path::set_override(Some(fast));
+        let buffer = eval.buffers.get(buffer_id).expect("buffer");
+        let spans = buffer.automatic_composition_spans_visible(table, first, budget);
+        fast_path::set_override(None);
+        spans.as_ref().clone()
+    };
+    let check = |eval: &super::super::eval::Context, what: &str| {
+        let chars = eval
+            .buffers
+            .get(buffer_id)
+            .expect("buffer")
+            .point_max_char_pos()
+            .get();
+        for (first, budget) in [(0, chars), (0, 5), (3, 40), (chars / 2, chars)] {
+            // Twice with the fast path: the second call answers from the memo.
+            let fast = spans(eval, true, first, budget);
+            let again = spans(eval, true, first, budget);
+            let full = spans(eval, false, first, budget);
+            assert_eq!(fast, full, "{what}: range ({first}, {budget})");
+            assert_eq!(again, full, "{what}: memo at ({first}, {budget})");
+        }
+    };
+
+    eval.buffers
+        .get_mut(buffer_id)
+        .expect("buffer")
+        .insert("plain ascii text, nothing composes here\n");
+    check(&eval, "pure ascii");
+    assert!(spans(&eval, true, 0, 100).is_empty());
+
+    eval.buffers
+        .get_mut(buffer_id)
+        .expect("buffer")
+        .insert("ꦧꦱꦗꦮꦶ and more ascii\n");
+    check(&eval, "javanese");
+    assert!(!spans(&eval, true, 0, 200).is_empty());
+
+    // A rule on an ASCII trigger: the ASCII-only range must be scanned.
+    let ligature = Value::vector(vec![
+        Value::string("->"),
+        Value::fixnum(1),
+        Value::symbol("font-shape-gstring"),
+    ]);
+    crate::emacs_core::chartable::builtin_set_char_table_range(
+        vec![
+            table,
+            Value::fixnum('>' as i64),
+            Value::list(vec![ligature]),
+        ],
+        Some(&eval.obarray),
+    )
+    .expect("install an ASCII ligature rule");
+    check(&eval, "ascii rule, before the arrow");
+    eval.buffers
+        .get_mut(buffer_id)
+        .expect("buffer")
+        .insert("x -> y\n");
+    check(&eval, "ascii rule");
+    let chars = eval
+        .buffers
+        .get(buffer_id)
+        .expect("buffer")
+        .point_max_char_pos()
+        .get();
+    let whole = eval.buffers.get(buffer_id).expect("buffer").buffer_string();
+    let arrow = whole
+        .chars()
+        .collect::<Vec<_>>()
+        .windows(2)
+        .position(|pair| pair == ['-', '>'])
+        .expect("the arrow is in the buffer");
+    let arrow_composes =
+        |spans: &[AutomaticCompositionSpan]| spans.iter().any(|span| span.start() == arrow);
+    assert!(
+        arrow_composes(&spans(&eval, true, 0, chars)),
+        "the arrow composes"
+    );
+
+    // Removing the rule changes no buffer tick: the memo must notice the
+    // char-table write.
+    crate::emacs_core::chartable::builtin_set_char_table_range(
+        vec![table, Value::fixnum('>' as i64), Value::NIL],
+        Some(&eval.obarray),
+    )
+    .expect("remove the ASCII ligature rule");
+    check(&eval, "ascii rule removed");
+    assert!(
+        !arrow_composes(&spans(&eval, true, 0, chars)),
+        "the arrow no longer composes"
+    );
+}
