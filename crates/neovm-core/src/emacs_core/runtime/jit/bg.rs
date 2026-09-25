@@ -13,6 +13,7 @@
 //! |---|---|---|
 //! | `legacy` (default) | `Legacy` | the persistent per-thread module defines each leaf in place (the B4 path, unchanged) |
 //! | `sync` | `Sync` | the split, run in line: the eval thread's backend compiles each packaged function at once. Deterministic |
+//! | `on` | `Threaded` | entry tier-ups hand their package to a worker thread (`bg::worker`) and the function stays interpreted until its leaf is installed; every other compile runs as under `sync`. x86-64 Linux; elsewhere `on` is `sync` |
 //!
 //! Whatever the mode, the CLIF and the machine code are the same, and so is
 //! everything Lisp can observe: the mode moves where code is produced, never
@@ -42,14 +43,19 @@
 //!   call.
 
 use std::cell::{Cell, RefCell};
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 use super::RuntimeState;
+use super::compile::shared::split::JobPayload;
 use super::compile::{CompileError, CompiledLeaf};
 use super::stats::CompileOrigin;
 use super::stats::asm_dump::{self, PendingAsm};
+
+mod queue;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod worker;
 
 /// How JIT compiles run (`NEOVM_JIT_BG`). Exhaustive matches only.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, strum::IntoStaticStr)]
@@ -59,6 +65,16 @@ pub(crate) enum BgMode {
     Legacy,
     /// The front/backend split, run in line on the eval thread.
     Sync,
+    /// The split, with tier-up backends on worker threads.
+    #[strum(serialize = "on")]
+    Threaded,
+}
+
+/// Whether this target can run backends on a worker: the code arena that
+/// seals a worker's code and the install's instruction-stream serialization
+/// are x86-64 Linux's.
+pub(crate) const fn workers_supported() -> bool {
+    cfg!(all(target_os = "linux", target_arch = "x86_64"))
 }
 
 /// The mode a `NEOVM_JIT_BG` value selects; anything unrecognised (or
@@ -66,6 +82,8 @@ pub(crate) enum BgMode {
 pub(crate) fn parse_mode(value: Option<&str>) -> BgMode {
     match value.map(str::trim) {
         Some("sync") => BgMode::Sync,
+        Some("on") if workers_supported() => BgMode::Threaded,
+        Some("on") => BgMode::Sync,
         _ => BgMode::Legacy,
     }
 }
@@ -92,8 +110,13 @@ pub(crate) fn mode() -> BgMode {
 pub(crate) fn split_enabled() -> bool {
     match mode() {
         BgMode::Legacy => false,
-        BgMode::Sync => true,
+        BgMode::Sync | BgMode::Threaded => true,
     }
+}
+
+/// Worker threads to start (one; B12 adds the knob).
+pub(crate) fn worker_threads() -> usize {
+    1
 }
 
 /// Why a compile was requested; the order is its priority (lower = sooner).
@@ -377,6 +400,7 @@ pub(crate) fn install(
         return Err(Discard::Stale(DiscardReason::HeapChanged));
     }
     let mut leaf = job.leaf.take().expect("a pending job holds its leaf");
+    serialize_instruction_stream();
     leaf.entry = entry as *const u8;
     job.settle(Settled::Installed);
     if let Some(asm) = out.asm {
@@ -430,6 +454,91 @@ pub(crate) struct BgStats {
     pub(crate) interp_calls_while_pending: u64,
 }
 
+/// The `[neovm-jit-final-bg]` line: the eval thread's counters, the
+/// workers' and what was still pending at exit.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct BgReport {
+    pub(crate) mode: &'static str,
+    pub(crate) workers: usize,
+    pub(crate) stats: BgStats,
+    /// Pending entries this thread held at exit (their jobs are dropped).
+    pub(crate) in_flight_at_exit: usize,
+    pub(crate) worker_jobs: u64,
+    pub(crate) worker_skipped: u64,
+    pub(crate) worker_panics: u64,
+    pub(crate) worker_code_bytes: u64,
+    pub(crate) worker_backend_max_us: u64,
+}
+
+impl BgReport {
+    /// This thread's report, or `None` under the legacy path (no line).
+    pub(crate) fn collect() -> Option<BgReport> {
+        let mode = mode();
+        if mode == BgMode::Legacy {
+            return None;
+        }
+        Some(BgReport {
+            mode: mode.into(),
+            workers: queue::pool().workers(),
+            stats: stats_snapshot(),
+            in_flight_at_exit: pending_count(),
+            worker_jobs: WORKER_STATS.jobs.load(Ordering::Relaxed),
+            worker_skipped: WORKER_STATS.skipped.load(Ordering::Relaxed),
+            worker_panics: WORKER_STATS.panics.load(Ordering::Relaxed),
+            worker_code_bytes: WORKER_STATS.code_bytes.load(Ordering::Relaxed),
+            worker_backend_max_us: WORKER_STATS.backend_max_us.load(Ordering::Relaxed),
+        })
+    }
+
+    pub(crate) fn render(&self) -> String {
+        use strum::IntoEnumIterator;
+        let by_class = |counts: &[u64]| {
+            JobClass::iter()
+                .map(|c| {
+                    let name: &'static str = c.into();
+                    format!("{name}:{}", counts[c as usize])
+                })
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        let discarded = DiscardReason::iter()
+            .map(|r| {
+                let name: &'static str = r.into();
+                format!("{name}:{}", self.stats.discarded[r as usize])
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        let latency = self
+            .stats
+            .latency_us
+            .iter()
+            .map(u64::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(
+            "mode={} workers={} enqueued={} installed={} discarded={discarded} backend_us={} \
+             backend_max_us={} queue_wait_us={} latency_hist_us[<100,<250,<500,<1ms,<2.5ms,<5ms,<10ms,>=10ms]={latency} \
+             pending_probes={} interp_calls_while_pending={} in_flight_at_exit={} worker_jobs={} \
+             worker_skipped={} worker_panics={} worker_code_bytes={} worker_backend_max_us={}",
+            self.mode,
+            self.workers,
+            by_class(&self.stats.enqueued),
+            by_class(&self.stats.installed),
+            self.stats.backend_us,
+            self.stats.backend_max_us,
+            self.stats.queue_wait_us,
+            self.stats.pending_probes,
+            self.stats.interp_calls_while_pending,
+            self.in_flight_at_exit,
+            self.worker_jobs,
+            self.worker_skipped,
+            self.worker_panics,
+            self.worker_code_bytes,
+            self.worker_backend_max_us,
+        )
+    }
+}
+
 thread_local! {
     static STATS: Cell<BgStats> = Cell::new(BgStats::default());
     /// The class the compile in progress may defer under ([`DeferScope`]).
@@ -470,7 +579,7 @@ pub(crate) fn drain_pending_ids(mut visit: impl FnMut(u64) -> bool) {
 }
 
 /// Lets the compile inside it defer its backend under a class (see
-/// [`defer_class`]); restores the enclosing scope on drop.
+/// [`defer_route`]); restores the enclosing scope on drop.
 #[must_use = "the scope lasts until the guard drops"]
 pub(crate) struct DeferScope(Option<JobClass>);
 
@@ -486,12 +595,143 @@ impl Drop for DeferScope {
     }
 }
 
-/// The class the leaf being built may hand to a backend elsewhere, or
-/// `None` to compile it in line. Taking it closes the scope: one compile
-/// defers at most one leaf.
-pub(crate) fn defer_class() -> Option<JobClass> {
+/// Where a deferred leaf's backend runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DeferRoute {
+    /// A worker thread ([`enqueue`]).
+    Worker,
+    /// In line, the install still waiting for the next probe (the
+    /// deferred-install test mode).
+    InLine,
+}
+
+/// The class and route the leaf being built may hand its backend under, or
+/// `None` to compile it in line and install it at once. Taking it closes
+/// the scope: one compile defers at most one leaf.
+pub(crate) fn defer_route() -> Option<(JobClass, DeferRoute)> {
     let class = DEFER_SCOPE.with(|c| c.take())?;
-    deferred_install_for_test().then_some(class)
+    if deferred_install_for_test() {
+        return Some((class, DeferRoute::InLine));
+    }
+    match mode() {
+        BgMode::Legacy | BgMode::Sync => None,
+        BgMode::Threaded => Some((class, DeferRoute::Worker)),
+    }
+}
+
+/// Start worker `index` for `pool` (x86-64 Linux only; see
+/// [`workers_supported`]).
+fn spawn_worker(index: usize, pool: &'static queue::Pool) -> std::io::Result<()> {
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    return worker::spawn(index, pool);
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    {
+        let _ = (index, pool);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "background JIT backends need x86-64 Linux",
+        ))
+    }
+}
+
+/// Process-unique job sequence numbers (FIFO order within a class).
+static NEXT_SEQ: AtomicU64 = AtomicU64::new(1);
+
+/// Hand `payload` to a worker under `class` and record the job for the
+/// compile's cache entry. `Err` gives the payload back when no worker can
+/// run it: the caller compiles it in line.
+pub(crate) fn enqueue(class: JobClass, payload: JobPayload) -> Result<(), JobPayload> {
+    let cell = JobCell::new();
+    let enqueued_at = Instant::now();
+    let job = queue::BackendJob {
+        payload,
+        class,
+        seq: NEXT_SEQ.fetch_add(1, Ordering::Relaxed),
+        enqueued_at,
+        cell: Arc::clone(&cell),
+    };
+    match queue::pool().push(job) {
+        Ok(()) => {
+            stash_deferred(cell, class, enqueued_at);
+            Ok(())
+        }
+        Err(job) => Err(job.payload),
+    }
+}
+
+/// Counters the worker threads keep (process-wide).
+pub(crate) struct WorkerStats {
+    /// Jobs compiled (or failed).
+    pub(crate) jobs: AtomicU64,
+    /// Jobs skipped because they were cancelled before they started.
+    pub(crate) skipped: AtomicU64,
+    /// Backend panics contained.
+    pub(crate) panics: AtomicU64,
+    /// Machine code bytes produced.
+    pub(crate) code_bytes: AtomicU64,
+    /// The longest backend run, µs.
+    pub(crate) backend_max_us: AtomicU64,
+}
+
+pub(crate) static WORKER_STATS: WorkerStats = WorkerStats {
+    jobs: AtomicU64::new(0),
+    skipped: AtomicU64::new(0),
+    panics: AtomicU64::new(0),
+    code_bytes: AtomicU64::new(0),
+    backend_max_us: AtomicU64::new(0),
+};
+
+/// A test asked the next worker job to panic.
+static FORCED_PANIC: AtomicBool = AtomicBool::new(false);
+
+/// Whether the backend job starting now must panic (consumes the request;
+/// only a test makes one).
+pub(crate) fn take_forced_panic() -> bool {
+    FORCED_PANIC.swap(false, Ordering::Relaxed)
+}
+
+/// Make the next job a worker starts panic inside its backend (tests).
+#[cfg(test)]
+pub(crate) fn force_backend_panic_for_test() {
+    FORCED_PANIC.store(true, Ordering::Relaxed);
+}
+
+/// Wait until no job is queued or running (tests); whether it got there
+/// within `timeout`.
+#[cfg(test)]
+pub(crate) fn quiesce_for_test(timeout: std::time::Duration) -> bool {
+    queue::pool().quiesce(timeout)
+}
+
+/// Keep the workers from taking jobs until the guard drops (tests): jobs
+/// queue up, so a test can act while they are known not to have started.
+#[cfg(test)]
+pub(crate) fn hold_workers_for_test() -> WorkerHold {
+    queue::pool().set_held(true);
+    WorkerHold(())
+}
+
+#[cfg(test)]
+pub(crate) struct WorkerHold(());
+
+#[cfg(test)]
+impl Drop for WorkerHold {
+    fn drop(&mut self) {
+        queue::pool().set_held(false);
+    }
+}
+
+/// Make code another core wrote visible to this core's instruction fetch:
+/// the backend sealed it and published with a release store that this
+/// thread read with an acquire load; a serializing instruction before the
+/// first execution completes the cross-modifying-code protocol (Intel SDM
+/// vol. 3 §8.1.3; Cranelift's own flush is a no-op on x86-64).
+#[inline(never)]
+fn serialize_instruction_stream() {
+    // `cpuid` (leaf 0) is architecturally serializing and has no other
+    // effect.
+    #[cfg(target_arch = "x86_64")]
+    let _ = core::arch::x86_64::__cpuid(0);
 }
 
 /// Record the job the compile in progress deferred (the sink's side).
@@ -628,3 +868,7 @@ mod split_tests;
 #[cfg(test)]
 #[path = "bg/tests/pending_test.rs"]
 mod pending_tests;
+
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[path = "bg/tests/worker_test.rs"]
+mod worker_tests;

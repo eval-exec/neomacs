@@ -157,9 +157,10 @@ impl DeferredSink<'_> {
     }
 }
 
-/// A compiled payload: its finalized entry.
+/// A compiled payload: its finalized entry and code size.
 pub(crate) struct DefinedCode {
     pub(crate) entry: *const u8,
+    pub(crate) code_bytes: usize,
 }
 
 impl SharedJit {
@@ -195,6 +196,9 @@ impl SharedJit {
         ctx.clear();
         ctx.func = payload.func;
         let defined = define_with_context(&mut shared.module, fid, ctx, payload.disasm);
+        let code_bytes = ctx
+            .compiled_code()
+            .map_or(0, |code| code.code_buffer().len());
         shared.module.clear_context(ctx);
         defined?;
         let finalize_phase = enter_phase(CompilePhase::Finalize);
@@ -209,7 +213,7 @@ impl SharedJit {
             s.shared_leaves += 1;
             s.split_payloads += 1;
         });
-        Ok(DefinedCode { entry })
+        Ok(DefinedCode { entry, code_bytes })
     }
 }
 
@@ -248,16 +252,28 @@ pub(super) fn define_split(
     // A compile the cache lets defer leaves its leaf pending: the entry
     // stays null until a probe installs the backend's (`jit::bg`). Only a
     // portable payload may go: another module could not link the rest.
+    let mut payload = payload;
     if payload.portable
-        && let Some(class) = crate::emacs_core::jit::bg::defer_class()
+        && let Some((class, route)) = crate::emacs_core::jit::bg::defer_route()
     {
-        crate::emacs_core::jit::bg::defer_in_line(class, || {
-            jit.define_payload(payload).map(|code| code.entry as usize)
-        });
-        return Ok(JitDefined {
+        use crate::emacs_core::jit::bg::{self, DeferRoute};
+        let pending = JitDefined {
             entry: std::ptr::null(),
             backing: LeafBacking::Shared,
-        });
+        };
+        match route {
+            DeferRoute::Worker => match bg::enqueue(class, payload) {
+                Ok(()) => return Ok(pending),
+                // No worker could start: compile in line after all.
+                Err(back) => payload = back,
+            },
+            DeferRoute::InLine => {
+                bg::defer_in_line(class, || {
+                    jit.define_payload(payload).map(|code| code.entry as usize)
+                });
+                return Ok(pending);
+            }
+        }
     }
     let code = jit.define_payload(payload)?;
     Ok(JitDefined {

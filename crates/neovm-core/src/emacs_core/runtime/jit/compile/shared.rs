@@ -408,6 +408,36 @@ fn define_shared(
     })
 }
 
+/// The backend of a background compile worker (`jit::bg::worker`): a
+/// persistent backend of its own -- modules, Cranelift context and code
+/// arena -- that no eval thread shares. Built on the worker's thread.
+pub(crate) struct WorkerBackend(SharedJit);
+
+/// A payload a worker compiled: its entry's address and code size.
+pub(crate) struct WorkerCode {
+    pub(crate) entry: usize,
+    pub(crate) code_bytes: usize,
+}
+
+impl WorkerBackend {
+    pub(crate) fn new() -> WorkerBackend {
+        WorkerBackend(SharedJit::fresh())
+    }
+
+    /// Compile `payload` (see [`split::JobPayload`]); its code is sealed
+    /// read+execute when this returns.
+    pub(crate) fn define(
+        &mut self,
+        payload: split::JobPayload,
+    ) -> Result<WorkerCode, CompileError> {
+        let code = self.0.define_payload(payload)?;
+        Ok(WorkerCode {
+            entry: code.entry as usize,
+            code_bytes: code.code_bytes,
+        })
+    }
+}
+
 /// The persistent module's side of [`JitSink`].
 pub(crate) struct SharedSink<'a> {
     module: &'a mut JITModule,

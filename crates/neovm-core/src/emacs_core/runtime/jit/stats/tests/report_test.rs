@@ -72,6 +72,7 @@ fn jit_final_report_renders_every_section() {
             signals: 1,
         },
         builtin_leaves: String::new(),
+        bg: None,
     };
     let lines = report.render();
     let tags: Vec<&'static str> = lines.iter().map(|(t, _)| (*t).into()).collect();

@@ -162,6 +162,8 @@ pub(crate) struct FinalReport {
     pub(crate) dropped: LeafTotals,
     /// The leaf builtin census (`leaf_abi::render_leaf_stats`), or empty.
     pub(crate) builtin_leaves: String,
+    /// Background compilation (`jit::bg`), unless on the legacy path.
+    pub(crate) bg: Option<crate::emacs_core::jit::bg::BgReport>,
 }
 
 impl FinalReport {
@@ -195,6 +197,9 @@ impl FinalReport {
         lines.push((ReportTag::Final, head));
         lines.push((ReportTag::FinalPhases, format_phases(&self.compile)));
         lines.push((ReportTag::FinalCodeMemory, self.code_memory.render()));
+        if let Some(bg) = &self.bg {
+            lines.push((ReportTag::FinalBg, bg.render()));
+        }
         lines.push((ReportTag::FinalMirBails, or_dash(&self.mir_bails)));
         lines.push((ReportTag::FinalInline, or_dash(&self.inline)));
         let (mut entries_all, mut deopt_at, mut deopt_rerun, mut signals) = (

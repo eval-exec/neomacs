@@ -437,6 +437,9 @@ pub(crate) enum ReportTag {
     /// Exit report: one of the most executed recording call sites.
     #[strum(serialize = "neovm-jit-final-call-site")]
     FinalCallSite,
+    /// Exit report: background compilation (`jit::bg`), unless legacy.
+    #[strum(serialize = "neovm-jit-final-bg")]
+    FinalBg,
 }
 
 /// The process-wide report sink, chosen once from `NEOVM_JIT_STATS_FILE`.
@@ -946,6 +949,7 @@ fn collect_final_report(ctx: &crate::emacs_core::eval::Context) -> report::Final
         leaves,
         dropped,
         builtin_leaves: super::compile::leaf_abi::render_leaf_stats(),
+        bg: super::bg::BgReport::collect(),
     }
 }
 
