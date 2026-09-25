@@ -1332,8 +1332,12 @@ impl TaggedHeap {
                     }
                     VecLikeType::Subr => unsafe { drop(Box::from_raw(ptr as *mut SubrObj)) },
                     VecLikeType::Bignum => unsafe {
-                        // Box::drop runs malachite::Integer::drop, which
-                        // frees the underlying limb buffer.
+                        // Residual-Box seam only: page bignums never enter
+                        // the intrusive lists this fn sweeps (`alloc_bignum`
+                        // is page-only, so this arm is unreachable today;
+                        // kept so any future Box producer stays leak-free by
+                        // construction). Box::drop runs
+                        // malachite::Integer::drop, which frees the limbs.
                         drop(Box::from_raw(ptr as *mut BignumObj))
                     },
                     VecLikeType::SymbolWithPos => unsafe {

@@ -387,6 +387,7 @@ fn concurrent_termination_classifies_deferred_kinds() {
     const N_FLT: usize = 120;
     const N_HT: usize = 8;
     const N_VEC: usize = 50;
+    const N_BIG: usize = 60;
 
     let mut list = TaggedValue::fixnum(0);
     for _ in 0..N_STR {
@@ -427,6 +428,10 @@ fn concurrent_termination_classifies_deferred_kinds() {
     for i in 0..N_VEC {
         let v = heap.alloc_vector(vec![TaggedValue::fixnum(i as i64); 4]);
         list = heap.alloc_cons(v, list);
+    }
+    for i in 0..N_BIG {
+        let b = heap.alloc_bignum(Integer::from(u64::MAX) * Integer::from(i as u64 + 2));
+        list = heap.alloc_cons(b, list);
     }
     let root = list;
 
@@ -498,6 +503,13 @@ fn concurrent_termination_classifies_deferred_kinds() {
         kinds.vector, 0,
         "no vector may remain parked on a bare page-only heap (vec={})",
         kinds.vector,
+    );
+    // Page bignums are not claimed on the GC thread (P0.11 §3.6: childless,
+    // and too few deferrals to pay for a snapshot); they park in `other`.
+    assert!(
+        kinds.other >= N_BIG,
+        "arena bignums stay parked in the other bucket (other={})",
+        kinds.other,
     );
     assert_eq!(
         kinds.total(),

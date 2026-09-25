@@ -47,9 +47,9 @@ fn big_integer(id: i64) -> Integer {
     if id < 0 { -magnitude } else { magnitude }
 }
 
-/// The allocator under test.
+/// The allocator under test: the production entry point.
 fn alloc_big(heap: &mut TaggedHeap, value: Integer) -> TaggedValue {
-    heap.alloc_bignum_paged(value)
+    heap.alloc_bignum(value)
 }
 
 fn big(heap: &mut TaggedHeap, id: i64) -> TaggedValue {

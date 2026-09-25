@@ -821,35 +821,39 @@ impl TaggedHeap {
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
     }
 
-    /// Allocate a bignum (arbitrary-precision integer).
+    /// Allocate a bignum (arbitrary-precision integer) from the BIGNUM ARENA
+    /// PAGES.
     ///
-    /// Mirrors GNU `make_bignum` (`src/bignum.c:113`): the caller is
-    /// responsible for ensuring the value is outside fixnum range.
-    /// Use `Value::make_integer` for the canonical "fixnum-or-bignum"
-    /// constructor that delegates here only when promotion is needed.
+    /// GNU `make_bignum_bits` (`src/bignum.c:94`): a pseudovector slot from
+    /// a vector block, never a malloc of its own; the limbs stay the
+    /// `Integer`'s own vector (GNU: the `mpz_t` limbs GMP mallocs). The caller
+    /// is responsible for the value being outside fixnum range —
+    /// `Value::make_integer` is the canonical fixnum-or-bignum constructor
+    /// that delegates here only when promotion is needed.
+    ///
+    /// Page bignums are OWNED via the page-span oracle (routed by
+    /// `owns_veclike_object`) and are NOT `link_veclike`d: no intrusive-list
+    /// node and no `non_cons_object_addrs` insert, so the sweep neither walks
+    /// a list nor hash-removes per bignum. The page sweep is their only
+    /// reclaimer; `free_gc_object`'s Bignum arm stays the residual-Box seam.
     pub fn alloc_bignum(&mut self, value: Integer) -> TaggedValue {
-        let obj = Box::new(BignumObj {
-            header: VecLikeHeader::new(VecLikeType::Bignum),
-            value,
-        });
-        let ptr = Box::into_raw(obj);
-        self.link_veclike(ptr as *mut VecLikeHeader);
-        self.allocated_count += 1;
-        self.note_allocation_bytes(size_of::<BignumObj>());
-        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+        self.alloc_bignum_inline(value)
     }
 
-    /// TEST-ONLY: allocate a bignum from the BIGNUM ARENA PAGES, the
-    /// allocator `alloc_bignum` switches to next (GNU `make_bignum_bits`:
-    /// a vector-block slot, never a malloc of its own). One FULL-header
-    /// `ptr::write` with the born-at-parity mark in the same store sequence
-    /// (the `alloc_float_inline` pattern); no intrusive list, no addr-set.
-    #[cfg(test)]
-    pub(crate) fn alloc_bignum_paged(&mut self, value: Integer) -> TaggedValue {
+    /// [`Self::alloc_bignum`] inlined into its caller: for the out-of-line
+    /// arithmetic kernels, so the result's fields go from registers straight
+    /// into the slot instead of through a by-value `Integer` copy the kernel's
+    /// narrow stores cannot forward to. Every other caller keeps the call.
+    ///
+    /// One FULL-header `ptr::write` (a reused slot's stale bytes must never
+    /// leak into the new object) with the born-at-parity mark in the same
+    /// store sequence — allocate-black during a mark/sweep, pre-armed white
+    /// for the next `begin_collection` flip otherwise — before the pointer
+    /// escapes (the `alloc_float_inline` pattern).
+    #[inline(always)]
+    pub(crate) fn alloc_bignum_inline(&mut self, value: Integer) -> TaggedValue {
         let ptr = self.bignum_arena.alloc_slot();
         unsafe {
-            // FULL-HEADER WRITE: never partially reuse prior slot bytes.
-            // BORN-AT-PARITY, unconditionally, before the pointer escapes.
             std::ptr::write(
                 ptr,
                 BignumObj {
@@ -864,8 +868,11 @@ impl TaggedHeap {
                 },
             );
         }
+        #[cfg(test)]
         alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
         self.allocated_count += 1;
+        // Pacing unchanged: the 56-byte object, as for the boxed bignum. GNU
+        // does not count GMP limb memory toward `consing_until_gc` either.
         self.note_allocation_bytes(size_of::<BignumObj>());
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
     }

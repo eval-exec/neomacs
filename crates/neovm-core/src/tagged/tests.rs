@@ -785,6 +785,23 @@ fn alloc_roundtrip_cost_probe() {
         },
         &mut out,
     );
+    for limbs in [1usize, 4, 64] {
+        // `limbs == 1` is malachite `Small` (no limb allocation); otherwise
+        // the Integer owns a limb Vec the sweep's drop_in_place frees.
+        let value = if limbs == 1 {
+            malachite::integer::Integer::from(u64::MAX)
+        } else {
+            malachite::integer::Integer::from(1) << (64 * limbs as u64 - 1)
+        };
+        run_case(
+            &format!("bignum {limbs} limb(s)"),
+            m,
+            move |h| {
+                h.alloc_bignum(value.clone());
+            },
+            &mut out,
+        );
+    }
 
     // Report via panic! so nextest surfaces the dump (profiling aid pattern).
     panic!("ALLOC ROUND-TRIP PROBE (profiling aid, not a failure)\n{out}");
