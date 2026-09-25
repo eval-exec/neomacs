@@ -1008,9 +1008,10 @@ fn emit_inline_string_aref(
 /// owned storage (a borrowed or read-only string is copied by the shim
 /// first), an in-range fixnum index, and a fixnum VALUE that is a byte
 /// (0..=255) for a normally allocated unibyte string or ASCII (0..=127) for
-/// an all-ASCII multibyte one. Guarded first by the shim's own `aset`
-/// redefinition gate (`Context::aset_fast_path_epoch` equal to the
-/// obarray's function epoch): a miss calls the shim, which re-validates.
+/// an all-ASCII multibyte one. A non-string leaves after the tag test
+/// alone; a string is then guarded by the shim's own `aset` redefinition
+/// gate (`Context::aset_fast_path_epoch` equal to the obarray's function
+/// epoch): a miss calls the shim, which re-validates.
 /// No write barrier: string bytes hold no references. Branches to `slow`
 /// on any miss; on success defines `res` as VALUE and jumps to `merge`.
 fn emit_inline_string_aset(
@@ -1027,6 +1028,16 @@ fn emit_inline_string_aset(
     let [array, index, value] = operands;
     let base = core::mem::offset_of!(StringObj, data);
     let flags = MemFlagsData::trusted();
+    // The string test first and alone: every `aset` site runs this prefix,
+    // and a vector or record store (the common case, which the shim serves)
+    // must leave after one tag test, not after the whole predicate below
+    // (nbody paid +4% instructions for it).
+    let tag = band_imm_p(fb, array, TAG_MASK as i64);
+    let is_string = icmp_imm_p(fb, IntCC::Equal, tag, TAG_STRING as i64);
+    let string_block = fb.create_block();
+    fb.ins().brif(is_string, string_block, &[], slow, &[]);
+    fb.switch_to_block(string_block);
+    fb.seal_block(string_block);
     let vmctx = fb.use_var(rt.vmctx_var);
     let epoch = fb.ins().load(
         types::I64,
@@ -1042,14 +1053,11 @@ fn emit_inline_string_aset(
         core::mem::offset_of!(Context, aset_fast_path_epoch) as i32,
     );
     let gated = fb.ins().icmp(IntCC::Equal, epoch, gate);
-    let tag = band_imm_p(fb, array, TAG_MASK as i64);
-    let is_string = icmp_imm_p(fb, IntCC::Equal, tag, TAG_STRING as i64);
     let index_tag = band_imm_p(fb, index, FIXNUM_CHECK_MASK as i64);
     let index_fixnum = icmp_imm_p(fb, IntCC::Equal, index_tag, FIXNUM_CHECK_VALUE as i64);
     let value_tag = band_imm_p(fb, value, FIXNUM_CHECK_MASK as i64);
     let value_fixnum = icmp_imm_p(fb, IntCC::Equal, value_tag, FIXNUM_CHECK_VALUE as i64);
-    let shapes = fb.ins().band(is_string, index_fixnum);
-    let shapes = fb.ins().band(shapes, value_fixnum);
+    let shapes = fb.ins().band(index_fixnum, value_fixnum);
     let shapes = fb.ins().band(shapes, gated);
     let typed = fb.create_block();
     fb.ins().brif(shapes, typed, &[], slow, &[]);
