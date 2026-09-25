@@ -1587,13 +1587,19 @@ pub fn skip_syntax_forward(
     syntax_chars: &str,
     limit: Option<usize>,
 ) -> usize {
-    skip_syntax_forward_with_options(buf, table, syntax_chars, limit, SyntaxProperties::Ignore)
+    skip_syntax_forward_with_options(
+        buf,
+        table,
+        SkipSyntaxClasses::parse_str(syntax_chars),
+        limit,
+        SyntaxProperties::Ignore,
+    )
 }
 
 fn skip_syntax_forward_with_options(
     buf: &Buffer,
     table: &SyntaxTable,
-    syntax_chars: &str,
+    classes: SkipSyntaxClasses,
     limit: Option<usize>,
     props: SyntaxProperties<'_>,
 ) -> usize {
@@ -1601,8 +1607,6 @@ fn skip_syntax_forward_with_options(
     // interval lookup per property RUN instead of per character.
     let prop_cache = SyntaxPropRange::new(props);
     let prop_cache = &prop_cache;
-
-    let (classes, negate) = parse_skip_syntax_classes(syntax_chars);
 
     let accessible_bytes = buf.accessible_emacs_byte_region();
     let accessible_chars = buf.accessible_char_region();
@@ -1628,7 +1632,7 @@ fn skip_syntax_forward_with_options(
             prop_cache,
         )
         .class;
-        if classes.contains(&syn) == negate {
+        if !classes.skips(syn) {
             break;
         }
         idx += 1;
@@ -1646,13 +1650,19 @@ pub fn skip_syntax_backward(
     syntax_chars: &str,
     limit: Option<usize>,
 ) -> usize {
-    skip_syntax_backward_with_options(buf, table, syntax_chars, limit, SyntaxProperties::Ignore)
+    skip_syntax_backward_with_options(
+        buf,
+        table,
+        SkipSyntaxClasses::parse_str(syntax_chars),
+        limit,
+        SyntaxProperties::Ignore,
+    )
 }
 
 fn skip_syntax_backward_with_options(
     buf: &Buffer,
     table: &SyntaxTable,
-    syntax_chars: &str,
+    classes: SkipSyntaxClasses,
     limit: Option<usize>,
     props: SyntaxProperties<'_>,
 ) -> usize {
@@ -1660,8 +1670,6 @@ fn skip_syntax_backward_with_options(
     // interval lookup per property RUN instead of per character.
     let prop_cache = SyntaxPropRange::new(props);
     let prop_cache = &prop_cache;
-
-    let (classes, negate) = parse_skip_syntax_classes(syntax_chars);
 
     let accessible_bytes = buf.accessible_emacs_byte_region();
     let accessible_chars = buf.accessible_char_region();
@@ -1686,7 +1694,7 @@ fn skip_syntax_backward_with_options(
             prop_cache,
         )
         .class;
-        if classes.contains(&syn) == negate {
+        if !classes.skips(syn) {
             break;
         }
         idx -= 1;
@@ -1703,6 +1711,52 @@ fn parse_skip_syntax_classes(syntax_chars: &str) -> (Vec<SyntaxClass>, bool) {
         chars.next();
     }
     (chars.filter_map(SyntaxClass::from_char).collect(), negate)
+}
+
+/// The syntax classes a `skip-syntax-forward`/`-backward` call skips: GNU
+/// `skip_syntaxes`' fastmap, one bit per class, with its leading-`^`
+/// negation folded into the test.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SkipSyntaxClasses {
+    bits: u32,
+    negate: bool,
+}
+
+impl SkipSyntaxClasses {
+    fn from_classes(classes: impl IntoIterator<Item = SyntaxClass>, negate: bool) -> Self {
+        let bits = classes
+            .into_iter()
+            .fold(0u32, |bits, class| bits | (1u32 << u8::from(class)));
+        Self { bits, negate }
+    }
+
+    /// Parse a decoded class string (the general path, and Rust callers).
+    fn parse_str(syntax_chars: &str) -> Self {
+        let (classes, negate) = parse_skip_syntax_classes(syntax_chars);
+        Self::from_classes(classes, negate)
+    }
+
+    /// GNU `skip_syntaxes`: the string's internal bytes, `^` first to
+    /// negate, each byte through `syntax_spec_code` -- no decoding and no
+    /// allocation. A non-ASCII character's bytes are all >= 0x80 and name no
+    /// class, exactly as its decoded character does not.
+    fn parse_spec_bytes(bytes: &[u8]) -> Self {
+        let (negate, spec) = match bytes.split_first() {
+            Some((b'^', rest)) => (true, rest),
+            _ => (false, bytes),
+        };
+        Self::from_classes(
+            spec.iter()
+                .filter_map(|&byte| SyntaxClass::from_syntax_spec_byte(byte)),
+            negate,
+        )
+    }
+
+    /// Whether a character of syntax CLASS is skipped.
+    #[inline(always)]
+    fn skips(self, class: SyntaxClass) -> bool {
+        ((self.bits >> u8::from(class)) & 1 != 0) != self.negate
+    }
 }
 
 /// Scan for balanced expressions (sexps).
@@ -7572,7 +7626,7 @@ pub(crate) fn builtin_skip_syntax_forward_2(
             stop = skip_syntax_forward_with_options(
                 buf,
                 &table,
-                &syntax_chars,
+                syntax_chars,
                 Some(window_end_byte),
                 props,
             );
@@ -7594,7 +7648,7 @@ pub(crate) fn builtin_skip_syntax_forward_2(
         skip_syntax_forward_with_options(
             buf,
             &table,
-            &syntax_chars,
+            syntax_chars,
             limit_byte,
             SyntaxProperties::Ignore,
         )
@@ -7651,7 +7705,7 @@ pub(crate) fn builtin_skip_syntax_backward_2(
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
     let table = SyntaxTable::for_buffer(buf);
     let limit = limit.map(|raw| lisp_pos_to_byte(buf, LispCharPos1::new(raw)).get());
-    let new_pos = skip_syntax_backward_with_options(buf, &table, &syntax_chars, limit, props);
+    let new_pos = skip_syntax_backward_with_options(buf, &table, syntax_chars, limit, props);
 
     let old_pt = eval
         .buffers
@@ -7679,14 +7733,24 @@ pub(crate) fn builtin_skip_syntax_backward_2(
     Ok(Value::fixnum(chars_moved))
 }
 
-fn expect_skip_syntax_args(caller: &str, args: &[Value]) -> Result<(String, Option<i64>), Flow> {
+fn expect_skip_syntax_args(
+    caller: &str,
+    args: &[Value],
+) -> Result<(SkipSyntaxClasses, Option<i64>), Flow> {
     if !(1..=2).contains(&args.len()) {
         return Err(signal(
             LispCondition::WrongNumberOfArguments,
             vec![Value::symbol(caller), Value::fixnum(args.len() as i64)],
         ));
     }
-    let syntax_chars = syntax_runtime_string(&args[0])?;
+    // U2.8: parse the class string's bytes in place; with the knob off,
+    // decode it to UTF-8 first as before.
+    let syntax_chars = match args[0].as_lisp_string() {
+        Some(string) if super::eval::builtin_frontend_on() => {
+            SkipSyntaxClasses::parse_spec_bytes(string.as_bytes())
+        }
+        _ => SkipSyntaxClasses::parse_str(&syntax_runtime_string(&args[0])?),
+    };
     let limit = match args.get(1) {
         None => None,
         Some(value) if value.is_nil() => None,
@@ -7731,3 +7795,7 @@ mod flat_ascii_syntax_entry_cache_tests;
 #[cfg(test)]
 #[path = "tests/scan_error_data_gnu.rs"]
 mod scan_error_data_gnu_tests;
+
+#[cfg(test)]
+#[path = "tests/skip_syntax_classes.rs"]
+mod skip_syntax_classes_tests;
