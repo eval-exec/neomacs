@@ -68,6 +68,8 @@ pub(super) trait PagedObject: Sized {
     const KIND: HeapObjectKind;
     /// Class name for diagnostics.
     const CLASS: &'static str;
+    /// This class's pages in the chunk map (`chunk_map.rs`).
+    const CHUNK_CLASS: ChunkClass;
     /// TEST-ONLY live page counter (teardown-leak / double-free probe for the
     /// Drop tests): `ObjectPage::new` increments, `ObjectPage::drop` decrements.
     #[cfg(test)]
@@ -205,6 +207,7 @@ impl PagedObject for BignumObj {
     const SLOT_BYTES: usize = 64;
     const KIND: HeapObjectKind = HeapObjectKind::VecLike;
     const CLASS: &'static str = "bignum";
+    const CHUNK_CLASS: ChunkClass = ChunkClass::Bignum;
     #[cfg(test)]
     fn live_page_counter() -> &'static AtomicUsize {
         &LIVE_BIGNUM_PAGES
@@ -218,6 +221,7 @@ impl PagedObject for MarkerObj {
     const SLOT_BYTES: usize = 128;
     const KIND: HeapObjectKind = HeapObjectKind::VecLike;
     const CLASS: &'static str = "marker";
+    const CHUNK_CLASS: ChunkClass = ChunkClass::Marker;
     #[cfg(test)]
     fn live_page_counter() -> &'static AtomicUsize {
         &LIVE_MARKER_PAGES
@@ -227,6 +231,7 @@ impl PagedObject for FloatObj {
     const SLOT_BYTES: usize = 32;
     const KIND: HeapObjectKind = HeapObjectKind::Float;
     const CLASS: &'static str = "float";
+    const CHUNK_CLASS: ChunkClass = ChunkClass::Float;
     #[cfg(test)]
     fn live_page_counter() -> &'static AtomicUsize {
         &LIVE_FLOAT_PAGES
@@ -237,6 +242,7 @@ impl PagedObject for StringObj {
     const SLOT_BYTES: usize = 64;
     const KIND: HeapObjectKind = HeapObjectKind::String;
     const CLASS: &'static str = "string";
+    const CHUNK_CLASS: ChunkClass = ChunkClass::String;
     #[cfg(test)]
     fn live_page_counter() -> &'static AtomicUsize {
         &LIVE_STRING_PAGES
@@ -247,6 +253,7 @@ impl PagedObject for VectorObj {
     const SLOT_BYTES: usize = 64;
     const KIND: HeapObjectKind = HeapObjectKind::VecLike;
     const CLASS: &'static str = "vector";
+    const CHUNK_CLASS: ChunkClass = ChunkClass::Vector;
     #[cfg(test)]
     fn live_page_counter() -> &'static AtomicUsize {
         &LIVE_VECTOR_PAGES
@@ -259,6 +266,7 @@ impl PagedObject for ByteCodeObj {
     const SLOT_BYTES: usize = 384;
     const KIND: HeapObjectKind = HeapObjectKind::VecLike;
     const CLASS: &'static str = "bytecode";
+    const CHUNK_CLASS: ChunkClass = ChunkClass::ByteCode;
     #[cfg(test)]
     fn live_page_counter() -> &'static AtomicUsize {
         &LIVE_BYTECODE_PAGES
@@ -270,6 +278,7 @@ impl PagedObject for LambdaObj {
     const SLOT_BYTES: usize = 128;
     const KIND: HeapObjectKind = HeapObjectKind::VecLike;
     const CLASS: &'static str = "lambda";
+    const CHUNK_CLASS: ChunkClass = ChunkClass::Lambda;
     #[cfg(test)]
     fn live_page_counter() -> &'static AtomicUsize {
         &LIVE_LAMBDA_PAGES
@@ -281,6 +290,7 @@ impl PagedObject for MacroObj {
     const SLOT_BYTES: usize = 128;
     const KIND: HeapObjectKind = HeapObjectKind::VecLike;
     const CLASS: &'static str = "macro";
+    const CHUNK_CLASS: ChunkClass = ChunkClass::Macro;
     #[cfg(test)]
     fn live_page_counter() -> &'static AtomicUsize {
         &LIVE_MACRO_PAGES
@@ -293,6 +303,7 @@ impl PagedObject for RecordObj {
     const SLOT_BYTES: usize = 64;
     const KIND: HeapObjectKind = HeapObjectKind::VecLike;
     const CLASS: &'static str = "record";
+    const CHUNK_CLASS: ChunkClass = ChunkClass::Record;
     #[cfg(test)]
     fn live_page_counter() -> &'static AtomicUsize {
         &LIVE_RECORD_PAGES
@@ -304,6 +315,7 @@ impl PagedObject for SymbolWithPosObj {
     const SLOT_BYTES: usize = 64;
     const KIND: HeapObjectKind = HeapObjectKind::VecLike;
     const CLASS: &'static str = "symbol-with-pos";
+    const CHUNK_CLASS: ChunkClass = ChunkClass::SymbolWithPos;
     #[cfg(test)]
     fn live_page_counter() -> &'static AtomicUsize {
         &LIVE_SYMBOL_WITH_POS_PAGES
@@ -679,6 +691,10 @@ pub(super) struct ObjectArena<T: PagedObject> {
     /// (pages are size-aligned, so `ObjectPage::page_base_for_ptr` masks the
     /// base out of the pointer). Retired pages STAY registered (C1).
     pub(super) page_index_by_base: FxHashMap<usize, usize>,
+    /// The heap's chunk map when `NEOVM_GC_CHUNK_MAP` is on: this arena
+    /// writes its pages' entries (`T::CHUNK_CLASS`, page index) at every
+    /// page creation and release, next to `page_index_by_base`.
+    chunk_map: Option<std::sync::Arc<ChunkMap>>,
     /// Class free list: index of the first page with free slots
     /// (`PAGE_NONE` = none), chained through `ObjectPage::next_partial`.
     /// Alloc order: partial-page free-slot pop → last-page bump → new page.
@@ -686,10 +702,11 @@ pub(super) struct ObjectArena<T: PagedObject> {
 }
 
 impl<T: PagedObject> ObjectArena<T> {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(chunk_map: Option<std::sync::Arc<ChunkMap>>) -> Self {
         Self {
             pages: Vec::new(),
             page_index_by_base: FxHashMap::default(),
+            chunk_map,
             partial_head: PAGE_NONE,
             spare_storage: Vec::new(),
             spare_unused_floor: 0,
@@ -728,6 +745,28 @@ impl<T: PagedObject> ObjectArena<T> {
         // be set — bump/free never mint indices >= SLOTS — but the oracle
         // must not lean on "never set" for exactness).
         slot < ObjectPage::<T>::SLOTS && self.pages[index].is_allocated(slot)
+    }
+
+    /// [`Self::owns`] for an address the chunk map already placed in page
+    /// `index` of this arena: the stride, tail and alloc-bit tests only.
+    #[inline]
+    pub(super) fn owns_in_page(&self, index: usize, addr: usize) -> bool {
+        let page = &self.pages[index];
+        debug_assert_eq!(addr & !(OBJECT_PAGE_ALIGN - 1), page.base_addr());
+        let offset = addr & (OBJECT_PAGE_ALIGN - 1);
+        if !offset.is_multiple_of(T::SLOT_BYTES) {
+            return false;
+        }
+        let slot = offset / T::SLOT_BYTES;
+        slot < ObjectPage::<T>::SLOTS && page.is_allocated(slot)
+    }
+
+    /// Record page `index` (at `base`) in the chunk map, when there is one.
+    #[inline]
+    fn chunk_map_set(&self, base: usize, index: usize) {
+        if let Some(map) = self.chunk_map.as_deref() {
+            map.set(base, ChunkEntry::new(T::CHUNK_CLASS, index));
+        }
     }
 
     /// Grab one raw slot: class free-list pop → current-page bump → new page.
@@ -788,6 +827,7 @@ impl<T: PagedObject> ObjectArena<T> {
         self.pages.push(page);
         let prev = self.page_index_by_base.insert(base, self.pages.len() - 1);
         debug_assert!(prev.is_none(), "arena page base registered twice");
+        self.chunk_map_set(base, self.pages.len() - 1);
         ptr
     }
 
@@ -865,6 +905,7 @@ impl<T: PagedObject> ObjectArena<T> {
         let page_index = self.pages.len() - 1;
         let prev = self.page_index_by_base.insert(base, page_index);
         debug_assert!(prev.is_none(), "arena page base registered twice");
+        self.chunk_map_set(base, page_index);
         ArenaRun {
             page: page_index,
             first: 0,
@@ -1036,6 +1077,9 @@ impl<T: PagedObject> ObjectArena<T> {
             .pages
             .extract_if(.., |page| page.allocated == 0 && !page.retired)
         {
+            if let Some(map) = self.chunk_map.as_deref() {
+                map.set(page.base_addr(), ChunkEntry::NONE);
+            }
             self.spare_storage.push(page.into_storage());
         }
         self.spare_unused_floor = self.spare_storage.len();
@@ -1047,6 +1091,12 @@ impl<T: PagedObject> ObjectArena<T> {
         for (page_index, page) in self.pages.iter_mut().enumerate() {
             let previous = self.page_index_by_base.insert(page.base_addr(), page_index);
             debug_assert!(previous.is_none(), "arena page base registered twice");
+            if let Some(map) = self.chunk_map.as_deref() {
+                map.set(
+                    page.base_addr(),
+                    ChunkEntry::new(T::CHUNK_CLASS, page_index),
+                );
+            }
 
             page.next_partial = PAGE_NONE;
             page.on_partial = false;

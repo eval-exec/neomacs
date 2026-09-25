@@ -674,7 +674,14 @@ impl TaggedHeap {
         let block_index = match self.mark_cons_block_cache {
             Some(cache) if cache.block_base == block_base => cache.block_index,
             _ => {
-                let Some(&block_index) = self.cons_block_index_by_base.get(&block_base) else {
+                let found = match self.chunk_map.as_deref() {
+                    Some(map) => {
+                        let entry = map.get(addr);
+                        entry.is(ChunkClass::Cons).then(|| entry.index())
+                    }
+                    None => self.cons_block_index_by_base.get(&block_base).copied(),
+                };
+                let Some(block_index) = found else {
                     return self.mark_mapped_cons(ptr);
                 };
                 self.mark_cons_block_cache =
@@ -1017,6 +1024,7 @@ impl TaggedHeap {
             cons_blocks,
             cons_free_list,
             census,
+            chunk_map,
             ..
         } = self;
         cons_blocks.retain_mut(|block| {
@@ -1030,6 +1038,9 @@ impl TaggedHeap {
                 released += 1;
                 if let Some(census) = census.as_deref_mut() {
                     census.forget_cons_block(block.base_addr());
+                }
+                if let Some(map) = chunk_map.as_deref() {
+                    map.set(block.base_addr(), ChunkEntry::NONE);
                 }
                 false
             } else {
@@ -1051,6 +1062,12 @@ impl TaggedHeap {
                     .cons_block_index_by_base
                     .insert(block.base_addr(), block_index);
                 debug_assert!(previous.is_none(), "cons block base registered twice");
+                if let Some(map) = self.chunk_map.as_deref() {
+                    map.set(
+                        block.base_addr(),
+                        ChunkEntry::new(ChunkClass::Cons, block_index),
+                    );
+                }
             }
         }
 
@@ -1091,7 +1108,7 @@ impl TaggedHeap {
 
         self.cons_free_list = std::ptr::null_mut();
         self.mark_cons_block_cache = None;
-        if self.census.is_some() {
+        if self.census.is_some() || self.chunk_map.is_some() {
             let released: Vec<usize> = self
                 .cons_blocks
                 .iter()
@@ -1100,6 +1117,9 @@ impl TaggedHeap {
                 .collect();
             for base in released {
                 self.census_forget_cons_block(base);
+                if let Some(map) = self.chunk_map.as_deref() {
+                    map.set(base, ChunkEntry::NONE);
+                }
             }
         }
         self.cons_blocks.retain(|block| block.count_marked() != 0);
@@ -1113,6 +1133,12 @@ impl TaggedHeap {
                 .cons_block_index_by_base
                 .insert(block.base_addr(), block_index);
             debug_assert!(previous.is_none(), "cons block base registered twice");
+            if let Some(map) = self.chunk_map.as_deref() {
+                map.set(
+                    block.base_addr(),
+                    ChunkEntry::new(ChunkClass::Cons, block_index),
+                );
+            }
             rebuilt_live += block.sweep(&mut self.cons_free_list);
         }
         debug_assert_eq!(rebuilt_live, self.cons_live_count);
@@ -1434,20 +1460,51 @@ impl TaggedHeap {
     /// page hit can never be a cross-class collision. Mapped (pdump) objects
     /// answer false everywhere here — the not-owned fallback keeps routing
     /// them to the mapped side-table arms, unchanged.
+    ///
+    /// With the chunk map (`NEOVM_GC_CHUNK_MAP`) each oracle is one map
+    /// lookup plus, on a page of the right class, that page's stride and
+    /// alloc-bit tests; only an address on no block or page consults the
+    /// residual `Box` addr-set. A page owns its whole 64 KiB granule, so an
+    /// address on another class's page is not an object of this one.
     #[inline]
     pub(super) fn owns_float_object(&self, ptr: *const u8) -> bool {
+        if let Some(map) = self.chunk_map.as_deref() {
+            let addr = ptr as usize;
+            let entry = map.get(addr);
+            return if entry.is(ChunkClass::Float) {
+                self.float_arena.owns_in_page(entry.index(), addr)
+            } else {
+                entry == ChunkEntry::NONE
+                    && !ptr.is_null()
+                    && self.non_cons_object_addrs.contains(&addr)
+            };
+        }
         !ptr.is_null()
             && (self.float_arena.owns(ptr) || self.non_cons_object_addrs.contains(&(ptr as usize)))
     }
 
     #[inline]
     pub(super) fn owns_string_object(&self, ptr: *const u8) -> bool {
+        if let Some(map) = self.chunk_map.as_deref() {
+            let addr = ptr as usize;
+            let entry = map.get(addr);
+            return if entry.is(ChunkClass::String) {
+                self.string_arena.owns_in_page(entry.index(), addr)
+            } else {
+                entry == ChunkEntry::NONE
+                    && !ptr.is_null()
+                    && self.non_cons_object_addrs.contains(&addr)
+            };
+        }
         !ptr.is_null()
             && (self.string_arena.owns(ptr) || self.non_cons_object_addrs.contains(&(ptr as usize)))
     }
 
     #[inline]
     pub(super) fn owns_veclike_object(&self, ptr: *const u8) -> bool {
+        if let Some(map) = self.chunk_map.as_deref() {
+            return self.owns_veclike_object_by_chunk(map, ptr);
+        }
         // `VecLikeType::Vector`, `ByteCode`, `Lambda`, `Macro`, `Record`
         // (incl. the `WindowConfiguration` tag — same `RecordObj`),
         // `SymbolWithPos`, `Marker` and `Bignum` are paged (each in its own
@@ -1463,6 +1520,27 @@ impl TaggedHeap {
                 || self.marker_arena.owns(ptr)
                 || self.bignum_arena.owns(ptr)
                 || self.non_cons_object_addrs.contains(&(ptr as usize)))
+    }
+
+    /// [`Self::owns_veclike_object`] through the chunk map: the granule's
+    /// class picks the arena, whose page answers.
+    #[inline]
+    fn owns_veclike_object_by_chunk(&self, map: &ChunkMap, ptr: *const u8) -> bool {
+        let addr = ptr as usize;
+        let entry = map.get(addr);
+        let index = entry.index();
+        match entry.class() {
+            ChunkClass::Vector => self.vector_arena.owns_in_page(index, addr),
+            ChunkClass::ByteCode => self.bytecode_arena.owns_in_page(index, addr),
+            ChunkClass::Lambda => self.lambda_arena.owns_in_page(index, addr),
+            ChunkClass::Macro => self.macro_arena.owns_in_page(index, addr),
+            ChunkClass::Record => self.record_arena.owns_in_page(index, addr),
+            ChunkClass::SymbolWithPos => self.symbol_with_pos_arena.owns_in_page(index, addr),
+            ChunkClass::Marker => self.marker_arena.owns_in_page(index, addr),
+            ChunkClass::Bignum => self.bignum_arena.owns_in_page(index, addr),
+            ChunkClass::None => !ptr.is_null() && self.non_cons_object_addrs.contains(&addr),
+            ChunkClass::Cons | ChunkClass::Float | ChunkClass::String => false,
+        }
     }
 
     /// Tag-dispatched ownership for a heap value whose raw object address is

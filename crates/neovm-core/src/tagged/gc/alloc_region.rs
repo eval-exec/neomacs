@@ -212,6 +212,9 @@ impl TaggedHeap {
         let block_index = self.cons_blocks.len() - 1;
         self.cons_block_index_by_base
             .insert(block_base, block_index);
+        if let Some(map) = self.chunk_map.as_deref() {
+            map.set(block_base, ChunkEntry::new(ChunkClass::Cons, block_index));
+        }
         (cell, n, ConsRegionSource::BlockTail { block: block_index })
     }
 

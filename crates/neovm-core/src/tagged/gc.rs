@@ -345,6 +345,12 @@ pub struct TaggedHeap {
     /// the allocator may reuse an address for a different heap lifetime.
     identity: usize,
 
+    /// The O(1) page directory (`chunk_map.rs`) when `NEOVM_GC_CHUNK_MAP`
+    /// is on (read once, at construction): every cons block and arena page
+    /// has an entry, and the ownership oracles and the GC thread classify
+    /// through it instead of the per-class registries. Shared with the
+    /// arenas (their page writers) and each concurrent mark's job.
+    chunk_map: Option<std::sync::Arc<ChunkMap>>,
     /// Cons cell block allocator.
     cons_blocks: Vec<ConsBlock>,
     /// Base-address lookup for O(1) cons block ownership and marking.
@@ -928,11 +934,13 @@ pub(crate) fn set_verify_marked_objects_for_test(on: bool) {
 
 impl TaggedHeap {
     pub fn new() -> Self {
+        let chunk_map = knobs::chunk_map_on().then(|| std::sync::Arc::new(ChunkMap::new()));
         let heap = Self {
             jit: JitHeapState::new(),
             region_book: RegionBook::new(),
             region_stats: RegionStats::default(),
             identity: next_tagged_heap_identity(),
+            chunk_map: chunk_map.clone(),
             cons_blocks: Vec::new(),
             cons_block_index_by_base: FxHashMap::default(),
             mark_cons_block_cache: None,
@@ -965,17 +973,17 @@ impl TaggedHeap {
             pending_surface_destroys: Vec::new(),
             pending_video_destroys: Vec::new(),
             cons_free_list: std::ptr::null_mut(),
-            float_arena: ObjectArena::new(),
-            string_arena: ObjectArena::new(),
+            float_arena: ObjectArena::new(chunk_map.clone()),
+            string_arena: ObjectArena::new(chunk_map.clone()),
             canonical_empty_strings: CanonicalEmptyStrings::default(),
-            vector_arena: ObjectArena::new(),
-            bytecode_arena: ObjectArena::new(),
-            lambda_arena: ObjectArena::new(),
-            macro_arena: ObjectArena::new(),
-            record_arena: ObjectArena::new(),
-            symbol_with_pos_arena: ObjectArena::new(),
-            marker_arena: ObjectArena::new(),
-            bignum_arena: ObjectArena::new(),
+            vector_arena: ObjectArena::new(chunk_map.clone()),
+            bytecode_arena: ObjectArena::new(chunk_map.clone()),
+            lambda_arena: ObjectArena::new(chunk_map.clone()),
+            macro_arena: ObjectArena::new(chunk_map.clone()),
+            record_arena: ObjectArena::new(chunk_map.clone()),
+            symbol_with_pos_arena: ObjectArena::new(chunk_map.clone()),
+            marker_arena: ObjectArena::new(chunk_map.clone()),
+            bignum_arena: ObjectArena::new(chunk_map),
             mapped_cons_ranges: Vec::new(),
             mapped_float_ranges: Vec::new(),
             mapped_veclike_objects: Vec::new(),
@@ -2506,6 +2514,9 @@ mod jit_state;
 
 mod knobs;
 
+mod chunk_map;
+use chunk_map::{ChunkClass, ChunkEntry, ChunkMap};
+
 mod census;
 #[cfg(test)]
 use census::CensusRecord;
@@ -2549,6 +2560,12 @@ mod bignum_arena_tests;
 #[cfg(test)]
 #[path = "gc/tests/census_tests.rs"]
 mod census_tests;
+/// The chunk map: the radix, its entries through page and block creation,
+/// release and re-indexing, the oracles against the registries, and
+/// concurrent cycles with it on.
+#[cfg(test)]
+#[path = "gc/tests/chunk_map_tests.rs"]
+mod chunk_map_tests;
 #[cfg(test)]
 mod cons_alloc_tests;
 /// A fake pdump image in one allocation (see the module doc for why one).
