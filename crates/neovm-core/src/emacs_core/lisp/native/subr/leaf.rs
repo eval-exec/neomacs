@@ -258,6 +258,11 @@ pub(crate) struct LeafSpec {
 }
 
 impl LeafSpec {
+    /// How many argument slots the body takes.
+    pub(crate) const fn entry_slots(&self) -> usize {
+        self.entry.slots() as usize
+    }
+
     /// A leaf is never MAY_GC, MAY_REENTER, MAY_DEOPT or WRITE_BINDINGS:
     /// checked here at compile time (declarations are consts).
     pub(crate) const fn new(
@@ -348,7 +353,6 @@ pub(crate) fn record_subr_leaf(sym: SymId, leaf: Option<&'static LeafSpec>) -> L
 }
 
 /// The [`LeafShape::Bcall`] leaf of the builtin registered under `sym`.
-#[cfg_attr(not(test), allow(dead_code))] // TEMPORARY: the Bcall lowering (next commit).
 pub(crate) fn subr_leaf(sym: SymId) -> Option<&'static LeafSpec> {
     LEAF_BY_SUBR.with(|table| table.borrow().get(sym.0 as usize).copied().flatten())
 }

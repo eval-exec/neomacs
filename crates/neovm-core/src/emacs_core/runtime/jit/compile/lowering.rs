@@ -2204,9 +2204,14 @@ pub(super) fn plan_mir_leaf_for_jit(
     for (slot, site) in sites.values_mut().enumerate() {
         site.slot = slot;
     }
-    let slots = (0..sites.len())
+    let slots: Box<[super::SpecSlot]> = (0..sites.len())
         .map(|_| super::SpecSlot::at_epoch(ob.function_epoch()))
         .collect();
+    for site in sites.values() {
+        if site.kind == SpecCalleeKind::SubrGeneral {
+            slots[site.slot].bind_subr(site.sym, site.expected_bits);
+        }
+    }
     plan_mir_leaf_with_spec(m, sites, slots)
 }
 
@@ -3709,6 +3714,16 @@ pub(crate) fn rootwin_carry_meet(snapshot: &[Option<ClifValue>]) {
     });
 }
 
+/// Put back a record taken with [`rootwin_carry_snapshot`]: a block whose
+/// only predecessor had that store history starts from it exactly.
+pub(crate) fn rootwin_carry_restore(snapshot: &[Option<ClifValue>]) {
+    ROOTWIN_CARRY.with(|c| {
+        let mut c = c.borrow_mut();
+        c.stored.clear();
+        c.stored.extend_from_slice(snapshot);
+    });
+}
+
 /// Zero the per-function elision counters (at the hoisted prologue).
 pub(crate) fn rootwin_counters_reset() {
     ROOTWIN_CARRY.with(|c| {
@@ -3898,6 +3913,251 @@ pub(crate) fn emit_hoisted_root_window_prologue(
     fb.seal_block(cont_blk);
     let byte_off = ishl_imm_p(fb, base, 3);
     rt.rootwin = Some(HoistedRootWin { base, byte_off });
+}
+
+/// An `Op::Call` site lowered to a Bcall leaf.
+#[derive(Clone, Copy)]
+struct BcallLeafSite {
+    /// The site's symbol (the frame and the reference call use it).
+    sym: u32,
+    /// The subr the symbol was bound to at compile time.
+    expected: u64,
+    /// The site's `SpecSlot` (JIT: its baked address), carrying the epoch
+    /// and, from `bind_subr`, the symbol and the expected binding.
+    slot_ptr: i64,
+    nargs: usize,
+}
+
+/// Lower an `Op::Call` site to a Bcall leaf (design
+/// `p1-2-builtin-intrinsics` §2.5 (a)). The stack is `[.. f a1 .. aN]`.
+///
+/// The hot path is one register-argument call of the leaf's Bcall
+/// trampoline (its guard decides GNU `Bcall`'s steps are unobservable) and a
+/// tag test: no argument spill, no residual roots, no frame, nothing stored.
+/// A sentinel leaves through a cold exit:
+///
+/// * `LEAF_SIGNAL`: the leaf's undispatched signal. Spill the arguments,
+///   root the residual, and call `neovm_jit_leaf_signal_frame`, which
+///   pushes the frame today's shim would have pushed, dispatches (signal
+///   hook, `handler-bind`, the debugger) and pops; then the site's signal
+///   target.
+/// * `LEAF_NEED_GENERIC`: a guard miss or a declined shape. Today's
+///   `SubrGeneral` lowering, unchanged: spill, root,
+///   `neovm_jit_call_subr_spec` (quit poll, re-validation, frame, depth,
+///   the builtin), and on its own NEED_GENERIC the generic call on the
+///   symbol.
+///
+/// Root-window records (`RootWinCarry`): the fast path stores nothing and
+/// cannot start a nested activation, so the record is untouched across
+/// it; each cold path starts from the site's record and the continuation
+/// takes the meet of all of them.
+#[allow(clippy::too_many_arguments)]
+fn lower_bcall_leaf_site(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    leaf: &'static crate::emacs_core::subr::leaf::LeafSpec,
+    site: BcallLeafSite,
+    stack: &mut Vec<ClifValue>,
+    reps: &[SlotRep],
+    signal_exit: &mut Option<Block>,
+    handlers: &[HandlerStatic],
+    pending: &mut Vec<PendingDispatch>,
+) -> Result<(), CompileError> {
+    use super::leaf_abi;
+    let n = site.nargs;
+    let args_at = stack.len() - n;
+    let args: SmallVec<[ClifValue; 4]> = stack[args_at..].iter().copied().collect();
+    let func_val = stack[args_at - 1];
+    stack.truncate(args_at - 1);
+    let subr_spec = rt
+        .refs
+        .call_subr_spec
+        .ok_or(CompileError::UnsupportedOp("subr-spec-refs"))?;
+    let tramp = leaf_abi::bcall_trampoline(leaf.id)
+        .ok_or(CompileError::UnsupportedOp("bcall-leaf-trampoline"))?;
+    let slots = leaf.entry_slots();
+
+    // Hot path.
+    let carry0 = rootwin_carry_snapshot();
+    let mut sig = Signature::new(rt.refs.call_conv);
+    sig.params.push(AbiParam::new(rt.ptr_ty)); // ctx
+    sig.params.push(AbiParam::new(rt.ptr_ty)); // slot
+    for _ in 0..slots {
+        sig.params.push(AbiParam::new(types::I64));
+    }
+    sig.returns.push(AbiParam::new(types::I64));
+    let sig = fb.import_signature(sig);
+    let vmctx = fb.use_var(rt.vmctx_var);
+    let slot_v = fb.ins().iconst(rt.ptr_ty, site.slot_ptr);
+    let mut call_args: SmallVec<[ClifValue; 6]> = SmallVec::new();
+    call_args.push(vmctx);
+    call_args.push(slot_v);
+    call_args.extend_from_slice(&args);
+    while call_args.len() < 2 + slots {
+        call_args.push(fb.ins().iconst(types::I64, Value::NIL.bits() as i64));
+    }
+    let callee = fb.ins().iconst(rt.ptr_ty, tramp as i64);
+    let call = fb.ins().call_indirect(sig, callee, &call_args);
+    let word = fb.inst_results(call)[0];
+    let res = fb.declare_var(types::I64);
+    fb.def_var(res, word);
+    let cont = fb.create_block();
+    let exit = fb.create_block();
+    let tag = band_imm_p(fb, word, TAG_MASK as i64);
+    let is_sentinel = icmp_imm_p(
+        fb,
+        IntCC::Equal,
+        tag,
+        leaf_abi::LEAF_SIGNAL & TAG_MASK as i64,
+    );
+    fb.ins().brif(is_sentinel, exit, &[], cont, &[]);
+
+    // Cold exit: which sentinel.
+    fb.switch_to_block(exit);
+    fb.seal_block(exit);
+    fb.set_cold_block(exit);
+    let signal_blk = fb.create_block();
+    let reference = fb.create_block();
+    let need_generic = icmp_imm_p(fb, IntCC::Equal, word, leaf_abi::LEAF_NEED_GENERIC);
+    fb.ins().brif(need_generic, reference, &[], signal_blk, &[]);
+
+    let spill_args = |fb: &mut FunctionBuilder| {
+        for (i, &v) in args.iter().enumerate() {
+            fb.ins()
+                .stack_store(rt.ptr_ty, v, rt.call_args_slot, (i * 8) as i32);
+        }
+        (
+            fb.ins().stack_addr(rt.ptr_ty, rt.call_args_slot, 0),
+            fb.ins().iconst(types::I64, n as i64),
+            fb.ins().stack_addr(rt.ptr_ty, rt.call_result_slot, 0),
+        )
+    };
+    let load_result = |fb: &mut FunctionBuilder| {
+        fb.ins()
+            .stack_load(rt.ptr_ty, types::I64, rt.call_result_slot, 0)
+    };
+
+    // Cold: the leaf signalled. Its frame, then dispatch, then the site's
+    // signal target.
+    fb.switch_to_block(signal_blk);
+    fb.seal_block(signal_blk);
+    fb.set_cold_block(signal_blk);
+    let (args_addr, n_val, out_addr) = spill_args(fb);
+    let saved = if stack.is_empty() {
+        CondRoots::NONE
+    } else {
+        emit_model_roots_pre(fb, rt, stack, reps)
+    };
+    let mut frame_sig = Signature::new(rt.refs.call_conv);
+    frame_sig.params.push(AbiParam::new(rt.ptr_ty)); // ctx
+    frame_sig.params.push(AbiParam::new(types::I64)); // sym
+    frame_sig.params.push(AbiParam::new(rt.ptr_ty)); // args
+    frame_sig.params.push(AbiParam::new(types::I64)); // nargs
+    frame_sig.params.push(AbiParam::new(rt.ptr_ty)); // out
+    frame_sig.returns.push(AbiParam::new(types::I64));
+    let frame_sig = fb.import_signature(frame_sig);
+    let frame_shim = fb.ins().iconst(
+        rt.ptr_ty,
+        super::neovm_jit_leaf_signal_frame as *const u8 as i64,
+    );
+    let vmctx_sig = fb.use_var(rt.vmctx_var);
+    let sym_v = fb.ins().iconst(types::I64, site.sym as i64);
+    let frame_call = fb.ins().call_indirect(
+        frame_sig,
+        frame_shim,
+        &[vmctx_sig, sym_v, args_addr, n_val, out_addr],
+    );
+    let frame_status = fb.inst_results(frame_call)[0];
+    emit_cond_residual_roots_post(fb, rt, saved);
+    let carry_signal = rootwin_carry_snapshot();
+    let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack, reps);
+    let signal_ok = fb.create_block();
+    let ok = icmp_imm_p(fb, IntCC::Equal, frame_status, STATUS_OK);
+    fb.ins().brif(ok, signal_ok, &[], se, &[]);
+    fb.switch_to_block(signal_ok);
+    fb.seal_block(signal_ok);
+    fb.set_cold_block(signal_ok);
+    let value = load_result(fb);
+    fb.def_var(res, value);
+    fb.ins().jump(cont, &[]);
+
+    // Cold: the reference protocol -- today's SubrGeneral lowering.
+    fb.switch_to_block(reference);
+    fb.seal_block(reference);
+    fb.set_cold_block(reference);
+    rootwin_carry_restore(&carry0);
+    let (args_addr, n_val, out_addr) = spill_args(fb);
+    let saved = if stack.is_empty() {
+        CondRoots::NONE
+    } else {
+        emit_model_roots_pre(fb, rt, stack, reps)
+    };
+    let vmctx_ref = fb.use_var(rt.vmctx_var);
+    let sym_v = fb.ins().iconst(types::I64, site.sym as i64);
+    let exp_v = fb.ins().iconst(types::I64, site.expected as i64);
+    let slot_v = fb.ins().iconst(rt.ptr_ty, site.slot_ptr);
+    let ref_call = fb.ins().call(
+        subr_spec,
+        &[vmctx_ref, sym_v, exp_v, slot_v, args_addr, n_val, out_addr],
+    );
+    let ref_status = fb.inst_results(ref_call)[0];
+    emit_cond_residual_roots_post(fb, rt, saved);
+    let se_ref = signal_target_for_site(fb, signal_exit, handlers, pending, stack, reps);
+    let ref_ok = fb.create_block();
+    let ref_check = fb.create_block();
+    let ok = icmp_imm_p(fb, IntCC::Equal, ref_status, STATUS_OK);
+    fb.ins().brif(ok, ref_ok, &[], ref_check, &[]);
+    fb.switch_to_block(ref_check);
+    fb.seal_block(ref_check);
+    fb.set_cold_block(ref_check);
+    let generic = fb.create_block();
+    let need_gen = fb
+        .ins()
+        .icmp_imm_u(IntCC::Equal, ref_status, STATUS_NEED_GENERIC);
+    fb.ins().brif(need_gen, generic, &[], se_ref, &[]);
+    // The generic call on the symbol (fset/advice/overrides take effect).
+    fb.switch_to_block(generic);
+    fb.seal_block(generic);
+    fb.set_cold_block(generic);
+    let carry_ref = rootwin_carry_snapshot();
+    let saved_gen = if stack.is_empty() {
+        CondRoots::NONE
+    } else {
+        emit_model_roots_pre(fb, rt, stack, reps)
+    };
+    let vmctx_gen = fb.use_var(rt.vmctx_var);
+    let gen_call = fb.ins().call(
+        rt.refs.call,
+        &[vmctx_gen, func_val, args_addr, n_val, out_addr],
+    );
+    let gen_status = fb.inst_results(gen_call)[0];
+    emit_cond_residual_roots_post(fb, rt, saved_gen);
+    rootwin_carry_meet(&carry_ref);
+    let se_gen = signal_target_for_site(fb, signal_exit, handlers, pending, stack, reps);
+    let gen_ok = fb.create_block();
+    let ok = icmp_imm_p(fb, IntCC::Equal, gen_status, STATUS_OK);
+    fb.ins().brif(ok, gen_ok, &[], se_gen, &[]);
+    fb.switch_to_block(gen_ok);
+    fb.seal_block(gen_ok);
+    fb.set_cold_block(gen_ok);
+    let value = load_result(fb);
+    fb.def_var(res, value);
+    fb.ins().jump(cont, &[]);
+    fb.switch_to_block(ref_ok);
+    fb.seal_block(ref_ok);
+    fb.set_cold_block(ref_ok);
+    let value = load_result(fb);
+    fb.def_var(res, value);
+    fb.ins().jump(cont, &[]);
+
+    // The continuation: every path's store history met.
+    rootwin_carry_meet(&carry_signal);
+    rootwin_carry_meet(&carry0);
+    fb.switch_to_block(cont);
+    fb.seal_block(cont);
+    stack.push(fb.use_var(res));
+    leaf_abi::note_bcall_site(leaf.id);
+    Ok(())
 }
 
 /// Callable references to every runtime shim, declared into one function.
@@ -6505,6 +6765,33 @@ fn lower_simple_op_arms(
                 stack.push(res);
                 reps.push(SlotRep::Tagged);
                 return Ok(());
+            }
+            // `NEOVM_JIT_LEAF=bcall` (JIT only): a speculated builtin with a
+            // Bcall leaf (`gethash`, `plist-get`, `get-char-property`) is
+            // called through the leaf's armed trampoline -- register
+            // arguments, no roots, no frame on success -- with today's
+            // protocol call as its cold reference path. A site whose callee
+            // crossed a block boundary keeps the general lowering below.
+            if let Some((sym, expected, slot_ptr, _, SpecCalleeKind::SubrGeneral)) = spec
+                && guarded_sym.is_none()
+                && let Some(leaf) = super::leaf_abi::bcall_leaf_site(expected, n, aot)
+            {
+                return lower_bcall_leaf_site(
+                    fb,
+                    rt,
+                    leaf,
+                    BcallLeafSite {
+                        sym,
+                        expected,
+                        slot_ptr,
+                        nargs: n,
+                    },
+                    stack,
+                    reps,
+                    signal_exit,
+                    handlers,
+                    pending,
+                );
             }
             // Pred/EqIncl sites pass their 1–2 args in REGISTERS on the direct
             // path (no spill; their fallback block spills for itself). Every

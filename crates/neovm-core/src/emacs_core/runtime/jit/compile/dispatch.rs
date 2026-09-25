@@ -1600,6 +1600,72 @@ fn finish_fixed_builtin_from_native(
     ctx.pop_bytecode_backtrace_frame_with_result(bt_count, result)
 }
 
+/// GNU `Bcall`'s frame for a leaf builtin that signalled from an `Op::Call`
+/// site (design `p1-2-builtin-intrinsics` §2.6): record the call as
+/// `record_in_backtrace` would have (`bytecode.c:795`) -- the site's SYMBOL
+/// over the caller's argument words and the call's own count, exactly the
+/// frame [`call_fixed_builtin_from_native`] pushes -- then dispatch the
+/// leaf's stashed, undispatched signal with it in place (signal hook,
+/// `handler-bind`, the debugger) and pop it: the same sequence that
+/// function runs after its builtin returns `Err`, at the same depth (the
+/// caller's). The leaf's success path pushes no frame at all; only Lisp
+/// running during the call could see one, and the only Lisp that can run
+/// is this dispatch.
+///
+/// The generated code calls this by address (JIT only), from the leaf
+/// site's cold signal block, with the residual operand stack rooted and the
+/// arguments spilled to its call-args slot (which outlives the frame: it is
+/// popped here).
+///
+/// A panic contained in the leaf leaves its marker for the caller's healing
+/// points (the seam-diet-2 review rule): this shim must not take the flow
+/// then, and answers STATUS_SIGNAL straight away.
+///
+/// SAFETY: the vmctx contract of [`neovm_jit_call`]; `args_ptr` addresses
+/// `nargs` argument words; `out` is the site's result slot.
+#[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
+#[unsafe(no_mangle)]
+pub extern "C" fn neovm_jit_leaf_signal_frame(
+    ctx: *mut u8,
+    sym: i64,
+    args_ptr: *const i64,
+    nargs: i64,
+    out: *mut i64,
+) -> i64 {
+    jit_shim_contain!(ctx, STATUS_SIGNAL, {
+        if shim_panic_pending() {
+            return STATUS_SIGNAL;
+        }
+        // SAFETY: see neovm_jit_call's function-level contract.
+        let ctx = unsafe { &mut *(ctx as *mut Context) };
+        // The raw take: no panic materialization (checked above).
+        let Some(flow) = PENDING_FLOW.with(|p| p.borrow_mut().take()) else {
+            unreachable!("a leaf answers LEAF_SIGNAL only after stashing its flow")
+        };
+        let bt_count = ctx.specpdl.len();
+        // SAFETY: `args_ptr` is the site's call-args slot, valid until this
+        // shim returns; the frame is popped below before that.
+        unsafe {
+            ctx.push_backtrace_frame_from_native_args(
+                Value::from_sym_id(SymId(sym as u32)),
+                args_ptr,
+                nargs as usize,
+            )
+        };
+        match finish_fixed_builtin_from_native(ctx, bt_count, Err(flow)) {
+            Ok(value) => {
+                // SAFETY: `out` is the generated code's result stack slot.
+                unsafe { *out = value.bits() as i64 };
+                STATUS_OK
+            }
+            Err(flow) => {
+                stash_pending_flow(flow);
+                STATUS_SIGNAL
+            }
+        }
+    })
+}
+
 /// Speculated direct SUBR call (`Op::Call` whose callee slot provably holds a
 /// constant symbol fbound at compile time to a fixed-arity builtin subr — see
 /// `find_spec_sites`' subr classification). Quit poll FIRST (interpreter

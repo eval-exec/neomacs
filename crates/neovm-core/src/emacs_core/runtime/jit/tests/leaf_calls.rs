@@ -367,3 +367,416 @@ fn opcode_leaf_sites_are_counted() {
         super::leaf_abi::render_leaf_stats()
     );
 }
+
+// ---------------------------------------------------------------------------
+// Bcall leaf sites: `Op::Call` on a builtin with a Bcall leaf.
+// ---------------------------------------------------------------------------
+
+/// `(lambda (a1..an) (CALLEE a1..an))` through `Op::Call` (GNU `Bcall`).
+fn bcall_fn(callee: &str, nargs: usize) -> ByteCodeFunction {
+    let mut ops = vec![Op::Constant(0)];
+    for _ in 0..nargs {
+        ops.push(Op::StackRef(nargs as u16));
+    }
+    ops.push(Op::Call(nargs as u16));
+    ops.push(Op::Return);
+    let mut f = lexical_fn(nargs as u32, ops, vec![Value::symbol(callee)]);
+    f.max_stack = 16;
+    f
+}
+
+fn compile_bcall_with_knob(ev: &Context, f: &ByteCodeFunction, knob: LeafKnob) -> CompiledLeaf {
+    force_profit_gate_for_test(false);
+    force_leaf_knob_for_test(Some(knob));
+    let leaf = compile_bytecode_function_with(f, Some(&ev.obarray)).expect("compiles");
+    force_leaf_knob_for_test(None);
+    leaf
+}
+
+fn bcall_knob() -> LeafKnob {
+    LeafKnob {
+        bcall: true,
+        ..LeafKnob::OFF
+    }
+}
+
+/// Evaluate `(list SRC...)` once, rooted.
+fn operands(ev: &mut Context, sources: &[&str]) -> Vec<Value> {
+    let list = ev
+        .eval_str(&format!("(list {})", sources.join(" ")))
+        .expect("operands");
+    crate::emacs_core::eval::push_scratch_gc_root(list);
+    crate::emacs_core::value::list_to_vec(&list).expect("proper")
+}
+
+fn leaf_generic(id: LeafId) -> u64 {
+    LEAF_STATS[id.index()].generic.load(Ordering::Relaxed)
+}
+
+fn leaf_guard_miss(id: LeafId) -> u64 {
+    LEAF_STATS[id.index()].guard_miss.load(Ordering::Relaxed)
+}
+
+/// `gethash`, `plist-get` and `get-char-property` at two and three
+/// arguments: natively through the leaf against the interpreter's `Bcall`,
+/// including the signals and the bounce shapes (a user-test table, a
+/// PREDICATE), which the reference protocol answers.
+#[test]
+fn bcall_leaf_sites_match_the_protocol_call() {
+    let mut ev = Context::new();
+    ev.eval_str(
+        "(progn
+           (define-hash-table-test 'leaf-site-test
+             #'(lambda (x y) (equal x y)) #'(lambda (k) (sxhash-equal k)))
+           (set-buffer (get-buffer-create \" leaf-site\"))
+           (insert \"hello world\")
+           (put-text-property 3 5 'p 'text)
+           (overlay-put (make-overlay 4 7) 'p 'overlay))",
+    )
+    .expect("setup");
+    let ctx_ptr = &mut ev as *mut Context as *mut u8;
+    let cases: &[(&str, LeafId, &[&str], &[&str], &[&str])] = &[
+        (
+            "gethash",
+            LeafId::Gethash,
+            &["7", "'a", "\"s\"", "nil"],
+            &[
+                "(let ((h (make-hash-table))) (puthash 7 'seven h) h)",
+                "(let ((h (make-hash-table :test 'equal))) (puthash \"s\" 3 h) h)",
+                "(let ((h (make-hash-table :test 'leaf-site-test))) (puthash \"s\" 4 h) h)",
+                "5",
+                "nil",
+            ],
+            &["nil", "'dflt"],
+        ),
+        (
+            "plist-get",
+            LeafId::PlistGet,
+            &["'(a 1 b 2)", "'(a . 1)", "nil", "5"],
+            &["'a", "'b", "'z"],
+            &["nil", "#'eq"],
+        ),
+        (
+            "get-char-property",
+            LeafId::GetCharProperty,
+            &["1", "3", "5", "12", "0", "'x"],
+            &["'p", "'q"],
+            &["nil", "(current-buffer)", "(propertize \"abc\" 'p 'str)"],
+        ),
+    ];
+    for (name, id, firsts, seconds, thirds) in cases {
+        let firsts = operands(&mut ev, firsts);
+        let seconds = operands(&mut ev, seconds);
+        let thirds = operands(&mut ev, thirds);
+        for nargs in [2usize, 3] {
+            let f = bcall_fn(name, nargs);
+            let leaf = compile_bcall_with_knob(&ev, &f, bcall_knob());
+            let (runs0, generic0) = (leaf_trampoline_calls(*id), leaf_generic(*id));
+            let mut cases = 0u64;
+            for &a in &firsts {
+                for &b in &seconds {
+                    for &c in thirds
+                        .iter()
+                        .take(if nargs == 3 { thirds.len() } else { 1 })
+                    {
+                        let args: Vec<Value> = [a, b, c][..nargs].to_vec();
+                        let what = format!("({name} {})", args.len());
+                        let want = interpret(&mut ev, &f, args.clone());
+                        assert_eq!(native(ctx_ptr, &leaf, &args, &what), want, "{what}");
+                        cases += 1;
+                    }
+                }
+            }
+            assert_eq!(
+                leaf_trampoline_calls(*id) - runs0,
+                cases,
+                "({name} ..{nargs}): every call ran the leaf"
+            );
+            if matches!(id, LeafId::Gethash) || (nargs == 3 && matches!(id, LeafId::PlistGet)) {
+                assert!(
+                    leaf_generic(*id) > generic0,
+                    "({name} ..{nargs}): a bounce shape reached the reference"
+                );
+            }
+        }
+    }
+}
+
+/// Arm a `signal-hook-function` that records whether a backtrace frame for
+/// TARGET is live when a signal is raised.
+fn install_frame_probe(ev: &mut Context, target: &str) {
+    ev.eval_str(&format!(
+        "(setq leaf-target '{target} leaf-seen 'no-signal)"
+    ))
+    .expect("probe target");
+    ev.eval_str(
+        "(setq signal-hook-function
+           (lambda (_sym _data)
+             (setq leaf-seen 'no-frame)
+             (mapbacktrace
+               (lambda (_evald func args _flags)
+                 (if (eq func leaf-target)
+                     (setq leaf-seen (cons 'frame args)))))))",
+    )
+    .expect("install the frame probe");
+}
+
+/// GNU `Bcall` records the builtin's frame, so a signal hook sees
+/// `(gethash KEY 5)` under a leaf that signalled -- pushed lazily by
+/// `neovm_jit_leaf_signal_frame` -- with the call's own arguments, exactly
+/// as the interpreter shows it. The specpdl is balanced afterwards.
+#[test]
+fn a_leaf_signal_runs_under_the_builtins_frame() {
+    let mut ev = Context::new();
+    install_frame_probe(&mut ev, "gethash");
+    let ctx_ptr = &mut ev as *mut Context as *mut u8;
+    for nargs in [2usize, 3] {
+        let f = bcall_fn("gethash", nargs);
+        let leaf = compile_bcall_with_knob(&ev, &f, bcall_knob());
+        let args: Vec<Value> =
+            [Value::fixnum(1), Value::fixnum(5), Value::symbol("d")][..nargs].to_vec();
+        let want = interpret(&mut ev, &f, args.clone());
+        let want_probe = print_value(&ev.eval_str("leaf-seen").expect("probe"));
+        ev.eval_str("(setq leaf-seen 'no-signal)").expect("reset");
+        let specpdl = ev.specpdl.len();
+        let runs0 = leaf_trampoline_calls(LeafId::Gethash);
+        let got = native(ctx_ptr, &leaf, &args, "gethash");
+        assert_eq!(got, want);
+        assert_eq!(got, "signal wrong-type-argument [\"hash-table-p\", \"5\"]");
+        let got_probe = print_value(&ev.eval_str("leaf-seen").expect("probe"));
+        assert_eq!(got_probe, want_probe, "the hook saw the same frame");
+        assert!(got_probe.starts_with("(frame 1 5"), "{got_probe}");
+        assert_eq!(ev.specpdl.len(), specpdl, "the lazy frame was popped");
+        assert_eq!(leaf_trampoline_calls(LeafId::Gethash) - runs0, 1);
+    }
+    ev.eval_str("(setq signal-hook-function nil)")
+        .expect("unhook");
+}
+
+/// A redefinition takes effect at the next call (GNU `Bcall` reads the
+/// function cell every time): the guard's re-validation fails and the
+/// reference protocol calls the new definition; restoring re-arms.
+#[test]
+fn a_redefined_builtin_runs_from_a_leaf_site() {
+    let mut ev = Context::new();
+    let ctx_ptr = &mut ev as *mut Context as *mut u8;
+    let f = bcall_fn("gethash", 2);
+    let leaf = compile_bcall_with_knob(&ev, &f, bcall_knob());
+    let table = ev
+        .eval_str("(let ((h (make-hash-table))) (puthash 1 'one h) h)")
+        .expect("table");
+    crate::emacs_core::eval::push_scratch_gc_root(table);
+    let args = [Value::fixnum(1), table];
+    assert_eq!(native(ctx_ptr, &leaf, &args, "gethash"), "one");
+    ev.eval_str(
+        "(progn (defvar leaf-orig-gethash (symbol-function 'gethash))
+                (fset 'gethash (lambda (_k _h &optional _d) 'redefined)))",
+    )
+    .expect("redefine");
+    let miss0 = leaf_guard_miss(LeafId::Gethash);
+    assert_eq!(native(ctx_ptr, &leaf, &args, "redefined"), "redefined");
+    assert!(leaf_guard_miss(LeafId::Gethash) > miss0);
+    ev.eval_str("(fset 'gethash leaf-orig-gethash)")
+        .expect("restore");
+    let runs0 = leaf_trampoline_calls(LeafId::Gethash);
+    assert_eq!(native(ctx_ptr, &leaf, &args, "restored"), "one");
+    assert_eq!(
+        leaf_trampoline_calls(LeafId::Gethash) - runs0,
+        1,
+        "the restored binding re-arms the leaf"
+    );
+}
+
+/// The guard, condition by condition, on the trampoline itself: each
+/// observer of GNU's `Bcall` protocol sends the call to the reference
+/// (NEED_GENERIC) before the leaf runs.
+#[test]
+fn the_bcall_guard_declines_every_observable_protocol_step() {
+    use super::leaf_abi::neovm_leaf_bcall_gethash as tramp;
+    let mut ev = Context::new();
+    let table = ev
+        .eval_str("(let ((h (make-hash-table))) (puthash 1 'one h) h)")
+        .expect("table");
+    crate::emacs_core::eval::push_scratch_gc_root(table);
+    let sym = crate::emacs_core::intern::intern("gethash");
+    let expected = ev.obarray.symbol_function_id(sym).expect("fbound").bits() as u64;
+    let slot = SpecSlot::at_epoch(ev.obarray.function_epoch());
+    slot.bind_subr(sym.0, expected);
+    let call = |ev: &mut Context, slot: &SpecSlot| {
+        tramp(
+            ev as *const Context,
+            slot as *const SpecSlot,
+            Value::fixnum(1).bits() as i64,
+            table.bits() as i64,
+            Value::NIL.bits() as i64,
+        )
+    };
+    let one = Value::symbol("one").bits() as i64;
+    let generic = super::leaf_abi::LEAF_NEED_GENERIC;
+    assert_eq!(call(&mut ev, &slot), one, "armed: the leaf answers");
+
+    ev.set_quit_flag_value(Value::T);
+    assert_eq!(call(&mut ev, &slot), generic, "a pending quit");
+    ev.set_quit_flag_value(Value::NIL);
+
+    let depth = ev.depth;
+    ev.depth = ev.max_depth;
+    assert_eq!(call(&mut ev, &slot), generic, "at the depth limit");
+    ev.depth = depth;
+
+    // Straight through the forwarded cell: evaluating a `setq` with the
+    // flag armed would enter the debugger.
+    let debug_cell = ev
+        .obarray
+        .debug_on_next_call_bool_fwd(crate::emacs_core::intern::intern("debug-on-next-call"))
+        .expect("a forwarded boolean");
+    debug_cell.set(true);
+    assert_eq!(call(&mut ev, &slot), generic, "debug-on-next-call");
+    debug_cell.set(false);
+
+    // An unrelated redefinition moves the epoch: re-validated and re-armed.
+    ev.eval_str("(fset 'leaf-guard-unrelated 'car)")
+        .expect("fset");
+    assert_ne!(
+        slot.epoch.load(Ordering::Relaxed),
+        ev.obarray.function_epoch()
+    );
+    assert_eq!(
+        call(&mut ev, &slot),
+        one,
+        "re-armed after an unrelated fset"
+    );
+    assert_eq!(
+        slot.epoch.load(Ordering::Relaxed),
+        ev.obarray.function_epoch()
+    );
+
+    // A changed binding: declined, and it stays declined.
+    ev.eval_str("(progn (defvar leaf-guard-orig (symbol-function 'gethash)) (fset 'gethash 'car))")
+        .expect("rebind");
+    assert_eq!(call(&mut ev, &slot), generic, "a changed binding");
+    ev.eval_str("(fset 'gethash leaf-guard-orig)")
+        .expect("restore");
+    assert_eq!(call(&mut ev, &slot), one, "restored");
+
+    // A loader-disarmed slot never re-arms.
+    let disarmed = SpecSlot::at_epoch(SPEC_EPOCH_DISARMED);
+    disarmed.bind_subr(sym.0, expected);
+    assert_eq!(call(&mut ev, &disarmed), generic, "a disarmed slot");
+}
+
+/// Live values below a Bcall leaf site survive a `signal-hook-function`
+/// that collects while the lazy frame's dispatch runs (the cold signal
+/// block roots the residual), and a handler in the same body catches it.
+///
+///     (lambda (k h) (let ((r (cons 1 2))) (condition-case nil (gethash k h) (error r))))
+#[test]
+fn a_bcall_leaf_signal_edge_keeps_the_residual_alive() {
+    let mut ev = Context::new();
+    let ctx_ptr = &mut ev as *mut Context as *mut u8;
+    let mut ops = vec![
+        Op::Constant(0),          // [k h 1]
+        Op::Constant(1),          // [k h 1 2]
+        Op::Cons,                 // [k h r]
+        Op::PushConditionCase(0), // patched
+        Op::Constant(2),          // [k h r gethash]
+        Op::StackRef(3),          // [k h r gethash k]
+        Op::StackRef(3),          // [k h r gethash k h]
+        Op::Call(2),              // [k h r x]
+        Op::Pop,
+        Op::PopHandler,
+        Op::Return, // r
+    ];
+    let handler = ops.len();
+    ops[3] = Op::PushConditionCase(handler as u32);
+    ops.extend([Op::Pop, Op::Return]);
+    let mut f = lexical_fn(
+        2,
+        ops,
+        vec![
+            Value::make_int(1),
+            Value::make_int(2),
+            Value::symbol("gethash"),
+        ],
+    );
+    f.max_stack = 16;
+    let leaf = compile_bcall_with_knob(&ev, &f, bcall_knob());
+    ev.eval_str(
+        "(setq signal-hook-function
+               (lambda (_sym _data) (garbage-collect) (make-list 4096 (cons 0 0)) nil))",
+    )
+    .expect("hook");
+    let runs0 = leaf_trampoline_calls(LeafId::Gethash);
+    for _ in 0..3 {
+        match leaf.call(ctx_ptr, &[Value::fixnum(1), Value::fixnum(5)]) {
+            NativeRun::Ok(bits) => {
+                let r = Value::from_bits(bits);
+                assert!(r.is_cons(), "r survived");
+                assert_eq!(r.cons_car(), Value::make_int(1));
+                assert_eq!(r.cons_cdr(), Value::make_int(2));
+            }
+            other => panic!("must catch natively, got {other:?}"),
+        }
+    }
+    ev.eval_str("(setq signal-hook-function nil)")
+        .expect("unhook");
+    assert_eq!(leaf_trampoline_calls(LeafId::Gethash) - runs0, 3);
+}
+
+/// With the `bcall` part off, the same site takes the protocol shim.
+#[test]
+fn bcall_knob_off_keeps_the_protocol_shim() {
+    let mut ev = Context::new();
+    let ctx_ptr = &mut ev as *mut Context as *mut u8;
+    let f = bcall_fn("gethash", 2);
+    let leaf = compile_bcall_with_knob(
+        &ev,
+        &f,
+        LeafKnob {
+            opcode: true,
+            string: true,
+            ..LeafKnob::OFF
+        },
+    );
+    let table = ev
+        .eval_str("(let ((h (make-hash-table))) (puthash 1 'one h) h)")
+        .expect("table");
+    crate::emacs_core::eval::push_scratch_gc_root(table);
+    let runs0 = leaf_trampoline_calls(LeafId::Gethash);
+    assert_eq!(
+        native(ctx_ptr, &leaf, &[Value::fixnum(1), table], "gethash"),
+        "one"
+    );
+    assert_eq!(leaf_trampoline_calls(LeafId::Gethash), runs0);
+}
+
+/// A subr site's slot carries its binding words, which no slot walker may
+/// clear (p1-0-integration §2 P1.2 correction 2): `clear_leaf` refuses in
+/// debug builds, and the words survive the calls.
+#[test]
+fn subr_site_slots_keep_their_binding_words() {
+    let mut ev = Context::new();
+    let ctx_ptr = &mut ev as *mut Context as *mut u8;
+    let f = bcall_fn("gethash", 2);
+    let leaf = compile_bcall_with_knob(&ev, &f, bcall_knob());
+    let sym = crate::emacs_core::intern::intern("gethash");
+    let expected = ev.obarray.symbol_function_id(sym).expect("fbound").bits() as u64;
+    let slot = leaf
+        .spec_slots
+        .iter()
+        .find(|s| s.holds_subr_binding())
+        .expect("the site's slot is bound");
+    assert_eq!(slot.subr_binding(), (sym, expected));
+    let _ = native(
+        ctx_ptr,
+        &leaf,
+        &[Value::fixnum(1), Value::fixnum(5)],
+        "gethash",
+    );
+    assert_eq!(slot.subr_binding(), (sym, expected), "unchanged by a call");
+    #[cfg(debug_assertions)]
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| slot.clear_leaf())).is_err(),
+        "clear_leaf refuses a subr site's slot"
+    );
+}

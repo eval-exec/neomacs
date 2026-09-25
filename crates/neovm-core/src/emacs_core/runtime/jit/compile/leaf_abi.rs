@@ -46,6 +46,10 @@ pub(crate) struct LeafSiteStats {
     pub(crate) bcall_sites: AtomicU64,
     pub(crate) generic: AtomicU64,
     pub(crate) signal: AtomicU64,
+    /// Bcall calls the guard sent to the reference protocol (a pending
+    /// quit, `debug-on-next-call`, the depth limit, a changed binding,
+    /// compiler overrides or `NEOVM_JIT_FORCE_SLOW_SPEC`).
+    pub(crate) guard_miss: AtomicU64,
 }
 
 impl LeafSiteStats {
@@ -55,6 +59,7 @@ impl LeafSiteStats {
             bcall_sites: AtomicU64::new(0),
             generic: AtomicU64::new(0),
             signal: AtomicU64::new(0),
+            guard_miss: AtomicU64::new(0),
         }
     }
 }
@@ -80,15 +85,16 @@ pub(crate) fn render_leaf_stats() -> String {
     let mut out = Vec::new();
     for spec in crate::emacs_core::subr::leaf::LEAVES {
         let s = &LEAF_STATS[spec.id.index()];
-        let (o, b, g, x) = (
+        let (o, b, g, x, m) = (
             s.opcode_sites.load(Ordering::Relaxed),
             s.bcall_sites.load(Ordering::Relaxed),
             s.generic.load(Ordering::Relaxed),
             s.signal.load(Ordering::Relaxed),
+            s.guard_miss.load(Ordering::Relaxed),
         );
-        if o + b + g + x > 0 {
+        if o + b + g + x + m > 0 {
             out.push(format!(
-                "{}:opcode_sites={o},bcall_sites={b},generic={g},signal={x}",
+                "{}:opcode_sites={o},bcall_sites={b},generic={g},signal={x},guard_miss={m}",
                 spec.name
             ));
         }
@@ -251,6 +257,175 @@ bare_trampoline!(
     leaves::string_lessp,
     2
 );
+
+// ---------------------------------------------------------------------------
+// Bcall trampolines (design §2.4, the pre-P0 guard; §2.5 (a)).
+// ---------------------------------------------------------------------------
+
+/// GNU `Bcall`'s observable steps, decided up front: when this holds, the
+/// frame, the depth count and the quit poll of the protocol call cannot be
+/// observed -- a leaf runs no Lisp -- so the trampoline may skip them. It is
+/// the reference protocol's own fast conditions (`neovm_jit_call_subr_spec`,
+/// `subr_spec_armed`): no pending quit, OS signal, profiler tick or
+/// `throw-on-input` (the poll would do nothing), no compiler function
+/// overrides, not the `NEOVM_JIT_FORCE_SLOW_SPEC` harness, no
+/// `debug-on-next-call`, one level of depth to spare (GNU's
+/// `++lisp_eval_depth > max_lisp_eval_depth` would pass), and the function
+/// cell still the subr the site was compiled against (the epoch, else a
+/// re-validation). Any miss runs the reference protocol unchanged.
+///
+/// This is the fallback form for before P0q's attention words land
+/// (p1-0-integration §2 P1.2 correction 5); with them it shrinks to one
+/// masked word test.
+#[inline(always)]
+fn bcall_guard(ctx: &Context, slot: &SpecSlot) -> bool {
+    ctx.maybe_quit_hot_ok()
+        && !ctx.compiler_function_overrides_active()
+        && !jit_force_slow_spec()
+        && !ctx.debug_on_next_call_is_armed()
+        && ctx.depth < ctx.max_depth
+        && (slot.epoch.load(Ordering::Relaxed) == ctx.obarray.function_epoch()
+            || bcall_rearm(ctx, slot))
+}
+
+/// The re-validate half of [`bcall_guard`] (`subr_spec_armed`'s): the
+/// function cell still holds the expected subr, so store the new epoch.
+#[cold]
+#[inline(never)]
+fn bcall_rearm(ctx: &Context, slot: &SpecSlot) -> bool {
+    debug_assert!(
+        slot.holds_subr_binding(),
+        "a Bcall leaf site's slot carries its binding words"
+    );
+    let slot_epoch = slot.epoch.load(Ordering::Relaxed);
+    if slot_epoch == SPEC_EPOCH_DISARMED {
+        return false;
+    }
+    let (sym, expected) = slot.subr_binding();
+    let epoch = ctx.obarray.function_epoch();
+    if ctx
+        .obarray
+        .symbol_function_id(sym)
+        .is_some_and(|v| v.bits() as u64 == expected)
+    {
+        slot.epoch.store(epoch, Ordering::Relaxed);
+        true
+    } else {
+        false
+    }
+}
+
+/// A guard miss: the site runs the reference protocol.
+#[cold]
+#[inline(never)]
+fn bcall_declined(id: LeafId) -> i64 {
+    LEAF_STATS[id.index()]
+        .guard_miss
+        .fetch_add(1, Ordering::Relaxed);
+    LEAF_NEED_GENERIC
+}
+
+/// Generate a leaf's Bcall trampoline,
+/// `$bcall(ctx, slot, a0, a1, a2) -> word`: [`bcall_guard`], then the body
+/// as a bare trampoline runs it. A call with fewer arguments than the body
+/// has slots passes nil for the rest, as the fixed-arity dispatcher does.
+macro_rules! bcall_trampoline {
+    ($bcall:ident, $spec:path, $body:path, 3) => {
+        #[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI trampoline: vmctx contract.
+        #[unsafe(no_mangle)]
+        pub extern "C" fn $bcall(
+            ctx: *const Context,
+            slot: *const SpecSlot,
+            a: i64,
+            b: i64,
+            c: i64,
+        ) -> i64 {
+            // SAFETY: the seam's dormant Context; `slot` points into the
+            // executing leaf's spec slots (alive while its code runs).
+            let (cx, slot) = unsafe { (&*ctx, &*slot) };
+            if !bcall_guard(cx, slot) {
+                return bcall_declined($spec.id);
+            }
+            let (a, b, c) = (
+                Value::from_bits(a as usize),
+                Value::from_bits(b as usize),
+                Value::from_bits(c as usize),
+            );
+            let (cx, active) = leaf_enter(ctx, &$spec);
+            let word = leaf_contained(ctx, &$spec, |cx| $body(cx, a, b, c));
+            leaf_finish(active, cx, word)
+        }
+    };
+}
+
+bcall_trampoline!(
+    neovm_leaf_bcall_gethash,
+    leaves::GETHASH,
+    leaves::gethash,
+    3
+);
+bcall_trampoline!(
+    neovm_leaf_bcall_plist_get,
+    leaves::PLIST_GET,
+    leaves::plist_get,
+    3
+);
+bcall_trampoline!(
+    neovm_leaf_bcall_get_char_property,
+    leaves::GET_CHAR_PROPERTY,
+    leaves::get_char_property,
+    3
+);
+
+/// A Bcall leaf's trampoline address.
+pub(crate) fn bcall_trampoline(id: LeafId) -> Option<*const u8> {
+    let f: *const u8 = match id {
+        LeafId::Gethash => neovm_leaf_bcall_gethash as *const u8,
+        LeafId::PlistGet => neovm_leaf_bcall_plist_get as *const u8,
+        LeafId::GetCharProperty => neovm_leaf_bcall_get_char_property as *const u8,
+        LeafId::Get
+        | LeafId::Length
+        | LeafId::Nth
+        | LeafId::Nthcdr
+        | LeafId::Elt
+        | LeafId::Memq
+        | LeafId::Assq
+        | LeafId::Member
+        | LeafId::Equal
+        | LeafId::StringEqual
+        | LeafId::StringLessp => return None,
+    };
+    Some(f)
+}
+
+/// The leaf an `Op::Call` site of `nargs` arguments speculated on the
+/// builtin `expected` lowers to, if any: JIT only, `NEOVM_JIT_LEAF` with
+/// `bcall`, the leaf attached to that builtin (found through the SUBR, so an
+/// alias of `gethash` gets it too), past the `NEOVM_JIT_LEAF_ONLY` filter,
+/// taking the call's arguments in its slots.
+pub(crate) fn bcall_leaf_site(expected: u64, nargs: usize, aot: bool) -> Option<&'static LeafSpec> {
+    if aot || !super::jit_leaf_knob().bcall {
+        return None;
+    }
+    let (subr_sym, entry) = subr_entry_from_value(Value::from_bits(expected as usize))?;
+    let leaf = crate::emacs_core::subr::leaf::subr_leaf(subr_sym)?;
+    if leaf.shape != LeafShape::Bcall
+        || nargs > leaf.entry_slots()
+        || nargs < usize::from(entry.min_args)
+        || !super::jit_leaf_selected(leaf.name)
+    {
+        return None;
+    }
+    bcall_trampoline(leaf.id)?;
+    Some(leaf)
+}
+
+/// Count a lowered Bcall leaf site.
+pub(crate) fn note_bcall_site(id: LeafId) {
+    LEAF_STATS[id.index()]
+        .bcall_sites
+        .fetch_add(1, Ordering::Relaxed);
+}
 
 /// The opcode leaf an opcode site calls, if the opcode has one wired to a
 /// bare trampoline. `memq`/`assq` stay on their value shims (whose fast

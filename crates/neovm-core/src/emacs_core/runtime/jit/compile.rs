@@ -2242,6 +2242,7 @@ impl SpecSlot {
         short_call: bool,
         framed: bool,
     ) {
+        debug_assert!(!self.holds_subr_binding(), "arm_leaf on a subr site's slot");
         self.leaf.store(leaf as usize as u64, Ordering::Relaxed);
         let key = if direct_consts.is_null() {
             0
@@ -2264,8 +2265,48 @@ impl SpecSlot {
     /// Drop the cached leaf (and with it the fast-path key).
     #[inline(always)]
     pub(crate) fn clear_leaf(&self) {
+        debug_assert!(
+            !self.holds_subr_binding(),
+            "clear_leaf on a subr site's slot would erase its binding words"
+        );
         self.direct_consts.store(0, Ordering::Relaxed);
         self.leaf.store(0, Ordering::Relaxed);
+    }
+
+    /// Give a `SubrGeneral` site's slot its IMMUTABLE binding words, written
+    /// once when the slot is built: `leaf` holds the expected subr's bits and
+    /// `direct_consts` the site's symbol (p1-0-integration §3.1). A leaf
+    /// builtin's Bcall trampoline then gets the symbol, the expected binding
+    /// and the armed epoch from the one slot pointer, keeping the argument
+    /// registers for the call's own arguments. The subr shims never read
+    /// these two words; nothing may clear them (`clear_leaf` asserts): a
+    /// cleared slot would make every re-validation fail -- a permanent,
+    /// silent fall to the reference path.
+    pub(crate) fn bind_subr(&self, sym: u32, expected: u64) {
+        debug_assert!(
+            Value::from_bits(expected as usize).is_veclike(),
+            "a subr binding is a tagged subr object"
+        );
+        self.leaf.store(expected, Ordering::Relaxed);
+        self.direct_consts.store(u64::from(sym), Ordering::Relaxed);
+    }
+
+    /// Whether this slot carries a subr site's binding words
+    /// ([`Self::bind_subr`]). In-band: a bytecode site's `leaf` is null or an
+    /// aligned `CompiledLeaf` pointer (tag bits 0), a subr binding is a
+    /// tagged veclike. Slot walkers must skip these slots.
+    #[inline(always)]
+    pub(crate) fn holds_subr_binding(&self) -> bool {
+        self.leaf.load(Ordering::Relaxed) & TAG_MASK as u64 != 0
+    }
+
+    /// A subr site's `(symbol, expected subr bits)` ([`Self::bind_subr`]).
+    #[inline(always)]
+    pub(crate) fn subr_binding(&self) -> (SymId, u64) {
+        (
+            SymId(self.direct_consts.load(Ordering::Relaxed) as u32),
+            self.leaf.load(Ordering::Relaxed),
+        )
     }
 }
 
@@ -3796,6 +3837,9 @@ pub fn lower_leaf_full_osr(
             let epoch = ob.function_epoch();
             for site in sites.values() {
                 slots[site.slot].epoch.store(epoch, Ordering::Relaxed);
+                if site.kind == SpecCalleeKind::SubrGeneral {
+                    slots[site.slot].bind_subr(site.sym, site.expected_bits);
+                }
             }
             (sites, slots)
         }
