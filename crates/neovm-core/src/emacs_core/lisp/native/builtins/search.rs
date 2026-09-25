@@ -1735,6 +1735,10 @@ pub(crate) fn builtin_looking_at_2(
         .map(|v| !v.is_nil())
         .unwrap_or(true);
     let inhibit_changing = read_inhibit_changing_match_data(eval);
+    if let Some(result) = looking_at_fast(eval, &args, case_fold, inhibit_changing) {
+        eval.maybe_quit()?;
+        return result;
+    }
     let mut lazy = AnchoredPropertize::new(&eval.buffers);
     loop {
         let (syntax_properties, lazy_relevant, compiled) =
@@ -1789,6 +1793,57 @@ pub(crate) fn builtin_looking_at_2(
         eval.maybe_quit()?;
         return result;
     }
+}
+
+/// U2.8 front end of `looking-at`: when the pattern cannot make
+/// `syntax-propertize` run -- it reads no buffer syntax, or
+/// `parse-sexp-lookup-properties` is nil -- there is no propertize frontier
+/// to arm and nothing to retry, so one cache probe and one match answer,
+/// without the `syntax-table` property resolver the matcher would never
+/// consult. `None`, having changed nothing observable, leaves the call to
+/// the general loop; a compile error signals here exactly as there.
+fn looking_at_fast(
+    eval: &mut super::eval::Context,
+    args: &[Value],
+    case_fold: bool,
+    inhibit_changing: bool,
+) -> Option<EvalResult> {
+    if !crate::emacs_core::eval::builtin_frontend_on() || !args[0].is_string() {
+        return None;
+    }
+    let compiled = {
+        let pattern = expect_lisp_string(&args[0]).ok()?;
+        let buf = eval.buffers.current_buffer()?;
+        match super::regex::buffer_regexp_syntax_dependency_compiled(buf, pattern, case_fold, false)
+        {
+            Ok((_, compiled)) => compiled,
+            Err(msg) => return Some(Err(regex_error_signal(msg))),
+        }
+    };
+    if compiled.uses_syntax && crate::emacs_core::syntax::parse_sexp_lookup_properties_enabled(eval)
+    {
+        return None;
+    }
+    let word_boundary = if compiled.uses_syntax {
+        current_word_boundary_lookup(eval)
+    } else {
+        crate::emacs_core::regex_emacs::WordBoundaryLookup::default()
+    };
+    let match_context = current_buffer_regexp_match_context(
+        &eval.obarray,
+        &eval.buffers,
+        word_boundary,
+        BufferRegexpSyntaxProperties::Ignore,
+    );
+    note_frontend_fast_call();
+    let match_data = (!inhibit_changing).then_some(&mut eval.match_data);
+    Some(builtin_looking_at_with_state_and_syntax_properties(
+        match_context,
+        &eval.buffers,
+        match_data,
+        args,
+        &compiled,
+    ))
 }
 
 fn builtin_looking_at_with_state_and_syntax_properties(

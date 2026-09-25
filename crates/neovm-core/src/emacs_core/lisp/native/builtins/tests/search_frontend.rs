@@ -42,12 +42,44 @@ const SEARCH_MATRIX: &str = r#"
   (nreverse out))
 "#;
 
+/// `looking-at` at every position, with and without INHIBIT-MODIFY.
+const LOOKING_AT_MATRIX: &str = r#"
+(let ((out nil))
+  (dolist (mode '(fundamental-mode emacs-lisp-mode))
+    (dolist (text '("foo bar baz\n(defun x () \"str\" ; c\n  (car y))\n"
+                    "\u00c0\u00c9 \u6f22\u5b57 abc_def-ghi\n(a \"b\" c)"))
+      (dolist (propertized '(stale covered))
+        (with-temp-buffer
+          (insert text)
+          (funcall mode)
+          (dolist (re '("" "a" "b\\w+" "\\_<[a-z]+\\_>" "\\s-+" "[[:space:]]"
+                        "(\\(\\w+\\)" "\\bba" "z\\'" "^(" "\\(a\\)?\\(b\\)?" "[" "\\s\""))
+            (dolist (pos '(1 2 5 9 13 20 30 1000))
+              (dolist (inhibit-arg '(nil t))
+                (dolist (fold '(nil t))
+                  (if (eq propertized 'stale)
+                      (setq syntax-propertize--done -1)
+                    (setq syntax-propertize--done (1+ (point-max))))
+                  (goto-char (min (point-max) pos))
+                  (set-match-data (list 1 1))
+                  (let ((case-fold-search fold))
+                    (push (list re pos inhibit-arg fold
+                                (condition-case err (looking-at re inhibit-arg)
+                                  (error (list 'signal err)))
+                                (point)
+                                (match-data t))
+                          out))))))))))
+  (nreverse out))
+"#;
+
 fn run_matrix(frontend: bool) -> Vec<String> {
+    run_form(SEARCH_MATRIX, frontend)
+}
+
+fn run_form(form: &str, frontend: bool) -> Vec<String> {
     set_builtin_frontend_for_test(Some(frontend));
     let mut eval = runtime_startup_context();
-    let result = eval
-        .eval_str(SEARCH_MATRIX)
-        .expect("the search matrix evaluates");
+    let result = eval.eval_str(form).expect("the matrix evaluates");
     set_builtin_frontend_for_test(None);
     crate::emacs_core::value::list_to_vec(&result)
         .expect("a list of rows")
@@ -71,6 +103,26 @@ fn fast_buffer_searches_answer_like_the_general_path() {
     // The matrix must actually exercise the fast path, and also leave some
     // calls to the general path (stale `syntax-propertize--done` under
     // `emacs-lisp-mode`, COUNT 0, a malformed pattern).
+    assert!(
+        fast_calls > general.len() / 2,
+        "only {fast_calls} of {} calls took the fast path",
+        general.len()
+    );
+    assert!(fast_calls < general.len(), "every call took the fast path");
+}
+
+#[test]
+fn fast_looking_at_answers_like_the_general_path() {
+    crate::test_utils::init_test_tracing();
+    let general = run_form(LOOKING_AT_MATRIX, false);
+    let before = super::FRONTEND_FAST_CALLS.with(|calls| calls.get());
+    let fast = run_form(LOOKING_AT_MATRIX, true);
+    let fast_calls = super::FRONTEND_FAST_CALLS.with(|calls| calls.get()) - before;
+    assert_eq!(general.len(), fast.len());
+    assert!(general.len() > 3_000, "{} rows", general.len());
+    for (index, (general, fast)) in general.iter().zip(&fast).enumerate() {
+        assert_eq!(fast, general, "row {index} differs");
+    }
     assert!(
         fast_calls > general.len() / 2,
         "only {fast_calls} of {} calls took the fast path",
