@@ -487,6 +487,35 @@ impl WideTranslationMemo {
 /// report an empty memo as valid.
 const CASE_TRANSLATION_UNFILLED: u32 = u32::MAX;
 
+/// Which characters a case translation can map INTO the ASCII range.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AsciiPreimage {
+    /// Only ASCII characters translate to ASCII, and every ASCII character
+    /// translates to ASCII: the hardwired standard translation.  GNU's
+    /// characters.el:803-812 leaves out the same pairs (İ, ı, ſ, K) "because
+    /// that makes searches slow".  Proven over every character code by
+    /// `standard_translation_keeps_non_ascii_out_of_ascii`.
+    AsciiOnly,
+    /// A case-canon char-table: any character may map into ASCII, and the
+    /// table can be edited in place after a pattern is compiled.
+    Unknown,
+}
+
+impl CaseTranslation {
+    /// Which characters this translation can map into ASCII.
+    #[inline]
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "read by the case-folded candidate scan")
+    )]
+    pub(crate) fn ascii_preimage(&self) -> AsciiPreimage {
+        match self.table {
+            None => AsciiPreimage::AsciiOnly,
+            Some(_) => AsciiPreimage::Unknown,
+        }
+    }
+}
+
 impl CaseTranslation {
     pub(crate) fn standard() -> Self {
         // The canonicalization of bytes 0..256 is a constant
@@ -8604,3 +8633,7 @@ pub(crate) fn match_pattern(
 #[cfg(test)]
 #[path = "tests/emacs.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/casefold_scan.rs"]
+mod casefold_scan_tests;
