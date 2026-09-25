@@ -930,7 +930,6 @@ pub(crate) fn invalidate_for_reopt(
     rt.reopen_numeric_feedback();
     rt.clear_aot_prewarmed();
     rt.disarm_leaf_slot();
-    forget_inline_deps(id);
     let retired_entry = COMPILED.with(|c| {
         let Ok(mut c) = c.try_borrow_mut() else {
             tracing::warn!(target: "neovm_jit::reopt", id, "cache borrowed; entry kept");
@@ -966,23 +965,35 @@ pub(crate) fn invalidate_for_reopt(
             .collect()
     });
     if !osr.is_empty() {
-        COMPILED.with(|c| {
-            if let Ok(mut c) = c.try_borrow_mut() {
+        let retired = COMPILED.with(|c| match c.try_borrow_mut() {
+            Ok(mut c) => {
                 for leaf in &osr {
                     c.retire(Rc::clone(leaf));
                 }
+                true
             }
+            Err(_) => false,
         });
-    }
-    let unlinked = retired_entry
-        .as_ref()
-        .map_or(0, |old| unlink_spec_slots(Rc::as_ptr(old)));
-    match level {
-        ReoptLevel::Interpreter => rt.mark_native_rejected(rejection_epoch()),
-        _ if reprofile == Reprofile::Window => {
-            rt.defer_tier_up(rt.heat().saturating_add(knobs.heat).max(1))
+        if !retired {
+            // Dropped instead, as `evict_compiled` drops OSR leaves (only
+            // the interpreter enters them; a running one holds its own Rc).
+            for leaf in &osr {
+                fold_dropped_leaf(leaf);
+            }
         }
-        _ => {}
+    }
+    let mut unlinked = 0;
+    if let Some(old) = &retired_entry {
+        // Its entry no longer names a compiled leaf that inlined anything,
+        // so a redefinition of an inlined callee has nothing to evict.
+        forget_inline_deps(id);
+        unlinked = unlink_spec_slots(Rc::as_ptr(old));
+        if reprofile == Reprofile::Window && level != ReoptLevel::Interpreter {
+            rt.defer_tier_up(rt.heat().saturating_add(knobs.heat).max(1));
+        }
+    }
+    if level == ReoptLevel::Interpreter {
+        rt.mark_native_rejected(rejection_epoch());
     }
     stats::record_reopt(level);
     tracing::debug!(
