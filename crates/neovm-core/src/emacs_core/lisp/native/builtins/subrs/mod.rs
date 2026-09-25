@@ -791,11 +791,16 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(builtin_get_byte),
         SubrArity::new(0, Some(2)),
     ));
-    ctx.register_subr(SubrSpec::fixed2(
-        "buffer-local-value",
-        builtin_buffer_local_value_2,
-        FixedMin2::Two,
-    ));
+    ctx.register_subr(
+        const {
+            SubrSpec::fixed2(
+                "buffer-local-value",
+                builtin_buffer_local_value_2,
+                FixedMin2::Two,
+            )
+            .leaf(&leaves::BUFFER_LOCAL_VALUE)
+        },
+    );
     ctx.register_subr(SubrSpec::new(
         "local-variable-if-set-p",
         NativeFn::ContextVec(builtin_local_variable_if_set_p),

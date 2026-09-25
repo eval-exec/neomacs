@@ -283,6 +283,12 @@ bare_trampoline!(
     leaves::string_lessp,
     2
 );
+bare_trampoline!(
+    neovm_leaf_bare_symbol_value,
+    leaves::SYMBOL_VALUE,
+    leaves::symbol_value,
+    1
+);
 
 // ---------------------------------------------------------------------------
 // Bcall trampolines (design §2.4, the pre-P0 guard; §2.5 (a)).
@@ -356,6 +362,27 @@ fn bcall_declined(id: LeafId) -> i64 {
 /// as a bare trampoline runs it. A call with fewer arguments than the body
 /// has slots passes nil for the rest, as the fixed-arity dispatcher does.
 macro_rules! bcall_trampoline {
+    ($bcall:ident, $spec:path, $body:path, 2) => {
+        #[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI trampoline: vmctx contract.
+        #[unsafe(no_mangle)]
+        pub extern "C" fn $bcall(
+            ctx: *const Context,
+            slot: *const SpecSlot,
+            a: i64,
+            b: i64,
+        ) -> i64 {
+            // SAFETY: the seam's dormant Context; `slot` points into the
+            // executing leaf's spec slots (alive while its code runs).
+            let (cx, slot) = unsafe { (&*ctx, &*slot) };
+            if !bcall_guard(cx, slot) {
+                return bcall_declined($spec.id);
+            }
+            let (a, b) = (Value::from_bits(a as usize), Value::from_bits(b as usize));
+            let (cx, active) = leaf_enter(ctx, &$spec);
+            let word = leaf_contained(ctx, &$spec, |cx| $body(cx, a, b));
+            leaf_finish(active, cx, word)
+        }
+    };
     ($bcall:ident, $spec:path, $body:path, 3) => {
         #[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI trampoline: vmctx contract.
         #[unsafe(no_mangle)]
@@ -402,6 +429,12 @@ bcall_trampoline!(
     leaves::get_char_property,
     3
 );
+bcall_trampoline!(
+    neovm_leaf_bcall_buffer_local_value,
+    leaves::BUFFER_LOCAL_VALUE,
+    leaves::buffer_local_value,
+    2
+);
 
 /// A Bcall leaf's trampoline address.
 pub(crate) fn bcall_trampoline(id: LeafId) -> Option<*const u8> {
@@ -409,6 +442,7 @@ pub(crate) fn bcall_trampoline(id: LeafId) -> Option<*const u8> {
         LeafId::Gethash => neovm_leaf_bcall_gethash as *const u8,
         LeafId::PlistGet => neovm_leaf_bcall_plist_get as *const u8,
         LeafId::GetCharProperty => neovm_leaf_bcall_get_char_property as *const u8,
+        LeafId::BufferLocalValue => neovm_leaf_bcall_buffer_local_value as *const u8,
         LeafId::Get
         | LeafId::Length
         | LeafId::Nth
@@ -419,9 +453,22 @@ pub(crate) fn bcall_trampoline(id: LeafId) -> Option<*const u8> {
         | LeafId::Member
         | LeafId::Equal
         | LeafId::StringEqual
-        | LeafId::StringLessp => return None,
+        | LeafId::StringLessp
+        | LeafId::SymbolValue => return None,
     };
     Some(f)
+}
+
+/// Whether `knob` turns on the sites of `spec`: the variable leaves have a
+/// part of their own (`vars`, default off); every other leaf its shape's.
+pub(crate) fn leaf_part_on(knob: super::LeafKnob, spec: &LeafSpec) -> bool {
+    match spec.id {
+        LeafId::SymbolValue | LeafId::BufferLocalValue => knob.vars,
+        _ => match spec.shape {
+            LeafShape::Opcode => knob.opcode,
+            LeafShape::Bcall => knob.bcall,
+        },
+    }
 }
 
 /// The leaf an `Op::Call` site of `nargs` arguments speculated on the
@@ -430,12 +477,14 @@ pub(crate) fn bcall_trampoline(id: LeafId) -> Option<*const u8> {
 /// alias of `gethash` gets it too), past the `NEOVM_JIT_LEAF_ONLY` filter,
 /// taking the call's arguments in its slots.
 pub(crate) fn bcall_leaf_site(expected: u64, nargs: usize, aot: bool) -> Option<&'static LeafSpec> {
-    if aot || !super::jit_leaf_knob().bcall {
+    let knob = super::jit_leaf_knob();
+    if aot || !(knob.bcall || knob.vars) {
         return None;
     }
     let (subr_sym, entry) = subr_entry_from_value(Value::from_bits(expected as usize))?;
     let leaf = crate::emacs_core::subr::leaf::subr_leaf(subr_sym)?;
     if leaf.shape != LeafShape::Bcall
+        || !leaf_part_on(knob, leaf)
         || nargs > leaf.entry_slots()
         || nargs < usize::from(entry.min_args)
         || !super::jit_leaf_selected(leaf.name)
@@ -468,6 +517,7 @@ pub(crate) fn opcode_leaf(op: &Op) -> Option<LeafId> {
         Op::Equal => LeafId::Equal,
         Op::StringEqual => LeafId::StringEqual,
         Op::StringLessp => LeafId::StringLessp,
+        Op::SymbolValue => LeafId::SymbolValue,
         _ => return None,
     })
 }
@@ -484,9 +534,11 @@ pub(crate) fn bare_trampoline(id: LeafId) -> Option<*const u8> {
         LeafId::Equal => neovm_leaf_bare_equal as *const u8,
         LeafId::StringEqual => neovm_leaf_bare_string_equal as *const u8,
         LeafId::StringLessp => neovm_leaf_bare_string_lessp as *const u8,
+        LeafId::SymbolValue => neovm_leaf_bare_symbol_value as *const u8,
         LeafId::Gethash
         | LeafId::PlistGet
         | LeafId::GetCharProperty
+        | LeafId::BufferLocalValue
         | LeafId::Memq
         | LeafId::Assq => return None,
     };
@@ -498,12 +550,14 @@ pub(crate) fn bare_trampoline(id: LeafId) -> Option<*const u8> {
 /// filter, and a leaf that never bounces (an opcode site has no reference
 /// call to bounce to; none of today's opcode leaves declares a shape).
 pub(crate) fn opcode_leaf_site(op: &Op, aot: bool) -> Option<LeafId> {
-    if aot || !super::jit_leaf_knob().opcode {
+    let knob = super::jit_leaf_knob();
+    if aot || !(knob.opcode || knob.vars) {
         return None;
     }
     let id = opcode_leaf(op)?;
     let spec = id.spec();
     if spec.shape != LeafShape::Opcode
+        || !leaf_part_on(knob, spec)
         || !spec.generic_when.is_empty()
         || !super::jit_leaf_selected(spec.name)
     {
@@ -563,6 +617,7 @@ pub(crate) fn trampoline_bodies_for_test() -> Vec<(LeafId, usize, Option<usize>)
         (LeafId::Equal, two(leaves::equal), None),
         (LeafId::StringEqual, two(leaves::string_equal), None),
         (LeafId::StringLessp, two(leaves::string_lessp), None),
+        (LeafId::SymbolValue, one(leaves::symbol_value), None),
     ]
 }
 

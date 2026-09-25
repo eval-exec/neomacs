@@ -300,9 +300,10 @@ pub(crate) fn jit_eq_prefilter_on() -> bool {
 }
 
 /// Which leaf-builtin emissions `NEOVM_JIT_LEAF` turns on (design
-/// `p1-2-builtin-intrinsics`; default OFF until its gate passes). Read at
-/// compile time only, so both sides of an A/B run in one binary and the off
-/// side emits exactly the former code.
+/// `p1-2-builtin-intrinsics`). Read at compile time only, so both sides of
+/// an A/B run in one binary and the off side emits exactly the former code.
+/// Unset is [`LeafKnob::DEFAULT`]: the parts whose gates passed; a part
+/// added since stays off until its own gate passes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub(crate) struct LeafKnob {
     /// Opcode sites (`Op::Get`, `Op::Length`, `Op::Nth`, ...) call their
@@ -313,6 +314,11 @@ pub(crate) struct LeafKnob {
     pub(crate) bcall: bool,
     /// String `aref`/`aset` inline (I1/I2).
     pub(crate) string: bool,
+    /// The variable leaves (default off): `Op::SymbolValue` sites call the
+    /// `symbol-value` leaf's bare trampoline, and `Op::Call` sites on
+    /// `buffer-local-value` its armed one; both read through P1.4 Stage A's
+    /// cached tiers.
+    pub(crate) vars: bool,
 }
 
 impl LeafKnob {
@@ -320,19 +326,30 @@ impl LeafKnob {
         opcode: false,
         bcall: false,
         string: false,
+        vars: false,
     };
+    /// What an unset knob selects: the parts on by default since the F-B
+    /// and board measurements.
+    pub(crate) const DEFAULT: Self = Self {
+        opcode: true,
+        bcall: true,
+        string: true,
+        vars: false,
+    };
+    /// Every part, the default-off ones included.
     pub(crate) const ALL: Self = Self {
         opcode: true,
         bcall: true,
         string: true,
+        vars: true,
     };
 
-    /// Unset/`on`/`1`/`all`: everything (the default since the F-B and
-    /// board measurements); `off`/`0`: nothing, the former code exactly;
-    /// otherwise a comma list of `opcode`, `bcall`, `string`.
+    /// Unset: [`Self::DEFAULT`]; `on`/`1`/`all`: every part
+    /// ([`Self::ALL`]); `off`/`0`: nothing, the former code exactly;
+    /// otherwise a comma list of `opcode`, `bcall`, `string`, `vars`.
     pub(crate) fn parse(value: Option<&str>) -> Self {
         let Some(value) = value.map(str::trim) else {
-            return Self::ALL;
+            return Self::DEFAULT;
         };
         match value {
             "" | "0" | "off" | "false" | "no" => return Self::OFF,
@@ -345,10 +362,11 @@ impl LeafKnob {
                 "opcode" => knob.opcode = true,
                 "bcall" => knob.bcall = true,
                 "string" => knob.string = true,
+                "vars" => knob.vars = true,
                 other => tracing::warn!(
                     target: "neovm_jit",
                     part = other,
-                    "NEOVM_JIT_LEAF: unknown part ignored (expected opcode, bcall, string)"
+                    "NEOVM_JIT_LEAF: unknown part ignored (expected opcode, bcall, string, vars)"
                 ),
             }
         }

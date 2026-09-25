@@ -85,6 +85,7 @@ const OPCODE_LEAF_OPS: &[(Op, LeafId, u32)] = &[
     (Op::Equal, LeafId::Equal, 2),
     (Op::StringEqual, LeafId::StringEqual, 2),
     (Op::StringLessp, LeafId::StringLessp, 2),
+    (Op::SymbolValue, LeafId::SymbolValue, 1),
 ];
 
 /// Printable (non-circular) operands: printing a result must terminate.
@@ -208,7 +209,18 @@ fn leaf_only_filter_restricts_the_sites() {
 
 #[test]
 fn leaf_knob_parses() {
-    assert_eq!(LeafKnob::parse(None), LeafKnob::ALL);
+    assert_eq!(LeafKnob::parse(None), LeafKnob::DEFAULT);
+    assert!(
+        !LeafKnob::DEFAULT.vars,
+        "the variable leaves are default off"
+    );
+    assert_eq!(
+        LeafKnob::parse(Some("vars")),
+        LeafKnob {
+            vars: true,
+            ..LeafKnob::OFF
+        }
+    );
     for off in ["", "0", "off", "false", "no"] {
         assert_eq!(LeafKnob::parse(Some(off)), LeafKnob::OFF, "{off}");
     }
@@ -723,6 +735,138 @@ fn a_bcall_leaf_signal_edge_keeps_the_residual_alive() {
     ev.eval_str("(setq signal-hook-function nil)")
         .expect("unhook");
     assert_eq!(leaf_trampoline_calls(LeafId::Gethash) - runs0, 3);
+}
+
+/// The variable leaves have a part of their own, off by default: under the
+/// default knob an `Op::SymbolValue` site keeps the table shim and a
+/// `buffer-local-value` call the protocol shim; with `vars` both run their
+/// leaf (and nothing else changes: `vars` alone leaves `nth` on its shim).
+#[test]
+fn the_vars_part_gates_the_variable_leaves() {
+    let mut ev = Context::new();
+    ev.eval_str("(defvar leaf-vars-probe 'probed)")
+        .expect("defvar");
+    let ctx_ptr = &mut ev as *mut Context as *mut u8;
+    let sv = opcode_fn(Op::SymbolValue, 1);
+    let blv = bcall_fn("buffer-local-value", 2);
+    let nth = opcode_fn(Op::Nth, 2);
+    let sym = Value::symbol("leaf-vars-probe");
+    let buf = ev.eval_str("(current-buffer)").expect("buffer");
+    let list = ev.eval_str("'(a b c)").expect("list");
+    let vars_only = LeafKnob {
+        vars: true,
+        ..LeafKnob::OFF
+    };
+    for (knob, engaged) in [(LeafKnob::DEFAULT, false), (vars_only, true)] {
+        let (sv0, blv0, nth0) = (
+            leaf_trampoline_calls(LeafId::SymbolValue),
+            leaf_trampoline_calls(LeafId::BufferLocalValue),
+            leaf_trampoline_calls(LeafId::Nth),
+        );
+        let sv_leaf = compile_with_knob(&sv, knob);
+        let blv_leaf = compile_bcall_with_knob(&ev, &blv, knob);
+        let nth_leaf = compile_with_knob(&nth, knob);
+        assert_eq!(native(ctx_ptr, &sv_leaf, &[sym], "symbol-value"), "probed");
+        assert_eq!(
+            native(ctx_ptr, &blv_leaf, &[sym, buf], "buffer-local-value"),
+            "probed"
+        );
+        assert_eq!(
+            native(ctx_ptr, &nth_leaf, &[Value::fixnum(1), list], "nth"),
+            "b"
+        );
+        let n = u64::from(engaged);
+        assert_eq!(
+            leaf_trampoline_calls(LeafId::SymbolValue) - sv0,
+            n,
+            "{knob:?}"
+        );
+        assert_eq!(
+            leaf_trampoline_calls(LeafId::BufferLocalValue) - blv0,
+            n,
+            "{knob:?}"
+        );
+        assert_eq!(
+            leaf_trampoline_calls(LeafId::Nth) - nth0,
+            u64::from(knob.opcode),
+            "{knob:?}"
+        );
+    }
+}
+
+/// `buffer-local-value` at a `Bcall` site under `vars`: natively through
+/// the leaf against the interpreter's protocol call, over buffer-local,
+/// forwarded, plain, aliased and void variables and every buffer shape,
+/// from a buffer with its own bindings and one without.
+#[test]
+fn buffer_local_value_bcall_sites_match_the_protocol_call() {
+    let mut ev = Context::new();
+    ev.eval_str(
+        "(progn
+           (defvar leaf-plain 'plain)
+           (defvar leaf-local 'local-default)
+           (make-variable-buffer-local 'leaf-local)
+           (defvaralias 'leaf-alias 'leaf-plain)
+           (get-buffer-create \" leaf-blv-b\")
+           (set-buffer (get-buffer-create \" leaf-blv-a\"))
+           (setq leaf-local 'a-local fill-column 33))",
+    )
+    .expect("setup");
+    let ctx_ptr = &mut ev as *mut Context as *mut u8;
+    let variables = operands(
+        &mut ev,
+        &[
+            "'leaf-local",
+            "'leaf-plain",
+            "'leaf-alias",
+            "'leaf-void",
+            "'fill-column",
+            "'gc-cons-threshold",
+            "nil",
+            "5",
+        ],
+    );
+    let buffers = operands(
+        &mut ev,
+        &[
+            "(get-buffer \" leaf-blv-a\")",
+            "(get-buffer \" leaf-blv-b\")",
+            "nil",
+            "'x",
+        ],
+    );
+    let f = bcall_fn("buffer-local-value", 2);
+    let leaf = compile_bcall_with_knob(
+        &ev,
+        &f,
+        LeafKnob {
+            vars: true,
+            ..LeafKnob::OFF
+        },
+    );
+    for current in [" leaf-blv-a", " leaf-blv-b"] {
+        ev.eval_str(&format!("(set-buffer {current:?})"))
+            .expect("set-buffer");
+        let runs0 = leaf_trampoline_calls(LeafId::BufferLocalValue);
+        let mut cases = 0;
+        for &v in &variables {
+            for &b in &buffers {
+                let what = format!(
+                    "(buffer-local-value {} {}) in {current:?}",
+                    print_value(&v),
+                    print_value(&b)
+                );
+                let want = interpret(&mut ev, &f, vec![v, b]);
+                assert_eq!(native(ctx_ptr, &leaf, &[v, b], &what), want, "{what}");
+                cases += 1;
+            }
+        }
+        assert_eq!(
+            leaf_trampoline_calls(LeafId::BufferLocalValue) - runs0,
+            cases,
+            "every call ran the leaf"
+        );
+    }
 }
 
 /// With the `bcall` part off, the same site takes the protocol shim.

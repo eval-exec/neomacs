@@ -233,16 +233,16 @@ pub(crate) enum LeafId {
     Equal,
     StringEqual,
     StringLessp,
-    // TODO(P1.4 Stage A): `symbol-value` (Op::SymbolValue) and
-    // `buffer-local-value` (Bcall) leaves. Their bodies must call P1.4
-    // Stage A's `read_var_cached` rather than grow a second copy of the
-    // variable read tiers; that function lives on the P1.4 branch, which
-    // has not landed (p1-0-integration §2 P1.2 correction 4, stage S1.5a).
+    /// `symbol-value` (`Op::SymbolValue`) and `buffer-local-value` (Bcall):
+    /// the variable leaves, whose bodies read through P1.4 Stage A's
+    /// `Context::read_var_cached` (p1-0-integration §2 P1.2 correction 4).
+    SymbolValue,
+    BufferLocalValue,
 }
 
 impl LeafId {
     /// Number of leaves: the length of [`LEAVES`].
-    pub(crate) const COUNT: usize = LeafId::StringLessp as usize + 1;
+    pub(crate) const COUNT: usize = LeafId::BufferLocalValue as usize + 1;
 
     /// The index into [`LEAVES`].
     pub(crate) const fn index(self) -> usize {
@@ -323,6 +323,8 @@ pub(crate) static LEAVES: [&LeafSpec; LeafId::COUNT] = {
         &l::EQUAL,
         &l::STRING_EQUAL,
         &l::STRING_LESSP,
+        &l::SYMBOL_VALUE,
+        &l::BUFFER_LOCAL_VALUE,
     ]
 };
 

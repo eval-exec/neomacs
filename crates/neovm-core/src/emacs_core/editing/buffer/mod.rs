@@ -5013,6 +5013,17 @@ pub(crate) fn builtin_buffer_local_value_2(
     variable: Value,
     buffer: Value,
 ) -> EvalResult {
+    buffer_local_value_in(eval, variable, buffer)
+}
+
+/// `buffer-local-value`'s whole body: it only READS the evaluator (the
+/// obarray, the buffer table), so it takes a shared borrow, which is what
+/// lets the same body serve as the builtin's leaf (`builtins::leaves`).
+pub(crate) fn buffer_local_value_in(
+    eval: &super::eval::Context,
+    variable: Value,
+    buffer: Value,
+) -> EvalResult {
     let args: [Value; 2] = [variable, buffer];
     use crate::emacs_core::intern::{intern, resolve_sym};
     use crate::emacs_core::symbol::SymbolRedirect;

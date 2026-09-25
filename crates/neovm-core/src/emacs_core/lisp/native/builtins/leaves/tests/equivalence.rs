@@ -99,7 +99,10 @@ fn leaf_opcode(id: LeafId) -> Option<Op> {
         LeafId::Equal => Op::Equal,
         LeafId::StringEqual => Op::StringEqual,
         LeafId::StringLessp => Op::StringLessp,
-        LeafId::Gethash | LeafId::PlistGet | LeafId::GetCharProperty => return None,
+        LeafId::SymbolValue => Op::SymbolValue,
+        LeafId::Gethash | LeafId::PlistGet | LeafId::GetCharProperty | LeafId::BufferLocalValue => {
+            return None;
+        }
     })
 }
 
@@ -441,6 +444,125 @@ fn get_char_property_leaf_matches_the_builtin() {
             check(&mut ctx, &GET_CHAR_PROPERTY, &[pos, prop], false, &what);
         }
     }
+}
+
+/// Variables of every shape the read tiers distinguish: plain (bound, nil,
+/// void), buffer-local (`make-variable-buffer-local`; `make-local-variable` in one buffer),
+/// an alias, per-buffer forwarded slots (local and not), forwarders that
+/// hold their own value (int, bool, object), the dedicated
+/// `buffer-undo-list`, nil, t, a keyword, a symbol with position, and
+/// non-symbols.
+const VARIABLES: &[&str] = &[
+    "'leaf-plain",
+    "'leaf-nil",
+    "'leaf-void",
+    "'leaf-local",
+    "'leaf-lset",
+    "'leaf-alias",
+    "'fill-column",
+    "'case-fold-search",
+    "'tab-width",
+    "'gc-cons-threshold",
+    "'debug-on-error",
+    "'load-path",
+    "'buffer-undo-list",
+    "'buffer-file-name",
+    "nil",
+    "t",
+    ":kw",
+    "(position-symbol 'leaf-plain 3)",
+    "5",
+    "\"leaf-plain\"",
+];
+
+/// Define [`VARIABLES`] and two buffers, `a` with its own bindings of the
+/// buffer-local ones (loaded into their caches, so the cached tiers hit) and
+/// `b` without.
+fn variable_setup(ctx: &mut Context) {
+    ctx.eval_str(
+        "(progn
+           (defvar leaf-plain 'plain)
+           (defvar leaf-nil nil)
+           (defvar leaf-local 'local-default)
+           (make-variable-buffer-local 'leaf-local)
+           (defvar leaf-lset 'lset-global)
+           (defvaralias 'leaf-alias 'leaf-plain)
+           (get-buffer-create \" leaf-vars-b\")
+           (set-buffer (get-buffer-create \" leaf-vars-a\"))
+           (setq leaf-local 'a-local)
+           (set (make-local-variable 'leaf-lset) 'a-lset)
+           (setq fill-column 33)
+           (setq buffer-undo-list t)
+           (setq leaf-local leaf-local leaf-lset leaf-lset))",
+    )
+    .expect("variable setup");
+}
+
+/// `symbol-value` over every variable shape, current buffer `a` (the
+/// cached tiers hit) and `b` (they refuse), against `Op::SymbolValue`.
+#[test]
+fn symbol_value_leaf_matches_its_opcode_arm_on_every_variable_shape() {
+    use crate::emacs_core::eval::{VarCacheEvent, var_cache_event_count};
+    let mut ctx = Context::new();
+    variable_setup(&mut ctx);
+    let variables = pool(&mut ctx, VARIABLES);
+    let hits0 = var_cache_event_count(VarCacheEvent::ReadLocalized)
+        + var_cache_event_count(VarCacheEvent::ReadBufferSlot)
+        + var_cache_event_count(VarCacheEvent::ReadForwarded);
+    for buffer in [" leaf-vars-a", " leaf-vars-b"] {
+        ctx.eval_str(&format!("(set-buffer {buffer:?})"))
+            .expect("set-buffer");
+        for on in [false, true] {
+            set_swp(&mut ctx, on);
+            for (i, &v) in variables.iter().enumerate() {
+                let what = format!("(symbol-value {}) in {buffer:?} swp={on}", VARIABLES[i]);
+                check(&mut ctx, &SYMBOL_VALUE, &[v], false, &what);
+            }
+        }
+    }
+    set_swp(&mut ctx, false);
+    let hits = var_cache_event_count(VarCacheEvent::ReadLocalized)
+        + var_cache_event_count(VarCacheEvent::ReadBufferSlot)
+        + var_cache_event_count(VarCacheEvent::ReadForwarded);
+    assert!(hits > hits0, "the leaf's cached tiers answered some reads");
+}
+
+/// `buffer-local-value` over variable × buffer, from buffers `a` and `b`,
+/// against the registered builtin.
+#[test]
+fn buffer_local_value_leaf_matches_the_builtin_on_every_variable_shape() {
+    use crate::emacs_core::eval::{VarCacheEvent, var_cache_event_count};
+    let mut ctx = Context::new();
+    variable_setup(&mut ctx);
+    let variables = pool(&mut ctx, VARIABLES);
+    let buffers = pool(
+        &mut ctx,
+        &[
+            "(get-buffer \" leaf-vars-a\")",
+            "(get-buffer \" leaf-vars-b\")",
+            "(let ((b (get-buffer-create \" leaf-vars-dead\"))) (kill-buffer b) b)",
+            "nil",
+            "5",
+        ],
+    );
+    let hits0 = var_cache_event_count(VarCacheEvent::ReadLocalized);
+    for current in [" leaf-vars-a", " leaf-vars-b"] {
+        ctx.eval_str(&format!("(set-buffer {current:?})"))
+            .expect("set-buffer");
+        for (i, &v) in variables.iter().enumerate() {
+            for (j, &b) in buffers.iter().enumerate() {
+                let what = format!(
+                    "(buffer-local-value {} buffer#{j}) in {current:?}",
+                    VARIABLES[i]
+                );
+                check(&mut ctx, &BUFFER_LOCAL_VALUE, &[v, b], false, &what);
+            }
+        }
+    }
+    assert!(
+        var_cache_event_count(VarCacheEvent::ReadLocalized) > hits0,
+        "the leaf's cached tier answered some reads"
+    );
 }
 
 /// Every declared bounce shape is one the harness above exercises: a new

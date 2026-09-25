@@ -25,6 +25,8 @@ fn leaf_ids_are_dense_and_stable() {
         (LeafId::Equal, "equal"),
         (LeafId::StringEqual, "string-equal"),
         (LeafId::StringLessp, "string-lessp"),
+        (LeafId::SymbolValue, "symbol-value"),
+        (LeafId::BufferLocalValue, "buffer-local-value"),
     ];
     assert_eq!(golden.len(), LeafId::COUNT);
     assert_eq!(LEAVES.len(), LeafId::COUNT);

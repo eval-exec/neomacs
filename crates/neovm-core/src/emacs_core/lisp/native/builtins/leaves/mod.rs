@@ -13,8 +13,11 @@
 //! * containment: `Catch` everywhere except `nth`, whose fast half is the
 //!   audited walk in [`fast`].
 //!
-//! Deferred: `symbol-value` and `buffer-local-value` (see the TODO on
-//! `LeafId`), which must share P1.4 Stage A's `read_var_cached`.
+//! The variable leaves -- `symbol-value` (opcode) and `buffer-local-value`
+//! (Bcall), `NEOVM_JIT_LEAF=vars` -- read a buffer-local or forwarded
+//! variable through P1.4 Stage A's cached tiers (`Context::read_var_cached`)
+//! rather than a second copy of them, and everything else through their
+//! reference's own body.
 
 // Only compiled code calls leaves: without the JIT they are declarations.
 #![cfg_attr(not(feature = "jit"), allow(dead_code))]
@@ -113,9 +116,77 @@ pub(crate) fn get_char_property(
     )
 }
 
+/// `(buffer-local-value VARIABLE BUFFER)`: the registered body
+/// (`buffer_local_value_in`, a shared borrow of the evaluator), after P1.4
+/// Stage A's cached read for the one shape that cache answers identically:
+/// BUFFER is the current buffer and VARIABLE a buffer-local variable whose
+/// binding is loaded for it (the builtin's `read_localized` early-out on
+/// `where == buf`). Everything else, an unbound value included, takes the
+/// body, which signals as the builtin does.
+pub(crate) static BUFFER_LOCAL_VALUE: LeafSpec = LeafSpec::new(
+    LeafId::BufferLocalValue,
+    "buffer-local-value",
+    LeafEntry::L2(buffer_local_value),
+    LeafShape::Bcall,
+    Effects::READ_HEAP
+        .with(Effects::READ_BUFFER)
+        .with(Effects::READ_BINDINGS)
+        .with(Effects::MAY_SIGNAL),
+    &[],
+    Containment::Catch,
+);
+
+pub(crate) fn buffer_local_value(ctx: &Context, variable: Value, buffer: Value) -> LeafResult {
+    if let Some(sym) = variable.as_symbol_id()
+        && buffer.as_buffer_id().is_some()
+        && buffer.as_buffer_id() == ctx.buffers.current_buffer_id()
+        && ctx
+            .obarray
+            .get_by_id(sym)
+            .is_some_and(|s| s.redirect() == crate::emacs_core::symbol::SymbolRedirect::Localized)
+        && let Some(value) = ctx.read_var_cached(sym)
+    {
+        return Ok(value);
+    }
+    Ok(crate::emacs_core::buffer::buffer_local_value_in(
+        ctx, variable, buffer,
+    )?)
+}
+
 // ---------------------------------------------------------------------------
 // Opcode leaves: each answers as the interpreter's opcode arm.
 // ---------------------------------------------------------------------------
+
+/// `Bsymbol_value` (`Op::SymbolValue`): `builtin_symbol_value_1`'s body --
+/// the argument checked as a symbol (a symbol with position when
+/// `symbols-with-pos-enabled`), its value, `void-variable` with the
+/// argument as given -- after P1.4 Stage A's cached tiers, which answer a
+/// buffer-local variable loaded for the current buffer or a forwarded one
+/// exactly as the reference's first arms do (and refuse anything else,
+/// including a void value, which the reference then signals).
+pub(crate) static SYMBOL_VALUE: LeafSpec = LeafSpec::new(
+    LeafId::SymbolValue,
+    "symbol-value",
+    LeafEntry::L1(symbol_value),
+    LeafShape::Opcode,
+    Effects::READ_HEAP
+        .with(Effects::READ_BUFFER)
+        .with(Effects::READ_BINDINGS)
+        .with(Effects::MAY_SIGNAL),
+    &[],
+    Containment::Catch,
+);
+
+pub(crate) fn symbol_value(ctx: &Context, symbol_value: Value) -> LeafResult {
+    let symbol = expect_symbol_id_checked(&symbol_value, ctx.symbols_with_pos_enabled)?;
+    if let Some(value) = ctx.read_var_cached(symbol) {
+        return Ok(value);
+    }
+    match ctx.visible_runtime_variable_value_by_id(symbol)? {
+        Some(value) => Ok(value),
+        None => Err(signal(LispCondition::VoidVariable, vec![symbol_value]).into()),
+    }
+}
 
 /// `Bget` (`Op::Get`): reads `overriding-plist-environment`, then the plist.
 pub(crate) static GET: LeafSpec = LeafSpec::new(
