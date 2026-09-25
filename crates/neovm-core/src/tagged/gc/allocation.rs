@@ -885,10 +885,7 @@ impl TaggedHeap {
                 ptr,
                 BignumObj {
                     header: VecLikeHeader {
-                        gc: GcHeader {
-                            marked: std::sync::atomic::AtomicBool::new(self.mark_parity),
-                            ..GcHeader::new(HeapObjectKind::VecLike)
-                        },
+                        gc: GcHeader::new_marked(HeapObjectKind::VecLike, self.mark_parity),
                         type_tag: VecLikeType::Bignum,
                     },
                     value,

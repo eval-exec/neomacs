@@ -562,7 +562,7 @@ impl TaggedHeap {
                 // tricolor verifiers). Tenured ≡ permanently marked, never
                 // re-traced — identical to the frozen-`true` behavior the
                 // parity scheme replaced.
-                if (*ptr).header.tenured {
+                if (*ptr).header.black_by_generation(self.collection_scope()) {
                     return;
                 }
                 if (*ptr).header.is_marked_at(self.mark_parity) {
@@ -587,7 +587,9 @@ impl TaggedHeap {
             }
             unsafe {
                 // Tenured short-circuit before the bit read (see string arm).
-                if (*ptr).header.tenured || (*ptr).header.is_marked_at(self.mark_parity) {
+                if (*ptr).header.black_by_generation(self.collection_scope())
+                    || (*ptr).header.is_marked_at(self.mark_parity)
+                {
                     return;
                 }
                 (*ptr).header.set_marked(self.mark_parity);
@@ -615,7 +617,7 @@ impl TaggedHeap {
             unsafe {
                 // Tenured short-circuit before the bit read (see string arm):
                 // permanent-black, never re-traced.
-                if (*ptr).gc.tenured {
+                if (*ptr).gc.black_by_generation(self.collection_scope()) {
                     return;
                 }
                 if (*ptr).gc.is_marked_at(self.mark_parity) {
@@ -1222,6 +1224,7 @@ impl TaggedHeap {
         // (`alloc_region.rs`, invariant I2).
         self.close_alloc_regions();
         let parity = self.mark_parity;
+        let scope = self.collection_scope();
         let ArenaSweepRanges {
             float,
             string,
@@ -1236,47 +1239,48 @@ impl TaggedHeap {
         } = ranges;
         let (fl, ff) = self
             .float_arena
-            .sweep_range(float.start, float.end, parity, |_| {});
-        let (sl, sf) = self
-            .string_arena
-            .sweep_range(string.start, string.end, parity, |_| {});
+            .sweep_range(float.start, float.end, parity, scope, |_| {});
+        let (sl, sf) =
+            self.string_arena
+                .sweep_range(string.start, string.end, parity, scope, |_| {});
         let (bl, bf) =
             self.bytecode_arena
-                .sweep_range(bytecode.start, bytecode.end, parity, |_| {});
-        let (lal, laf) = self
-            .lambda_arena
-            .sweep_range(lambda.start, lambda.end, parity, |_| {});
-        let (mal, maf) = self
-            .macro_arena
-            .sweep_range(macro_.start, macro_.end, parity, |_| {});
-        let (rel, ref_) = self
-            .record_arena
-            .sweep_range(record.start, record.end, parity, |_| {});
+                .sweep_range(bytecode.start, bytecode.end, parity, scope, |_| {});
+        let (lal, laf) =
+            self.lambda_arena
+                .sweep_range(lambda.start, lambda.end, parity, scope, |_| {});
+        let (mal, maf) =
+            self.macro_arena
+                .sweep_range(macro_.start, macro_.end, parity, scope, |_| {});
+        let (rel, ref_) =
+            self.record_arena
+                .sweep_range(record.start, record.end, parity, scope, |_| {});
         let (swl, swf) = self.symbol_with_pos_arena.sweep_range(
             symbol_with_pos.start,
             symbol_with_pos.end,
             parity,
+            scope,
             |_| {},
         );
         // Markers: `unchain_dead_markers` already detached every unmarked
         // marker from its buffer chain (it runs before the first sweep slice
         // and before the eager sweep), so freeing the slot here cannot leave
         // a dangling chain link.
-        let (mkl, mkf) = self
-            .marker_arena
-            .sweep_range(marker.start, marker.end, parity, |_| {});
+        let (mkl, mkf) =
+            self.marker_arena
+                .sweep_range(marker.start, marker.end, parity, scope, |_| {});
         // Bignums: childless and in no side registry; the in-place drop of a
         // dead slot's `Integer` frees its limb vector (GNU `cleanup_vector`
         // → `mpz_clear`).
-        let (bgl, bgf) = self
-            .bignum_arena
-            .sweep_range(bignum.start, bignum.end, parity, |_| {});
+        let (bgl, bgf) =
+            self.bignum_arena
+                .sweep_range(bignum.start, bignum.end, parity, scope, |_| {});
         let TaggedHeap {
             vector_arena,
             vector_object_addrs,
             ..
         } = self;
-        let (vl, vf) = vector_arena.sweep_range(vector.start, vector.end, parity, |addr| {
+        let (vl, vf) = vector_arena.sweep_range(vector.start, vector.end, parity, scope, |addr| {
             let removed = vector_object_addrs.remove(&addr);
             debug_assert!(removed, "freed page vector was not in the registry");
         });
@@ -1609,12 +1613,13 @@ impl TaggedHeap {
         // are permanently marked (frozen bit, exempt from parity); young ones
         // are interpreted at the current parity.
         let parity = self.mark_parity;
+        let scope = self.collection_scope();
         let mut total_marked = 0usize;
         for head in [self.all_objects, self.tenured_objects] {
             let mut current = head;
             while !current.is_null() {
                 unsafe {
-                    if (*current).tenured || (*current).is_marked_at(parity) {
+                    if (*current).black_by_generation(scope) || (*current).is_marked_at(parity) {
                         total_marked += 1;
                         // Verify the object's internal data is sane
                         if (*current).kind == HeapObjectKind::String {
@@ -1650,6 +1655,7 @@ impl TaggedHeap {
             arena: &ObjectArena<T>,
             non_cons_object_addrs: &FxHashSet<usize>,
             parity: bool,
+            scope: CollectionScope,
             total_marked: &mut usize,
             problems: &mut usize,
         ) {
@@ -1664,7 +1670,7 @@ impl TaggedHeap {
                             slot
                         );
                     }
-                    if (*header).tenured || (*header).is_marked_at(parity) {
+                    if (*header).black_by_generation(scope) || (*header).is_marked_at(parity) {
                         *total_marked += 1;
                     }
                 }
@@ -1683,6 +1689,7 @@ impl TaggedHeap {
             &self.float_arena,
             &self.non_cons_object_addrs,
             parity,
+            scope,
             &mut total_marked,
             &mut problems,
         );
@@ -1690,6 +1697,7 @@ impl TaggedHeap {
             &self.string_arena,
             &self.non_cons_object_addrs,
             parity,
+            scope,
             &mut total_marked,
             &mut problems,
         );
@@ -1697,6 +1705,7 @@ impl TaggedHeap {
             &self.vector_arena,
             &self.non_cons_object_addrs,
             parity,
+            scope,
             &mut total_marked,
             &mut problems,
         );
@@ -1704,6 +1713,7 @@ impl TaggedHeap {
             &self.bytecode_arena,
             &self.non_cons_object_addrs,
             parity,
+            scope,
             &mut total_marked,
             &mut problems,
         );
@@ -1711,6 +1721,7 @@ impl TaggedHeap {
             &self.lambda_arena,
             &self.non_cons_object_addrs,
             parity,
+            scope,
             &mut total_marked,
             &mut problems,
         );
@@ -1718,6 +1729,7 @@ impl TaggedHeap {
             &self.macro_arena,
             &self.non_cons_object_addrs,
             parity,
+            scope,
             &mut total_marked,
             &mut problems,
         );
@@ -1725,6 +1737,7 @@ impl TaggedHeap {
             &self.record_arena,
             &self.non_cons_object_addrs,
             parity,
+            scope,
             &mut total_marked,
             &mut problems,
         );
@@ -1732,6 +1745,7 @@ impl TaggedHeap {
             &self.symbol_with_pos_arena,
             &self.non_cons_object_addrs,
             parity,
+            scope,
             &mut total_marked,
             &mut problems,
         );
@@ -1739,6 +1753,7 @@ impl TaggedHeap {
             &self.marker_arena,
             &self.non_cons_object_addrs,
             parity,
+            scope,
             &mut total_marked,
             &mut problems,
         );
@@ -1746,6 +1761,7 @@ impl TaggedHeap {
             &self.bignum_arena,
             &self.non_cons_object_addrs,
             parity,
+            scope,
             &mut total_marked,
             &mut problems,
         );

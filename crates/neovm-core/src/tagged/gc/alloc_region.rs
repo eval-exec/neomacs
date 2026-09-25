@@ -312,10 +312,7 @@ impl TaggedHeap {
                 std::ptr::write(
                     slot,
                     FloatObj {
-                        header: GcHeader {
-                            marked: std::sync::atomic::AtomicBool::new(parity),
-                            ..GcHeader::new(HeapObjectKind::Float)
-                        },
+                        header: GcHeader::new_marked(HeapObjectKind::Float, parity),
                         value: 0.0,
                     },
                 );

@@ -233,7 +233,7 @@ impl TaggedHeap {
         let mut obj = self.all_objects;
         while !obj.is_null() {
             unsafe {
-                (*obj).tenured = true;
+                (*obj).make_permanent();
                 // A weak hash table being tenured becomes permanent-black and the
                 // main mark will never re-touch it; record it so the weak sweep
                 // keeps re-evaluating its entries every GC (GNU sweeps every weak
@@ -340,7 +340,7 @@ impl TaggedHeap {
                         let slot = page.slot_ptr(index);
                         // Allocated ⇒ survivor of the just-completed sweep ⇒
                         // a permanent. Plain store: promotion is STW.
-                        unsafe { (*(slot as *mut GcHeader)).tenured = true };
+                        unsafe { (*(slot as *mut GcHeader)).make_permanent() };
                     }
                 }
                 // RETIREMENT: FULL pages only (occupancy == slots, which
@@ -823,7 +823,7 @@ impl TaggedHeap {
             // "unmarked" on every other cycle — spurious partition/tricolor
             // verifier panics and needless old-gen concern. Tenured ≡ marked.
             let header = addr as *const GcHeader;
-            if unsafe { (*header).tenured } {
+            if unsafe { (*header).black_by_generation(self.collection_scope()) } {
                 return true;
             }
             return unsafe { (*header).is_marked_at(self.mark_parity) };
@@ -1147,9 +1147,10 @@ impl TaggedHeap {
     /// MARKED at the current parity (black), as `GcHeader` pointers.
     pub(super) fn collect_young_marked_page_slot_headers(&self) -> Vec<*mut GcHeader> {
         let parity = self.mark_parity;
+        let scope = self.collection_scope();
         let mut out: Vec<*mut GcHeader> = Vec::new();
         let mut push = |header: *mut GcHeader| unsafe {
-            if !(*header).tenured && (*header).is_marked_at(parity) {
+            if !(*header).black_by_generation(scope) && (*header).is_marked_at(parity) {
                 out.push(header);
             }
         };
@@ -1522,7 +1523,11 @@ impl TaggedHeap {
             // interpreted against the current parity — a tenured finalizer is
             // permanently live, never doomed.
             if unsafe {
-                (*ptr).header.gc.tenured || (*ptr).header.gc.is_marked_at(self.mark_parity)
+                (*ptr)
+                    .header
+                    .gc
+                    .black_by_generation(self.collection_scope())
+                    || (*ptr).header.gc.is_marked_at(self.mark_parity)
             } {
                 self.finalizer_registry.push(ptr);
             } else {

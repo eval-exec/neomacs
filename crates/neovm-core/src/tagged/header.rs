@@ -173,12 +173,13 @@ pub struct GcHeader {
     pub marked: AtomicBool,
     /// Exact object category for typed sweep/deallocation.
     pub kind: HeapObjectKind,
-    /// Tenured (old generation): a permanently-live heap object — the
-    /// heap-reconstructed dump permanents (bytecode/hash-tables/closures) and,
-    /// later, survival-promoted long-lived objects. When the dump partition is
-    /// active, tenured objects are born black, never cleared/re-traced, and
-    /// never swept; mutations of them are caught by the write barrier. Occupies
-    /// padding between `kind` and `next`, so the header does not grow.
+    /// Tenured: an OLD or PERMANENT heap object (sticky once set). Today
+    /// every tenured object is a permanent (the first partition cycle's
+    /// survivors, `generation.permanent()` set with it); P3.1's minors add
+    /// survival-promoted old objects. Whether a collection may skip it is
+    /// [`GcHeader::black_by_generation`]'s question, never this byte's
+    /// alone; the write barrier asks it directly (a tenured owner needs
+    /// remembering). Byte 2, read by compiled code with byte 3 as one `u16`.
     pub tenured: bool,
     /// Remembered: this (tenured) object is already in the heap's dump
     /// remembered set (`TaggedHeap::mapped_remembered`), so a write by it has
@@ -190,9 +191,80 @@ pub struct GcHeader {
     /// byte of its own, so the mutator's store cannot race the GC thread's
     /// claim-time `tenured` read. Occupies padding too (byte 3).
     pub remembered: AtomicBool,
+    /// Byte 4, reserved for P3.2 L2's `type_tag` (P3.0 §3.1); always 0.
+    reserved_type_tag: u8,
+    /// Byte 5, reserved for P3.2 L2's flags (P3.0 §3.1); always 0.
+    reserved_flags: u8,
+    /// Byte 6: the generation byte ([`GenBits`], P3.0's `gen`). Written only at a
+    /// world-stopped promotion, like `tenured`, so the GC thread reads it
+    /// without a race.
+    pub generation: GenBits,
+    /// Byte 7, reserved for P3.2 L1's slot class (P3.0 §3.1); always 0.
+    reserved_class: u8,
     /// Intrusive linked list of all GC-managed objects (for sweep).
     pub next: *mut GcHeader,
 }
+
+/// The generation byte of a [`GcHeader`] (byte 6; P3.0 §3.1, P3.1 §3.2).
+///
+/// - bit 0 `permanent`: a loadup survivor, promoted by the first partition
+///   cycle (`promote_and_blacken`): never traced, never swept, not even by a
+///   major. Implies `tenured`.
+/// - bit 1: reserved for the age bit of P3.1 C3.3 (age-2 promotion).
+///
+/// The pdump image writes this byte as 0 and it is never read for mapped
+/// objects.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GenBits(u8);
+
+impl GenBits {
+    const PERMANENT: u8 = 1 << 0;
+
+    /// No generation bits: a young (or old, not permanent) object.
+    pub const NONE: Self = Self(0);
+
+    /// Is the object a permanent (loadup survivor)?
+    #[inline(always)]
+    pub fn permanent(self) -> bool {
+        self.0 & Self::PERMANENT != 0
+    }
+
+    /// These bits with `permanent` set.
+    #[inline]
+    pub fn with_permanent(self) -> Self {
+        Self(self.0 | Self::PERMANENT)
+    }
+}
+
+/// Which generations a collection traces and sweeps (P3.1 §3.1, §3.5): the
+/// argument of THE generation predicate, [`GcHeader::black_by_generation`].
+///
+/// Every collection today is [`CollectionScope::Young`]: tenured objects are
+/// black, never traced or swept. [`CollectionScope::Full`] is a
+/// generational major's (P3.1 C2.6), which traces and frees old objects and
+/// leaves only permanents black; nothing constructs it yet except tests.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CollectionScope {
+    /// Old and permanent objects are black: today's cycles, and minors.
+    Young,
+    /// Only permanent objects are black: a major.
+    #[cfg_attr(not(test), allow(dead_code))]
+    Full,
+}
+
+// The header byte map (P3.0 §3.1; owner P3.1 C2.1/C2.2). P3.2 fills the
+// reserved bytes; compiled code bakes byte 2 (`GC_HEADER_TENURED_OFFSET`,
+// with byte 3 as one `u16`).
+const _: () = assert!(std::mem::offset_of!(GcHeader, marked) == 0);
+const _: () = assert!(std::mem::offset_of!(GcHeader, kind) == 1);
+const _: () = assert!(std::mem::offset_of!(GcHeader, tenured) == 2);
+const _: () = assert!(std::mem::offset_of!(GcHeader, remembered) == 3);
+const _: () = assert!(std::mem::offset_of!(GcHeader, reserved_type_tag) == 4);
+const _: () = assert!(std::mem::offset_of!(GcHeader, reserved_flags) == 5);
+const _: () = assert!(std::mem::offset_of!(GcHeader, generation) == 6);
+const _: () = assert!(std::mem::offset_of!(GcHeader, reserved_class) == 7);
+const _: () = assert!(std::mem::offset_of!(GcHeader, next) == 8);
 
 /// `tenured` and `remembered` are adjacent bytes: compiled code tests both
 /// with one 16-bit load (see [`GcHeader::NEEDS_REMEMBERING_U16`]).
@@ -214,8 +286,43 @@ impl GcHeader {
             kind,
             tenured: false,
             remembered: AtomicBool::new(false),
+            reserved_type_tag: 0,
+            reserved_flags: 0,
+            generation: GenBits::NONE,
+            reserved_class: 0,
             next: std::ptr::null_mut(),
         }
+    }
+
+    /// A header of `kind` whose raw mark is `marked` (born at a parity).
+    #[inline]
+    pub fn new_marked(kind: HeapObjectKind, marked: bool) -> Self {
+        let header = Self::new(kind);
+        header.marked.store(marked, Ordering::Relaxed);
+        header
+    }
+
+    /// THE generation predicate (P3.1 C2.1): is this object black by its
+    /// generation in a collection of `scope` — never traced, never swept, and
+    /// its mark never interpreted? Every mark, sweep, verifier, finalizer,
+    /// marker and claim reader that short-circuits on a generation asks this,
+    /// BEFORE interpreting the mark (a tenured object's mark is frozen).
+    /// Permanent implies tenured, so under [`CollectionScope::Young`] this is
+    /// exactly the `tenured` byte.
+    #[inline(always)]
+    pub(crate) fn black_by_generation(&self, scope: CollectionScope) -> bool {
+        match scope {
+            CollectionScope::Young => self.tenured,
+            CollectionScope::Full => self.generation.permanent(),
+        }
+    }
+
+    /// Promote to the permanent generation (world stopped): tenured and
+    /// permanent.
+    #[inline]
+    pub(crate) fn make_permanent(&mut self) {
+        self.tenured = true;
+        self.generation = self.generation.with_permanent();
     }
 
     /// The `(tenured, remembered)` byte pair of a header whose owner still

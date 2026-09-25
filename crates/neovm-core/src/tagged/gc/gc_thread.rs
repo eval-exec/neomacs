@@ -151,6 +151,16 @@ pub(super) struct ConcurrentClaimJob {
     pub(super) subr_dropped: std::sync::Arc<AtomicUsize>,
 }
 
+impl ConcurrentClaimJob {
+    /// The scope of the collection this job marks for (see
+    /// `TaggedHeap::collection_scope`): `Young` until generational majors
+    /// carry theirs in the job (P3.1 C2.6).
+    #[inline(always)]
+    pub(super) const fn scope(&self) -> CollectionScope {
+        CollectionScope::Young
+    }
+}
+
 /// A unit of work handed to the GC thread, plus a oneshot done-channel the GC
 /// thread signals when finished so the mutator can resume.
 ///
@@ -382,7 +392,7 @@ pub(super) fn concurrent_try_mark_owned(
         // TENURED short-circuit BEFORE the claim (H5): tenured ≡ permanently
         // black, never re-traced/re-swept — "handled, nothing owed" without
         // touching the frozen mark bit.
-        if unsafe { (*ptr).header.tenured } {
+        if unsafe { (*ptr).header.black_by_generation(job.scope()) } {
             return true;
         }
         // Young owned page float: claim at THIS cycle's parity. A failed
@@ -457,7 +467,7 @@ pub(super) fn concurrent_try_mark_owned(
             );
             // TENURED short-circuit BEFORE the claim (H5): permanently
             // black, never re-traced; frozen at the world-stopped promotion.
-            if unsafe { (*ptr).gc.tenured } {
+            if unsafe { (*ptr).gc.black_by_generation(job.scope()) } {
                 return true;
             }
             if unsafe { (*ptr).gc.mark_claim_at(job.parity) } {
@@ -531,7 +541,7 @@ pub(super) fn concurrent_try_mark_owned(
             // black, never re-traced/re-swept; frozen bit untouched. Its
             // young children are the promotion-time page-tenured
             // remembered-set scan's job, exactly as on the defer path.
-            if unsafe { (*ptr).gc.tenured } {
+            if unsafe { (*ptr).gc.black_by_generation(job.scope()) } {
                 return true;
             }
             if unsafe { (*ptr).gc.mark_claim_at(job.parity) } {

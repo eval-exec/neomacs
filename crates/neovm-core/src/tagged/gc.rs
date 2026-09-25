@@ -1111,6 +1111,15 @@ impl TaggedHeap {
         self.identity
     }
 
+    /// The scope of the collection now running or next to run: which
+    /// generations it treats as black (`GcHeader::black_by_generation`).
+    /// Every collection is `Young` until generational majors exist (P3.1
+    /// C2.6), which will make this read the cycle's kind.
+    #[inline(always)]
+    pub(crate) const fn collection_scope(&self) -> CollectionScope {
+        CollectionScope::Young
+    }
+
     pub fn set_write_tracking_mode(&mut self, mode: WriteTrackingMode) {
         self.write_tracking_mode = mode;
         TAGGED_HEAP_WRITE_TRACKING_MODE.with(|current| current.set(mode));
@@ -2245,6 +2254,7 @@ impl TaggedHeap {
         // Take the slot list out so we don't alias self while iterating.
         let slots = std::mem::take(&mut self.marker_chain_head_slots);
         let parity = self.mark_parity;
+        let scope = self.collection_scope();
         let (dump_lo, dump_hi) = (self.dump_addr_lo, self.dump_addr_hi);
         for slot in slots {
             unsafe {
@@ -2269,7 +2279,7 @@ impl TaggedHeap {
                     // cannot dangle.
                     let addr = curr as usize;
                     if (addr >= dump_lo && addr < dump_hi)
-                        || (*curr).header.gc.tenured
+                        || (*curr).header.gc.black_by_generation(scope)
                         || (*curr).header.gc.is_marked_at(parity)
                     {
                         // Live — advance prev
@@ -2572,6 +2582,11 @@ mod cons_alloc_tests;
 #[cfg(test)]
 #[path = "gc/tests/fake_image.rs"]
 pub(crate) mod fake_image;
+/// The header's generation byte, THE generation predicate per collection
+/// scope, the byte map, and the first cycle's promotion to permanent.
+#[cfg(test)]
+#[path = "gc/tests/generation_tests.rs"]
+mod generation_tests;
 #[cfg(test)]
 mod marker_arena_tests;
 /// Record and closure slot stores are atomic: race-free against an atomic

@@ -990,6 +990,7 @@ impl<T: PagedObject> ObjectArena<T> {
         start: usize,
         end: usize,
         parity: bool,
+        scope: CollectionScope,
         mut on_free: impl FnMut(usize),
     ) -> (usize, usize) {
         let mut live_bytes = 0usize;
@@ -1016,8 +1017,8 @@ impl<T: PagedObject> ObjectArena<T> {
                         "wrong-kind header in a {} arena slot",
                         T::CLASS,
                     );
-                    // (1) TENURED-SKIP before any parity interpretation.
-                    if header.tenured {
+                    // (1) GENERATION-SKIP before any parity interpretation.
+                    if header.black_by_generation(scope) {
                         continue;
                     }
                     if header.is_marked_at(parity) {
