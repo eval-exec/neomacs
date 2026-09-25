@@ -2673,7 +2673,56 @@ pub(super) fn lower_mir_with_plan(
     })
 }
 
-/// The host ISA for JIT modules, with cranelift-jit's own flag defaults
+/// The host ISA for the compile in progress (its allocator is
+/// [`active_regalloc_choice`]): built once per allocator per process and
+/// shared ([`build_jit_isa`] has the flags). Building it probes the host CPU
+/// through `cranelift_native` and resolves every setting by name, work that
+/// used to run on every compile; the cache keys on everything the flags
+/// depend on (the allocator; the checker and verifier switches are process
+/// constants). `NEOVM_JIT_ISA_CACHE=off` rebuilds per compile (the
+/// single-build A/B arm).
+pub(crate) fn jit_isa() -> Result<cranelift_codegen::isa::OwnedTargetIsa, CompileError> {
+    let choice = active_regalloc_choice();
+    if !isa_cache_enabled() {
+        return build_jit_isa(choice);
+    }
+    static ISAS: [std::sync::OnceLock<cranelift_codegen::isa::OwnedTargetIsa>;
+        RegallocChoice::COUNT] = [std::sync::OnceLock::new(), std::sync::OnceLock::new()];
+    let slot = &ISAS[choice.index()];
+    if let Some(isa) = slot.get() {
+        return Ok(isa.clone());
+    }
+    // Built outside the lock: a failure is returned, not cached, and a
+    // racing builder's identical ISA is simply dropped.
+    let built = build_jit_isa(choice)?;
+    Ok(slot.get_or_init(|| built).clone())
+}
+
+/// `NEOVM_JIT_ISA_CACHE=off`: build the ISA afresh for every compile (the
+/// pre-cache behaviour). Read once.
+pub(crate) fn isa_cache_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(on) = ISA_CACHE_TEST_OVERRIDE.with(std::cell::Cell::get) {
+        return on;
+    }
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var("NEOVM_JIT_ISA_CACHE").as_deref() != Ok("off"))
+}
+
+#[cfg(test)]
+thread_local! {
+    static ISA_CACHE_TEST_OVERRIDE: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Force the ISA cache on or off for this thread (tests only).
+#[cfg(test)]
+pub(crate) fn force_isa_cache_for_test(on: bool) {
+    ISA_CACHE_TEST_OVERRIDE.with(|c| c.set(Some(on)));
+}
+
+/// Build the host ISA for `choice`, with cranelift-jit's own flag defaults
 /// (`use_colocated_libcalls=false`, `is_pic=false` — mirrored by the AOT
 /// module builder, which flips only `is_pic`) plus ONE deliberate change:
 /// the Cranelift IR **verifier** runs only in debug builds. Cranelift enables
@@ -2682,8 +2731,9 @@ pub(super) fn lower_mir_with_plan(
 /// fontify sim's 352-op font-lock body). The verifier exists to catch
 /// lowering bugs, which debug/test builds still do; release compiles are
 /// trusted the same way a shipped compiler's are.
-pub(crate) fn jit_isa()
--> Result<std::sync::Arc<dyn cranelift_codegen::isa::TargetIsa>, CompileError> {
+pub(crate) fn build_jit_isa(
+    choice: RegallocChoice,
+) -> Result<cranelift_codegen::isa::OwnedTargetIsa, CompileError> {
     use cranelift_codegen::settings::{self, Configurable};
     let init_err = |e: String| CompileError::Backend(BackendError::ModuleInit(e));
     let mut flags = settings::builder();
@@ -2694,10 +2744,7 @@ pub(crate) fn jit_isa()
         .set("is_pic", "false")
         .map_err(|e| init_err(e.to_string()))?;
     flags
-        .set(
-            "regalloc_algorithm",
-            active_regalloc_choice().cranelift_setting(),
-        )
+        .set("regalloc_algorithm", choice.cranelift_setting())
         .map_err(|e| init_err(e.to_string()))?;
     if regalloc_checker_enabled() {
         flags
@@ -2737,6 +2784,17 @@ pub(crate) enum RegallocChoice {
 }
 
 impl RegallocChoice {
+    /// How many allocators there are (per-allocator tables).
+    pub(crate) const COUNT: usize = 2;
+
+    /// This allocator's slot in a per-allocator table.
+    pub(crate) fn index(self) -> usize {
+        match self {
+            RegallocChoice::Fast => 0,
+            RegallocChoice::Full => 1,
+        }
+    }
+
     /// The value of Cranelift's `regalloc_algorithm` setting.
     pub(crate) fn cranelift_setting(self) -> &'static str {
         match self {
