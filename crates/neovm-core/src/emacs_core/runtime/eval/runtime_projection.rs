@@ -24,17 +24,6 @@ pub(crate) const CONTEXT_THROW_ON_INPUT_OFFSET: usize =
 /// [`crate::buffer::buffer::jit_layout`] for the rest of the chain and for why
 /// two of its hops are probed rather than baked.
 pub(crate) const CONTEXT_BUFFERS_OFFSET: usize = std::mem::offset_of!(Context, buffers);
-/// Where compiled code reads `Context::quit_requested`'s `Arc` pointer.
-pub(crate) const CONTEXT_QUIT_REQUESTED_OFFSET: usize =
-    std::mem::offset_of!(Context, quit_requested);
-
-/// How far past the pointer a [`QuitRequest`] holds its flag sits, probed on a
-/// live request (the pointer names the shared allocation, whose layout std
-/// does not promise). `None` when the probe cannot find it.
-pub(crate) fn arc_atomic_bool_data_offset() -> Option<usize> {
-    QuitRequest::raised_flag_offset()
-}
-
 /// The gate's membership as one bit per symbol id, resolved against the
 /// current obarray (after any dump remap): the Context mirrors passed in by
 /// `install_core_eval_symbols`, the keyboard maps, the GC settings the

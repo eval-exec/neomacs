@@ -1126,7 +1126,7 @@ fn emit_inline_record_type_of(
 ) -> Option<(Block, Variable)> {
     use crate::emacs_core::eval::runtime_projection::{
         CONTEXT_COMPILER_OVERRIDES_ACTIVE_OFFSET, CONTEXT_QUIT_FLAG_OFFSET,
-        CONTEXT_QUIT_REQUESTED_OFFSET, CONTEXT_THROW_ON_INPUT_OFFSET, arc_atomic_bool_data_offset,
+        CONTEXT_THROW_ON_INPUT_OFFSET,
     };
     use crate::emacs_core::forward::LISP_BOOL_FWD_VALUE_OFFSET;
     use crate::emacs_core::symbol::{
@@ -1134,7 +1134,6 @@ fn emit_inline_record_type_of(
     };
     use crate::tagged::header::{LispValueVec, VecLikeHeader, VecLikeType, VectorObj};
     let (ptr_off, len_off) = LispValueVec::jit_slice_offsets()?;
-    let quit_requested_off = arc_atomic_bool_data_offset()?;
     const_assert_vector_record_share_layout();
     let data_off = core::mem::offset_of!(VectorObj, data);
     let type_off = core::mem::offset_of!(VecLikeHeader, type_tag);
@@ -1187,25 +1186,14 @@ fn emit_inline_record_type_of(
         vmctx,
         CONTEXT_THROW_ON_INPUT_OFFSET as i32,
     );
-    let requested_arc = fb.ins().load(
+    // The profiler tick, a pending OS signal and every raised cross-thread
+    // quit request: one word. A JIT-only bake of a process address (this
+    // emitter is gated `!aot` at its call site).
+    let async_addr = fb.ins().iconst(
         rt.ptr_ty,
-        flags,
-        vmctx,
-        CONTEXT_QUIT_REQUESTED_OFFSET as i32,
+        crate::emacs_core::eval::ASYNC_ATTENTION.addr() as i64,
     );
-    let requested = fb
-        .ins()
-        .uload8(types::I64, flags, requested_arc, quit_requested_off as i32);
-    let signal_addr = fb.ins().iconst(
-        rt.ptr_ty,
-        crate::emacs_core::os_signal::pending_flag_addr() as i64,
-    );
-    let signal = fb.ins().uload8(types::I64, flags, signal_addr, 0);
-    let tick_addr = fb.ins().iconst(
-        rt.ptr_ty,
-        crate::emacs_core::profiler::profiler_sample_due_addr() as i64,
-    );
-    let tick = fb.ins().uload8(types::I64, flags, tick_addr, 0);
+    let async_word = fb.ins().uload32(flags, async_addr, 0);
     // An unresolved `debug-on-next-call` cell reads through a stand-in that
     // is always armed.
     let fwd = fb.ins().load(
@@ -1228,9 +1216,7 @@ fn emit_inline_record_type_of(
     let not_record = fb.ins().bxor_imm_u(type_tag, record_tag);
     let set = fb.ins().bor(overrides, quit_flag);
     let set = fb.ins().bor(set, throw_on_input);
-    let set = fb.ins().bor(set, requested);
-    let set = fb.ins().bor(set, signal);
-    let set = fb.ins().bor(set, tick);
+    let set = fb.ins().bor(set, async_word);
     let set = fb.ins().bor(set, debug);
     let set = fb.ins().bor(set, not_record);
     let clear = icmp_imm_p(fb, IntCC::Equal, set, 0);
@@ -1832,14 +1818,12 @@ fn emit_mir_inline_entry_guard(
 ) -> Result<(), CompileError> {
     use crate::emacs_core::eval::runtime_projection::{
         CONTEXT_COMPILER_OVERRIDES_ACTIVE_OFFSET, CONTEXT_QUIT_FLAG_OFFSET,
-        CONTEXT_QUIT_REQUESTED_OFFSET, CONTEXT_THROW_ON_INPUT_OFFSET, arc_atomic_bool_data_offset,
+        CONTEXT_THROW_ON_INPUT_OFFSET,
     };
     use crate::emacs_core::forward::LISP_BOOL_FWD_VALUE_OFFSET;
     use crate::emacs_core::symbol::{
         OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET, OBARRAY_FUNCTION_EPOCH_OFFSET,
     };
-    let requested_off =
-        arc_atomic_bool_data_offset().ok_or(CompileError::UnsupportedOp("inline-quit-layout"))?;
     let ob = core::mem::offset_of!(Context, obarray);
     let flags = MemFlagsData::trusted();
     let vmctx = fb.use_var(rt.vmctx_var);
@@ -1865,25 +1849,13 @@ fn emit_mir_inline_entry_guard(
         vmctx,
         CONTEXT_THROW_ON_INPUT_OFFSET as i32,
     );
-    let requested_arc = fb.ins().load(
+    // The asynchronous sources, one word; a JIT-only bake (this guard refuses
+    // AOT, see its caller's `aot-inline-epoch`).
+    let async_addr = fb.ins().iconst(
         rt.ptr_ty,
-        flags,
-        vmctx,
-        CONTEXT_QUIT_REQUESTED_OFFSET as i32,
+        crate::emacs_core::eval::ASYNC_ATTENTION.addr() as i64,
     );
-    let requested = fb
-        .ins()
-        .uload8(types::I64, flags, requested_arc, requested_off as i32);
-    let signal_addr = fb.ins().iconst(
-        rt.ptr_ty,
-        crate::emacs_core::os_signal::pending_flag_addr() as i64,
-    );
-    let signal = fb.ins().uload8(types::I64, flags, signal_addr, 0);
-    let tick_addr = fb.ins().iconst(
-        rt.ptr_ty,
-        crate::emacs_core::profiler::profiler_sample_due_addr() as i64,
-    );
-    let tick = fb.ins().uload8(types::I64, flags, tick_addr, 0);
+    let async_word = fb.ins().uload32(flags, async_addr, 0);
     let fwd = fb.ins().load(
         rt.ptr_ty,
         flags,
@@ -1915,9 +1887,7 @@ fn emit_mir_inline_entry_guard(
     debug_assert_eq!(Value::NIL.bits(), 0);
     let set = fb.ins().bor(overrides, quit);
     let set = fb.ins().bor(set, throw);
-    let set = fb.ins().bor(set, requested);
-    let set = fb.ins().bor(set, signal);
-    let set = fb.ins().bor(set, tick);
+    let set = fb.ins().bor(set, async_word);
     let set = fb.ins().bor(set, debug);
     let clear = icmp_imm_p(fb, IntCC::Equal, set, 0);
     let valid = fb.ins().band(epoch_ok, clear);

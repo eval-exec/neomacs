@@ -7288,6 +7288,7 @@ mod gc_pacing;
 
 mod attention;
 pub use attention::QuitRequest;
+pub(crate) use attention::{ASYNC_ATTENTION, AsyncSource};
 
 pub(crate) mod runtime_projection;
 

@@ -136,7 +136,7 @@
 use std::sync::OnceLock;
 #[cfg(unix)]
 use std::sync::atomic::AtomicI32;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 
 mod platform;
 
@@ -394,10 +394,6 @@ impl InstallReport {
 static PENDING: [AtomicU32; HandledSignal::COUNT] =
     [const { AtomicU32::new(0) }; HandledSignal::COUNT];
 
-/// GNU's `pending_signals` (src/keyboard.c:105, `bool volatile`), read by
-/// `maybe_quit` (src/lisp.h:3896-3900).
-static PENDING_ANY: AtomicBool = AtomicBool::new(false);
-
 /// The write end of GNU's self-pipe (`child_signal_write_fd`,
 /// src/process.c:7595).  `-1` until [`install`] creates it.
 #[cfg(unix)]
@@ -434,8 +430,17 @@ impl AsyncSignalScope {
 
     /// GNU's `pending_signals = true` (src/keyboard.c:8512, :8431), the flag
     /// `maybe_quit` tests.
+    ///
+    /// The one write this handler makes outside the section above: GNU's
+    /// `pending_signals` is the evaluator's asynchronous-attention word
+    /// (`eval::ASYNC_ATTENTION`), shared with the profiler tick and the
+    /// cross-thread quit request so that a safe point tests all three with one
+    /// load.  `raise` is a single lock-free `fetch_or` on an `AtomicU32`
+    /// (`the_pending_counters_are_lock_free` pins the width), so it keeps this
+    /// method on the async-signal-safe list.
     fn set_pending_signals(&self) {
-        PENDING_ANY.store(true, Ordering::Release);
+        crate::emacs_core::eval::ASYNC_ATTENTION
+            .raise(crate::emacs_core::eval::AsyncSource::OsSignal);
     }
 
     /// GNU's `child_signal_notify`, whose entire surviving body is
@@ -631,17 +636,13 @@ fn classify_previous(old: &libc::sigaction) -> PreviousDisposition {
 // The safe-point half (runs on the Lisp thread, where anything is allowed)
 // ---------------------------------------------------------------------------
 
-/// The address of the flag [`pending`] reads, for compiled code that makes
-/// the quit poll's fast test inline.
-pub(crate) fn pending_flag_addr() -> usize {
-    std::ptr::from_ref(&PENDING_ANY) as usize
-}
-
 /// GNU's `pending_signals` (src/keyboard.c:105), read by `maybe_quit`
-/// (src/lisp.h:3896-3900).  One relaxed `'static` load.
+/// (src/lisp.h:3896-3900).  One relaxed `'static` load of the evaluator's
+/// asynchronous-attention word, whose `OsSignal` bit it is.
 #[inline(always)]
 pub(crate) fn pending() -> bool {
-    PENDING_ANY.load(Ordering::Relaxed)
+    crate::emacs_core::eval::ASYNC_ATTENTION
+        .is_raised(crate::emacs_core::eval::AsyncSource::OsSignal)
 }
 
 /// The pending count for one signal, without consuming it.
@@ -669,7 +670,7 @@ pub(crate) fn pending_count(signal: HandledSignal) -> u32 {
 /// residual.  When that lands, this becomes its drain and the attribute goes.
 #[cfg(test)]
 pub(crate) fn take_pending() -> [u32; HandledSignal::COUNT] {
-    PENDING_ANY.store(false, Ordering::Release);
+    crate::emacs_core::eval::ASYNC_ATTENTION.take(crate::emacs_core::eval::AsyncSource::OsSignal);
     let mut taken = [0u32; HandledSignal::COUNT];
     for &signal in supported_signals() {
         taken[signal as usize] = PENDING[signal as usize].swap(0, Ordering::AcqRel);
@@ -743,7 +744,7 @@ pub(crate) fn drain_pending_os_signals(
     eval: &mut crate::emacs_core::eval::Context,
 ) -> UserSignalDrain {
     // GNU's `process_pending_signals` opens with `pending_signals = false;`.
-    PENDING_ANY.store(false, Ordering::Release);
+    crate::emacs_core::eval::ASYNC_ATTENTION.take(crate::emacs_core::eval::AsyncSource::OsSignal);
 
     let debug_on_event = eval.debug_on_event_signal_name();
     let mut drain = UserSignalDrain::default();

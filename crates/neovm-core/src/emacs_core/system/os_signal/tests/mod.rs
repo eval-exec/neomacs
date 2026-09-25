@@ -442,10 +442,15 @@ fn the_pending_counters_are_lock_free() {
         "AtomicU32 is not native on this target, so the pending-signal counter \
          would take a lock in signal context"
     );
-    #[cfg(not(target_has_atomic = "8"))]
-    compile_error!(
-        "AtomicBool is not native on this target, so the pending-signal flag \
-         would take a lock in signal context"
+    // The pending-signal flag is one bit of the evaluator's asynchronous-
+    // attention word, raised with `AtomicU32::fetch_or`: the same width, so
+    // the check above covers it too. Pin that the word stays that width.
+    let _: fn(&std::sync::atomic::AtomicU32, u32, std::sync::atomic::Ordering) -> u32 =
+        std::sync::atomic::AtomicU32::fetch_or;
+    assert_eq!(
+        std::mem::size_of_val(&crate::emacs_core::eval::ASYNC_ATTENTION.load()),
+        4,
+        "the asynchronous-attention word is an AtomicU32"
     );
 }
 // The trigger's ENGAGEMENT counter, and the previous disposition it replaced.
@@ -528,6 +533,48 @@ fn a_delivered_sigchld_reaches_nothing_here_and_never_touches_pending_signals() 
         Default::default(),
         "`process_pending_signals' did something for a signal nothing here \
          handles: {drain:?}"
+    );
+}
+
+/// GNU's `pending_signals = true` is the evaluator's asynchronous-attention
+/// bit here: a real delivery sends the next safe point to its slow path, and
+/// the drain there lowers the bit again (`process_pending_signals` opens with
+/// `pending_signals = false`, src/keyboard.c:8367-8372), so one delivery does
+/// not make every later safe point take the cold path.
+#[test]
+#[cfg(all(unix, not(target_os = "android")))]
+fn os_signal_bit_raised_by_handler_and_cleared_by_drain() {
+    let report = os_signal::install();
+    assert!(report.installed_count() > 0, "{report:?}");
+    // Built before the delivery: building an evaluator runs Lisp, which
+    // reaches every safe point (see the SIGCHLD pin above).
+    let mut eval = crate::emacs_core::eval::Context::new();
+    let _ = os_signal::take_pending();
+    assert!(!os_signal::pending());
+    assert!(
+        eval.maybe_quit_hot_ok(),
+        "nothing pending before the delivery"
+    );
+
+    kill_self_and_wait(HandledSignal::Sigusr1);
+    assert!(os_signal::pending(), "the handler raised the bit");
+    assert!(
+        !eval.maybe_quit_hot_ok(),
+        "a pending signal is due at the next safe point"
+    );
+    // `debug-on-event` defaults to `sigusr2`, so SIGUSR1 takes the queue arm:
+    // no quit, the delivery stays counted for the input path.
+    eval.maybe_quit()
+        .expect("a queued user signal is not a quit");
+    assert!(
+        !os_signal::pending(),
+        "the safe point's drain lowered the bit"
+    );
+    assert!(eval.maybe_quit_hot_ok(), "and the fast path is back");
+    assert_eq!(
+        os_signal::pending_count(HandledSignal::Sigusr1),
+        1,
+        "the queue arm leaves GNU's npending in place"
     );
 }
 

@@ -39,18 +39,60 @@ fn quit_request_clones_share_one_flag() {
     );
 }
 
+/// The process word counts raised requests, not raises: a second raise of a
+/// raised request adds nothing, a take removes exactly what the raise added,
+/// and a request dropped while raised gives its unit back.
 #[test]
-fn quit_request_flag_offset_names_the_flag() {
-    let offset = QuitRequest::raised_flag_offset().expect("the probe finds the flag");
-    let request = QuitRequest::new();
-    // SAFETY: a `QuitRequest` is one pointer word (asserted by the probe).
-    let inner: usize = unsafe { std::mem::transmute_copy(&request) };
-    let read = || unsafe { *((inner + offset) as *const u8) };
-    assert_eq!(read(), 0, "a lowered request reads zero at the offset");
-    request.request();
-    assert_eq!(read(), 1, "a raised request reads one at the offset");
-    request.clear();
-    assert_eq!(read(), 0);
+fn quit_request_counts_raised_cells_exactly() {
+    use crate::emacs_core::eval::ASYNC_ATTENTION;
+    let count = || ASYNC_ATTENTION.raised_quit_requests_for_test();
+    let base = count();
+    let a = QuitRequest::new();
+    let b = QuitRequest::new();
+    a.request();
+    a.request();
+    assert_eq!(count(), base + 1, "raising a raised request adds nothing");
+    b.request();
+    assert_eq!(count(), base + 2, "each raised cell counts once");
+    assert!(a.take());
+    assert_eq!(count(), base + 1);
+    assert!(!a.take(), "a second take finds nothing");
+    assert_eq!(count(), base + 1, "and removes nothing");
+    let b_clone = b.clone();
+    drop(b);
+    assert_eq!(count(), base + 1, "a live clone keeps the raise");
+    drop(b_clone);
+    assert_eq!(
+        count(),
+        base,
+        "the last handle of a raised request releases its unit"
+    );
+    let c = QuitRequest::new();
+    c.request();
+    c.clear();
+    drop(c);
+    assert_eq!(count(), base, "a cleared request owes nothing at drop");
+}
+
+/// A raised request is what the safe point's fast test sees: the word goes
+/// nonzero, `maybe_quit_hot_ok` refuses, and the drain lowers both.
+#[test]
+fn a_raised_quit_request_sends_the_safe_point_to_its_slow_path() {
+    crate::test_utils::init_test_tracing();
+    let mut ctx = Context::new();
+    assert!(ctx.maybe_quit_hot_ok(), "nothing pending at start");
+    ctx.quit_requested.request();
+    assert_ne!(crate::emacs_core::eval::ASYNC_ATTENTION.load(), 0);
+    assert!(
+        !ctx.maybe_quit_hot_ok(),
+        "a raised request is due at the next safe point"
+    );
+    let err = ctx.maybe_quit().expect_err("the drain signals quit");
+    assert!(format!("{err:?}").contains("quit"), "{err:?}");
+    assert!(!ctx.quit_requested.is_requested());
+    ctx.set_quit_flag_value(Value::NIL);
+    assert_eq!(crate::emacs_core::eval::ASYNC_ATTENTION.load(), 0);
+    assert!(ctx.maybe_quit_hot_ok());
 }
 
 /// A raise from another thread -- the input bridge's shape -- reaches the

@@ -3,7 +3,7 @@ use std::time::Instant;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
-use super::eval::{Context, SpecBinding};
+use super::eval::{ASYNC_ATTENTION, AsyncSource, Context, SpecBinding};
 use super::intern::resolve_sym;
 use super::value::{
     FunctionSourceIdentity, HashKey, HashTableTest, Value, build_hash_table_literal_value,
@@ -270,38 +270,27 @@ impl ProfilerState {
     }
 }
 
-/// Wall-clock sample-due flag, set by the watchdog timer armed while a
-/// profiler runs and consumed on the Lisp thread at the `maybe_quit` safe
-/// point ([`Context::profiler_sample_tick`]). GNU's CPU profiler is a SIGPROF
-/// handler with ZERO cost when off; SIGPROF is taken here by the native
-/// profiler (pprof-rs), so the Lisp profiler samples via this flag instead —
-/// one `'static` relaxed load on the quit-poll fast path replaces the two to
-/// three `profiler_poll` calls every Lisp call used to pay (the poll walked
-/// `is_active()` per push/pop even with the profiler off). Sample COUNTS stay
-/// exact regardless of tick timing: `Profiler::poll` self-corrects on thread
-/// CPU time (samples = elapsed / interval since the last poll), so the tick
-/// only decides which backtrace the accumulated samples attribute to — the
-/// same quantization GNU gets from signal delivery.
-static PROFILER_SAMPLE_DUE: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+// The wall-clock sample-due flag is `AsyncSource::ProfilerTick` in the
+// evaluator's asynchronous-attention word, set by the watchdog timer armed
+// while a profiler runs and consumed on the Lisp thread at the `maybe_quit`
+// safe point ([`Context::profiler_sample_tick`]). GNU's CPU profiler is a
+// SIGPROF handler with ZERO cost when off; SIGPROF is taken here by the
+// native profiler (pprof-rs), so the Lisp profiler samples via this bit
+// instead — it shares the one relaxed load the quit poll's fast path makes
+// for every asynchronous source, replacing the two to three `profiler_poll`
+// calls every Lisp call used to pay (the poll walked `is_active()` per
+// push/pop even with the profiler off). Sample COUNTS stay exact regardless
+// of tick timing: `Profiler::poll` self-corrects on thread CPU time (samples
+// = elapsed / interval since the last poll), so the tick only decides which
+// backtrace the accumulated samples attribute to — the same quantization GNU
+// gets from signal delivery.
 
 /// Generation counter for the watchdog: arming bumps it and spawns a thread
 /// pinned to the new generation; disarming (or re-arming) bumps it again and
 /// the stale thread exits at its next tick. At most one live watchdog, no
-/// join handles to plumb, and a stale `SAMPLE_DUE` is harmless (the consumer
+/// join handles to plumb, and a stale `ProfilerTick` bit is harmless (the consumer
 /// re-checks `is_active`).
 static PROFILER_TIMER_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-/// The address of the flag [`profiler_sample_due`] reads, for compiled code
-/// that makes the quit poll's fast test inline.
-pub(crate) fn profiler_sample_due_addr() -> usize {
-    std::ptr::from_ref(&PROFILER_SAMPLE_DUE) as usize
-}
-
-#[inline]
-pub(crate) fn profiler_sample_due() -> bool {
-    PROFILER_SAMPLE_DUE.load(std::sync::atomic::Ordering::Relaxed)
-}
 
 fn arm_profiler_sample_timer(interval_ns: u64) {
     use std::sync::atomic::Ordering;
@@ -314,7 +303,7 @@ fn arm_profiler_sample_timer(interval_ns: u64) {
         .spawn(move || {
             while PROFILER_TIMER_GEN.load(Ordering::Relaxed) == generation {
                 std::thread::sleep(tick);
-                PROFILER_SAMPLE_DUE.store(true, Ordering::Relaxed);
+                ASYNC_ATTENTION.raise(AsyncSource::ProfilerTick);
             }
         })
         .expect("profiler tick thread should spawn");
@@ -323,19 +312,23 @@ fn arm_profiler_sample_timer(interval_ns: u64) {
 fn disarm_profiler_sample_timer() {
     use std::sync::atomic::Ordering;
     PROFILER_TIMER_GEN.fetch_add(1, Ordering::Relaxed);
-    PROFILER_SAMPLE_DUE.store(false, Ordering::Relaxed);
+    ASYNC_ATTENTION.take(AsyncSource::ProfilerTick);
 }
 
 impl Context {
-    /// Consume a pending sample tick: swap the flag off and take one poll
+    /// Consume a pending sample tick: clear the bit and take one poll
     /// (which attributes every CPU sample / allocated byte accumulated since
-    /// the previous poll to the current backtrace). Called from the
-    /// `maybe_quit` fast path; a race that loses the swap just defers the
-    /// attribution to the next tick, and a stale flag with no profiler
-    /// running falls into `profiler_poll`'s `is_active` early-return.
+    /// the previous poll to the current backtrace). Called first thing on the
+    /// `maybe_quit` slow path, which the raised bit sends the safe point to;
+    /// a race that loses the clear just defers the attribution to the next
+    /// tick, and a stale bit with no profiler running falls into
+    /// `profiler_poll`'s `is_active` early-return. The load before the RMW
+    /// keeps the slow path's other visitors (a quit, a signal) off the atomic.
     #[inline]
     pub(crate) fn profiler_sample_tick(&mut self) {
-        if PROFILER_SAMPLE_DUE.swap(false, std::sync::atomic::Ordering::Relaxed) {
+        if ASYNC_ATTENTION.is_raised(AsyncSource::ProfilerTick)
+            && ASYNC_ATTENTION.take(AsyncSource::ProfilerTick)
+        {
             self.profiler_poll();
         }
     }

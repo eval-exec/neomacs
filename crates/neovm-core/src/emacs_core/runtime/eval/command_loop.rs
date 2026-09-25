@@ -2572,6 +2572,22 @@ impl Context {
         Err(signal(LispCondition::Quit, vec![]))
     }
 
+    /// The pure fast-path condition of [`Self::maybe_quit`]: true when the
+    /// poll would do nothing. Loads only — no mutation, no allocation, no
+    /// Lisp — so bytecode dispatch may evaluate it with its operand-stack
+    /// cursor still live and only publish for the cold slow path.
+    ///
+    /// GNU's test is `!NILP (Vquit_flag) || pending_signals`
+    /// (src/lisp.h:3897-3901).  [`ASYNC_ATTENTION`] is the second word: the
+    /// profiler tick, a handled OS signal and every raised cross-thread quit
+    /// request share it, so the asynchronous half is one load.
+    #[inline(always)]
+    pub(crate) fn maybe_quit_hot_ok(&self) -> bool {
+        ASYNC_ATTENTION.load() == 0
+            && self.quit_flag.is_nil()
+            && (self.throw_on_input.is_nil() || !self.has_throw_on_input_poll_source())
+    }
+
     /// GNU `maybe_quit`: promote frontend input for `throw-on-input`, then do
     /// nothing when `quit-flag` is nil or `inhibit-quit` is non-nil;
     /// otherwise process the quit request.
@@ -2581,38 +2597,9 @@ impl Context {
     /// host channel, so this semantic safe point must perform that promotion
     /// itself.  Restrict the channel poll to an active `throw-on-input`
     /// binding; the normal `maybe_quit` hot path remains a flag/atomic check.
-    /// The pure fast-path condition of [`Self::maybe_quit`]: true when the
-    /// poll would do nothing. Loads only — no mutation, no allocation, no
-    /// Lisp — so bytecode dispatch may evaluate it with its operand-stack
-    /// cursor still live and only publish for the cold slow path.
-    #[inline(always)]
-    pub(crate) fn maybe_quit_hot_ok(&self) -> bool {
-        !crate::emacs_core::profiler::profiler_sample_due()
-            && !crate::emacs_core::os_signal::pending()
-            && self.quit_flag.is_nil()
-            && !self.quit_requested.is_requested()
-            && (self.throw_on_input.is_nil() || !self.has_throw_on_input_poll_source())
-    }
-
     #[inline(always)]
     pub(crate) fn maybe_quit(&mut self) -> Result<(), Flow> {
-        // Profiler sampling rides the quit poll (GNU samples in a SIGPROF
-        // handler; SIGPROF belongs to the native profiler here, so the Lisp
-        // profiler's watchdog raises a flag that this — the canonical safe
-        // point every engine polls — consumes). One 'static relaxed load
-        // when no profiler runs, replacing the per-call profiler_poll the
-        // backtrace push/pop helpers used to pay.
-        if crate::emacs_core::profiler::profiler_sample_due() {
-            self.profiler_sample_tick();
-        }
-        // GNU's safe point is `if (!NILP (Vquit_flag) || pending_signals)`
-        // (src/lisp.h:3896-3900), so an OS signal costs exactly one more
-        // relaxed `'static` load here -- GNU's own hot-path shape and cost.
-        if self.quit_flag.is_nil()
-            && !crate::emacs_core::os_signal::pending()
-            && !self.quit_requested.is_requested()
-            && (self.throw_on_input.is_nil() || !self.has_throw_on_input_poll_source())
-        {
+        if self.maybe_quit_hot_ok() {
             return Ok(());
         }
         self.maybe_quit_slow()
@@ -2620,6 +2607,13 @@ impl Context {
 
     #[cold]
     pub(super) fn maybe_quit_slow(&mut self) -> Result<(), Flow> {
+        // Profiler sampling rides the quit poll (GNU samples in a SIGPROF
+        // handler; SIGPROF belongs to the native profiler here, so the Lisp
+        // profiler's watchdog raises `AsyncSource::ProfilerTick`, which sends
+        // the safe point here). A tick is consumed first, as the fast path
+        // used to, and every step below is a no-op when its own condition is
+        // false, so a tick alone changes nothing else.
+        self.profiler_sample_tick();
         if self.has_throw_on_input_poll_source() {
             self.poll_pending_input_for_throw_on_input()?;
         }

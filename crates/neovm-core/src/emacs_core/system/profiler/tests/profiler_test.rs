@@ -223,3 +223,33 @@ fn profiler_el_public_memory_workflow_builds_and_renders_a_report() {
     );
     ctx.eval_str("(profiler-report)").unwrap();
 }
+
+/// The watchdog's tick is `AsyncSource::ProfilerTick` in the evaluator's
+/// asynchronous-attention word: a raised tick sends the next safe point to
+/// its slow path, which consumes it (one poll) and leaves the fast path clear;
+/// disarming the watchdog lowers a tick nobody consumed.
+#[test]
+fn profiler_tick_bit_round_trip() {
+    use crate::emacs_core::eval::{ASYNC_ATTENTION, AsyncSource};
+    let mut ctx = Context::new();
+    assert!(ctx.maybe_quit_hot_ok());
+    ASYNC_ATTENTION.raise(AsyncSource::ProfilerTick);
+    assert!(
+        !ctx.maybe_quit_hot_ok(),
+        "a due tick is noticed at the next safe point"
+    );
+    ctx.maybe_quit().expect("a tick alone is not a quit");
+    assert!(
+        !ASYNC_ATTENTION.is_raised(AsyncSource::ProfilerTick),
+        "the safe point consumed the tick"
+    );
+    assert!(ctx.maybe_quit_hot_ok());
+
+    ASYNC_ATTENTION.raise(AsyncSource::ProfilerTick);
+    disarm_profiler_sample_timer();
+    assert!(
+        !ASYNC_ATTENTION.is_raised(AsyncSource::ProfilerTick),
+        "disarming drops an unconsumed tick"
+    );
+    assert!(ctx.maybe_quit_hot_ok());
+}

@@ -601,9 +601,10 @@ fn neovm_jit_call_general(
                 return jit_call_status(res, out);
             }
             // `maybe_quit_hot_ok` above tested exactly `maybe_quit`'s
-            // fast-path condition (the same four loads plus the profiler
-            // tick) and nothing between here and there can set any of
-            // them, so the generic path does not poll a second time.
+            // fast-path condition (the same loads, the asynchronous word
+            // included) and nothing between here and there can set any of
+            // them on this thread, so the generic path does not poll a
+            // second time.
             let saved = save_scratch_gc_roots();
             // The callee is not on bc_buf, so it needs an explicit scratch
             // root across the call (which may GC); the arguments are
