@@ -3542,7 +3542,11 @@ impl Context {
                 Ok(new_env) => new_env,
                 Err(flow) => return self.unbind_to_with_result(root_count, Err(flow)),
             };
-            let result = self.run_lexical_closure_body(new_env, body);
+            let result = if self.tier_i.engaged() {
+                self.tier_i_run_lexical_body(arglist, new_env, body)
+            } else {
+                self.run_lexical_closure_body(new_env, body)
+            };
             return self.unbind_to_with_result(root_count, result);
         }
         if raw_cons_lambda {
@@ -3556,7 +3560,11 @@ impl Context {
                 return self.unbind_to_with_result(root_count, Err(err));
             }
         };
-        let result = self.eval_lambda_body_value(body);
+        let result = if self.tier_i.engaged() && !raw_cons_lambda {
+            self.tier_i_run_dynamic_body(arglist, body)
+        } else {
+            self.eval_lambda_body_value(body)
+        };
         let result = self.rewrap_thread_blocked_in_lexenv(result);
         let result = self.finish_lambda_call(call_state, result);
         self.unbind_to_with_result(root_count, result)
@@ -3601,6 +3609,9 @@ impl Context {
             arglist,
             &self.bc_buf[first_arg..first_arg + nargs],
         )?;
+        if self.tier_i.engaged() {
+            return self.tier_i_run_lexical_body(arglist, new_env, body);
+        }
         self.run_lexical_closure_body(new_env, body)
     }
 

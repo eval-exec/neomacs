@@ -215,6 +215,7 @@ impl Context {
             macro_perf_stats: MacroPerfStats::default(),
             interpreted_closure_filter_fn: None,
             cconv_memo: cconv_memo::CconvMemo::from_env(),
+            tier_i: tier_i::TierI::from_env(),
             fringe_bitmaps: super::super::builtins::fringe_bitmap::FringeBitmapRegistry::new(),
         };
         ev.setup_thread_locals();

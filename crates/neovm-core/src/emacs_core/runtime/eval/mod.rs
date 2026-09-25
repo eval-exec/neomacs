@@ -3552,6 +3552,9 @@ pub struct Context {
     /// `cconv-make-interpreted-closure` statistics and effect counters
     /// (`NEOVM_CCONV_MEMO`, P4.1 Stage 0).
     pub(crate) cconv_memo: cconv_memo::CconvMemo,
+    /// Tier-I fallback B: compiled hot interpreted closures (`NEOVM_TIER_I`,
+    /// P4.2 Part A).
+    pub(crate) tier_i: tier_i::TierI,
     /// User-defined fringe bitmaps registered via `define-fringe-bitmap`.
     /// GC-safe: holds no raw `Value`s (bits are `Vec<u16>`, faces are names).
     pub(crate) fringe_bitmaps: super::builtins::fringe_bitmap::FringeBitmapRegistry,
@@ -7456,6 +7459,7 @@ mod cconv_memo;
 mod cconv_shape;
 mod cconv_trust;
 pub(crate) use cconv_memo::note_function_epoch_move;
+mod tier_i;
 #[cfg(test)]
 pub(crate) use cconv_memo::{
     CconvMemoEvent, CconvMemoMode, HeadVerdict, parse_cconv_fast_knob, parse_cconv_memo_knob,
@@ -7468,6 +7472,8 @@ pub(crate) use cconv_shape::{
 pub(crate) use cconv_trust::{
     EXCLUDED_CALLEES, TRUSTED_LISP, TRUSTED_VARIABLES, TrustRefusal, TrustedVariableRole,
 };
+#[cfg(test)]
+pub(crate) use tier_i::{TierIEvent, TierIMode, parse_tier_i_knob};
 #[cfg(test)]
 pub(crate) use var_fast::{
     VarCacheEvent, VarCacheTier, parse_var_cache_knob, reset_var_cache_events,
