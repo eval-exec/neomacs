@@ -388,6 +388,12 @@ impl CconvMemo {
         self.fast = fast;
     }
 
+    /// Forget the trusted set, so the next use builds it again.
+    #[cfg(test)]
+    pub(crate) fn reset_trusted_for_test(&mut self) {
+        self.trusted = TrustedSet::default();
+    }
+
     #[cfg(test)]
     pub(crate) fn set_strict(&mut self, strict: bool) {
         self.strict = strict;

@@ -5,9 +5,15 @@ use crate::emacs_core::eval::{CconvMemoEvent, CconvMemoMode, Context, parse_ccon
 use crate::emacs_core::print::print_value;
 use crate::emacs_core::value::Value;
 
+/// A runtime-startup context with the memo in MODE and the native
+/// untrimmed path off, whatever `NEOVM_CCONV_MEMO` / `NEOVM_CCONV_FAST` say
+/// (the whole suite also runs under those knobs as a soak).
 fn startup(mode: CconvMemoMode) -> Context {
     let mut eval = crate::test_utils::runtime_startup_context();
     eval.cconv_memo.set_mode(mode);
+    eval.cconv_memo.set_fast(false);
+    // Built afresh at the test's first use, not during startup.
+    eval.cconv_memo.reset_trusted_for_test();
     eval
 }
 
