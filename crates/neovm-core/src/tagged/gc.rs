@@ -1600,6 +1600,27 @@ impl TaggedHeap {
         }
     }
 
+    /// Enter the mapped (dump-image) cons CONS into the dump remembered set
+    /// before anything writes it -- exactly what `record_heap_write` does at
+    /// its first write -- so that later writes by compiled code may be plain
+    /// stores while neither a concurrent mark nor owner tracking is on
+    /// (P1.4 Stage B: a buffer-local variable's dumped default cell, which
+    /// sits in the barrier window's dump span). The set is append-only for
+    /// the heap's life and mapped objects are never freed, so the entry
+    /// outlives every leaf baked against it (the JIT cache is dropped with
+    /// the heap). A spurious entry only re-scans one cons per collection.
+    /// `false`, doing nothing, for anything but a mapped cons of a heap with
+    /// the dump partition on.
+    pub(crate) fn remember_mapped_cons_ahead_of_writes(&mut self, cons: TaggedValue) -> bool {
+        if !cons.is_cons() || !self.partition_dump || !self.owner_is_mapped(cons) {
+            return false;
+        }
+        let bits = cons.bits();
+        self.remember_owner(cons);
+        TAGGED_HEAP_REMEMBERED_CACHE.with(|slots| slots[barrier_cache_slot(bits)].set(bits));
+        true
+    }
+
     /// Raw object address for a heap-tagged value (cons/veclike/string/float),
     /// used for the dump-partition address-span test.
     fn value_heap_addr(value: TaggedValue) -> Option<usize> {

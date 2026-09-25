@@ -6814,6 +6814,24 @@ fn lower_simple_op_arms(
             let rt = rt.ok_or(CompileError::UnsupportedOp("variable"))?;
             let sym = const_sym_id(constants, *idx)?;
             let val = stack.pop().ok_or(CompileError::StackUnderflow)?;
+            // `NEOVM_JIT_INLINE_VARS=set`: the store inline, the shim below
+            // as its slow path (`inline_vars`).
+            if let Some(site) = (!aot).then(|| super::inline_vars::set_site(sym)).flatten() {
+                let sym_v = materialize_op_sym_id(fb, reloc_base, reloc_index, sym);
+                super::inline_vars::lower_varset(
+                    fb,
+                    rt,
+                    &site,
+                    sym_v,
+                    val,
+                    stack,
+                    reps,
+                    signal_exit,
+                    handlers,
+                    pending,
+                );
+                return Ok(());
+            }
             let saved = if stack.is_empty() {
                 CondRoots::NONE
             } else {

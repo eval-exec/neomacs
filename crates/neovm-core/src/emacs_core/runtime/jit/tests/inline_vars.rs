@@ -37,6 +37,14 @@ impl Prog {
             arity: 0,
         }
     }
+
+    /// `(lambda (v) (setq VAR v) VAR)`
+    fn setq() -> Self {
+        Self {
+            ops: vec![Op::StackRef(0), Op::VarSet(0), Op::VarRef(0), Op::Return],
+            arity: 1,
+        }
+    }
 }
 
 fn constants(var: &str) -> Vec<Value> {
@@ -248,8 +256,8 @@ fn inline_vars_knob_parses_every_spelling() {
 }
 
 /// Every shape a fast path takes answers as the interpreter does and calls
-/// no variable shim: reads of plain, buffer-local (own binding and default)
-/// and forwarded variables.
+/// no variable shim: reads and `setq`s of plain, buffer-local (own binding
+/// and default) and forwarded variables.
 #[test]
 fn cached_shapes_take_no_shim_and_answer_as_the_interpreter() {
     const VARS: &[&str] = &[
@@ -261,10 +269,13 @@ fn cached_shapes_take_no_shim_and_answer_as_the_interpreter() {
         "ivt-bool",
         "ivt-int",
     ];
-    let progs: [(&str, Prog, Vec<Value>); 1] = [("read", Prog::read(), vec![])];
+    let progs: [(&str, Prog, Vec<Value>); 2] = [
+        ("read", Prog::read(), vec![]),
+        ("setq", Prog::setq(), vec![Value::make_int(5)]),
+    ];
     for &var in VARS {
         for (name, prog, args) in &progs {
-            // Each engine in its own fixture.
+            // Each engine in its own fixture: a `setq` changes the variable.
             let mut ev = fixture();
             warm(&mut ev, VARS);
             let want = interpret(&mut ev, prog, var, args);
@@ -289,19 +300,20 @@ fn knob_off_inlines_nothing() {
     warm(&mut ev, &["ivt-plain", "ivt-loc"]);
     for (knob, inline) in [(OFF, false), (ALL, true)] {
         reset_inline_var_sites();
-        let leaf = compile(&ev, knob, &Prog::read(), "ivt-loc");
-        let (got, called) = run(&mut ev, &leaf, &[]);
-        assert_eq!(got, "11");
-        let sites = inline_var_sites(InlineVarOp::Read);
+        let leaf = compile(&ev, knob, &Prog::setq(), "ivt-loc");
+        let (got, called) = run(&mut ev, &leaf, &[Value::make_int(3)]);
+        assert_eq!(got, "3");
+        let sites = [InlineVarOp::Read, InlineVarOp::Set].map(inline_var_sites);
         if inline {
-            assert_eq!(sites, 1);
+            assert_eq!(sites, [1, 1]);
             assert_eq!(called, Shims::default());
         } else {
-            assert_eq!(sites, 0);
+            assert_eq!(sites, [0, 0]);
             assert_eq!(
                 called,
                 Shims {
                     varref: 1,
+                    varset: 1,
                     ..Shims::default()
                 }
             );
@@ -314,24 +326,28 @@ fn knob_off_inlines_nothing() {
 /// refuses and the shim answers as the interpreter does.
 #[test]
 fn a_class_change_after_compile_takes_the_shim() {
-    // (what, the change, whether the read must now reach the shim: a
-    // watcher traps writes only).
-    type Change = (&'static str, &'static str, [bool; 1]);
+    // (what, the change, which of read/setq must now reach a shim: a
+    // watcher traps writes only; a void plain cell refuses the read only --
+    // its `setq` is a plain store, as in `try_set_plain_variable`).
+    type Change = (&'static str, &'static str, [bool; 2]);
     let changes: &[Change] = &[
         (
             "make-local",
             "(progn (make-local-variable 'ivt-plain) (setq ivt-plain 111))",
-            [true],
+            [true; 2],
         ),
-        ("alias", "(defvaralias 'ivt-plain 'ivt-loc)", [true]),
+        ("alias", "(defvaralias 'ivt-plain 'ivt-loc)", [true; 2]),
         (
             "watch",
             "(add-variable-watcher 'ivt-plain 'ivt-watcher)",
-            [false],
+            [false, true],
         ),
-        ("makunbound", "(makunbound 'ivt-plain)", [true]),
+        ("makunbound", "(makunbound 'ivt-plain)", [true, false]),
     ];
-    let progs = [("read", Prog::read(), vec![])];
+    let progs = [
+        ("read", Prog::read(), vec![]),
+        ("setq", Prog::setq(), vec![Value::make_int(5)]),
+    ];
     for &(what, change, refused) in changes {
         for ((name, prog, args), refused) in progs.iter().zip(refused) {
             let mut ev = fixture();
@@ -376,6 +392,85 @@ fn a_cache_miss_takes_the_shim_and_the_next_run_hits() {
     eval_ok(&mut ev, "(kill-local-variable 'ivt-locd)");
     let (got, called) = run(&mut ev, &leaf, &[]);
     assert_eq!((got.as_str(), called.varref), ("20", 1), "the epoch moved");
+    // `setq` of a `make-variable-buffer-local` variable with no binding here
+    // auto-creates one through the shim; the next `setq` is inline.
+    eval_ok(&mut ev, "(set-buffer ivt-home)");
+    warm(&mut ev, &["ivt-auto"]);
+    let leaf = compile(&ev, ALL, &Prog::setq(), "ivt-auto");
+    let (got, called) = run(&mut ev, &leaf, &[Value::make_int(31)]);
+    assert_eq!((got.as_str(), called.varset), ("31", 1), "auto-create");
+    assert_eq!(
+        eval(
+            &mut ev,
+            "(list (local-variable-p 'ivt-auto) (default-value 'ivt-auto))"
+        ),
+        "(t 30)"
+    );
+    let (got, called) = run(&mut ev, &leaf, &[Value::make_int(32)]);
+    assert_eq!((got.as_str(), called), ("32".into(), Shims::default()));
+}
+
+/// Type rules: an integer forwarder takes a fixnum inline and signals for
+/// anything else through the shim; a Boolean one canonicalises.
+#[test]
+fn type_rules_match_the_interpreter() {
+    let cases: &[(&str, Prog, Vec<Value>)] = &[
+        ("ivt-int", Prog::setq(), vec![Value::string("s")]),
+        ("ivt-lbool", Prog::setq(), vec![Value::make_int(5)]),
+    ];
+    for (var, prog, args) in cases {
+        let answers: Vec<(String, String)> = [None, Some(ALL)]
+            .into_iter()
+            .map(|knob| {
+                let mut ev = fixture();
+                warm(&mut ev, &[var]);
+                let depth = ev.specpdl.len();
+                let got = match knob {
+                    None => interpret(&mut ev, prog, var, args),
+                    Some(knob) => {
+                        let leaf = compile(&ev, knob, prog, var);
+                        run(&mut ev, &leaf, args).0
+                    }
+                };
+                // A signal leaves the leaf's frame to its caller's unwinder.
+                if ev.specpdl.len() > depth {
+                    ev.unbind_to(depth);
+                }
+                ev.jit_bind_stack.clear();
+                (got, observe(&mut ev, var))
+            })
+            .collect();
+        assert_eq!(answers[0], answers[1], "{var} {:?}", prog.ops);
+    }
+}
+
+/// While a concurrent mark runs (the barrier window is ALL), stores into a
+/// symbol cell and a forwarder go to the shim, which brackets the seqlock
+/// and logs the pre-image; after it they are inline again.
+#[test]
+fn a_concurrent_mark_sends_every_store_to_the_shim() {
+    let mut ev = fixture();
+    eval_ok(&mut ev, "(setq ivt-plain (list 'old-plain))");
+    let set_plain = compile(&ev, ALL, &Prog::setq(), "ivt-plain");
+    let set_obj = compile(&ev, ALL, &Prog::setq(), "ivt-obj");
+    ev.tagged_heap.set_concurrent_active_for_test(true);
+    let (got, called) = run(&mut ev, &set_plain, &[Value::make_int(1)]);
+    assert_eq!((got.as_str(), called.varset), ("1", 1));
+    let logged = ev.tagged_heap.take_satb_shared_for_test();
+    let (_, called) = run(&mut ev, &set_obj, &[Value::make_int(3)]);
+    assert_eq!(called.varset, 1);
+    ev.tagged_heap.set_concurrent_active_for_test(false);
+    assert!(
+        logged.iter().any(|v| print_value(v) == "(old-plain)"),
+        "the overwritten plain value is logged: {logged:?}"
+    );
+    for (leaf, args) in [
+        (&set_plain, vec![Value::make_int(4)]),
+        (&set_obj, vec![Value::make_int(6)]),
+    ] {
+        assert_eq!(run(&mut ev, leaf, &args).1, Shims::default());
+    }
+    assert!(ev.tagged_heap.take_satb_shared_for_test().is_empty());
 }
 
 // ---------------------------------------------------------------------------

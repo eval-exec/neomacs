@@ -44,11 +44,23 @@ const ENGINES: &[Engine] = &[
 /// Every `NEOVM_JIT_INLINE_VARS` value that inlines something: each must
 /// leave every transcript exactly as the interpreter's.
 #[cfg(feature = "jit")]
-const INLINE_ENGINES: &[Engine] = &[Engine::JitInline(InlineVarsKnob {
-    read: true,
-    set: false,
-    bind: false,
-})];
+const INLINE_ENGINES: &[Engine] = &[
+    Engine::JitInline(InlineVarsKnob {
+        read: true,
+        set: false,
+        bind: false,
+    }),
+    Engine::JitInline(InlineVarsKnob {
+        read: false,
+        set: true,
+        bind: false,
+    }),
+    Engine::JitInline(InlineVarsKnob {
+        read: true,
+        set: true,
+        bind: false,
+    }),
+];
 #[cfg(not(feature = "jit"))]
 const INLINE_ENGINES: &[Engine] = &[];
 

@@ -191,12 +191,27 @@ pub(crate) use crate::emacs_core::forward::{
 };
 pub(crate) use crate::emacs_core::symbol::blv_alist_epoch_addr;
 
-/// `LispBufferLocalValue` (`#[repr(C)]`): the raw id of the buffer the
-/// cache is loaded for (`NO_WHERE_BUF` when none, never 0).
+/// `LispBufferLocalValue` (`#[repr(C)]`): GNU `local_if_set`, a `bool`.
+pub(crate) const BLV_LOCAL_IF_SET_OFFSET: usize = offset_of!(
+    crate::emacs_core::symbol::LispBufferLocalValue,
+    local_if_set
+);
+/// GNU `found`, a `bool`: the byte after `local_if_set` (asserted), so the
+/// two read as one `u16`, `local_if_set | found << 8`.
+pub(crate) const BLV_FOUND_OFFSET: usize =
+    offset_of!(crate::emacs_core::symbol::LispBufferLocalValue, found);
+/// GNU `fwd`: an `Option<&'static LispFwd>`, null for none.
+pub(crate) const BLV_FWD_OFFSET: usize =
+    offset_of!(crate::emacs_core::symbol::LispBufferLocalValue, fwd);
+/// The raw id of the buffer the cache is loaded for (`NO_WHERE_BUF` when
+/// none, never 0).
 pub(crate) const BLV_WHERE_BUF_ID_OFFSET: usize = offset_of!(
     crate::emacs_core::symbol::LispBufferLocalValue,
     where_buf_id
 );
+/// `(SYMBOL . DEFAULT-VALUE)`.
+pub(crate) const BLV_DEFCELL_OFFSET: usize =
+    offset_of!(crate::emacs_core::symbol::LispBufferLocalValue, defcell);
 /// `(SYMBOL . CURRENT-VALUE)`, the loaded cell.
 pub(crate) const BLV_VALCELL_OFFSET: usize =
     offset_of!(crate::emacs_core::symbol::LispBufferLocalValue, valcell);
@@ -212,8 +227,14 @@ pub(crate) const CONTEXT_CURRENT_BUFFER_RAW_OFFSET: usize =
 pub(crate) const CONS_CDR_OFFSET: usize = offset_of!(crate::tagged::header::ConsCell, cdr_or_next);
 
 const _: () = {
+    assert!(BLV_FOUND_OFFSET == BLV_LOCAL_IF_SET_OFFSET + 1);
+    assert!(size_of::<bool>() == 1);
+    assert!(size_of::<Option<&'static crate::emacs_core::forward::LispFwd>>() == WORD);
     assert!(BLV_WHERE_BUF_ID_OFFSET % WORD == 0 && BLV_ALIST_EPOCH_OFFSET % WORD == 0);
-    assert!(BLV_VALCELL_OFFSET % WORD == 0 && CONS_CDR_OFFSET % WORD == 0);
+    assert!(BLV_DEFCELL_OFFSET % WORD == 0 && BLV_VALCELL_OFFSET % WORD == 0);
+    assert!(BLV_FWD_OFFSET % WORD == 0 && CONS_CDR_OFFSET % WORD == 0);
+    // The inline read of the 16-bit write window is little-endian.
+    assert!(cfg!(target_endian = "little"));
 };
 
 // ---------------------------------------------------------------------------

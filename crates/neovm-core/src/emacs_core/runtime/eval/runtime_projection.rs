@@ -83,6 +83,13 @@ impl Context {
             .is_some_and(|word| word & (1 << (id % 64)) != 0)
     }
 
+    /// The mask [`Self::runtime_binding_has_projection`] tests, one bit per
+    /// symbol id: fixed at construction, so a JIT compile decides from it
+    /// which `setq` and unbind sites may store inline (P1.4 Stage B).
+    pub(crate) fn runtime_projection_mask(&self) -> &[u64] {
+        &self.runtime_projection_mask
+    }
+
     /// The comparison chain the mask replaced, kept to pin their equivalence.
     #[cfg(test)]
     pub(crate) fn runtime_binding_has_projection_by_comparison(&self, resolved: SymId) -> bool {

@@ -331,10 +331,20 @@ fn variable_words_are_where_compiled_code_reads_them() {
     let buffer = ev.buffers.current_buffer_id().expect("a current buffer");
     assert_eq!(words_at(base, BLV_WHERE_BUF_ID_OFFSET), buffer.0 as usize);
     assert_eq!(words_at(base, BLV_VALCELL_OFFSET), blv.valcell.bits());
+    assert_eq!(words_at(base, BLV_DEFCELL_OFFSET), blv.defcell.bits());
     assert_eq!(
         words_at(base, BLV_ALIST_EPOCH_OFFSET) as u64,
         blv.alist_epoch
     );
+    assert_eq!(words_at(base, BLV_FWD_OFFSET), 0, "no forwarder");
+    // SAFETY: the two bool bytes of a live record.
+    let (local_if_set, found) = unsafe {
+        (
+            base.add(BLV_LOCAL_IF_SET_OFFSET).read(),
+            base.add(BLV_FOUND_OFFSET).read(),
+        )
+    };
+    assert_eq!((local_if_set, found), (u8::from(blv.local_if_set), 1));
     // SAFETY: a process static.
     let epoch = unsafe { (blv_alist_epoch_addr() as *const u64).read() };
     assert_eq!(epoch, blv.alist_epoch, "the cache is current");
