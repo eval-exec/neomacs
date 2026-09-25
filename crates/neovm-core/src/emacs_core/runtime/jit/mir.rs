@@ -30,7 +30,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use super::compile::{CompileError, analyze_cfg, simple_effect};
+use super::compile::{CompileError, MirReach, analyze_cfg, simple_effect};
 use crate::emacs_core::bytecode::chunk::GnuByteOffsetMapEntry;
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::jit::NumericFeedback;
@@ -305,6 +305,9 @@ pub struct MirFunction {
     /// Function epoch used by inline-entry guards in reentrant bodies.
     /// Pure bodies retain the cache's entry validation; AOT never inlines.
     pub(crate) inline_epoch: Option<u64>,
+    /// Unreachable block leaders the builder skipped ([`MirReach::dead`]);
+    /// always 0 without that bit, where such a body bails instead.
+    pub dead_leaders: usize,
 }
 
 impl MirFunction {
@@ -355,13 +358,16 @@ impl Builder {
 /// `Bin` guards both operands and range-checks its result — the value IS a
 /// fixnum or the body deopts. The tier-up path passes the body's real
 /// feedback through [`build_mir_with_feedback`].
+///
+/// No reach admissions ([`MirReach::OFF`]): the AOT paths and inline
+/// callees build exactly as before the reach bits existed.
 pub fn build_mir(
     ops: &[Op],
     constants: &[Value],
     offset_map: Option<&[GnuByteOffsetMapEntry]>,
     arity: usize,
 ) -> Result<MirFunction, CompileError> {
-    build_mir_with_feedback(ops, constants, offset_map, arity, &|_| {
+    build_mir_with_feedback(ops, constants, offset_map, arity, MirReach::OFF, &|_| {
         NumericFeedback::FixnumOnly
     })
 }
@@ -378,11 +384,16 @@ pub fn build_mir(
 /// and the block-parameter inference never proves a float a fixnum.
 /// `% max min` and `1+ 1- -` have no float lowering (both operands guarded,
 /// result range-checked) and stay `Fixnum`.
-pub fn build_mir_with_feedback(
+///
+/// `reach` names the reach admissions the tier-up compile turned on
+/// (`NEOVM_JIT_MIR_REACH`): with [`MirReach::dead`] an unreachable leader is
+/// skipped instead of bailing the body.
+pub(crate) fn build_mir_with_feedback(
     ops: &[Op],
     constants: &[Value],
     offset_map: Option<&[GnuByteOffsetMapEntry]>,
     arity: usize,
+    reach: MirReach,
     feedback: &dyn Fn(usize) -> NumericFeedback,
 ) -> Result<MirFunction, CompileError> {
     // Reuse the baseline CFG analysis (block leaders + entry stack depths),
@@ -394,23 +405,30 @@ pub fn build_mir_with_feedback(
         value_types: Vec::new(),
     };
 
-    // Assign a block id per leader, and create its parameters. Block 0's params
-    // are the function arguments; every other block's params are phis (typed
-    // Unknown until inference).
+    // Assign a block id per reachable leader, and create its parameters.
+    // Block 0's params are the function arguments; every other block's
+    // params are phis (typed Unknown until inference).
     let mut block_for: HashMap<usize, MirBlockId> = HashMap::new();
     let mut block_params: HashMap<usize, Vec<MirValue>> = HashMap::new();
-    for (bid, &leader) in cfg.leaders.iter().enumerate() {
-        block_for.insert(leader, MirBlockId(bid as u32));
+    let mut dead_leaders = 0usize;
+    for &leader in &cfg.leaders {
         // `analyze_cfg` propagates entry depths forward from block 0, so an
-        // UNREACHABLE leader (dead code — e.g. a block after an unconditional
-        // jump that nothing targets) has no entry depth. The baseline tolerates
-        // this (`entry_depth.get(&l).unwrap_or(0)` — depth-0 dead code); the MIR
-        // builder bails instead, so such bodies fall back to the baseline rather
-        // than build a CFG with a malformed (depthless) block.
+        // UNREACHABLE leader (dead code — e.g. the `Return` that `seal_ops`
+        // appends after a final `goto`) has no entry depth. The baseline
+        // tolerates this (`entry_depth.get(&l).unwrap_or(0)` — depth-0 dead
+        // code). With `reach.dead` the MIR builder leaves such a block out:
+        // no edge targets it (that is why it has no depth) and no reachable
+        // block falls through into it (the fall-through would have given it
+        // one). Without the bit the body bails to the baseline, as before.
         let depth = match cfg.entry_depth.get(&leader) {
             Some(&d) => d,
+            None if reach.dead => {
+                dead_leaders += 1;
+                continue;
+            }
             None => return Err(CompileError::UnsupportedOp("mir-unreachable-block")),
         };
+        block_for.insert(leader, MirBlockId(block_params.len() as u32));
         let params: Vec<MirValue> = (0..depth)
             .map(|i| {
                 if leader == 0 {
@@ -429,7 +447,11 @@ pub fn build_mir_with_feedback(
     let mut blocks: Vec<MirBlockData> = Vec::with_capacity(cfg.leaders.len());
 
     for (leader_index, &leader) in cfg.leaders.iter().enumerate() {
-        let params = block_params[&leader].clone();
+        // A skipped unreachable leader (`reach.dead`): its ops belong to no
+        // block, and the block before it ends at it.
+        let Some(params) = block_params.get(&leader).cloned() else {
+            continue;
+        };
         let mut stack: Vec<MirValue> = params.clone();
         let mut insts: Vec<MirInst> = Vec::new();
 
@@ -576,6 +598,7 @@ pub fn build_mir_with_feedback(
         block_for,
         constants: constants.into(),
         inline_epoch: None,
+        dead_leaders,
     })
 }
 

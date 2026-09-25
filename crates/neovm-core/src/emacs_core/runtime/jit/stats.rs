@@ -98,6 +98,11 @@ pub(crate) struct CompileStats {
     pub mir_taken: u64,
     /// Callees successfully spliced in by `inline_pure_single_block_callees`.
     pub mir_inlined_callees: u64,
+    /// Bodies the MIR builder built only by skipping unreachable leaders
+    /// (`NEOVM_JIT_MIR_REACH=dead`; without the bit each bails as
+    /// `mir-unreachable-block`), and the leaders it skipped.
+    pub mir_reach_dead: u64,
+    pub mir_dead_leaders: u64,
     /// Deopts consumed on this thread, by cause (`reopt::DeoptCause::
     /// census_index`, names in `DeoptCause::CENSUS_NAMES`). Release builds
     /// count too: this is the steady-state deopt census.
@@ -166,6 +171,8 @@ impl CompileStats {
             mir_tier_rejected: d(self.mir_tier_rejected, base.mir_tier_rejected),
             mir_taken: d(self.mir_taken, base.mir_taken),
             mir_inlined_callees: d(self.mir_inlined_callees, base.mir_inlined_callees),
+            mir_reach_dead: d(self.mir_reach_dead, base.mir_reach_dead),
+            mir_dead_leaders: d(self.mir_dead_leaders, base.mir_dead_leaders),
             deopt_causes: std::array::from_fn(|i| d(self.deopt_causes[i], base.deopt_causes[i])),
             deopt_osr: d(self.deopt_osr, base.deopt_osr),
             reopt_levels: std::array::from_fn(|i| d(self.reopt_levels[i], base.reopt_levels[i])),
@@ -259,6 +266,9 @@ pub(crate) enum MirFunnel {
     TierRejected,
     Taken,
     InlinedCallees(u64),
+    /// Built only by skipping this many unreachable leaders (the `dead`
+    /// reach bit).
+    DeadLeadersSkipped(u64),
 }
 
 impl MirFunnel {
@@ -290,6 +300,10 @@ pub(crate) fn record_mir(stage: MirFunnel) {
             MirFunnel::TierRejected => s.mir_tier_rejected += 1,
             MirFunnel::Taken => s.mir_taken += 1,
             MirFunnel::InlinedCallees(n) => s.mir_inlined_callees += n,
+            MirFunnel::DeadLeadersSkipped(n) => {
+                s.mir_reach_dead += 1;
+                s.mir_dead_leaders += n;
+            }
         }
         c.set(s);
     });
@@ -622,7 +636,8 @@ pub(crate) fn format_summary(s: &CompileStats) -> String {
     format!(
         "compiles={} ok={} native_entries={} dispatch={}/{} not_profitable={} not_compilable={} aot_loads={} retiers={} \
          total_us={} mean_us={mean_us} max_us={} max_fn_len={} \
-         mir[taken={} tier_rej={} lower_fail={} build_fail={} gate_opt={} gate_rest={} gate_prefix={} gate_reopt={} inlined={}] \
+         mir[taken={} tier_rej={} lower_fail={} build_fail={} gate_opt={} gate_rest={} gate_prefix={} gate_reopt={} inlined={} \
+         reach_dead={} dead_leaders={}] \
          hist[<100us,<250us,<500us,<1ms,<2.5ms,<5ms,<10ms,>=10ms]={:?} \
          deopts[total={} osr={}{}{}] \
          reopt[invalidated={} stale={} speculative={} no_inline={} baseline_only={} generic={} interpreter={}]",
@@ -647,6 +662,8 @@ pub(crate) fn format_summary(s: &CompileStats) -> String {
         s.mir_gate_prefix,
         s.mir_gate_reopt,
         s.mir_inlined_callees,
+        s.mir_reach_dead,
+        s.mir_dead_leaders,
         s.histogram_us,
         s.deopts(),
         s.deopt_osr,

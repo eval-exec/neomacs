@@ -1230,6 +1230,7 @@ fn compile_bytecode_function_inner(
                     constants,
                     f.executable_gnu_byte_offset_map(),
                     native_arity,
+                    jit_mir_reach(),
                     &active_numeric_feedback,
                 )
             },
@@ -1240,6 +1241,11 @@ fn compile_bytecode_function_inner(
             super::stats::record_mir_bail(format!("build:{e:?}"));
         })
     {
+        if mir.dead_leaders > 0 {
+            super::stats::record_mir(super::stats::MirFunnel::DeadLeadersSkipped(
+                mir.dead_leaders as u64,
+            ));
+        }
         // Inline pure single-block callees (resolved through the obarray). When
         // a call is inlined the body can become pure (no Opaque), so
         // lower_mir_pure handles it and unboxing/guard-elision flow ACROSS the
@@ -4810,6 +4816,9 @@ mod mir_inline_guards;
 #[cfg(test)]
 #[path = "tests/mir_named_calls.rs"]
 mod mir_named_calls_tests;
+#[cfg(test)]
+#[path = "tests/mir_reach_dead.rs"]
+mod mir_reach_dead_tests;
 #[cfg(test)]
 #[path = "tests/observability.rs"]
 mod observability_tests;

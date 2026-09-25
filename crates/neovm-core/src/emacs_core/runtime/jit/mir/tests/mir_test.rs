@@ -315,7 +315,7 @@ fn float_feedback_bin_result_is_typed_any() {
             NumericFeedback::FixnumOnly
         }
     };
-    let m = build_mir_with_feedback(&ops, &constants, None, 2, &fb).expect("builds");
+    let m = build_mir_with_feedback(&ops, &constants, None, 2, MirReach::OFF, &fb).expect("builds");
     let adds = bin_insts(&m);
     assert_eq!(adds.len(), 1);
     assert_eq!(adds[0].pc, 8);
@@ -353,12 +353,14 @@ fn float_rule_covers_add_sub_mul_div_per_site() {
         Op::Div, // pc 8
         Op::Return,
     ];
-    let all =
-        build_mir_with_feedback(&ops, &[], None, 2, &|_| NumericFeedback::Float).expect("builds");
+    let all = build_mir_with_feedback(&ops, &[], None, 2, MirReach::OFF, &|_| {
+        NumericFeedback::Float
+    })
+    .expect("builds");
     let tys: Vec<LispType> = bin_insts(&all).iter().map(|i| i.ty).collect();
     assert_eq!(tys, vec![LispType::Any; 4]);
     for float_pc in [2usize, 4, 6, 8] {
-        let m = build_mir_with_feedback(&ops, &[], None, 2, &|pc| {
+        let m = build_mir_with_feedback(&ops, &[], None, 2, MirReach::OFF, &|pc| {
             if pc == float_pc {
                 NumericFeedback::Float
             } else {
@@ -399,8 +401,10 @@ fn rem_max_min_unary_ignore_float_feedback() {
         Op::Negate,
         Op::Return,
     ];
-    let m =
-        build_mir_with_feedback(&ops, &[], None, 2, &|_| NumericFeedback::Float).expect("builds");
+    let m = build_mir_with_feedback(&ops, &[], None, 2, MirReach::OFF, &|_| {
+        NumericFeedback::Float
+    })
+    .expect("builds");
     for inst in &m.blocks[0].insts {
         if matches!(inst.op, MirOp::Bin(..) | MirOp::Unary(..)) {
             assert_eq!(inst.ty, LispType::Fixnum, "{:?}", inst.op);
@@ -506,7 +510,7 @@ fn float_feedback_keeps_header_param_any() {
             NumericFeedback::FixnumOnly
         }
     };
-    let m = build_mir_with_feedback(&ops, &constants, None, 2, &fb).expect("builds");
+    let m = build_mir_with_feedback(&ops, &constants, None, 2, MirReach::OFF, &fb).expect("builds");
     let ty = infer_value_types(&m);
     for blk in &m.blocks[1..] {
         let got: Vec<LispType> = blk.params.iter().map(|p| ty[p.0 as usize]).collect();
@@ -704,4 +708,86 @@ fn switch_byte_offset_read_as_an_index_was_a_stack_model_error() {
         build_mir(&ops, &constants, Some(&map), 1),
         Err(CompileError::UnsupportedOp("mir-unmodelled-control:Switch"))
     ));
+}
+
+/// `(lambda (n) (named-let lp ((n n) (acc 0)) (if (> n 0) (lp (1- n) (1+ acc)) acc)))`
+/// as the byte compiler shapes a named-let: the loop's exit `Return` sits
+/// inside the loop, the body ends in the back-edge `goto`, and `seal_ops`
+/// appends a `Return` after it that no path reaches (index 14).
+fn named_let_ops() -> Vec<Op> {
+    vec![
+        Op::Constant(0),     // 0: acc = 0          [n acc]
+        Op::StackRef(1),     // 1: header: n        [n acc n]
+        Op::Constant(0),     // 2: 0
+        Op::Gtr,             // 3: (> n 0)          [n acc b]
+        Op::GotoIfNotNil(7), // 4                   [n acc]
+        Op::StackRef(0),     // 5: acc              [n acc acc]
+        Op::Return,          // 6
+        Op::StackRef(1),     // 7: n                [n acc n]
+        Op::Sub1,            // 8                   [n acc n-1]
+        Op::StackSet(2),     // 9: n = n-1          [n acc]
+        Op::StackRef(0),     // 10: acc             [n acc acc]
+        Op::Add1,            // 11                  [n acc acc+1]
+        Op::StackSet(1),     // 12: acc = acc+1     [n acc]
+        Op::Goto(1),         // 13: back edge
+        Op::Return,          // 14: seal_ops' trailing Return: unreachable
+    ]
+}
+
+/// The `dead` reach bit leaves an unreachable leader out of the MIR (dense
+/// block ids, no block at its pc); without the bit the body bails exactly as
+/// before.
+#[test]
+fn seal_ops_trailing_return_leader_is_skipped() {
+    let ops = named_let_ops();
+    let constants = [Value::make_int(0)];
+    let cfg = analyze_cfg(&ops, &constants, None, 1).expect("cfg");
+    assert_eq!(cfg.leaders, [0, 1, 5, 7, 14]);
+    assert!(!cfg.entry_depth.contains_key(&14), "nothing reaches 14");
+    assert!(matches!(
+        build_mir(&ops, &constants, None, 1),
+        Err(CompileError::UnsupportedOp("mir-unreachable-block"))
+    ));
+    assert!(matches!(
+        build_mir_with_feedback(&ops, &constants, None, 1, MirReach::OFF, &|_| {
+            NumericFeedback::FixnumOnly
+        }),
+        Err(CompileError::UnsupportedOp("mir-unreachable-block"))
+    ));
+    let dead = MirReach { dead: true };
+    let m = build_mir_with_feedback(&ops, &constants, None, 1, dead, &|_| {
+        NumericFeedback::FixnumOnly
+    })
+    .expect("builds without the unreachable leader");
+    assert_eq!(m.dead_leaders, 1);
+    let pcs: Vec<usize> = m.blocks.iter().map(|b| b.bytecode_pc).collect();
+    assert_eq!(
+        pcs,
+        [0, 1, 5, 7],
+        "one block per reachable leader, in order"
+    );
+    for (id, block) in m.blocks.iter().enumerate() {
+        assert_eq!(m.block_for[&block.bytecode_pc], MirBlockId(id as u32));
+    }
+    assert!(!m.block_for.contains_key(&14));
+    // Every edge lands on a real block with matching arity.
+    for block in &m.blocks {
+        let edges: Vec<(MirBlockId, usize)> = match &block.term {
+            MirTerm::Return(_) => Vec::new(),
+            MirTerm::Goto { target, args } => vec![(*target, args.len())],
+            MirTerm::Branch {
+                taken,
+                taken_args,
+                fallthrough,
+                fallthrough_args,
+                ..
+            } => vec![
+                (*taken, taken_args.len()),
+                (*fallthrough, fallthrough_args.len()),
+            ],
+        };
+        for (target, nargs) in edges {
+            assert_eq!(m.blocks[target.0 as usize].params.len(), nargs);
+        }
+    }
 }

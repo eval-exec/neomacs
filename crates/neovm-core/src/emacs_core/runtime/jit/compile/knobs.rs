@@ -406,3 +406,73 @@ pub(crate) fn jit_inline_arith_on() -> bool {
         )
     })
 }
+
+/// Which P2.5 reach admissions the MIR builder may use
+/// (`NEOVM_JIT_MIR_REACH`, design `p2-5-mir-reach`; default none). Legacy
+/// MIR has one bit, `dead`; the design's other admissions (`args`, `env`,
+/// `vars`, `binds`, `switch`, `handlers`) belong to the opt tier's
+/// `NEOVM_JIT_OPT_ADMIT` (p2-0-integration §3.2). Read at compile time only,
+/// and only by the tier-up compile: the AOT paths and inline callees always
+/// build with [`MirReach::OFF`]. With a bit off the builder bails exactly
+/// where it did before the bit existed (the per-bit kill switch).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub(crate) struct MirReach {
+    /// Skip a block leader no path reaches (the `Return` that `seal_ops`
+    /// appends after a body's final `goto`: named-let and `cl-loop` tails)
+    /// instead of bailing the body as `mir-unreachable-block`.
+    pub(crate) dead: bool,
+}
+
+impl MirReach {
+    pub(crate) const OFF: Self = Self { dead: false };
+    pub(crate) const ALL: Self = Self { dead: true };
+
+    /// `off`/`0`/`none`/unset: nothing; `all`/`on`/`1`: every bit; otherwise
+    /// a comma list of bits (`dead`).
+    pub(crate) fn parse(value: Option<&str>) -> Self {
+        let Some(value) = value.map(str::trim) else {
+            return Self::OFF;
+        };
+        match value {
+            "" | "0" | "off" | "none" | "false" | "no" => return Self::OFF,
+            "1" | "on" | "all" | "true" | "yes" => return Self::ALL,
+            _ => {}
+        }
+        let mut reach = Self::OFF;
+        for part in value.split(',').map(str::trim) {
+            match part {
+                "dead" => reach.dead = true,
+                "" => {}
+                other => tracing::warn!(
+                    target: "neovm_jit",
+                    part = other,
+                    "NEOVM_JIT_MIR_REACH: unknown bit ignored (legacy MIR has only `dead`)"
+                ),
+            }
+        }
+        reach
+    }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static MIR_REACH_TEST_OVERRIDE: std::cell::Cell<Option<MirReach>> = const { std::cell::Cell::new(None) };
+}
+
+/// Force the MIR reach bits for compiles on the current thread (tests
+/// only); `None` returns to the environment's.
+#[cfg(test)]
+pub(crate) fn force_mir_reach_for_test(reach: Option<MirReach>) {
+    MIR_REACH_TEST_OVERRIDE.with(|c| c.set(reach));
+}
+
+/// The `NEOVM_JIT_MIR_REACH` bits tier-up compiles use (read once).
+pub(crate) fn jit_mir_reach() -> MirReach {
+    #[cfg(test)]
+    if let Some(reach) = MIR_REACH_TEST_OVERRIDE.with(|c| c.get()) {
+        return reach;
+    }
+    use std::sync::OnceLock;
+    static REACH: OnceLock<MirReach> = OnceLock::new();
+    *REACH.get_or_init(|| MirReach::parse(std::env::var("NEOVM_JIT_MIR_REACH").ok().as_deref()))
+}
