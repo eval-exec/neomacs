@@ -14,15 +14,10 @@
 //! | D4 | `[[:upper:]]` on U+01C5 (a titlecase digraph) | open |
 //! | D5 | `\(?:a?\)*?b` never terminates (no `CHECK_INFINITE_LOOP` for `on_failure_jump_nastyloop`) | fixed (U0.5) |
 //! | D6 | `\(a\|\)+?x` signals a spurious "Stack overflow in regexp matcher" | fixed (U0.5) |
-//! | D7 | the Pike fallback masks GNU's "Stack overflow in regexp matcher" | open |
+//! | D7 | the Pike fallback masks GNU's "Stack overflow in regexp matcher" | fixed (U0.5) |
 //!
 //! A fixed divergence keeps its test as a parity regression guard
 //! (`assert_oracle_parity_expect`, same GNU expectation).
-//!
-//! The 300K-character D7 case does not finish on Neomacs while it is open (a
-//! linear Pike match runs at each of 300K candidates), so that pin is
-//! `#[ignore]`d until its fix lands; the fast D7 variant exercises the same
-//! masking with a single candidate.
 
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
@@ -105,7 +100,6 @@ fn oracle_pin_regexp_d6_nullable_nongreedy_plus_has_no_spurious_overflow() {
 }
 
 #[test]
-#[ignore = "D7: Neomacs takes minutes (one Pike run per candidate) until the overflow parity fix"]
 fn oracle_pin_regexp_d7_pike_fallback_masks_overflow() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -114,7 +108,7 @@ fn oracle_pin_regexp_d7_pike_fallback_masks_overflow() {
         (error (list 'error err))))"#;
     let expect =
         expect_test::expect![[r#""OK (error (error \"Stack overflow in regexp matcher\"))""#]];
-    crate::common::assert_oracle_divergence_expect(form, expect);
+    crate::common::assert_oracle_parity_expect(form, expect);
 }
 
 #[test]
@@ -122,9 +116,10 @@ fn oracle_pin_regexp_d7_pike_fallback_masks_overflow_at_one_candidate() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
     // Only position 0 can start a match, so the whole search is one candidate:
-    // GNU's backtracker runs out of fail stack, Neomacs's hands the candidate
-    // to the Pike VM, which cannot overflow.  The 20K-character twin stays
-    // under GNU's limit and must answer nil on both.
+    // GNU's backtracker runs out of fail stack; Neomacs's budgeted one hands
+    // the candidate to the Pike VM, which cannot overflow, so the Pike run's
+    // reach decides whether the backtracker must answer instead.  The
+    // 20K-character twin stays under GNU's limit and must answer nil on both.
     let form = r#"(let ((long (concat "x" (apply #'concat (make-list 100000 "ab"))))
           (short (concat "x" (apply #'concat (make-list 10000 "ab")))))
       (list (condition-case err (string-match "x\\(?:a\\|b\\)*c" long)
@@ -134,5 +129,5 @@ fn oracle_pin_regexp_d7_pike_fallback_masks_overflow_at_one_candidate() {
     let expect = expect_test::expect![[
         r#""OK ((error (error \"Stack overflow in regexp matcher\")) nil)""#
     ]];
-    crate::common::assert_oracle_divergence_expect(form, expect);
+    crate::common::assert_oracle_parity_expect(form, expect);
 }

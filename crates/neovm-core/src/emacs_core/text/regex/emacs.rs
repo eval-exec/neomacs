@@ -1133,6 +1133,38 @@ pub(crate) fn matcher_entry_count() -> u64 {
     MATCHER_ENTRY_COUNT.with(|c| c.get())
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The deepest fail stack (frames plus undo entries) any backtracker run
+    /// reached, and the furthest position at which it pushed, since the last
+    /// [`take_fail_stack_probe`]: the measurements behind the bound in
+    /// [`fail_stack_may_overflow`].
+    static FAIL_STACK_PROBE: std::cell::Cell<FailStackProbe> =
+        const { std::cell::Cell::new(FailStackProbe { max_depth: 0, max_push_pos: 0 }) };
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct FailStackProbe {
+    pub(crate) max_depth: usize,
+    pub(crate) max_push_pos: usize,
+}
+
+#[cfg(test)]
+fn note_fail_stack_push(depth: usize, d: usize) {
+    FAIL_STACK_PROBE.with(|probe| {
+        let mut seen = probe.get();
+        seen.max_depth = seen.max_depth.max(depth);
+        seen.max_push_pos = seen.max_push_pos.max(d);
+        probe.set(seen);
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn take_fail_stack_probe() -> FailStackProbe {
+    FAIL_STACK_PROBE.with(|probe| probe.replace(FailStackProbe::default()))
+}
+
 fn set_pike_fallback() {
     PIKE_FALLBACK.with(|f| f.set(true));
     #[cfg(test)]
@@ -5071,9 +5103,93 @@ fn re_match_candidate_in(
     // The budgeted backtracker gave up on a catastrophic match: recompute it
     // linearly (and byte-exactly) with the Pike VM.
     if budgeted && take_pike_fallback() {
-        return pike_match_into(pattern, text, pos, stop, syntax, point, regs);
+        return pike_fallback_into(scratch, pattern, text, pos, stop, syntax, point, regs);
     }
     result
+}
+
+/// The budgeted backtracker's hand-off: the Pike VM decides the candidate
+/// linearly and byte-exactly, but it cannot run out of fail stack, and GNU's
+/// backtracker can ("Stack overflow in regexp matcher", which search.c turns
+/// into an error).  The backtracker's stack is bounded by the characters its
+/// longest path consumes ([`fail_stack_may_overflow`]), which the Pike run
+/// measures; when that bound reaches GNU's limit, the unbudgeted backtracker
+/// decides the candidate instead, overflow included, at GNU's own cost.
+#[cold]
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn pike_fallback_into(
+    scratch: &mut MatchScratch,
+    pattern: &CompiledPattern,
+    text: &[u8],
+    pos: usize,
+    stop: usize,
+    syntax: &dyn SyntaxLookup,
+    point: usize,
+    regs: &mut MatchRegisters,
+) -> Option<usize> {
+    let outcome = pike_match_outcome(pattern, text, pos, stop, syntax, point);
+    if fail_stack_may_overflow(&pattern.buffer, outcome.reach.saturating_sub(pos)) {
+        tracing::debug!(
+            target: "neovm::regex",
+            pos,
+            reach = outcome.reach,
+            "Pike fallback defers to the backtracker: its fail stack may overflow"
+        );
+        return re_match_internal(
+            scratch, pattern, text, pos, stop, syntax, point, false, regs,
+        );
+    }
+    let (end, found) = outcome.found?;
+    *regs = found;
+    Some(end)
+}
+
+/// Opcodes that push onto the backtracker's fail stack when they run: every
+/// failure-point opcode (a fused literal or charset loop pushes the frames of
+/// its own `on_failure_jump`) and `start_memory`'s register save.  Interval
+/// counters push too; patterns with them never reach the callers.
+fn fail_stack_push_sites(bytecode: &[u8]) -> usize {
+    let mut sites = 0usize;
+    let mut pc = 0usize;
+    while pc < bytecode.len() {
+        let Some(op) = RegexOp::from_byte(bytecode[pc]) else {
+            return usize::MAX;
+        };
+        if matches!(
+            op,
+            RegexOp::OnFailureJump
+                | RegexOp::OnFailureKeepStringJump
+                | RegexOp::OnFailureJumpLoop
+                | RegexOp::OnFailureJumpNastyloop
+                | RegexOp::OnFailureJumpSmart
+                | RegexOp::StartMemory
+                | RegexOp::SucceedN
+                | RegexOp::JumpN
+                | RegexOp::SetNumberAt
+        ) {
+            sites += 1;
+        }
+        let Some(len) = opcode_len(bytecode, pc) else {
+            return usize::MAX;
+        };
+        pc += len;
+    }
+    sites
+}
+
+/// Whether a backtracker path that consumes at most `consumed` characters
+/// might fill GNU's fail stack.  Between two consumed characters a path runs
+/// each push site at most twice: re-entering one without progress needs an
+/// empty loop iteration, which `CHECK_INFINITE_LOOP` cuts on its second
+/// visit.  A path's stack holds only its own live pushes, so it stays below
+/// `(consumed + 1) * 2 * sites` entries.
+pub(crate) fn fail_stack_may_overflow(bytecode: &[u8], consumed: usize) -> bool {
+    consumed
+        .saturating_add(1)
+        .saturating_mul(2)
+        .saturating_mul(fail_stack_push_sites(bytecode))
+        >= FAIL_STACK_ENTRY_LIMIT
 }
 
 /// [`pike_match`] with [`re_match_candidate_in`]'s out-parameter protocol.
@@ -5303,6 +5419,8 @@ fn re_match_loop<const SEALED: bool>(
                 resume: FailureResume($resume),
                 input: $input,
             });
+            #[cfg(test)]
+            note_fail_stack_push(frames.len() + undo.len(), d);
         };
     }
 
@@ -5315,6 +5433,8 @@ fn re_match_loop<const SEALED: bool>(
                 return None;
             }
             undo.push($entry);
+            #[cfg(test)]
+            note_fail_stack_push(frames.len() + undo.len(), d);
         };
     }
 
@@ -6548,6 +6668,18 @@ thread_local! {
         std::cell::RefCell::new(PikeScratch::default());
 }
 
+/// The outcome of one Pike VM run: the match (end and registers), and the
+/// furthest position any thread reached.
+struct PikeOutcome {
+    found: Option<(usize, MatchRegisters)>,
+    /// No backtracker path from the start position consumes past this
+    /// position: every path is a sequence of the same NFA steps the threads
+    /// take, and a thread killed by the `(pc)` dedup shares its future with
+    /// the one kept.  A match cuts only threads the backtracker, which stops
+    /// at its first success, never explores.
+    reach: usize,
+}
+
 /// Anchored leftmost-greedy match of an eligible pattern starting exactly at
 /// `pos`.  Byte-exact with `re_match_internal` for `pike_eligible` patterns.
 pub(crate) fn pike_match(
@@ -6558,6 +6690,17 @@ pub(crate) fn pike_match(
     syntax: &dyn SyntaxLookup,
     point: usize,
 ) -> Option<(usize, MatchRegisters)> {
+    pike_match_outcome(pattern, text, pos, stop, syntax, point).found
+}
+
+fn pike_match_outcome(
+    pattern: &CompiledPattern,
+    text: &[u8],
+    pos: usize,
+    stop: usize,
+    syntax: &dyn SyntaxLookup,
+    point: usize,
+) -> PikeOutcome {
     PIKE_SCRATCH.with(|cell| match cell.try_borrow_mut() {
         Ok(mut scratch) => pike_match_inner(&mut scratch, pattern, text, pos, stop, syntax, point),
         // Defensive: a syntax/category callback re-entering the matcher gets
@@ -6582,7 +6725,7 @@ fn pike_match_inner(
     stop: usize,
     syntax: &dyn SyntaxLookup,
     point: usize,
-) -> Option<(usize, MatchRegisters)> {
+) -> PikeOutcome {
     debug_assert!(pattern.pike_eligible);
     // Read opcodes from the Pike-only rewind view when present (keep-string
     // loops de-optimized); charset bitmaps are identical in both buffers so
@@ -6827,7 +6970,10 @@ fn pike_match_inner(
     scratch.seen = seen;
     scratch.generation = generation;
 
-    let (end, caps) = matched?;
+    let reach = d;
+    let Some((end, caps)) = matched else {
+        return PikeOutcome { found: None, reach };
+    };
     let mut regs = MatchRegisters::new(num_regs);
     regs.start[0] = pos as i64;
     regs.end[0] = end as i64;
@@ -6845,7 +6991,10 @@ fn pike_match_inner(
             .map(|v| v as i64)
             .unwrap_or(-1);
     }
-    Some((end, regs))
+    PikeOutcome {
+        found: Some((end, regs)),
+        reach,
+    }
 }
 
 /// GNU `CHECK_INFINITE_LOOP` (regex-emacs.c:1049-1069): walk down the
