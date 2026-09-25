@@ -438,6 +438,29 @@ pub(super) fn same_on_a_terminal(
         && left.terminal_underline_color == right.terminal_underline_color
 }
 
+/// Whether any glyph or face fill of STATE uses one of FACES.
+fn references_any_face(state: &FrameDisplayState, faces: &[FaceId]) -> bool {
+    let wanted = |face: FaceId| faces.contains(&face);
+    let row_uses = |row: &GlyphRow| {
+        row.glyphs
+            .iter()
+            .any(|area| area.iter().any(|glyph| wanted(glyph.face_id)))
+    };
+    state.face_fills.iter().any(|fill| wanted(fill.face_id))
+        || state
+            .window_matrices
+            .iter()
+            .any(|entry| entry.matrix.rows.iter().any(|row| row_uses(row)))
+        || state
+            .frame_chrome
+            .bands()
+            .iter()
+            .any(|band| match band.content() {
+                FrameChromeContent::DisplayRow(content) => row_uses(content.row()),
+                _ => false,
+            })
+}
+
 /// Whether two rows show the same thing: every cell field but the
 /// erased/written materialization.
 fn cells_same_content(left: &[TtyCell], right: &[TtyCell]) -> bool {
@@ -570,25 +593,35 @@ impl TtyRif {
     /// Install STATE's face map; outside `off`, only when its content changed.
     ///
     /// The generation the frame key carries moves only when a face the old
-    /// map had changed what a terminal shows ([`same_on_a_terminal`]) or went
-    /// away: a row keyed by identity references only faces that existed when
-    /// it was laid out, so a face added since (the `region` face on the first
-    /// `set-mark`) cannot change how it looks, and neither can a GUI-only
-    /// metric (the default face's `font_ascent` alternates between frames).
+    /// map had changed what a terminal shows ([`same_on_a_terminal`]), or went
+    /// away while something in the new frame still references it: a row keyed
+    /// by identity references only faces that existed when it was laid out, so
+    /// a face added since (the `region` face on the first `set-mark`) cannot
+    /// change how it looks, neither can a GUI-only metric (the default face's
+    /// `font_ascent` alternates between frames), and neither can a face no
+    /// glyph or fill uses any more (per-window realizations come and go with
+    /// the windows that were walked).
     pub(super) fn install_face_map(&mut self, state: &FrameDisplayState) {
         if self.damage.mode == TtyDamageMode::Off {
             self.faces = state.faces.clone();
-        } else if self.faces != state.faces {
-            let invalidates = self.faces.iter().any(|(id, face)| {
-                !state
-                    .faces
-                    .get(id)
-                    .is_some_and(|new| same_on_a_terminal(face, new))
-            });
-            self.faces = state.faces.clone();
-            if invalidates {
-                self.damage.faces_generation = self.damage.faces_generation.wrapping_add(1);
+            return;
+        }
+        if self.faces == state.faces {
+            return;
+        }
+        let mut changed = false;
+        let mut removed = Vec::new();
+        for (id, face) in &self.faces {
+            match state.faces.get(id) {
+                None => removed.push(*id),
+                Some(new) if !same_on_a_terminal(face, new) => changed = true,
+                Some(_) => {}
             }
+        }
+        let invalidates = changed || (!removed.is_empty() && references_any_face(state, &removed));
+        self.faces = state.faces.clone();
+        if invalidates {
+            self.damage.faces_generation = self.damage.faces_generation.wrapping_add(1);
         }
     }
 

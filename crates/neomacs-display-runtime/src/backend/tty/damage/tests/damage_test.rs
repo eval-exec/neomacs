@@ -962,3 +962,36 @@ fn scrolling_reuses_row_signatures_and_matches_the_full_path() {
     }
     assert!(reused > 0, "the screen model's signatures were reused");
 }
+
+/// A face that leaves the map keeps the frame key when nothing uses it any
+/// more, and changes it when a glyph still does.
+#[test]
+fn a_removed_face_changes_the_frame_key_only_while_referenced() {
+    let mut scene = Scene::new(30, 16);
+    scene
+        .windows
+        .push(SceneWindow::new(1, 0, 0, 30, &["plain", "colored"], true));
+    scene.window(1).set_line(1, "colored", 1);
+    let mut diff = Differential::new(&scene, false);
+    diff.frame(&scene, "first");
+
+    // Face 3 is unused: removing it keeps damage frames going.
+    scene.next_frame();
+    scene.faces.remove(&FaceId::new(3));
+    diff.frame(&scene, "unused face removed");
+    assert!(
+        diff.damage.frame_stats().damage_frame,
+        "{:?}",
+        diff.damage.frame_stats()
+    );
+
+    // Face 1 is used by a reused row: removing it must repaint (the full
+    // path's carry keeps the old colours, see `damage.rs`).
+    scene.next_frame();
+    scene.faces.remove(&FaceId::new(1));
+    diff.frame_accepting_stale_full_path(&scene, "used face removed");
+    assert_eq!(
+        diff.damage.frame_stats().full_reason,
+        Some(TtyFullFrameReason::FaceChange)
+    );
+}

@@ -200,6 +200,21 @@ fn tty_damage_path_matches_the_full_path_over_a_real_session() {
     let totals = r.verify.damage_verify_totals();
     assert_eq!(totals.false_negatives, 0);
     assert_eq!(totals.screen_diff_rows, 0);
+    let print: Vec<String> = r
+        .frames
+        .iter()
+        .map(|f| {
+            format!(
+                "{:<26} {:<6} {:<18} rows={:<3} bytes full={} damage={}",
+                f.label,
+                if f.damage_frame { "damage" } else { "full" },
+                format!("{:?}", f.full_reason),
+                f.rows_repainted,
+                f.full_bytes,
+                f.damage_bytes
+            )
+        })
+        .collect();
     // The damage path engages wherever layout reuses rows: idle frames,
     // cursor motion, echo-area messages, a moving region. (Typing here makes
     // layout relay every row below the edit -- the source has tabs, the P3.5
@@ -216,24 +231,13 @@ fn tty_damage_path_matches_the_full_path_over_a_real_session() {
         "idle at the end",
     ] {
         let record = r.record(label);
-        assert!(record.damage_frame, "{record:?}");
-        assert!(record.rows_repainted <= 5, "{record:?}");
+        assert!(record.damage_frame, "{record:?}\n{}", print.join("\n"));
+        assert!(
+            record.rows_repainted <= 5,
+            "{record:?}\n{}",
+            print.join("\n")
+        );
     }
-    let print: Vec<String> = r
-        .frames
-        .iter()
-        .map(|f| {
-            format!(
-                "{:<26} {:<6} {:<18} rows={:<3} bytes full={} damage={}",
-                f.label,
-                if f.damage_frame { "damage" } else { "full" },
-                format!("{:?}", f.full_reason),
-                f.rows_repainted,
-                f.full_bytes,
-                f.damage_bytes
-            )
-        })
-        .collect();
     tracing::info!(
         "tty damage session:\n{}\nfull-path churn frames: {:#?}",
         print.join("\n"),
