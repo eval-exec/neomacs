@@ -811,9 +811,22 @@ struct PreparedInterpreterCall {
 /// aliases, autoloads, advice and compiler overrides remain on `Generic`.
 #[derive(Clone, Copy)]
 enum ResolvedStackCallTarget {
-    Interpreter { call: PreparedInterpreterCall },
-    ByteCode { callee: ResolvedByteCodeCallee },
-    Builtin { callee: ResolvedBuiltinCallee },
+    Interpreter {
+        call: PreparedInterpreterCall,
+    },
+    ByteCode {
+        callee: ResolvedByteCodeCallee,
+    },
+    Builtin {
+        callee: ResolvedBuiltinCallee,
+    },
+    /// A builtin with a Bcall leaf, resolved under `NEOVM_VM_LEAF`
+    /// (`vm_leaf`): the call runs the leaf and pushes GNU's frame only when
+    /// it signals.
+    BuiltinLeaf {
+        callee: ResolvedBuiltinCallee,
+        leaf: crate::emacs_core::subr::leaf::LeafId,
+    },
     Generic,
 }
 
@@ -1804,6 +1817,7 @@ enum CachedStackCallee {
     Empty,
     ByteCode(Value),
     Builtin(ResolvedBuiltinCallee),
+    BuiltinLeaf(ResolvedBuiltinCallee, crate::emacs_core::subr::leaf::LeafId),
 }
 #[derive(Clone, Copy)]
 struct SymbolByteCodeCallCacheEntry {
@@ -1907,6 +1921,9 @@ impl SymbolByteCodeCallCache {
                 callee: ResolvedByteCodeCallee(value),
             }),
             CachedStackCallee::Builtin(callee) => Some(ResolvedStackCallTarget::Builtin { callee }),
+            CachedStackCallee::BuiltinLeaf(callee, leaf) => {
+                Some(ResolvedStackCallTarget::BuiltinLeaf { callee, leaf })
+            }
             CachedStackCallee::Empty => None,
         }
     }
@@ -1923,14 +1940,29 @@ impl SymbolByteCodeCallCache {
             CachedStackCallee::ByteCode(callee.0),
         );
     }
+    /// Cache a builtin callee and answer the target it resolves to: with
+    /// `NEOVM_VM_LEAF`, a builtin with a Bcall leaf resolves to its leaf.
     #[inline(always)]
     fn insert_builtin(
         &mut self,
         symbol: SymId,
         function_epoch: u64,
         callee: ResolvedBuiltinCallee,
-    ) {
-        self.store(symbol, function_epoch, CachedStackCallee::Builtin(callee));
+    ) -> ResolvedStackCallTarget {
+        match vm_leaf::bcall_leaf_of(callee) {
+            Some(leaf) => {
+                self.store(
+                    symbol,
+                    function_epoch,
+                    CachedStackCallee::BuiltinLeaf(callee, leaf),
+                );
+                ResolvedStackCallTarget::BuiltinLeaf { callee, leaf }
+            }
+            None => {
+                self.store(symbol, function_epoch, CachedStackCallee::Builtin(callee));
+                ResolvedStackCallTarget::Builtin { callee }
+            }
+        }
     }
     #[inline(always)]
     fn store(&mut self, symbol: SymId, function_epoch: u64, callee: CachedStackCallee) {
@@ -3488,6 +3520,11 @@ impl<'a> Vm<'a> {
             ResolvedStackCallTarget::Builtin { callee } => {
                 InterpreterStackCall::Complete(Self::call_resolved_builtin_from_stack_args(
                     self.ctx, func_val, args_start, nargs, callee,
+                ))
+            }
+            ResolvedStackCallTarget::BuiltinLeaf { callee, leaf } => {
+                InterpreterStackCall::Complete(Self::call_builtin_leaf_from_stack_args(
+                    self.ctx, func_val, args_start, nargs, callee, leaf,
                 ))
             }
             ResolvedStackCallTarget::Generic => {
@@ -7805,6 +7842,11 @@ impl<'a> Vm<'a> {
                         self.ctx, func_val, args_start, nargs, callee,
                     );
                 }
+                ResolvedStackCallTarget::BuiltinLeaf { callee, leaf } => {
+                    return Self::call_builtin_leaf_from_stack_args(
+                        self.ctx, func_val, args_start, nargs, callee, leaf,
+                    );
+                }
                 ResolvedStackCallTarget::ByteCode { callee } => {
                     return self.call_bytecode_from_stack_args(
                         func_val,
@@ -8606,14 +8648,10 @@ impl<'a> Vm<'a> {
                                 ValueKind::Subr(_) | ValueKind::Veclike(VecLikeType::Subr)
                             ) {
                                 match ResolvedBuiltinCallee::from_subr_value(value) {
-                                    Some(callee) => {
-                                        self.ctx.symbol_bytecode_call_cache.insert_builtin(
-                                            sym_id,
-                                            function_epoch,
-                                            callee,
-                                        );
-                                        ResolvedStackCallTarget::Builtin { callee }
-                                    }
+                                    Some(callee) => self
+                                        .ctx
+                                        .symbol_bytecode_call_cache
+                                        .insert_builtin(sym_id, function_epoch, callee),
                                     None => ResolvedStackCallTarget::Generic,
                                 }
                             } else {
@@ -8632,14 +8670,11 @@ impl<'a> Vm<'a> {
                     // same resolved subr object here instead of consulting the
                     // static table again on the hot path.
                     None => match ResolvedBuiltinCallee::from_static_symbol(sym_id) {
-                        Some(callee) => {
-                            self.ctx.symbol_bytecode_call_cache.insert_builtin(
-                                sym_id,
-                                function_epoch,
-                                callee,
-                            );
-                            ResolvedStackCallTarget::Builtin { callee }
-                        }
+                        Some(callee) => self.ctx.symbol_bytecode_call_cache.insert_builtin(
+                            sym_id,
+                            function_epoch,
+                            callee,
+                        ),
                         None => ResolvedStackCallTarget::Generic,
                     },
                 }
@@ -9499,6 +9534,10 @@ fn sym_id_at(constants: &[Value], idx: u16) -> SymId {
         })
         .unwrap_or_else(|| intern("nil"))
 }
+#[path = "vm_leaf.rs"]
+mod vm_leaf;
+pub(crate) use vm_leaf::render_vm_leaf_stats;
+
 #[cfg(test)]
 #[path = "tests/vm.rs"]
 mod tests;

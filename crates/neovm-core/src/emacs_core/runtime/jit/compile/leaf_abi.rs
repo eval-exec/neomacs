@@ -127,6 +127,8 @@ pub(crate) fn render_leaf_stats() -> String {
     // intrinsics' sites (`intrinsics`) share the line.
     out.extend(super::direct_call::render_direct_call_stats());
     out.extend(super::intrinsics::render_intrinsic_stats());
+    // The interpreter's leaf calls (`NEOVM_VM_LEAF`) too.
+    out.extend(crate::emacs_core::bytecode::vm::render_vm_leaf_stats());
     out.join(" ")
 }
 

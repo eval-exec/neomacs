@@ -1444,6 +1444,8 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     // P1.4 Stage A cached variable tiers: `=0` restores the general
     // read/set/bind/unbind paths.
     "NEOVM_VAR_CACHE",
+    // P1.2 / P1.0 §3.10: Tier-0 `Bcall` of leaf builtins (`=on`).
+    "NEOVM_VM_LEAF",
     // P3.3 regex knobs: alternation anchors (`=on`) and the existence DFA
     // (`=on`/`=verify`), plus its exit statistics.
     "NEOVM_REGEX_ANCHOR_ALT",

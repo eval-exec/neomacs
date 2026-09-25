@@ -424,7 +424,7 @@ pub(crate) enum LeafOutcome {
 }
 
 impl LeafOutcome {
-    #[cfg(test)]
+    #[inline(always)]
     pub(crate) fn of(result: &LeafResult) -> Self {
         match result {
             Ok(_) => LeafOutcome::Value,
