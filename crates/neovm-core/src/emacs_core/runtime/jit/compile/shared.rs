@@ -369,7 +369,7 @@ fn define_shared(
         .expect("ensure_module installed it");
     let fid = build(&mut JitSink::Shared(SharedSink {
         module: &mut shared.module,
-        shims: shared.shims,
+        shims: &shared.shims,
         ctx,
         fbctx,
         seq: shared.leaves,
@@ -392,7 +392,7 @@ fn define_shared(
 /// The persistent module's side of [`JitSink`].
 pub(crate) struct SharedSink<'a> {
     module: &'a mut JITModule,
-    shims: ShimIds,
+    shims: &'a ShimIds,
     ctx: &'a mut cranelift_codegen::Context,
     fbctx: &'a mut Option<FunctionBuilderContext>,
     /// The module's leaf count: a uniquifier for named entries.
@@ -426,7 +426,7 @@ impl LeafSink for JitSink<'_> {
         match self {
             JitSink::PerLeaf(module) => ShimIds::declare(*module, call_conv, ptr_ty, groups),
             // Declared once, every group, when the module was created.
-            JitSink::Shared(sink) => Ok(sink.shims),
+            JitSink::Shared(sink) => Ok(*sink.shims),
         }
     }
 
