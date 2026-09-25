@@ -215,18 +215,101 @@ buffer until both are empty and the mutator asks it to stop. It marks:
 
 Before the mutator overwrites a heap slot it logs the OLD value; the GC drains
 those into gray, keeping the start-of-cycle snapshot live regardless of
-concurrent mutation, with a wait-free append fast path. New objects
-allocate-black.
+concurrent mutation. The log itself is a `Mutex<Vec<TaggedValue>>` (a locked
+append, deduplicated per owner per cycle); what is cheap is the inline gate
+in front of it (see "The barrier window" below), which sends a store to the
+log only while a mark runs. New objects allocate-black.
 
 - Every `tagged/mutate.rs` heap-slot store fires `note_heap_write` /
   `note_heap_slot_write` (owner-driven `record_heap_write`, which logs the
   pre-overwrite children via `collect_veclike_children`) BEFORE the store.
 - Every symbol value / function / plist overwrite fires `note_root_overwrite`.
-- The barrier's fast-path gate keys on the `TAGGED_HEAP_CONCURRENT_ACTIVE`
-  thread-local, so the SATB log fires even when owner write-tracking is
-  Disabled (this was a real correctness bug: `note_heap_write_record`
-  short-circuited before `record_heap_write` and the log never fired).
+- The barrier's inline gate tests the barrier window, which is ALL for the
+  whole life of a concurrent mark, so the SATB log fires even when owner
+  write-tracking is Disabled (this was once a real correctness bug: the old
+  gate short-circuited before `record_heap_write` and the log never fired).
 - The GC drains a shared `Mutex<Vec<TaggedValue>>` SATB buffer into gray.
+
+## The barrier window (`tagged/gc/barrier_window.rs`)
+
+Every state that makes `record_heap_write` do something is folded into one
+owner-address window `(lo, len)`: **ALL** during a concurrent mark or owner
+tracking, **the dump span** when only the partition is active (the steady
+state), **empty** otherwise. A store by owner `a` leaves the inline gate iff
+`a - lo <u len`, or `a` is a non-cons whose header says tenured and not yet
+remembered (`GcHeader::needs_remembering`); only then is the
+`HeapWriteRecord` built (in the cold `note_heap_write_slow`, which runs the
+unchanged outlined rejects and `record_heap_write`).
+
+- **Publication.** `TaggedHeap::publish_barrier_window` is the one writer: it
+  stores the window into the thread-local the Rust stores test AND into
+  `JitHeapState` (`jit_state.rs`), which compiled code reads through
+  `vmctx -> Context.tagged_heap -> jit`. It runs at every writer of an input
+  (`set_write_tracking_mode`, `extend_dump_span`, `launch_concurrent_mark`
+  after `running = true`, `join_concurrent_mark` after `running = false`);
+  `set_tagged_heap` re-derives the thread-local (protocol state, no drop
+  guard, like the concurrent flag).
+- **The remembered bit.** `GcHeader.remembered` (header byte 3) is set by
+  exactly one helper, `TaggedHeap::remember_owner`, right after the owner is
+  inserted into the never-cleared `mapped_remembered`; tenured objects are
+  never freed, so a set bit cannot outlive its fact. A spurious bit would let
+  an owner skip the barrier with no re-seed of its young children (a UAF),
+  which is why nothing else writes it. Image owners never get it: they sit
+  in the window.
+- **Preconditions** (debug-asserted in `record_heap_write`): tenured implies
+  the dump partition (promotion only happens at the partition's first
+  cycle), and a remembered header implies set membership.
+- **Plain inline stores are sound outside the window.** The window is ALL
+  from the launch handshake (published before the GC thread reads anything)
+  until join (cleared only after the thread exited), so an inline store never
+  races a collector read; the next mark's start handshake (a channel send)
+  orders it before any. JIT `setcar`/`setcdr` and `aset` of owned plain
+  vectors and records store inline under exactly this test
+  (`jit/compile/heap_inline.rs`).
+
+## Allocation regions (`tagged/gc/alloc_region.rs`)
+
+Conses and floats are handed out from bump regions: a cursor and a limit per
+class in `JitHeapState`, bumped by the Rust allocator (`take_cons_cell`,
+`take_float_slot`) and by JIT code alike. A refill (cold) takes one
+contiguous run in GNU's source order (free list / page free-list run, else
+the newest block or page's bump tail, else a fresh one).
+
+- **I1 — black consistency.** A cons region granted while the heap allocates
+  black (a deferred sweep or a concurrent mark) is pre-marked with the
+  marker's relaxed atomics; a float region's slots get their full header,
+  born at the current parity, at the grant. Every assignment to
+  `mark_parity`, `concurrent_mark_running` or `sweep_in_progress` is preceded
+  by `close_alloc_regions()`, so a region never outlives the phase it was
+  granted in (debug-asserted at close via the region's recorded color).
+- **I2 — collector code never sees an open region.** Every collector entry
+  and walker closes first (`incremental_finish` before it resets the free
+  list — a free-list run closed after that would be pushed onto the list the
+  sweep rebuilds and handed out twice — the sweep slices, `sweep_cons`,
+  `sweep_objects`, the page sweep, `complete_collection`,
+  `begin_stw_collection`, `promote_and_blacken`, `reset_bytes_since_gc`);
+  the verifiers, the block/page releases and `layout_stats` assert it.
+  Closing unmarks a black region's unused tail and gives it back: a bump
+  tail still ending at the limit rewinds its cursor (keeping "bits at or
+  above `next_index` are never set"), anything else goes back on its free
+  list in the order the sweep leaves it.
+- **I3 — counter exactness.** Counters are charged per region at the grant
+  and the unused tail refunded at close. `memory-use-counts`,
+  `allocated_count()`, `bytes_since_gc_exact()` (`garbage-collect-maybe`,
+  the profiler) subtract the open regions' unused objects; `bytes_since_gc()`
+  (the pacing gates) is the charged value, never below exact, and
+  `region_budget` never grants past the threshold, so a collection comes
+  when it did before.
+- **Publication during a mark.** Inline allocation stays on during marks and
+  sweeps. A new object's fields are plain stores; it reaches the GC thread
+  only through a barriered (Release) store on the slow path or through roots
+  read at a stop-the-world handshake. A new black cons is never traced; a
+  new float is only header-claimed, and its header was written by the Rust
+  refill before any publication. Unhanded region cells are unreachable, so
+  the GC thread never sets their bits.
+- **The GC thread reads no allocator cursor, alloc bit or free list**, and
+  pdump walks no allocator structure; allocation regions are mutator-only
+  state.
 
 ## The adaptive pacer
 
@@ -323,7 +406,14 @@ adversarial review — a soundness proof + a failed reproduction):
 - **tenured-before-parity read order**: every `marked` reader short-circuits on
   `tenured` first.
 - **born-at-parity**: allocation link seams write `marked` at the current
-  parity (allocate-black).
+  parity (allocate-black); float slots get theirs when their allocation
+  region is granted, and every region closes before the parity flips.
+- **regions closed at every collector entry** (`alloc_region.rs`, I1/I2
+  above): a new phase-flag writer or collector walker MUST call
+  `close_alloc_regions()` first.
+- **barrier window republished at every input writer** (`barrier_window.rs`):
+  a new state that makes `record_heap_write` act MUST be folded into
+  `barrier_window()` and republished where it changes.
 - **page ownership including retired pages**: the `ObjectArena::owns` oracle
   and the claim/sweep page-sets include retired (full) pages.
 - Any NEW root source must be seeded at BOTH the start and termination
