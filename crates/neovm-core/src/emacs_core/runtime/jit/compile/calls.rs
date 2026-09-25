@@ -88,15 +88,30 @@ pub(crate) fn opcode_site_effects(op: &Op, aot: bool) -> Effects {
     }
 }
 
-/// Whether an opcode site is a leaf call in the MIR tier's sense: its
-/// lowering cannot collect, run Lisp or deopt, so a loop may contain it and
-/// the values live across it need no roots (`NEOVM_JIT_LEAF_EFFECTS`).
+/// Whether an opcode site is a leaf call in the MIR tier's sense
+/// (`NEOVM_JIT_LEAF_EFFECTS`): it calls a leaf builtin's body -- through its
+/// trampoline, the `memq`/`assq` value shims or a pure table entry -- and
+/// its lowering cannot collect, run Lisp or deopt, so a loop may contain it
+/// and the values live across it need no roots.
+///
+/// The GC-free ops the baseline lowers INLINE (`aref`, `setcar`, `setcdr`)
+/// and the pure entries without a leaf (`symbol-function`, `nreverse`) are
+/// not leaf calls here: admitting their loops into the MIR tier was
+/// measured slower (bubble-no-cons +4.1%, inclist +1.6% instructions, the
+/// `setcar` loops; nbody's `aref` loop +-0).
 pub(crate) fn opcode_site_is_leaf_call(op: &Op, aot: bool) -> bool {
-    !opcode_site_effects(op, aot).intersects(
-        Effects::MAY_GC
-            .with(Effects::MAY_REENTER)
-            .with(Effects::MAY_DEOPT),
-    )
+    use crate::emacs_core::subr::leaf::LeafId;
+    let leaf = match op {
+        Op::Memq => Some(LeafId::Memq),
+        Op::Assq => Some(LeafId::Assq),
+        _ => super::leaf_abi::opcode_leaf(op),
+    };
+    leaf.is_some()
+        && !opcode_site_effects(op, aot).intersects(
+            Effects::MAY_GC
+                .with(Effects::MAY_REENTER)
+                .with(Effects::MAY_DEOPT),
+        )
 }
 
 /// Select the same named-builtin specialization for baseline JIT, MIR and

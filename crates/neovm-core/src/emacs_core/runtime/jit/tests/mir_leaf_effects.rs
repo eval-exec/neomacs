@@ -35,8 +35,11 @@ fn compile(ev: &Context, f: &ByteCodeFunction, effects: bool, leaf: LeafKnob) ->
 }
 
 /// The classification: leaf trampolines, value shims and pure table entries
-/// are leaf calls with their leaf's declared effects; a rooted table entry,
-/// `aset`, `set` and every non-builtin op are not.
+/// have their leaf's declared effects, with no GC, Lisp or deopt; a rooted
+/// table entry, `aset`, `set` and every non-builtin op are `UNKNOWN`. Only
+/// the sites that call a leaf's body are leaf calls for MIR admission: the
+/// inline-lowered `aref`/`setcar`/`setcdr` and the leafless pure entries
+/// are not.
 #[test]
 fn opcode_site_effects_follow_the_lowering() {
     let _ev = Context::new();
@@ -64,8 +67,16 @@ fn opcode_site_effects_follow_the_lowering() {
         ] {
             let effects = opcode_site_effects(&op, false);
             assert!(!effects.intersects(forbidden), "{op:?} {knob:?}");
-            assert!(opcode_site_is_leaf_call(&op, false), "{op:?} {knob:?}");
             assert!(effects.contains(Effects::MAY_SIGNAL), "{op:?}");
+            let leaf_backed = !matches!(
+                op,
+                Op::Aref | Op::Setcar | Op::Setcdr | Op::SymbolFunction | Op::Nreverse
+            );
+            assert_eq!(
+                opcode_site_is_leaf_call(&op, false),
+                leaf_backed,
+                "{op:?} {knob:?}"
+            );
         }
         // `string=`/`string<` are leaf calls only through their leaves: the
         // table shim roots and takes `&mut Context`.
