@@ -106,7 +106,7 @@ fn jit_final_report_renders_every_section() {
     );
     assert_eq!(
         body_of(&lines, ReportTag::FinalCodeMemory),
-        "shared_leaves=0 per_leaf_modules=0 reentrant_fallbacks=0 modules_created=0 \
+        "shared_leaves=0 per_leaf_modules=0 reentrant_fallbacks=0 split_payloads=0 modules_created=0 \
          modules_retired=0 arena_regions=0 arena_page_bytes=0 arena_code_bytes=0 arena_seals=0"
     );
     assert_eq!(

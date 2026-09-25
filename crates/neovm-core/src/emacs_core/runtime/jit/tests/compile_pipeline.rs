@@ -6,7 +6,7 @@ use crate::emacs_core::jit::cache;
 use crate::emacs_core::jit::stats::{self, CompileOrigin, CompilePhase};
 use crate::emacs_core::value::LambdaParams;
 
-fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFunction {
+pub(crate) fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFunction {
     let mut f = ByteCodeFunction::new(LambdaParams {
         required: (0..arity).map(|i| SymId(i as u32 + 1)).collect(),
         optional: Vec::new(),
@@ -106,7 +106,7 @@ fn jit_pipeline_first_sight_and_direct_origins() {
 /// Mask what legitimately differs between two compiles of one body: baked
 /// addresses (hex literals of 6+ digits) and module-local external-name
 /// indices (`userextname3`).
-fn mask_code_text(text: &str) -> String {
+pub(crate) fn mask_code_text(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let bytes = text.as_bytes();
     let mut i = 0;
@@ -140,7 +140,7 @@ fn mask_code_text(text: &str) -> String {
 /// The register-allocated code of every leaf `compile` builds on this
 /// thread, one entry per leaf: `size=` plus the masked disassembly (the
 /// `NEOVM_JIT_DUMP_ASM` capture; addresses and bytes are dropped).
-fn captured_code(compile: impl FnOnce()) -> Vec<String> {
+pub(crate) fn captured_code(compile: impl FnOnce()) -> Vec<String> {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("leaves.asm");
     stats::asm_dump::force_asm_dump_for_test(Some(path.clone()));
@@ -164,7 +164,7 @@ fn captured_code(compile: impl FnOnce()) -> Vec<String> {
 /// A body mix that reaches both tiers and most shim families: a pure MIR
 /// leaf, a baseline leaf with calls, a loop, a condition-case and float
 /// arithmetic.
-fn corpus() -> Vec<(Vec<Op>, Vec<Value>, usize)> {
+pub(crate) fn corpus() -> Vec<(Vec<Op>, Vec<Value>, usize)> {
     let sym = |name: &str| Value::symbol(name);
     vec![
         // (lambda (x) (+ x 1)): MIR.
@@ -312,7 +312,7 @@ fn jit_pipeline_isa_cache_is_code_identical() {
 
 /// The CLIF text of every function `compile` lowers on this thread (the
 /// `NEOVM_JIT_DUMP_CLIF` capture), one entry per function.
-fn captured_clif(compile: impl FnOnce()) -> Vec<String> {
+pub(crate) fn captured_clif(compile: impl FnOnce()) -> Vec<String> {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("leaves.clif");
     lowering::force_clif_dump_for_test(Some(path.to_string_lossy().into_owned()));

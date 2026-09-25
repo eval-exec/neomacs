@@ -4566,7 +4566,7 @@ mod array_shim_tests;
 mod call_feedback_tests;
 #[cfg(test)]
 #[path = "tests/compile_pipeline.rs"]
-mod compile_pipeline_tests;
+pub(crate) mod compile_pipeline_tests;
 pub(crate) mod heap_inline;
 #[cfg(test)]
 #[path = "tests/inline_heap_ops.rs"]

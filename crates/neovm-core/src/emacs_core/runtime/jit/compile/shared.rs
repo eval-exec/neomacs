@@ -26,6 +26,12 @@
 //! module on Cranelift's default memory, as before (the single-build A/B
 //! arm). A compile that finds the backend borrowed (compiles do not nest,
 //! so this is a defensive path) does the same and is counted.
+//!
+//! Under `NEOVM_JIT_BG` (P2.4 B5, [`split`]) the same backend takes a
+//! compile in two halves: the builders hand their finished function to a
+//! capturing sink, and the backend compiles the packaged function
+//! ([`split::JobPayload`]) afterwards -- in line, or on a worker thread's
+//! backend of its own.
 
 use std::cell::{Cell, RefCell};
 
@@ -34,7 +40,7 @@ use cranelift_frontend::FunctionBuilderContext;
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{FuncId, Linkage, Module, default_libcall_names};
 
-use super::lowering::{RegallocChoice, active_regalloc_choice, jit_isa};
+use super::lowering::{RegallocChoice, active_regalloc_choice, jit_isa, jit_isa_for};
 use super::shim_refs::{ShimGroups, ShimIds};
 use super::sink::{LeafEntry, LeafSink, define_in_place, define_with_context};
 use super::{CompileError, LeafBacking};
@@ -43,6 +49,8 @@ use crate::emacs_core::jit::stats::{self, CompilePhase, enter_phase};
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 use super::code_arena::CodeArena;
+
+pub(crate) mod split;
 
 /// Leaves defined into one module before it is replaced (bounds the
 /// module's per-leaf declarations, blobs and relocation records).
@@ -64,6 +72,9 @@ pub(crate) struct CodeMemoryStats {
     pub(crate) per_leaf_modules: u64,
     /// Of those, compiles that found the persistent backend borrowed.
     pub(crate) reentrant_fallbacks: u64,
+    /// Of the shared leaves, those compiled from a packaged front/backend
+    /// split payload (`NEOVM_JIT_BG`, [`split`]) by this thread's backend.
+    pub(crate) split_payloads: u64,
     /// Persistent modules created.
     pub(crate) modules_created: u64,
     /// Persistent modules replaced after [`module_leaf_limit`] leaves.
@@ -79,12 +90,13 @@ impl CodeMemoryStats {
     /// `key=value` rendering for the `[neovm-jit-final-code-memory]` line.
     pub(crate) fn render(&self) -> String {
         format!(
-            "shared_leaves={} per_leaf_modules={} reentrant_fallbacks={} modules_created={} \
-             modules_retired={} arena_regions={} arena_page_bytes={} arena_code_bytes={} \
-             arena_seals={}",
+            "shared_leaves={} per_leaf_modules={} reentrant_fallbacks={} split_payloads={} \
+             modules_created={} modules_retired={} arena_regions={} arena_page_bytes={} \
+             arena_code_bytes={} arena_seals={}",
             self.shared_leaves,
             self.per_leaf_modules,
             self.reentrant_fallbacks,
+            self.split_payloads,
             self.modules_created,
             self.modules_retired,
             self.arena_regions,
@@ -121,6 +133,7 @@ thread_local! {
             shared_leaves: 0,
             per_leaf_modules: 0,
             reentrant_fallbacks: 0,
+            split_payloads: 0,
             modules_created: 0,
             modules_retired: 0,
             arena_regions: 0,
@@ -236,13 +249,19 @@ pub(crate) fn define_jit_leaf(
 ) -> Result<JitDefined, CompileError> {
     let mut build = Some(build);
     if persistent_module_enabled() {
+        // Read once per compile: the front/backend split (`NEOVM_JIT_BG`).
+        let split = crate::emacs_core::jit::bg::split_enabled();
         // `try_with`: a compile during thread-local teardown (the backend
         // already destroyed) takes the per-leaf path like a re-entrant one.
         let shared = SHARED_JIT
             .try_with(|cell| {
                 let mut guard = cell.try_borrow_mut().ok()?;
                 let build = build.take().expect("build runs once");
-                Some(define_shared(&mut guard, build))
+                Some(if split {
+                    split::define_split(&mut guard, build)
+                } else {
+                    define_shared(&mut guard, build)
+                })
             })
             .ok()
             .flatten();
@@ -324,7 +343,7 @@ impl SharedJit {
         if slot.is_some() {
             return Ok(());
         }
-        let mut builder = JITBuilder::with_isa(jit_isa()?, default_libcall_names());
+        let mut builder = JITBuilder::with_isa(jit_isa_for(choice)?, default_libcall_names());
         super::shims::register_shims(&mut builder);
         #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
         builder.memory_provider(Box::new(self.arena.handle()));
@@ -405,6 +424,10 @@ pub(crate) enum JitSink<'a> {
     PerLeaf(&'a mut JITModule),
     /// The thread's persistent module.
     Shared(SharedSink<'a>),
+    /// The front of a split compile: declarations come from the thread's
+    /// persistent module, and the finished function is captured for the
+    /// backend instead of defined (`split::define_split`).
+    Deferred(split::DeferredSink<'a>),
 }
 
 impl LeafSink for JitSink<'_> {
@@ -414,6 +437,7 @@ impl LeafSink for JitSink<'_> {
         match self {
             JitSink::PerLeaf(module) => module,
             JitSink::Shared(sink) => sink.module,
+            JitSink::Deferred(sink) => sink.module,
         }
     }
 
@@ -427,6 +451,7 @@ impl LeafSink for JitSink<'_> {
             JitSink::PerLeaf(module) => ShimIds::declare(*module, call_conv, ptr_ty, groups),
             // Declared once, every group, when the module was created.
             JitSink::Shared(sink) => Ok(*sink.shims),
+            JitSink::Deferred(sink) => Ok(*sink.shims),
         }
     }
 
@@ -434,12 +459,15 @@ impl LeafSink for JitSink<'_> {
         match self {
             JitSink::PerLeaf(_) => FunctionBuilderContext::new(),
             JitSink::Shared(sink) => sink.fbctx.take().unwrap_or_default(),
+            JitSink::Deferred(sink) => sink.fbctx.take().unwrap_or_default(),
         }
     }
 
     fn return_builder_context(&mut self, context: FunctionBuilderContext) {
-        if let JitSink::Shared(sink) = self {
-            *sink.fbctx = Some(context);
+        match self {
+            JitSink::PerLeaf(_) => {}
+            JitSink::Shared(sink) => *sink.fbctx = Some(context),
+            JitSink::Deferred(sink) => *sink.fbctx = Some(context),
         }
     }
 
@@ -452,6 +480,7 @@ impl LeafSink for JitSink<'_> {
         match self {
             JitSink::PerLeaf(module) => define_in_place(*module, entry, func, disasm),
             JitSink::Shared(sink) => sink.define(entry, func, disasm),
+            JitSink::Deferred(sink) => Ok(sink.capture(entry, func, disasm)),
         }
     }
 }
@@ -463,7 +492,7 @@ impl SharedSink<'_> {
         func: Function,
         disasm: bool,
     ) -> Result<FuncId, CompileError> {
-        let fid = self.declare_entry(entry)?;
+        let fid = declare_leaf_entry(self.module, entry, entry_is_named(entry.linkage), self.seq)?;
         self.ctx.clear();
         self.ctx.func = func;
         let defined = define_with_context(self.module, fid, self.ctx, disasm);
@@ -471,28 +500,36 @@ impl SharedSink<'_> {
         defined?;
         Ok(fid)
     }
+}
 
-    /// Declare the entry under a name no other leaf of this module has: a
-    /// persistent module sees the same label again for a re-tier or a
-    /// recompile. Without per-function names (the default) the entry is
-    /// anonymous: no name string, no symbol-table insert. With them (perf
-    /// map, dumps, reports) the label is kept, suffixed `.N` on reuse.
-    fn declare_entry(&mut self, entry: LeafEntry<'_>) -> Result<FuncId, CompileError> {
-        let declared = match entry.linkage {
-            Linkage::Local if !stats::naming_enabled() => {
-                self.module.declare_anonymous_function(entry.signature)
-            }
-            linkage => {
-                let taken = self.module.declarations().get_name(entry.name).is_some();
-                let name = if taken {
-                    format!("{}.{}", entry.name, self.seq)
-                } else {
-                    entry.name.to_string()
-                };
-                self.module
-                    .declare_function(&name, linkage, entry.signature)
-            }
+/// Whether a leaf entry of `linkage` is declared under its name: always
+/// for a non-local entry, and for a local one only under per-function names
+/// (`stats::naming_enabled`). Read on the compiling (eval) thread.
+pub(crate) fn entry_is_named(linkage: Linkage) -> bool {
+    linkage != Linkage::Local || stats::naming_enabled()
+}
+
+/// Declare a leaf entry in `module` under a name no other leaf of the
+/// module has: a persistent module sees the same label again for a re-tier
+/// or a recompile. An unnamed entry (`named` false: per-function names are
+/// off, the default) is anonymous: no name string, no symbol-table insert.
+/// A named one keeps its label, suffixed `.seq` on reuse.
+pub(crate) fn declare_leaf_entry(
+    module: &mut JITModule,
+    entry: LeafEntry<'_>,
+    named: bool,
+    seq: u32,
+) -> Result<FuncId, CompileError> {
+    let declared = if named {
+        let taken = module.declarations().get_name(entry.name).is_some();
+        let name = if taken {
+            format!("{}.{}", entry.name, seq)
+        } else {
+            entry.name.to_string()
         };
-        declared.map_err(|e| CompileError::Backend(BackendError::Define(e.to_string())))
-    }
+        module.declare_function(&name, entry.linkage, entry.signature)
+    } else {
+        module.declare_anonymous_function(entry.signature)
+    };
+    declared.map_err(|e| CompileError::Backend(BackendError::Define(e.to_string())))
 }

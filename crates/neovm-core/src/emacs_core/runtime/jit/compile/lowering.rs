@@ -2766,7 +2766,14 @@ pub(super) fn lower_mir_with_plan(
 /// constants). `NEOVM_JIT_ISA_CACHE=off` rebuilds per compile (the
 /// single-build A/B arm).
 pub(crate) fn jit_isa() -> Result<cranelift_codegen::isa::OwnedTargetIsa, CompileError> {
-    let choice = active_regalloc_choice();
+    jit_isa_for(active_regalloc_choice())
+}
+
+/// [`jit_isa`] for an explicit allocator: a backend that compiles another
+/// thread's function (`jit::bg`) has no compile scope of its own.
+pub(crate) fn jit_isa_for(
+    choice: RegallocChoice,
+) -> Result<cranelift_codegen::isa::OwnedTargetIsa, CompileError> {
     if !isa_cache_enabled() {
         return build_jit_isa(choice);
     }
