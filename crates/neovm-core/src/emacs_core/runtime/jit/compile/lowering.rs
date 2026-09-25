@@ -3207,6 +3207,21 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
             _ => entry_params,
         };
         let [vmctx_param, args_ptr, out_ptr, fourth_param] = entry_params;
+        // The arguments first: nothing below writes the caller's argument
+        // slot, and read here the pointer to it dies at once, instead of
+        // staying live across the root-window prologue's cold grow call
+        // (a callee-saved copy and a restore on every entry).
+        let arg_vals: Vec<BlockArg> = (0..m.arity)
+            .map(|i| {
+                let v = fb.ins().load(
+                    types::I64,
+                    MemFlagsData::trusted(),
+                    args_ptr,
+                    (i * 8) as i32,
+                );
+                BlockArg::Value(v)
+            })
+            .collect();
         if let Some(slot) = backedge_counter {
             let one = fb.ins().iconst(types::I64, 1);
             fb.ins().stack_store(ptr_ty, one, slot, 0);
@@ -3261,17 +3276,6 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
             meta_depth_addr,
             meta_handlers_addr,
         );
-        let arg_vals: Vec<BlockArg> = (0..m.arity)
-            .map(|i| {
-                let v = fb.ins().load(
-                    types::I64,
-                    MemFlagsData::trusted(),
-                    args_ptr,
-                    (i * 8) as i32,
-                );
-                BlockArg::Value(v)
-            })
-            .collect();
         fb.ins().jump(clif_blocks[0], &arg_vals);
 
         for (bi, blk) in m.blocks.iter().enumerate() {
