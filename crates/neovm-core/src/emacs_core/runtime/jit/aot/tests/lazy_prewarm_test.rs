@@ -335,3 +335,50 @@ fn leaves_hash(ctx: &Context, name: &str) -> u128 {
     leaf_content_hash(bc.executable_ops(), &bc.constants, bc.params.required.len())
         .expect("hashable")
 }
+
+/// Startup marking streams the manifest's `m` lines (P4.2 A2): members only,
+/// escaped names decoded, the interlock header enforced, malformed lines
+/// skipped.
+#[test]
+fn manifest_member_stream_yields_members_behind_the_interlock() {
+    let key = |member, ops_len, arity, hash| ManifestPreKey {
+        member,
+        ops_len,
+        arity,
+        hash,
+    };
+    let header = |fingerprint: &str| {
+        format!(
+            "version {PRELOAD_MANIFEST_VERSION}\nabi_tag {ABI_TAG:08x}\nfingerprint {fingerprint}\nleaves 5\n"
+        )
+    };
+    let mut body = String::new();
+    body.push_str(&manifest_leaf_line(true, 3, 1, 0xabc, "plain-member"));
+    body.push_str(&manifest_leaf_line(false, 4, 1, 0xdef, "non-member"));
+    body.push_str(&manifest_leaf_line(true, 5, 2, 7, "with space"));
+    body.push_str("leaf m 1 1 zz broken-hash\n");
+    body.push_str(&manifest_leaf_line(true, 6, 0, u128::MAX, "%leading"));
+
+    let running = crate::emacs_core::pdump::fingerprint_hex();
+    let text = header(running) + &body;
+    let mut seen = Vec::new();
+    assert!(for_each_manifest_member(&text, |name, key| {
+        seen.push((name.to_string(), key))
+    }));
+    assert_eq!(
+        seen,
+        vec![
+            ("plain-member".to_string(), key(true, 3, 1, 0xabc)),
+            ("with space".to_string(), key(true, 5, 2, 7)),
+            ("%leading".to_string(), key(true, 6, 0, u128::MAX)),
+        ]
+    );
+
+    // A manifest for another image streams nothing.
+    let mut stale = Vec::new();
+    assert!(!for_each_manifest_member(
+        &(header("not-this-image") + &body),
+        |name, _| stale.push(name.to_string())
+    ));
+    assert!(stale.is_empty());
+}

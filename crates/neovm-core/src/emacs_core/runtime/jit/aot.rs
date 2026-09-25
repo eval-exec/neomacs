@@ -3791,6 +3791,92 @@ fn load_preload_prekeys() -> Option<PreKeyMap> {
     parsed.prekeys
 }
 
+/// Stream the MEMBER pre-keys (`m` lines) of the preload manifest beside the
+/// running executable into `f`, for startup marking: the interlock header is
+/// checked first (`false` = no manifest or a refused one, nothing streamed),
+/// then each member line is parsed in place, with no map and no per-name
+/// allocation (a `%`-escaped name aside). A malformed line is skipped: it
+/// can only leave a member unmarked, and the entry dlsym stays the
+/// membership ground truth at the consult.
+fn for_each_preload_member(mut f: impl FnMut(&str, ManifestPreKey)) -> bool {
+    // Test seam: the injected pre-key map stands in for the manifest.
+    #[cfg(test)]
+    if let Some(injected) = test_support::injected_prekeys() {
+        for (name, key) in &injected {
+            if key.member {
+                f(name, *key);
+            }
+        }
+        return true;
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        return false;
+    };
+    let Ok(text) = std::fs::read_to_string(preload_manifest_path_for_executable(&exe)) else {
+        return false;
+    };
+    for_each_manifest_member(&text, f)
+}
+
+/// [`for_each_preload_member`] over a manifest's text.
+fn for_each_manifest_member(text: &str, mut f: impl FnMut(&str, ManifestPreKey)) -> bool {
+    let mut header = ParsedPreloadManifest {
+        version: None,
+        abi_tag: None,
+        fingerprint: None,
+        prekeys: None,
+    };
+    // The header lines precede the pre-keys (`build_and_link_preload`).
+    let mut lines = text.lines().peekable();
+    while let Some(line) = lines.next_if(|line| !line.starts_with("leaf ")) {
+        let mut it = line.split_whitespace();
+        match it.next() {
+            Some("version") => header.version = it.next().and_then(|v| v.parse().ok()),
+            Some("abi_tag") => {
+                header.abi_tag = it.next().and_then(|v| u32::from_str_radix(v, 16).ok());
+            }
+            Some("fingerprint") => header.fingerprint = it.next().map(str::to_string),
+            _ => {}
+        }
+    }
+    if !manifest_interlock_ok(&header) {
+        return false;
+    }
+    for line in lines {
+        let Some(fields) = line.strip_prefix("leaf m ") else {
+            continue;
+        };
+        let mut it = fields.split_whitespace();
+        let parsed = (|| {
+            let ops_len: usize = it.next()?.parse().ok()?;
+            let arity: usize = it.next()?.parse().ok()?;
+            let hash = u128::from_str_radix(it.next()?, 16).ok()?;
+            let tok = it.next()?;
+            if it.next().is_some() {
+                return None;
+            }
+            let name = if tok.starts_with('%') {
+                std::borrow::Cow::Owned(manifest_unescape_name(tok)?)
+            } else {
+                std::borrow::Cow::Borrowed(tok)
+            };
+            Some((
+                name,
+                ManifestPreKey {
+                    member: true,
+                    ops_len,
+                    arity,
+                    hash,
+                },
+            ))
+        })();
+        if let Some((name, key)) = parsed {
+            f(&name, key);
+        }
+    }
+    true
+}
+
 thread_local! {
     /// The preload unit (one `.so` serving all loadup entries), `dlopen`'d once
     /// per thread on first [`load_preload`]. `Some(None)` records a checked miss
@@ -4179,41 +4265,37 @@ pub fn mark_preload_members_prewarmed(ctx: &crate::emacs_core::eval::Context) ->
     if !aot_enabled() {
         return (0, 0);
     }
-    let Some(prekeys) = load_preload_prekeys() else {
-        return (0, 0);
-    };
     // A fresh marking pass: stale stub entries (an earlier image on this
     // thread) must not adopt objects of this one.
     PREWARM_STUBS.with(|m| m.borrow_mut().clear());
     PREWARM_STUBS_PENDING.with(|p| p.set(false));
     let mut candidates = 0usize;
     let mut marked = 0usize;
-    for (name_id, func_val) in ctx.obarray.interned_function_cells_with_names() {
-        if !func_val.is_bytecode() {
-            continue;
-        }
-        // Prekey miss / non-member skips BEFORE touching the function data:
-        // this obarray-wide sweep must not materialize thousands of
-        // never-called functions at startup. (`candidates` counts prekey
-        // members, not all required-only bytecode fns.)
-        let Some(key) = prekeys.get(crate::emacs_core::intern::resolve_name(name_id)) else {
-            continue;
+    // Walk the manifest's members, not the obarray: ~1.7K name lookups
+    // instead of a pre-key map built for every line and probed for every
+    // bound byte-code function.
+    for_each_preload_member(|name, key| {
+        let Some(sym) = crate::emacs_core::intern::lookup_interned(name) else {
+            return;
         };
-        if !key.member {
-            continue;
+        let Some(func_val) = ctx.obarray.symbol_function_id(sym) else {
+            return;
+        };
+        if !func_val.is_bytecode() {
+            return;
         }
         // Required-only and the arity, from a lazy stub's raw header.
         let Some(arity) = func_val.bytecode_required_only_arity_probe() else {
-            continue;
+            return;
         };
         candidates += 1;
         if key.arity != arity {
-            continue;
+            return;
         }
         match func_val.bytecode_data_if_materialized() {
             Some(bc) => {
                 if key.ops_len != bc.executable_ops().len() {
-                    continue;
+                    return;
                 }
                 bc.jit_runtime().mark_aot_prewarmed();
                 PREWARM_HASHES.with(|m| {
@@ -4233,7 +4315,7 @@ pub fn mark_preload_members_prewarmed(ctx: &crate::emacs_core::eval::Context) ->
             }
         }
         marked += 1;
-    }
+    });
     (candidates, marked)
 }
 
