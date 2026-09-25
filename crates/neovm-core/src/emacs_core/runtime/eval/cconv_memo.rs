@@ -35,6 +35,7 @@
 //! had an effect.
 
 use super::cconv_shape::{ClosureFacts, ClosureShape, EnvSummary, FactsRefusal};
+use super::cconv_trust::TrustedSet;
 use super::*;
 use std::sync::atomic::{AtomicU8, Ordering};
 use strum::{EnumCount, IntoEnumIterator};
@@ -105,6 +106,9 @@ pub(crate) enum CconvMemoEvent {
     NoLexvars,
     /// The environment binds lexical variables: the trimming path.
     Trim,
+    /// The trusted set does not stand (see `cconv_trust`): a trusted
+    /// function was redefined or advised, or the set could not be built.
+    Untrusted,
     /// A trimming call whose inputs the memo could serve (S0.3's checks).
     Eligible,
     /// The environment is not a proper list of `(SYMBOL . VALUE)` and bare
@@ -187,11 +191,13 @@ pub(crate) struct EffectSnapshot {
 // The per-Context state
 // ---------------------------------------------------------------------------
 
-/// Everything the filter hook keeps on a [`Context`].  Holds no Lisp value.
+/// Everything the filter hook keeps on a [`Context`].  Its only Lisp values
+/// are the trusted set's, which the root walk traces.
 #[derive(Debug)]
 pub(crate) struct CconvMemo {
     mode: CconvMemoMode,
     stats: CconvMemoStats,
+    pub(super) trusted: TrustedSet,
     /// Files loaded (bumped by the loader), for [`EffectSnapshot`].
     loads: u64,
     /// Echo-area / stderr messages emitted, for [`EffectSnapshot`].
@@ -203,6 +209,7 @@ impl CconvMemo {
         Self {
             mode,
             stats: CconvMemoStats::default(),
+            trusted: TrustedSet::default(),
             loads: 0,
             outputs: 0,
         }
@@ -226,6 +233,15 @@ impl CconvMemo {
     #[cfg(test)]
     pub(crate) fn stats(&self) -> &CconvMemoStats {
         &self.stats
+    }
+
+    #[cfg(test)]
+    pub(crate) fn trusted(&self) -> &TrustedSet {
+        &self.trusted
+    }
+
+    pub(crate) fn trace_roots(&self, visit: &mut dyn FnMut(Value)) {
+        self.trusted.trace_roots(visit);
     }
 
     fn note(&mut self, event: CconvMemoEvent) {
@@ -469,7 +485,11 @@ impl Context {
             return self.apply(closure_hook, vec![params, body, env, docstring, iform]);
         }
         self.cconv_memo.note(CconvMemoEvent::Trim);
-        let eligibility = self.cconv_eligibility(params, body, env, iform);
+        let eligibility = if self.cconv_trusted_set_valid() {
+            self.cconv_eligibility(params, body, env, iform)
+        } else {
+            CconvMemoEvent::Untrusted
+        };
         self.cconv_memo.note(eligibility);
         let before = self.cconv_effect_snapshot();
         let result = self.apply(closure_hook, vec![params, body, env, docstring, iform]);

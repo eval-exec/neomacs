@@ -181,6 +181,7 @@ impl Context {
         if let Some(filter_fn) = self.interpreted_closure_filter_fn {
             visit(filter_fn);
         }
+        self.cconv_memo.trace_roots(visit);
         for entry in self.named_call_cache.values() {
             if let NamedCallTarget::Obarray(val) = &entry.target {
                 visit(*val);

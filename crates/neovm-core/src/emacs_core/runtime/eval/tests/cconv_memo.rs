@@ -474,3 +474,199 @@ fn stats_classify_eligibility() {
         assert_eq!(count(&eval, event), before + 1, "{form}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// S0.4: the trusted set and its audit
+// ---------------------------------------------------------------------------
+
+use crate::emacs_core::eval::{
+    EXCLUDED_CALLEES, TRUSTED_LISP, TRUSTED_VARIABLES, TrustRefusal, TrustedVariableRole,
+};
+
+fn constant_symbols(function: Value) -> Vec<Value> {
+    let mut out = Vec::new();
+    let mut stack: Vec<Value> = function
+        .get_bytecode_data()
+        .expect("byte-code")
+        .constants
+        .iter()
+        .copied()
+        .collect();
+    while let Some(value) = stack.pop() {
+        if value.is_symbol() && !value.is_nil() {
+            out.push(value);
+        } else if value.is_cons() {
+            stack.push(value.cons_car());
+            stack.push(value.cons_cdr());
+        } else if let Some(code) = value.get_bytecode_data() {
+            stack.extend(code.constants.iter().copied());
+        } else if let Some(items) = value.as_vector_data() {
+            stack.extend(items.iter().copied());
+        }
+    }
+    out
+}
+
+/// T0.11: what the dumped trusted byte-code calls and reads, pinned.  A GNU
+/// sync that changes `cconv.el' or `macroexp.el' fails here and forces a
+/// re-audit of the memo's exactness argument (p4-1 design, section 5.5).
+#[test]
+fn trusted_set_audit_pins_the_dumped_byte_code() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = startup(CconvMemoMode::Stats);
+    assert!(
+        eval.cconv_trusted_set_valid(),
+        "{:?}",
+        eval.cconv_memo.trusted().refusal()
+    );
+
+    let mut callees: Vec<String> = Vec::new();
+    let mut specials: Vec<String> = Vec::new();
+    for name in TRUSTED_LISP {
+        let function = eval
+            .obarray()
+            .symbol_function(name)
+            .unwrap_or_else(|| panic!("{name} is void"));
+        assert!(
+            function.get_bytecode_data().is_some(),
+            "{name} is not byte-code"
+        );
+        for symbol in constant_symbols(function) {
+            let id = symbol.as_symbol_id().expect("symbol");
+            let name = crate::emacs_core::intern::resolve_sym(id).to_string();
+            if eval.obarray().is_special_id(id) && !name.starts_with(':') {
+                specials.push(name.clone());
+            }
+            let Some(cell) = eval
+                .obarray()
+                .symbol_function_id(id)
+                .filter(|c| !c.is_nil())
+            else {
+                continue;
+            };
+            let subr = cell.is_subr() || cell.as_subr_id().is_some();
+            let macro_cell = cell.is_cons() && cell.cons_car().is_symbol_named("macro");
+            if !subr && !macro_cell {
+                callees.push(name);
+            }
+        }
+    }
+    callees.sort();
+    callees.dedup();
+    specials.sort();
+    specials.dedup();
+
+    // Every Lisp callee is trusted or excluded with a reason.
+    let mut unaudited: Vec<&String> = callees
+        .iter()
+        .filter(|name| {
+            !TRUSTED_LISP.contains(&name.as_str())
+                && !EXCLUDED_CALLEES
+                    .iter()
+                    .any(|(excluded, _)| excluded == name)
+        })
+        .collect();
+    unaudited.sort();
+    assert!(unaudited.is_empty(), "unaudited callees: {unaudited:?}");
+    let mut expected_callees: Vec<String> = TRUSTED_LISP
+        .iter()
+        .filter(|name| **name != "cconv-make-interpreted-closure")
+        .chain(EXCLUDED_CALLEES.iter().map(|(name, _)| name))
+        .map(|name| name.to_string())
+        .collect();
+    expected_callees.sort();
+    assert_eq!(callees, expected_callees, "the audited callee set moved");
+
+    // Every special variable they mention is classified.
+    let mut classified: Vec<String> = TRUSTED_VARIABLES
+        .iter()
+        .map(|(name, _)| name.to_string())
+        .collect();
+    classified.sort();
+    assert_eq!(specials, classified, "the audited variable set moved");
+    assert_eq!(
+        TRUSTED_VARIABLES
+            .iter()
+            .filter(|(_, role)| *role == TrustedVariableRole::Key)
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>(),
+        ["lexical-binding"]
+    );
+
+    // The snapshot holds the trusted functions and their subrs, and the
+    // `(t)' constant.
+    let cells = eval.cconv_memo.trusted().trusted_cells();
+    for name in TRUSTED_LISP {
+        assert!(cells.iter().any(|(id, _)| *id == intern(name)), "{name}");
+    }
+    for subr in [
+        "make-interpreted-closure",
+        "mapcar",
+        "delq",
+        "special-variable-p",
+    ] {
+        assert!(cells.iter().any(|(id, _)| *id == intern(subr)), "{subr}");
+    }
+    let empty = eval.cconv_memo.trusted().empty_env();
+    assert_eq!(print_value(&empty), "(t)");
+}
+
+#[test]
+fn trusted_set_follows_advice_and_redefinition() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = startup(CconvMemoMode::Stats);
+    assert!(eval.cconv_trusted_set_valid());
+    eval_ok(&mut eval, "(defun cm-around (f &rest args) (apply f args))");
+    eval_ok(
+        &mut eval,
+        "(advice-add 'macroexp--all-forms :around #'cm-around)",
+    );
+    assert!(
+        !eval.cconv_trusted_set_valid(),
+        "advice on a trusted function"
+    );
+    eval_ok(
+        &mut eval,
+        "(advice-remove 'macroexp--all-forms #'cm-around)",
+    );
+    assert!(
+        eval.cconv_trusted_set_valid(),
+        "the original object is back"
+    );
+
+    // An advised callee subr counts too.
+    eval_ok(
+        &mut eval,
+        "(advice-add 'special-variable-p :around #'cm-around)",
+    );
+    assert!(!eval.cconv_trusted_set_valid());
+    eval_ok(&mut eval, "(advice-remove 'special-variable-p #'cm-around)");
+    assert!(eval.cconv_trusted_set_valid());
+
+    // Unrelated definitions move function_epoch but not the set.
+    eval_ok(&mut eval, "(defalias 'cm-unrelated #'car)");
+    assert!(eval.cconv_trusted_set_valid());
+
+    // A redefinition stays untrusted.
+    eval_ok(
+        &mut eval,
+        "(defalias 'macroexp-const-p (lambda (_exp) nil))",
+    );
+    assert!(!eval.cconv_trusted_set_valid());
+    let before = count(&eval, CconvMemoEvent::Untrusted);
+    eval_ok(&mut eval, "(let ((a 1)) (lambda () a))");
+    assert_eq!(count(&eval, CconvMemoEvent::Untrusted), before + 1);
+}
+
+#[test]
+fn trusted_set_refuses_source_loaded_cconv() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = startup(CconvMemoMode::Stats);
+    // Before first use: an interpreted trusted function refuses the build.
+    eval_ok(&mut eval, "(defalias 'caar (lambda (x) (car (car x))))");
+    assert!(!eval.cconv_trusted_set_valid());
+    assert_eq!(
+        eval.cconv_memo.trusted().refusal(),
+        Some(&TrustRefusal::NotCompiled("caar"))
+    );
+}

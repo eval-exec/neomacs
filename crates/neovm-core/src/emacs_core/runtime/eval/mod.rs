@@ -7347,11 +7347,16 @@ mod var_fast;
 
 mod cconv_memo;
 mod cconv_shape;
+mod cconv_trust;
 #[cfg(test)]
 pub(crate) use cconv_memo::{CconvMemoEvent, CconvMemoMode, HeadVerdict, parse_cconv_memo_knob};
 #[cfg(test)]
 pub(crate) use cconv_shape::{
     ClosureFacts, ClosureShape, EnvSummary, FactsRefusal, SHAPE_NODE_CAP, ShapeRefusal, ShapeTok,
+};
+#[cfg(test)]
+pub(crate) use cconv_trust::{
+    EXCLUDED_CALLEES, TRUSTED_LISP, TRUSTED_VARIABLES, TrustRefusal, TrustedVariableRole,
 };
 #[cfg(test)]
 pub(crate) use var_fast::{
