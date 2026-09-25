@@ -767,6 +767,10 @@ pub struct HashTableStorage {
     /// Weak tables are hydrated eagerly at load so the weak sweep never
     /// sees a pending table.
     pending: Option<Box<PendingHashEntries>>,
+    /// The compiled plan `switch` dispatches through when this table is a
+    /// jump table (`switch_plan.rs`). Built on the table's second dispatch;
+    /// dropped by every mutation.
+    pub(crate) switch_plan: switch_plan::SwitchPlanCache,
 }
 
 /// Dump entries parked in `HashTableStorage::pending`: each tuple is
@@ -817,6 +821,7 @@ impl HashTableStorage {
             user_hashes: rustc_hash::FxHashMap::default(),
             user_buckets: rustc_hash::FxHashMap::default(),
             pending: None,
+            switch_plan: switch_plan::SwitchPlanCache::default(),
         }
     }
 
@@ -1056,6 +1061,7 @@ impl HashTableStorage {
     }
 
     pub fn clear(&mut self) {
+        self.switch_plan.invalidate();
         self.index.clear();
         self.slots.clear();
         self.free_slots.clear();
@@ -1184,6 +1190,9 @@ impl HashTableStorage {
     /// order [`Self::remove`] over [`Self::iter`] would free the slots in),
     /// without re-hashing or cloning a key.
     pub fn retain_entries(&mut self, mut keep: impl FnMut(Value, Value) -> bool) {
+        // Never a store for the weak tables the GC sweeps: they are never
+        // planned. Here so a storage-level removal is safe on its own.
+        self.switch_plan.invalidate();
         let slots = &mut self.slots;
         let free_slots = &mut self.free_slots;
         // The weak-table sweep frees slots here rather than going through
@@ -1214,6 +1223,7 @@ impl HashTableStorage {
     }
 
     pub fn retain(&mut self, mut keep: impl FnMut(&HashKey, &mut Value) -> bool) {
+        self.switch_plan.invalidate();
         let mut removed = Vec::new();
         for (key, &slot) in &self.index {
             let entry = self.slots[slot]
@@ -5081,6 +5091,8 @@ macro_rules! assert_val_eq {
         }
     }};
 }
+
+mod switch_plan;
 
 // ---------------------------------------------------------------------------
 // Tests

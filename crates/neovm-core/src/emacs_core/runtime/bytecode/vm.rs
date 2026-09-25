@@ -4710,12 +4710,8 @@ impl<'a> Vm<'a> {
                         }
 
                         let ht = jump_table.as_hash_table().unwrap();
-                        // In-place probe rather than a materialized `HashKey`;
-                        // see `neovm_jit_switch` for the same lookup compiled.
-                        let target = ht
-                            .data
-                            .lookup(dispatch, ht.test, self.ctx.symbols_with_pos_enabled)
-                            .copied();
+                        let target =
+                            vm_switch_target(ht, dispatch, self.ctx.symbols_with_pos_enabled);
 
                         if let Some(target_val) = target {
                             match target_val.kind() {
@@ -9276,6 +9272,15 @@ fn unwind_handlers_to_selected_resume(
         }
     }
     None
+}
+
+/// `Op::Switch`'s lookup: the jump table answers through its switch plan
+/// (see `LispHashTable::switch_target`; `neovm_jit_switch` is the same lookup
+/// compiled). Out of line so `run_loop` keeps one call here instead of the
+/// inlined plan and lookup paths.
+#[inline(never)]
+fn vm_switch_target(ht: &LispHashTable, dispatch: Value, swp: bool) -> Option<Value> {
+    ht.switch_target(dispatch, swp)
 }
 
 fn resolve_switch_target(func: &ByteCodeFunction, raw_addr: i64) -> Result<usize, Flow> {

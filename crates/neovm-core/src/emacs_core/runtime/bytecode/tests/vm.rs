@@ -3112,6 +3112,147 @@ fn vm_switch_branches_using_hash_table_jump_table() {
     assert_eq!(result, Value::fixnum(20));
 }
 
+/// `(lambda (x) (switch x TABLE))` hand-built: a miss answers 10, byte offset
+/// 8 answers 20, byte offset 12 answers 30.
+fn switch_on_arg(table: Value) -> ByteCodeFunction {
+    let mut func = ByteCodeFunction::new(LambdaParams::simple(vec![intern("vm-switch-x")]));
+    func.lexical = true;
+    // Seal-shaped by construction (trailing Return, in-bounds targets and
+    // constants); left unverified so it runs in the checked driver, which
+    // is the only one `Switch` gets.
+    func.ops_sealed = true;
+    func.ops = vec![
+        Op::StackRef(0), // [x x]
+        Op::Constant(0), // [x x table]
+        Op::Switch,      // [x]
+        Op::Constant(1), // miss
+        Op::Return,
+        Op::Constant(2), // 5: byte offset 8
+        Op::Return,
+        Op::Constant(3), // 7: byte offset 12
+        Op::Return,
+    ];
+    func.constants = vec![
+        table,
+        Value::fixnum(10),
+        Value::fixnum(20),
+        Value::fixnum(30),
+    ]
+    .into();
+    func.max_stack = 3;
+    func.gnu_byte_offset_map = Some(vec![
+        GnuByteOffsetMapEntry::new(8, 5),
+        GnuByteOffsetMapEntry::new(12, 7),
+    ]);
+    func
+}
+
+fn switch_table(test: HashTableTest, entries: &[(Value, i64)]) -> Value {
+    let table = Value::hash_table(test);
+    let _ = table.with_hash_table_mut(|ht| {
+        for (key, offset) in entries {
+            ht.insert(key.to_hash_key(&test), *key, Value::fixnum(*offset));
+        }
+    });
+    table
+}
+
+fn run_switch(eval: &mut Context, func: &ByteCodeFunction, arg: Value) -> i64 {
+    let mut vm = new_vm(eval);
+    vm.execute(func, vec![arg])
+        .expect("switch executes")
+        .as_fixnum()
+        .expect("a fixnum answer")
+}
+
+#[test]
+fn vm_switch_equal_table_with_cons_keys() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new_minimal_vm_harness();
+    let (a, b) = (Value::symbol("vm-sw-a"), Value::symbol("vm-sw-b"));
+    let list = |items: &[Value]| Value::list(items.to_vec());
+    let table = switch_table(
+        HashTableTest::Equal,
+        &[(list(&[a, b]), 8), (list(&[a]), 12)],
+    );
+    let func = switch_on_arg(table);
+    // Several rounds: the first dispatch runs unplanned, the second builds
+    // the table's plan, the rest answer from it.
+    for _ in 0..4 {
+        assert_eq!(run_switch(&mut eval, &func, list(&[a, b])), 20);
+        assert_eq!(run_switch(&mut eval, &func, list(&[a])), 30);
+        assert_eq!(run_switch(&mut eval, &func, list(&[a, b, a])), 10);
+        assert_eq!(run_switch(&mut eval, &func, Value::cons(a, b)), 10);
+        assert_eq!(run_switch(&mut eval, &func, a), 10);
+        assert_eq!(run_switch(&mut eval, &func, Value::fixnum(7)), 10);
+    }
+    assert!(
+        table
+            .as_hash_table()
+            .expect("a hash table")
+            .data
+            .switch_plan
+            .shape()
+            .is_some(),
+        "tier-0 dispatch planned the jump table"
+    );
+}
+
+#[test]
+fn vm_switch_dense_fixnum_table() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new_minimal_vm_harness();
+    let entries: Vec<(Value, i64)> = (0..10)
+        .map(|n| (Value::fixnum(n), if n % 2 == 0 { 8 } else { 12 }))
+        .collect();
+    let func = switch_on_arg(switch_table(HashTableTest::Eq, &entries));
+    for _ in 0..3 {
+        for n in 0..10 {
+            let expected = if n % 2 == 0 { 20 } else { 30 };
+            assert_eq!(run_switch(&mut eval, &func, Value::fixnum(n)), expected);
+        }
+        for miss in [
+            Value::fixnum(-1),
+            Value::fixnum(10),
+            Value::fixnum(Value::MOST_POSITIVE_FIXNUM),
+            Value::NIL,
+            Value::make_float(1.0),
+        ] {
+            assert_eq!(run_switch(&mut eval, &func, miss), 10);
+        }
+    }
+}
+
+/// A program can `puthash` into a jump table it pulled out of the constants
+/// vector; GNU obeys the new contents on the next dispatch, and so must a
+/// table that has already been planned.
+#[test]
+fn vm_switch_follows_a_jump_table_mutated_after_dispatch() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new_minimal_vm_harness();
+    let (a, b, c) = (
+        Value::symbol("vm-sw-mut-a"),
+        Value::symbol("vm-sw-mut-b"),
+        Value::symbol("vm-sw-mut-c"),
+    );
+    let table = switch_table(HashTableTest::Eq, &[(a, 8), (b, 12)]);
+    let func = switch_on_arg(table);
+    for _ in 0..3 {
+        assert_eq!(run_switch(&mut eval, &func, a), 20);
+        assert_eq!(run_switch(&mut eval, &func, c), 10);
+    }
+    let _ = table.with_hash_table_mut(|ht| {
+        ht.insert(c.to_hash_key(&ht.test), c, Value::fixnum(12));
+    });
+    assert_eq!(run_switch(&mut eval, &func, c), 30, "the new key");
+    let _ = table.with_hash_table_mut(|ht| {
+        ht.insert(a.to_hash_key(&ht.test), a, Value::fixnum(12));
+    });
+    assert_eq!(run_switch(&mut eval, &func, a), 30, "a key retargeted");
+    let _ = table.with_hash_table_mut(|ht| ht.data.remove_by_value(b, ht.test, false));
+    assert_eq!(run_switch(&mut eval, &func, b), 10, "a removed key");
+}
+
 /// Byte-compiled `pcase`/`cond` forms dispatch through real jump tables
 /// (`byte-compile-cond-jump-table`, lisp/emacs-lisp/bytecomp.el), each corpus
 /// many times over so the table is dispatched cold, repeatedly and (with the

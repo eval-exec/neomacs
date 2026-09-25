@@ -238,6 +238,10 @@ pub fn with_hash_table_mut<R>(
         if (*ptr).table.needs_hydration() {
             (*ptr).table.hydrate_pending();
         }
+        // Whatever `f` does to the table, a `switch` plan compiled from its
+        // keys no longer describes it. A wholesale replacement (`*table =
+        // other`) installs a table whose cache starts empty.
+        (*ptr).table.data.switch_plan.invalidate();
     }
     Some(f(unsafe { &mut (*ptr).table }))
 }
