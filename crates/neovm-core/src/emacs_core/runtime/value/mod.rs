@@ -2227,20 +2227,50 @@ impl TaggedValue {
         if (Self::MOST_NEGATIVE_FIXNUM..=Self::MOST_POSITIVE_FIXNUM).contains(&value) {
             Self::fixnum(value)
         } else {
-            Self::bignum(Integer::from(value))
+            Self::bignum_from_i64(value)
+        }
+    }
+
+    /// [`Self::make_int`]'s promotion, out of line: its hot callers (the
+    /// fixnum arithmetic arms) stay small, and a promotion is rare.
+    #[cold]
+    #[inline(never)]
+    fn bignum_from_i64(value: i64) -> Self {
+        Self::bignum(Integer::from(value))
+    }
+
+    /// The fixnum a sign and a one-limb magnitude denote, if it is one:
+    /// GNU `make_integer_mpz`'s demotion test (`src/bignum.c:146`) on the
+    /// sign and magnitude a kernel already has in registers, with no
+    /// `Integer` to inspect. `MOST_NEGATIVE_FIXNUM` is `-(2^61)`, one more
+    /// in magnitude than `MOST_POSITIVE_FIXNUM`.
+    #[inline(always)]
+    pub(crate) const fn fixnum_from_sign_magnitude(negative: bool, m: u64) -> Option<i64> {
+        const MAX: u64 = TaggedValue::MOST_POSITIVE_FIXNUM as u64;
+        if !negative {
+            if m <= MAX { Some(m as i64) } else { None }
+        } else if m <= MAX + 1 {
+            Some((m as i64).wrapping_neg())
+        } else {
+            None
         }
     }
 
     /// Canonical "make a Lisp integer from this malachite::Integer" entry
     /// point. Mirrors GNU `make_integer_mpz` (`src/bignum.c:146`):
     /// returns a fixnum if the value fits in fixnum range, otherwise
-    /// allocates a bignum object.
+    /// allocates a bignum object. A fixnum has at most one limb of
+    /// magnitude, so the test reads the limb count and that limb instead of
+    /// converting the whole value (`i64::try_from(&Integer)`).
     pub fn make_integer(value: Integer) -> Self {
-        if let Ok(small) = i64::try_from(&value)
-            && (TaggedValue::MOST_NEGATIVE_FIXNUM..=TaggedValue::MOST_POSITIVE_FIXNUM)
-                .contains(&small)
-        {
-            return Self::fixnum(small);
+        let limbs = value.unsigned_abs_ref().as_limbs_asc();
+        if limbs.len() <= 1 {
+            let magnitude = limbs.first().copied().unwrap_or(0);
+            let negative = malachite::base::num::arithmetic::traits::Sign::sign(&value)
+                == std::cmp::Ordering::Less;
+            if let Some(n) = Self::fixnum_from_sign_magnitude(negative, magnitude) {
+                return Self::fixnum(n);
+            }
         }
         Self::bignum(value)
     }

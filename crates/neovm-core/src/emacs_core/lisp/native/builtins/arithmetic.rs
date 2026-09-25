@@ -2250,3 +2250,7 @@ mod arithmetic_rounding_float_exact_test;
 #[cfg(test)]
 #[path = "tests/arithmetic_limb_kernels.rs"]
 mod arithmetic_limb_kernels_test;
+
+#[cfg(test)]
+#[path = "tests/arithmetic_integer_value.rs"]
+mod arithmetic_integer_value_test;
