@@ -1,7 +1,7 @@
 //! A switch plan must answer exactly what the hashed lookup answers, for
 //! every table and dispatch value, and must never outlive a mutation.
 use super::super::tests::jump_table_lookup::{
-    Rng, TESTS, fresh_copy, key_pool, list, probe_pool, random_table,
+    Rng, TESTS, key_pool, list, probe_pool, random_table,
 };
 use super::*;
 use crate::emacs_core::eval::Context;
