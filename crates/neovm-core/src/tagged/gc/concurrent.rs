@@ -252,7 +252,11 @@ impl TaggedHeap {
                 );
             }
         }
-        let vectors = {
+        let vectors = if self.vec_scan == knobs::VecScanMode::Defer {
+            // F-G measurement: no Tier-B snapshot; the page snapshot has no
+            // vector pages either, so every page vector defers.
+            None
+        } else {
             let mut snap = crate::tagged::header::VectorScanSnapshot::with_capacity(
                 self.vector_object_addrs.len(),
             );
@@ -342,7 +346,10 @@ impl TaggedHeap {
             start_count[ChunkClass::Cons as usize] = self.cons_blocks.len();
             start_count[ChunkClass::String as usize] = self.string_arena.pages.len();
             start_count[ChunkClass::Float as usize] = self.float_arena.pages.len();
-            start_count[ChunkClass::Vector as usize] = self.vector_arena.pages.len();
+            start_count[ChunkClass::Vector as usize] = match self.vec_scan {
+                knobs::VecScanMode::Snapshot => self.vector_arena.pages.len(),
+                knobs::VecScanMode::Defer => 0,
+            };
             start_count[ChunkClass::ByteCode as usize] = self.bytecode_arena.pages.len();
             self.handshake.last_start_conssnap_us = 0;
             self.handshake.last_start_floatsnap_us = 0;
@@ -375,7 +382,10 @@ impl TaggedHeap {
         let float = bases(&self.float_arena);
         self.handshake.last_start_floatsnap_us = floatsnap_t0.elapsed().as_micros() as u64;
         let vecbasesnap_t0 = std::time::Instant::now();
-        let vector = bases(&self.vector_arena);
+        let vector = match self.vec_scan {
+            knobs::VecScanMode::Snapshot => bases(&self.vector_arena),
+            knobs::VecScanMode::Defer => FxHashSet::default(),
+        };
         self.handshake.last_start_vecbasesnap_us = vecbasesnap_t0.elapsed().as_micros() as u64;
         let bcsnap_t0 = std::time::Instant::now();
         let bytecode = bases(&self.bytecode_arena);
@@ -567,6 +577,10 @@ impl TaggedHeap {
     ///
     /// Safety: `owner` must be a live `VecLikeType::Vector` value on this heap.
     pub(crate) fn concurrent_clone_on_write_vector(&mut self, owner: TaggedValue) {
+        // No snapshot to protect under the F-G deferral measurement.
+        if self.vec_scan == knobs::VecScanMode::Defer {
+            return;
+        }
         // First mutation of this owner this cycle? `insert` returns false if already
         // present, so later mutations of the same owner skip the clone (they touch the
         // already-cloned live backing the snapshot does not point at).

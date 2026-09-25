@@ -893,6 +893,10 @@ pub struct TaggedHeap {
     /// Scratch: last `seed_mapped_remembered` cost/volume (owners re-scanned).
     last_remembered_seed_us: u64,
     last_remembered_seed_roots: usize,
+    /// How the concurrent marker handles page vectors (`NEOVM_GC_VEC_SCAN`,
+    /// read once, here at construction): the Tier-B snapshot (the default),
+    /// or, for the F-G measurement only, deferral to the termination.
+    vec_scan: knobs::VecScanMode,
     /// The generation census (`census.rs`), present only under
     /// `NEOVM_GC_CENSUS` / `NEOVM_GC_CENSUS_REMSET` (read once, here at
     /// construction). Trace-only: it never changes what is marked or freed.
@@ -1101,6 +1105,7 @@ impl TaggedHeap {
             last_remembered_seed_roots: 0,
             dump_addr_lo: usize::MAX,
             dump_addr_hi: 0,
+            vec_scan: knobs::vec_scan_mode(),
             census: GenCensus::from_knob(),
         };
         // The census's remembered-set probe widens the window compiled code
@@ -2599,6 +2604,11 @@ mod marker_arena_tests;
 mod slot_store_tests;
 #[cfg(test)]
 mod symbol_with_pos_arena_tests;
+/// `NEOVM_GC_VEC_SCAN=defer` (F-G): no Tier-B snapshot, page vectors traced
+/// by reachability at the termination, with and without the chunk map.
+#[cfg(test)]
+#[path = "gc/tests/vec_scan_tests.rs"]
+mod vec_scan_tests;
 
 /// Test-only growth helper mirroring the production insert resize policy closely
 /// enough to force rehashes during the concurrent-mark stress test.
