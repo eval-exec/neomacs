@@ -26,8 +26,10 @@
 //! `neovm--vm-profile-dump` prints them.
 
 use super::*;
-use crate::emacs_core::forward::LispBufferObjFwd;
-use crate::emacs_core::symbol::{LispSymbol, SymbolRedirect};
+use crate::emacs_core::forward::{ForwardStore, LispBufferObjFwd, LispFwd, LispFwdType};
+use crate::emacs_core::symbol::{
+    LispSymbol, SYMCELL_INLINE_WRITE_MASK, SymbolRedirect, symcell_inline_write_value,
+};
 use std::sync::atomic::{AtomicU8, Ordering};
 
 // ---------------------------------------------------------------------------
@@ -152,15 +154,28 @@ pub(crate) enum VarCacheEvent {
     ReadBufferSlot,
     /// A buffer-local or forwarded read the tier left to the general path.
     ReadRefused,
+    /// `setq` of a buffer-local variable into the buffer's own binding.
+    SetLocalizedFound,
+    /// `setq` of a buffer-local variable (not `local_if_set`) with no
+    /// binding here: the default.
+    SetLocalizedDefault,
+    /// `setq` of a forwarder that holds its own value.
+    SetForwarded,
+    /// A buffer-local or forwarded `setq` the tier left to the general path.
+    SetRefused,
 }
 
 #[cfg(any(test, feature = "vm-profile"))]
 impl VarCacheEvent {
-    pub(crate) const ALL: [Self; 4] = [
+    pub(crate) const ALL: [Self; 8] = [
         Self::ReadLocalized,
         Self::ReadForwarded,
         Self::ReadBufferSlot,
         Self::ReadRefused,
+        Self::SetLocalizedFound,
+        Self::SetLocalizedDefault,
+        Self::SetForwarded,
+        Self::SetRefused,
     ];
     const COUNT: usize = Self::ALL.len();
 
@@ -170,6 +185,10 @@ impl VarCacheEvent {
             Self::ReadForwarded => "read   forwarded (Obj/Bool/Int/Kboard)",
             Self::ReadBufferSlot => "read   per-buffer slot",
             Self::ReadRefused => "read   refused -> general path",
+            Self::SetLocalizedFound => "setq   localized, own binding",
+            Self::SetLocalizedDefault => "setq   localized, default",
+            Self::SetForwarded => "setq   forwarded (Obj/Bool/Int/Kboard)",
+            Self::SetRefused => "setq   refused -> general path",
         }
     }
 }
@@ -290,13 +309,11 @@ impl Context {
             return Some(value);
         }
         // `load` answers `None` for exactly the per-buffer slot.
-        debug_assert_eq!(fwd.ty, crate::emacs_core::forward::LispFwdType::BufferObj);
+        debug_assert_eq!(fwd.ty, LispFwdType::BufferObj);
         let buf = self.buffers.current_buffer()?;
         // SAFETY: a `BufferObj` descriptor is a `LispBufferObjFwd`, whose
         // first field is the shared header (`#[repr(C)]`).
-        let buf_fwd = unsafe {
-            &*(fwd as *const crate::emacs_core::forward::LispFwd as *const LispBufferObjFwd)
-        };
+        let buf_fwd = unsafe { &*(fwd as *const LispFwd as *const LispBufferObjFwd) };
         let value = buf_fwd.value_in(
             Some(&buf.slots[..]),
             buf.local_flags,
@@ -307,5 +324,118 @@ impl Context {
         }
         note(VarCacheEvent::ReadBufferSlot);
         Some(value)
+    }
+    /// GNU `set_internal (sym, val, Qnil, SET)` -- bytecode `Bvarset` -- of
+    /// a buffer-local or forwarded variable when the store needs no swap-in,
+    /// no watcher, no `let_shadows` walk, no allocation and no
+    /// republication: the cache-hit prefix of `Vm::assign_var_id`.
+    ///
+    /// The symbol must be untrapped (no watcher, not a constant), not
+    /// host-projected (flag bit and `runtime_binding_has_projection`) and an
+    /// interned member: [`SYMCELL_INLINE_WRITE_MASK`] over its write window,
+    /// the one test the inline JIT stores will use. Then:
+    /// - buffer-local, BLV loaded for the current buffer at the current
+    ///   epoch, and either the buffer's own binding (`found`) or no binding
+    ///   and not `local_if_set` (the default, with `valcell == defcell`):
+    ///   the loaded cell's cdr takes the value through the BLV forwarder's
+    ///   type rule. That is `set_internal_localized_with`'s whole effect on
+    ///   such a hit: it re-selects the same cell and rewrites `where`,
+    ///   `alist_epoch` and `found` with the values they hold, and the alist
+    ///   comes back unchanged.
+    /// - forwarded Obj/Bool/Int/Kboard (not a per-buffer slot): the
+    ///   descriptor's typed store, exactly `set_symbol_value_id`'s.
+    ///
+    /// `false`, having stored nothing, for anything else -- a plain cell
+    /// (`try_set_plain_variable` owns it), an alias, a BLV miss, an
+    /// auto-creating `local_if_set` store, a per-buffer slot, a value the
+    /// type rule refuses (the general path signals) -- and when the `set`
+    /// tier is off.
+    #[inline(never)]
+    pub(crate) fn try_set_var_cached(&mut self, id: SymId, value: Value) -> bool {
+        if !var_cache_tier_on(VarCacheTier::Set) {
+            return false;
+        }
+        let Some(sym) = self.obarray.get_by_id(id) else {
+            return false;
+        };
+        let window = sym.write_window() & SYMCELL_INLINE_WRITE_MASK;
+        let stored = if window == symcell_inline_write_value(SymbolRedirect::Localized) {
+            self.set_localized_cached(sym, id, value)
+        } else if window == symcell_inline_write_value(SymbolRedirect::Forwarded) {
+            self.set_forwarded_cached(sym, id, value)
+        } else {
+            return false;
+        };
+        if !stored {
+            note(VarCacheEvent::SetRefused);
+        }
+        stored
+    }
+
+    #[inline(always)]
+    fn set_localized_cached(&self, sym: &LispSymbol, id: SymId, value: Value) -> bool {
+        // `assign_var_id` publishes the write to the host projections.
+        if self.runtime_binding_has_projection(id) {
+            return false;
+        }
+        // Its Localized arm needs a current buffer.
+        let Some(buf) = self.buffers.current_buffer() else {
+            return false;
+        };
+        let Some(hit) = sym.blv_cache_hit(buf.id) else {
+            return false;
+        };
+        let Some(stored) = forward_rule(hit.fwd, value) else {
+            return false;
+        };
+        let (cell, event) = if hit.found {
+            (hit.valcell, VarCacheEvent::SetLocalizedFound)
+        } else if !hit.local_if_set && hit.valcell.bits() == hit.defcell.bits() {
+            (hit.defcell, VarCacheEvent::SetLocalizedDefault)
+        } else {
+            // `local_if_set` with no binding here: auto-create unless a
+            // `let` shadows the buffer -- a specpdl walk and a cons.
+            return false;
+        };
+        cell.set_cdr(stored);
+        note(event);
+        true
+    }
+
+    #[inline(always)]
+    fn set_forwarded_cached(&self, sym: &LispSymbol, id: SymId, value: Value) -> bool {
+        // `assign_var_id` republishes (and marks redisplay for) these.
+        if self.runtime_binding_has_projection(id) {
+            return false;
+        }
+        let Some(fwd) = sym.forwarded_descriptor() else {
+            return false;
+        };
+        // A per-buffer slot has local-flag and default-propagation rules;
+        // `store_runtime_binding` writes a slot-named symbol's buffer slot.
+        if fwd.ty == LispFwdType::BufferObj
+            || crate::buffer::buffer::lookup_buffer_slot_by_sym_id(id).is_some()
+        {
+            return false;
+        }
+        let Ok(store) = fwd.store(value) else {
+            return false;
+        };
+        fwd.commit(store);
+        note(VarCacheEvent::SetForwarded);
+        true
+    }
+}
+
+/// `store_symval_forwarding`'s type rule for a store governed by FWD, as
+/// `check_forwarded_store` applies it: the value to store (a Boolean slot
+/// canonicalises to `t`/`nil`), or `None` where the general path signals or
+/// where FWD is a per-buffer slot, whose rule depends on the buffer.
+#[inline(always)]
+fn forward_rule(fwd: Option<&'static LispFwd>, value: Value) -> Option<Value> {
+    match fwd {
+        None => Some(value),
+        Some(fwd) if fwd.ty == LispFwdType::BufferObj => None,
+        Some(fwd) => fwd.store(value).ok().map(ForwardStore::canonical_value),
     }
 }

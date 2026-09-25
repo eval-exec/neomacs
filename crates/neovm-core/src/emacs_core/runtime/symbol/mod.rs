@@ -601,8 +601,16 @@ const _: () = {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct BlvCacheHit {
     /// The `(SYMBOL . VALUE)` cell loaded for the buffer: its local binding
-    /// or the default cell.
+    /// when `found`, otherwise normally `defcell`.
     pub(crate) valcell: Value,
+    /// `(SYMBOL . DEFAULT-VALUE)`.
+    pub(crate) defcell: Value,
+    /// GNU `blv_found`: `valcell` is the buffer's own binding.
+    pub(crate) found: bool,
+    /// GNU `local_if_set`: a `set` with no binding creates one.
+    pub(crate) local_if_set: bool,
+    /// The forwarder whose type rule the value obeys (`make_blv` keeps it).
+    pub(crate) fwd: Option<&'static crate::emacs_core::forward::LispFwd>,
 }
 
 /// Mirrors GNU `swap_in_symval_forwarding` (`src/data.c:1539-1571`).
@@ -837,6 +845,15 @@ impl LispSymbol {
         self.flags.trapped_write()
     }
 
+    /// The symbol's 16-bit write window: the flags byte with
+    /// `interned_global` above it, the two bytes at
+    /// [`LISP_SYMBOL_FLAGS_OFFSET`] that an inline or cached symbol-cell
+    /// write tests under [`SYMCELL_INLINE_WRITE_MASK`].
+    #[inline(always)]
+    pub(crate) fn write_window(&self) -> u16 {
+        u16::from(self.flags.0) | (u16::from(self.interned_global) << 8)
+    }
+
     /// The BLV cache of a `Localized` symbol when it is loaded for BUFFER at
     /// the current epoch (see [`BlvCacheHit`]); `None` for a miss or any
     /// other redirect.
@@ -860,6 +877,10 @@ impl LispSymbol {
         );
         Some(BlvCacheHit {
             valcell: blv.valcell,
+            defcell: blv.defcell,
+            found: blv.found,
+            local_if_set: blv.local_if_set,
+            fwd: blv.fwd,
         })
     }
 
@@ -1170,8 +1191,30 @@ pub(crate) const LISP_SYMBOL_INTERNED_GLOBAL_OFFSET: usize =
 /// concurrent reader never sees two of them torn across words.
 pub(crate) const LISP_SYMBOL_WRITE_WINDOW_OFFSET: usize = LISP_SYMBOL_FLAGS_OFFSET & !3;
 
+/// The bits of a symbol's [`LispSymbol::write_window`] every inline or
+/// cached symbol-cell write tests: the redirect, the trapped-write state, the
+/// host-projection bit, and the whole `interned_global` byte. P1.3's watch
+/// byte joins the mask in the commit that adds it.
+pub(crate) const SYMCELL_INLINE_WRITE_MASK: u16 = (SymbolFlags::REDIRECT_MASK
+    | SymbolFlags::TRAPPED_WRITE_MASK
+    | SymbolFlags::RUNTIME_PROJECTED_BIT) as u16
+    | 0xFF00;
+/// The masked window of a symbol a store may write without the general
+/// path: untrapped (no watcher, not a constant), not host-projected, and an
+/// interned member of the obarray, with redirect `Plainval`. For another
+/// redirect OR its code in: [`symcell_inline_write_value`].
+pub(crate) const SYMCELL_INLINE_WRITE_VALUE: u16 = 1 << 8;
+
+/// [`SYMCELL_INLINE_WRITE_VALUE`] for a cell of REDIRECT.
+#[inline(always)]
+pub(crate) const fn symcell_inline_write_value(redirect: SymbolRedirect) -> u16 {
+    SYMCELL_INLINE_WRITE_VALUE | redirect as u16
+}
+
 const _: () = {
     assert!(std::mem::size_of::<bool>() == 1);
+    assert!(SymbolTrappedWrite::Untrapped as u8 == 0);
+    assert!(SYMCELL_INLINE_WRITE_MASK == 0xFF8F);
     assert!(LISP_SYMBOL_INTERNED_GLOBAL_OFFSET == LISP_SYMBOL_FLAGS_OFFSET + 1);
     assert!(LISP_SYMBOL_INTERNED_GLOBAL_OFFSET & !3 == LISP_SYMBOL_WRITE_WINDOW_OFFSET);
     assert!(LISP_SYMBOL_WRITE_WINDOW_OFFSET + 4 <= LISP_SYMBOL_SIZE);

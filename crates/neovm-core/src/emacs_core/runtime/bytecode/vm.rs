@@ -4258,8 +4258,11 @@ impl<'a> Vm<'a> {
                         let name_id = sym_id_at(constants, *idx);
                         let val = stk!().pop().unwrap_or(Value::NIL);
                         // A plain cell is one store that cannot reach a safe
-                        // point, so it needs none of the frame rooting below.
-                        if !self.ctx.try_set_plain_variable(name_id, val) {
+                        // point, so it needs none of the frame rooting below;
+                        // nor does a cached buffer-local or forwarded store.
+                        if !self.ctx.try_set_plain_variable(name_id, val)
+                            && !self.ctx.try_set_var_cached(name_id, val)
+                        {
                             let extra = [val];
                             vm_try!(self.with_frame_roots(func, &extra, |vm| {
                                 vm.assign_var_id(name_id, val)

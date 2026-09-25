@@ -905,3 +905,106 @@ fn jit_reads_take_the_read_tier() {
     assert_eq!(var_cache_event_count(VarCacheEvent::ReadBufferSlot), 1);
     assert_eq!(var_cache_event_count(VarCacheEvent::ReadRefused), 0);
 }
+
+/// `try_set_var_cached` stores every buffer-local variable whose cache is
+/// loaded for the current buffer (its own binding, or the default of a
+/// variable that is not `local_if_set`) and every forwarder that holds its
+/// own value, through the type rule; and refuses, storing nothing, every
+/// shape the general path treats specially.
+#[test]
+fn set_tier_stores_cached_shapes_and_refuses_the_rest() {
+    let mut ev = fixture();
+    set_var_cache_tiers_for_test(&VarCacheTier::ALL);
+    for &var in FIXTURE_VARS {
+        let _ = run(&mut ev, Engine::Interpreter, &Prog::read(), var, &[]);
+    }
+    reset_var_cache_events();
+    let set =
+        |ev: &mut Context, name: &str, value: Value| ev.try_set_var_cached(intern(name), value);
+    let n = Value::make_int(100);
+    // Stored.
+    for (var, want) in [
+        ("vft-loc", "(100 10 t (10 nil) home)"),
+        ("vft-locd", "(100 100 nil (21 t) home)"),
+        ("vft-lbool", "(t t t (t nil) home)"),
+        ("vft-lobj", "(100 100 nil (lobj-other t) home)"),
+        ("vft-obj", "(100 100 nil (100 nil) home)"),
+        ("vft-bool", "(t t nil (t nil) home)"),
+        ("vft-int", "(100 100 nil (100 nil) home)"),
+        ("vft-kbd", "(100 100 nil (100 nil) home)"),
+    ] {
+        assert!(set(&mut ev, var, n), "{var}: a cached shape");
+        assert_eq!(eval(&mut ev, &observe_form(var)), want, "{var}");
+    }
+    assert_eq!(var_cache_event_count(VarCacheEvent::SetLocalizedFound), 2);
+    assert_eq!(var_cache_event_count(VarCacheEvent::SetLocalizedDefault), 2);
+    assert_eq!(var_cache_event_count(VarCacheEvent::SetForwarded), 4);
+    // Refused, nothing stored: the general path's specials.
+    let before: Vec<String> = FIXTURE_VARS
+        .iter()
+        .map(|v| eval(&mut ev, &observe_form(v)))
+        .collect();
+    for var in [
+        "vft-plain",         // plain: try_set_plain_variable's
+        "vft-auto",          // local_if_set, no binding: auto-create
+        "vft-lint",          // likewise, with an Int forwarder
+        "vft-watched",       // a watcher
+        "vft-alias",         // an alias
+        "fill-column",       // a per-buffer slot
+        "case-fold-search",  // local_if_set, no binding here
+        "gc-cons-threshold", // republished to the GC pacer
+        "inhibit-quit",      // host-projected
+        "buffer-undo-list",  // plain, host-projected
+    ] {
+        assert!(!set(&mut ev, var, n), "{var}: the general path's");
+    }
+    // Type rules the general path signals for.
+    assert!(!set(&mut ev, "vft-int", Value::string("s")));
+    assert!(!set(&mut ev, "vft-lint", Value::string("s")));
+    let after: Vec<String> = FIXTURE_VARS
+        .iter()
+        .map(|v| eval(&mut ev, &observe_form(v)))
+        .collect();
+    assert_eq!(before, after, "a refusal stores nothing");
+    assert_eq!(var_cache_event_count(VarCacheEvent::SetRefused), 7);
+    // The observations above ended in the other buffer, so every BLV is now
+    // loaded for it: a miss here, refused.
+    assert!(!set(&mut ev, "vft-loc", n));
+    assert_eq!(var_cache_event_count(VarCacheEvent::SetRefused), 8);
+    assert_eq!(eval(&mut ev, "vft-loc"), "100");
+    // Tier off.
+    set_var_cache_tiers_for_test(&[VarCacheTier::Read]);
+    assert!(!set(&mut ev, "vft-obj", n));
+}
+
+/// Both engines' `varset` takes the set tier.
+#[test]
+fn bytecode_setq_takes_the_set_tier_on_both_engines() {
+    for &engine in ENGINES {
+        let mut ev = fixture();
+        set_var_cache_tiers_for_test(&VarCacheTier::ALL);
+        for &var in FIXTURE_VARS {
+            let _ = run(&mut ev, Engine::Interpreter, &Prog::read(), var, &[]);
+        }
+        reset_var_cache_events();
+        for var in ["vft-loc", "vft-locd", "vft-obj", "vft-bool", "vft-int"] {
+            let got = run(&mut ev, engine, &Prog::setq(), var, &[Value::make_int(3)]);
+            assert!(got == "3" || got == "t", "{engine:?} {var}: {got}");
+        }
+        assert_eq!(
+            var_cache_event_count(VarCacheEvent::SetLocalizedFound),
+            1,
+            "{engine:?}"
+        );
+        assert_eq!(
+            var_cache_event_count(VarCacheEvent::SetLocalizedDefault),
+            1,
+            "{engine:?}"
+        );
+        assert_eq!(
+            var_cache_event_count(VarCacheEvent::SetForwarded),
+            3,
+            "{engine:?}"
+        );
+    }
+}
