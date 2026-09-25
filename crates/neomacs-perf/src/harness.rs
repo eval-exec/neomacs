@@ -1421,6 +1421,18 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     // U2.8 builtin front-end diets: `=off` restores the general search,
     // syntax and text-property paths for a same-binary board A/B.
     "NEOVM_BUILTIN_FRONTEND",
+    // P1.4 Stage A cached variable tiers: `=0` restores the general
+    // read/set/bind/unbind paths.
+    "NEOVM_VAR_CACHE",
+    // P3.3 regex knobs: alternation anchors (`=on`) and the existence DFA
+    // (`=on`/`=verify`), plus its exit statistics.
+    "NEOVM_REGEX_ANCHOR_ALT",
+    "NEOVM_REGEX_DFA",
+    "NEOVM_REGEX_DFA_STATS",
+    // P4.1 Stage 0 cconv memo (`off`/`stats`/`on`/`verify`) and the native
+    // no-lexvars closure path (`on`).
+    "NEOVM_CCONV_MEMO",
+    "NEOVM_CCONV_FAST",
 ];
 
 pub(crate) fn configure_benchmark_environment(command: &mut Command, sandbox: &MelpaSandbox) {
