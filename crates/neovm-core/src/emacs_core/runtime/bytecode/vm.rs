@@ -7166,9 +7166,10 @@ impl<'a> Vm<'a> {
     }
 
     /// V3 + native-to-native speculated direct call: the caller's spec site is
-    /// armed, so `callee` is the compile-time bytecode object the symbol still
-    /// names, and `args_ptr` addresses `nargs` pre-marshaled argument words (the
-    /// caller's native call-args slot). Resolve and cache the callee's compiled
+    /// armed, so `callee` is the compile-time bytecode object the symbol
+    /// `called` still names, and `args_ptr` addresses `nargs` pre-marshaled
+    /// argument words (the caller's native call-args slot). The callee's
+    /// backtrace frame records `called`, as GNU's `Bcall` does. Resolve and cache the callee's compiled
     /// leaf in `leaf_slot`, then run it DIRECTLY under the recursion-depth
     /// guard — skipping the `funcall_general` dispatch and the compiled-cache
     /// hash lookup that `call_for_jit_stack` would pay.
@@ -7205,6 +7206,7 @@ impl<'a> Vm<'a> {
     /// defensive deopt fallback below builds a `Vm`.
     pub(crate) fn call_armed_callee_native(
         ctx: &mut crate::emacs_core::eval::Context,
+        called: SymId,
         callee: Value,
         slot: &crate::emacs_core::jit::compile::SpecSlot,
         args_ptr: *const i64,
@@ -7284,6 +7286,7 @@ impl<'a> Vm<'a> {
         }
         Self::run_leaf_native_to_native(
             ctx,
+            Value::from_sym_id(called),
             callee,
             bc,
             leaf,
@@ -7341,6 +7344,7 @@ impl<'a> Vm<'a> {
         let leaf = unsafe { &*ptr };
         Self::run_leaf_native_to_native(
             ctx,
+            callee,
             callee,
             bc,
             leaf,
@@ -7440,6 +7444,7 @@ impl<'a> Vm<'a> {
         let outcome = Self::run_leaf_native_to_native(
             ctx,
             function,
+            function,
             bc,
             leaf,
             spread_ptr,
@@ -7476,6 +7481,13 @@ impl<'a> Vm<'a> {
     /// the strict path (which signals `wrong-number-of-arguments` exactly as
     /// the interpreter would).
     ///
+    /// `frame_function` is what the callee's backtrace frame records: GNU's
+    /// `Bcall` records the value it called (`record_in_backtrace (call_fun =
+    /// TOP)`, src/bytecode.c:792-796) -- the SYMBOL for a named call, the
+    /// object itself for a call of a value. The object of a named call is
+    /// kept alive by the symbol's function cell, and past a redefinition by
+    /// the frame (`jit::cache::pin_redefined_function`).
+    ///
     /// SAFETY: `args_ptr` addresses `nargs` valid tagged words that stay valid
     /// for the whole call (the caller's own native call-args slot).
     ///
@@ -7492,6 +7504,7 @@ impl<'a> Vm<'a> {
     #[inline(always)]
     fn run_leaf_native_to_native(
         ctx: &mut crate::emacs_core::eval::Context,
+        frame_function: Value,
         callee: Value,
         bc: &ByteCodeFunction,
         leaf: &crate::emacs_core::jit::compile::CompiledLeaf,
@@ -7519,21 +7532,21 @@ impl<'a> Vm<'a> {
         let bt_count = ctx.specpdl.len();
         // SAFETY: args_ptr addresses `nargs` valid tagged words (the caller's
         // call-args slot), same contract the native run below relies on. This
-        // push also ROOTS `callee` (the frame's function field is GC-traced)
-        // for the whole native run — the shim's separate scratch-root push
-        // became redundant with it.
+        // push also keeps `callee` alive for the whole native run: the frame
+        // traces a called object, and a called symbol's frame pins what its
+        // function cell held once that is redefined.
         // `frame_args` is a literal at each call site, so this folds to one arm
         // per instantiation (the hot `CallerSlot` one is unchanged).
         match frame_args {
             CalleeFrameArgs::CallerSlot => unsafe {
-                ctx.push_backtrace_frame_from_native_args(callee, args_ptr, nargs);
+                ctx.push_backtrace_frame_from_native_args(frame_function, args_ptr, nargs);
             },
             CalleeFrameArgs::Local => {
                 // SAFETY: as above; `Value` is `#[repr(transparent)]` over the
                 // word. The frame copies the words (`Backtrace1`/`Backtrace2`,
                 // or the owned side stack).
                 let args = unsafe { core::slice::from_raw_parts(args_ptr as *const Value, nargs) };
-                ctx.push_backtrace_frame(callee, args);
+                ctx.push_backtrace_frame(frame_function, args);
                 #[cfg(test)]
                 APPLY_CALLEE_FRAME_BORROWS.with(|c| {
                     c.set(Some(matches!(

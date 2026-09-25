@@ -296,7 +296,8 @@ impl Shim {
             // (vmctx, variant, sym, args_ptr, nargs, out_ptr) -> status;
             // (vmctx, which, sym, args_ptr, nargs, out_ptr) -> status
             Shim::NamedBuiltin | Shim::CbsymRead => (&[Ptr, I64, I64, Ptr, I64, Ptr], true),
-            // (vmctx, sym, expected, slot_ptr, args_ptr, nargs, out_ptr) -> status
+            // (vmctx, sym, expected, slot_ptr, args_ptr, nargs, out_ptr) -> status;
+            // CallSpec's `sym` is the symbol's tagged bits, CallSubrSpec's its id
             Shim::CallSpec | Shim::CallSubrSpec => (&[Ptr, I64, I64, I64, Ptr, I64, Ptr], true),
             // pred: (vmctx, kind, sym, expected, slot_ptr, a, out_ptr)
             // eq:   (vmctx, sym, expected, slot_ptr, a, b, out_ptr)

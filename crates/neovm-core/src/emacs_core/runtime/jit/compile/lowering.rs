@@ -6831,7 +6831,9 @@ fn lower_simple_op_arms(
             let mut generic_fallback: Option<Block> = guard_generic;
             let call = match spec {
                 Some((sym, expected, slot_ptr, slot_idx, SpecCalleeKind::Bytecode)) => {
-                    let sym_v = materialize_op_sym_id(fb, reloc_base, reloc_index, sym);
+                    // The callee's frame records the called symbol: the shim
+                    // takes its tagged bits.
+                    let sym_v = materialize_op_sym_value(fb, reloc_base, reloc_index, sym);
                     let exp_v =
                         materialize_spec_expected(fb, aot, spec_expected_base, expected, slot_idx);
                     let slot_v = materialize_spec_slot(fb, aot, spec_slot_base, slot_ptr, slot_idx);

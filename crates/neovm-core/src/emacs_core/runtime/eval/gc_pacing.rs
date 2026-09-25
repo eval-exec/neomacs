@@ -13,6 +13,41 @@ impl Context {
     /// values are visited. The group seam is diagnostics-only: the GC
     /// handshake instrumentation brackets per-group timings around the
     /// boundaries; enumeration order and content are unchanged.
+    /// The functions a redefinition took out of a function cell while a
+    /// compiled activation called through that symbol may still run them
+    /// (`jit::cache::pin_redefined_function`): rooted while a backtrace frame
+    /// -- this thread's or a suspended one's -- records the symbol.
+    #[cfg(feature = "jit")]
+    fn trace_jit_redefined_functions(&self, visit: &mut dyn FnMut(Value)) {
+        use crate::emacs_core::jit::cache;
+        if !cache::has_redefined_pins() {
+            return;
+        }
+        let mut called: Vec<SymId> = self
+            .specpdl
+            .iter()
+            .chain(
+                self.suspended_thread_bindings
+                    .iter()
+                    .flat_map(|state| state.specpdl.iter()),
+            )
+            .filter_map(|entry| match entry {
+                SpecBinding::Backtrace { function, .. }
+                | SpecBinding::Backtrace1 { function, .. }
+                | SpecBinding::Backtrace2 { function, .. }
+                | SpecBinding::BacktraceNative { function, .. } => function.as_symbol_id(),
+                _ => None,
+            })
+            .collect();
+        called.sort_unstable_by_key(|sym| sym.0);
+        called.dedup();
+        cache::trace_redefined_pins(
+            self.tagged_heap.identity(),
+            &|sym| called.binary_search_by_key(&sym.0, |s| s.0).is_ok(),
+            visit,
+        );
+    }
+
     pub(super) fn trace_roots(
         &self,
         group: &mut dyn FnMut(&'static str),
@@ -167,6 +202,11 @@ impl Context {
                 | SpecBinding::RequireStack { .. }
                 | SpecBinding::Nop => {}
             }
+        }
+        #[cfg(feature = "jit")]
+        {
+            group("jit_redefined");
+            self.trace_jit_redefined_functions(visit);
         }
         group("profiler");
         self.trace_profiler_roots(visit);

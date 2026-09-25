@@ -878,6 +878,83 @@ pub(crate) fn unlink_spec_slots(dead: *const CompiledLeaf) -> usize {
     cleared
 }
 
+thread_local! {
+    /// Function objects a redefinition took out of a symbol's function cell,
+    /// with the symbol and the identity of the heap they live in (see
+    /// [`pin_redefined_function`]).
+    static REDEFINED_PINS: RefCell<Vec<RedefinedPin>> = const { RefCell::new(Vec::new()) };
+}
+
+/// One pinned function: see [`pin_redefined_function`].
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RedefinedPin {
+    pub(crate) heap: usize,
+    pub(crate) sym: SymId,
+    pub(crate) function: Value,
+}
+
+/// `sym`'s function cell stopped holding `previous` (`fset`, `defalias`,
+/// `fmakunbound`, advice, unintern). A compiled activation called through
+/// `sym` may still be running `previous`, and its backtrace frame records
+/// the symbol, as GNU's `Bcall` does -- not the object, which GNU's bytecode
+/// frame keeps alive (`fp->fun`, src/bytecode.c:518) and which a deopt
+/// resume or an interpreter rerun of that activation reads. So a
+/// byte-code `previous` stays a GC root while any backtrace frame records
+/// `sym` ([`trace_redefined_pins`]); with none, nothing can be running it
+/// through `sym`, and the next collection drops the pin. Cold: one push per
+/// redefinition of a byte-code function, none for a pair already pinned.
+pub(crate) fn pin_redefined_function(sym: SymId, previous: Value) {
+    if !previous.is_bytecode() {
+        return;
+    }
+    let Some(heap) = crate::tagged::gc::current_tagged_heap_identity() else {
+        return;
+    };
+    REDEFINED_PINS.with(|pins| {
+        let mut pins = pins.borrow_mut();
+        if !pins
+            .iter()
+            .any(|pin| pin.heap == heap && pin.sym == sym && pin.function.bits() == previous.bits())
+        {
+            pins.push(RedefinedPin {
+                heap,
+                sym,
+                function: previous,
+            });
+        }
+    });
+}
+
+/// Whether any redefined function is pinned (the root walk's fast exit).
+pub(crate) fn has_redefined_pins() -> bool {
+    REDEFINED_PINS.with(|pins| !pins.borrow().is_empty())
+}
+
+/// Root walk of the heap `heap`: visit every function pinned in it whose
+/// symbol a live backtrace frame records (`frame_calls`), and drop the
+/// others -- another heap's pins too, which no frame of this one can need.
+pub(crate) fn trace_redefined_pins(
+    heap: usize,
+    frame_calls: &dyn Fn(SymId) -> bool,
+    visit: &mut dyn FnMut(Value),
+) {
+    REDEFINED_PINS.with(|pins| {
+        pins.borrow_mut().retain(|pin| {
+            let live = pin.heap == heap && frame_calls(pin.sym);
+            if live {
+                visit(pin.function);
+            }
+            live
+        });
+    });
+}
+
+/// The pinned functions (tests).
+#[cfg(test)]
+pub(crate) fn redefined_pins_for_test() -> Vec<RedefinedPin> {
+    REDEFINED_PINS.with(|pins| pins.borrow().clone())
+}
+
 /// Whether `leaf` is still the leaf the caches hold for `func` at `origin`:
 /// the entry leaf of its `compiled_id`, or the OSR leaf at its header. A
 /// retired leaf never is.
@@ -1412,6 +1489,8 @@ pub(crate) fn clear() {
     REJECTION_EPOCH.fetch_add(1, Ordering::Relaxed);
     // No leaf is left to be bound to an obarray.
     COMPILED_OBARRAY.with(|g| g.set(None));
+    // The pinned functions belong to the heap being replaced.
+    REDEFINED_PINS.with(|pins| pins.borrow_mut().clear());
 }
 
 /// Tier-up entry point: run `func`'s body as native code if possible.

@@ -3933,12 +3933,13 @@ impl Obarray {
         let sym = self.ensure_symbol_id(id);
         // See `set_symbol_function_id': the same value redefines nothing.
         let unchanged = !sym.function_unbound && sym.function.bits() == function.bits();
+        let previous = sym.function;
         // SATB: retain the function cell's pre-image during a concurrent mark.
         crate::tagged::gc::note_root_overwrite(sym.function);
         store_value_atomic(&mut sym.function, function);
         sym.function_unbound = false;
         if !unchanged {
-            self.note_function_redefined(id, FunctionEpochBump::InternalCellWrite);
+            self.note_function_redefined(id, FunctionEpochBump::InternalCellWrite, previous);
         } else {
             note_function_cell_unchanged();
         }
@@ -3977,16 +3978,21 @@ impl Obarray {
     /// entries of callers that INLINED `id` -- the only invalidation inlined
     /// callees get, so every function-cell write must come through here (see
     /// jit::cache::evict_inline_dependents). `why` only feeds the JIT's
-    /// per-reason bump counters; it changes nothing else.
-    fn note_function_redefined(&mut self, id: SymId, why: FunctionEpochBump) {
+    /// per-reason bump counters; it changes nothing else. `previous` is what
+    /// the cell held: a compiled activation called through `id` may still be
+    /// running it, and its frame records only the symbol, so the JIT keeps it
+    /// alive while such a frame lives (`jit::cache::pin_redefined_function`;
+    /// GNU's bytecode frame holds its `fun`, src/bytecode.c:518).
+    fn note_function_redefined(&mut self, id: SymId, why: FunctionEpochBump, previous: Value) {
         self.advance_function_epoch();
         #[cfg(feature = "jit")]
         {
             crate::emacs_core::jit::stats::note_function_epoch_bump(why, Some(id));
             crate::emacs_core::jit::cache::evict_inline_dependents(id);
+            crate::emacs_core::jit::cache::pin_redefined_function(id, previous);
         }
         #[cfg(not(feature = "jit"))]
-        let _ = (id, why);
+        let _ = (id, why, previous);
     }
 
     /// Set the function cell of a symbol by identity.
@@ -4008,12 +4014,13 @@ impl Obarray {
         // behavior, so it redefines nothing: no epoch move, no JIT eviction
         // (a `defalias' re-run while a file reloads, an `fset' in a loop).
         let unchanged = !sym.function_unbound && sym.function.bits() == function.bits();
+        let previous = sym.function;
         // SATB: retain the function cell's pre-image during a concurrent mark.
         crate::tagged::gc::note_root_overwrite(sym.function);
         store_value_atomic(&mut sym.function, function);
         sym.function_unbound = false;
         if !unchanged {
-            self.note_function_redefined(id, why);
+            self.note_function_redefined(id, why, previous);
         } else {
             note_function_cell_unchanged();
         }
@@ -4030,12 +4037,13 @@ impl Obarray {
         let sym = self.ensure_symbol_id(id);
         let was_unbound = sym.function_unbound;
         let was_bound_function = !sym.function.is_nil();
+        let previous = sym.function;
         sym.function_unbound = true;
         // SATB: retain the function cell's pre-image during a concurrent mark.
         crate::tagged::gc::note_root_overwrite(sym.function);
         store_value_atomic(&mut sym.function, Value::NIL);
         if !was_unbound || was_bound_function {
-            self.note_function_redefined(id, FunctionEpochBump::Fmakunbound);
+            self.note_function_redefined(id, FunctionEpochBump::Fmakunbound, previous);
         }
     }
 
@@ -4047,17 +4055,18 @@ impl Obarray {
 
     /// Remove function cell without marking as explicitly unbound, by identity.
     pub fn clear_function_silent_id(&mut self, id: SymId) {
-        let mut redefined = false;
+        let mut redefined = None;
         if let Some(sym) = self.slot_mut(id)
             && !sym.function.is_nil()
         {
+            let previous = sym.function;
             // SATB: retain the function cell's pre-image during a concurrent mark.
             crate::tagged::gc::note_root_overwrite(sym.function);
             store_value_atomic(&mut sym.function, Value::NIL);
-            redefined = true;
+            redefined = Some(previous);
         }
-        if redefined {
-            self.note_function_redefined(id, FunctionEpochBump::SilentClear);
+        if let Some(previous) = redefined {
+            self.note_function_redefined(id, FunctionEpochBump::SilentClear, previous);
         }
     }
 
@@ -4733,7 +4742,10 @@ impl Obarray {
         let removed_symbol = self.clear_global_member(id);
         if removed_symbol {
             crate::emacs_core::intern::unintern_canonical_id(id);
-            self.note_function_redefined(id, FunctionEpochBump::Unintern);
+            // The cell stays with the symbol; pinning it keeps a running
+            // definition alive should the symbol itself go.
+            let previous = self.symbol_function_id(id).unwrap_or(Value::NIL);
+            self.note_function_redefined(id, FunctionEpochBump::Unintern, previous);
         }
         removed_symbol
     }

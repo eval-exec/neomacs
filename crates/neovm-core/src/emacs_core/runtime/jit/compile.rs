@@ -168,6 +168,25 @@ fn materialize_op_sym_id(
     }
 }
 
+/// [`materialize_op_sym_id`] as the symbol's tagged `Value` bits: what a
+/// backtrace frame records, so a shim that pushes one takes them as they are.
+fn materialize_op_sym_value(
+    fb: &mut FunctionBuilder,
+    reloc_base: Option<ClifValue>,
+    reloc_index: &std::collections::HashMap<usize, u32>,
+    sym: u32,
+) -> ClifValue {
+    let key = (sym as usize) << TAG_BITS | TAG_SYMBOL;
+    match reloc_index.get(&key) {
+        Some(&idx) => {
+            let base = reloc_base.expect("reloc_base set when an op-symbol is reloc'd");
+            fb.ins()
+                .load(types::I64, MemFlagsData::trusted(), base, (idx * 8) as i32)
+        }
+        None => fb.ins().iconst(types::I64, key as i64),
+    }
+}
+
 /// Materialize an `Op::Call` spec site's `expected` (subr/bytecode VALUE bits) for
 /// the shim call. JIT (`aot=false`) bakes it as an `iconst` (valid same-session);
 /// AOT (`aot=true`) loads it from `spec_expected_base[slot_idx]` — the per-thread
@@ -4873,6 +4892,9 @@ mod osr_poll_tests;
 #[cfg(test)]
 #[path = "tests/predicate_branches.rs"]
 mod predicate_branch_tests;
+#[cfg(test)]
+#[path = "tests/spec_frames.rs"]
+mod spec_frame_tests;
 #[cfg(test)]
 #[path = "tests/spec_gate.rs"]
 mod spec_gate_tests;

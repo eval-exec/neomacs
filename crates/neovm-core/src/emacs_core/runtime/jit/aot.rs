@@ -90,7 +90,10 @@ pub(crate) const ABI_TAG: u32 = compute_abi_tag();
 /// with `Context::jit_stack_limit` and below it parks its parameters in
 /// `Context::jit_stack_scratch` and calls `neovm_jit_stack_check`
 /// (`compile::stack_guard`).
-const ABI_TAG_VERSION: u32 = 10;
+/// v11: `Op::Call` bytecode spec sites pass `neovm_jit_call_spec` the called
+/// symbol as its tagged `Value` bits (the callee's backtrace frame records
+/// it), not its `SymId`.
+const ABI_TAG_VERSION: u32 = 11;
 
 /// Format version of the AOT descriptor spec-section + the runtime spec ABI
 /// (`SpecSlot`/`spec_expected` sidecar bases, the loader re-classify+arm protocol).

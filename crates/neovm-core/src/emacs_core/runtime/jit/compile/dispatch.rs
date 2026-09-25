@@ -997,13 +997,18 @@ fn call_for_jit_from_native(
 /// [`call_spec_slow`] / [`call_spec_finish`], which is the reference
 /// protocol unchanged.
 ///
+/// `sym_bits` is the called symbol as its tagged `Value` bits: the callee's
+/// backtrace frame records it, as GNU's `Bcall` records `call_fun`
+/// (src/bytecode.c:792-796), and the site's constant is already in that
+/// form, so the hot path records it with no conversion.
+///
 /// SAFETY: same vmctx contract as [`neovm_jit_call`]; `slot` points into the
 /// owning CompiledLeaf's spec_slots (alive whenever its code runs).
 #[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
 #[unsafe(no_mangle)]
 pub extern "C" fn neovm_jit_call_spec(
     ctx: *mut u8,
-    sym: i64,
+    sym_bits: i64,
     expected: i64,
     slot: i64,
     args_ptr: *const i64,
@@ -1040,8 +1045,17 @@ pub extern "C" fn neovm_jit_call_spec(
         let nargs = nargs as usize;
         let bt_count = ctx_ref.specpdl.len();
         // SAFETY: args_ptr addresses `nargs` valid tagged words (the caller's
-        // call-args slot). The push roots `callee` for the whole native run.
-        unsafe { ctx_ref.push_backtrace_frame_from_native_args(callee, args_ptr, nargs) };
+        // call-args slot). The frame records the called SYMBOL, as GNU's
+        // `Bcall` does (src/bytecode.c:792-796); `callee` stays alive through
+        // the symbol's function cell, or past a redefinition through the
+        // frame (`cache::pin_redefined_function`).
+        unsafe {
+            ctx_ref.push_backtrace_frame_from_native_args(
+                Value::from_bits(sym_bits as usize),
+                args_ptr,
+                nargs,
+            )
+        };
         ctx_ref.depth += 1;
         // The callee's frame: the call as laid out when the count is the
         // leaf's arity, otherwise the given words followed by nil for each
@@ -1114,7 +1128,15 @@ pub extern "C" fn neovm_jit_call_spec(
         };
         return call_spec_finish(ctx, callee, leaf, args_ptr, nargs, out, bt_count, run);
     }
-    call_spec_slow(ctx, sym, expected, slot_ref, args_ptr, nargs as usize, out)
+    call_spec_slow(
+        ctx,
+        sym_bits,
+        expected,
+        slot_ref,
+        args_ptr,
+        nargs as usize,
+        out,
+    )
 }
 
 /// The fast path's framed entry, under a containment frame of its own: a
@@ -1239,13 +1261,19 @@ fn call_spec_finish(
 #[inline(never)]
 fn call_spec_slow(
     ctx: *mut u8,
-    sym: i64,
+    sym_bits: i64,
     expected: i64,
     slot: &SpecSlot,
     args_ptr: *const i64,
     nargs: usize,
     out: *mut i64,
 ) -> i64 {
+    // The site passes the called symbol as its tagged bits (what the
+    // callee's frame records).
+    let sym = Value::from_bits(sym_bits as usize)
+        .as_symbol_id()
+        .expect("a speculated call site's callee is a symbol")
+        .0 as i64;
     jit_shim_contain!(detach args_ptr, ctx, STATUS_SIGNAL, {
         // Build a rooted LispArgVec from the caller's call-args slot — used only by
         // the strict-call fallback paths (call_for_jit), inside their own
@@ -1332,15 +1360,25 @@ fn call_spec_slow(
                         ));
                     }
                     // No scratch rooting and no Vm construction on the armed
-                    // fast path: nothing between the epoch proof and the
-                    // callee's backtrace push (which roots the target for the
-                    // whole native run) can reach a GC safe point, and
+                    // fast path: the target is the symbol's function (the
+                    // epoch proof), which keeps it alive -- and once that is
+                    // redefined, the callee's frame recording the symbol
+                    // does (`cache::pin_redefined_function`) -- and
                     // `Vm::from_context`'s eager cache zero-fill was a
                     // measured per-call tax.
-                    match Vm::call_armed_callee_native(ctx, target, slot, args_ptr, nargs) {
+                    let called = SymId(sym as u32);
+                    match Vm::call_armed_callee_native(ctx, called, target, slot, args_ptr, nargs)
+                    {
                         Some(o) => o,
+                        // The strict call goes through the SYMBOL, like the
+                        // unarmed one below: GNU's frame records the symbol,
+                        // and the epoch proof says it names `target`, which
+                        // the interpreter frame then roots.
                         None => NativeCallOutcome::from_result(call_for_jit_from_native(
-                            ctx, target, args_ptr, nargs,
+                            ctx,
+                            Value::from_sym_id(called),
+                            args_ptr,
+                            nargs,
                         )),
                     }
                 } else {
