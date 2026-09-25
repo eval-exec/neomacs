@@ -231,7 +231,9 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         )
         .requires_eval_state(),
     );
-    ctx.register_subr(SubrSpec::fixed1("boundp", builtin_boundp_1, FixedMin1::One));
+    ctx.register_subr(
+        const { SubrSpec::fixed1("boundp", builtin_boundp_1, FixedMin1::One).leaf(&leaves::BOUNDP) },
+    );
     let evaluator_compatibility = EvaluatorCompatibility::begin()
         .register_data(ctx)
         .register_ordinary_eval(ctx)
@@ -3202,7 +3204,11 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         SubrArity::new(2, Some(2)),
     ));
     ctx.register_subr(
-        SubrSpec::fixed3("assoc", builtin_assoc_3, FixedMin3::Two).requires_eval_state(),
+        const {
+            SubrSpec::fixed3("assoc", builtin_assoc_3, FixedMin3::Two)
+                .requires_eval_state()
+                .leaf(&leaves::ASSOC)
+        },
     );
     ctx.register_subr(
         SubrSpec::new(
@@ -3835,7 +3841,9 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(builtin_delete_with_ctx),
         SubrArity::new(2, Some(2)),
     ));
-    ctx.register_subr(SubrSpec::fixed2("delq", builtin_delq_2, FixedMin2::Two));
+    ctx.register_subr(
+        const { SubrSpec::fixed2("delq", builtin_delq_2, FixedMin2::Two).leaf(&leaves::DELQ) },
+    );
     ctx.register_subr(SubrSpec::new(
         "elt",
         NativeFn::ContextVec(|_ctx, args| builtin_elt(args)),
@@ -6743,11 +6751,11 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     // and lisp/simple.el:6683 over primitives that ARE in C
     // (`stringp', `integerp', `indirect-function',
     // `get-char-code-property') -- DIVERGENCES.md 148.
-    ctx.register_subr(SubrSpec::fixed1(
-        "keywordp",
-        builtin_keywordp_1,
-        FixedMin1::One,
-    ));
+    ctx.register_subr(
+        const {
+            SubrSpec::fixed1("keywordp", builtin_keywordp_1, FixedMin1::One).leaf(&leaves::KEYWORDP)
+        },
+    );
     ctx.register_subr(SubrSpec::new(
         "hash-table-p",
         NativeFn::ContextVec(|_ctx, args| builtin_hash_table_p(args)),
@@ -6830,11 +6838,12 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ctx.register_subr(SubrSpec::fixed2("member", builtin_member_2, FixedMin2::Two));
     ctx.register_subr(SubrSpec::fixed2("memq", builtin_memq_2, FixedMin2::Two));
     ctx.register_subr(SubrSpec::fixed2("assq", builtin_assq_2, FixedMin2::Two));
-    ctx.register_subr(SubrSpec::fixed1(
-        "copy-sequence",
-        builtin_copy_sequence_1,
-        FixedMin1::One,
-    ));
+    ctx.register_subr(
+        const {
+            SubrSpec::fixed1("copy-sequence", builtin_copy_sequence_1, FixedMin1::One)
+                .leaf(&leaves::COPY_SEQUENCE)
+        },
+    );
     ctx.register_subr(
         const {
             SubrSpec::fixed3("plist-get", builtin_plist_get_3, FixedMin3::Two)
@@ -6856,11 +6865,16 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(crate::emacs_core::misc::builtin_rassoc_with_ctx),
         SubrArity::new(2, Some(2)),
     ));
-    ctx.register_subr(SubrSpec::fixed2(
-        "rassq",
-        crate::emacs_core::misc::builtin_rassq_2,
-        FixedMin2::Two,
-    ));
+    ctx.register_subr(
+        const {
+            SubrSpec::fixed2(
+                "rassq",
+                crate::emacs_core::misc::builtin_rassq_2,
+                FixedMin2::Two,
+            )
+            .leaf(&leaves::RASSQ)
+        },
+    );
     ctx.register_subr(SubrSpec::new(
         "make-list",
         NativeFn::ContextVec(|_ctx, args| crate::emacs_core::misc::builtin_make_list(args)),
@@ -7135,11 +7149,12 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
 
     // -- Symbol --
-    ctx.register_subr(SubrSpec::fixed1(
-        "symbol-name",
-        builtin_symbol_name_1,
-        FixedMin1::One,
-    ));
+    ctx.register_subr(
+        const {
+            SubrSpec::fixed1("symbol-name", builtin_symbol_name_1, FixedMin1::One)
+                .leaf(&leaves::SYMBOL_NAME)
+        },
+    );
     ctx.register_subr(SubrSpec::fixed1(
         "make-symbol",
         builtin_make_symbol_1,

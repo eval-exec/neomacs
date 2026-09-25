@@ -192,6 +192,8 @@ pub(crate) enum BounceShape {
     UserHashTest,
     /// `plist-get` with a non-nil PREDICATE, which GNU calls through funcall.
     PlistPredicate,
+    /// `assoc` with a non-nil TESTFN, which GNU calls through funcall.
+    AssocTestfn,
 }
 
 /// The audited, panic-free fast half of a [`Containment::FastOutside`] leaf:
@@ -238,11 +240,20 @@ pub(crate) enum LeafId {
     /// `Context::read_var_cached` (p1-0-integration §2 P1.2 correction 4).
     SymbolValue,
     BufferLocalValue,
+    /// The first leaf batch (P1.2 commit 12, `NEOVM_JIT_LEAF=batch`): Bcall
+    /// leaves of builtins the org, magit and elb-eieio census calls often.
+    Assoc,
+    Rassq,
+    Delq,
+    CopySequence,
+    SymbolName,
+    Boundp,
+    Keywordp,
 }
 
 impl LeafId {
     /// Number of leaves: the length of [`LEAVES`].
-    pub(crate) const COUNT: usize = LeafId::BufferLocalValue as usize + 1;
+    pub(crate) const COUNT: usize = LeafId::Keywordp as usize + 1;
 
     /// The index into [`LEAVES`].
     pub(crate) const fn index(self) -> usize {
@@ -325,6 +336,13 @@ pub(crate) static LEAVES: [&LeafSpec; LeafId::COUNT] = {
         &l::STRING_LESSP,
         &l::SYMBOL_VALUE,
         &l::BUFFER_LOCAL_VALUE,
+        &l::ASSOC,
+        &l::RASSQ,
+        &l::DELQ,
+        &l::COPY_SEQUENCE,
+        &l::SYMBOL_NAME,
+        &l::BOUNDP,
+        &l::KEYWORDP,
     ]
 };
 

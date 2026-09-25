@@ -269,21 +269,28 @@ pub(crate) fn builtin_boundp(eval: &mut super::eval::Context, args: Vec<Value>) 
 
 typed_subr! {
     pub(crate) fn builtin_boundp_1(eval, symbol: SymId) -> EvalResult {
-        let obarray = eval.obarray();
-        let resolved = resolve_variable_alias_id_in_obarray(obarray, symbol)?;
-        // `boundp` runs constantly (font-lock/redisplay); a global (non-Localized)
-        // symbol is never in any local_var_alist, so skip the per-buffer scan.
-        let localized = obarray.is_localized(resolved);
-        // specbind writes directly to obarray, so no dynamic stack lookup needed.
-        if let Some(buf) = eval.buffers.current_buffer()
-            && let Some(binding) = buf.get_buffer_local_binding_by_sym_id_gated(resolved, localized)
-            {
-                return Ok(Value::bool_val(binding.as_value().is_some()));
-            }
-        Ok(Value::bool_val(
-            obarray.boundp_id(resolved) || obarray.is_constant_id(resolved),
-        ))
+        boundp_in(eval, symbol)
     }
+}
+
+/// `boundp`'s body: it only reads the obarray and the current buffer, so it
+/// takes a shared borrow -- which is what lets it serve as the builtin's
+/// leaf too (`builtins::leaves`).
+pub(crate) fn boundp_in(eval: &super::eval::Context, symbol: SymId) -> EvalResult {
+    let obarray = eval.obarray();
+    let resolved = resolve_variable_alias_id_in_obarray(obarray, symbol)?;
+    // `boundp` runs constantly (font-lock/redisplay); a global (non-Localized)
+    // symbol is never in any local_var_alist, so skip the per-buffer scan.
+    let localized = obarray.is_localized(resolved);
+    // specbind writes directly to obarray, so no dynamic stack lookup needed.
+    if let Some(buf) = eval.buffers.current_buffer()
+        && let Some(binding) = buf.get_buffer_local_binding_by_sym_id_gated(resolved, localized)
+    {
+        return Ok(Value::bool_val(binding.as_value().is_some()));
+    }
+    Ok(Value::bool_val(
+        obarray.boundp_id(resolved) || obarray.is_constant_id(resolved),
+    ))
 }
 
 pub(crate) fn builtin_obarrayp(args: Vec<Value>) -> EvalResult {

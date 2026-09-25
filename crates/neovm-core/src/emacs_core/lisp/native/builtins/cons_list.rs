@@ -1275,7 +1275,12 @@ pub(crate) fn builtin_assoc_3(
     if !test_fn.is_nil() {
         return builtin_assoc_slice(eval, &[key, list, test_fn]);
     }
-    let symbols_with_pos_enabled = eval.symbols_with_pos_enabled;
+    assoc_values(key, list, eval.symbols_with_pos_enabled)
+}
+
+/// `assoc` without a TESTFN: the first entry whose car is KEY (`eq`, then
+/// `equal`). Runs no Lisp; shared with the builtin's leaf.
+pub(crate) fn assoc_values(key: Value, list: Value, symbols_with_pos_enabled: bool) -> EvalResult {
     for_each_proper_list_tail(list, list, |tail| {
         let pair_car = tail.cons_car();
         if pair_car.is_cons() {
@@ -1497,7 +1502,7 @@ pub(crate) fn builtin_copy_sequence_1(_eval: &mut super::eval::Context, arg: Val
     copy_sequence_value(arg)
 }
 
-fn copy_sequence_value(arg: Value) -> EvalResult {
+pub(crate) fn copy_sequence_value(arg: Value) -> EvalResult {
     match arg.kind() {
         ValueKind::Nil => Ok(Value::NIL),
         ValueKind::Cons => {
@@ -1716,7 +1721,11 @@ pub(crate) fn builtin_delq_2(
     builtin_delq_values(elt, list, eval.symbols_with_pos_enabled)
 }
 
-fn builtin_delq_values(elt: Value, list: Value, symbols_with_pos_enabled: bool) -> EvalResult {
+pub(crate) fn builtin_delq_values(
+    elt: Value,
+    list: Value,
+    symbols_with_pos_enabled: bool,
+) -> EvalResult {
     match list.kind() {
         ValueKind::Nil => Ok(Value::NIL),
         ValueKind::Cons => delete_from_list_in_place(&list, |item| {

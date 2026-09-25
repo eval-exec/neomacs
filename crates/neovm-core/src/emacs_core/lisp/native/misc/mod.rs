@@ -188,7 +188,11 @@ pub(crate) fn builtin_rassq_2(
 
 /// `rassq`, scanned like `memq`: no cycle bookkeeping until the budget runs
 /// out, then the exact algorithm from the head.
-fn builtin_rassq_values(key: Value, alist: Value, symbols_with_pos_enabled: bool) -> EvalResult {
+pub(crate) fn builtin_rassq_values(
+    key: Value,
+    alist: Value,
+    symbols_with_pos_enabled: bool,
+) -> EvalResult {
     if symbols_with_pos_enabled {
         return builtin_rassq_values_swp(key, alist);
     }

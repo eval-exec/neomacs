@@ -869,6 +869,116 @@ fn buffer_local_value_bcall_sites_match_the_protocol_call() {
     }
 }
 
+/// The first leaf batch at `Bcall` sites under `batch` (and only then):
+/// natively through each leaf against the interpreter's protocol call, at
+/// every arity the leaf takes, including signals and `assoc`'s TESTFN
+/// bounce. Each case evaluates its arguments afresh (`delq` unlinks).
+#[test]
+fn batch_bcall_sites_match_the_protocol_call() {
+    let mut ev = Context::new();
+    ev.eval_str("(defvar leaf-batch-bound 1)").expect("defvar");
+    let ctx_ptr = &mut ev as *mut Context as *mut u8;
+    /// `(builtin, leaf, nargs, argument sources)`.
+    type Case<'a> = (&'a str, LeafId, usize, &'a [&'a str]);
+    let cases: &[Case] = &[
+        (
+            "assoc",
+            LeafId::Assoc,
+            2,
+            &[
+                "'b '((a . 1) (b . 2))",
+                "\"s\" '((\"s\" . 1))",
+                "'z nil",
+                "'a 5",
+            ],
+        ),
+        (
+            "assoc",
+            LeafId::Assoc,
+            3,
+            &["'b '((a . 1) (b . 2)) nil", "'b '((a . 1) (b . 2)) #'eq"],
+        ),
+        (
+            "rassq",
+            LeafId::Rassq,
+            2,
+            &["2 '((a . 1) (b . 2))", "'z '((a . 1))", "1 5"],
+        ),
+        (
+            "delq",
+            LeafId::Delq,
+            2,
+            &["'a (list 'a 'b 'a)", "'z (list 'a)", "'a 5", "'a nil"],
+        ),
+        (
+            "copy-sequence",
+            LeafId::CopySequence,
+            1,
+            &["(list 1 2)", "\"abc\"", "[1 2]", "nil", "5"],
+        ),
+        (
+            "symbol-name",
+            LeafId::SymbolName,
+            1,
+            &["'leaf-batch-bound", "nil", ":kw", "5"],
+        ),
+        (
+            "boundp",
+            LeafId::Boundp,
+            1,
+            &["'leaf-batch-bound", "'leaf-batch-unbound", "nil", "5"],
+        ),
+        ("keywordp", LeafId::Keywordp, 1, &[":kw", "'a", "5"]),
+    ];
+    let batch = LeafKnob {
+        batch: true,
+        ..LeafKnob::OFF
+    };
+    for (name, id, nargs, sources) in cases {
+        let f = bcall_fn(name, *nargs);
+        let leaf = compile_bcall_with_knob(&ev, &f, batch);
+        let off = compile_bcall_with_knob(&ev, &f, LeafKnob::DEFAULT);
+        let runs0 = leaf_trampoline_calls(*id);
+        for src in *sources {
+            let args = || ev_list(ev_ref(ctx_ptr), src);
+            let want = interpret(ev_ref(ctx_ptr), &f, args());
+            let got = native(ctx_ptr, &leaf, &args(), src);
+            assert_eq!(got, want, "({name} {src})");
+            let runs = leaf_trampoline_calls(*id);
+            assert_eq!(
+                native(ctx_ptr, &off, &args(), src),
+                want,
+                "({name} {src}) off"
+            );
+            assert_eq!(
+                leaf_trampoline_calls(*id),
+                runs,
+                "the default knob runs no batch leaf"
+            );
+        }
+        assert_eq!(
+            leaf_trampoline_calls(*id) - runs0,
+            sources.len() as u64,
+            "({name} ..{nargs}): every call ran the leaf"
+        );
+    }
+}
+
+/// The context behind a raw test pointer (the tests hold `ev` mutably
+/// through `ctx_ptr` for the native calls).
+fn ev_ref<'a>(ctx_ptr: *mut u8) -> &'a mut Context {
+    // SAFETY: the tests pass the pointer of a live `Context` they own.
+    unsafe { &mut *(ctx_ptr as *mut Context) }
+}
+
+/// Evaluate `(list SOURCE)` -- SOURCE is a whitespace-separated argument
+/// list -- and root it.
+fn ev_list(ev: &mut Context, source: &str) -> Vec<Value> {
+    let list = ev.eval_str(&format!("(list {source})")).expect("arguments");
+    crate::emacs_core::eval::push_scratch_gc_root(list);
+    crate::emacs_core::value::list_to_vec(&list).expect("proper")
+}
+
 /// With the `bcall` part off, the same site takes the protocol shim.
 #[test]
 fn bcall_knob_off_keeps_the_protocol_shim() {

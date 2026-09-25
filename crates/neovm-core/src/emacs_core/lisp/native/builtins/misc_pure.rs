@@ -642,7 +642,10 @@ pub(crate) fn symbol_name_string_for_format(value: Value) -> Option<Value> {
     Some(crate::emacs_core::intern::materialize_symbol_name_value(id))
 }
 
-fn builtin_symbol_name_value(symbol: Value, symbols_with_pos_enabled: bool) -> EvalResult {
+pub(crate) fn builtin_symbol_name_value(
+    symbol: Value,
+    symbols_with_pos_enabled: bool,
+) -> EvalResult {
     match super::symbols::symbol_id_checked(&symbol, symbols_with_pos_enabled) {
         Some(id) => Ok(crate::emacs_core::intern::materialize_symbol_name_value(id)),
         None => Err(signal(

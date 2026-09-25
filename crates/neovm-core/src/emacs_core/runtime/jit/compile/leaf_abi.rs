@@ -366,6 +366,22 @@ fn bcall_declined(id: LeafId) -> i64 {
 /// as a bare trampoline runs it. A call with fewer arguments than the body
 /// has slots passes nil for the rest, as the fixed-arity dispatcher does.
 macro_rules! bcall_trampoline {
+    ($bcall:ident, $spec:path, $body:path, 1) => {
+        #[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI trampoline: vmctx contract.
+        #[unsafe(no_mangle)]
+        pub extern "C" fn $bcall(ctx: *const Context, slot: *const SpecSlot, a: i64) -> i64 {
+            // SAFETY: the seam's dormant Context; `slot` points into the
+            // executing leaf's spec slots (alive while its code runs).
+            let (cx, slot) = unsafe { (&*ctx, &*slot) };
+            if !bcall_guard(cx, slot) {
+                return bcall_declined($spec.id);
+            }
+            let a = Value::from_bits(a as usize);
+            let (cx, active) = leaf_enter(ctx, &$spec);
+            let word = leaf_contained(ctx, &$spec, |cx| $body(cx, a));
+            leaf_finish(active, cx, word)
+        }
+    };
     ($bcall:ident, $spec:path, $body:path, 2) => {
         #[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI trampoline: vmctx contract.
         #[unsafe(no_mangle)]
@@ -439,6 +455,28 @@ bcall_trampoline!(
     leaves::buffer_local_value,
     2
 );
+bcall_trampoline!(neovm_leaf_bcall_assoc, leaves::ASSOC, leaves::assoc, 3);
+bcall_trampoline!(neovm_leaf_bcall_rassq, leaves::RASSQ, leaves::rassq, 2);
+bcall_trampoline!(neovm_leaf_bcall_delq, leaves::DELQ, leaves::delq, 2);
+bcall_trampoline!(
+    neovm_leaf_bcall_copy_sequence,
+    leaves::COPY_SEQUENCE,
+    leaves::copy_sequence,
+    1
+);
+bcall_trampoline!(
+    neovm_leaf_bcall_symbol_name,
+    leaves::SYMBOL_NAME,
+    leaves::symbol_name,
+    1
+);
+bcall_trampoline!(neovm_leaf_bcall_boundp, leaves::BOUNDP, leaves::boundp, 1);
+bcall_trampoline!(
+    neovm_leaf_bcall_keywordp,
+    leaves::KEYWORDP,
+    leaves::keywordp,
+    1
+);
 
 /// A Bcall leaf's trampoline address.
 pub(crate) fn bcall_trampoline(id: LeafId) -> Option<*const u8> {
@@ -447,6 +485,13 @@ pub(crate) fn bcall_trampoline(id: LeafId) -> Option<*const u8> {
         LeafId::PlistGet => neovm_leaf_bcall_plist_get as *const u8,
         LeafId::GetCharProperty => neovm_leaf_bcall_get_char_property as *const u8,
         LeafId::BufferLocalValue => neovm_leaf_bcall_buffer_local_value as *const u8,
+        LeafId::Assoc => neovm_leaf_bcall_assoc as *const u8,
+        LeafId::Rassq => neovm_leaf_bcall_rassq as *const u8,
+        LeafId::Delq => neovm_leaf_bcall_delq as *const u8,
+        LeafId::CopySequence => neovm_leaf_bcall_copy_sequence as *const u8,
+        LeafId::SymbolName => neovm_leaf_bcall_symbol_name as *const u8,
+        LeafId::Boundp => neovm_leaf_bcall_boundp as *const u8,
+        LeafId::Keywordp => neovm_leaf_bcall_keywordp as *const u8,
         LeafId::Get
         | LeafId::Length
         | LeafId::Nth
@@ -463,11 +508,19 @@ pub(crate) fn bcall_trampoline(id: LeafId) -> Option<*const u8> {
     Some(f)
 }
 
-/// Whether `knob` turns on the sites of `spec`: the variable leaves have a
-/// part of their own (`vars`, default off); every other leaf its shape's.
+/// Whether `knob` turns on the sites of `spec`: the variable leaves and the
+/// first leaf batch have parts of their own (`vars`, `batch`, default off);
+/// every other leaf its shape's.
 pub(crate) fn leaf_part_on(knob: super::LeafKnob, spec: &LeafSpec) -> bool {
     match spec.id {
         LeafId::SymbolValue | LeafId::BufferLocalValue => knob.vars,
+        LeafId::Assoc
+        | LeafId::Rassq
+        | LeafId::Delq
+        | LeafId::CopySequence
+        | LeafId::SymbolName
+        | LeafId::Boundp
+        | LeafId::Keywordp => knob.batch,
         _ => match spec.shape {
             LeafShape::Opcode => knob.opcode,
             LeafShape::Bcall => knob.bcall,
@@ -482,7 +535,7 @@ pub(crate) fn leaf_part_on(knob: super::LeafKnob, spec: &LeafSpec) -> bool {
 /// taking the call's arguments in its slots.
 pub(crate) fn bcall_leaf_site(expected: u64, nargs: usize, aot: bool) -> Option<&'static LeafSpec> {
     let knob = super::jit_leaf_knob();
-    if aot || !(knob.bcall || knob.vars) {
+    if aot || !(knob.bcall || knob.vars || knob.batch) {
         return None;
     }
     let (subr_sym, entry) = subr_entry_from_value(Value::from_bits(expected as usize))?;
@@ -543,6 +596,13 @@ pub(crate) fn bare_trampoline(id: LeafId) -> Option<*const u8> {
         | LeafId::PlistGet
         | LeafId::GetCharProperty
         | LeafId::BufferLocalValue
+        | LeafId::Assoc
+        | LeafId::Rassq
+        | LeafId::Delq
+        | LeafId::CopySequence
+        | LeafId::SymbolName
+        | LeafId::Boundp
+        | LeafId::Keywordp
         | LeafId::Memq
         | LeafId::Assq => return None,
     };

@@ -100,9 +100,17 @@ fn leaf_opcode(id: LeafId) -> Option<Op> {
         LeafId::StringEqual => Op::StringEqual,
         LeafId::StringLessp => Op::StringLessp,
         LeafId::SymbolValue => Op::SymbolValue,
-        LeafId::Gethash | LeafId::PlistGet | LeafId::GetCharProperty | LeafId::BufferLocalValue => {
-            return None;
-        }
+        LeafId::Gethash
+        | LeafId::PlistGet
+        | LeafId::GetCharProperty
+        | LeafId::BufferLocalValue
+        | LeafId::Assoc
+        | LeafId::Rassq
+        | LeafId::Delq
+        | LeafId::CopySequence
+        | LeafId::SymbolName
+        | LeafId::Boundp
+        | LeafId::Keywordp => return None,
     })
 }
 
@@ -197,7 +205,13 @@ fn check(
         describe(&got)
     );
     let want = run_reference(ctx, spec, args);
+    // An allocating leaf answers a fresh object: compare those by `equal`.
+    let fresh = spec.effects.contains(Effects::ALLOCATES);
     let agree = match (&got, &want) {
+        (Outcome::Value(a), Outcome::Value(b)) if fresh => {
+            same_value(*a, *b)
+                || crate::emacs_core::value::try_equal_value_swp(a, b, 0, false).unwrap_or(false)
+        }
         (Outcome::Value(a), Outcome::Value(b)) => same_value(*a, *b),
         (Outcome::Signal(sa, da), Outcome::Signal(sb, db)) => {
             sa == sb && da.len() == db.len() && da.iter().zip(db).all(|(a, b)| same_value(*a, *b))
@@ -567,11 +581,162 @@ fn buffer_local_value_leaf_matches_the_builtin_on_every_variable_shape() {
     );
 }
 
+/// The first leaf batch's read-only and allocating leaves over the pool
+/// (pairs for `rassq`), with `symbols-with-pos-enabled` off and on, against
+/// the registered builtins.
+#[test]
+fn batch_leaves_match_their_builtins() {
+    let mut ctx = Context::new();
+    setup(&mut ctx);
+    let values = pool(&mut ctx, POOL);
+    let alists = pool(
+        &mut ctx,
+        &[
+            "'((a . 1) (b . 2) (\"s\" . 3) (1 . a) (nil . t))",
+            "'((1 . 2) x (3 . 1))",
+            "'((a . 1) . b)",
+            "(let ((l (list (cons 1 2) (cons 3 4)))) (setcdr (cdr l) l) l)",
+        ],
+    );
+    let mut checked = 0usize;
+    for on in [false, true] {
+        set_swp(&mut ctx, on);
+        for spec in [&COPY_SEQUENCE, &SYMBOL_NAME, &BOUNDP, &KEYWORDP] {
+            for (i, &a) in values.iter().enumerate() {
+                let what = format!("({} {}) swp={on}", spec.name, POOL[i]);
+                check(&mut ctx, spec, &[a], false, &what);
+                checked += 1;
+            }
+        }
+        for (i, &key) in values.iter().enumerate() {
+            for (j, &list) in values.iter().chain(&alists).enumerate() {
+                let what = format!("(rassq {} list#{j}) swp={on}", POOL[i]);
+                check(&mut ctx, &RASSQ, &[key, list], false, &what);
+                checked += 1;
+            }
+        }
+    }
+    set_swp(&mut ctx, false);
+    assert!(checked > 2_000, "{checked}");
+}
+
+/// `assoc` over key x alist x TESTFN: a TESTFN bounces (the builtin calls
+/// it through funcall).
+#[test]
+fn assoc_leaf_matches_the_builtin() {
+    let mut ctx = Context::new();
+    setup(&mut ctx);
+    let keys = pool(
+        &mut ctx,
+        &[
+            "'a",
+            "'z",
+            "\"s\"",
+            "1",
+            "(expt 2 70)",
+            "1.5",
+            "nil",
+            "(position-symbol 'a 4)",
+        ],
+    );
+    let alists = pool(
+        &mut ctx,
+        &[
+            "'((a . 1) (b . 2) (\"s\" . 3) (1 . a) (nil . t) (1.5 . f))",
+            "(list (cons (expt 2 70) 'big))",
+            "'(x (a . 1))",
+            "'((a . 1) . b)",
+            "nil",
+            "5",
+            "(let ((l (list (cons 'q 1) (cons 'r 2)))) (setcdr (cdr l) l) l)",
+        ],
+    );
+    let testfns = pool(&mut ctx, &["nil", "#'eq"]);
+    let mut bounced = 0;
+    for on in [false, true] {
+        set_swp(&mut ctx, on);
+        for (ki, &key) in keys.iter().enumerate() {
+            for (ai, &alist) in alists.iter().enumerate() {
+                for (ti, &testfn) in testfns.iter().enumerate() {
+                    let what = format!("(assoc key#{ki} alist#{ai} fn#{ti}) swp={on}");
+                    if check(&mut ctx, &ASSOC, &[key, alist, testfn], ti == 1, &what) {
+                        bounced += 1;
+                    }
+                }
+                let what = format!("(assoc key#{ki} alist#{ai}) swp={on}");
+                check(&mut ctx, &ASSOC, &[key, alist], false, &what);
+            }
+        }
+    }
+    set_swp(&mut ctx, false);
+    assert!(bounced > 0);
+}
+
+/// `delq` unlinks in place, so each case runs on its own fresh copy of the
+/// list for the leaf and for the builtin: the answers and the lists left
+/// behind must print the same.
+#[test]
+fn delq_leaf_matches_the_builtin() {
+    let mut ctx = Context::new();
+    let lists = [
+        "(list 'a 'b 'a 'c 'a)",
+        "(list 'a)",
+        "(list 1 2 1)",
+        "(list 'a 'b)",
+        "(cons 'a (cons 'b 'c))",
+        "(cons 'a 'a)",
+        "nil",
+        "5",
+    ];
+    let elts = ["'a", "'b", "1", "'z", "nil"];
+    // A proper list prints; anything else is compared by its shape only.
+    let show = |v: Value| {
+        if !v.is_cons() || crate::emacs_core::value::list_to_vec(&v).is_some() {
+            print_value(&v)
+        } else {
+            "#<improper or circular>".to_string()
+        }
+    };
+    for elt in elts {
+        for list in lists {
+            let make = |ctx: &mut Context| {
+                let pair = ctx.eval_str(&format!("(list {elt} {list})")).expect("case");
+                crate::emacs_core::eval::push_scratch_gc_root(pair);
+                (pair.cons_car(), pair.cons_cdr().cons_car())
+            };
+            let (e1, l1) = make(&mut ctx);
+            let got = run_leaf(&ctx, &DELQ, &[e1, l1]);
+            let (e2, l2) = make(&mut ctx);
+            let want = run_reference(&mut ctx, &DELQ, &[e2, l2]);
+            let what = format!("(delq {elt} {list})");
+            match (&got, &want) {
+                (Outcome::Value(a), Outcome::Value(b)) => {
+                    assert_eq!(show(*a), show(*b), "{what}");
+                    assert_eq!(show(l1), show(l2), "{what}: the list left behind");
+                }
+                (Outcome::Signal(sa, da), Outcome::Signal(sb, db)) => {
+                    assert_eq!(sa, sb, "{what}");
+                    assert_eq!(da.len(), db.len(), "{what}");
+                }
+                _ => panic!(
+                    "{what}: leaf {} vs builtin {}",
+                    describe(&got),
+                    describe(&want)
+                ),
+            }
+        }
+    }
+}
+
 /// Every declared bounce shape is one the harness above exercises: a new
 /// shape needs a case.
 #[test]
 fn every_generic_shape_is_exercised() {
-    let exercised = [BounceShape::UserHashTest, BounceShape::PlistPredicate];
+    let exercised = [
+        BounceShape::UserHashTest,
+        BounceShape::PlistPredicate,
+        BounceShape::AssocTestfn,
+    ];
     for spec in LEAVES {
         for shape in spec.generic_when {
             assert!(

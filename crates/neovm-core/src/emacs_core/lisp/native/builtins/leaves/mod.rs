@@ -154,6 +154,144 @@ pub(crate) fn buffer_local_value(ctx: &Context, variable: Value, buffer: Value) 
 }
 
 // ---------------------------------------------------------------------------
+// The first leaf batch (P1.2 commit 12; `NEOVM_JIT_LEAF=batch` for compiled
+// sites, `NEOVM_VM_LEAF` for the interpreter's): Bcall leaves of builtins
+// the org, magit and elb-eieio call census reaches often. Each is the
+// registered builtin's own body behind a shared borrow; none runs Lisp
+// except `assoc` with a TESTFN, which bounces.
+// ---------------------------------------------------------------------------
+
+/// `(assoc KEY ALIST &optional TESTFN)`: `builtin_assoc_3`'s walk (a key
+/// `eq` to the entry's, else `equal`); a TESTFN is called through funcall,
+/// so it bounces.
+pub(crate) static ASSOC: LeafSpec = LeafSpec::new(
+    LeafId::Assoc,
+    "assoc",
+    LeafEntry::L3(assoc),
+    LeafShape::Bcall,
+    READS,
+    &[BounceShape::AssocTestfn],
+    Containment::Catch,
+);
+
+pub(crate) fn assoc(ctx: &Context, key: Value, list: Value, test_fn: Value) -> LeafResult {
+    if !test_fn.is_nil() {
+        return Err(LeafExit::Generic);
+    }
+    Ok(assoc_values(key, list, ctx.symbols_with_pos_enabled)?)
+}
+
+/// `(rassq KEY ALIST)`.
+pub(crate) static RASSQ: LeafSpec = LeafSpec::new(
+    LeafId::Rassq,
+    "rassq",
+    LeafEntry::L2(rassq),
+    LeafShape::Bcall,
+    READS,
+    &[],
+    Containment::Catch,
+);
+
+pub(crate) fn rassq(ctx: &Context, key: Value, alist: Value) -> LeafResult {
+    Ok(crate::emacs_core::misc::builtin_rassq_values(
+        key,
+        alist,
+        ctx.symbols_with_pos_enabled,
+    )?)
+}
+
+/// `(delq ELT LIST)`: unlinks in place (heap writes through the barrier);
+/// never bounces, so no bounce can follow a write.
+pub(crate) static DELQ: LeafSpec = LeafSpec::new(
+    LeafId::Delq,
+    "delq",
+    LeafEntry::L2(delq),
+    LeafShape::Bcall,
+    Effects::READ_HEAP
+        .with(Effects::WRITE_HEAP)
+        .with(Effects::MAY_SIGNAL),
+    &[],
+    Containment::Catch,
+);
+
+pub(crate) fn delq(ctx: &Context, elt: Value, list: Value) -> LeafResult {
+    Ok(builtin_delq_values(
+        elt,
+        list,
+        ctx.symbols_with_pos_enabled,
+    )?)
+}
+
+/// `(copy-sequence ARG)`: allocates the copy (allocation never collects).
+pub(crate) static COPY_SEQUENCE: LeafSpec = LeafSpec::new(
+    LeafId::CopySequence,
+    "copy-sequence",
+    LeafEntry::L1(copy_sequence),
+    LeafShape::Bcall,
+    READS.with(Effects::ALLOCATES),
+    &[],
+    Containment::Catch,
+);
+
+pub(crate) fn copy_sequence(_: &Context, arg: Value) -> LeafResult {
+    Ok(copy_sequence_value(arg)?)
+}
+
+/// `(symbol-name SYMBOL)`: the name string (materialized on first use).
+pub(crate) static SYMBOL_NAME: LeafSpec = LeafSpec::new(
+    LeafId::SymbolName,
+    "symbol-name",
+    LeafEntry::L1(symbol_name),
+    LeafShape::Bcall,
+    READS.with(Effects::ALLOCATES),
+    &[],
+    Containment::Catch,
+);
+
+pub(crate) fn symbol_name(ctx: &Context, symbol: Value) -> LeafResult {
+    Ok(builtin_symbol_name_value(
+        symbol,
+        ctx.symbols_with_pos_enabled,
+    )?)
+}
+
+/// `(boundp SYMBOL)`: `boundp_in`, the registered body.
+pub(crate) static BOUNDP: LeafSpec = LeafSpec::new(
+    LeafId::Boundp,
+    "boundp",
+    LeafEntry::L1(boundp),
+    LeafShape::Bcall,
+    READS
+        .with(Effects::READ_BINDINGS)
+        .with(Effects::READ_BUFFER),
+    &[],
+    Containment::Catch,
+);
+
+pub(crate) fn boundp(ctx: &Context, symbol: Value) -> LeafResult {
+    let symbol = expect_symbol_id_checked(&symbol, ctx.symbols_with_pos_enabled)?;
+    Ok(boundp_in(ctx, symbol)?)
+}
+
+/// `(keywordp OBJECT)`.
+pub(crate) static KEYWORDP: LeafSpec = LeafSpec::new(
+    LeafId::Keywordp,
+    "keywordp",
+    LeafEntry::L1(keywordp),
+    LeafShape::Bcall,
+    Effects::READ_HEAP,
+    &[],
+    Containment::Catch,
+);
+
+pub(crate) fn keywordp(ctx: &Context, object: Value) -> LeafResult {
+    Ok(Value::bool_val(keywordp_swp(
+        object,
+        ctx.symbols_with_pos_enabled,
+    )))
+}
+
+// ---------------------------------------------------------------------------
 // Opcode leaves: each answers as the interpreter's opcode arm.
 // ---------------------------------------------------------------------------
 

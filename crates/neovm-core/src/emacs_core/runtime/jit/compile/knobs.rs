@@ -319,6 +319,10 @@ pub(crate) struct LeafKnob {
     /// `buffer-local-value` its armed one; both read through P1.4 Stage A's
     /// cached tiers.
     pub(crate) vars: bool,
+    /// The first leaf batch (default off): `Op::Call` sites on `assoc`,
+    /// `rassq`, `delq`, `copy-sequence`, `symbol-name`, `boundp` and
+    /// `keywordp` call their armed trampolines.
+    pub(crate) batch: bool,
 }
 
 impl LeafKnob {
@@ -327,6 +331,7 @@ impl LeafKnob {
         bcall: false,
         string: false,
         vars: false,
+        batch: false,
     };
     /// What an unset knob selects: the parts on by default since the F-B
     /// and board measurements.
@@ -335,6 +340,7 @@ impl LeafKnob {
         bcall: true,
         string: true,
         vars: false,
+        batch: false,
     };
     /// Every part, the default-off ones included.
     pub(crate) const ALL: Self = Self {
@@ -342,11 +348,13 @@ impl LeafKnob {
         bcall: true,
         string: true,
         vars: true,
+        batch: true,
     };
 
     /// Unset: [`Self::DEFAULT`]; `on`/`1`/`all`: every part
     /// ([`Self::ALL`]); `off`/`0`: nothing, the former code exactly;
-    /// otherwise a comma list of `opcode`, `bcall`, `string`, `vars`.
+    /// otherwise a comma list of `opcode`, `bcall`, `string`, `vars`,
+    /// `batch`.
     pub(crate) fn parse(value: Option<&str>) -> Self {
         let Some(value) = value.map(str::trim) else {
             return Self::DEFAULT;
@@ -363,10 +371,12 @@ impl LeafKnob {
                 "bcall" => knob.bcall = true,
                 "string" => knob.string = true,
                 "vars" => knob.vars = true,
+                "batch" => knob.batch = true,
                 other => tracing::warn!(
                     target: "neovm_jit",
                     part = other,
-                    "NEOVM_JIT_LEAF: unknown part ignored (expected opcode, bcall, string, vars)"
+                    "NEOVM_JIT_LEAF: unknown part ignored \
+                     (expected opcode, bcall, string, vars, batch)"
                 ),
             }
         }

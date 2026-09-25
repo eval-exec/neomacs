@@ -125,6 +125,35 @@ fn bcall_leaf_calls_match_the_builtin_protocol() {
             &["nil", "(current-buffer)", "(propertize \"abc\" 'p 'str)"],
         ),
         (
+            "assoc",
+            &[2, 3],
+            &["'b", "\"s\"", "'z", "1.5"],
+            &["'((a . 1) (b . 2) (\"s\" . 3) (1.5 . f))", "nil", "5"],
+            &["nil", "#'eq"],
+        ),
+        (
+            "rassq",
+            &[2],
+            &["2", "'z"],
+            &["'((a . 1) (b . 2))", "5"],
+            &[],
+        ),
+        (
+            "boundp",
+            &[1],
+            &["'vm-leaf-plain", "'vm-leaf-void", "nil", "5"],
+            &[],
+            &[],
+        ),
+        ("keywordp", &[1], &[":kw", "'a", "5"], &[], &[]),
+        (
+            "symbol-name",
+            &[1],
+            &["'vm-leaf-plain", "nil", "5"],
+            &[],
+            &[],
+        ),
+        (
             "buffer-local-value",
             &[2],
             &[
@@ -150,6 +179,11 @@ fn bcall_leaf_calls_match_the_builtin_protocol() {
         for &nargs in *arities {
             let f = bcall_fn(name, nargs);
             let mut calls: Vec<Vec<Value>> = Vec::new();
+            let seconds = if seconds.is_empty() {
+                vec![Value::NIL]
+            } else {
+                seconds.clone()
+            };
             for &a in &firsts {
                 for &b in &seconds {
                     let tail: Vec<Value> = if thirds.is_empty() {
@@ -170,7 +204,10 @@ fn bcall_leaf_calls_match_the_builtin_protocol() {
             let runs0 = super::vm_leaf::vm_leaf_calls_for_test();
             let got: Vec<String> = calls.iter().map(|args| run(&mut ev, &f, args)).collect();
             assert_eq!(got, want, "({name} ..{nargs})");
-            let in_arity = nargs <= leaf.entry_slots() && nargs >= 2;
+            let min_args = crate::emacs_core::eval::lookup_global_subr_entry(intern(name))
+                .expect("registered")
+                .min_args;
+            let in_arity = nargs <= leaf.entry_slots() && nargs >= usize::from(min_args);
             assert_eq!(
                 super::vm_leaf::vm_leaf_calls_for_test() - runs0,
                 if in_arity { calls.len() as u64 } else { 0 },
