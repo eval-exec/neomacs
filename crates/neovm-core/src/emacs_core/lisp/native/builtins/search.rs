@@ -63,11 +63,9 @@ fn dynamic_or_global_symbol_value(
     variable: SearchStateVariable,
 ) -> Option<Value> {
     // GNU reads these via `find_symbol_value`: specials never have a lexenv
-    // cell, so skip that probe.
-    match eval.find_symbol_value_by_id(variable.symbol_id()) {
-        Ok(super::eval::SymbolValueLookup::Bound(value)) => Some(value),
-        Ok(super::eval::SymbolValueLookup::Unbound) | Err(_) => None,
-    }
+    // cell, so skip that probe. The typed read answers the plain, buffer-local
+    // and forwarded shapes from their caches (U2.8).
+    eval.builtin_var_value(variable.symbol_id())
 }
 
 /// Map a regex front-end error string to its Lisp signal.  Compile
@@ -761,7 +759,7 @@ impl AnchoredPropertize {
             return None;
         }
         let done = eval
-            .special_variable_value_by_id(crate::emacs_core::syntax::syntax_propertize_done_sym())?
+            .builtin_var_value(crate::emacs_core::syntax::syntax_propertize_done_sym())?
             .as_fixnum()?;
         let buf = eval.buffers.current_buffer()?;
         let accessible_end_lisp = buf.accessible_char_region().end().get() as i64 + 1;
@@ -883,7 +881,7 @@ fn prepare_buffer_regexp_search(
         // accessible region (fontified buffer, no edits since), so neither
         // the ladder's probe search nor any propertize call is needed.
         let done = eval
-            .special_variable_value_by_id(crate::emacs_core::syntax::syntax_propertize_done_sym())
+            .builtin_var_value(crate::emacs_core::syntax::syntax_propertize_done_sym())
             .unwrap_or(Value::fixnum(-1));
         let covered = eval
             .buffers

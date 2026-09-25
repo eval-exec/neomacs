@@ -7335,6 +7335,11 @@ mod macroexpand;
 
 mod specpdl;
 
+mod builtin_vars;
+pub(crate) use builtin_vars::builtin_frontend_on;
+#[cfg(test)]
+pub(crate) use builtin_vars::{parse_builtin_frontend_knob, set_builtin_frontend_for_test};
+
 mod var_fast;
 #[cfg(test)]
 pub(crate) use var_fast::{
@@ -7397,6 +7402,10 @@ mod varset_plain_fast_path_tests;
 #[cfg(test)]
 #[path = "tests/var_fast.rs"]
 mod var_fast_tests;
+
+#[cfg(test)]
+#[path = "tests/builtin_vars.rs"]
+mod builtin_vars_tests;
 
 #[cfg(test)]
 #[path = "tests/gc_sweep_cap.rs"]
