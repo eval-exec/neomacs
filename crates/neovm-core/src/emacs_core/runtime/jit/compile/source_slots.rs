@@ -39,6 +39,11 @@ use cranelift_codegen::isa::CallConv;
 #[cfg(any(test, debug_assertions))]
 pub(crate) static SOURCE_SLOT_FAST_CALLS: AtomicU64 = AtomicU64::new(0);
 
+/// Times a source slot was (re-)armed with its source's leaf (tests and
+/// debug builds).
+#[cfg(any(test, debug_assertions))]
+pub(crate) static SOURCE_SLOT_ARMINGS: AtomicU64 = AtomicU64::new(0);
+
 /// Calls a source slot handed to the site's generic call (tests and debug
 /// builds).
 #[cfg(any(test, debug_assertions))]
@@ -98,6 +103,8 @@ impl SpecSlot {
     /// entry, valid under `epoch` (the `leaf_slot_epoch` the leaf was armed
     /// under): the epoch and the leaf first, the entry last.
     pub(crate) fn arm_source(&self, leaf: *const CompiledLeaf, entry: *const u8, epoch: u64) {
+        // A direct entry never outlives the leaf it was armed for.
+        self.direct_entry.store(0, Ordering::Relaxed);
         self.epoch.store(epoch, Ordering::Relaxed);
         self.leaf.store(leaf as usize as u64, Ordering::Relaxed);
         self.direct_entry
@@ -246,7 +253,8 @@ pub(crate) extern "C" fn neovm_jit_call_source_spec(
     // The source's armed leaf, as `cache::armed_leaf_for_native_call` finds
     // it, deciding everything before the heat moves: a declined call runs
     // the generic shim, whose own probe must see the same heat.
-    let Some(ptr) = rt.armed_leaf_slot(crate::emacs_core::jit::cache::leaf_slot_epoch()) else {
+    let epoch = crate::emacs_core::jit::cache::leaf_slot_epoch();
+    let Some(ptr) = rt.armed_leaf_slot(epoch) else {
         return source_slot_declined();
     };
     #[cfg(test)]
@@ -265,14 +273,14 @@ pub(crate) extern "C" fn neovm_jit_call_source_spec(
     rt.bump_heat();
     #[cfg(any(test, debug_assertions))]
     SOURCE_SLOT_FAST_CALLS.fetch_add(1, Ordering::Relaxed);
-    // `NEOVM_JIT_DIRECT_CALL`: (re-)arm the site's direct entry with this
-    // leaf, so the next call of the source enters it from the site. One
-    // compare while it holds this leaf.
+    // Remember this leaf (and its epoch) in the slot, with its direct
+    // entry under `NEOVM_JIT_DIRECT_CALL`, so the next call of the source
+    // enters it from the site. Two compares while the slot holds it.
     {
         // SAFETY: the executing leaf's slot.
         let slot = unsafe { &*(slot as *const SpecSlot) };
-        if slot.leaf_ptr() != ptr {
-            arm_source_direct_entry(slot, leaf, nargs);
+        if slot.leaf_ptr() != ptr || slot.epoch.load(Ordering::Relaxed) != epoch {
+            arm_source_direct_entry(slot, leaf, nargs, epoch);
         }
     }
     let consts = bc.jit_constant_base();
@@ -331,14 +339,16 @@ pub(crate) extern "C" fn neovm_jit_call_source_spec(
     call_spec_finish(ctx, callee, leaf, args_ptr, nargs, out, bt_count, run)
 }
 
-/// Arm a source site's direct entry for `leaf`, the source's current armed
-/// leaf (under `NEOVM_JIT_DIRECT_CALL`, when the site may enter it: its
-/// register ABI takes exactly `nargs` words, it is frameless, and the lean
-/// frame layout was probed). Out of line: once per leaf the source runs.
+/// Remember `leaf`, the source's current armed leaf, in a source site's
+/// slot, with its direct entry under `NEOVM_JIT_DIRECT_CALL` when the site
+/// may enter it (its register ABI takes exactly `nargs` words, it is
+/// frameless, and the lean frame layout was probed). Out of line: once per
+/// leaf the source runs.
 #[cold]
 #[inline(never)]
-fn arm_source_direct_entry(slot: &SpecSlot, leaf: &CompiledLeaf, nargs: usize) {
-    slot.clear_source();
+fn arm_source_direct_entry(slot: &SpecSlot, leaf: &CompiledLeaf, nargs: usize, epoch: u64) {
+    #[cfg(any(test, debug_assertions))]
+    SOURCE_SLOT_ARMINGS.fetch_add(1, Ordering::Relaxed);
     let eligible = jit_direct_call_on()
         && leaf.abi
             == (LeafAbi::Register {
@@ -348,13 +358,17 @@ fn arm_source_direct_entry(slot: &SpecSlot, leaf: &CompiledLeaf, nargs: usize) {
         && !leaf.has_rest
         && leaf.direct_call_eligible()
         && super::jit_layout::backtrace_layout().is_some();
-    if eligible {
-        slot.arm_source(
-            leaf,
-            leaf.entry,
-            crate::emacs_core::jit::cache::leaf_slot_epoch(),
-        );
-    }
+    // The slot remembers the leaf either way, so the shim's compare holds
+    // until the leaf changes; the entry only when the site may enter it.
+    slot.arm_source(
+        leaf,
+        if eligible {
+            leaf.entry
+        } else {
+            std::ptr::null()
+        },
+        epoch,
+    );
 }
 
 /// The fast path declined: the site runs its generic call.

@@ -3,7 +3,7 @@
 //! through the slot; any other callee, and every call the fast path
 //! declines, runs the site's generic call with the same result or signal.
 
-use super::source_slots::{SOURCE_SLOT_DECLINED, SOURCE_SLOT_FAST_CALLS};
+use super::source_slots::{SOURCE_SLOT_ARMINGS, SOURCE_SLOT_DECLINED, SOURCE_SLOT_FAST_CALLS};
 use super::*;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::jit::feedback::{CallTarget, FeedbackMode, force_feedback_mode_for_test};
@@ -405,5 +405,50 @@ fn with_direct_calls_an_inexact_callee_keeps_the_shim() {
         );
     }
     assert!(source_slot(&leaf).direct_entry().is_null(), "never armed");
+    off();
+}
+
+/// Without direct calls the slot still remembers the source's leaf, so the
+/// shim arms it once, not per call; a moved leaf-slot epoch re-arms it.
+#[test]
+fn the_slot_remembers_its_leaf_and_re_arms_on_a_new_epoch() {
+    on(true);
+    force_direct_call_for_test(Some(false));
+    let mut ev = Context::new();
+    let proto = adder(1);
+    arm(&mut ev, &proto);
+    let caller = funcall_caller();
+    record(&caller, 2, instance(&proto, 1));
+    let leaf = compile(&ev, &caller);
+    let armings = SOURCE_SLOT_ARMINGS.load(Ordering::Relaxed);
+    for k in 0..4 {
+        assert_eq!(
+            run(&mut ev, &leaf, &[instance(&proto, k), Value::make_int(1)]),
+            Ok(Value::make_int(1 + k))
+        );
+    }
+    assert_eq!(
+        SOURCE_SLOT_ARMINGS.load(Ordering::Relaxed) - armings,
+        1,
+        "armed once"
+    );
+    let slot = source_slot(&leaf);
+    assert!(
+        slot.direct_entry().is_null(),
+        "no direct entry with the knob off"
+    );
+    // Retire an unrelated leaf: the epoch moves, the source's slot is
+    // re-armed on its next call through the cache.
+    let other = adder(9);
+    arm(&mut ev, &other);
+    cache::evict_compiled(other.jit_runtime().compiled_id().unwrap());
+    let armings = SOURCE_SLOT_ARMINGS.load(Ordering::Relaxed);
+    for _ in 0..3 {
+        run(&mut ev, &leaf, &[instance(&proto, 2), Value::make_int(1)]);
+    }
+    assert!(
+        SOURCE_SLOT_ARMINGS.load(Ordering::Relaxed) - armings <= 1,
+        "re-armed at most once"
+    );
     off();
 }

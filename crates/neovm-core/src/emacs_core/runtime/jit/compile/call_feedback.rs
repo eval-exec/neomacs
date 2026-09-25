@@ -162,10 +162,26 @@ pub(crate) extern "C" fn neovm_jit_call_prof<const WINDOWED: bool>(
     out: *mut i64,
     site: *const CallSiteFeedback,
 ) -> i64 {
+    // Both arms are tail calls, so the path after the window needs no
+    // frame: a load, a compare and a jump.
     // SAFETY: the calling leaf keeps its source's table alive.
     if !WINDOWED || unsafe { &*site }.window_open() {
-        record_at(site, func_bits, args_ptr, nargs);
+        return neovm_jit_call_recording(ctx, func_bits, args_ptr, nargs, out, site);
     }
+    neovm_jit_call(ctx, func_bits, args_ptr, nargs, out)
+}
+
+/// [`neovm_jit_call_prof`]'s recording arm.
+#[inline(never)]
+extern "C" fn neovm_jit_call_recording(
+    ctx: *mut u8,
+    func_bits: i64,
+    args_ptr: *const i64,
+    nargs: i64,
+    out: *mut i64,
+    site: *const CallSiteFeedback,
+) -> i64 {
+    record_at(site, func_bits, args_ptr, nargs);
     neovm_jit_call(ctx, func_bits, args_ptr, nargs, out)
 }
 
@@ -181,8 +197,22 @@ pub(crate) extern "C" fn neovm_jit_apply_prof<const WINDOWED: bool>(
 ) -> i64 {
     // SAFETY: as above.
     if !WINDOWED || unsafe { &*site }.window_open() {
-        record_at(site, func_bits, args_ptr, nargs);
+        return neovm_jit_apply_recording(ctx, func_bits, args_ptr, nargs, out, site);
     }
+    neovm_jit_apply(ctx, func_bits, args_ptr, nargs, out)
+}
+
+/// [`neovm_jit_apply_prof`]'s recording arm.
+#[inline(never)]
+extern "C" fn neovm_jit_apply_recording(
+    ctx: *mut u8,
+    func_bits: i64,
+    args_ptr: *const i64,
+    nargs: i64,
+    out: *mut i64,
+    site: *const CallSiteFeedback,
+) -> i64 {
+    record_at(site, func_bits, args_ptr, nargs);
     neovm_jit_apply(ctx, func_bits, args_ptr, nargs, out)
 }
 
@@ -201,11 +231,10 @@ pub(crate) extern "C" fn neovm_jit_record_call_target<const WINDOWED: bool>(
     }
 }
 
-/// The recording half of the `_prof` shims, out of line so the shims' fast
-/// path (after the window) needs no frame. Touches only the site's atomics
-/// and, on a transition, Rust-heap `Weak`s: no Lisp allocation, no
+/// The recording half of the `_prof` shims. Touches only the site's
+/// atomics and, on a transition, Rust-heap `Weak`s: no Lisp allocation, no
 /// safepoint, no unwind.
-#[inline(never)]
+#[inline(always)]
 fn record_at(site: *const CallSiteFeedback, func_bits: i64, args_ptr: *const i64, nargs: i64) {
     // SAFETY: the calling leaf keeps its source's table alive.
     let site = unsafe { &*site };
