@@ -1103,6 +1103,27 @@ pub(crate) fn resolve_char_property_buffer_id_with_frames(
     resolve_char_property_target_in_state(frames, buffers, object).map(|(id, _wid)| id)
 }
 
+/// Property names the text-property builtins look up on every call, interned
+/// once: `Value::symbol("...")` hashed the name through the obarray on each
+/// use (about 140 instructions), inside per-overlay loops for `window` (U2.8).
+macro_rules! textprop_cached_symbol {
+    ($fn_name:ident, $name:literal) => {
+        #[inline(always)]
+        fn $fn_name() -> Value {
+            static SYMBOL: std::sync::OnceLock<crate::emacs_core::intern::SymId> =
+                std::sync::OnceLock::new();
+            Value::from_sym_id(*SYMBOL.get_or_init(|| crate::emacs_core::intern::intern($name)))
+        }
+    };
+}
+textprop_cached_symbol!(modification_hooks_prop, "modification-hooks");
+textprop_cached_symbol!(insert_behind_hooks_prop, "insert-behind-hooks");
+textprop_cached_symbol!(insert_in_front_hooks_prop, "insert-in-front-hooks");
+textprop_cached_symbol!(priority_prop, "priority");
+textprop_cached_symbol!(window_prop, "window");
+textprop_cached_symbol!(face_prop, "face");
+textprop_cached_symbol!(display_prop, "display");
+
 /// Interned-once ids for the read-only verification walk — it runs on
 /// every text-property mutation builtin and re-hashed these names per
 /// call.
@@ -1666,7 +1687,7 @@ pub(crate) fn prepare_interval_modification_for_change(
         let lisp_end = buf
             .emacs_byte_pos_to_lisp_char_pos(byte_range.end())
             .as_i64();
-        let mod_sym = Value::symbol("modification-hooks");
+        let mod_sym = modification_hooks_prop();
         let mut prev: Option<Value> = None;
         let mut hooks = Vec::new();
         let _ = buf.text_props_try_for_each_interval_in_emacs_byte_range(
@@ -1711,8 +1732,8 @@ fn record_interval_insert_hooks(
     if buf.text_props_is_empty() {
         return;
     }
-    let behind_sym = Value::symbol("insert-behind-hooks");
-    let front_sym = Value::symbol("insert-in-front-hooks");
+    let behind_sym = insert_behind_hooks_prop();
+    let front_sym = insert_in_front_hooks_prop();
     let accessible = buf.accessible_emacs_byte_region();
 
     if byte_pos > accessible.start()
@@ -1960,7 +1981,7 @@ pub(crate) fn buffer_overlay_property_at_byte_pos(
     // overlay carrying only a `category' is ordered by that symbol's
     // `priority'. The overlay layer has no obarray to follow the category
     // with; this one does.
-    let priority_sym = Value::symbol("priority");
+    let priority_sym = priority_prop();
     buf.overlays
         .sort_overlay_ids_by_priority_desc_with(&mut overlays, &|overlay| {
             Some(lookup_overlay_property(
@@ -1972,8 +1993,7 @@ pub(crate) fn buffer_overlay_property_at_byte_pos(
         });
     for overlay in overlays {
         if let Some(wid) = window_id {
-            let window_prop =
-                lookup_overlay_property(obarray, buffers, overlay, Value::symbol("window"));
+            let window_prop = lookup_overlay_property(obarray, buffers, overlay, window_prop());
             if window_prop
                 .as_window_id()
                 .is_some_and(|overlay_wid| overlay_wid != wid.0)
@@ -2556,7 +2576,7 @@ pub(crate) fn builtin_add_face_text_property(
         let unchanged = eval.buffers.get(buf_id).is_some_and(|buf| {
             buf.text_props_range_has_all_properties_in_emacs_byte_range(
                 byte_range,
-                &[(Value::symbol("face"), new_face)],
+                &[(face_prop(), new_face)],
             )
         });
         if unchanged {
@@ -2609,13 +2629,12 @@ pub(crate) fn builtin_add_face_text_property_in_buffers(
                 Some(p) if p.get() > seg_start && p.get() < char_end => p.get(),
                 _ => char_end,
             };
-            let existing =
-                table.get_property_at_char_pos(string_char_pos(seg_start), Value::symbol("face"));
+            let existing = table.get_property_at_char_pos(string_char_pos(seg_start), face_prop());
             let merged = merge_face_property(existing, new_face, append)?;
             table.put_property_for_object_char_len(
                 CharRange::new(CharPos0::new(seg_start), CharPos0::new(seg_end)),
                 string_char_len(s.schars()),
-                Value::symbol("face"),
+                face_prop(),
                 merged,
             );
             seg_start = seg_end;
@@ -2662,8 +2681,7 @@ pub(crate) fn builtin_add_face_text_property_in_buffers(
                 Some(p) if p > seg_start && p < byte_end_pos => p,
                 _ => byte_end_pos,
             };
-        let existing =
-            buf.text_props_get_property_at_emacs_byte_pos(seg_start, Value::symbol("face"));
+        let existing = buf.text_props_get_property_at_emacs_byte_pos(seg_start, face_prop());
         let merged = merge_face_property(existing, new_face, append)?;
         segments.push((EmacsByteRange::new(seg_start, seg_end), merged));
         seg_start = seg_end;
@@ -2671,12 +2689,7 @@ pub(crate) fn builtin_add_face_text_property_in_buffers(
     let mut any_changed = false;
     for (byte_range, merged) in segments {
         if buffers
-            .put_buffer_text_property_in_emacs_byte_range(
-                buf_id,
-                byte_range,
-                Value::symbol("face"),
-                merged,
-            )
+            .put_buffer_text_property_in_emacs_byte_range(buf_id, byte_range, face_prop(), merged)
             .unwrap_or(false)
         {
             any_changed = true;
@@ -3799,7 +3812,7 @@ pub(crate) fn builtin_get_display_property_in_state(
     expect_min_args("get-display-property", &args, 2)?;
     expect_max_args("get-display-property", &args, 4)?;
     let prop = expect_property_key(&args[1])?;
-    if prop != Value::symbol("display") {
+    if prop != display_prop() {
         return Ok(Value::NIL);
     }
     let mut forwarded = vec![args[0], args[1]];
