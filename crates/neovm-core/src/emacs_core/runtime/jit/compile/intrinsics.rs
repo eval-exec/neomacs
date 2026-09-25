@@ -145,8 +145,25 @@ pub(crate) const LENGTH_INLINE_STEPS: i64 = 64;
 /// The largest constant index I4 unrolls.
 pub(crate) const NTH_INLINE_MAX: i64 = 4;
 /// How many conses I5's walk visits before handing the list to the site's
-/// call (the value shim walks up to 64 more, then the builtin).
+/// call (the value shim walks up to 64 more, then the builtin), unless
+/// `NEOVM_JIT_MEMQ_STEPS` says otherwise ([`memq_inline_steps`]). A list
+/// longer than the bound is walked twice up to it: the bound trades the
+/// matches it answers inline against that waste.
 pub(crate) const MEMQ_INLINE_STEPS: i64 = 16;
+
+/// I5's walk bound: `NEOVM_JIT_MEMQ_STEPS=<1..=64>` (a measurement knob,
+/// read once), else [`MEMQ_INLINE_STEPS`].
+pub(crate) fn memq_inline_steps() -> i64 {
+    use std::sync::OnceLock;
+    static STEPS: OnceLock<i64> = OnceLock::new();
+    *STEPS.get_or_init(|| {
+        std::env::var("NEOVM_JIT_MEMQ_STEPS")
+            .ok()
+            .and_then(|v| v.trim().parse::<i64>().ok())
+            .filter(|n| (1..=64).contains(n))
+            .unwrap_or(MEMQ_INLINE_STEPS)
+    })
+}
 
 /// An emitted prefix: its hits define `res` and jump to `merge`; the builder
 /// is left in the (sealed) miss block, where the site's call follows and
@@ -569,7 +586,7 @@ fn emit_nth(
 // I5: memq, assq, member.
 // ---------------------------------------------------------------------------
 
-/// `Bmemq`, `Bassq` and `Bmember` over the first [`MEMQ_INLINE_STEPS`]
+/// `Bmemq`, `Bassq` and `Bmember` over the first [`memq_inline_steps`]
 /// conses of a list, by bit identity -- exactly `memq_fast`/`assq_fast`'s
 /// rule: only while `symbols-with-pos-enabled` is off (`eq` then looks
 /// through positions), a match found before the builtin's cycle check
@@ -666,7 +683,7 @@ fn emit_memq(
     fb.seal_block(next);
     let d = cons_field(fb, t, true);
     let n2 = iadd_imm_p(fb, n, 1);
-    let within = icmp_imm_p(fb, IntCC::SignedLessThan, n2, MEMQ_INLINE_STEPS);
+    let within = icmp_imm_p(fb, IntCC::SignedLessThan, n2, memq_inline_steps());
     fb.ins().brif(
         within,
         head,
