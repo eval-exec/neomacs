@@ -1031,7 +1031,8 @@ fn harness_built_from_dirty_tracked_sources_cannot_be_acceptance_evidence() {
 }
 
 /// The editor child gets the allowlisted host variables plus any operator-set
-/// JIT master switch, `NEOVM_JIT_*` diagnostic knob or explicit OSR trace.
+/// JIT master switch, `NEOVM_JIT_*` diagnostic knob, explicit OSR trace or
+/// allowlisted collector knob (not the GC trace, not the logging filter).
 #[test]
 fn benchmark_environment_forwards_the_allowlist_and_jit_knobs_only() {
     use std::ffi::OsString;
@@ -1046,6 +1047,9 @@ fn benchmark_environment_forwards_the_allowlist_and_jit_knobs_only() {
         (os("NEOMACS_OSR_DEBUG"), os("1")),
         (os("NEOMACS_OSR_UNRELATED"), os("1")),
         (os("NEOVM_GC_TRACE"), os("1")),
+        (os("NEOVM_GC_CHUNK_MAP"), os("1")),
+        (os("NEOVM_GC_CENSUS"), os("1")),
+        (os("NEOVM_GC_CENSUS_FILE"), os("/tmp/census.log")),
         (os("NEOVM_BUILTIN_FRONTEND"), os("off")),
         (os("NEOVM_TEXT_LINE_INDEX"), os("verify")),
         (os("NEOVM_TEXT_LINE_INDEX_STATS"), os("1")),
@@ -1065,6 +1069,9 @@ fn benchmark_environment_forwards_the_allowlist_and_jit_knobs_only() {
         [
             "NEOMACS_OSR_DEBUG",
             "NEOVM_BUILTIN_FRONTEND",
+            "NEOVM_GC_CENSUS",
+            "NEOVM_GC_CENSUS_FILE",
+            "NEOVM_GC_CHUNK_MAP",
             "NEOVM_JIT",
             "NEOVM_JIT_PROFILE",
             "NEOVM_JIT_THRESHOLD",

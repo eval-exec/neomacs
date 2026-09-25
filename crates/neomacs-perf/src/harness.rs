@@ -1450,6 +1450,14 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     "NEOVM_SYNTAX_PARSE_CACHE_CHUNK",
     "NEOVM_SYNTAX_PARSE_CACHE_MIN_SPAN",
     "NEOVM_SYNTAX_PARSE_CACHE_STATS",
+    // Collector knobs (same-binary A/B; each defaults to the old path): the
+    // chunk map (`=1`), falsifier F-G's vector deferral (`=defer`), and the
+    // generation census (`=1`), whose records go to the census file.
+    "NEOVM_GC_CHUNK_MAP",
+    "NEOVM_GC_VEC_SCAN",
+    "NEOVM_GC_CENSUS",
+    "NEOVM_GC_CENSUS_REMSET",
+    "NEOVM_GC_CENSUS_FILE",
 ];
 
 pub(crate) fn configure_benchmark_environment(command: &mut Command, sandbox: &MelpaSandbox) {

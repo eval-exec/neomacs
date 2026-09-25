@@ -254,3 +254,26 @@ fn census_changes_nothing_it_measures() {
     assert_eq!(run(CensusMode::Off), run(CensusMode::Survivors));
     assert_eq!(run(CensusMode::Off), run(CensusMode::SurvivorsAndRemset));
 }
+
+/// `NEOVM_GC_CENSUS_FILE`: every record is also appended to the file, one
+/// line per cycle, in the format `tmp/census/parse_census.py` reads.
+#[test]
+fn census_records_go_to_the_census_file() {
+    let dir = crate::test_utils::workspace_root().join("tmp");
+    std::fs::create_dir_all(&dir).expect("tmp dir");
+    let path = dir.join(format!("census-file-test-{}.log", std::process::id()));
+    let _ = std::fs::remove_file(&path);
+    // SAFETY: nextest runs each test in its own process; the census reads
+    // the variable once, at its first record below.
+    unsafe { std::env::set_var("NEOVM_GC_CENSUS_FILE", &path) };
+    let mut heap = census_heap(CensusMode::Survivors);
+    let a = list(&mut heap, 5);
+    heap.collect_exact(std::iter::once(a));
+    heap.collect_exact(std::iter::once(a));
+    let text = std::fs::read_to_string(&path).expect("the census file");
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 2, "{text}");
+    assert!(lines[0].starts_with("NEOVM_GC census gc#"), "{text}");
+    assert!(lines[1].contains("old_surv=(5,0,"), "{text}");
+    let _ = std::fs::remove_file(&path);
+}

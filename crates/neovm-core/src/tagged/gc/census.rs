@@ -29,7 +29,10 @@
 //!
 //! One record per cycle goes to the `neovm::gc::census` tracing target at
 //! INFO, e.g. with `RUST_LOG=neovm::gc::census=info
-//! NEOMACS_LOG_FILE=census.log` (see [`CensusRecord`]'s `Display`).
+//! NEOMACS_LOG_FILE=census.log` (see [`CensusRecord`]'s `Display`), and,
+//! when `NEOVM_GC_CENSUS_FILE=<path>` is set, is appended to that file as
+//! well: a measurement data file, like the perf harness's other report
+//! files, which the harness forwards where it does not forward logging.
 
 use super::mark_sweep::VisitChild;
 use super::*;
@@ -297,6 +300,12 @@ impl TaggedHeap {
         }
 
         tracing::info!(target: "neovm::gc::census", "{record}");
+        if let Some(file) = census_file() {
+            use std::io::Write;
+            if let Ok(mut file) = file.lock() {
+                let _ = writeln!(file, "{record}");
+            }
+        }
         census.last = Some(record);
         self.census = Some(census);
     }
@@ -384,6 +393,33 @@ impl TaggedHeap {
     pub(crate) fn last_census_for_test(&self) -> Option<CensusRecord> {
         self.census.as_deref().and_then(|census| census.last)
     }
+}
+
+/// The census data file (`NEOVM_GC_CENSUS_FILE`), opened for appending
+/// once per process; `None` when unset or unopenable (the tracing record
+/// still goes out).
+fn census_file() -> Option<&'static std::sync::Mutex<std::fs::File>> {
+    static FILE: std::sync::OnceLock<Option<std::sync::Mutex<std::fs::File>>> =
+        std::sync::OnceLock::new();
+    FILE.get_or_init(|| {
+        let path = std::env::var_os("NEOVM_GC_CENSUS_FILE")?;
+        match std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
+            Ok(file) => Some(std::sync::Mutex::new(file)),
+            Err(error) => {
+                tracing::warn!(
+                    target: "neovm::gc::census",
+                    "cannot open NEOVM_GC_CENSUS_FILE {}: {error}",
+                    std::path::Path::new(&path).display()
+                );
+                None
+            }
+        }
+    })
+    .as_ref()
 }
 
 /// Whether the remembered-set probe is on for this process: the barrier's

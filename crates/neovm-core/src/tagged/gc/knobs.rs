@@ -5,6 +5,7 @@
 //! |---|---|---|
 //! | `NEOVM_GC_CENSUS=1` | off | the generation census, one record per cycle (`census.rs`) |
 //! | `NEOVM_GC_CENSUS_REMSET=1` | off | the census plus its remembered-set estimate: the barrier window covers every owner, so every store reaches the census |
+//! | `NEOVM_GC_CENSUS_FILE=<path>` | unset | also append each census record to this file (read once, by `census.rs`) |
 //! | `NEOVM_GC_CHUNK_MAP=1` | off | page and block ownership through the chunk map (`chunk_map.rs`), on the mutator and on the GC thread |
 //! | `NEOVM_GC_VEC_SCAN=defer` | `snapshot` | MEASUREMENT ONLY (falsifier F-G (c), P3.2 F1b): no Tier-B vector snapshot and no vector claims, so page vectors defer to the stop-the-world termination and are traced by reachability |
 //!
