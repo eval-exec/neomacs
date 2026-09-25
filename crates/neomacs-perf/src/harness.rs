@@ -1433,6 +1433,14 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     // no-lexvars closure path (`on`).
     "NEOVM_CCONV_MEMO",
     "NEOVM_CCONV_FAST",
+    // P3.4 text line index: `off` (default), `on` or `verify`, its size
+    // thresholds, and the exit report of builds, copies and served queries.
+    "NEOVM_TEXT_LINE_INDEX",
+    "NEOVM_TEXT_LINE_INDEX_MIN_BYTES",
+    "NEOVM_TEXT_LINE_INDEX_CHUNK",
+    "NEOVM_TEXT_LINE_INDEX_QUERY_BYTES",
+    "NEOVM_TEXT_LINE_INDEX_QUERY_LINES",
+    "NEOVM_TEXT_LINE_INDEX_STATS",
 ];
 
 pub(crate) fn configure_benchmark_environment(command: &mut Command, sandbox: &MelpaSandbox) {

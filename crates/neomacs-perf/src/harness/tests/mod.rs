@@ -1047,6 +1047,9 @@ fn benchmark_environment_forwards_the_allowlist_and_jit_knobs_only() {
         (os("NEOMACS_OSR_UNRELATED"), os("1")),
         (os("NEOVM_GC_TRACE"), os("1")),
         (os("NEOVM_BUILTIN_FRONTEND"), os("off")),
+        (os("NEOVM_TEXT_LINE_INDEX"), os("verify")),
+        (os("NEOVM_TEXT_LINE_INDEX_STATS"), os("1")),
+        (os("NEOVM_TEXT_LINE_INDEXING"), os("unrelated")),
         (os("RUST_LOG"), os("debug")),
     ];
     let mut forwarded: Vec<String> = crate::harness::passthrough_from(vars)
@@ -1062,6 +1065,8 @@ fn benchmark_environment_forwards_the_allowlist_and_jit_knobs_only() {
             "NEOVM_JIT",
             "NEOVM_JIT_PROFILE",
             "NEOVM_JIT_THRESHOLD",
+            "NEOVM_TEXT_LINE_INDEX",
+            "NEOVM_TEXT_LINE_INDEX_STATS",
             "PATH"
         ]
     );
