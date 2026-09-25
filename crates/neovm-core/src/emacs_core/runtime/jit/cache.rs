@@ -1274,9 +1274,10 @@ pub(crate) fn collect_jit_reloc_gc_roots(roots: &mut Vec<Value>) {
     });
 }
 
-/// GC handshake size probe: `(total COMPILED cache entries plus retired
-/// leaves, total reloc slots the root walk visits)` — the O() inputs of
-/// `collect_jit_reloc_gc_roots`. Read-only; called once per handshake
+/// GC handshake size probe: `(total COMPILED cache entries, total reloc slots
+/// the root walk visits)` — the O() inputs of `collect_jit_reloc_gc_roots`.
+/// The slots include the retired leaves' (the walk roots them too); the
+/// entry count stays the cache's own. Read-only; called once per handshake
 /// OUTSIDE the timed pause window.
 pub(crate) fn compiled_cache_probe() -> (usize, usize) {
     COMPILED.with(|c| {
@@ -1289,7 +1290,7 @@ pub(crate) fn compiled_cache_probe() -> (usize, usize) {
             })
             .sum();
         let retired: usize = cache.retired.iter().map(|l| l.reloc_values().len()).sum();
-        (cache.len() + cache.retired.len(), live + retired)
+        (cache.len(), live + retired)
     })
 }
 

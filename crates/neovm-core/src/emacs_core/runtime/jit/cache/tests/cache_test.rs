@@ -594,8 +594,8 @@ fn retired_leaf_is_marked_and_its_constants_stay_rooted() {
     );
     assert_eq!(
         compiled_cache_probe(),
-        (entries_before, slots_before),
-        "the probe counts the retired leaf where it counted the live one"
+        (entries_before - 1, slots_before),
+        "the entry is gone; the probe still counts the retired leaf's reloc slots"
     );
 }
 
