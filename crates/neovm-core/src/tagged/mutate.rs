@@ -110,12 +110,13 @@ pub fn set_record_slot(value: TaggedValue, index: usize, item: TaggedValue) -> b
     }
     let ptr = value.as_veclike_ptr().unwrap() as *mut RecordObj;
     let data = unsafe { (*ptr).data.ensure_owned() };
-    let slot = match data.get_mut(index) {
-        Some(slot) => slot,
-        None => return false,
-    };
+    if index >= data.len() {
+        return false;
+    }
     note_heap_slot_write(value, HeapWriteKind::RecordSlot, index, item);
-    *slot = item;
+    // Atomic store, as for vector slots: a concurrent reader of the slot
+    // (the GC thread, once records are traced there) sees a whole value.
+    unsafe { (*ptr).data.store_atomic(index, item) };
     true
 }
 
@@ -154,28 +155,28 @@ pub fn replace_closure_slots(value: TaggedValue, slots: Vec<TaggedValue>) -> boo
 #[inline]
 pub fn set_closure_slot(value: TaggedValue, index: usize, item: TaggedValue) -> bool {
     match value.veclike_type() {
+        // Atomic stores, as for vector slots: a concurrent reader of the slot
+        // (the GC thread, once closures are traced there) sees a whole value.
         Some(VecLikeType::Lambda) => unsafe {
             let ptr = value.as_veclike_ptr().unwrap() as *mut LambdaObj;
             let obj = &mut *ptr;
             let _ = obj.parsed_params.take();
-            let slot = match obj.data.get_mut(index) {
-                Some(slot) => slot,
-                None => return false,
-            };
+            if index >= obj.data.ensure_owned().len() {
+                return false;
+            }
             note_heap_slot_write(value, HeapWriteKind::ClosureSlot, index, item);
-            *slot = item;
+            obj.data.store_atomic(index, item);
             true
         },
         Some(VecLikeType::Macro) => unsafe {
             let ptr = value.as_veclike_ptr().unwrap() as *mut MacroObj;
             let obj = &mut *ptr;
             let _ = obj.parsed_params.take();
-            let slot = match obj.data.get_mut(index) {
-                Some(slot) => slot,
-                None => return false,
-            };
+            if index >= obj.data.ensure_owned().len() {
+                return false;
+            }
             note_heap_slot_write(value, HeapWriteKind::ClosureSlot, index, item);
-            *slot = item;
+            obj.data.store_atomic(index, item);
             true
         },
         _ => false,

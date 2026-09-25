@@ -2574,6 +2574,11 @@ mod cons_alloc_tests;
 pub(crate) mod fake_image;
 #[cfg(test)]
 mod marker_arena_tests;
+/// Record and closure slot stores are atomic: race-free against an atomic
+/// reader, same semantics, same barrier through a concurrent mark.
+#[cfg(test)]
+#[path = "gc/tests/slot_store_tests.rs"]
+mod slot_store_tests;
 #[cfg(test)]
 mod symbol_with_pos_arena_tests;
 
