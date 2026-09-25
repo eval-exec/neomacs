@@ -31,6 +31,7 @@ use neomacs_display_protocol::types::Rect;
 use neovm_core::buffer::position::LispCharPos1;
 use neovm_core::window::{DisplayPointSnapshot, DisplayRowSnapshot};
 
+pub(crate) mod edit_sync;
 pub(crate) mod mode_line_gate;
 
 /// How a window's layout was produced this cycle.
@@ -652,6 +653,11 @@ pub struct ScrollReplay {
     /// checks for optimization 1). The render drops the chrome and evaluates
     /// the mode line when the walk breaks it. `None` = no post-walk check.
     pub(crate) one_line_contract: Option<mode_line_gate::OneLineContract>,
+    /// `NEOMACS_LAYOUT_EDIT_SYNC=sync`: the rows below the edit the walk may
+    /// synchronize with (GNU `try_window_id`). The walk runs unbounded and
+    /// stops where the next row would begin at the plan's `stop_charpos`;
+    /// only then are these rows installed, moved by what the walk produced.
+    pub(crate) sync: Option<edit_sync::EditSyncPlan>,
     /// An edit replay (window-start kept), as opposed to a scroll.
     pub(crate) edit: bool,
     /// Sealed frame-face generation that owns every ID in `reused_rows`.
@@ -665,23 +671,55 @@ pub struct ScrollReplay {
 /// identities in this type prevents commit and renderer provenance from
 /// reconstructing a different set of rows from a lossy count.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct ReusedMatrixRows(std::collections::BTreeSet<usize>);
+pub(crate) struct ReusedMatrixRows {
+    rows: std::collections::BTreeSet<usize>,
+    /// The subset that moved vertically, with the shift's `f32` bits: an
+    /// edit replay that synchronized below a span which changed height
+    /// (`NEOMACS_LAYOUT_EDIT_SYNC`).
+    shifted: Option<(std::collections::BTreeSet<usize>, u32)>,
+}
 
 impl ReusedMatrixRows {
     pub(crate) fn from_indices(indices: impl IntoIterator<Item = usize>) -> Self {
-        Self(indices.into_iter().collect())
+        Self {
+            rows: indices.into_iter().collect(),
+            shifted: None,
+        }
     }
 
     pub(crate) fn from_replay_rows(rows: &[(usize, MatrixRow)]) -> Self {
         Self::from_indices(rows.iter().map(|(index, _)| *index))
     }
 
+    /// Record that the rows at `indices` (already among the reused rows)
+    /// moved down by `dy` pixels.
+    pub(crate) fn with_shift(mut self, indices: impl IntoIterator<Item = usize>, dy: f32) -> Self {
+        let indices: std::collections::BTreeSet<usize> = indices.into_iter().collect();
+        if !indices.is_empty() && dy != 0.0 {
+            self.shifted = Some((indices, dy.to_bits()));
+        }
+        self
+    }
+
     pub(crate) fn contains(&self, index: usize) -> bool {
-        self.0.contains(&index)
+        self.rows.contains(&index)
     }
 
     pub(crate) fn len(&self) -> usize {
-        self.0.len()
+        self.rows.len()
+    }
+
+    /// The vertical shift the row at `index` took, if it moved.
+    pub(crate) fn shift_of(&self, index: usize) -> Option<f32> {
+        self.shifted
+            .as_ref()
+            .filter(|(rows, _)| rows.contains(&index))
+            .map(|(_, dy)| f32::from_bits(*dy))
+    }
+
+    /// How many of the reused rows moved vertically.
+    pub(crate) fn shifted_len(&self) -> usize {
+        self.shifted.as_ref().map_or(0, |(rows, _)| rows.len())
     }
 }
 
@@ -829,10 +867,18 @@ impl CursorOnlyReplay {
 
 impl ScrollReplay {
     pub(crate) fn retained_face_ids(&self) -> Vec<FaceId> {
+        // The rows an edit sync may install are retained rows too: their
+        // faces must be admitted with the rest, whether or not the walk ends
+        // up synchronizing.
+        let sync_rows = self
+            .sync
+            .iter()
+            .flat_map(|plan| plan.rows.iter().map(|(_, row)| row.as_ref()));
         referenced_face_ids(
             self.reused_rows
                 .iter()
                 .map(|(_, row)| row.as_ref())
+                .chain(sync_rows)
                 .chain(chrome_face_ids(self.chrome.as_ref())),
         )
     }
@@ -1251,6 +1297,7 @@ impl RetainedWindowMatrix {
             expected_walk: None,
             chrome: None,
             one_line_contract: None,
+            sync: None,
             edit: false,
             face_generation: self.face_generation,
         })
@@ -1270,6 +1317,29 @@ impl RetainedWindowMatrix {
         damage: EditDamage,
         allow_below_reuse: bool,
     ) -> Option<ScrollReplay> {
+        self.edit_replay_with(
+            curr,
+            damage,
+            if allow_below_reuse {
+                edit_sync::BelowReuse::Prove
+            } else {
+                edit_sync::BelowReuse::Off
+            },
+        )
+    }
+
+    /// [`Self::edit_replay`] with the below-reuse strategy spelled out:
+    /// [`edit_sync::BelowReuse::Sync`] synchronizes the walk with the first
+    /// unchanged row the way GNU's `try_window_id` does instead of proving
+    /// ahead that every changed line stays one row.
+    pub(crate) fn edit_replay_with(
+        &self,
+        curr: &RetainedWindowKey,
+        damage: EditDamage,
+        below: edit_sync::BelowReuse,
+    ) -> Option<ScrollReplay> {
+        let allow_below_reuse = below.prove_allowed();
+        let sync = matches!(below, edit_sync::BelowReuse::Sync { .. });
         let dirty_start = damage.start();
         let dirty_end_old = damage.end_old();
         let span_newlines = damage.span_newlines();
@@ -1337,8 +1407,18 @@ impl RetainedWindowMatrix {
         // the rows below still reuse shifted (GNU `try_window_id` regenerates
         // from the first row and syncs up with the rest the same way); only
         // the above-only fallback at the end has nothing to offer then.
-        let first_dirty_by_charpos =
+        let mut first_dirty_by_charpos =
             (0..body.len()).position(|index| row_extent_end(index) >= topology_dirty_start)?;
+        // The lookbehind only matters for a row that carries a box face: its
+        // final glyph's box-run ownership is the one thing that depends on
+        // the next character. Under `sync` a plain predecessor is not pulled
+        // into the walk (the prove path keeps its historical widening).
+        if sync
+            && first_dirty_by_charpos < damage_first_by_charpos
+            && !edit_sync::row_has_boxed_glyph(body[first_dirty_by_charpos].1)
+        {
+            first_dirty_by_charpos = damage_first_by_charpos;
+        }
         // A row's CHARPOS is unchanged above the edit, but its pointer
         // identities (mouse-face source ranges, display-replacement anchors)
         // carry the RANGE's positions, and a range reaching the edit point is
@@ -1430,6 +1510,30 @@ impl RetainedWindowMatrix {
         // gate: it defaults to TRUE at every `LayoutEngine` construction site,
         // so below-reuse is the production path. Tests flip it off to isolate
         // above-only reuse.
+        if sync && let Some(plan) = edit_sync::plan(self, &body, first_dirty, damage) {
+            return Some(ScrollReplay {
+                dvpos: 0.0,
+                reused_rows,
+                reused_row_snapshots,
+                reused_points,
+                walk_start: PartialBodyWalkStart::new(dirty_row.start_charpos as i64),
+                exposed_row_base: body[first_dirty].0,
+                // The walk is not bounded by a row count: it runs until it
+                // synchronizes with `plan` or reaches the window bottom.
+                exposed_row_count: body.len() - first_dirty,
+                exposed_text_y: dirty_row.pixel_y,
+                new_window_start: curr.window_start,
+                new_point: curr.point,
+                bound_walk: false,
+                expected_walk: None,
+                chrome: None,
+                one_line_contract: None,
+                sync: Some(plan),
+                edit: true,
+                face_generation: self.face_generation,
+            });
+        }
+
         if allow_below_reuse {
             let delta = damage.delta();
             debug_assert_eq!(
@@ -1629,6 +1733,7 @@ impl RetainedWindowMatrix {
                     }),
                     chrome: None,
                     one_line_contract: None,
+                    sync: None,
                     edit: true,
                     face_generation: self.face_generation,
                 });
@@ -1655,6 +1760,7 @@ impl RetainedWindowMatrix {
             expected_walk: None,
             chrome: None,
             one_line_contract: None,
+            sync: None,
             edit: true,
             face_generation: self.face_generation,
         })

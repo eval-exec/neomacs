@@ -365,7 +365,7 @@ impl OneLineBufferProbe for neovm_core::buffer::Buffer {
 /// Whether a buffer runs bidi reordering with an automatic paragraph
 /// direction: `bidi-display-reordering` non-nil and `bidi-paragraph-direction`
 /// nil (xdisp.c:17030-17035).
-fn bidi_auto_paragraph(buffer: &neovm_core::buffer::Buffer) -> bool {
+pub(crate) fn bidi_auto_paragraph(buffer: &neovm_core::buffer::Buffer) -> bool {
     let non_nil = |name: &str| buffer.buffer_local_value(name).is_some_and(|v| !v.is_nil());
     non_nil("bidi-display-reordering") && !non_nil("bidi-paragraph-direction")
 }

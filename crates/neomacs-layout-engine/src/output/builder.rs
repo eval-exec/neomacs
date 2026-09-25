@@ -50,6 +50,10 @@ pub(crate) struct DisplayOutputBuilder {
     window_state: OutputWindowBuildState,
     frame_state: OutputFrameBuildState,
     face_attempt: FrameFaceAttempt,
+    /// P3.5 G2: the synchronization point of the edit-replay walk in
+    /// progress (`None` outside one), and where it was reached.
+    edit_sync: Option<crate::incremental_layout::edit_sync::EditSyncStop>,
+    edit_sync_reached: Option<crate::incremental_layout::edit_sync::EditSyncReached>,
 }
 
 impl DisplayOutputBuilder {
@@ -58,7 +62,48 @@ impl DisplayOutputBuilder {
             window_state: OutputWindowBuildState::new(),
             frame_state: OutputFrameBuildState::new(),
             face_attempt: FrameFaceArena::default().begin_attempt(),
+            edit_sync: None,
+            edit_sync_reached: None,
         }
+    }
+
+    /// Arm the walk that follows to stop where it synchronizes with the rows
+    /// below an edit (P3.5 G2).
+    pub(crate) fn begin_edit_sync(
+        &mut self,
+        stop: crate::incremental_layout::edit_sync::EditSyncStop,
+    ) {
+        self.edit_sync = Some(stop);
+        self.edit_sync_reached = None;
+    }
+
+    /// Disarm the synchronization and report where the walk reached it.
+    pub(crate) fn finish_edit_sync(
+        &mut self,
+    ) -> Option<crate::incremental_layout::edit_sync::EditSyncReached> {
+        self.edit_sync = None;
+        self.edit_sync_reached.take()
+    }
+
+    /// Whether the row about to begin is where an armed edit-replay walk
+    /// synchronizes; records the point and disarms when it is.
+    #[inline]
+    pub(crate) fn edit_sync_stops_before(
+        &mut self,
+        start: crate::types::LayoutCharPos0,
+        y: f32,
+        display_row_index: usize,
+    ) -> bool {
+        let Some(stop) = self.edit_sync else {
+            return false;
+        };
+        let window_y = self.window_state.current_window_pixel_bounds().y;
+        let Some(reached) = stop.reached_at(start, y - window_y, display_row_index) else {
+            return false;
+        };
+        self.edit_sync = None;
+        self.edit_sync_reached = Some(reached);
+        true
     }
 
     pub(crate) fn set_face_attempt(&mut self, face_attempt: FrameFaceAttempt) {
@@ -68,6 +113,8 @@ impl DisplayOutputBuilder {
     pub(crate) fn reset(&mut self) {
         self.window_state.reset();
         self.frame_state.reset();
+        self.edit_sync = None;
+        self.edit_sync_reached = None;
     }
 
     #[cfg(test)]
@@ -677,6 +724,8 @@ impl DisplayOutputBuilder {
             window_state,
             frame_state,
             face_attempt,
+            edit_sync: _,
+            edit_sync_reached: _,
         } = self;
         let mut state = FrameDisplayState::new(frame_cols, frame_rows, char_width, char_height);
         state.frame_pixel_width = frame_pixel_width;

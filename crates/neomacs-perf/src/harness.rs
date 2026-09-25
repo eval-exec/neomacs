@@ -1421,6 +1421,9 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     // P3.5 U3.7. An edit frame's mode line by GNU's optimization-1 guard:
     // `legacy` (default) or `gnu`.
     "NEOMACS_MODE_LINE_GATE",
+    // Edit replays synchronize with the rows below the edit (GNU
+    // try_window_id): `prove` (default) or `sync`.
+    "NEOMACS_LAYOUT_EDIT_SYNC",
     // U2.8 builtin front-end diets: `=off` restores the general search,
     // syntax and text-property paths for a same-binary board A/B.
     "NEOVM_BUILTIN_FRONTEND",

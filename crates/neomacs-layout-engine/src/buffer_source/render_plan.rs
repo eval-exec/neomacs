@@ -979,6 +979,16 @@ impl BufferSourceOutputSetup {
         // re-walk chrome. Byte-identical to a full rebuild of the scrolled window.
         if let Some(mut scroll) = scroll {
             let retained_chrome = scroll.chrome.take();
+            // Window-relative y past which a row is not visible.
+            let visible_bottom = geometry.visibility_bottom_y - params.bounds.y;
+            // P3.5 G2: arm the walk to stop where it synchronizes with the
+            // rows below the edit (GNU try_window_id's stop_pos).
+            if let Some(plan) = scroll.sync.as_ref() {
+                output
+                    .output_target()
+                    .builder()
+                    .begin_edit_sync(plan.stop());
+            }
             // Phase A already admitted the frame-wide retained face namespace
             // before this partial walk can mint IDs.
             let (mut output_emitter, post_loop) = walk_setup.begin_render_body_and_tail(
@@ -1001,6 +1011,33 @@ impl BufferSourceOutputSetup {
                 buf_access,
             );
             let (mut output, evaluator) = output.into_parts();
+            // The rows below the edit move by what the walk produced; a walk
+            // that never synchronized ran to the window bottom instead and
+            // produced those rows itself.
+            let edit_sync_reached = output.builder().finish_edit_sync();
+            let mut edit_sync_shift = None;
+            // Where the walked rows end when the walk synchronized: the first
+            // synchronized row starts here.
+            let mut synced_stop = None;
+            if let Some(plan) = scroll.sync.take()
+                && let Some(reached) = edit_sync_reached
+            {
+                synced_stop = Some(plan.stop_charpos as i64);
+                let placed = plan.install(reached, visible_bottom, geometry.mode_line_display_row);
+                edit_sync_shift = Some((
+                    placed
+                        .rows
+                        .iter()
+                        .map(|(index, _)| *index)
+                        .collect::<Vec<_>>(),
+                    placed.dy,
+                ));
+                scroll.reused_rows.extend(placed.rows);
+                scroll.reused_row_snapshots.extend(placed.row_snapshots);
+                scroll.reused_points.extend(placed.points);
+            }
+            // Whether reused rows sit BELOW the walked span.
+            let below_reused = scroll.bound_walk || edit_sync_shift.is_some();
 
             // Post-walk validation (GNU try_window_id: the regenerated region
             // must sync back up with the reused rows). The bounded walk just
@@ -1052,7 +1089,7 @@ impl BufferSourceOutputSetup {
             //  - BELOW-REUSE (bound_walk): reused rows sit BELOW the exposed
             //    (edited) line, so the last visible row is the last reused-below
             //    row — compute AFTER they are spliced into the emitter.
-            let scroll_positions = (!scroll.bound_walk).then(|| {
+            let scroll_positions = (!below_reused).then(|| {
                 TextWindowRedisplayPositions::from_output_rows(
                     &output_emitter,
                     scroll.new_window_start,
@@ -1063,8 +1100,31 @@ impl BufferSourceOutputSetup {
 
             // Install the reused (shifted, already-finalized) rows and splice
             // their snapshots/points into the emitter.
-            let reused_matrix_rows =
+            // The walk asks for the cursor whenever point lies between
+            // window-start and where its source ends, so for a point in the
+            // reused rows above it -- or in the synchronized rows below it --
+            // the cursor it publishes is not point's. Such a point is found in
+            // the reused rows like one the walk never asked for.
+            let point_in_walk = scroll.new_point >= scroll.walk_start.get()
+                && synced_stop.is_none_or(|stop| scroll.new_point < stop);
+            let cursor_status = {
+                use crate::display_text_window_row_lifecycle::TextWindowCursorPublishStatus;
+                match post_loop.cursor_publish_status {
+                    TextWindowCursorPublishStatus::Published
+                    | TextWindowCursorPublishStatus::NoWindowCursor
+                    | TextWindowCursorPublishStatus::Clipped
+                        if !point_in_walk =>
+                    {
+                        TextWindowCursorPublishStatus::MissingCapture
+                    }
+                    status => status,
+                }
+            };
+            let mut reused_matrix_rows =
                 crate::incremental_layout::ReusedMatrixRows::from_replay_rows(&scroll.reused_rows);
+            if let Some((shifted, dy)) = edit_sync_shift.take() {
+                reused_matrix_rows = reused_matrix_rows.with_shift(shifted, dy);
+            }
             for (idx, row) in &scroll.reused_rows {
                 output
                     .builder()
@@ -1078,11 +1138,12 @@ impl BufferSourceOutputSetup {
             // back on from its glyphs (the end of a line, an empty line), and a
             // full layout is what places it -- GNU's try_window_id likewise
             // gives up when it cannot find the cursor (xdisp.c:23077-23110).
+            // A synchronized walk that pushed point's row partly below the
+            // window lands here too.
             if scroll.edit {
                 use crate::display_text_window_row_lifecycle::TextWindowCursorPublishStatus;
                 let point = scroll.new_point.max(0) as usize;
-                let visible_bottom = geometry.visibility_bottom_y - params.bounds.y;
-                let point_row_on_screen = match post_loop.cursor_publish_status {
+                let point_row_on_screen = match cursor_status {
                     // The cursor snapshot is text-area relative.
                     TextWindowCursorPublishStatus::Published => {
                         output_emitter.phys_cursor().is_some_and(|cursor| {
@@ -1119,7 +1180,7 @@ impl BufferSourceOutputSetup {
                     walk_setup.byte_idx,
                 )
             });
-            if scroll.bound_walk {
+            if below_reused {
                 // The bounded walk's `byte_idx` stops at the edited line, so the
                 // from_output_rows window_end_byte points there, not at the last
                 // reused-below row. Re-derive it from the (correct) window_end
@@ -1159,7 +1220,7 @@ impl BufferSourceOutputSetup {
             // cannot be reconstructed from buffer glyph spans alone.
             // Reused rows arrive without cursor decorations.
             use crate::display_text_window_row_lifecycle::TextWindowCursorPublishStatus;
-            let cursor_row = match post_loop.cursor_publish_status {
+            let cursor_row = match cursor_status {
                 TextWindowCursorPublishStatus::Published
                 | TextWindowCursorPublishStatus::NoWindowCursor
                 | TextWindowCursorPublishStatus::Clipped => None,

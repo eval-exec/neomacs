@@ -498,7 +498,13 @@ pub(crate) fn transition_text_window_row_with_limit(
     transition: DisplayTextRowGeometryTransition,
     max_rows: usize,
 ) -> DisplayTextRowTransition {
-    if transition.begin_row.row >= max_rows {
+    if transition.begin_row.row >= max_rows
+        || output.builder().edit_sync_stops_before(
+            transition.begin_row.start_charpos,
+            transition.begin_row.y,
+            transition.begin_row.display_row_index,
+        )
+    {
         finish_and_end_text_window_row(output.reborrow(), output_emitter, transition.finished_row);
         return DisplayTextRowTransition::ExhaustedRows;
     }

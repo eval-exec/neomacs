@@ -2884,9 +2884,13 @@ impl LayoutEngine {
                     next_layout_stats.relaid_body_rows += enabled_body - reused;
                     next_layout_stats.record_window_class(LayoutClass::Scroll);
                 } else if let Some(ref reused) = edit_reused {
-                    // Rows outside the regenerated edit span reused verbatim.
+                    // Rows outside the regenerated edit span reused verbatim;
+                    // under the edit sync the rows below a span that changed
+                    // height are reused shifted.
+                    let shifted = reused.shifted_len();
                     let reused = reused.len().min(enabled_body);
-                    next_layout_stats.reused_rows += reused;
+                    next_layout_stats.reused_rows += reused.saturating_sub(shifted);
+                    next_layout_stats.reused_shifted_rows += shifted.min(reused);
                     next_layout_stats.relaid_body_rows += enabled_body - reused;
                     next_layout_stats.record_window_class(LayoutClass::Edit);
                 } else {
@@ -2918,10 +2922,12 @@ impl LayoutEngine {
                                 RowDamage::New
                             }
                         } else if let Some(ref reused) = edit_reused {
-                            if reused.contains(idx) {
-                                RowDamage::Reused
-                            } else {
+                            if !reused.contains(idx) {
                                 RowDamage::New
+                            } else if let Some(dy) = reused.shift_of(idx) {
+                                RowDamage::ReusedShifted { dvpos: Px(dy) }
+                            } else {
+                                RowDamage::Reused
                             }
                         } else {
                             RowDamage::New
@@ -3387,7 +3393,24 @@ impl LayoutEngine {
                 EditReplayStructureProperty::symbols(),
             );
         let damage = EditDamage::new(dirty_start, dirty_end, delta, span_newlines);
-        let Some(mut replay) = prev.edit_replay(&curr_key, damage, span_structure_safe) else {
+        // P3.5 G2: under NEOMACS_LAYOUT_EDIT_SYNC=sync the rows below the edit
+        // are reused by synchronizing the walk with them (GNU try_window_id),
+        // which needs none of the span proofs above; they remain the fallback
+        // when no row below can be synchronized with.
+        use crate::incremental_layout::edit_sync::{self, BelowReuse, EditSyncMode};
+        let below = if self.allow_below_reuse
+            && edit_sync::edit_sync_mode() == EditSyncMode::Sync
+            && edit_sync::sync_allowed(&curr_key, params.scroll_margin, buffer)
+        {
+            BelowReuse::Sync {
+                prove_fallback: span_structure_safe,
+            }
+        } else if span_structure_safe {
+            BelowReuse::Prove
+        } else {
+            BelowReuse::Off
+        };
+        let Some(mut replay) = prev.edit_replay_with(&curr_key, damage, below) else {
             if tracing::enabled!(tracing::Level::DEBUG) {
                 let body: Vec<&neomacs_display_protocol::glyph_matrix::GlyphRow> = prev
                     .matrix

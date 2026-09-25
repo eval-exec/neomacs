@@ -561,6 +561,7 @@ impl<'a> OverlayStringRowBreakRenderContext<'a> {
             .output_render()
             .transition_text_row_with_limit(geometry_transition, self.row_context.max_rows);
         if row_transition.is_exhausted() {
+            state.geometry.exhaust_rows(self.row_context.max_rows);
             return DisplayRowTransitionContinuation::Exhausted;
         }
 

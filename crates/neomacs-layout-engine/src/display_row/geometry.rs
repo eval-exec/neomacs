@@ -665,6 +665,15 @@ impl DisplayRowGeometryState {
         self.row < limit.max_rows
     }
 
+    /// The walk ended at a row boundary before reaching `max_rows` (an edit
+    /// replay synchronized with the rows below it, P3.5 G2). Leave the
+    /// geometry exactly where row-limit exhaustion leaves it, so the tail
+    /// treats the walk the same way: no pending row to finish, no ZV mark on
+    /// the finished row.
+    pub(crate) fn exhaust_rows(&mut self, max_rows: usize) {
+        self.row = self.row.max(max_rows);
+    }
+
     #[cfg(test)]
     pub(crate) fn rendered_row_count(&self, limit: DisplayRowLimit) -> usize {
         self.row.min(limit.max_rows)

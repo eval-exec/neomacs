@@ -120,7 +120,12 @@ impl<'a> DisplayRowBoundaryTransitionRequest<'a> {
         output_render: TextRowOutputRenderState<'_>,
     ) -> DisplayTextRowTransition {
         let geometry_transition = row_geometry.finish_boundary(self.target);
-        output_render.transition_text_row_with_limit(geometry_transition, self.max_rows)
+        let transition =
+            output_render.transition_text_row_with_limit(geometry_transition, self.max_rows);
+        if transition.is_exhausted() {
+            row_geometry.exhaust_rows(self.max_rows);
+        }
+        transition
     }
 }
 

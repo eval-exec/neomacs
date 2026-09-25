@@ -35,6 +35,7 @@ mod display_motion;
 
 mod edit_replay_point_visibility_test;
 mod edit_replay_row_extent_test;
+mod edit_sync_engine_test;
 #[path = "../../engine_layout_validity_test.rs"]
 mod layout_validity;
 mod mini_window_still_test;
