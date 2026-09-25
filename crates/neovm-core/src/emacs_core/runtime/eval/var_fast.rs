@@ -46,7 +46,7 @@ pub(crate) enum VarCacheTier {
     Set = 1 << 1,
     /// The cached `specbind` (`Bvarbind`, `let`).
     Bind = 1 << 2,
-    /// The cached `do_one_unbind` arms (`Bunbind`, every `unbind_to`).
+    /// The cached `do_one_unbind` arms (`Bunbind`, `unbind_to_with_result`).
     Unbind = 1 << 3,
 }
 

@@ -33,6 +33,7 @@
 //! | `NEOVM_JIT_PROFIT` | on | Profitability gate (calls ≤ arith); `=off` also compiles call-heavy bodies. |
 //! | `NEOVM_JIT_INLINE` | on | Bytecode fuser: splice a constant-bytecode callee into its caller before lowering (`jit/inline.rs`); `=off` disables. |
 //! | `NEOVM_JIT_MIR_OPAQUE` | on | The MIR tier lowers shim-using ops (variable ops, builtins, `eq`, list ops) through the baseline's emitters; `=0`/`off` makes every such op bail the body to the baseline — an A/B of the adapter alone: the tier gate (`gate:loop-opaque`/`generic-call`/`inline-opaque`) applies either way, so it is not the pre-adapter gate. |
+//! | `NEOVM_VAR_CACHE` | on | P1.4 Stage A cached variable tiers (`eval/var_fast.rs`): the read, `setq`, `let` and unbind of a buffer-local or forwarded variable answered from its BLV cache or forwarder, used by the JIT var shims, the interpreter's `varset`/`varbind`/`unbind` and the tree walker's `let`; `=0`/`off`/`none` disables all four, a comma list of `read`,`set`,`bind`,`unbind` enables those (single-build A/B). |
 //!
 //! ## Opt-in features (default-OFF, pending a graduation decision)
 //! | Knob | Enable | Meaning / graduation blocker |
