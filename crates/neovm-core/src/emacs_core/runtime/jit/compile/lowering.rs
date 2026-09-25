@@ -3789,6 +3789,10 @@ pub(crate) fn emit_entry_count(
 
 /// `NEOVM_JIT_DUMP_CLIF=<path>`: append every lowered function's CLIF (with
 /// an `;; ops=N` header) to `path` — the IR-composition census.
+///
+/// Each record is formatted first and appended with ONE write, so processes
+/// sharing the file (a parallel test run) interleave whole records, never
+/// fragments of them: a before/after comparison can then sort the records.
 pub(crate) fn dump_clif(func: &cranelift_codegen::ir::Function, header: &str) {
     use std::sync::OnceLock;
     static PATH: OnceLock<Option<String>> = OnceLock::new();
@@ -3801,7 +3805,8 @@ pub(crate) fn dump_clif(func: &cranelift_codegen::ir::Function, header: &str) {
         .append(true)
         .open(path)
     {
-        let _ = writeln!(f, ";; {header}\n{}\n", func.display());
+        let record = format!(";; {header}\n{}\n\n", func.display());
+        let _ = f.write_all(record.as_bytes());
     }
 }
 
