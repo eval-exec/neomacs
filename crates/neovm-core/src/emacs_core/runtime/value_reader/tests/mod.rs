@@ -1269,21 +1269,21 @@ fn bool_vector_literal_returns_bool_vector_object() {
     crate::test_utils::init_test_tracing();
     let value = read1("#&3\"\x05\"");
 
-    assert!(crate::emacs_core::chartable::is_bool_vector(&value));
+    assert!(crate::emacs_core::boolvec::is_bool_vector(&value));
     assert_eq!(
-        crate::emacs_core::chartable::bool_vector_length(&value),
+        crate::emacs_core::boolvec::bool_vector_length(&value),
         Some(3)
     );
     assert_eq!(
-        crate::emacs_core::chartable::bool_vector_ref_value(&value, 0),
+        crate::emacs_core::boolvec::bool_vector_ref_value(&value, 0),
         Some(Value::T)
     );
     assert_eq!(
-        crate::emacs_core::chartable::bool_vector_ref_value(&value, 1),
+        crate::emacs_core::boolvec::bool_vector_ref_value(&value, 1),
         Some(Value::NIL)
     );
     assert_eq!(
-        crate::emacs_core::chartable::bool_vector_ref_value(&value, 2),
+        crate::emacs_core::boolvec::bool_vector_ref_value(&value, 2),
         Some(Value::T)
     );
 }

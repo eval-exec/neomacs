@@ -120,11 +120,9 @@ pub(crate) fn force_aref_skip_slot0_for_test(on: Option<bool>) {
 /// (`lowering::emit_plain_slot_address`), and the `aset` shim's fast path
 /// without `classify_vector_slots` (`dispatch::aset_fast`). This is what
 /// the inline sequences cost once P3.2 L0 retires every tagged vector.
-/// Default off; `NEOVM_JIT_AREF_SKIP_SLOT0=1` turns it on. With it on,
-/// `aref`/`aset` of a tagged vector answer wrongly, so a run is valid only
-/// when its hot paths create none: every tagged vector created while it is
-/// on is counted and the first one logs a warning
-/// ([`note_tagged_vector_under_skip_slot0`]).
+/// Default off; `NEOVM_JIT_AREF_SKIP_SLOT0=1` turns it on. Since P3.2 L0.8
+/// there are no tagged vectors: a vector whose slot 0 is a tag symbol is a
+/// plain vector, which the shim the test routes it to answers the same.
 pub(crate) fn jit_aref_skip_slot0_on() -> bool {
     #[cfg(test)]
     if let Some(o) = AREF_SKIP_SLOT0_TEST_OVERRIDE.with(|c| c.get()) {
@@ -145,29 +143,6 @@ pub(crate) fn jit_aref_skip_slot0_on() -> bool {
         }
         on
     })
-}
-
-/// Tagged vectors (bool-vectors) created while `NEOVM_JIT_AREF_SKIP_SLOT0`
-/// is on: a nonzero count means the run's inline `aref`/`aset` may have
-/// answered wrongly on one of them.
-pub(crate) static TAGGED_VECTORS_UNDER_SKIP_SLOT0: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
-
-/// A tagged vector is being created: under `NEOVM_JIT_AREF_SKIP_SLOT0`,
-/// count it and warn once (the measurement run is suspect).
-#[cold]
-#[inline(never)]
-pub(crate) fn note_tagged_vector_under_skip_slot0() {
-    if !jit_aref_skip_slot0_on() {
-        return;
-    }
-    let before = TAGGED_VECTORS_UNDER_SKIP_SLOT0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    if before == 0 {
-        tracing::warn!(
-            "NEOVM_JIT_AREF_SKIP_SLOT0 is on and a tagged vector (bool-vector) was created: \
-             inline aref/aset on it answer wrongly, so this run is not a valid measurement"
-        );
-    }
 }
 
 /// Store `setcar`/`setcdr` inline at JIT sites when the cons lies outside

@@ -1,5 +1,4 @@
 use super::*;
-use crate::emacs_core::intern::intern;
 
 // -----------------------------------------------------------------------
 // CaseTable tests
@@ -158,7 +157,7 @@ fn builtin_case_table_p_on_non_table() {
 fn builtin_case_table_p_on_char_table() {
     crate::test_utils::init_test_tracing();
     // A proper char-table with case-table subtype.
-    let ct = make_case_table_value();
+    let ct = make_empty_case_table();
     assert!(builtin_case_table_p(vec![ct]).unwrap().is_t());
 }
 
@@ -203,7 +202,7 @@ fn builtin_standard_case_table_wrong_args() {
 fn builtin_set_case_table_returns_arg() {
     crate::test_utils::init_test_tracing();
     let mut ctx = super::super::eval::Context::new();
-    let table = make_case_table_value();
+    let table = make_empty_case_table();
     let result = builtin_set_case_table(&mut ctx, vec![table]).unwrap();
     assert_eq!(result, table);
 }
@@ -227,7 +226,7 @@ fn builtin_set_case_table_wrong_args() {
 fn builtin_set_standard_case_table_returns_arg() {
     crate::test_utils::init_test_tracing();
     let mut ctx = super::super::eval::Context::new();
-    let table = make_case_table_value();
+    let table = make_empty_case_table();
     let result = builtin_set_standard_case_table(&mut ctx, vec![table]).unwrap();
     assert_eq!(result, table);
 }
@@ -257,7 +256,7 @@ fn evaluator_case_table_roundtrip_and_isolation() {
     let current_id = eval.buffers.current_buffer().expect("current buffer").id;
     let other_id = eval.buffers.create_buffer("*case-other*");
 
-    let custom = make_case_table_value();
+    let custom = make_empty_case_table();
     builtin_set_case_table(&mut eval, vec![custom]).unwrap();
     let after_set = builtin_current_case_table(&mut eval, vec![]).unwrap();
     assert_eq!(after_set, custom);
@@ -367,7 +366,7 @@ fn non_ascii_chars_unchanged() {
 fn is_case_table_on_short_vector() {
     crate::test_utils::init_test_tracing();
     // A vector too short to be a char-table.
-    let v = Value::vector(vec![Value::symbol(intern(CT_CHAR_TABLE_TAG)), Value::NIL]);
+    let v = Value::vector(vec![Value::symbol("--char-table--"), Value::NIL]);
     assert!(!is_case_table(&v));
 }
 
@@ -375,33 +374,27 @@ fn is_case_table_on_short_vector() {
 fn is_case_table_wrong_subtype() {
     crate::test_utils::init_test_tracing();
     // A char-table with a different subtype is NOT a case table.
-    let v = build_char_table("syntax-table", &[], Value::NIL, &[]);
+    let v = char_table_with_extras("syntax-table", &[]);
     assert!(!is_case_table(&v));
 }
 
 #[test]
 fn is_case_table_rejects_missing_extra_slots() {
     crate::test_utils::init_test_tracing();
-    let v = build_char_table("case-table", &[], Value::NIL, &[]);
+    let v = char_table_with_extras("case-table", &[]);
     assert!(!is_case_table(&v));
 }
 
 #[test]
 fn is_case_table_rejects_invalid_extra_slots() {
     crate::test_utils::init_test_tracing();
-    let invalid_upcase = build_char_table(
-        "case-table",
-        &[Value::fixnum(1), Value::NIL, Value::NIL],
-        Value::NIL,
-        &[],
-    );
+    let invalid_upcase =
+        char_table_with_extras("case-table", &[Value::fixnum(1), Value::NIL, Value::NIL]);
     assert!(!is_case_table(&invalid_upcase));
 
-    let eqv_without_canon = build_char_table(
+    let eqv_without_canon = char_table_with_extras(
         "case-table",
-        &[Value::NIL, Value::NIL, make_case_table_value()],
-        Value::NIL,
-        &[],
+        &[Value::NIL, Value::NIL, make_empty_case_table()],
     );
     assert!(!is_case_table(&eqv_without_canon));
 }
@@ -599,4 +592,13 @@ fn the_standard_case_tables_and_replace_match_case_answer_like_gnu() {
         result,
         "OK (97 97 65 49 113 81 113 233 201 969 1 t 2 \"Bye There and BYE THERE and bye there and Zoé\")"
     );
+}
+
+/// A real char-table with purpose `purpose` and these extra slots.
+fn char_table_with_extras(purpose: &str, extras: &[Value]) -> Value {
+    let table = Value::make_char_table(Value::symbol(purpose), Value::NIL, extras.len());
+    let _ = table.with_char_table_mut(|obj| {
+        obj.extras.ensure_owned().clone_from(&extras.to_vec());
+    });
+    table
 }

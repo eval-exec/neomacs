@@ -1,12 +1,10 @@
-//! Bool-vector representations and operations against a bit-by-bit model,
-//! in both representations (and mixed), with GNU's error data and
-//! destination semantics (`data.c:3709-4016`).
+//! Bool-vector operations against a bit-by-bit model, with GNU's error data
+//! and destination semantics (`data.c:3709-4016`).
 
 use super::*;
 use crate::emacs_core::error::Flow;
 
 const LENGTHS: [usize; 10] = [0, 1, 7, 8, 63, 64, 65, 127, 128, 1000];
-const REPRS: [BoolVectorRepr; 2] = [BoolVectorRepr::Legacy, BoolVectorRepr::Packed];
 
 /// A deterministic bit stream (xorshift64*).
 struct Bits(u64);
@@ -24,12 +22,9 @@ impl Bits {
     }
 }
 
-/// A bool-vector of `bits` in representation `repr`.
-fn make(repr: BoolVectorRepr, bits: &[bool]) -> Value {
-    set_bool_vector_repr_for_test(Some(repr));
-    let value = bool_vector_from_bits(bits);
-    set_bool_vector_repr_for_test(None);
-    value
+/// A bool-vector of `bits`.
+fn make(bits: &[bool]) -> Value {
+    bool_vector_from_bits(bits)
 }
 
 /// The bits of a bool-vector, read one at a time.
@@ -60,24 +55,31 @@ fn signal_parts(result: EvalResult) -> (String, Vec<Value>) {
 }
 
 #[test]
-fn both_representations_answer_the_predicates_and_reads() {
+fn bool_vectors_answer_the_predicates_and_reads() {
     crate::test_utils::init_test_tracing();
     let mut rng = Bits(0x9e37_79b9_7f4a_7c15);
-    for repr in REPRS {
-        for n in LENGTHS {
-            let bits = rng.take(n);
-            let bv = make(repr, &bits);
-            assert!(is_bool_vector(&bv), "{repr:?} {n}");
-            assert_eq!(bool_vector_length(&bv), Some(n as i64));
-            assert_eq!(bv.is_bool_vector_obj(), repr == BoolVectorRepr::Packed);
-            assert_eq!(bits_of(&bv), bits);
-            for (i, &bit) in bits.iter().enumerate() {
-                assert_eq!(bool_vector_ref_value(&bv, i), Some(Value::bool_val(bit)));
-            }
-            assert_eq!(bool_vector_ref_value(&bv, n), None);
-            assert_trailing_zero(&bv);
+    for n in LENGTHS {
+        let bits = rng.take(n);
+        let bv = make(&bits);
+        assert!(is_bool_vector(&bv), "{n}");
+        assert!(bv.is_bool_vector_obj());
+        assert!(!bv.is_vector());
+        assert_eq!(bool_vector_length(&bv), Some(n as i64));
+        assert_eq!(bits_of(&bv), bits);
+        for (i, &bit) in bits.iter().enumerate() {
+            assert_eq!(bool_vector_ref_value(&bv, i), Some(Value::bool_val(bit)));
         }
+        assert_eq!(bool_vector_ref_value(&bv, n), None);
+        assert_trailing_zero(&bv);
     }
+    // A vector with the old in-band tag in slot 0 is a plain vector.
+    let tagged = Value::vector(vec![
+        Value::symbol("--bool-vector--"),
+        Value::fixnum(1),
+        Value::fixnum(1),
+    ]);
+    assert!(!is_bool_vector(&tagged));
+    assert_eq!(bool_vector_length(&tagged), None);
     assert!(!is_bool_vector(&Value::vector(vec![Value::NIL; 3])));
     assert!(!is_bool_vector(&Value::fixnum(3)));
     assert_eq!(bool_vector_length(&Value::NIL), None);
@@ -86,9 +88,9 @@ fn both_representations_answer_the_predicates_and_reads() {
 #[test]
 fn set_and_fill_update_in_place() {
     crate::test_utils::init_test_tracing();
-    for repr in REPRS {
+    {
         for n in LENGTHS {
-            let bv = make(repr, &vec![false; n]);
+            let bv = make(&vec![false; n]);
             let mut model = vec![false; n];
             for i in (0..n).step_by(3) {
                 assert!(bool_vector_set(&bv, i, true));
@@ -111,11 +113,9 @@ fn set_and_fill_update_in_place() {
 #[test]
 fn bytes_follow_gnu_order() {
     crate::test_utils::init_test_tracing();
-    for repr in REPRS {
+    {
         // Bit i is bit i%8 of byte i/8; bytes past the end are ignored.
-        set_bool_vector_repr_for_test(Some(repr));
         let bv = bool_vector_from_bytes(10, &[0b1000_0101, 0b1111_1110, 0xff]);
-        set_bool_vector_repr_for_test(None);
         assert_eq!(
             bits_of(&bv),
             [
@@ -130,7 +130,7 @@ fn bytes_follow_gnu_order() {
 }
 
 /// Every set operation against the model, fresh and into a destination,
-/// across both representations and mixed operands.
+/// with the destination distinct from and equal to an operand.
 #[test]
 fn set_operations_match_the_model() {
     crate::test_utils::init_test_tracing();
@@ -157,20 +157,20 @@ fn set_operations_match_the_model() {
                 .zip(&b_bits)
                 .map(|(&a, &b)| model(a, b))
                 .collect();
-            for ra in REPRS {
-                for rb in REPRS {
-                    let a = make(ra, &a_bits);
-                    let b = make(rb, &b_bits);
+            {
+                {
+                    let a = make(&a_bits);
+                    let b = make(&b_bits);
                     // Fresh result.
                     let fresh = op(vec![a, b]).unwrap();
-                    assert_eq!(bits_of(&fresh), expected, "{name} {n} {ra:?}/{rb:?}");
+                    assert_eq!(bits_of(&fresh), expected, "{name} {n}");
                     assert_trailing_zero(&fresh);
                     // An explicit nil destination allocates too.
                     let fresh = op(vec![a, b, Value::NIL]).unwrap();
                     assert_eq!(bits_of(&fresh), expected);
-                    for rd in REPRS {
+                    {
                         // Into a destination: returned when it changed...
-                        let dest = make(rd, &vec![false; n]);
+                        let dest = make(&vec![false; n]);
                         let changed = expected.iter().any(|&bit| bit);
                         let result = op(vec![a, b, dest]).unwrap();
                         if changed {
@@ -187,7 +187,7 @@ fn set_operations_match_the_model() {
                         assert!(op(vec![a, b, dest]).unwrap().is_nil());
                     }
                     // The destination may be an operand.
-                    let a_copy = make(ra, &a_bits);
+                    let a_copy = make(&a_bits);
                     let result = op(vec![a_copy, b, a_copy]).unwrap();
                     assert_eq!(bits_of(&a_copy), expected);
                     assert!(result.is_nil() || result.bits() == a_copy.bits());
@@ -204,15 +204,15 @@ fn not_subsetp_and_counts_match_the_model() {
     for n in LENGTHS {
         let a_bits = rng.take(n);
         let b_bits: Vec<bool> = a_bits.iter().map(|&a| a || rng.next()).collect();
-        for repr in REPRS {
-            let a = make(repr, &a_bits);
-            let b = make(repr, &b_bits);
+        {
+            let a = make(&a_bits);
+            let b = make(&b_bits);
             let not: Vec<bool> = a_bits.iter().map(|&x| !x).collect();
             let fresh = builtin_bool_vector_not(vec![a]).unwrap();
             assert_eq!(bits_of(&fresh), not);
             assert_trailing_zero(&fresh);
             // `bool-vector-not` returns its destination unconditionally.
-            let dest = make(repr, &not);
+            let dest = make(&not);
             assert!(builtin_bool_vector_not(vec![a, dest]).unwrap().bits() == dest.bits());
             assert_eq!(bits_of(&dest), not);
             assert_trailing_zero(&dest);
@@ -244,7 +244,7 @@ fn not_subsetp_and_counts_match_the_model() {
                         Value::fixnum(start as i64),
                     ])
                     .unwrap();
-                    assert_eq!(got, Value::fixnum(expected), "{repr:?} n={n} start={start}");
+                    assert_eq!(got, Value::fixnum(expected), "n={n} start={start}");
                 }
             }
         }
@@ -254,17 +254,17 @@ fn not_subsetp_and_counts_match_the_model() {
 #[test]
 fn count_consecutive_runs_across_words() {
     crate::test_utils::init_test_tracing();
-    for repr in REPRS {
+    {
         let mut bits = vec![true; 200];
         bits[150] = false;
-        let bv = make(repr, &bits);
+        let bv = make(&bits);
         for (start, expected) in [(0, 150), (3, 147), (64, 86), (150, 0), (151, 49), (200, 0)] {
             let got =
                 builtin_bool_vector_count_consecutive(vec![bv, Value::T, Value::fixnum(start)])
                     .unwrap();
-            assert_eq!(got, Value::fixnum(expected), "{repr:?} start {start}");
+            assert_eq!(got, Value::fixnum(expected), "start {start}");
         }
-        let zeros = make(repr, &[false; 70]);
+        let zeros = make(&[false; 70]);
         let got = builtin_bool_vector_count_consecutive(vec![zeros, Value::NIL, Value::fixnum(3)])
             .unwrap();
         assert_eq!(got, Value::fixnum(67), "the pad bits never count");
@@ -274,10 +274,10 @@ fn count_consecutive_runs_across_words() {
 #[test]
 fn errors_carry_gnu_data() {
     crate::test_utils::init_test_tracing();
-    for repr in REPRS {
-        let a = make(repr, &[true; 3]);
-        let b = make(repr, &[true; 4]);
-        let c = make(repr, &[true; 5]);
+    {
+        let a = make(&[true; 3]);
+        let b = make(&[true; 4]);
+        let c = make(&[true; 5]);
         // A length mismatch between the operands: two sizes with no
         // destination, three with one.
         let (sym, data) = signal_parts(builtin_bool_vector_union(vec![a, b]));
@@ -289,7 +289,7 @@ fn errors_carry_gnu_data() {
             vec![Value::fixnum(3), Value::fixnum(4), Value::fixnum(5)]
         );
         // A destination of the wrong length.
-        let a2 = make(repr, &[false; 3]);
+        let a2 = make(&[false; 3]);
         let (_, data) = signal_parts(builtin_bool_vector_intersection(vec![a, a2, c]));
         assert_eq!(
             data,
@@ -333,14 +333,12 @@ fn errors_carry_gnu_data() {
 }
 
 #[test]
-fn make_bool_vector_and_bool_vector_follow_the_knob() {
+fn make_bool_vector_and_bool_vector_build_packed_bool_vectors() {
     crate::test_utils::init_test_tracing();
-    for repr in REPRS {
-        set_bool_vector_repr_for_test(Some(repr));
+    {
         let made = builtin_make_bool_vector(vec![Value::fixnum(70), Value::T]).unwrap();
         let listed = builtin_bool_vector(vec![Value::T, Value::NIL, Value::symbol("x")]).unwrap();
-        set_bool_vector_repr_for_test(None);
-        assert_eq!(made.is_bool_vector_obj(), repr == BoolVectorRepr::Packed);
+        assert!(made.is_bool_vector_obj());
         assert_eq!(bits_of(&made), vec![true; 70]);
         assert_trailing_zero(&made);
         assert_eq!(bits_of(&listed), [true, false, true]);
@@ -356,79 +354,22 @@ fn make_bool_vector_and_bool_vector_follow_the_knob() {
     );
 }
 
-/// Evaluate `src` in a fresh evaluator whose new bool-vectors take
-/// representation `repr`, and print the result.
-fn eval_printed(repr: BoolVectorRepr, src: &str) -> String {
-    set_bool_vector_repr_for_test(Some(repr));
+/// Evaluate `src` in a fresh evaluator and print the result.
+fn eval_printed(src: &str) -> String {
     let mut ctx = crate::emacs_core::eval::Context::new();
-    let value = ctx
-        .eval_str(src)
-        .unwrap_or_else(|e| panic!("{src} under {repr:?}: {e:?}"));
-    let printed = crate::emacs_core::print::print_value(&value);
-    set_bool_vector_repr_for_test(None);
-    printed
+    let value = ctx.eval_str(src).unwrap_or_else(|e| panic!("{src}: {e:?}"));
+    crate::emacs_core::print::print_value(&value)
 }
 
-/// The Lisp surface answers alike in both representations wherever the
-/// legacy encoding was already GNU's answer: element access, the sequence
-/// functions, printing and reading, `equal` and `equal` tables, `value<`,
-/// and category sets.
+/// Where the old tagged encoding diverged from GNU, bool-vectors answer as
+/// GNU 31.1 does (`bvsem.el` R2 and `muc.el` on GNU: `vectorp` nil,
+/// `type-of` `bool-vector`, 17 vector cells for 1000 bits), and a vector
+/// whose slot 0 is the old tag is a plain vector (`bvsem.el` R1 on GNU).
 #[test]
-fn the_lisp_surface_is_the_same_in_both_representations() {
-    crate::test_utils::init_test_tracing();
-    let forms = [
-        "(let ((b (bool-vector t nil t t nil)))
-           (list b (length b) (aref b 2) (aref b 1) (vconcat b) (append b nil)
-                 (mapcar (lambda (x) x) b) (copy-sequence b) (reverse b)
-                 (equal b (copy-sequence b)) (equal b (reverse b)) (elt b 3)
-                 (bool-vector-p b) (arrayp b) (sequencep b)
-                 (length< b 6) (length= b 5) (length> b 4)
-                 (condition-case e (aref b 5) (error e))
-                 (condition-case e (aref b -1) (error e))
-                 (aset b 1 'x) b))",
-        "(let ((b (make-bool-vector 9 nil)))
-           (aset b 0 t) (aset b 1 t)
-           (list (nreverse b) (fillarray b t) (fillarray b nil)))",
-        "(let* ((b (make-bool-vector 70 t)) (s (prin1-to-string b)))
-           (aset b 3 nil)
-           (list s (prin1-to-string b) (equal (car (read-from-string (prin1-to-string b))) b)
-                 (car (read-from-string \"#&5\\\"\\\\37\\\"\"))
-                 (car (read-from-string \"#&3\\\"\\\\377\\\"\"))))",
-        "(let ((h (make-hash-table :test 'equal)))
-           (puthash (bool-vector t nil) 'two h)
-           (puthash (make-bool-vector 200 t) 'big h)
-           (list (gethash (bool-vector t nil) h) (gethash (make-bool-vector 200 t) h)
-                 (gethash (bool-vector nil t) h) (hash-table-count h)
-                 (= (sxhash-equal (bool-vector t nil)) (sxhash-equal (bool-vector t nil)))))",
-        "(list (value< (bool-vector nil t) (bool-vector t nil))
-               (value< (bool-vector t) (bool-vector t nil))
-               (value< (bool-vector t nil) (bool-vector t)))",
-        "(let ((s (make-category-set \"abz\")))
-           (list (category-set-mnemonics s) (length s) (bool-vector-p s) (aref s ?b)))",
-        "(let ((a (make-bool-vector 100 nil)) (b (make-bool-vector 100 t)))
-           (aset a 99 t)
-           (list (bool-vector-union a b) (bool-vector-intersection a b)
-                 (bool-vector-count-consecutive b t 7)
-                 (bool-vector-subsetp a b) (bool-vector-not a)))",
-    ];
-    for form in forms {
-        assert_eq!(
-            eval_printed(BoolVectorRepr::Packed, form),
-            eval_printed(BoolVectorRepr::Legacy, form),
-            "{form}"
-        );
-    }
-}
-
-/// Where the legacy encoding diverged from GNU, a packed bool-vector
-/// answers as GNU 31.1 does (`bvsem.el` R2 and `muc.el` on GNU: `vectorp`
-/// nil, `type-of` `bool-vector`, 17 vector cells for 1000 bits).
-#[test]
-fn packed_bool_vectors_answer_as_gnu_where_legacy_diverged() {
+fn bool_vectors_answer_as_gnu_where_the_tagged_encoding_diverged() {
     crate::test_utils::init_test_tracing();
     assert_eq!(
         eval_printed(
-            BoolVectorRepr::Packed,
             "(let ((b (make-bool-vector 5 t)))
                (list (vectorp b) (type-of b) (cl-type-of b) (arrayp b) (sequencep b)
                      (vector-or-char-table-p b)
@@ -437,5 +378,14 @@ fn packed_bool_vectors_answer_as_gnu_where_legacy_diverged() {
                        (and x (- (nth 2 (memory-use-counts)) before)))))"
         ),
         "(nil bool-vector bool-vector t t nil 17)"
+    );
+    assert_eq!(
+        eval_printed(
+            "(let ((fake (vector (intern \"--bool-vector--\") 3 1 0 1))
+                   (fake-ct (vector (intern \"--char-table--\") nil nil nil 0)))
+               (list (bool-vector-p fake) (vectorp fake) (length fake) (aref fake 0)
+                     (char-table-p fake-ct) (vectorp fake-ct) (length fake-ct)))"
+        ),
+        "(nil t 5 --bool-vector-- nil t 5)"
     );
 }

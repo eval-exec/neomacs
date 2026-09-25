@@ -133,10 +133,10 @@ fn reverse_bool_vector_preserves_layout_and_reverses_bits() {
 
 /// The bits of a bool-vector, in order.
 fn bool_vector_bits(value: Value) -> Vec<bool> {
-    let len = crate::emacs_core::chartable::bool_vector_length(&value).unwrap() as usize;
+    let len = crate::emacs_core::boolvec::bool_vector_length(&value).unwrap() as usize;
     (0..len)
         .map(|i| {
-            crate::emacs_core::chartable::bool_vector_ref_value(&value, i)
+            crate::emacs_core::boolvec::bool_vector_ref_value(&value, i)
                 .unwrap()
                 .is_truthy()
         })

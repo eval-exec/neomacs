@@ -5325,14 +5325,7 @@ fn pure_dispatch_typed_make_vector_validates_wholenump_length() {
 #[test]
 fn pure_dispatch_typed_aref_bool_vector_returns_boolean_bits() {
     crate::test_utils::init_test_tracing();
-    let bv = Value::vector(vec![
-        Value::symbol("--bool-vector--"),
-        Value::fixnum(4),
-        Value::fixnum(0),
-        Value::fixnum(0),
-        Value::fixnum(0),
-        Value::fixnum(0),
-    ]);
+    let bv = crate::emacs_core::boolvec::bool_vector_from_bits(&[false; 4]);
 
     let initial = dispatch_builtin_pure("aref", vec![bv, Value::fixnum(2)])
         .expect("builtin aref should resolve")
@@ -5352,13 +5345,10 @@ fn pure_dispatch_typed_aref_bool_vector_returns_boolean_bits() {
 #[test]
 fn pure_dispatch_typed_aref_aset_char_table_uses_character_index_semantics() {
     crate::test_utils::init_test_tracing();
-    let ct = Value::vector(vec![
-        Value::symbol("--char-table--"),
-        Value::NIL,
-        Value::NIL,
+    let ct = crate::emacs_core::chartable::make_char_table_value(
         Value::symbol("syntax-table"),
-        Value::fixnum(0),
-    ]);
+        Value::NIL,
+    );
 
     let initial = dispatch_builtin_pure("aref", vec![ct, Value::fixnum(0)])
         .expect("builtin aref should resolve")
@@ -5412,13 +5402,7 @@ fn pure_dispatch_typed_aref_aset_char_table_uses_character_index_semantics() {
 #[test]
 fn pure_dispatch_typed_length_family_uses_bool_vector_logical_length() {
     crate::test_utils::init_test_tracing();
-    let bv = Value::vector(vec![
-        Value::symbol("--bool-vector--"),
-        Value::fixnum(3),
-        Value::fixnum(1),
-        Value::fixnum(0),
-        Value::fixnum(1),
-    ]);
+    let bv = crate::emacs_core::boolvec::bool_vector_from_bits(&[true, false, true]);
 
     let len = dispatch_builtin_pure("length", vec![bv])
         .expect("builtin length should resolve")
@@ -5444,13 +5428,10 @@ fn pure_dispatch_typed_length_family_uses_bool_vector_logical_length() {
 #[test]
 fn pure_dispatch_typed_length_family_uses_char_table_logical_length() {
     crate::test_utils::init_test_tracing();
-    let ct = Value::vector(vec![
-        Value::symbol("--char-table--"),
-        Value::NIL,
-        Value::NIL,
+    let ct = crate::emacs_core::chartable::make_char_table_value(
         Value::symbol("syntax-table"),
-        Value::fixnum(0),
-    ]);
+        Value::NIL,
+    );
 
     let len = dispatch_builtin_pure("length", vec![ct])
         .expect("builtin length should resolve")

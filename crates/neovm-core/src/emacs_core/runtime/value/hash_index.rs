@@ -195,7 +195,6 @@ impl HashKey {
                 | HashKey::ByteCode(_)
                 | HashKey::Marker(_)
                 | HashKey::Overlay(_)
-                | HashKey::BoolVec(_)
                 | HashKey::BoolVector(_)
                 | HashKey::SymbolWithPos(..)
                 | HashKey::Cycle(_)
@@ -225,29 +224,10 @@ pub(super) fn key_index_hash(key: &HashKey) -> Option<u64> {
             parts.hash(&mut hasher);
             Some(hasher.finish())
         }
-        HashKey::BoolVec(parts) => Some(bool_vector_key_hash(parts.0, parts.1)),
         HashKey::BoolVector(parts) => Some(packed_bool_vector_hash(parts.0, &parts.1)),
         key if key.is_structural() => None,
         key => Some(fx_hash_key(key)),
     }
-}
-
-/// What [`equal_value_hash`] computes for the `--bool-vector--` vector that
-/// `bool_vector_equal_hash_key` packs into `HashKey::BoolVec((len, bits))`:
-/// its length, then its first [`SXHASH_MAX_LEN`] slots (the tag symbol, the
-/// bit count, and the leading bits as fixnums).
-fn bool_vector_key_hash(len: usize, bits: u128) -> u64 {
-    static TAG: OnceLock<SymId> = OnceLock::new();
-    let tag = *TAG.get_or_init(|| intern("--bool-vector--"));
-    let mut hasher = FxHasher::default();
-    EqualHashTag::Vector.write(&mut hasher);
-    (len + 2).hash(&mut hasher);
-    HashKey::Symbol(tag).hash(&mut hasher);
-    HashKey::Int(len as i64).hash(&mut hasher);
-    for index in 0..len.min(SXHASH_MAX_LEN - 2) {
-        HashKey::Int(i64::from(bits & (1_u128 << index) != 0)).hash(&mut hasher);
-    }
-    hasher.finish()
 }
 
 /// The stream [`equal_value_hash`] writes for a packed bool-vector: GNU

@@ -325,16 +325,11 @@ const _: () = {
 fn aref_fast(array: Value, index: Value) -> Option<Value> {
     let idx = usize::try_from(index.as_fixnum()?).ok()?;
     if array.is_veclike() {
-        let (items, record) = match array.veclike_type()? {
-            crate::tagged::header::VecLikeType::Vector => (array.as_vector_data()?, false),
-            crate::tagged::header::VecLikeType::Record => (array.as_record_data()?, true),
+        let items = match array.veclike_type()? {
+            crate::tagged::header::VecLikeType::Vector => array.as_vector_data()?,
+            crate::tagged::header::VecLikeType::Record => array.as_record_data()?,
             _ => return None,
         };
-        if crate::emacs_core::chartable::classify_vector_slots(items, record)
-            != crate::emacs_core::chartable::VectorTag::Plain
-        {
-            return None;
-        }
         return items.get(idx).copied();
     }
     if array.is_string() {
@@ -567,7 +562,7 @@ fn aset_fast(array: Value, index: Value, value: Value) -> bool {
             return false;
         }
         let items = data.as_slice();
-        if idx >= items.len() || !aset_fast_plain_slots(items, false) {
+        if idx >= items.len() {
             return false;
         }
         crate::tagged::gc::note_heap_slot_write(
@@ -591,7 +586,7 @@ fn aset_fast(array: Value, index: Value, value: Value) -> bool {
             },
             _ => return false,
         };
-        if idx >= items.len() || !aset_fast_plain_slots(items, record) {
+        if idx >= items.len() {
             return false;
         }
         // Both setters run the heap write barrier.
@@ -616,18 +611,6 @@ fn aset_fast(array: Value, index: Value, value: Value) -> bool {
         return fits && array.set_string_byte_same_char_count(idx, code as u8);
     }
     false
-}
-
-/// Whether `aset_fast` may store into these slots: a plain vector or record,
-/// not a tagged char-table or bool-vector — or, under the measurement knob
-/// `NEOVM_JIT_AREF_SKIP_SLOT0` (falsifier F-G (b)), unconditionally.
-#[inline(always)]
-fn aset_fast_plain_slots(items: &[Value], record: bool) -> bool {
-    if jit_aref_skip_slot0_on() {
-        return true;
-    }
-    crate::emacs_core::chartable::classify_vector_slots(items, record)
-        == crate::emacs_core::chartable::VectorTag::Plain
 }
 
 /// `Op::Aset` (GNU `Baset`) from compiled code: VALUE's bits, or one of the

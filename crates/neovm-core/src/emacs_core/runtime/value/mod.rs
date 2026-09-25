@@ -1732,9 +1732,6 @@ pub enum HashKey {
     Marker(Box<(Option<u64>, EmacsBytePos)>),
     /// Structural overlay key for `equal`-test hash tables.
     Overlay(Box<(Option<u64>, usize, usize, HashKey)>),
-    /// Compact structural key for LEGACY (tagged-vector) bool-vectors whose
-    /// bits fit in 128.
-    BoolVec(Box<(usize, u128)>),
     /// Structural key for a packed bool-vector (`BoolVectorObj`): its bit
     /// count and words (trailing bits zero).
     BoolVector(Box<(usize, Box<[u64]>)>),
@@ -1970,7 +1967,6 @@ impl std::hash::Hash for HashKey {
             HashKey::SymbolWithPos(_, _) => 17,
             HashKey::Marker(_) => 18,
             HashKey::Overlay(_) => 19,
-            HashKey::BoolVec(_) => 20,
             HashKey::BoolVector(_) => 24,
         };
         tag.hash(state);
@@ -2007,10 +2003,6 @@ impl std::hash::Hash for HashKey {
                 parts.1.hash(state);
                 parts.2.hash(state);
                 parts.3.hash(state);
-            }
-            HashKey::BoolVec(parts) => {
-                parts.0.hash(state);
-                parts.1.hash(state);
             }
             HashKey::BoolVector(parts) => {
                 parts.0.hash(state);
@@ -2052,7 +2044,6 @@ impl PartialEq for HashKey {
             (HashKey::ByteCode(a), HashKey::ByteCode(b)) => a == b,
             (HashKey::Marker(a), HashKey::Marker(b)) => a == b,
             (HashKey::Overlay(a), HashKey::Overlay(b)) => a == b,
-            (HashKey::BoolVec(a), HashKey::BoolVec(b)) => a == b,
             (HashKey::BoolVector(a), HashKey::BoolVector(b)) => a == b,
             (HashKey::SymbolWithPos(a_sym, a_pos), HashKey::SymbolWithPos(b_sym, b_pos)) => {
                 a_sym == b_sym && a_pos == b_pos
@@ -2793,18 +2784,18 @@ impl TaggedValue {
         with_tagged_heap(|h| h.alloc_xwidget_view(model, window))
     }
 
+    /// Allocate a bool-vector of `nbits` bits from `words` (`⌈nbits/64⌉`
+    /// of them, GNU's PVEC_BOOL_VECTOR layout). Lisp-level constructors go
+    /// through `boolvec`.
+    pub fn make_bool_vector(nbits: usize, words: Vec<u64>) -> Self {
+        with_tagged_heap(|h| h.alloc_bool_vector(nbits, words))
+    }
+
     /// Allocate a GC-managed shader-surface handle wrapping a host surface
     /// id (`neomacs-surface-create`). When the handle becomes unreachable,
     /// the GC sweep queues the id for a best-effort
     /// `DisplayHost::destroy_shader_surface`, so a handle Lisp drops without
     /// an explicit `neomacs-surface-destroy` still frees its GPU objects.
-    /// Allocate a packed bool-vector of `nbits` bits from `words`
-    /// (`⌈nbits/64⌉` of them). Lisp-level constructors go through
-    /// `boolvec`, which honours `NEOVM_BOOL_VECTOR_REPR`.
-    pub fn make_bool_vector(nbits: usize, words: Vec<u64>) -> Self {
-        with_tagged_heap(|h| h.alloc_bool_vector(nbits, words))
-    }
-
     pub fn make_surface_handle(surface_id: u32) -> Self {
         with_tagged_heap(|h| h.alloc_surface_handle(surface_id))
     }
@@ -4035,11 +4026,6 @@ impl TaggedValue {
                         | VecLikeType::SubCharTable
                 ) =>
             {
-                if self.is_vector()
-                    && let Some(key) = bool_vector_equal_hash_key(&self)
-                {
-                    return key;
-                }
                 let ptr = self.bits();
                 if let Some(index) = seen.iter().position(|&p| p == ptr) {
                     return HashKey::Cycle(index as u32);
@@ -4120,30 +4106,6 @@ impl TaggedValue {
             as_neovm_int(counts[MemoryUseCountSlot::Strings.index()]),
         ]
     }
-}
-
-pub(crate) fn bool_vector_equal_hash_key(value: &Value) -> Option<HashKey> {
-    let vec = value.as_vector_data()?;
-    if vec.len() < 2 || vec[0].as_symbol_name()? != "--bool-vector--" {
-        return None;
-    }
-    let len = match vec[1].kind() {
-        ValueKind::Fixnum(n) if (0..=128).contains(&n) => n as usize,
-        _ => return None,
-    };
-    if vec.len() != len + 2 {
-        return None;
-    }
-
-    let mut bits = 0_u128;
-    for index in 0..len {
-        match vec[2 + index].as_fixnum() {
-            Some(0) => {}
-            Some(1) => bits |= 1_u128 << index,
-            _ => return None,
-        }
-    }
-    Some(HashKey::BoolVec(Box::new((len, bits))))
 }
 
 // ---------------------------------------------------------------------------

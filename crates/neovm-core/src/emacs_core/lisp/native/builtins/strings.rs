@@ -316,11 +316,7 @@ fn substring_impl(name: &str, args: &[Value], preserve_props: bool) -> EvalResul
 
             Ok(new_val)
         }
-        ValueKind::Veclike(VecLikeType::Vector)
-            if name == "substring"
-                && !super::chartable::is_char_table(&args[0])
-                && !super::chartable::is_bool_vector(&args[0]) =>
-        {
+        ValueKind::Veclike(VecLikeType::Vector) if name == "substring" => {
             let items = args[0].as_vector_data().unwrap().clone();
             let len = items.len() as i64;
             let normalize_index = |value: &Value, default: i64| -> Result<i64, Flow> {
@@ -424,14 +420,9 @@ pub(crate) fn builtin_concat_slice(args: &[Value]) -> EvalResult {
                 ValueKind::String => value
                     .as_lisp_string()
                     .is_some_and(|string| string.is_multibyte()),
-                ValueKind::Veclike(VecLikeType::Vector)
-                    if !super::chartable::is_bool_vector(&value)
-                        && !super::chartable::is_char_table(&value) =>
-                {
-                    value
-                        .as_vector_data()
-                        .is_some_and(|items| items.iter().copied().any(concat_arg_makes_multibyte))
-                }
+                ValueKind::Veclike(VecLikeType::Vector) => value
+                    .as_vector_data()
+                    .is_some_and(|items| items.iter().copied().any(concat_arg_makes_multibyte)),
                 ValueKind::Cons => {
                     let mut cursor = value;
                     while cursor.is_cons() {
@@ -570,10 +561,7 @@ pub(crate) fn builtin_concat_slice(args: &[Value]) -> EvalResult {
                         }
                     }
                 }
-                ValueKind::Veclike(VecLikeType::Vector)
-                    if !super::chartable::is_bool_vector(arg)
-                        && !super::chartable::is_char_table(arg) =>
-                {
+                ValueKind::Veclike(VecLikeType::Vector) => {
                     let items = arg.as_vector_data().unwrap().clone();
                     for item in items.iter() {
                         result_chars += push_concat_element(&mut result, item, dest_multibyte)?;

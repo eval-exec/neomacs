@@ -360,16 +360,6 @@ pub(crate) fn builtin_fillarray(args: Vec<Value>) -> EvalResult {
             Ok(args[0])
         }
         ValueKind::Veclike(VecLikeType::Vector) => {
-            let is_bool_vector = super::boolvec::is_bool_vector(&args[0]);
-            let is_char_table = !is_bool_vector && super::chartable::is_char_table(&args[0]);
-            if is_bool_vector {
-                super::boolvec::bool_vector_fill(&args[0], args[1].is_truthy());
-                return Ok(args[0]);
-            }
-            if is_char_table {
-                super::chartable::fill_char_table_from_fillarray(&args[0], args[1])?;
-                return Ok(args[0]);
-            }
             let fill_len = args[0].as_vector_data().map_or(0, |vec| vec.len());
             let _ = args[0].replace_vector_data(vec![args[1]; fill_len]);
             Ok(args[0])

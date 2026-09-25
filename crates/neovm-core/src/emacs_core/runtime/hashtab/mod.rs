@@ -78,10 +78,6 @@ pub(crate) fn hash_key_to_value(key: &HashKey) -> Value {
         }
         HashKey::ByteCode(_) => Value::NIL,
         HashKey::Marker(_) | HashKey::Overlay(_) => Value::NIL,
-        HashKey::BoolVec(parts) => {
-            let (len, bits) = **parts;
-            crate::emacs_core::boolvec::bool_vector_from_u128(len, bits)
-        }
         HashKey::BoolVector(parts) => Value::make_bool_vector(parts.0, parts.1.to_vec()),
         HashKey::SymbolWithPos(_, _) => Value::NIL,
         HashKey::Cycle(index) => Value::string(format!("#{}", index)),

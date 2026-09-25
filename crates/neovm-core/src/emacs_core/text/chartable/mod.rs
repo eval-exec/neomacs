@@ -1,20 +1,12 @@
-//! Char-table and bool-vector types.
+//! Char-tables: GNU `PVEC_CHAR_TABLE` / `PVEC_SUB_CHAR_TABLE`
+//! (`chartab.c`), as `CharTableObj` and `SubCharTableObj`: a default, a
+//! parent, a purpose, an ASCII cache, 64 top-level contents slots and the
+//! extra slots, with sub-char-tables of depth 1..3 below.
 //!
-//! Since we cannot add new `Value` variants, these types are represented using
-//! existing `Value` infrastructure:
-//!
-//! - **Char-table**: A `Value::Vector` whose first element is the tag symbol
-//!   `--char-table--`.  The layout is:
-//!   `[--char-table-- DEFAULT PARENT SUB-TYPE EXTRA-SLOTS-COUNT ...EXTRA-SLOTS... ASCII-CACHE ...DATA-PAIRS...]`
-//!   where DATA-PAIRS are stored as consecutive `(char-code, value)` pairs
-//!   starting after the optional ASCII cache.  The cache mirrors GNU Emacs'
-//!   `ascii` char-table slot for the hot 0..127 lookup path.
-//!
-//! - **Bool-vector**: A `Value::Vector` whose first element is the tag symbol
-//!   `--bool-vector--`.  The layout is:
-//!   `[--bool-vector-- SIZE ...BITS...]`
-//!   where SIZE is `Value::fixnum(length)` and each subsequent element is
-//!   `Value::fixnum(0)` or `Value::fixnum(1)`.
+//! There are no in-band tagged vectors (P3.2 L0.8): a vector whose slot 0
+//! happens to be `--char-table--` (or `--bool-vector--`) is a plain vector,
+//! as in GNU. Bool-vectors live in `boolvec`; this module re-exports their
+//! builtins for the registration table.
 
 use super::error::{EvalResult, Flow, signal};
 use super::eval::{Context, push_scratch_gc_root, restore_scratch_gc_roots, save_scratch_gc_roots};
@@ -22,29 +14,15 @@ use super::intern::{NIL_SYM_ID, SymId, T_SYM_ID, intern};
 use super::value::*;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
-use crate::tagged::header::store_value_atomic;
-use std::collections::{BTreeMap, BTreeSet};
 
 // ---------------------------------------------------------------------------
-// Tag constants
+// Constants
 // ---------------------------------------------------------------------------
 
-const CHAR_TABLE_TAG: &str = "--char-table--";
-const SUB_CHAR_TABLE_TAG: &str = "--sub-char-table--";
-const CT_OPTIMIZED_PREFIX_MARKER: &str = "--char-table-optimized-prefix--";
-
-// Char-table fixed-layout indices (after the tag at index 0):
-const CT_DEFAULT: usize = 1; // default value
-const CT_PARENT: usize = 2; // parent char-table or nil
-const CT_SUBTYPE: usize = 3; // sub-type symbol
-const CT_EXTRA_COUNT: usize = 4; // number of extra slots
-const CT_EXTRA_START: usize = 5; // first extra slot (if any)
 /// Maximum valid Unicode code point.
 const MAX_CHAR: i64 = 0x3F_FFFF;
 const CT_LOGICAL_LENGTH: i64 = MAX_CHAR + 1;
 const CT_ASCII_CACHE_LEN: usize = 128;
-const CT_ASCII_CACHE_MAGIC: i64 = -7_000_001;
-const CT_ASCII_CACHE_PREPARED_MAGIC: i64 = -7_000_002;
 
 const GNU_CHAR_TABLE_STANDARD_SLOTS: usize = 4 + GNU_CHAR_TABLE_CONTENT_BLOCKS_USIZE;
 const GNU_CHAR_TABLE_CONTENT_BLOCKS_USIZE: usize = 64;
@@ -57,102 +35,29 @@ const GNU_CHARTAB_CHARS: [i64; 4] = [65_536, 4_096, 128, 1];
 // Predicates
 // ---------------------------------------------------------------------------
 
-/// What a vectorlike's slot-0 tag says it really is.
-///
-/// A char-table and a bool-vector are both encoded as an ordinary vector with
-/// a marker SYMBOL in slot 0, so every element access has to look. Classifying
-/// from slots the caller ALREADY fetched is the point of this: `aref` used to
-/// fetch them twice (once through [`is_char_table`], once for the access) and
-/// read slot 0 twice, for every indexed read in the language.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum VectorTag {
-    Plain,
-    CharTable,
-    BoolVector,
-}
-
-/// Classify already-fetched vector slots. `record` suppresses the char-table
-/// test, which applies to vectors only — a record's slot 0 is its struct type.
-///
-/// `#[inline]` because this sits on every `aref`/`aset` and lives in a
-/// different module from both: left as a cross-module call it cost `smie`
-/// 0.8%, more than the fetch it saves.
-#[inline]
-pub(crate) fn classify_vector_slots(slots: &[Value], record: bool) -> VectorTag {
-    // LENGTH first, slot 0 second: both tagged shapes need at least two slots,
-    // and a length compare is cheaper than a slot load plus a symbol-id
-    // extraction. The predicates this replaced tested length first for that
-    // reason, and reading slot 0 up front cost `smie` 0.6% on the short
-    // vectors it asks about.
-    if slots.len() < 2 {
-        return VectorTag::Plain;
-    }
-    let Some(tag) = slots[0].as_symbol_id() else {
-        return VectorTag::Plain;
-    };
-    if !record && slots.len() >= CT_EXTRA_START && tag == char_table_tag_sym_id() {
-        return VectorTag::CharTable;
-    }
-    if tag == bool_vector_tag_sym_id() {
-        return VectorTag::BoolVector;
-    }
-    VectorTag::Plain
-}
-
-/// Return `true` if `v` is a char-table (tagged vector).
-///
-/// `#[inline]`, and measured: this used to be small enough that LLVM inlined
-/// it at every call site (zero frames in a profile). Folding the shape test
-/// into `classify_vector_slots` made it just big enough to stop, and `smie`
-/// — which asks 2.67M times — paid 35.6M for the calls alone.
+/// Return `true` if `v` is a char-table.
 #[inline]
 pub fn is_char_table(v: &Value) -> bool {
-    if v.is_char_table() {
-        return true;
-    }
-    if v.is_vector() {
-        classify_vector_slots(v.as_vector_data().unwrap(), false) == VectorTag::CharTable
-    } else {
-        false
-    }
+    v.is_char_table()
 }
 
 fn is_sub_char_table(v: Value) -> bool {
     v.is_sub_char_table()
 }
 
-pub(crate) use super::boolvec::{bool_vector_length, bool_vector_ref_value, is_bool_vector};
+pub(crate) use super::boolvec::{bool_vector_length, is_bool_vector};
 
 /// GNU `XCHAR_TABLE (table)->defalt`: the value characters with no entry of
 /// their own fall back to, or nil for a non-char-table.
 pub(crate) fn char_table_default(table: &Value) -> Value {
-    if !table.is_char_table() {
-        return Value::NIL;
-    }
     table
-        .as_vector_data()
-        .and_then(|vec| vec.get(CT_DEFAULT).copied())
-        .unwrap_or(Value::NIL)
+        .as_char_table_obj()
+        .map_or(Value::NIL, |obj| obj.defalt)
 }
 
 /// Return the logical sequence length if `v` is a char-table.
 pub(crate) fn char_table_length(v: &Value) -> Option<i64> {
-    if v.is_char_table() {
-        return Some(CT_LOGICAL_LENGTH);
-    }
-    if !v.is_vector() {
-        return None;
-    };
-    let vec = v.as_vector_data().unwrap();
-    if vec.len() >= CT_EXTRA_START
-        && vec[0]
-            .as_symbol_id()
-            .is_some_and(|id| id == char_table_tag_sym_id())
-    {
-        Some(CT_LOGICAL_LENGTH)
-    } else {
-        None
-    }
+    v.is_char_table().then_some(CT_LOGICAL_LENGTH)
 }
 
 fn chartab_idx(c: i64, depth: usize, min_char: i64) -> usize {
@@ -493,122 +398,14 @@ fn invalid_range_error(name: &str, obarray: Option<&super::symbol::Obarray>) -> 
     signal("error", vec![Value::string(message)])
 }
 
-/// Data-pairs region start index for a char-table vector.
-fn ct_data_start(vec: &[Value]) -> usize {
-    ct_ascii_cache_range(vec)
-        .map(|range| range.end)
-        .unwrap_or_else(|| ct_ascii_cache_start(vec))
-}
-
-pub(crate) fn char_table_data_start(vec: &[Value]) -> usize {
-    ct_data_start(vec)
-}
-
-fn ct_ascii_cache_start(vec: &[Value]) -> usize {
-    let extra_count = match vec[CT_EXTRA_COUNT].kind() {
-        ValueKind::Fixnum(n) => n as usize,
-        _ => 0,
-    };
-    CT_EXTRA_START + extra_count
-}
-
-fn ct_ascii_cache_range(vec: &[Value]) -> Option<std::ops::Range<usize>> {
-    let start = ct_ascii_cache_start(vec);
-    let values_start = start + 1;
-    let values_end = values_start + CT_ASCII_CACHE_LEN;
-    if vec.len() >= values_end
-        && matches!(
-            vec[start].as_fixnum(),
-            Some(CT_ASCII_CACHE_MAGIC | CT_ASCII_CACHE_PREPARED_MAGIC)
-        )
-    {
-        Some(values_start..values_end)
-    } else {
-        None
-    }
-}
-
-fn ct_ascii_cache_magic(vec: &[Value]) -> Option<i64> {
-    let start = ct_ascii_cache_start(vec);
-    vec.get(start).and_then(|value| value.as_fixnum())
-}
-
-pub(crate) fn char_table_ascii_cache_range(vec: &[Value]) -> Option<std::ops::Range<usize>> {
-    ct_ascii_cache_range(vec)
-}
-
-fn ct_update_ascii_cache(vec: &mut [Value], min: i64, max: i64, value: Value) {
-    if min > max || max < 0 || min >= CT_ASCII_CACHE_LEN as i64 {
-        return;
-    }
-    let Some(range) = ct_ascii_cache_range(vec) else {
-        return;
-    };
-    let start = min.max(0) as usize;
-    let end = max.min(CT_ASCII_CACHE_LEN as i64 - 1) as usize;
-    for ch in start..=end {
-        store_value_atomic(&mut vec[range.start + ch], value);
-    }
-}
-
 fn prepare_uniprop_ascii_cache(table: &Value) {
-    if table.is_char_table() {
-        if is_char_code_property_table(table) {
-            set_char_table_ascii(*table, char_table_ascii(*table));
-        }
-        return;
+    if is_char_code_property_table(table) {
+        set_char_table_ascii(*table, char_table_ascii(*table));
     }
-    let Some(original) = table.as_vector_data() else {
-        return;
-    };
-    if !is_char_code_property_vec(original) {
-        return;
-    }
-    if ct_ascii_cache_magic(original) == Some(CT_ASCII_CACHE_PREPARED_MAGIC) {
-        return;
-    }
-    let Some(cache_range) = ct_ascii_cache_range(original) else {
-        return;
-    };
-
-    let mut vec = original.clone();
-    for ch in 0..CT_ASCII_CACHE_LEN {
-        vec[cache_range.start + ch] = ct_get_char(&vec, ch as i64, true).unwrap_or(Value::NIL);
-    }
-    vec[cache_range.start - 1] = Value::fixnum(CT_ASCII_CACHE_PREPARED_MAGIC);
-    let _ = table.replace_vector_data(vec);
 }
 
-fn is_sub_char_table_literal(v: &Value) -> bool {
-    if !v.is_vector() {
-        return false;
-    }
-    let vec = v.as_vector_data().unwrap();
-    vec.len() >= 3
-        && vec[0]
-            .as_symbol_id()
-            .is_some_and(|id| id == sub_char_table_tag_sym_id())
-}
-
-fn sub_char_table_depth_min_contents(v: &Value) -> Option<(usize, i64, Vec<Value>)> {
-    if !is_sub_char_table_literal(v) {
-        return None;
-    }
-    let vec = v.as_vector_data().unwrap();
-    let depth = vec.get(1)?.as_fixnum()?;
-    let min_char = vec.get(2)?.as_fixnum()?;
-    if !(1..=3).contains(&depth) || !(0..=MAX_CHAR).contains(&min_char) {
-        return None;
-    }
-    Some((depth as usize, min_char, vec[3..].to_vec()))
-}
-
-/// Build the temporary reader representation for GNU `#^^[...]` literals.
-///
-/// GNU Emacs creates a PVEC_SUB_CHAR_TABLE directly in `lread.c`; NeoVM has no
-/// dedicated `Value` variant for it, so the reader keeps a tagged vector long
-/// enough for the enclosing `#^[...]` reader path to fold it into the existing
-/// sparse char-table representation.
+/// Build a sub-char-table from GNU's readable `#^^[DEPTH MIN-CHAR ...]`
+/// literal, as `lread.c` does.
 pub(crate) fn make_sub_char_table_from_external_slots(items: &[Value]) -> Result<Value, String> {
     if items.len() < 2 {
         return Err("Invalid size of sub-char-table".to_string());
@@ -638,46 +435,18 @@ pub(crate) fn make_sub_char_table_from_external_slots(items: &[Value]) -> Result
     ))
 }
 
-fn char_table_extra_count(vec: &[Value]) -> usize {
-    match vec.get(CT_EXTRA_COUNT).map(|v| v.kind()) {
-        Some(ValueKind::Fixnum(n)) if n >= 0 => n as usize,
-        _ => 0,
-    }
-}
-
 fn char_table_extra_slot_value(table: &Value, idx: usize) -> Option<Value> {
-    if !is_char_table(table) {
-        return None;
-    }
-    if table.is_char_table() {
-        return table
-            .as_char_table_obj()
-            .and_then(|obj| obj.extras.get(idx).copied());
-    }
-    let vec = table.as_vector_data().unwrap();
-    let extra_count = char_table_extra_count(vec);
-    (idx < extra_count).then(|| vec[CT_EXTRA_START + idx])
+    table
+        .as_char_table_obj()
+        .and_then(|obj| obj.extras.get(idx).copied())
 }
 
 fn set_char_table_extra_slot(table: &Value, idx: usize, value: Value) {
     bump_char_table_write_tick();
-    if !is_char_table(table) {
-        return;
-    }
-    if table.is_char_table() {
-        let _ = table.with_char_table_mut(|obj| {
-            if let Some(slot) = obj.extras.ensure_owned().get_mut(idx) {
-                *slot = value;
-            }
-        });
-        return;
-    }
-    let extra_count = char_table_extra_count(table.as_vector_data().unwrap());
-    if idx >= extra_count {
-        return;
-    }
-    table.with_vector_data_mut(|vec| {
-        store_value_atomic(&mut vec[CT_EXTRA_START + idx], value);
+    let _ = table.with_char_table_mut(|obj| {
+        if let Some(slot) = obj.extras.ensure_owned().get_mut(idx) {
+            *slot = value;
+        }
     });
 }
 
@@ -689,56 +458,23 @@ fn char_code_property_table_sym_id() -> SymId {
     *ID.get_or_init(|| intern("char-code-property-table"))
 }
 
-/// Cached SymId of [`CHAR_TABLE_TAG`] — `is_char_table` runs per case-table
-/// probe on string/buffer search paths, and resolving + strcmp'ing the tag
-/// symbol's name there dominated the check.
-/// Cached `SymId` of the legacy bool-vector tag. The bool-vector shape test runs on
-/// every `aset` and `aref` of a vector, and comparing NAMES there meant
-/// resolving a symbol to a `&str` and running a string compare per element
-/// access. Same rationale as [`char_table_tag_sym_id`].
-pub(crate) fn bool_vector_tag_sym_id() -> SymId {
-    super::boolvec::legacy_tag_sym_id()
-}
-
-/// What [`classify_vector_slots`] compares, for compiled code that inlines
-/// it: the char-table and bool-vector tag symbols' bits, and the length from
-/// which a tagged vector is a char-table.
+/// The retired in-band tags (P3.2 L0.8) as the JIT's inline `aref` used to
+/// compare them: the `--char-table--` and `--bool-vector--` symbols' bits,
+/// and the length from which a tagged vector was a char-table. Only the
+/// measurement knob that re-emits the retired slot-0 test reads this.
 pub(crate) fn inline_vector_tag_shape() -> (u64, u64, usize) {
     (
-        Value::from_sym_id(char_table_tag_sym_id()).bits() as u64,
-        Value::from_sym_id(bool_vector_tag_sym_id()).bits() as u64,
-        CT_EXTRA_START,
+        Value::from_sym_id(intern("--char-table--")).bits() as u64,
+        Value::from_sym_id(intern("--bool-vector--")).bits() as u64,
+        5,
     )
 }
 
-fn char_table_tag_sym_id() -> SymId {
-    static ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new();
-    *ID.get_or_init(|| intern(CHAR_TABLE_TAG))
-}
-
-/// Cached SymId of [`SUB_CHAR_TABLE_TAG`], same rationale.
-fn sub_char_table_tag_sym_id() -> SymId {
-    static ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new();
-    *ID.get_or_init(|| intern(SUB_CHAR_TABLE_TAG))
-}
-
 fn is_char_code_property_table(table: &Value) -> bool {
-    if !is_char_table(table) {
-        return false;
-    }
-    if table.is_char_table() {
-        let obj = table.as_char_table_obj().unwrap();
-        return obj.purpose.as_symbol_id() == Some(char_code_property_table_sym_id())
-            && obj.extras.len() == 5;
-    }
-    let vec = table.as_vector_data().unwrap();
-    is_char_code_property_vec(vec)
-}
-
-fn is_char_code_property_vec(vec: &[Value]) -> bool {
-    vec.get(CT_SUBTYPE)
-        .is_some_and(|v| v.as_symbol_id() == Some(char_code_property_table_sym_id()))
-        && char_table_extra_count(vec) == 5
+    table.as_char_table_obj().is_some_and(|obj| {
+        obj.purpose.as_symbol_id() == Some(char_code_property_table_sym_id())
+            && obj.extras.len() == 5
+    })
 }
 
 fn uniprop_compressed_string(value: Value) -> Option<Vec<u32>> {
@@ -845,160 +581,6 @@ fn uniprop_compressed_value_at(value: Value, offset: i64) -> Option<Value> {
     }
 }
 
-fn uniprop_compressed_runs(value: Value, start: i64, end: i64) -> Option<Vec<RawEntry>> {
-    if end < start || end - start + 1 != GNU_CHARTAB_CHARS[2] {
-        return None;
-    }
-    uniprop_compressed_string(value)?;
-
-    let mut runs = Vec::new();
-    let mut run_start = start;
-    let mut previous = uniprop_compressed_value_at(value, 0)?;
-    for offset in 1..GNU_CHARTAB_CHARS[2] {
-        let current = uniprop_compressed_value_at(value, offset)?;
-        if !eq_value(&previous, &current) {
-            runs.push(RawEntry {
-                start: run_start,
-                end: start + offset - 1,
-                value: previous,
-            });
-            run_start = start + offset;
-            previous = current;
-        }
-    }
-    runs.push(RawEntry {
-        start: run_start,
-        end,
-        value: previous,
-    });
-    Some(runs)
-}
-
-#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-fn flatten_uniprop_compressed_string(vec: &mut Vec<Value>, start: i64, codes: &[u32]) {
-    match codes.first().copied() {
-        Some(1) => {
-            let mut cursor = 1;
-            let Some(mut idx) = codes.get(cursor).copied().map(i64::from) else {
-                return;
-            };
-            cursor += 1;
-            while cursor < codes.len() && idx < GNU_CHARTAB_CHARS[2] {
-                let value = codes[cursor] as i64;
-                if value > 0 {
-                    ct_set_char(vec, start + idx, Value::fixnum(value));
-                }
-                idx += 1;
-                cursor += 1;
-            }
-        }
-        Some(2) => {
-            let mut cursor = 1;
-            let mut idx = 0_i64;
-            while cursor < codes.len() && idx < GNU_CHARTAB_CHARS[2] {
-                let value = codes[cursor] as i64;
-                cursor += 1;
-                let count = if cursor < codes.len() && codes[cursor] >= 128 {
-                    let count = codes[cursor] as i64 - 128;
-                    cursor += 1;
-                    count
-                } else {
-                    1
-                };
-                for _ in 0..count {
-                    if idx >= GNU_CHARTAB_CHARS[2] {
-                        break;
-                    }
-                    ct_set_char(vec, start + idx, Value::fixnum(value));
-                    idx += 1;
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
-#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-fn flatten_char_table_slot(
-    vec: &mut Vec<Value>,
-    value: Value,
-    start: i64,
-    span: i64,
-    is_uniprop: bool,
-) {
-    if value.is_nil() {
-        return;
-    }
-
-    if let Some((depth, min_char, contents)) = sub_char_table_depth_min_contents(&value) {
-        flatten_sub_char_table(vec, depth, min_char, &contents, is_uniprop);
-        return;
-    }
-
-    if is_uniprop
-        && span == GNU_CHARTAB_CHARS[2]
-        && let Some(codes) = uniprop_compressed_string(value)
-    {
-        flatten_uniprop_compressed_string(vec, start, &codes);
-        return;
-    }
-
-    let end = (start + span - 1).min(MAX_CHAR);
-    if start == end {
-        ct_set_char(vec, start, value);
-    } else {
-        ct_set_range(vec, start, end, value);
-    }
-}
-
-fn ct_set_range_no_ascii_cache(vec: &mut Vec<Value>, min: i64, max: i64, value: Value) {
-    bump_char_table_write_tick();
-    if min > max {
-        return;
-    }
-    vec.push(Value::cons(Value::fixnum(min), Value::fixnum(max)));
-    vec.push(value);
-}
-
-#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-fn flatten_sub_char_table(
-    vec: &mut Vec<Value>,
-    depth: usize,
-    min_char: i64,
-    contents: &[Value],
-    is_uniprop: bool,
-) {
-    if depth > 3 || contents.len() != GNU_CHARTAB_SIZE[depth] {
-        return;
-    }
-    let span = GNU_CHARTAB_CHARS[depth];
-    for (idx, value) in contents.iter().copied().enumerate() {
-        flatten_char_table_slot(vec, value, min_char + idx as i64 * span, span, is_uniprop);
-    }
-}
-
-fn maybe_optimize_completed_translation_table(vec: &mut Vec<Value>, extra_slot: i64) {
-    if extra_slot != 1 || !vec[CT_SUBTYPE].is_symbol_named("translation-table") {
-        return;
-    }
-
-    let data_start = ct_data_start(vec);
-    let old_slots = vec.len().saturating_sub(data_start);
-    if old_slots < 128 {
-        return;
-    }
-
-    let runs = ct_optimized_local_runs(vec, OptimizeCharTableTest::Eq);
-    if runs.len() < 64 {
-        return;
-    }
-
-    let new_slots = 2 + runs.len() * 2;
-    if new_slots <= old_slots + 2 {
-        ct_replace_local_entries_with_runs(vec, runs);
-    }
-}
-
 /// Build a NeoVM char-table from GNU's readable `#^[...]` char-table literal.
 ///
 /// GNU's external order is:
@@ -1047,33 +629,23 @@ fn copy_sub_char_table_direct(table: Value) -> Option<Value> {
 }
 
 pub(crate) fn copy_char_table(table: Value) -> Option<Value> {
-    if table.is_char_table() {
-        let obj = table.as_char_table_obj()?;
-        let copy = Value::make_char_table(obj.purpose, obj.defalt, obj.extras.len());
-        let contents = obj.contents.map(|value| {
-            if is_sub_char_table(value) {
-                copy_sub_char_table_direct(value).unwrap_or(value)
-            } else {
-                value
-            }
-        });
-        let extras = obj.extras.to_vec();
-        let _ = copy.with_char_table_mut(|copy_obj| {
-            copy_obj.parent = obj.parent;
-            copy_obj.contents = contents;
-            copy_obj.extras.ensure_owned().clone_from(&extras);
-        });
-        set_char_table_ascii(copy, char_table_ascii(copy));
-        return Some(copy);
-    }
-
-    if is_char_table(&table) && table.is_vector() {
-        return table
-            .as_vector_data()
-            .map(|items| Value::vector(items.clone()));
-    }
-
-    None
+    let obj = table.as_char_table_obj()?;
+    let copy = Value::make_char_table(obj.purpose, obj.defalt, obj.extras.len());
+    let contents = obj.contents.map(|value| {
+        if is_sub_char_table(value) {
+            copy_sub_char_table_direct(value).unwrap_or(value)
+        } else {
+            value
+        }
+    });
+    let extras = obj.extras.to_vec();
+    let _ = copy.with_char_table_mut(|copy_obj| {
+        copy_obj.parent = obj.parent;
+        copy_obj.contents = contents;
+        copy_obj.extras.ensure_owned().clone_from(&extras);
+    });
+    set_char_table_ascii(copy, char_table_ascii(copy));
+    Some(copy)
 }
 
 // ---------------------------------------------------------------------------
@@ -1108,17 +680,11 @@ pub fn ct_ref(table: &Value, ch: i64) -> Value {
 /// Panics if `table` is not a char-table Vector.
 pub fn ct_set_single(table: &Value, ch: i64, value: Value) {
     bump_char_table_write_tick();
-    if table.is_char_table() {
-        char_table_set_char_direct(*table, ch, value);
-        return;
-    }
-    if table.is_vector() {
-        table.with_vector_data_mut(|vec| {
-            ct_set_char(vec, ch, value);
-        });
-    } else {
-        panic!("ct_set_single: expected char-table Vector");
-    }
+    assert!(
+        table.is_char_table(),
+        "ct_set_single: expected a char-table"
+    );
+    char_table_set_char_direct(*table, ch, value);
 }
 
 /// `(make-char-table SUB-TYPE &optional DEFAULT)` -- create a char-table.
@@ -1155,21 +721,12 @@ pub(crate) fn fill_char_table_from_fillarray(table: &Value, item: Value) -> Resu
         return Err(wrong_type("char-table-p", table));
     }
     bump_char_table_write_tick();
-    if table.is_char_table() {
-        let _ = table.with_char_table_mut(|obj| {
-            obj.defalt = item;
-            obj.contents.fill(item);
-        });
-        crate::window::note_char_table_layout_mutation();
-        return Ok(());
-    }
-
-    let mut vec = table.as_vector_data().unwrap().clone();
-    vec[CT_DEFAULT] = item;
     // GNU `fillarray` rewrites the 64 top-level content slots and the default
     // slot, but it does not rewrite the separate ASCII cache slot.
-    ct_set_range_no_ascii_cache(&mut vec, 0, MAX_CHAR, item);
-    let _ = table.replace_vector_data(vec);
+    let _ = table.with_char_table_mut(|obj| {
+        obj.defalt = item;
+        obj.contents.fill(item);
+    });
     crate::window::note_char_table_layout_mutation();
     Ok(())
 }
@@ -1192,9 +749,8 @@ pub(crate) fn builtin_set_char_table_range(
     obarray: Option<&super::symbol::Obarray>,
 ) -> EvalResult {
     expect_args("set-char-table-range", &args, 3)?;
-    // Every branch below writes the table (including the nil-range default
-    // and the legacy vector representation, which do not reach the
-    // tick-bumping slot primitives).
+    // Every branch below writes the table (including the nil-range default,
+    // which does not reach the tick-bumping slot primitives).
     bump_char_table_write_tick();
     let table = &args[0];
     let range = &args[1];
@@ -1207,27 +763,12 @@ pub(crate) fn builtin_set_char_table_range(
     match range.kind() {
         // nil -> set default
         ValueKind::Nil => {
-            if table.is_char_table() {
-                let _ = table.with_char_table_mut(|obj| obj.defalt = *value);
-                crate::window::note_char_table_layout_mutation();
-                return Ok(*value);
-            }
-            table.with_vector_data_mut(|vec| {
-                store_value_atomic(&mut vec[CT_DEFAULT], *value);
-            });
+            let _ = table.with_char_table_mut(|obj| obj.defalt = *value);
         }
         // t -> set all characters, but not the default slot.
         ValueKind::T => {
-            if table.is_char_table() {
-                set_char_table_ascii(*table, *value);
-                let _ = table.with_char_table_mut(|obj| obj.contents.fill(*value));
-                crate::window::note_char_table_layout_mutation();
-                return Ok(*value);
-            }
-            let key = Value::cons(Value::fixnum(0), Value::fixnum(MAX_CHAR));
-            table.with_vector_data_mut(|vec| {
-                ct_push_range_entry(vec, 0, MAX_CHAR, key, *value);
-            });
+            set_char_table_ascii(*table, *value);
+            let _ = table.with_char_table_mut(|obj| obj.contents.fill(*value));
         }
         // Single character
         ValueKind::Fixnum(_) => {
@@ -1235,14 +776,7 @@ pub(crate) fn builtin_set_char_table_range(
                 Ok(ch) => ch,
                 Err(_) => return Err(invalid_range_error("set-char-table-range", obarray)),
             };
-            if table.is_char_table() {
-                char_table_set_char_direct(*table, ch, *value);
-                crate::window::note_char_table_layout_mutation();
-                return Ok(*value);
-            }
-            table.with_vector_data_mut(|vec| {
-                ct_set_char(vec, ch, *value);
-            });
+            char_table_set_char_direct(*table, ch, *value);
         }
         // Range cons (MIN . MAX)
         ValueKind::Cons => {
@@ -1251,15 +785,7 @@ pub(crate) fn builtin_set_char_table_range(
             let min = expect_character_code(&pair_car)?;
             let max = expect_character_code(&pair_cdr)?;
             if min <= max {
-                if table.is_char_table() {
-                    char_table_set_range_direct(*table, min, max, *value);
-                    crate::window::note_char_table_layout_mutation();
-                    return Ok(*value);
-                }
-                let key = Value::cons(Value::fixnum(min), Value::fixnum(max));
-                table.with_vector_data_mut(|vec| {
-                    ct_push_range_entry(vec, min, max, key, *value);
-                });
+                char_table_set_range_direct(*table, min, max, *value);
             }
         }
         _ => return Err(invalid_range_error("set-char-table-range", obarray)),
@@ -1269,191 +795,30 @@ pub(crate) fn builtin_set_char_table_range(
     Ok(*value)
 }
 
-/// Set a single character entry in the char-table's data pairs.
-fn ct_set_char(vec: &mut Vec<Value>, ch: i64, value: Value) {
-    ct_update_ascii_cache(vec, ch, ch, value);
-    vec.push(Value::fixnum(ch));
-    vec.push(value);
-}
-
-/// Set a range entry in the char-table's data pairs.
-/// The range is stored as a `Cons(min . max)` key.
-fn ct_set_range(vec: &mut Vec<Value>, min: i64, max: i64, value: Value) {
-    bump_char_table_write_tick();
-    // Store an internal range key, not the caller's cons.  GNU's char-table
-    // storage records bounds; Lisp-visible range conses from `map-char-table`
-    // are reusable mutable objects.
-    let key = Value::cons(Value::fixnum(min), Value::fixnum(max));
-    ct_push_range_entry(vec, min, max, key, value);
-}
-
-fn ct_push_range_entry(vec: &mut Vec<Value>, min: i64, max: i64, key: Value, value: Value) {
-    ct_update_ascii_cache(vec, min, max, value);
-    vec.push(key);
-    vec.push(value);
-}
-
-fn ct_optimized_prefix_range(vec: &[Value], data_start: usize) -> Option<std::ops::Range<usize>> {
-    if vec.len() < data_start + 2 || !vec[data_start].is_symbol_named(CT_OPTIMIZED_PREFIX_MARKER) {
-        return None;
-    }
-    let pair_count = usize::try_from(vec[data_start + 1].as_fixnum()?).ok()?;
-    let prefix_start = data_start + 2;
-    let prefix_end = prefix_start.checked_add(pair_count.checked_mul(2)?)?;
-    if prefix_end <= vec.len() {
-        Some(prefix_start..prefix_end)
-    } else {
-        None
-    }
-}
-
-fn ct_entry_value_for_char(value: Value, min: i64, max: i64, ch: i64, is_uniprop: bool) -> Value {
-    if is_uniprop
-        && max - min + 1 == GNU_CHARTAB_CHARS[2]
-        && let Some(decoded) = uniprop_compressed_value_at(value, ch - min)
-    {
-        decoded
-    } else {
-        value
-    }
-}
-
-fn ct_get_char_from_sorted_prefix(
-    vec: &[Value],
-    prefix: std::ops::Range<usize>,
-    ch: i64,
-    is_uniprop: bool,
-) -> Option<Value> {
-    let mut lo = 0usize;
-    let mut hi = prefix.len() / 2;
-    while lo < hi {
-        let mid = lo + (hi - lo) / 2;
-        let idx = prefix.start + mid * 2;
-        let (min, max) = key_span(vec[idx])?;
-        if ch < min {
-            hi = mid;
-        } else if ch > max {
-            lo = mid + 1;
-        } else {
-            return Some(ct_entry_value_for_char(
-                vec[idx + 1],
-                min,
-                max,
-                ch,
-                is_uniprop,
-            ));
-        }
-    }
-    None
-}
-
-/// Look up a single character in the data pairs (no parent/default fallback).
-/// The last assignment that covers the character wins, matching GNU Emacs
-/// `set-char-table-range` overwrite semantics for both single-char and range
-/// entries.
-fn ct_get_char(vec: &[Value], ch: i64, is_uniprop: bool) -> Option<Value> {
-    let start = ct_data_start(vec);
-    let len = vec.len();
-    if len < start + 2 {
-        return None;
-    }
-    let optimized_prefix = ct_optimized_prefix_range(vec, start);
-    let reverse_stop = optimized_prefix.as_ref().map_or(start, |range| range.end);
-    // Scan right-to-left so the first match seen is the most recently
-    // pushed entry — matching the "last assignment wins" semantic of
-    // `set-char-table-range` without needing to scan every pair on
-    // every call. The hot font-lock/syntax-ppss path pounds this
-    // function millions of times per fontification; the old
-    // unconditional O(N) scan was the dominant cost on a 147-char
-    // *scratch* buffer (see commit note).
-    let mut i = len; // walk backwards two slots at a time
-    while i >= reverse_stop + 2 {
-        i -= 2;
-        let key = vec[i];
-        match key.kind() {
-            ValueKind::Fixnum(existing) => {
-                if existing == ch {
-                    return Some(vec[i + 1]);
-                }
-            }
-            ValueKind::Cons => {
-                let pair_car = key.cons_car();
-                let pair_cdr = key.cons_cdr();
-                if let (Some(min), Some(max)) = (pair_car.as_fixnum(), pair_cdr.as_fixnum())
-                    && ch >= min
-                    && ch <= max
-                {
-                    return Some(ct_entry_value_for_char(
-                        vec[i + 1],
-                        min,
-                        max,
-                        ch,
-                        is_uniprop,
-                    ));
-                }
-            }
-            _ => {}
-        }
-    }
-    if let Some(prefix) = optimized_prefix {
-        return ct_get_char_from_sorted_prefix(vec, prefix, ch, is_uniprop);
-    }
-    None
-}
-
 fn ct_lookup_ascii_cached(table: &Value, ch: i64) -> Option<Value> {
     if !(0..CT_ASCII_CACHE_LEN as i64).contains(&ch) {
         return None;
     }
-    if table.is_char_table() {
-        let mut current = *table;
-        loop {
-            let obj = current.as_char_table_obj()?;
-            let value = if is_sub_char_table(obj.ascii) {
-                sub_char_table_contents(obj.ascii)
-                    .and_then(|contents| contents.get(ch as usize).copied())
-                    .unwrap_or(Value::NIL)
-            } else {
-                obj.ascii
-            };
-            if !value.is_nil() {
-                return Some(value);
-            }
-            if !obj.defalt.is_nil() {
-                return Some(obj.defalt);
-            }
-            if !is_char_table(&obj.parent) {
-                return Some(Value::NIL);
-            }
-            current = obj.parent;
-        }
-    }
-    let ch = ch as usize;
     let mut current = *table;
     loop {
-        let vec_ref = current.as_vector_data()?;
-        if is_char_code_property_vec(vec_ref)
-            && ct_ascii_cache_magic(vec_ref) == Some(CT_ASCII_CACHE_MAGIC)
-        {
-            return None;
-        }
-        let cache_range = ct_ascii_cache_range(vec_ref)?;
-
-        let value = vec_ref[cache_range.start + ch];
+        let obj = current.as_char_table_obj()?;
+        let value = if is_sub_char_table(obj.ascii) {
+            sub_char_table_contents(obj.ascii)
+                .and_then(|contents| contents.get(ch as usize).copied())
+                .unwrap_or(Value::NIL)
+        } else {
+            obj.ascii
+        };
         if !value.is_nil() {
             return Some(value);
         }
-
-        let default = vec_ref[CT_DEFAULT];
-        if !default.is_nil() {
-            return Some(default);
+        if !obj.defalt.is_nil() {
+            return Some(obj.defalt);
         }
-
-        let parent = vec_ref[CT_PARENT];
-        if !is_char_table(&parent) {
+        if !is_char_table(&obj.parent) {
             return Some(Value::NIL);
         }
-        current = parent;
+        current = obj.parent;
     }
 }
 
@@ -1475,14 +840,8 @@ pub(crate) fn builtin_char_table_range(
     }
 
     match range.kind() {
-        ValueKind::Nil => {
-            // Return the default value.
-            if table.is_char_table() {
-                return Ok(table.as_char_table_obj().unwrap().defalt);
-            }
-            let vec = table.as_vector_data().unwrap();
-            Ok(vec[CT_DEFAULT])
-        }
+        // The default value.
+        ValueKind::Nil => Ok(char_table_default(table)),
         ValueKind::Fixnum(_) => {
             let ch = match expect_character_code(range) {
                 Ok(ch) => ch,
@@ -1515,48 +874,22 @@ pub(crate) fn ct_lookup(table: &Value, ch: i64) -> EvalResult {
     if let Some(value) = ct_lookup_ascii_cached(table, ch) {
         return Ok(value);
     }
-    if table.is_char_table() {
-        let obj = table.as_char_table_obj().unwrap();
-        let idx = chartab_idx(ch, 0, 0);
-        let mut val = obj.contents[idx];
-        if is_sub_char_table(val) {
-            val = sub_char_table_ref(val, ch, is_char_code_property_table(table));
-        }
-        if !val.is_nil() {
-            return Ok(val);
-        }
-        if !obj.defalt.is_nil() {
-            return Ok(obj.defalt);
-        }
-        if is_char_table(&obj.parent) {
-            return ct_lookup(&obj.parent, ch);
-        }
-        return Ok(Value::NIL);
+    let obj = table.as_char_table_obj().unwrap();
+    let idx = chartab_idx(ch, 0, 0);
+    let mut val = obj.contents[idx];
+    if is_sub_char_table(val) {
+        val = sub_char_table_ref(val, ch, is_char_code_property_table(table));
     }
-    // Borrow the Vec instead of cloning — the 115K clones/sec we used to
-    // do in font-lock's syntax-ppss path each allocated a ~50+-entry Vec
-    // and nuked syntax-table reading throughput. GNU's `CHAR_TABLE_REF`
-    // is direct array indexing; the closest we can do without reshaping
-    // the table is to index without copying.
-    let vec_ref = table.as_vector_data().unwrap();
-
-    if let Some(val) = ct_get_char(vec_ref, ch, is_char_code_property_vec(vec_ref))
-        && !val.is_nil()
-    {
+    if !val.is_nil() {
         return Ok(val);
     }
-
-    let default = vec_ref[CT_DEFAULT];
-    let parent = vec_ref[CT_PARENT];
-
-    let value = if !default.is_nil() {
-        default
-    } else if is_char_table(&parent) {
-        ct_lookup(&parent, ch)?
-    } else {
-        Value::NIL
-    };
-    Ok(value)
+    if !obj.defalt.is_nil() {
+        return Ok(obj.defalt);
+    }
+    if is_char_table(&obj.parent) {
+        return ct_lookup(&obj.parent, ch);
+    }
+    Ok(Value::NIL)
 }
 
 /// Translate character `c` through translation `table`.
@@ -1719,18 +1052,6 @@ fn ct_lookup_and_range(table: &Value, ch: i64) -> Result<(Value, i64, i64), Flow
     Ok((value, from, to))
 }
 
-fn key_span(key: Value) -> Option<(i64, i64)> {
-    match key.kind() {
-        ValueKind::Fixnum(ch) => Some((ch, ch)),
-        ValueKind::Cons => {
-            let start = key.cons_car().as_fixnum()?;
-            let end = key.cons_cdr().as_fixnum()?;
-            Some((start, end))
-        }
-        _ => None,
-    }
-}
-
 #[derive(Clone, Copy)]
 struct LocalAtomicRun {
     value: Option<Value>,
@@ -1757,59 +1078,12 @@ fn ct_lookup_atomic_range(table: &Value, ch: i64) -> Result<(Value, i64, i64), F
     if !is_char_table(table) {
         return Err(wrong_type("char-table-p", table));
     }
-    if table.is_char_table() {
-        for run in ct_effective_runs(table) {
-            if ch >= run.start && ch <= run.end {
-                return Ok((run.value, run.start, run.end));
-            }
-        }
-        return Ok((Value::NIL, 0, MAX_CHAR));
-    }
-    if !(0..=MAX_CHAR).contains(&ch) {
-        return Ok((Value::NIL, 0, MAX_CHAR));
-    }
-
-    let vec = table.as_vector_data().unwrap();
-    let start = ct_data_start(vec);
-    let mut lo = 0;
-    let mut hi = MAX_CHAR.saturating_add(1);
-    let mut found_local = false;
-    let mut local_value = Value::NIL;
-
-    let mut i = vec.len();
-    while i >= start + 2 {
-        i -= 2;
-        if let Some((entry_start, entry_end)) = key_span(vec[i]) {
-            refine_atomic_boundary(entry_start, entry_end, ch, &mut lo, &mut hi);
-            if !found_local && ch >= entry_start && ch <= entry_end {
-                found_local = true;
-                local_value = vec[i + 1];
-                break;
-            }
+    for run in ct_effective_runs(table) {
+        if ch >= run.start && ch <= run.end {
+            return Ok((run.value, run.start, run.end));
         }
     }
-
-    let atomic_end = hi.saturating_sub(1).min(MAX_CHAR);
-    if found_local && !local_value.is_nil() {
-        return Ok((local_value, lo, atomic_end));
-    }
-
-    let default = vec[CT_DEFAULT];
-    if !default.is_nil() {
-        return Ok((default, lo, atomic_end));
-    }
-
-    let parent = vec[CT_PARENT];
-    if is_char_table(&parent) {
-        let (parent_value, parent_start, parent_end) = ct_lookup_atomic_range(&parent, ch)?;
-        return Ok((
-            parent_value,
-            lo.max(parent_start),
-            atomic_end.min(parent_end),
-        ));
-    }
-
-    Ok((Value::NIL, lo, atomic_end))
+    Ok((Value::NIL, 0, MAX_CHAR))
 }
 
 fn append_atomic_run(out: &mut Vec<(Value, i64, i64)>, value: Value, start: i64, end: i64) {
@@ -1831,76 +1105,20 @@ fn ct_local_atomic_runs(
     requested_start: i64,
     requested_end: i64,
 ) -> (Vec<LocalAtomicRun>, Value, Value) {
-    if table.is_char_table() {
-        let obj = table.as_char_table_obj().unwrap();
-        let runs = clipped_runs(
-            ct_local_direct_runs_in_range(table, requested_start, requested_end),
-            requested_start,
-            requested_end,
-        )
-        .into_iter()
-        .map(|run| LocalAtomicRun {
-            value: Some(run.value),
-            start: run.start,
-            end: run.end,
-        })
-        .collect();
-        return (runs, obj.defalt, obj.parent);
-    }
-    let vec = table.as_vector_data().unwrap();
-    let default = vec[CT_DEFAULT];
-    let parent = vec[CT_PARENT];
-    let start = requested_start.max(0);
-    let end = requested_end.min(MAX_CHAR);
-    if start > end {
-        return (Vec::new(), default, parent);
-    }
-
-    let end_exclusive = end.saturating_add(1);
-    let data_start = ct_data_start(vec);
-    let mut boundaries = vec![start, end_exclusive];
-    let mut spans = Vec::new();
-    let mut i = data_start;
-    while i + 1 < vec.len() {
-        if let Some((entry_start, entry_end)) = key_span(vec[i]) {
-            let span_start = entry_start.max(start);
-            let span_end = entry_end.min(end);
-            if span_start <= span_end {
-                let span_end_exclusive = span_end.saturating_add(1);
-                boundaries.push(span_start);
-                boundaries.push(span_end_exclusive);
-                spans.push((span_start, span_end_exclusive, vec[i + 1]));
-            }
-        }
-        i += 2;
-    }
-
-    boundaries.sort_unstable();
-    boundaries.dedup();
-
-    let mut values = vec![None; boundaries.len().saturating_sub(1)];
-    for (span_start, span_end_exclusive, value) in spans {
-        let Ok(first) = boundaries.binary_search(&span_start) else {
-            continue;
-        };
-        let Ok(last) = boundaries.binary_search(&span_end_exclusive) else {
-            continue;
-        };
-        for slot in values.iter_mut().take(last).skip(first) {
-            *slot = Some(value);
-        }
-    }
-
-    let runs = values
-        .into_iter()
-        .enumerate()
-        .map(|(index, value)| LocalAtomicRun {
-            value,
-            start: boundaries[index],
-            end: boundaries[index + 1].saturating_sub(1),
-        })
-        .collect();
-    (runs, default, parent)
+    let obj = table.as_char_table_obj().unwrap();
+    let runs = clipped_runs(
+        ct_local_direct_runs_in_range(table, requested_start, requested_end),
+        requested_start,
+        requested_end,
+    )
+    .into_iter()
+    .map(|run| LocalAtomicRun {
+        value: Some(run.value),
+        start: run.start,
+        end: run.end,
+    })
+    .collect();
+    (runs, obj.defalt, obj.parent)
 }
 
 /// GNU `char-table-ref-and-range`-style helper used by subsystems that need
@@ -1975,12 +1193,7 @@ pub(crate) fn builtin_char_table_parent(args: Vec<Value>) -> EvalResult {
     if !is_char_table(table) {
         return Err(wrong_type("char-table-p", table));
     }
-    if table.is_char_table() {
-        Ok(table.as_char_table_obj().unwrap().parent)
-    } else {
-        let vec = table.as_vector_data().unwrap();
-        Ok(vec[CT_PARENT])
-    }
+    Ok(table.as_char_table_obj().unwrap().parent)
 }
 
 /// Return the sparse local `(key . value)` entries stored directly in a char-table.
@@ -1992,24 +1205,10 @@ pub(crate) fn char_table_local_entries(table: &Value) -> Result<Vec<(Value, Valu
     if !is_char_table(table) {
         return Err(wrong_type("char-table-p", table));
     }
-    if table.is_char_table() {
-        return Ok(ct_collect_raw_entries_for_table(*table, false)
-            .into_iter()
-            .map(|run| (run_key(run.start, run.end), run.value))
-            .collect());
-    }
-    let vec = table.as_vector_data().unwrap();
-    let start = ct_data_start(vec);
-    let mut out = Vec::new();
-    let mut i = start;
-    while i + 1 < vec.len() {
-        match vec[i].kind() {
-            ValueKind::Fixnum(_) | ValueKind::Cons => out.push((vec[i], vec[i + 1])),
-            _ => {}
-        }
-        i += 2;
-    }
-    Ok(out)
+    Ok(ct_collect_raw_entries_for_table(*table, false)
+        .into_iter()
+        .map(|run| (run_key(run.start, run.end), run.value))
+        .collect())
 }
 
 /// `(set-char-table-parent CHAR-TABLE PARENT)` -- set the parent table.
@@ -2038,20 +1237,11 @@ pub(crate) fn builtin_set_char_table_parent(args: Vec<Value>) -> EvalResult {
                     )],
                 ));
             }
-            cursor = if cursor.is_char_table() {
-                cursor.as_char_table_obj().unwrap().parent
-            } else {
-                let vec = cursor.as_vector_data().unwrap();
-                vec[CT_PARENT]
-            };
+            cursor = cursor.as_char_table_obj().unwrap().parent;
         }
     }
 
-    if table.is_char_table() {
-        let _ = table.with_char_table_mut(|obj| obj.parent = *parent);
-    } else {
-        let _ = table.set_vector_slot(CT_PARENT, *parent);
-    }
+    let _ = table.with_char_table_mut(|obj| obj.parent = *parent);
     crate::window::note_char_table_layout_mutation();
     Ok(*parent)
 }
@@ -2139,83 +1329,18 @@ fn ct_local_direct_runs(table: &Value) -> Vec<EffectiveRun> {
 /// tables fall back to the full enumeration — they are 128-slot structures
 /// where pruning buys nothing.
 fn ct_local_direct_runs_in_range(table: &Value, win_start: i64, win_end: i64) -> Vec<EffectiveRun> {
-    if table.is_char_table() {
-        let obj = table.as_char_table_obj().unwrap();
-        let raws = ct_collect_raw_entries_for_table_in_range(*table, true, win_start, win_end);
-        let mut runs = Vec::new();
-        for raw in raws {
-            let value = if raw.value.is_nil() && !obj.defalt.is_nil() {
-                obj.defalt
-            } else {
-                raw.value
-            };
-            push_effective_run(&mut runs, raw.start, raw.end, value);
-        }
-        return if runs.is_empty() {
-            vec![EffectiveRun {
-                start: 0,
-                end: MAX_CHAR,
-                value: Value::NIL,
-            }]
-        } else {
-            runs
-        };
-    }
-    if !table.is_vector() {
-        return vec![EffectiveRun {
-            start: 0,
-            end: MAX_CHAR,
-            value: Value::NIL,
-        }];
-    }
-    let vec = table.as_vector_data().unwrap().clone();
-    let raws = ct_collect_raw_entries(&vec, is_char_code_property_vec(&vec));
-    let default = vec[CT_DEFAULT];
-    let domain_end = MAX_CHAR.saturating_add(1);
-
-    let mut boundaries = BTreeSet::new();
-    let mut starts: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
-    let mut ends: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
-    boundaries.insert(0);
-    boundaries.insert(domain_end);
-    for (idx, raw) in raws.iter().enumerate() {
-        let start = raw.start.clamp(0, domain_end);
-        let end_exclusive = raw.end.saturating_add(1).clamp(0, domain_end);
-        boundaries.insert(start);
-        boundaries.insert(end_exclusive);
-        starts.entry(start).or_default().push(idx);
-        ends.entry(end_exclusive).or_default().push(idx);
-    }
-
+    let obj = table.as_char_table_obj().unwrap();
+    let raws = ct_collect_raw_entries_for_table_in_range(*table, true, win_start, win_end);
     let mut runs = Vec::new();
-    let mut active_raws = BTreeSet::new();
-    for window in boundaries.into_iter().collect::<Vec<_>>().windows(2) {
-        let start = window[0];
-        let end_exclusive = window[1];
-        if let Some(indices) = ends.get(&start) {
-            for idx in indices {
-                active_raws.remove(idx);
-            }
-        }
-        if let Some(indices) = starts.get(&start) {
-            for idx in indices {
-                active_raws.insert(*idx);
-            }
-        }
-        if start > MAX_CHAR || end_exclusive <= start {
-            continue;
-        }
-        let end = end_exclusive.saturating_sub(1).min(MAX_CHAR);
-        let local = active_raws.iter().next_back().map(|idx| raws[*idx].value);
-        let value = match local {
-            Some(local) if !local.is_nil() => local,
-            _ if !default.is_nil() => default,
-            _ => Value::NIL,
+    for raw in raws {
+        let value = if raw.value.is_nil() && !obj.defalt.is_nil() {
+            obj.defalt
+        } else {
+            raw.value
         };
-        push_effective_run(&mut runs, start, end, value);
+        push_effective_run(&mut runs, raw.start, raw.end, value);
     }
-
-    if runs.is_empty() {
+    return if runs.is_empty() {
         vec![EffectiveRun {
             start: 0,
             end: MAX_CHAR,
@@ -2223,7 +1348,7 @@ fn ct_local_direct_runs_in_range(table: &Value, win_start: i64, win_end: i64) ->
         }]
     } else {
         runs
-    }
+    };
 }
 
 fn push_effective_run(runs: &mut Vec<EffectiveRun>, start: i64, end: i64, value: Value) {
@@ -2238,12 +1363,6 @@ fn push_effective_run(runs: &mut Vec<EffectiveRun>, start: i64, end: i64, value:
         return;
     }
     runs.push(EffectiveRun { start, end, value });
-}
-
-fn ct_ascii_initial_value(vec: &[Value]) -> Value {
-    ct_ascii_cache_range(vec)
-        .and_then(|range| vec.get(range.start).copied())
-        .unwrap_or(Value::NIL)
 }
 
 fn clipped_runs(
@@ -2329,18 +1448,11 @@ fn ct_map_char_table_runs(table: &Value) -> Vec<EffectiveRun> {
     if !is_char_table(table) {
         return Vec::new();
     }
-    let parent = if table.is_char_table() {
-        table.as_char_table_obj().unwrap().parent
-    } else {
-        table.as_vector_data().unwrap()[CT_PARENT]
-    };
+    let obj = table.as_char_table_obj().unwrap();
+    let parent = obj.parent;
     let local_runs = ct_local_direct_runs(table);
     let mut out = Vec::new();
-    let mut val = if table.is_char_table() {
-        table.as_char_table_obj().unwrap().ascii
-    } else {
-        ct_ascii_initial_value(table.as_vector_data().unwrap())
-    };
+    let mut val = obj.ascii;
     let mut from = 0;
 
     for run in local_runs {
@@ -2399,41 +1511,6 @@ fn optimize_values_equal(a: Value, b: Value, test: OptimizeCharTableTest) -> boo
     }
 }
 
-fn ct_collect_raw_entries(vec: &[Value], is_uniprop: bool) -> Vec<RawEntry> {
-    let start = ct_data_start(vec);
-    let mut raws = Vec::new();
-    let mut i = start;
-    while i + 1 < vec.len() {
-        match vec[i].kind() {
-            ValueKind::Fixnum(ch) => raws.push(RawEntry {
-                start: ch,
-                end: ch,
-                value: vec[i + 1],
-            }),
-            ValueKind::Cons => {
-                let pair_car = vec[i].cons_car();
-                let pair_cdr = vec[i].cons_cdr();
-                if let (Some(min), Some(max)) = (pair_car.as_fixnum(), pair_cdr.as_fixnum()) {
-                    if is_uniprop
-                        && let Some(mut decoded) = uniprop_compressed_runs(vec[i + 1], min, max)
-                    {
-                        raws.append(&mut decoded);
-                    } else {
-                        raws.push(RawEntry {
-                            start: min,
-                            end: max,
-                            value: vec[i + 1],
-                        });
-                    }
-                }
-            }
-            _ => {}
-        }
-        i += 2;
-    }
-    raws
-}
-
 /// Stored child values for display dependency capture, without Lisp allocation
 /// or expanding ranges into individual character codes. Includes defaults,
 /// parent tables and extra slots; callers distinguish tables from glyph vectors.
@@ -2444,21 +1521,9 @@ pub(crate) fn display_dependency_children(table: Value) -> Option<Vec<Value>> {
         values.extend_from_slice(table.extras.as_slice());
         return Some(values);
     }
-    if let Some(table) = table.as_sub_char_table_obj() {
-        return Some(table.contents.as_slice().to_vec());
-    }
-    if !is_char_table(&table) {
-        return None;
-    }
-    let slots = table.as_vector_data()?;
-    let mut values = vec![slots[CT_DEFAULT], slots[CT_PARENT]];
-    values.extend_from_slice(&slots[CT_EXTRA_START..ct_data_start(slots)]);
-    values.extend(
-        ct_collect_raw_entries(slots, false)
-            .into_iter()
-            .map(|entry| entry.value),
-    );
-    Some(values)
+    table
+        .as_sub_char_table_obj()
+        .map(|table| table.contents.as_slice().to_vec())
 }
 
 /// Ranged sub-char-table walk: descends only into slots whose
@@ -2533,132 +1598,18 @@ fn ct_collect_raw_entries_for_table_in_range(
     out
 }
 
-fn ct_collect_local_raw_entries(vec: &[Value]) -> Vec<RawEntry> {
-    ct_collect_raw_entries(vec, false)
-}
-
-fn append_optimized_raw_run(
-    runs: &mut Vec<RawEntry>,
-    start: i64,
-    end: i64,
-    value: Value,
-    test: OptimizeCharTableTest,
-) {
-    if start > end || value.is_nil() {
-        return;
-    }
-    if let Some(previous) = runs.last_mut()
-        && previous.end.saturating_add(1) == start
-        && optimize_values_equal(previous.value, value, test)
-    {
-        previous.end = end;
-        return;
-    }
-    runs.push(RawEntry { start, end, value });
-}
-
-fn ct_optimized_local_runs(vec: &[Value], test: OptimizeCharTableTest) -> Vec<RawEntry> {
-    let raws = ct_collect_raw_entries(vec, is_char_code_property_vec(vec));
-    if raws.is_empty() {
-        return Vec::new();
-    }
-
-    let domain_end = MAX_CHAR.saturating_add(1);
-    let mut boundaries = BTreeSet::new();
-    let mut starts: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
-    let mut ends: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
-    boundaries.insert(0);
-    boundaries.insert(domain_end);
-    for (idx, raw) in raws.iter().enumerate() {
-        let start = raw.start.clamp(0, domain_end);
-        let end_exclusive = raw.end.saturating_add(1).clamp(0, domain_end);
-        if start >= end_exclusive {
-            continue;
-        }
-        boundaries.insert(start);
-        boundaries.insert(end_exclusive);
-        starts.entry(start).or_default().push(idx);
-        ends.entry(end_exclusive).or_default().push(idx);
-    }
-
-    let mut runs = Vec::new();
-    let mut active_raws = BTreeSet::new();
-    let boundary_vec = boundaries.into_iter().collect::<Vec<_>>();
-    for window in boundary_vec.windows(2) {
-        let start = window[0];
-        let end_exclusive = window[1];
-        if let Some(indices) = ends.get(&start) {
-            for idx in indices {
-                active_raws.remove(idx);
-            }
-        }
-        if let Some(indices) = starts.get(&start) {
-            for idx in indices {
-                active_raws.insert(*idx);
-            }
-        }
-        if start > MAX_CHAR || end_exclusive <= start {
-            continue;
-        }
-        let Some(local_idx) = active_raws.iter().next_back().copied() else {
-            continue;
-        };
-        append_optimized_raw_run(
-            &mut runs,
-            start,
-            end_exclusive.saturating_sub(1).min(MAX_CHAR),
-            raws[local_idx].value,
-            test,
-        );
-    }
-    runs
-}
-
-fn ct_clear_ascii_cache(vec: &mut [Value]) {
-    if let Some(range) = ct_ascii_cache_range(vec) {
-        for slot in range {
-            vec[slot] = Value::NIL;
-        }
-    }
-}
-
-fn ct_replace_local_entries_with_runs(vec: &mut Vec<Value>, runs: Vec<RawEntry>) {
-    let data_start = ct_data_start(vec);
-    let pair_count = runs.len();
-    vec.truncate(data_start);
-    ct_clear_ascii_cache(vec);
-    if pair_count > 0 {
-        vec.push(Value::symbol(CT_OPTIMIZED_PREFIX_MARKER));
-        vec.push(Value::fixnum(pair_count as i64));
-    }
-    for run in runs {
-        if run.start == run.end {
-            ct_set_char(vec, run.start, run.value);
-        } else {
-            ct_set_range(vec, run.start, run.end, run.value);
-        }
-    }
-}
-
 pub(crate) fn optimize_char_table(table: &Value, test: OptimizeCharTableTest) -> Result<(), Flow> {
     if !is_char_table(table) {
         return Err(wrong_type("char-table-p", table));
     }
-    if table.is_char_table() {
-        for idx in 0..GNU_CHARTAB_SIZE[0] {
-            let value = table.as_char_table_obj().unwrap().contents[idx];
-            if is_sub_char_table(value) {
-                let optimized = optimize_sub_char_table_direct(value, test);
-                set_char_table_contents(*table, idx, optimized);
-            }
+    for idx in 0..GNU_CHARTAB_SIZE[0] {
+        let value = table.as_char_table_obj().unwrap().contents[idx];
+        if is_sub_char_table(value) {
+            let optimized = optimize_sub_char_table_direct(value, test);
+            set_char_table_contents(*table, idx, optimized);
         }
-        set_char_table_ascii(*table, char_table_ascii(*table));
-        return Ok(());
     }
-    table.with_vector_data_mut(|vec| {
-        let runs = ct_optimized_local_runs(vec, test);
-        ct_replace_local_entries_with_runs(vec, runs);
-    });
+    set_char_table_ascii(*table, char_table_ascii(*table));
     Ok(())
 }
 
@@ -2692,123 +1643,28 @@ fn optimize_sub_char_table_direct(table: Value, test: OptimizeCharTableTest) -> 
 }
 
 fn ct_effective_runs(table: &Value) -> Vec<EffectiveRun> {
-    if table.is_char_table() {
-        let obj = table.as_char_table_obj().unwrap();
-        let local_runs = ct_local_direct_runs(table);
-        if !is_char_table(&obj.parent) {
-            return local_runs;
-        }
-        let parent_runs = ct_effective_runs(&obj.parent);
-        let mut out = Vec::new();
-        let mut parent_idx = 0usize;
-        for run in local_runs {
-            if !run.value.is_nil() {
-                push_effective_run(&mut out, run.start, run.end, run.value);
-                continue;
-            }
-            push_clipped_parent_runs_from_slice(
-                &mut out,
-                &parent_runs,
-                &mut parent_idx,
-                run.start,
-                run.end,
-            );
-        }
-        return out;
+    let obj = table.as_char_table_obj().unwrap();
+    let local_runs = ct_local_direct_runs(table);
+    if !is_char_table(&obj.parent) {
+        return local_runs;
     }
-    if !table.is_vector() {
-        return vec![EffectiveRun {
-            start: 0,
-            end: MAX_CHAR,
-            value: Value::NIL,
-        }];
-    };
-    let vec = table.as_vector_data().unwrap();
-    let raws = ct_collect_raw_entries(vec, is_char_code_property_vec(vec));
-    let default = vec[CT_DEFAULT];
-    let parent = vec[CT_PARENT];
-    let domain_end = MAX_CHAR.saturating_add(1);
-    let parent_runs = if is_char_table(&parent) {
-        ct_effective_runs(&parent)
-    } else {
-        vec![EffectiveRun {
-            start: 0,
-            end: MAX_CHAR,
-            value: Value::NIL,
-        }]
-    };
-
-    let mut boundaries = BTreeSet::new();
-    let mut starts: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
-    let mut ends: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
-    boundaries.insert(0);
-    boundaries.insert(domain_end);
-    for (idx, raw) in raws.iter().enumerate() {
-        let end_exclusive = raw.end.saturating_add(1).min(domain_end);
-        boundaries.insert(raw.start);
-        boundaries.insert(end_exclusive);
-        starts.entry(raw.start).or_default().push(idx);
-        ends.entry(end_exclusive).or_default().push(idx);
-    }
-    for run in &parent_runs {
-        boundaries.insert(run.start);
-        boundaries.insert(run.end.saturating_add(1).min(domain_end));
-    }
-
-    let boundary_vec = boundaries.into_iter().collect::<Vec<_>>();
-    let mut runs: Vec<EffectiveRun> = Vec::new();
-    let mut active_raws = BTreeSet::new();
+    let parent_runs = ct_effective_runs(&obj.parent);
+    let mut out = Vec::new();
     let mut parent_idx = 0usize;
-
-    for window in boundary_vec.windows(2) {
-        let start = window[0];
-        let end_exclusive = window[1];
-        if let Some(indices) = ends.get(&start) {
-            for idx in indices {
-                active_raws.remove(idx);
-            }
-        }
-        if let Some(indices) = starts.get(&start) {
-            for idx in indices {
-                active_raws.insert(*idx);
-            }
-        }
-        if start > MAX_CHAR || end_exclusive <= start {
+    for run in local_runs {
+        if !run.value.is_nil() {
+            push_effective_run(&mut out, run.start, run.end, run.value);
             continue;
         }
-        let end = end_exclusive.saturating_sub(1).min(MAX_CHAR);
-        while parent_idx + 1 < parent_runs.len() && start > parent_runs[parent_idx].end {
-            parent_idx += 1;
-        }
-        let local = active_raws.iter().next_back().map(|idx| raws[*idx].value);
-        let value = match local {
-            Some(local) if !local.is_nil() => local,
-            _ if !default.is_nil() => default,
-            _ => parent_runs
-                .get(parent_idx)
-                .filter(|run| start >= run.start && start <= run.end)
-                .map(|run| run.value)
-                .unwrap_or(Value::NIL),
-        };
-        if let Some(previous) = runs.last_mut()
-            && previous.end.saturating_add(1) == start
-            && eq_value(&previous.value, &value)
-        {
-            previous.end = end;
-        } else {
-            runs.push(EffectiveRun { start, end, value });
-        }
+        push_clipped_parent_runs_from_slice(
+            &mut out,
+            &parent_runs,
+            &mut parent_idx,
+            run.start,
+            run.end,
+        );
     }
-
-    if runs.is_empty() {
-        vec![EffectiveRun {
-            start: 0,
-            end: MAX_CHAR,
-            value: Value::NIL,
-        }]
-    } else {
-        runs
-    }
+    out
 }
 
 fn run_key(start: i64, end: i64) -> Value {
@@ -2893,120 +1749,13 @@ where
     }
 }
 
-const GNU_CHAR_TABLE_CONTENT_BLOCKS: i64 = 64;
-const GNU_CHAR_TABLE_BLOCK_CHARS: i64 = 1 << 16;
-
-fn raw_entry_overlaps(raw: &RawEntry, start: i64, end: i64) -> bool {
-    raw.start <= end && raw.end >= start
-}
-
-fn local_raw_value_at(raws: &[RawEntry], ch: i64) -> Value {
-    raws.iter()
-        .rev()
-        .find(|raw| ch >= raw.start && ch <= raw.end)
-        .map(|raw| raw.value)
-        .unwrap_or(Value::NIL)
-}
-
-fn local_uniform_value(raws: &[RawEntry], start: i64, end: i64) -> Option<Value> {
-    if start > end {
-        return Some(Value::NIL);
-    }
-    if !raws.iter().any(|raw| raw_entry_overlaps(raw, start, end)) {
-        return Some(Value::NIL);
-    }
-
-    let mut boundaries = BTreeSet::new();
-    let domain_end = MAX_CHAR.saturating_add(1);
-    boundaries.insert(start.clamp(0, domain_end));
-    boundaries.insert(end.saturating_add(1).clamp(0, domain_end));
-    for raw in raws
-        .iter()
-        .filter(|raw| raw_entry_overlaps(raw, start, end))
-    {
-        boundaries.insert(raw.start.max(start).clamp(0, domain_end));
-        boundaries.insert(raw.end.saturating_add(1).min(end.saturating_add(1)));
-    }
-
-    let mut value = None;
-    for window in boundaries.into_iter().collect::<Vec<_>>().windows(2) {
-        let segment_start = window[0];
-        if segment_start > end || window[1] <= segment_start {
-            continue;
-        }
-        let segment_value = local_raw_value_at(raws, segment_start);
-        match value {
-            Some(previous) if !eq_value(&previous, &segment_value) => return None,
-            Some(_) => {}
-            None => value = Some(segment_value),
-        }
-    }
-    value.or(Some(Value::NIL))
-}
-
-fn make_sub_char_table_literal(depth: usize, min_char: i64, contents: Vec<Value>) -> Value {
-    let mut values = Vec::with_capacity(contents.len() + 3);
-    values.push(Value::symbol(SUB_CHAR_TABLE_TAG));
-    values.push(Value::fixnum(depth as i64));
-    values.push(Value::fixnum(min_char));
-    values.extend(contents);
-    Value::vector(values)
-}
-
-fn external_subtree_for_span(
-    raws: &[RawEntry],
-    depth: usize,
-    min_char: i64,
-    start: i64,
-    end: i64,
-) -> Value {
-    if let Some(value) = local_uniform_value(raws, start, end) {
-        return value;
-    }
-
-    let child_span = GNU_CHARTAB_CHARS[depth];
-    let mut contents = Vec::with_capacity(GNU_CHARTAB_SIZE[depth]);
-    for idx in 0..GNU_CHARTAB_SIZE[depth] {
-        let child_start = min_char + idx as i64 * child_span;
-        let child_end = (child_start + child_span - 1).min(MAX_CHAR);
-        let child = if depth == 3 {
-            local_uniform_value(raws, child_start, child_end).unwrap_or(Value::NIL)
-        } else {
-            external_subtree_for_span(raws, depth + 1, child_start, child_start, child_end)
-        };
-        contents.push(child);
-    }
-    make_sub_char_table_literal(depth, min_char, contents)
-}
-
-fn external_ascii_slot(raws: &[RawEntry]) -> Value {
-    external_subtree_for_span(raws, 3, 0, 0, 127)
-}
-
-fn external_ascii_slot_from_cache(vec: &[Value], raws: &[RawEntry]) -> Value {
-    let Some(range) = ct_ascii_cache_range(vec) else {
-        return external_ascii_slot(raws);
-    };
-    let values = vec[range].to_vec();
-    if let Some(first) = values.first().copied()
-        && values.iter().all(|value| eq_value(value, &first))
-    {
-        return first;
-    }
-    make_sub_char_table_literal(3, 0, values)
-}
-
 pub(crate) fn sub_char_table_external_slots(table: &Value) -> Option<(i64, i64, Vec<Value>)> {
-    if table.is_sub_char_table() {
-        let obj = table.as_sub_char_table_obj()?;
-        return Some((
-            obj.depth as i64,
-            obj.min_char as i64,
-            obj.contents.as_slice().to_vec(),
-        ));
-    }
-    let (depth, min_char, contents) = sub_char_table_depth_min_contents(table)?;
-    Some((depth as i64, min_char, contents))
+    let obj = table.as_sub_char_table_obj()?;
+    Some((
+        obj.depth as i64,
+        obj.min_char as i64,
+        obj.contents.as_slice().to_vec(),
+    ))
 }
 
 pub(crate) fn char_table_external_slots(table: &Value) -> Option<Vec<Value>> {
@@ -3014,36 +1763,7 @@ pub(crate) fn char_table_external_slots(table: &Value) -> Option<Vec<Value>> {
         return None;
     }
 
-    if table.is_char_table() {
-        return table.char_table_external_slots();
-    }
-    if !table.is_vector() {
-        return None;
-    };
-    let vec = table.as_vector_data().unwrap().clone();
-    let raws = ct_collect_local_raw_entries(&vec);
-    let extra_count = match vec[CT_EXTRA_COUNT].kind() {
-        ValueKind::Fixnum(n) if n >= 0 => n as usize,
-        _ => 0,
-    };
-
-    let mut slots = Vec::with_capacity(4 + GNU_CHAR_TABLE_CONTENT_BLOCKS as usize + extra_count);
-    slots.push(vec[CT_DEFAULT]);
-    slots.push(vec[CT_PARENT]);
-    slots.push(vec[CT_SUBTYPE]);
-    slots.push(external_ascii_slot_from_cache(&vec, &raws));
-
-    for idx in 0..GNU_CHAR_TABLE_CONTENT_BLOCKS {
-        let start = idx * GNU_CHAR_TABLE_BLOCK_CHARS;
-        let end = (start + GNU_CHAR_TABLE_BLOCK_CHARS - 1).min(MAX_CHAR);
-        slots.push(external_subtree_for_span(&raws, 1, start, start, end));
-    }
-
-    for extra_idx in 0..extra_count {
-        slots.push(vec[CT_EXTRA_START + extra_idx]);
-    }
-
-    Some(slots)
+    table.char_table_external_slots()
 }
 
 /// `(char-table-extra-slot TABLE N)` -- get extra slot N (0-based).
@@ -3055,30 +1775,14 @@ pub(crate) fn builtin_char_table_extra_slot(args: Vec<Value>) -> EvalResult {
     if !is_char_table(table) {
         return Err(wrong_type("char-table-p", table));
     }
-    if table.is_char_table() {
-        let obj = table.as_char_table_obj().unwrap();
-        if n < 0 || n as usize >= obj.extras.len() {
-            return Err(signal(
-                LispCondition::ArgsOutOfRange,
-                vec![args[0], args[1]],
-            ));
-        }
-        return Ok(obj.extras[n as usize]);
-    }
-    let v = table.as_vector_data().unwrap();
-    let extra_count = match v[CT_EXTRA_COUNT].kind() {
-        ValueKind::Fixnum(c) => c,
-        _ => 0,
-    };
-
-    if n < 0 || n >= extra_count {
+    let obj = table.as_char_table_obj().unwrap();
+    if n < 0 || n as usize >= obj.extras.len() {
         return Err(signal(
             LispCondition::ArgsOutOfRange,
             vec![args[0], args[1]],
         ));
     }
-
-    Ok(v[CT_EXTRA_START + n as usize])
+    Ok(obj.extras[n as usize])
 }
 
 /// `(set-char-table-extra-slot TABLE N VALUE)` -- set extra slot N.
@@ -3092,36 +1796,14 @@ pub(crate) fn builtin_set_char_table_extra_slot(args: Vec<Value>) -> EvalResult 
     if !is_char_table(table) {
         return Err(wrong_type("char-table-p", table));
     }
-    if table.is_char_table() {
-        let extra_len = table.as_char_table_obj().unwrap().extras.len();
-        if n < 0 || n as usize >= extra_len {
-            return Err(signal(
-                LispCondition::ArgsOutOfRange,
-                vec![args[0], args[1]],
-            ));
-        }
-        let _ = table.with_char_table_mut(|obj| obj.extras.ensure_owned()[n as usize] = *value);
-        crate::window::note_char_table_layout_mutation();
-        return Ok(*value);
-    }
-    let v = table.as_vector_data().unwrap();
-    let extra_count = match v[CT_EXTRA_COUNT].kind() {
-        ValueKind::Fixnum(c) => c,
-        _ => 0,
-    };
-
-    if n < 0 || n >= extra_count {
+    let extra_len = table.as_char_table_obj().unwrap().extras.len();
+    if n < 0 || n as usize >= extra_len {
         return Err(signal(
             LispCondition::ArgsOutOfRange,
             vec![args[0], args[1]],
         ));
     }
-
-    let slot_idx = CT_EXTRA_START + n as usize;
-    table.with_vector_data_mut(|vec| {
-        store_value_atomic(&mut vec[slot_idx], *value);
-        maybe_optimize_completed_translation_table(vec, n);
-    });
+    let _ = table.with_char_table_mut(|obj| obj.extras.ensure_owned()[n as usize] = *value);
     crate::window::note_char_table_layout_mutation();
     Ok(*value)
 }
@@ -3131,21 +1813,9 @@ pub(crate) fn builtin_set_char_table_extra_slot(args: Vec<Value>) -> EvalResult 
 /// builtin arg plumbing (two Vec allocs) or the purpose symbol's
 /// name-string parse the old callers paid per call.
 pub(crate) fn char_table_has_subtype_named(value: &Value, name: &str) -> bool {
-    if !is_char_table(value) {
-        return false;
-    }
-    let purpose = if value.is_char_table() {
-        match value.as_char_table_obj() {
-            Some(table) => table.purpose,
-            None => return false,
-        }
-    } else {
-        match value.as_vector_data() {
-            Some(vec) => vec[CT_SUBTYPE],
-            None => return false,
-        }
-    };
-    purpose.is_symbol_named(name)
+    value
+        .as_char_table_obj()
+        .is_some_and(|table| table.purpose.is_symbol_named(name))
 }
 
 pub(crate) fn builtin_char_table_subtype(args: Vec<Value>) -> EvalResult {
@@ -3154,12 +1824,7 @@ pub(crate) fn builtin_char_table_subtype(args: Vec<Value>) -> EvalResult {
     if !is_char_table(table) {
         return Err(wrong_type("char-table-p", table));
     }
-    if table.is_char_table() {
-        Ok(table.as_char_table_obj().unwrap().purpose)
-    } else {
-        let vec = table.as_vector_data().unwrap();
-        Ok(vec[CT_SUBTYPE])
-    }
+    Ok(table.as_char_table_obj().unwrap().purpose)
 }
 
 fn assq_cell_eq(key: Value, list: Value) -> Result<Value, Flow> {

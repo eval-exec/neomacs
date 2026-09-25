@@ -11,8 +11,7 @@ use std::collections::HashSet;
 
 use super::builtins::expect_integer_or_marker_in_buffers;
 use super::chartable::{
-    builtin_char_table_range, builtin_set_char_table_range, char_table_ascii_cache_range,
-    char_table_data_start, is_char_table, make_char_table_value,
+    builtin_char_table_range, builtin_set_char_table_range, is_char_table, make_char_table_value,
 };
 use super::error::{EvalResult, Flow, signal};
 use super::eval::Context;
@@ -3870,8 +3869,7 @@ fn copy_keymap_item(item: &Value, depth: usize) -> Value {
 ///
 /// GNU `copy_keymap_1` first calls `copy-sequence` on the char-table, then
 /// walks the copied table with `map_char_table` and replaces each binding with
-/// `copy_keymap_item`.  Keep that shape here so real char-table objects and
-/// legacy vector-backed tables follow the same semantics.
+/// `copy_keymap_item`.
 fn copy_char_table_for_keymap(ct: &Value, depth: usize) -> Value {
     let Some(copied) = super::chartable::copy_char_table(*ct) else {
         return *ct;
@@ -3884,27 +3882,6 @@ fn copy_char_table_for_keymap(ct: &Value, depth: usize) -> Value {
         let copied_value = copy_keymap_item(&value, depth + 1);
         let _ =
             super::chartable::builtin_set_char_table_range(vec![copied, range, copied_value], None);
-    }
-
-    if copied.is_vector() {
-        let Some(mut new_vec) = copied.as_vector_data().map(|data| data.to_vec()) else {
-            return copied;
-        };
-        if let Some(cache_range) = char_table_ascii_cache_range(&new_vec) {
-            for i in cache_range {
-                let val = new_vec[i];
-                new_vec[i] = copy_keymap_item(&val, depth + 1);
-            }
-        }
-
-        let data_start = char_table_data_start(&new_vec);
-        let mut i = data_start;
-        while i + 1 < new_vec.len() {
-            let val = new_vec[i + 1];
-            new_vec[i + 1] = copy_keymap_item(&val, depth + 1);
-            i += 2;
-        }
-        return Value::vector(new_vec);
     }
 
     copied

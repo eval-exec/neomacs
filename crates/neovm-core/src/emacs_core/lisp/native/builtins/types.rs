@@ -44,10 +44,7 @@ pub(crate) fn builtin_stringp_1(_eval: &mut super::eval::Context, arg: Value) ->
 }
 
 pub(crate) fn builtin_vectorp_1(_eval: &mut super::eval::Context, arg: Value) -> EvalResult {
-    let is_vec = arg.is_vector()
-        && !super::chartable::is_char_table(&arg)
-        && !super::chartable::is_bool_vector(&arg);
-    Ok(Value::bool_val(is_vec))
+    Ok(Value::bool_val(arg.is_vector()))
 }
 
 fn keywordp_swp(arg: Value, symbols_with_pos_enabled: bool) -> bool {
@@ -106,9 +103,8 @@ pub(crate) fn builtin_number_or_marker_p(args: Vec<Value>) -> EvalResult {
 
 pub(crate) fn builtin_vector_or_char_table_p(args: Vec<Value>) -> EvalResult {
     expect_args("vector-or-char-table-p", &args, 1)?;
-    let is_plain_vector = args[0].is_vector() && !super::chartable::is_bool_vector(&args[0]);
     Ok(Value::bool_val(
-        is_plain_vector || super::chartable::is_char_table(&args[0]),
+        args[0].is_vector() || super::chartable::is_char_table(&args[0]),
     ))
 }
 
@@ -288,13 +284,6 @@ pub(crate) fn builtin_cl_type_of(args: &[Value]) -> EvalResult {
     // Stale tagged pointer detection is not applicable with tagged pointers.
     if let Some(type_symbol) = record_type_of(args[0]) {
         return Ok(type_symbol);
-    }
-    // Char-tables and bool-vectors are tagged vectors
-    if chartable::is_char_table(&args[0]) {
-        return Ok(Value::symbol("char-table"));
-    }
-    if chartable::is_bool_vector(&args[0]) {
-        return Ok(Value::symbol("bool-vector"));
     }
     // GNU's PVEC_FONT reports font-spec/font-entity/font-object from type-of
     // and cl-type-of. Neomacs specs/entities are public vectors while opened

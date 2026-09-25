@@ -1205,12 +1205,6 @@ fn format_value_in_state_slow(
             out
         }
         ValueKind::Veclike(VecLikeType::Vector) => {
-            if super::chartable::bool_vector_length(value).is_some()
-                || super::chartable::char_table_external_slots(value).is_some()
-                || super::chartable::sub_char_table_external_slots(value).is_some()
-            {
-                return super::print::print_value_with_options(value, options);
-            }
             let mut out = String::from("[");
             let items = value.as_vector_data().unwrap().clone();
             for (idx, item) in items.iter().enumerate() {
@@ -1595,12 +1589,6 @@ fn format_vector_bytes_in_state(
     value: &Value,
     options: PrintOptions,
 ) -> Vec<u8> {
-    if super::chartable::bool_vector_length(value).is_some()
-        || super::chartable::char_table_external_slots(value).is_some()
-        || super::chartable::sub_char_table_external_slots(value).is_some()
-    {
-        return super::print::print_value_bytes_with_options(value, options);
-    }
     let mut out = Vec::new();
     out.push(b'[');
     let Some(values) = value.as_vector_data() else {

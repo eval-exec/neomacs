@@ -38,16 +38,7 @@ pub(crate) fn map_sequence_length(sequence: Value) -> Result<usize, Flow> {
             Ok(super::boolvec::bool_vector_length(&sequence).unwrap_or(0) as usize)
         }
         ValueKind::Veclike(VecLikeType::Vector) => {
-            if let Some(len) = super::chartable::bool_vector_length(&sequence) {
-                usize::try_from(len).map_err(|_| {
-                    signal(
-                        LispCondition::WrongTypeArgument,
-                        vec![Value::symbol("sequencep"), sequence],
-                    )
-                })
-            } else {
-                Ok(sequence.as_vector_data().expect("vector").len())
-            }
+            Ok(sequence.as_vector_data().expect("vector").len())
         }
         _ => Err(signal(
             LispCondition::WrongTypeArgument,
@@ -67,11 +58,7 @@ pub(crate) fn map_sequence_element(sequence: Value, index: usize) -> Result<Valu
             })
         }
         ValueKind::Veclike(VecLikeType::Vector) => {
-            if let Some(value) = super::chartable::bool_vector_ref_value(&sequence, index) {
-                Ok(value)
-            } else {
-                Ok(sequence.as_vector_data().expect("vector")[index])
-            }
+            Ok(sequence.as_vector_data().expect("vector")[index])
         }
         ValueKind::Veclike(VecLikeType::Lambda) => {
             super::cons_list::lambda_to_closure_vector(&sequence)
@@ -727,10 +714,7 @@ pub(crate) fn builtin_sort_slice(eval: &mut super::eval::Context, args: &[Value]
                 Ok(Value::list(std::mem::take(&mut sorted_values)))
             }
         }
-        ValueKind::Veclike(VecLikeType::Vector)
-            if !super::chartable::is_bool_vector(&args[0])
-                && !super::chartable::is_char_table(&args[0]) =>
-        {
+        ValueKind::Veclike(VecLikeType::Vector) => {
             let values = args[0].as_vector_data().unwrap().clone();
             let roots = eval.save_specpdl_roots();
             eval.push_specpdl_root(args[0]);

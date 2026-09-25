@@ -1,5 +1,5 @@
 use super::*;
-use crate::emacs_core::boolvec::bool_vector_from_bits;
+use crate::emacs_core::boolvec::{bool_vector_from_bits, bool_vector_ref_value};
 use crate::emacs_core::error::Flow;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::intern::{intern, intern_uninterned};

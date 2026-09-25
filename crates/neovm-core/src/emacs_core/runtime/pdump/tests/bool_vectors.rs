@@ -2,7 +2,6 @@
 //! trip: their bits, their identity where two holders share one, `equal`
 //! hash-table keys, and a category table's shared category sets.
 use super::*;
-use crate::emacs_core::boolvec::{BoolVectorRepr, set_bool_vector_repr_for_test};
 
 fn eval(ctx: &mut Context, src: &str) -> Value {
     let v = ctx.eval_str(src).unwrap_or_else(|e| panic!("{src}: {e:?}"));
@@ -17,7 +16,6 @@ fn printed(ctx: &mut Context, src: &str) -> String {
 #[test]
 fn packed_bool_vectors_round_trip_with_their_identity() {
     crate::test_utils::init_test_tracing();
-    set_bool_vector_repr_for_test(Some(BoolVectorRepr::Packed));
     let scratch_base = crate::emacs_core::eval::save_scratch_gc_roots();
     let mut ctx = Context::new();
     eval(
@@ -82,5 +80,4 @@ fn packed_bool_vectors_round_trip_with_their_identity() {
         printed(&mut loaded, "(bool-vector-count-population pbv-a)"),
         "4"
     );
-    set_bool_vector_repr_for_test(None);
 }

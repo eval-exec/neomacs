@@ -332,7 +332,8 @@ const HASH_KEY_CYCLE: u8 = 16;
 const HASH_KEY_TEXT: u8 = 17;
 const HASH_KEY_MARKER: u8 = 18;
 const HASH_KEY_OVERLAY: u8 = 19;
-const HASH_KEY_BOOL_VEC: u8 = 20;
+// 20 was the legacy tagged bool-vector key (`BoolVec`, removed with the
+// tagged encoding in P3.2 L0.8); not reused.
 const HASH_KEY_BIGNUM: u8 = 21;
 const HASH_KEY_BYTE_CODE: u8 = 22;
 const HASH_KEY_STRING_CONTENT: u8 = 23;
@@ -434,12 +435,6 @@ fn write_hash_key(out: &mut Vec<u8>, key: &DumpHashKey) -> Result<(), DumpError>
             write_usize(out, *start)?;
             write_usize(out, *end)?;
             write_hash_key(out, plist)?;
-        }
-        DumpHashKey::BoolVec { len, bits } => {
-            write_u8(out, HASH_KEY_BOOL_VEC);
-            write_u32(out, *len);
-            write_u64(out, *bits as u64);
-            write_u64(out, (*bits >> 64) as u64);
         }
         DumpHashKey::BoolVector { nbits, words } => {
             write_u8(out, HASH_KEY_BOOL_VECTOR);
@@ -1205,15 +1200,6 @@ impl<'a> Cursor<'a> {
                 end: self.read_usize("hash overlay end")?,
                 plist: Box::new(self.read_hash_key()?),
             }),
-            HASH_KEY_BOOL_VEC => {
-                let len = self.read_u32("bool-vector hash key length")?;
-                let low = self.read_u64("bool-vector hash key low bits")?;
-                let high = self.read_u64("bool-vector hash key high bits")?;
-                Ok(DumpHashKey::BoolVec {
-                    len,
-                    bits: u128::from(low) | (u128::from(high) << 64),
-                })
-            }
             HASH_KEY_BOOL_VECTOR => {
                 let nbits = self.read_u64("bool-vector hash key bit count")?;
                 let len = self.read_len("bool-vector hash key words")?;

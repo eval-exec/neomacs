@@ -3601,19 +3601,7 @@ fn compare_value_lt_inner(
             }
 
             match left_ty {
-                VecLikeType::Vector => match (vector_value_lt_kind(lhs), vector_value_lt_kind(rhs))
-                {
-                    (VectorValueLtKind::PlainVector, VectorValueLtKind::PlainVector) => {
-                        compare_value_sequences(eval, lhs, rhs, maxdepth - 1)
-                    }
-                    (VectorValueLtKind::BoolVector, VectorValueLtKind::BoolVector) => {
-                        compare_bool_vectors_for_value_lt(lhs, rhs)
-                    }
-                    (VectorValueLtKind::CharTable, VectorValueLtKind::CharTable) => {
-                        Ok(Ordering::Equal)
-                    }
-                    _ => Err(signal_value_lt_type_mismatch(lhs, rhs)),
-                },
+                VecLikeType::Vector => compare_value_sequences(eval, lhs, rhs, maxdepth - 1),
                 VecLikeType::Record => compare_value_sequences(eval, lhs, rhs, maxdepth - 1),
                 VecLikeType::BoolVector => compare_bool_vectors_for_value_lt(lhs, rhs),
                 VecLikeType::Marker => compare_markers_for_value_lt(eval, lhs, rhs),
@@ -3660,23 +3648,6 @@ fn compare_value_sequences(
     }
 
     Ok(left_values.len().cmp(&right_values.len()))
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum VectorValueLtKind {
-    PlainVector,
-    BoolVector,
-    CharTable,
-}
-
-fn vector_value_lt_kind(value: &Value) -> VectorValueLtKind {
-    if crate::emacs_core::chartable::is_bool_vector(value) {
-        VectorValueLtKind::BoolVector
-    } else if crate::emacs_core::chartable::is_char_table(value) {
-        VectorValueLtKind::CharTable
-    } else {
-        VectorValueLtKind::PlainVector
-    }
 }
 
 /// GNU `value_cmp` on two bool-vectors (fns.c): the first differing bit

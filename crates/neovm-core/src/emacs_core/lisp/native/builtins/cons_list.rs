@@ -464,15 +464,13 @@ pub(crate) fn builtin_length_value(sequence: Value) -> EvalResult {
 }
 
 fn vector_sequence_length(sequence: &Value) -> i64 {
-    super::chartable::bool_vector_length(sequence)
-        .or_else(|| super::chartable::char_table_length(sequence))
-        .unwrap_or_else(|| {
-            sequence
-                .as_vector_data()
-                .or_else(|| sequence.as_record_data())
-                .expect("vector or record")
-                .len() as i64
-        })
+    super::boolvec::bool_vector_length(sequence).unwrap_or_else(|| {
+        sequence
+            .as_vector_data()
+            .or_else(|| sequence.as_record_data())
+            .expect("vector or record")
+            .len() as i64
+    })
 }
 
 fn list_length_internal_for_predicate(mut sequence: Value, mut len: i64) -> Result<i64, Flow> {
@@ -888,20 +886,12 @@ fn builtin_append_slice_impl(args: &[Value]) -> EvalResult {
                         append_element(&mut result, &mut last, item);
                     }
                 }
-                ValueKind::Veclike(VecLikeType::Vector | VecLikeType::BoolVector)
-                    if super::boolvec::is_bool_vector(arg) =>
-                {
+                ValueKind::Veclike(VecLikeType::BoolVector) => {
                     for item in super::boolvec::bool_vector_elements(arg).unwrap_or_default() {
                         append_element(&mut result, &mut last, item);
                     }
                 }
                 ValueKind::Veclike(VecLikeType::Vector) => {
-                    if super::chartable::is_char_table(arg) {
-                        return Err(signal(
-                            LispCondition::WrongTypeArgument,
-                            vec![Value::symbol("sequencep"), *arg],
-                        ));
-                    }
                     if let Some(items) = arg.as_vector_data() {
                         for item in items.as_slice().iter().copied() {
                             append_element(&mut result, &mut last, item);
@@ -985,15 +975,6 @@ pub(crate) fn builtin_reverse(args: Vec<Value>) -> EvalResult {
             Ok(Value::list(reversed))
         }
         ValueKind::Veclike(VecLikeType::Vector) => {
-            if super::chartable::is_char_table(&args[0]) {
-                return Err(signal(
-                    LispCondition::WrongTypeArgument,
-                    vec![Value::symbol("sequencep"), args[0]],
-                ));
-            }
-            if super::chartable::is_bool_vector(&args[0]) {
-                return reverse_bool_vector(args[0]);
-            }
             let mut items = args[0].as_vector_data().unwrap().clone();
             items.reverse();
             Ok(Value::vector(items))
@@ -1045,15 +1026,6 @@ pub(crate) fn nreverse_value(arg: Value) -> EvalResult {
             }
         }
         ValueKind::Veclike(VecLikeType::Vector) => {
-            if super::chartable::is_char_table(&arg) {
-                return Err(signal(
-                    LispCondition::WrongTypeArgument,
-                    vec![Value::symbol("arrayp"), arg],
-                ));
-            }
-            if super::boolvec::nreverse_bool_vector(&arg) {
-                return Ok(arg);
-            }
             let mut data = arg
                 .as_vector_data()
                 .map(|items| items.to_vec())
@@ -1684,7 +1656,7 @@ fn builtin_delete_with_symbols(args: Vec<Value>, symbols_with_pos_enabled: bool)
         ValueKind::Cons => delete_from_list_in_place(&args[1], |item| {
             equal_value_swp(elt, item, 0, symbols_with_pos_enabled)
         }),
-        ValueKind::Veclike(VecLikeType::Vector) if !super::chartable::is_bool_vector(&args[1]) => {
+        ValueKind::Veclike(VecLikeType::Vector) => {
             let items = args[1].as_vector_data().unwrap().clone();
             let mut changed = false;
             let mut kept = Vec::with_capacity(items.len());

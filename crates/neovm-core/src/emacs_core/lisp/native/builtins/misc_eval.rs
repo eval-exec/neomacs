@@ -1773,9 +1773,6 @@ fn print_value_princ_bytes_inner(
             out
         }
         ValueKind::Veclike(VecLikeType::Vector) => {
-            if super::chartable::bool_vector_length(value).is_some() {
-                return prin1_bytes(value);
-            }
             let items = value.as_vector_data().unwrap().clone();
             let mut out = vec![b'['];
             for (i, item) in items.iter().enumerate() {

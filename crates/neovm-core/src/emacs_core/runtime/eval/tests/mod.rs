@@ -16495,7 +16495,7 @@ fn jit_subr_spec_vectorp_stays_general() {
     let vector = ev.eval_str("[1 2 3]").expect("vector");
     push_scratch_gc_root(vector);
     assert!(
-        crate::emacs_core::chartable::is_bool_vector(&boolvec),
+        crate::emacs_core::boolvec::is_bool_vector(&boolvec),
         "bool-vector fixture must survive setup before entering the native caller"
     );
     #[cfg(debug_assertions)]

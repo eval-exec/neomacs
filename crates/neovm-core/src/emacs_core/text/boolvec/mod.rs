@@ -2,15 +2,9 @@
 //! `alloc.c:2126-2200`, `data.c:3709-4016`).
 //!
 //! A bool-vector is a [`BoolVectorObj`] (`VecLikeType::BoolVector`): `nbits`
-//! bits packed into words, trailing bits zero. Until P3.2 L0.8 deletes it,
-//! the older in-band encoding still exists: an ordinary vector
-//! `[--bool-vector-- N b0 b1 ...]` whose slot 0 is a marker symbol and whose
-//! bits are fixnums 0/1 (the *legacy* representation).
-//!
-//! `NEOVM_BOOL_VECTOR_REPR=legacy|packed` picks the representation NEW
-//! bool-vectors get (read once per process; a same-binary A/B; default
-//! `packed`). Every reader here accepts both, so the two kinds may meet in
-//! one operation.
+//! bits packed into words, trailing bits zero. (The older in-band encoding,
+//! an ordinary vector `[--bool-vector-- N 0/1 ...]`, is gone: a vector whose
+//! slot 0 happens to be that symbol is a plain vector, as in GNU.)
 //!
 //! Operations follow GNU exactly: `wrong-length-argument` data, the
 //! destination argument of the set operations ("the destination if it
@@ -21,182 +15,54 @@ use super::value::*;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
 use crate::tagged::header::BoolVectorObj;
-use std::borrow::Cow;
 use std::mem::size_of;
 
 // ---------------------------------------------------------------------------
-// The representation knob
+// Reading
 // ---------------------------------------------------------------------------
 
-/// Which representation new bool-vectors get (`NEOVM_BOOL_VECTOR_REPR`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum BoolVectorRepr {
-    /// The in-band tagged vector `[--bool-vector-- N 0/1 ...]`.
-    Legacy,
-    /// A [`BoolVectorObj`] with packed words (GNU's layout).
-    Packed,
-}
-
-#[cfg(test)]
-thread_local! {
-    static REPR_OVERRIDE: std::cell::Cell<Option<BoolVectorRepr>> =
-        const { std::cell::Cell::new(None) };
-}
-
-/// Test hook: the representation bool-vectors created on this thread get
-/// (`None` restores the environment's).
-#[cfg(test)]
-pub(crate) fn set_bool_vector_repr_for_test(repr: Option<BoolVectorRepr>) {
-    REPR_OVERRIDE.with(|cell| cell.set(repr));
-}
-
-/// The representation new bool-vectors get: `NEOVM_BOOL_VECTOR_REPR`, read
-/// once per process. Default: packed; `legacy` restores the tagged vector.
-pub(crate) fn bool_vector_repr() -> BoolVectorRepr {
-    #[cfg(test)]
-    if let Some(repr) = REPR_OVERRIDE.with(|cell| cell.get()) {
-        return repr;
-    }
-    static REPR: std::sync::OnceLock<BoolVectorRepr> = std::sync::OnceLock::new();
-    *REPR.get_or_init(
-        || match std::env::var("NEOVM_BOOL_VECTOR_REPR").ok().as_deref() {
-            Some("legacy") => {
-                tracing::info!(
-                    target: "neovm::boolvec::knobs",
-                    "NEOVM_BOOL_VECTOR_REPR=legacy is on in this process"
-                );
-                BoolVectorRepr::Legacy
-            }
-            _ => BoolVectorRepr::Packed,
-        },
-    )
-}
-
-// ---------------------------------------------------------------------------
-// Reading either representation
-// ---------------------------------------------------------------------------
-
-/// Slot 0 of a legacy bool-vector.
-const LEGACY_TAG: &str = "--bool-vector--";
-/// Slot index of a legacy bool-vector's bit count.
-const LEGACY_SIZE: usize = 1;
-/// Slot index of a legacy bool-vector's first bit.
-const LEGACY_BITS: usize = 2;
-
-/// The legacy tag symbol's id.
-pub(crate) fn legacy_tag_sym_id() -> super::intern::SymId {
-    static ID: std::sync::OnceLock<super::intern::SymId> = std::sync::OnceLock::new();
-    *ID.get_or_init(|| super::intern::intern(LEGACY_TAG))
-}
-
-/// Is `slots` (a vector's slots) the legacy encoding?
-#[inline]
-fn is_legacy_slots(slots: &[Value]) -> bool {
-    slots.len() >= LEGACY_BITS && slots[0].as_symbol_id() == Some(legacy_tag_sym_id())
-}
-
-/// A read view of a bool-vector in either representation.
+/// A read view of a bool-vector.
 #[derive(Clone, Copy)]
-pub(crate) enum BoolVectorView<'a> {
-    Packed(&'a BoolVectorObj),
-    Legacy(&'a [Value]),
-}
+pub(crate) struct BoolVectorView<'a>(&'a BoolVectorObj);
 
 impl<'a> BoolVectorView<'a> {
     /// The view of `value`, or `None` when it is not a bool-vector.
     #[inline]
     pub(crate) fn of(value: &Value) -> Option<BoolVectorView<'static>> {
-        if let Some(obj) = value.as_bool_vector_obj() {
-            return Some(BoolVectorView::Packed(obj));
-        }
-        if value.is_vector() {
-            let slots = value.as_vector_data()?;
-            if is_legacy_slots(slots) {
-                return Some(BoolVectorView::Legacy(slots));
-            }
-        }
-        None
+        value.as_bool_vector_obj().map(BoolVectorView)
     }
 
     /// The number of bits.
     #[inline]
     pub(crate) fn len(&self) -> usize {
-        match self {
-            BoolVectorView::Packed(obj) => obj.nbits,
-            BoolVectorView::Legacy(slots) => match slots[LEGACY_SIZE].kind() {
-                ValueKind::Fixnum(n) if n > 0 => n as usize,
-                _ => 0,
-            },
-        }
+        self.0.nbits
     }
 
     /// Bit `index` (`index < len`).
     #[inline]
     pub(crate) fn get(&self, index: usize) -> bool {
-        match self {
-            BoolVectorView::Packed(obj) => obj.get(index),
-            BoolVectorView::Legacy(slots) => {
-                let bit = slots
-                    .get(LEGACY_BITS + index)
-                    .copied()
-                    .unwrap_or(Value::NIL);
-                match bit.kind() {
-                    ValueKind::Fixnum(n) => n != 0,
-                    ValueKind::Nil => false,
-                    _ => bit.is_truthy(),
-                }
-            }
-        }
+        self.0.get(index)
     }
 
     /// The bits as words (bit `i` in word `i / 64` at bit `i % 64`),
-    /// trailing bits zero: borrowed from a packed bool-vector, built for a
-    /// legacy one.
-    pub(crate) fn words(&self) -> Cow<'a, [u64]> {
-        match self {
-            BoolVectorView::Packed(obj) => Cow::Borrowed(obj.words()),
-            BoolVectorView::Legacy(_) => {
-                let nbits = self.len();
-                let mut words = vec![0u64; BoolVectorObj::words_for(nbits)];
-                for index in 0..nbits {
-                    if self.get(index) {
-                        words[index / BoolVectorObj::WORD_BITS] |=
-                            1u64 << (index % BoolVectorObj::WORD_BITS);
-                    }
-                }
-                Cow::Owned(words)
-            }
-        }
+    /// trailing bits zero.
+    #[inline]
+    pub(crate) fn words(&self) -> &'a [u64] {
+        self.0.words()
     }
 
     /// GNU's byte `index` of the bit data (the printer's and `sxhash`'s
     /// host-independent view).
+    #[inline]
     pub(crate) fn byte(&self, index: usize) -> u8 {
-        match self {
-            BoolVectorView::Packed(obj) => obj.byte(index),
-            BoolVectorView::Legacy(_) => {
-                let nbits = self.len();
-                let mut byte = 0u8;
-                for bit in 0..8 {
-                    let i = index * 8 + bit;
-                    if i < nbits && self.get(i) {
-                        byte |= 1 << bit;
-                    }
-                }
-                byte
-            }
-        }
+        self.0.byte(index)
     }
 }
 
-/// Is `value` a bool-vector (either representation)?
+/// Is `value` a bool-vector?
 #[inline]
 pub(crate) fn is_bool_vector(value: &Value) -> bool {
     value.is_bool_vector_obj()
-        || (value.is_vector()
-            && value
-                .as_vector_data()
-                .is_some_and(|slots| is_legacy_slots(slots)))
 }
 
 /// The bit count of a bool-vector, or `None` for anything else.
@@ -216,49 +82,25 @@ pub(crate) fn bool_vector_ref_value(value: &Value, index: usize) -> Option<Value
 /// Set bit `index` of the bool-vector `value` in place. `false` when `value`
 /// is not a bool-vector or `index` is out of range (nothing stored).
 pub(crate) fn bool_vector_set(value: &Value, index: usize, bit: bool) -> bool {
-    if value.is_bool_vector_obj() {
-        return value
-            .with_bool_vector_mut(|obj| {
-                if index < obj.nbits {
-                    obj.set(index, bit);
-                    true
-                } else {
-                    false
-                }
-            })
-            .unwrap_or(false);
-    }
-    match BoolVectorView::of(value) {
-        Some(view @ BoolVectorView::Legacy(_)) if index < view.len() => {
-            value.set_vector_slot(LEGACY_BITS + index, Value::fixnum(bit as i64))
-        }
-        _ => false,
-    }
+    value
+        .with_bool_vector_mut(|obj| {
+            if index < obj.nbits {
+                obj.set(index, bit);
+                true
+            } else {
+                false
+            }
+        })
+        .unwrap_or(false)
 }
 
 /// Overwrite every bit of the bool-vector `dest` (of `words.len()` words'
 /// worth of bits) from `words`, in place.
 fn store_words(dest: &Value, words: &[u64]) {
-    if dest.is_bool_vector_obj() {
-        let _ = dest.with_bool_vector_mut(|obj| {
-            obj.words_mut().copy_from_slice(words);
-            obj.clear_trailing_bits();
-        });
-        return;
-    }
-    let Some(view) = BoolVectorView::of(dest) else {
-        return;
-    };
-    let nbits = view.len();
-    let Some(slots) = dest.as_vector_data() else {
-        return;
-    };
-    let mut slots = slots.to_vec();
-    for index in 0..nbits {
-        let bit = words[index / BoolVectorObj::WORD_BITS] >> (index % BoolVectorObj::WORD_BITS) & 1;
-        slots[LEGACY_BITS + index] = Value::fixnum(bit as i64);
-    }
-    let _ = dest.replace_vector_data(slots);
+    let _ = dest.with_bool_vector_mut(|obj| {
+        obj.words_mut().copy_from_slice(words);
+        obj.clear_trailing_bits();
+    });
 }
 
 /// Fill every bit of the bool-vector `value` with `bit` (GNU
@@ -315,36 +157,12 @@ pub(crate) fn nreverse_bool_vector(value: &Value) -> bool {
 // Construction
 // ---------------------------------------------------------------------------
 
-/// A tagged vector (a legacy bool-vector) is being created: the JIT's
-/// measurement knob `NEOVM_JIT_AREF_SKIP_SLOT0` counts it (its inline
-/// `aref`/`aset` no longer tell tagged vectors apart).
-#[inline]
-fn note_tagged_vector_created() {
-    #[cfg(feature = "jit")]
-    crate::emacs_core::jit::compile::note_tagged_vector_under_skip_slot0();
-}
-
 /// A new bool-vector of `nbits` bits from `words` (exactly
-/// `⌈nbits/64⌉` of them; bits past `nbits` are ignored), in the
-/// representation [`bool_vector_repr`] picks.
+/// `⌈nbits/64⌉` of them; bits past `nbits` are cleared).
+#[inline]
 pub(crate) fn make_bool_vector_from_words(nbits: usize, words: Vec<u64>) -> Value {
     debug_assert_eq!(words.len(), BoolVectorObj::words_for(nbits));
-    match bool_vector_repr() {
-        BoolVectorRepr::Packed => Value::make_bool_vector(nbits, words),
-        BoolVectorRepr::Legacy => {
-            note_tagged_vector_created();
-            let mut slots = Vec::with_capacity(LEGACY_BITS + nbits);
-            slots.push(Value::from_sym_id(legacy_tag_sym_id()));
-            slots.push(Value::fixnum(nbits as i64));
-            for index in 0..nbits {
-                let bit = words[index / BoolVectorObj::WORD_BITS]
-                    >> (index % BoolVectorObj::WORD_BITS)
-                    & 1;
-                slots.push(Value::fixnum(bit as i64));
-            }
-            Value::vector(slots)
-        }
-    }
+    Value::make_bool_vector(nbits, words)
 }
 
 /// A new bool-vector of `nbits` bits, all `init`.
@@ -397,21 +215,15 @@ pub(crate) fn bool_vector_u128(value: &Value) -> Option<(usize, u128)> {
     Some((nbits, u128::from(lo) | (u128::from(hi) << 64)))
 }
 
-/// The `equal`-table key of a bool-vector of `nbits <= 128` bits `bits`
-/// in the representation [`bool_vector_repr`] gives new bool-vectors: what
-/// `to_hash_key` builds for one, without allocating it.
+/// The `equal`-table key of a bool-vector of `nbits <= 128` bits `bits`:
+/// what `to_hash_key` builds for one, without allocating it.
 pub(crate) fn bool_vector_equal_key_u128(nbits: usize, bits: u128) -> HashKey {
     debug_assert!(nbits <= 128);
-    match bool_vector_repr() {
-        BoolVectorRepr::Legacy => HashKey::BoolVec(Box::new((nbits, bits))),
-        BoolVectorRepr::Packed => {
-            let words = [bits as u64, (bits >> 64) as u64];
-            HashKey::BoolVector(Box::new((
-                nbits,
-                words[..BoolVectorObj::words_for(nbits)].into(),
-            )))
-        }
-    }
+    let words = [bits as u64, (bits >> 64) as u64];
+    HashKey::BoolVector(Box::new((
+        nbits,
+        words[..BoolVectorObj::words_for(nbits)].into(),
+    )))
 }
 
 /// A new bool-vector with the same bits as `value` (a bool-vector): GNU
@@ -420,7 +232,7 @@ pub(crate) fn copy_bool_vector(value: &Value) -> Option<Value> {
     let view = BoolVectorView::of(value)?;
     Some(make_bool_vector_from_words(
         view.len(),
-        view.words().into_owned(),
+        view.words().to_vec(),
     ))
 }
 
@@ -569,7 +381,7 @@ fn binop_driver(a: Value, b: Value, dest: Value, op: BinOp) -> EvalResult {
         return Ok(Value::NIL);
     };
     // Copy out the operands before writing: DEST may be A or B.
-    let mut words = dest_words.into_owned();
+    let mut words = dest_words.to_vec();
     for i in first_change..words.len() {
         words[i] = op.apply(a_words[i], b_words[i]);
     }

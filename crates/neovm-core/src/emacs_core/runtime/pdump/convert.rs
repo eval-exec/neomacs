@@ -2950,10 +2950,6 @@ pub(crate) fn dump_hash_key(encoder: &mut DumpEncoder, k: &HashKey) -> DumpHashK
             end: parts.2,
             plist: Box::new(dump_hash_key(encoder, &parts.3)),
         },
-        HashKey::BoolVec(parts) => DumpHashKey::BoolVec {
-            len: parts.0 as u32,
-            bits: parts.1,
-        },
         HashKey::BoolVector(parts) => DumpHashKey::BoolVector {
             nbits: parts.0 as u64,
             words: parts.1.to_vec(),
@@ -4665,7 +4661,6 @@ pub(crate) fn load_hash_key(decoder: &mut LoadDecoder, k: &DumpHashKey) -> HashK
             *end,
             load_hash_key(decoder, plist),
         ))),
-        DumpHashKey::BoolVec { len, bits } => HashKey::BoolVec(Box::new((*len as usize, *bits))),
         DumpHashKey::BoolVector { nbits, words } => HashKey::BoolVector(Box::new((
             *nbits as usize,
             words.clone().into_boxed_slice(),
@@ -4761,7 +4756,6 @@ fn load_hash_key_owned(decoder: &mut LoadDecoder, k: DumpHashKey) -> HashKey {
             end,
             load_hash_key_owned(decoder, *plist),
         ))),
-        DumpHashKey::BoolVec { len, bits } => HashKey::BoolVec(Box::new((len as usize, bits))),
         DumpHashKey::BoolVector { nbits, words } => {
             HashKey::BoolVector(Box::new((nbits as usize, words.into_boxed_slice())))
         }

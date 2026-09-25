@@ -40,32 +40,18 @@ pub(crate) fn builtin_aref_values(array: Value, index: Value) -> EvalResult {
             let ch = expect_char_table_index(&index)?;
             super::chartable::ct_lookup(&array, ch)
         }
-        ValueKind::Veclike(kind @ (VecLikeType::Vector | VecLikeType::Record)) => {
-            // ONE slot fetch and ONE slot-0 read decide all three shapes. The
-            // char-table arm used to ask `is_char_table`, which fetched the
-            // slots a SECOND time (an enum-discriminant match plus a slice
-            // build) and read slot 0 again — on every indexed read in the
-            // language.
-            let idx = idx_fixnum as usize;
+        // A vector or record slot: no in-band tags (P3.2 L0.8), so slot 0
+        // is just slot 0, as in GNU `Faref`. A negative index wraps to a huge
+        // one and is out of range.
+        ValueKind::Veclike(VecLikeType::Vector | VecLikeType::Record) => {
             let items = array
                 .as_vector_data()
                 .or_else(|| array.as_record_data())
                 .unwrap();
-            let record = matches!(kind, VecLikeType::Record);
-            match super::chartable::classify_vector_slots(items, record) {
-                super::chartable::VectorTag::CharTable => {
-                    let ch = expect_char_table_index(&index)?;
-                    super::chartable::ct_lookup(&array, ch)
-                }
-                super::chartable::VectorTag::BoolVector => {
-                    super::chartable::bool_vector_ref_value(&array, idx)
-                        .ok_or_else(|| signal(LispCondition::ArgsOutOfRange, vec![array, index]))
-                }
-                super::chartable::VectorTag::Plain => items
-                    .get(idx)
-                    .copied()
-                    .ok_or_else(|| signal(LispCondition::ArgsOutOfRange, vec![array, index])),
-            }
+            items
+                .get(idx_fixnum as usize)
+                .copied()
+                .ok_or_else(|| signal(LispCondition::ArgsOutOfRange, vec![array, index]))
         }
         // GNU `Faref`: a bool-vector's bit as t/nil; a negative index wraps
         // to a huge one and is out of range.
@@ -198,84 +184,24 @@ pub(crate) fn builtin_aset_args(args: &[Value]) -> EvalResult {
                 None,
             )
         }
+        // A vector or record slot (no in-band tags, P3.2 L0.8).
         ValueKind::Veclike(kind @ (VecLikeType::Vector | VecLikeType::Record)) => {
-            // One slot fetch and one slot-0 read for all three shapes, and the
-            // markers compared by SymId — this used to resolve slot 0 to a
-            // `&str` and run a string compare on every `aset`, and ask
-            // `is_char_table` for a second fetch of the same slots.
             let idx = idx_fixnum as usize;
-            let items = args[0]
+            let len = args[0]
                 .as_vector_data()
                 .or_else(|| args[0].as_record_data())
-                .unwrap();
-            let tag =
-                super::chartable::classify_vector_slots(items, matches!(kind, VecLikeType::Record));
-            if tag == super::chartable::VectorTag::CharTable {
-                let ch = expect_char_table_index(&args[1])?;
-                return super::chartable::builtin_set_char_table_range(
-                    vec![args[0], Value::fixnum(ch), args[2]],
-                    None,
-                );
-            }
-            let is_bool_vector = tag == super::chartable::VectorTag::BoolVector;
-            let bool_len = if is_bool_vector {
-                match items.get(1).map(|v| v.kind()) {
-                    Some(ValueKind::Fixnum(n)) if n >= 0 => Some(n as usize),
-                    _ => None,
-                }
-            } else {
-                None
-            };
-            let vec_len = items.len();
-            if is_bool_vector {
-                let len = match bool_len {
-                    Some(n) => n,
-                    None => {
-                        return Err(signal(
-                            LispCondition::WrongTypeArgument,
-                            vec![Value::symbol("bool-vector-p"), args[0]],
-                        ));
-                    }
-                };
-                if idx >= len {
-                    return Err(signal(
-                        LispCondition::ArgsOutOfRange,
-                        vec![args[0], args[1]],
-                    ));
-                }
-                let store_idx = idx + 2;
-                if store_idx >= vec_len {
-                    return Err(signal(
-                        LispCondition::ArgsOutOfRange,
-                        vec![args[0], args[1]],
-                    ));
-                }
-                let val = Value::fixnum(if args[2].is_truthy() { 1 } else { 0 });
-                match args[0].veclike_type() {
-                    Some(VecLikeType::Vector) => {
-                        args[0].set_vector_slot(store_idx, val);
-                    }
-                    Some(VecLikeType::Record) => {
-                        args[0].set_record_slot(store_idx, val);
-                    }
-                    _ => unreachable!("vector/record path should only reach vectorlike arrays"),
-                }
-                return Ok(args[2]);
-            }
-            if idx >= vec_len {
+                .unwrap()
+                .len();
+            if idx >= len {
                 return Err(signal(
                     LispCondition::ArgsOutOfRange,
                     vec![args[0], args[1]],
                 ));
             }
-            match args[0].veclike_type() {
-                Some(VecLikeType::Vector) => {
-                    args[0].set_vector_slot(idx, args[2]);
-                }
-                Some(VecLikeType::Record) => {
-                    args[0].set_record_slot(idx, args[2]);
-                }
-                _ => unreachable!("vector/record path should only reach vectorlike arrays"),
+            if kind == VecLikeType::Vector {
+                args[0].set_vector_slot(idx, args[2]);
+            } else {
+                args[0].set_record_slot(idx, args[2]);
             }
             Ok(args[2])
         }
@@ -310,16 +236,8 @@ pub(crate) fn builtin_vconcat_slice(args: &[Value]) -> EvalResult {
     let mut result = Vec::new();
     for arg in args {
         match arg.kind() {
-            ValueKind::Veclike(VecLikeType::Vector | VecLikeType::BoolVector)
-                if super::boolvec::is_bool_vector(arg) =>
-            {
+            ValueKind::Veclike(VecLikeType::BoolVector) => {
                 result.extend(super::boolvec::bool_vector_elements(arg).unwrap_or_default());
-            }
-            ValueKind::Veclike(VecLikeType::Vector) if super::chartable::is_char_table(arg) => {
-                return Err(signal(
-                    LispCondition::WrongTypeArgument,
-                    vec![Value::symbol("sequencep"), *arg],
-                ));
             }
             ValueKind::Veclike(VecLikeType::CharTable) => {
                 return Err(signal(

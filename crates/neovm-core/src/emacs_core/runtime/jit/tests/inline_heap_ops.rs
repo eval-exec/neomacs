@@ -903,12 +903,11 @@ fn aref_shim_calls() -> usize {
 }
 
 /// Under the measurement knob the inline `aref` and `aset` sites omit the
-/// slot-0 tagged-vector test: plain vectors and records are still read and
-/// stored inline and right, but a bool-vector is now read inline as the
-/// tagged vector it is stored as (slot 0 is its tag) — the premise the
-/// measurement rests on is that its hot paths create none, and creating one
-/// while the knob is on is counted. Off, the same leaf reads it through the
-/// shim, right.
+/// slot-0 tagged-vector test: plain vectors and records are read and stored
+/// inline and right. Since P3.2 L0.8 a vector whose slot 0 is
+/// `--bool-vector--` is a plain vector, so the inline read (knob on) and the
+/// shim the retired test routes it to (knob off) both answer its raw slot 0,
+/// as GNU does.
 #[test]
 fn skip_slot0_drops_the_tagged_vector_test_from_inline_aref_and_aset() {
     let mut eval = Context::new();
@@ -919,26 +918,15 @@ fn skip_slot0_drops_the_tagged_vector_test_from_inline_aref_and_aset() {
     super::force_aref_skip_slot0_for_test(Some(true));
     let aref = compile_bytecode_function(&f).expect("aref compiles");
     let aset = compile_bytecode_function(&g).expect("aset compiles");
-    let created = super::TAGGED_VECTORS_UNDER_SKIP_SLOT0.load(std::sync::atomic::Ordering::Relaxed);
-    // A tagged vector: the legacy bool-vector representation (packed
-    // bool-vectors are not vectors and never reach the inline path).
-    crate::emacs_core::boolvec::set_bool_vector_repr_for_test(Some(
-        crate::emacs_core::boolvec::BoolVectorRepr::Legacy,
-    ));
     let args = keep(
         &mut eval,
         &[
             "(vector 1 2 3)",
             "(record 'r 7 8)",
-            "(make-bool-vector 5 t)",
+            "(vector '--bool-vector-- 5 1 1)",
         ],
     );
-    crate::emacs_core::boolvec::set_bool_vector_repr_for_test(None);
-    assert!(
-        super::TAGGED_VECTORS_UNDER_SKIP_SLOT0.load(std::sync::atomic::Ordering::Relaxed) > created,
-        "a bool-vector created under the knob is counted"
-    );
-    let (vector, record, bool_vector) = (args[0], args[1], args[2]);
+    let (vector, record, tag_vector) = (args[0], args[1], args[2]);
     // The first `aset` arms the context's epoch cell through the shim.
     native(
         ctx_ptr,
@@ -960,11 +948,11 @@ fn skip_slot0_drops_the_tagged_vector_test_from_inline_aref_and_aset() {
         native(
             ctx_ptr,
             &aref,
-            &[bool_vector, Value::make_int(0)],
-            "bool-vector"
+            &[tag_vector, Value::make_int(0)],
+            "tag vector"
         ),
         "--bool-vector--",
-        "no slot-0 test: the tagged vector's raw slot 0"
+        "no slot-0 test: a plain vector's slot 0"
     );
     assert_eq!(
         native(
@@ -985,11 +973,11 @@ fn skip_slot0_drops_the_tagged_vector_test_from_inline_aref_and_aset() {
         native(
             ctx_ptr,
             &checked,
-            &[bool_vector, Value::make_int(0)],
-            "bool-vector"
+            &[tag_vector, Value::make_int(0)],
+            "tag vector"
         ),
-        "t",
-        "with the slot-0 test the shim answers"
+        "--bool-vector--",
+        "with the retired slot-0 test the shim answers the same slot"
     );
     assert_eq!(aref_shim_calls(), reads + 1);
     super::force_aref_skip_slot0_for_test(None);

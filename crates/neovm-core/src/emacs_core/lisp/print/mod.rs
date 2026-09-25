@@ -313,11 +313,8 @@ fn is_print_circle_candidate(value: &Value, print_gensym: bool) -> bool {
     match value.kind() {
         ValueKind::Cons => true,
         ValueKind::Veclike(VecLikeType::Vector) => {
-            // GNU's VECTORP excludes bool-vectors (a distinct pseudovector).
-            // neomacs builds bool-vectors as tagged plain vectors, so filter
-            // them out explicitly here. Non-empty vectors only.
-            !super::chartable::is_bool_vector(value)
-                && value.as_vector_data().is_some_and(|v| !v.is_empty())
+            // Non-empty vectors only (bool-vectors are their own type).
+            value.as_vector_data().is_some_and(|v| !v.is_empty())
         }
         ValueKind::Veclike(VecLikeType::Record) => true,
         ValueKind::Veclike(VecLikeType::HashTable) => true,
@@ -985,52 +982,6 @@ fn write_value_stateful_inner(
             out.push_str(&format_bool_vector(value, nbits as usize, state.options));
         }
         ValueKind::Veclike(VecLikeType::Vector) => {
-            if let Some(nbits) = bool_vector_length(value) {
-                out.push_str(&format_bool_vector(value, nbits as usize, state.options));
-                return;
-            }
-            if let Some(slots) = char_table_external_slots(value) {
-                with_default_cycle_guard(value, out, state, |out, state| {
-                    state.depth += 1;
-                    out.push_str("#^[");
-                    for (idx, item) in slots.iter().enumerate() {
-                        if let Some(length) = state.options.print_length
-                            && idx as i64 >= length
-                        {
-                            if idx > 0 {
-                                out.push(' ');
-                            }
-                            out.push_str("...");
-                            break;
-                        }
-                        if idx > 0 {
-                            out.push(' ');
-                        }
-                        write_value_stateful(item, out, state);
-                    }
-                    out.push(']');
-                    state.depth -= 1;
-                });
-                return;
-            }
-            if let Some((depth, min_char, slots)) =
-                super::chartable::sub_char_table_external_slots(value)
-            {
-                with_default_cycle_guard(value, out, state, |out, state| {
-                    state.depth += 1;
-                    out.push_str("#^^[");
-                    out.push_str(&depth.to_string());
-                    out.push(' ');
-                    out.push_str(&min_char.to_string());
-                    for item in &slots {
-                        out.push(' ');
-                        write_value_stateful(item, out, state);
-                    }
-                    out.push(']');
-                    state.depth -= 1;
-                });
-                return;
-            }
             with_default_cycle_guard(value, out, state, |out, state| {
                 state.depth += 1;
                 out.push('[');
@@ -1977,41 +1928,10 @@ fn append_print_value_bytes(value: &Value, out: &mut Vec<u8>, options: PrintOpti
             append_bool_vector_bytes(value, nbits as usize, out, options);
         }
         ValueKind::Veclike(VecLikeType::Vector) => {
-            if let Some(nbits) = bool_vector_length(value) {
-                append_bool_vector_bytes(value, nbits as usize, out, options);
-                return;
-            }
             if append_bytes_cycle_ref_if_any(value, out) {
                 return;
             }
             let pushed = push_bytes_cycle_object(value);
-            if let Some(slots) = char_table_external_slots(value) {
-                out.extend_from_slice(b"#^[");
-                for (idx, item) in slots.iter().enumerate() {
-                    if idx > 0 {
-                        out.push(b' ');
-                    }
-                    append_print_value_bytes(item, out, options);
-                }
-                out.push(b']');
-                pop_bytes_cycle_object(pushed);
-                return;
-            }
-            if let Some((depth, min_char, slots)) =
-                super::chartable::sub_char_table_external_slots(value)
-            {
-                out.extend_from_slice(b"#^^[");
-                out.extend_from_slice(depth.to_string().as_bytes());
-                out.push(b' ');
-                out.extend_from_slice(min_char.to_string().as_bytes());
-                for item in &slots {
-                    out.push(b' ');
-                    append_print_value_bytes(item, out, options);
-                }
-                out.push(b']');
-                pop_bytes_cycle_object(pushed);
-                return;
-            }
             out.push(b'[');
             let items = value.as_vector_data().unwrap().clone();
             for (idx, item) in items.iter().enumerate() {

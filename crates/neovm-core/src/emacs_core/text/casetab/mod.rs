@@ -9,7 +9,7 @@ use super::value::*;
 use crate::emacs_core::error::LispCondition;
 use crate::emacs_core::error::expect_args;
 use crate::emacs_core::intern::{SymId, intern};
-use crate::tagged::header::store_value_atomic;
+
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -224,11 +224,6 @@ pub(crate) fn builtin_downcase_char(args: Vec<Value>) -> EvalResult {
 // Case-table as char-table
 // ---------------------------------------------------------------------------
 
-// Char-table vector layout constants (mirrored from chartable.rs).
-const CT_CHAR_TABLE_TAG: &str = "--char-table--";
-const CT_SUBTYPE: usize = 3;
-const CT_EXTRA_COUNT: usize = 4;
-const CT_EXTRA_START: usize = 5;
 // Phase 10D holdout 5: per-buffer case-table char-table now lives in
 // `Buffer::slots[BUFFER_SLOT_CASE_TABLE.index()]`. NeoMacs collapses GNU's four
 // separate `downcase_table_` / `upcase_table_` / `case_canon_table_` /
@@ -244,30 +239,6 @@ const STANDARD_CASE_TABLE_SYMBOL: &str = "neovm--standard-case-table-object";
 fn standard_case_table_object_symbol_id() -> SymId {
     static SYMBOL: std::sync::OnceLock<SymId> = std::sync::OnceLock::new();
     *SYMBOL.get_or_init(|| intern(STANDARD_CASE_TABLE_SYMBOL))
-}
-
-/// Build a char-table vector with the given subtype, extra slots, default, and data pairs.
-fn build_char_table(
-    subtype: &str,
-    extra_slots: &[Value],
-    default: Value,
-    data_pairs: &[(i64, Value)],
-) -> Value {
-    let extra_count = extra_slots.len();
-    let mut vec = Vec::with_capacity(CT_EXTRA_START + extra_count + data_pairs.len() * 2);
-    vec.push(Value::symbol(CT_CHAR_TABLE_TAG)); // tag
-    vec.push(default); // CT_DEFAULT
-    vec.push(Value::NIL); // CT_PARENT
-    vec.push(Value::symbol(subtype)); // CT_SUBTYPE
-    vec.push(Value::fixnum(extra_count as i64)); // CT_EXTRA_COUNT
-    for slot in extra_slots {
-        vec.push(*slot);
-    }
-    for &(ch, val) in data_pairs {
-        vec.push(Value::fixnum(ch));
-        vec.push(val);
-    }
-    Value::vector(vec)
 }
 
 /// Create the standard case table: a char-table with `case-table` subtype,
@@ -350,25 +321,17 @@ pub(crate) fn make_case_table_with_pair(uc: i64, lc: i64) -> Value {
         }
     }
 
-    let upcase_ct = build_char_table("case-table", &[], Value::NIL, &upcase_pairs);
+    let upcase_ct = make_empty_case_table();
+    for (ch, value) in upcase_pairs {
+        super::chartable::ct_set_single(&upcase_ct, ch, value);
+    }
     // canon (extras[1]) and eqv (extras[2]) are nil: recomputed on install.
-    build_char_table(
-        "case-table",
-        &[upcase_ct, Value::NIL, Value::NIL],
-        Value::NIL,
-        &downcase_pairs,
-    )
-}
-
-/// Create an empty case-table char-table (valid for `case-table-p`).
-#[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
-fn make_case_table_value() -> Value {
-    build_char_table(
-        "case-table",
-        &[Value::NIL, Value::NIL, Value::NIL],
-        Value::NIL,
-        &[],
-    )
+    let downcase_ct = make_empty_case_table();
+    for (ch, value) in downcase_pairs {
+        super::chartable::ct_set_single(&downcase_ct, ch, value);
+    }
+    set_case_table_extra(downcase_ct, 0, upcase_ct);
+    downcase_ct
 }
 
 /// `(current-case-table)` -- evaluator-backed current buffer case table object.
@@ -698,30 +661,16 @@ fn set_current_case_table_for_buffer_in_state(
 }
 
 fn case_table_extra(table: Value, idx: usize) -> Value {
-    if table.is_char_table() {
-        return table
-            .as_char_table_obj()
-            .and_then(|obj| obj.extras.as_slice().get(idx).copied())
-            .unwrap_or(Value::NIL);
-    }
     table
-        .as_vector_data()
-        .and_then(|vec| vec.get(CT_EXTRA_START + idx).copied())
+        .as_char_table_obj()
+        .and_then(|obj| obj.extras.as_slice().get(idx).copied())
         .unwrap_or(Value::NIL)
 }
 
 fn set_case_table_extra(table: Value, idx: usize, value: Value) {
-    if table.is_char_table() {
-        let _ = table.with_char_table_mut(|obj| {
-            if let Some(slot) = obj.extras.ensure_owned().get_mut(idx) {
-                *slot = value;
-            }
-        });
-        return;
-    }
-    table.with_vector_data_mut(|vec| {
-        if let Some(slot) = vec.get_mut(CT_EXTRA_START + idx) {
-            store_value_atomic(slot, value);
+    let _ = table.with_char_table_mut(|obj| {
+        if let Some(slot) = obj.extras.ensure_owned().get_mut(idx) {
+            *slot = value;
         }
     });
 }
@@ -838,60 +787,23 @@ fn ensure_case_table_derived_slots(table: Value) -> Result<(), Flow> {
     Ok(())
 }
 
-/// Return `true` if `v` is a case table (char-table with `case-table` subtype).
+/// Return `true` if `v` is a case table (GNU `Fcase_table_p`): a char-table
+/// with the `case-table` purpose whose up/canon/eqv extras are nil or
+/// char-tables, with eqv present only alongside canon.
 pub fn is_case_table(v: &Value) -> bool {
     use super::chartable::is_char_table;
-    if !is_char_table(v) {
-        return false;
-    }
-
-    if v.is_char_table() {
-        let Some(obj) = v.as_char_table_obj() else {
-            return false;
-        };
-        if obj.purpose.as_symbol_id() != Some(case_table_sym_id()) || obj.extras.len() < 3 {
-            return false;
-        }
-
-        let up = obj.extras[0];
-        let canon = obj.extras[1];
-        let eqv = obj.extras[2];
-
-        return (up.is_nil() || is_char_table(&up))
-            && ((canon.is_nil() && eqv.is_nil())
-                || (is_char_table(&canon) && (eqv.is_nil() || is_char_table(&eqv))));
-    }
-
-    let Some(vec) = v.as_vector_data() else {
+    let Some(obj) = v.as_char_table_obj() else {
         return false;
     };
-    if vec.len() <= CT_EXTRA_START + 2
-        || vec[CT_SUBTYPE].as_symbol_id() != Some(case_table_sym_id())
-    {
+    if obj.purpose.as_symbol_id() != Some(case_table_sym_id()) || obj.extras.len() < 3 {
         return false;
     }
-    let ValueKind::Fixnum(extra_count) = vec[CT_EXTRA_COUNT].kind() else {
-        return false;
-    };
-    if extra_count < 3 || vec.len() < CT_EXTRA_START + extra_count as usize {
-        return false;
-    }
-
-    let up = vec[CT_EXTRA_START];
-    let canon = vec[CT_EXTRA_START + 1];
-    let eqv = vec[CT_EXTRA_START + 2];
-
-    if !up.is_nil() && !is_char_table(&up) {
-        return false;
-    }
-
-    if canon.is_nil() && eqv.is_nil() {
-        true
-    } else if is_char_table(&canon) {
-        eqv.is_nil() || is_char_table(&eqv)
-    } else {
-        false
-    }
+    let up = obj.extras[0];
+    let canon = obj.extras[1];
+    let eqv = obj.extras[2];
+    (up.is_nil() || is_char_table(&up))
+        && ((canon.is_nil() && eqv.is_nil())
+            || (is_char_table(&canon) && (eqv.is_nil() || is_char_table(&eqv))))
 }
 
 // ---------------------------------------------------------------------------

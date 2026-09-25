@@ -312,10 +312,6 @@ pub enum DumpHashKey {
         end: usize,
         plist: Box<DumpHashKey>,
     },
-    BoolVec {
-        len: u32,
-        bits: u128,
-    },
     /// A packed bool-vector key: bit count and words.
     BoolVector {
         nbits: u64,
