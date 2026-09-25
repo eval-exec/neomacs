@@ -154,6 +154,12 @@ impl RedisplayRuntime {
         }
     }
 
+    /// The presentation engine's layout statistics for its last accepted
+    /// frame (relaid and reused rows, fast-path classes).
+    pub fn last_layout_stats(&self) -> neomacs_layout_engine::incremental_layout::LayoutStats {
+        self.engine.borrow().last_layout_stats().clone()
+    }
+
     /// Produce one logical frame through the presentation engine.
     pub fn prepare_frame(
         &self,
