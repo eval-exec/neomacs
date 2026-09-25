@@ -395,6 +395,12 @@ pub(crate) struct CompiledPattern {
     /// compiler 6M instructions per file for 100 patterns that never
     /// searched a buffer.
     pub prefilter: std::cell::OnceCell<Option<LiteralPrefilter>>,
+
+    /// The zero-width anchor every path from the start meets before it
+    /// consumes anything ([`start_anchor`]), when that is more than the first
+    /// opcode shows (`\(?:^a\|^b\)`).  Computed only under
+    /// `NEOVM_REGEX_ANCHOR_ALT` ([`anchor_alt_enabled`]); `None` otherwise.
+    pub start_anchor: StartAnchor,
 }
 
 /// Bytes of text below which a forward search does not build a pattern's
@@ -804,6 +810,7 @@ impl CompiledPattern {
             buffer_sealed: false,
             pike_buffer: None,
             prefilter: std::cell::OnceCell::new(),
+            start_anchor: StartAnchor::None,
         }
     }
 
@@ -2116,6 +2123,12 @@ pub(crate) fn regex_compile_lisp_with_translation(
         buf.buffer_sealed,
         "regex compiler produced an unsealable buffer for this pattern"
     );
+
+    // Anchors behind alternations (P3.3 Stage 0), for the search's
+    // line-start scan; opt-in until measured.
+    if anchor_alt_enabled() {
+        buf.start_anchor = start_anchor(&buf.buffer);
+    }
 
     Ok(buf)
 }
@@ -8793,6 +8806,125 @@ fn sparse_ascii_fastmap(fastmap: &[bool; 256]) -> Option<SparseAsciiFastmap> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Search knobs (same-binary A/B)
+// ---------------------------------------------------------------------------
+
+/// Whether a regexp knob's value turns it on: `1`, `on`, `true` or `yes`.
+fn regex_knob_on(value: Option<&str>) -> bool {
+    matches!(
+        value.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
+        Some("1" | "on" | "true" | "yes")
+    )
+}
+
+#[cfg(any(test, feature = "fuzzing"))]
+thread_local! {
+    static ANCHOR_ALT_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// Run `f` with `NEOVM_REGEX_ANCHOR_ALT` forced to `on` on this thread.  It is
+/// read when a pattern compiles, so compile inside `f`.
+#[cfg(any(test, feature = "fuzzing"))]
+pub(crate) fn with_anchor_alt<R>(on: bool, f: impl FnOnce() -> R) -> R {
+    struct Guard(Option<bool>);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            ANCHOR_ALT_OVERRIDE.with(|slot| slot.set(self.0));
+        }
+    }
+    let _guard = Guard(ANCHOR_ALT_OVERRIDE.with(|slot| slot.replace(Some(on))));
+    f()
+}
+
+/// `NEOVM_REGEX_ANCHOR_ALT` (default off; `on` enables): a pattern whose every
+/// alternative begins with `^` (or `\``) searches line starts only, as a
+/// pattern whose FIRST opcode is `^` already does (P3.3 Stage 0).  Read once
+/// per process, when the first pattern compiles.
+pub(crate) fn anchor_alt_enabled() -> bool {
+    #[cfg(any(test, feature = "fuzzing"))]
+    if let Some(on) = ANCHOR_ALT_OVERRIDE.with(|slot| slot.get()) {
+        return on;
+    }
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        let on = regex_knob_on(std::env::var("NEOVM_REGEX_ANCHOR_ALT").ok().as_deref());
+        tracing::debug!(target: "neovm::regex", on, "NEOVM_REGEX_ANCHOR_ALT");
+        on
+    })
+}
+
+/// The zero-width anchor that every match of a pattern begins with.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum StartAnchor {
+    /// Some path from the start consumes a character (or succeeds) without
+    /// passing `^` or `\``, or the pattern was not analyzed.
+    #[default]
+    None,
+    /// Every path from the start meets `^` or `\`` before anything else, and
+    /// one meets `^`: a match can start only at a line start.
+    Line,
+    /// Every path from the start meets `\`` first: only position 0.
+    Buffer,
+}
+
+/// Which anchor every path from the start of `bytecode` meets before any
+/// other opcode, following the opcodes that neither consume nor test
+/// (`no_op`, group markers, jumps and both edges of every failure-point
+/// opcode).  GNU's `re_search_2` looks only at the first opcode
+/// (`anchored_start`); a candidate this analysis rules out is one where every
+/// path dies at the anchor, having pushed a few failure points and consumed
+/// nothing, so skipping it changes no result.
+pub(crate) fn start_anchor(bytecode: &[u8]) -> StartAnchor {
+    let mut visited = vec![false; bytecode.len() + 1];
+    let mut stack = vec![0usize];
+    let mut line = false;
+    let mut buf = false;
+    while let Some(pc) = stack.pop() {
+        if pc >= bytecode.len() {
+            // Fell off the end: an empty match with no anchor.
+            return StartAnchor::None;
+        }
+        if std::mem::replace(&mut visited[pc], true) {
+            continue;
+        }
+        let Some(op) = RegexOp::from_byte(bytecode[pc]) else {
+            return StartAnchor::None;
+        };
+        match op {
+            RegexOp::BegLine => line = true,
+            RegexOp::BegBuf => buf = true,
+            RegexOp::NoOp => stack.push(pc + 1),
+            RegexOp::StartMemory | RegexOp::StopMemory => stack.push(pc + 2),
+            RegexOp::Jump => {
+                let target = pc as i64 + 3 + extract_number(bytecode, pc + 1) as i64;
+                let Ok(target) = usize::try_from(target) else {
+                    return StartAnchor::None;
+                };
+                stack.push(target);
+            }
+            RegexOp::OnFailureJump
+            | RegexOp::OnFailureKeepStringJump
+            | RegexOp::OnFailureJumpLoop
+            | RegexOp::OnFailureJumpNastyloop
+            | RegexOp::OnFailureJumpSmart => {
+                let target = pc as i64 + 3 + extract_number(bytecode, pc + 1) as i64;
+                let Ok(target) = usize::try_from(target) else {
+                    return StartAnchor::None;
+                };
+                stack.push(pc + 3);
+                stack.push(target);
+            }
+            _ => return StartAnchor::None,
+        }
+    }
+    match (line, buf) {
+        (true, _) => StartAnchor::Line,
+        (false, true) => StartAnchor::Buffer,
+        (false, false) => StartAnchor::None,
+    }
+}
+
 /// Search for a match of the compiled pattern in text.
 ///
 /// Equivalent to GNU's `re_search_2()` operating on a single
@@ -8854,14 +8986,23 @@ pub(crate) fn re_search(
         }
         pattern.buffer.get(pc).copied()
     };
-    let bol_anchored = first_op == Some(RegexOp::BegLine as u8);
+    // `NEOVM_REGEX_ANCHOR_ALT`: the whole-pattern analysis, when compiled in
+    // (off under the search-optimization oracle).
+    let start_anchor = if fastmap_force_disabled() {
+        StartAnchor::None
+    } else {
+        pattern.start_anchor
+    };
+    let bol_anchored =
+        first_op == Some(RegexOp::BegLine as u8) || start_anchor == StartAnchor::Line;
     // `\``-anchored pattern (GNU `begbuf`, which succeeds only where
     // `AT_STRINGS_BEG`, `d == 0` here): position 0 is the one candidate.
     // Every other entry would pay the matcher's setup only to fail on the
     // first opcode -- 61 such entries for each 62-byte file name that
     // `find-file-name-handler` tests against TRAMP's archive handler
     // (`\`\(.+\.\(?:7z\|...`), which made a match 1.5 times GNU's.
-    let buf_anchored = first_op == Some(RegexOp::BegBuf as u8);
+    let buf_anchored =
+        first_op == Some(RegexOp::BegBuf as u8) || start_anchor == StartAnchor::Buffer;
 
     // A fresh search starts with a clean overflow flag; a candidate match
     // that hits the fail-stack limit sets it, aborting the whole scan
@@ -9398,3 +9539,7 @@ mod casefold_scan_tests;
 #[cfg(test)]
 #[path = "tests/fail_stack_parity.rs"]
 mod fail_stack_parity_tests;
+
+#[cfg(test)]
+#[path = "tests/start_anchor.rs"]
+mod start_anchor_tests;

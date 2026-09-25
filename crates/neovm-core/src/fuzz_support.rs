@@ -158,7 +158,12 @@ pub fn check_regex_differential(
     case: RegexCase<'_>,
     differential: RegexDifferential,
 ) -> Result<RegexCheck, RegexDivergence> {
-    let mut compiled = match regex_emacs::regex_compile(case.pattern, false, case.case_fold) {
+    // Every search optimization is on for the candidate side, the opt-in
+    // ones included (they are read when the pattern compiles).
+    let compiled = regex_emacs::with_anchor_alt(true, || {
+        regex_emacs::regex_compile(case.pattern, false, case.case_fold)
+    });
+    let mut compiled = match compiled {
         Ok(compiled) => compiled,
         Err(_) => {
             return Ok(RegexCheck::NotApplicable(
