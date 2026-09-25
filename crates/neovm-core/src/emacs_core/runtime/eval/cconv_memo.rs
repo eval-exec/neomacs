@@ -53,7 +53,12 @@
 //! non-nil.
 //!
 //! Excluded from exactness, as for P0.9's unboxed floats: allocation volume
-//! and what depends on it (`cons-cells-consed`, GC timing).
+//! and what depends on it (`cons-cells-consed`, GC timing, and so when
+//! finalizers and `post-gc-hook` run: GNU runs both at the end of
+//! `garbage_collect`, src/alloc.c:5960 and 5986-5990, at whichever
+//! `maybe_gc` point -- eval.c:2602, eval.c:3206, bytecode.c -- allocation
+//! trips a collection, inside a cconv run or, when the memo spares that
+//! allocation, somewhere after it).
 //!
 //! # Knob
 //!
@@ -90,8 +95,12 @@
 //! observable" check: loads, echo-area output, buffer creation and text
 //! changes, `gensym-counter`, function-cell writes, newly interned symbols and
 //! the match data.  Taken before and after a run, a difference means the run
-//! had an effect.  A verify mismatch names the fields that moved (and the
-//! function cells written, and the collections completed, during the run).
+//! had an effect.  A collection that completes while a run is observed this
+//! way (a recording or verify run) leaves its finalizers and `post-gc-hook`
+//! until after the second snapshot, so the snapshot charges the conversion
+//! with its own effects only; they still run before the filter returns.  A
+//! verify mismatch names the fields that moved (and the function cells
+//! written, and the collections completed, during the run).
 
 use super::cconv_shape::{ClosureFacts, ClosureShape, EnvSummary, FactsRefusal};
 use super::cconv_trust::TrustedSet;
@@ -278,12 +287,23 @@ pub(crate) enum CconvMemoEvent {
     RecordRefused,
     /// The memo reached its entry cap and was cleared.
     Cleared,
+    /// A collection completed during an observed run: its finalizers and
+    /// `post-gc-hook` ran when the run ended.
+    GcHooksDeferred,
 }
 
 /// Counts per [`CconvMemoEvent`].
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub(crate) struct CconvMemoStats {
     counts: [u64; CconvMemoEvent::COUNT],
+}
+
+impl Default for CconvMemoStats {
+    fn default() -> Self {
+        Self {
+            counts: [0; CconvMemoEvent::COUNT],
+        }
+    }
 }
 
 impl CconvMemoStats {
@@ -407,6 +427,16 @@ pub(crate) struct CconvMemo {
     loads: u64,
     /// Echo-area / stderr messages emitted, for [`EffectSnapshot`].
     outputs: u64,
+    /// Observed runs in progress ([`Context::cconv_observe_lisp`]): while
+    /// non-zero, a completed collection leaves its finalizers and
+    /// `post-gc-hook` to the end of the run.
+    observing: u32,
+    /// Collections that completed during an observed run, whose hooks are
+    /// still to run.
+    owed_gc_hooks: u32,
+    /// Complete a collection at the start of the next observed run.
+    #[cfg(test)]
+    collect_in_next_observed_run: bool,
 }
 
 impl CconvMemo {
@@ -421,6 +451,10 @@ impl CconvMemo {
             entry_count: 0,
             loads: 0,
             outputs: 0,
+            observing: 0,
+            owed_gc_hooks: 0,
+            #[cfg(test)]
+            collect_in_next_observed_run: false,
         }
     }
 
@@ -454,6 +488,13 @@ impl CconvMemo {
     #[cfg(test)]
     pub(crate) fn set_strict(&mut self, strict: bool) {
         self.strict = strict;
+    }
+
+    /// Make the next observed run start with a complete collection, as if
+    /// allocation had tripped one inside it.
+    #[cfg(test)]
+    pub(crate) fn collect_in_next_observed_run_for_test(&mut self) {
+        self.collect_in_next_observed_run = true;
     }
 
     /// Corrupt one recorded analysis (drop its first captured variable), so
@@ -537,6 +578,15 @@ struct Analysis {
     facts: Box<[MemoFact]>,
 }
 
+/// A Lisp run between two [`EffectSnapshot`]s ([`Context::cconv_observe_lisp`]).
+struct ObservedRun {
+    result: EvalResult,
+    before: EffectSnapshot,
+    after: EffectSnapshot,
+    /// Collections that completed during the run (their hooks ran after it).
+    gc_cycles: u64,
+}
+
 /// Most function-cell writes a verify run logs for its mismatch report.
 const OBSERVED_WRITE_LOG_CAP: usize = 16;
 
@@ -560,6 +610,31 @@ pub(crate) fn note_function_epoch_move(why: FunctionEpochBump, sym: Option<SymId
             log.push((why, sym));
         }
     });
+}
+
+/// Push every Lisp value RESULT holds as a specpdl root.
+fn push_result_roots(ctx: &mut Context, result: &EvalResult) {
+    match result {
+        Ok(value) => ctx.push_specpdl_root(*value),
+        Err(Flow::Signal(sig)) => {
+            ctx.push_specpdl_root(Value::from_sym_id(sig.symbol));
+            for value in sig.data.iter().copied() {
+                ctx.push_specpdl_root(value);
+            }
+            if let Some(raw) = sig.raw_data {
+                ctx.push_specpdl_root(raw);
+            }
+        }
+        Err(Flow::Throw(thrown)) => {
+            ctx.push_specpdl_root(thrown.tag);
+            ctx.push_specpdl_root(thrown.value);
+        }
+        Err(Flow::ThreadBlocked(blocked)) => {
+            ctx.push_specpdl_root(blocked.blocker);
+            ctx.push_specpdl_root(blocked.remaining_forms);
+        }
+        Err(Flow::Shutdown(_)) => {}
+    }
 }
 
 cached_symbol_id!(
@@ -1076,8 +1151,12 @@ impl Context {
         docstring: Value,
         iform: Value,
     ) -> (EvalResult, bool) {
-        let before = self.cconv_effect_snapshot();
-        let result = self.cconv_run_lisp(closure_hook, params, body, env, docstring, iform);
+        let ObservedRun {
+            result,
+            before,
+            after,
+            ..
+        } = self.cconv_observe_lisp(closure_hook, params, body, env, docstring, iform);
         let mut clean = match &result {
             Err(_) => {
                 self.cconv_memo.note(CconvMemoEvent::RunError);
@@ -1096,11 +1175,79 @@ impl Context {
                 identity
             }
         };
-        if self.cconv_effect_snapshot() != before {
+        if after != before {
             self.cconv_memo.note(CconvMemoEvent::RunEffect);
             clean = false;
         }
         (result, clean)
+    }
+
+    /// Run the filter between two effect snapshots.  GNU runs the doomed
+    /// finalizers and `post-gc-hook` at the end of `garbage_collect`
+    /// (src/alloc.c), wherever allocation happens to trip a collection --
+    /// inside this very run, or elsewhere when the memo spares its
+    /// allocation.  So a collection that completes while the run is observed
+    /// leaves its hooks to the end of the run, after the second snapshot:
+    /// what they do is no effect of the conversion, and would otherwise be
+    /// charged to it (a closed emacsql connection's finalizer moved
+    /// `function_epoch` inside a verify run).  They still run before the
+    /// filter returns, as if the collection had completed a moment later.
+    fn cconv_observe_lisp(
+        &mut self,
+        closure_hook: Value,
+        params: Value,
+        body: Value,
+        env: Value,
+        docstring: Value,
+        iform: Value,
+    ) -> ObservedRun {
+        let gc_count = self.gc_count;
+        let before = self.cconv_effect_snapshot();
+        self.cconv_memo.observing += 1;
+        #[cfg(test)]
+        if std::mem::take(&mut self.cconv_memo.collect_in_next_observed_run) {
+            self.gc_collect_exact();
+        }
+        let result = self.cconv_run_lisp(closure_hook, params, body, env, docstring, iform);
+        self.cconv_memo.observing -= 1;
+        let after = self.cconv_effect_snapshot();
+        let gc_cycles = self.gc_count.wrapping_sub(gc_count);
+        if self.cconv_memo.observing == 0 && self.cconv_memo.owed_gc_hooks > 0 {
+            self.cconv_run_owed_gc_hooks(&result);
+        }
+        ObservedRun {
+            result,
+            before,
+            after,
+            gc_cycles,
+        }
+    }
+
+    /// Whether a collection that just completed must leave its finalizers
+    /// and `post-gc-hook` to the end of an observed run (see
+    /// [`Self::cconv_observe_lisp`]); counts the owed cycle if so.
+    pub(super) fn cconv_memo_defers_gc_hooks(&mut self) -> bool {
+        if self.cconv_memo.observing == 0 {
+            return false;
+        }
+        self.cconv_memo.owed_gc_hooks = self.cconv_memo.owed_gc_hooks.saturating_add(1);
+        true
+    }
+
+    /// Run what the collections owed by an observed run left: the doomed
+    /// finalizers, then `post-gc-hook` once per collection (GNU's order).
+    #[cold]
+    #[inline(never)]
+    fn cconv_run_owed_gc_hooks(&mut self, result: &EvalResult) {
+        let cycles = std::mem::take(&mut self.cconv_memo.owed_gc_hooks);
+        self.cconv_memo.note(CconvMemoEvent::GcHooksDeferred);
+        let scope = self.save_specpdl_roots();
+        push_result_roots(self, result);
+        self.run_doomed_finalizers();
+        for _ in 0..cycles {
+            self.run_post_gc_hook();
+        }
+        self.restore_specpdl_roots(scope);
     }
 
     /// Run a call the memo does not serve: observed (for the statistics)
@@ -1369,11 +1516,12 @@ impl Context {
             self.push_specpdl_root(*closure);
         }
         OBSERVED_FUNCTION_WRITES.with(|log| *log.borrow_mut() = Some(Vec::new()));
-        let gc_count = self.gc_count;
-        let before = self.cconv_effect_snapshot();
-        let lisp = self.cconv_run_lisp(closure_hook, params, body, env, docstring, iform);
-        let after = self.cconv_effect_snapshot();
-        let gc_cycles = self.gc_count.wrapping_sub(gc_count);
+        let ObservedRun {
+            result: lisp,
+            before,
+            after,
+            gc_cycles,
+        } = self.cconv_observe_lisp(closure_hook, params, body, env, docstring, iform);
         let writes = OBSERVED_FUNCTION_WRITES.with(|log| log.borrow_mut().take());
         let quiet = after == before;
         let agree = match (&memo, &lisp) {

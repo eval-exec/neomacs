@@ -1961,9 +1961,12 @@ impl Context {
         self.drain_pending_surface_destroys();
         self.drain_pending_video_destroys();
         // GNU `garbage_collect` runs the doomed finalizers before
-        // `post-gc-hook`.
-        self.run_doomed_finalizers();
-        self.run_post_gc_hook();
+        // `post-gc-hook`.  A collection that completes while the cconv memo
+        // observes a Lisp run leaves both to the end of that run.
+        if !self.cconv_memo_defers_gc_hooks() {
+            self.run_doomed_finalizers();
+            self.run_post_gc_hook();
+        }
         if self.gc_stress {
             // GNU resets `consing_until_gc` before running post-gc-hook and
             // runs the hook with GC inhibited.  Keep Neomacs' exact-GC stress

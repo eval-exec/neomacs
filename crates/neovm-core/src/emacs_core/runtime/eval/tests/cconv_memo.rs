@@ -1060,6 +1060,54 @@ fn memo_survives_garbage_collection() {
     );
 }
 
+/// A collection that completes while the memo observes a Lisp run (here a
+/// verify run) leaves its finalizers and `post-gc-hook` to the end of the
+/// run: GNU runs them wherever allocation trips a collection
+/// (src/alloc.c `garbage_collect`), so what they do is no effect of the
+/// conversion.  The MELPA closql soak caught an emacsql connection's
+/// finalizer writing a function cell inside a verify run.
+#[test]
+fn collection_hooks_wait_for_the_end_of_an_observed_run() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = startup(CconvMemoMode::Verify);
+    eval.cconv_memo.set_strict(true);
+    eval_ok(
+        &mut eval,
+        "(defun cm-hooks (v) (let ((a v) (b 2)) (lambda () (list a))))",
+    );
+    for _ in 0..3 {
+        printed(&mut eval, "(cm-hooks 1)");
+    }
+    let matches = count(&eval, CconvMemoEvent::VerifyMatch);
+    assert!(matches > 0, "{}", eval.cconv_memo_report());
+    // Both hooks do what the snapshot sees: a function-cell write and a
+    // gensym.
+    eval_ok(
+        &mut eval,
+        "(progn (make-finalizer (lambda () (defalias 'cm-hooks-finalized #'ignore))) nil)",
+    );
+    eval_ok(
+        &mut eval,
+        "(progn (setq cm-hooks-gc-runs 0)
+                (add-hook 'post-gc-hook
+                          (lambda () (gensym) (setq cm-hooks-gc-runs (1+ cm-hooks-gc-runs)))))",
+    );
+    eval.cconv_memo.collect_in_next_observed_run_for_test();
+    let closure = printed(&mut eval, "(cm-hooks 1)");
+    assert_eq!(closure, "#[nil ((list a)) ((a . 1))]");
+    assert_eq!(count(&eval, CconvMemoEvent::VerifyMatch), matches + 1);
+    assert_eq!(count(&eval, CconvMemoEvent::VerifyMismatch), 0);
+    assert_eq!(count(&eval, CconvMemoEvent::GcHooksDeferred), 1);
+    // They ran before the creation returned.
+    assert_eq!(
+        printed(
+            &mut eval,
+            "(list (fboundp 'cm-hooks-finalized) (> cm-hooks-gc-runs 0))"
+        ),
+        "(t t)"
+    );
+}
+
 #[test]
 fn bypasses() {
     crate::test_utils::init_test_tracing();
