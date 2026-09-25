@@ -1,0 +1,307 @@
+//! `SpecSlot` v2 (p1-0-integration §3.1, S0.8): the per-site speculation
+//! state compiled code and the call shims share, and the one statement of
+//! what each of its words means for each kind of site.
+//!
+//! A slot is four words, baked into generated code by address (JIT) or
+//! indexed off the sidecar (AOT, stride `size_of::<SpecSlot>()`, salted into
+//! the ABI tag):
+//!
+//! | word | offset | [`SpecSlotKind::Bytecode`] | [`SpecSlotKind::Subr`] |
+//! |---|---|---|---|
+//! | `epoch` | 0 | clock at the last validation ([`SPEC_EPOCH_DISARMED`] never matches) | same |
+//! | `leaf` | 8 | `*const CompiledLeaf`, or 0 | the expected subr's bits (immutable) |
+//! | `direct_consts` | 16 | the shim's key: constant base with `KEY_*` flags, or 0 | the site's `SymId` (immutable) |
+//! | `direct_entry` | 24 | the register-ABI entry a direct call may take, or 0 | 0 |
+//!
+//! Only a [`SpecSlotKind::Bytecode`] slot's `leaf`, `direct_consts` and
+//! `direct_entry` ever change after the slot is built, so only those are
+//! ever cleared: every slot walker goes through
+//! [`CompiledLeaf::bytecode_spec_slots`]. Clearing a subr slot's words would
+//! make its re-validation fail forever (a silent permanent fall to the
+//! reference path), so `clear_leaf` refuses one in debug builds.
+
+use super::*;
+
+/// What a spec slot's words hold (see the module table), decided by its
+/// site's [`SpecCalleeKind`] when the leaf is built.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SpecSlotKind {
+    /// A byte-code callee: the cached leaf, the shim key and the direct
+    /// entry, armed and cleared as the callee's compiled state changes.
+    Bytecode,
+    /// A builtin callee (every subr [`SpecCalleeKind`]): immutable binding
+    /// words (a `SubrGeneral` site's symbol and expected subr; zero for the
+    /// other subr kinds, whose shims read neither).
+    Subr,
+    /// RESERVED for P2.1 C5's closure source slots (a source's runtime word
+    /// as the key). No site builds one yet; walkers skip it like a subr slot.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "reserved: P2.1 C5 closure source slots")
+    )]
+    Source,
+}
+
+impl SpecCalleeKind {
+    /// The kind of slot a site of this callee kind owns.
+    pub(crate) fn slot_kind(self) -> SpecSlotKind {
+        match self {
+            SpecCalleeKind::Bytecode => SpecSlotKind::Bytecode,
+            SpecCalleeKind::SubrGeneral
+            | SpecCalleeKind::PredRecordp
+            | SpecCalleeKind::PredSymbolWithPos
+            | SpecCalleeKind::PredTypeOf
+            | SpecCalleeKind::PredClTypeOf
+            | SpecCalleeKind::PredFboundp
+            | SpecCalleeKind::PredAutoloadDoLoad
+            | SpecCalleeKind::EqInclProps
+            | SpecCalleeKind::ArithIntrinsic { .. }
+            // CallBuiltinSym sites own no slot; their kind never reaches a
+            // slot, and would be a builtin's if it did.
+            | SpecCalleeKind::CbsymTierA { .. }
+            | SpecCalleeKind::CbsymTierB => SpecSlotKind::Subr,
+        }
+    }
+}
+
+/// Per-site speculation state (see the module docs for each word).
+///
+/// `epoch` is the obarray `function_epoch` at which this site's callee
+/// binding was last validated. `leaf` lazily caches a `*const CompiledLeaf`
+/// (as `usize` bits; 0 = none) for the armed callee, so repeat calls skip
+/// the compiled-cache hash lookup (the V3 fast path). The leaf pointer is
+/// cleared whenever revalidation fails (the binding changed), and is sound
+/// while set because the tagged-heap identity is stable during native
+/// execution (so `cache::clear()` cannot fire mid-call to free the leaf —
+/// see `resolve_compiled_leaf_ptr`; NOT "the cache never evicts", audit #1).
+/// `repr(C)` pins the field order the baked pointer arithmetic relies on.
+///
+/// `direct_consts` is the shim's own fast-path key: the cached leaf's
+/// constant base when that leaf takes this site's call -- as the generated
+/// code laid it out, or normalized into a frame buffer of at most
+/// [`FAST_PATH_MAX_ARITY`] words (missing `&optional` slots nil-filled, a
+/// `&rest` tail consed into the last slot) -- 0 otherwise. With it set the
+/// shim enters the leaf without re-classifying the callee, the leaf or the
+/// call; it is armed together with `leaf` and cleared with it.
+///
+/// `direct_entry` is the key of a site that calls the leaf itself (a direct
+/// call, `NEOVM_JIT_DIRECT_CALL`): the leaf's register-ABI entry when the
+/// site may enter it with its arguments in registers and `direct_consts` as
+/// its `aux` word, else 0. Armed LAST and cleared FIRST, so a site that sees
+/// it set sees the leaf and key it goes with.
+#[repr(C)]
+pub(crate) struct SpecSlot {
+    pub(super) epoch: AtomicU64,
+    pub(super) leaf: AtomicU64,
+    pub(super) direct_consts: AtomicU64,
+    pub(super) direct_entry: AtomicU64,
+}
+
+/// Byte offsets of the four words, for generated code.
+pub(crate) const SPEC_SLOT_EPOCH_OFFSET: usize = core::mem::offset_of!(SpecSlot, epoch);
+pub(crate) const SPEC_SLOT_LEAF_OFFSET: usize = core::mem::offset_of!(SpecSlot, leaf);
+pub(crate) const SPEC_SLOT_KEY_OFFSET: usize = core::mem::offset_of!(SpecSlot, direct_consts);
+pub(crate) const SPEC_SLOT_DIRECT_ENTRY_OFFSET: usize =
+    core::mem::offset_of!(SpecSlot, direct_entry);
+
+const _: () = {
+    assert!(core::mem::size_of::<SpecSlot>() == 32);
+    assert!(SPEC_SLOT_EPOCH_OFFSET == 0);
+    assert!(SPEC_SLOT_LEAF_OFFSET == 8);
+    assert!(SPEC_SLOT_KEY_OFFSET == 16);
+    assert!(SPEC_SLOT_DIRECT_ENTRY_OFFSET == 24);
+};
+
+/// Largest callee arity the spec shim's fast path frames itself (a short
+/// call to a callee with `&optional` slots is nil-filled, and a `&rest`
+/// callee's tail consed, into a buffer of this many words on the shim's
+/// stack); wider callees keep the slow half.
+pub(crate) const FAST_PATH_MAX_ARITY: usize = 16;
+
+impl SpecSlot {
+    /// A slot armed at `epoch` with no cached leaf.
+    pub(crate) const fn at_epoch(epoch: u64) -> Self {
+        Self {
+            epoch: AtomicU64::new(epoch),
+            leaf: AtomicU64::new(0),
+            direct_consts: AtomicU64::new(0),
+            direct_entry: AtomicU64::new(0),
+        }
+    }
+
+    /// The slot a site of `kind` starts with, armed at `epoch`: a
+    /// `SubrGeneral` site's carries its immutable binding words
+    /// ([`Self::bind_subr`]), every other starts empty.
+    pub(crate) fn for_site(kind: SpecCalleeKind, epoch: u64, sym: u32, expected: u64) -> Self {
+        let slot = Self::at_epoch(epoch);
+        if kind == SpecCalleeKind::SubrGeneral {
+            slot.bind_subr(sym, expected);
+        }
+        slot
+    }
+
+    /// The cached callee leaf, null when none.
+    #[inline(always)]
+    pub(crate) fn leaf_ptr(&self) -> *const CompiledLeaf {
+        self.leaf.load(Ordering::Relaxed) as *const CompiledLeaf
+    }
+
+    /// The armed direct entry, null when the site may not call directly.
+    #[inline(always)]
+    pub(crate) fn direct_entry(&self) -> *const u8 {
+        self.direct_entry.load(Ordering::Relaxed) as usize as *const u8
+    }
+
+    /// Cache `leaf` for the armed callee; `direct_consts` is the callee's
+    /// constant base when the leaf takes the site's call (the shim's
+    /// fast-path key), null otherwise, with [`Self::KEY_SHORT_CALL`] set
+    /// when the fast path builds the leaf's frame (a short call, nil-filled,
+    /// or a `&rest` leaf, its tail consed) and [`Self::KEY_FRAMED`] when the
+    /// leaf runs under its own native frame. The base is 8-byte aligned, so
+    /// the low bits are free; folding the two facts into the word the fast
+    /// path loads anyway keeps its pure, handler-free case at one test each
+    /// instead of the leaf's arity load and its three eligibility loads.
+    #[inline(always)]
+    pub(crate) fn arm_leaf(
+        &self,
+        leaf: *const CompiledLeaf,
+        direct_consts: *const Value,
+        short_call: bool,
+        framed: bool,
+    ) {
+        debug_assert!(!self.holds_subr_binding(), "arm_leaf on a subr site's slot");
+        debug_assert!(
+            self.direct_entry().is_null(),
+            "a slot is armed only after its previous leaf was cleared"
+        );
+        self.leaf.store(leaf as usize as u64, Ordering::Relaxed);
+        let key = if direct_consts.is_null() {
+            0
+        } else {
+            debug_assert_eq!(direct_consts as usize & Self::KEY_FLAGS as usize, 0);
+            direct_consts as usize as u64
+                | if short_call { Self::KEY_SHORT_CALL } else { 0 }
+                | if framed { Self::KEY_FRAMED } else { 0 }
+        };
+        self.direct_consts.store(key, Ordering::Relaxed);
+    }
+
+    /// Arm the direct entry of the leaf [`Self::arm_leaf`] just cached:
+    /// written last, after the leaf and the key it goes with.
+    #[inline]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "consumer: spec slots arm a direct entry (S2.1b)")
+    )]
+    pub(crate) fn arm_direct_entry(&self, entry: *const u8) {
+        debug_assert!(
+            !self.holds_subr_binding(),
+            "a subr site never calls directly"
+        );
+        debug_assert!(!self.leaf_ptr().is_null(), "a direct entry needs its leaf");
+        debug_assert_eq!(
+            self.direct_consts.load(Ordering::Relaxed) & Self::KEY_FLAGS,
+            0,
+            "a direct call is exact-arity and frameless"
+        );
+        self.direct_entry
+            .store(entry as usize as u64, Ordering::Relaxed);
+    }
+
+    /// `direct_consts` flag: the site's call is not the leaf's frame as laid
+    /// out -- short of its arity (nil-filled `&optional` slots) or to a
+    /// `&rest` leaf (the tail consed into its last slot) -- so the fast path
+    /// builds the frame in a buffer of [`FAST_PATH_MAX_ARITY`] words.
+    pub(crate) const KEY_SHORT_CALL: u64 = 1;
+    /// `direct_consts` flag: the leaf runs under its own native frame.
+    pub(crate) const KEY_FRAMED: u64 = 2;
+    /// The flag bits of the key; the rest is the constant base.
+    pub(crate) const KEY_FLAGS: u64 = 3;
+
+    /// Drop the cached leaf, and with it the direct entry and the fast-path
+    /// key: the direct entry FIRST, so no site enters a leaf whose key is
+    /// already gone (the arming order, reversed).
+    #[inline(always)]
+    pub(crate) fn clear_leaf(&self) {
+        debug_assert!(
+            !self.holds_subr_binding(),
+            "clear_leaf on a subr site's slot would erase its binding words"
+        );
+        self.direct_entry.store(0, Ordering::Relaxed);
+        self.direct_consts.store(0, Ordering::Relaxed);
+        self.leaf.store(0, Ordering::Relaxed);
+    }
+
+    /// Give a `SubrGeneral` site's slot its IMMUTABLE binding words, written
+    /// once when the slot is built: `leaf` holds the expected subr's bits and
+    /// `direct_consts` the site's symbol (p1-0-integration §3.1). A leaf
+    /// builtin's Bcall trampoline then gets the symbol, the expected binding
+    /// and the armed epoch from the one slot pointer, keeping the argument
+    /// registers for the call's own arguments. The subr shims never read
+    /// these two words; nothing may clear them (`clear_leaf` asserts): a
+    /// cleared slot would make every re-validation fail -- a permanent,
+    /// silent fall to the reference path.
+    pub(crate) fn bind_subr(&self, sym: u32, expected: u64) {
+        debug_assert!(
+            Value::from_bits(expected as usize).is_veclike(),
+            "a subr binding is a tagged subr object"
+        );
+        self.leaf.store(expected, Ordering::Relaxed);
+        self.direct_consts.store(u64::from(sym), Ordering::Relaxed);
+    }
+
+    /// Whether this slot carries a subr site's binding words
+    /// ([`Self::bind_subr`]): the in-band witness of [`SpecSlotKind::Subr`]
+    /// for a bound site, which `arm_leaf`/`clear_leaf` assert against. A
+    /// bytecode site's `leaf` is null or an aligned `CompiledLeaf` pointer
+    /// (tag bits 0), a subr binding is a tagged veclike. Walkers decide by
+    /// the leaf's [`SpecSlotKind`]s, never by this.
+    #[inline(always)]
+    pub(crate) fn holds_subr_binding(&self) -> bool {
+        self.leaf.load(Ordering::Relaxed) & TAG_MASK as u64 != 0
+    }
+
+    /// A subr site's `(symbol, expected subr bits)` ([`Self::bind_subr`]).
+    #[inline(always)]
+    pub(crate) fn subr_binding(&self) -> (SymId, u64) {
+        (
+            SymId(self.direct_consts.load(Ordering::Relaxed) as u32),
+            self.leaf.load(Ordering::Relaxed),
+        )
+    }
+}
+
+/// The per-slot kinds of a leaf's spec slots (`CompiledLeaf::spec_slot_kinds`),
+/// from the site map whose `slot` fields number `0..n` densely.
+pub(crate) fn spec_slot_kinds_of(
+    sites: &HashMap<usize, SpecSite>,
+    n: usize,
+) -> Box<[SpecSlotKind]> {
+    let mut kinds: Vec<Option<SpecSlotKind>> = vec![None; n];
+    for site in sites.values() {
+        debug_assert!(kinds[site.slot].is_none(), "one site per slot");
+        kinds[site.slot] = Some(site.kind.slot_kind());
+    }
+    kinds
+        .into_iter()
+        .map(|k| k.expect("spec slots are numbered densely"))
+        .collect()
+}
+
+impl CompiledLeaf {
+    /// This leaf's [`SpecSlotKind::Bytecode`] slots: the only ones whose
+    /// words name a callee leaf, and so the only ones a walker (retiring a
+    /// leaf, a redefinition firing) may clear.
+    pub(crate) fn bytecode_spec_slots(&self) -> impl Iterator<Item = &SpecSlot> {
+        debug_assert_eq!(self.spec_slots.len(), self.spec_slot_kinds.len());
+        self.spec_slots
+            .iter()
+            .zip(self.spec_slot_kinds.iter())
+            .filter(|(_, kind)| **kind == SpecSlotKind::Bytecode)
+            .map(|(slot, _)| slot)
+    }
+}
+
+#[cfg(test)]
+#[path = "spec_slot/tests/spec_slot_test.rs"]
+mod tests;

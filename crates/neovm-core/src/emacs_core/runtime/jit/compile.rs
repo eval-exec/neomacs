@@ -1689,23 +1689,6 @@ impl SpecCalleeKind {
     }
 }
 
-/// The per-slot kinds of a leaf's spec slots (`CompiledLeaf::spec_slot_kinds`),
-/// from the site map whose `slot` fields number `0..n` densely.
-pub(crate) fn spec_slot_kinds_of(
-    sites: &HashMap<usize, SpecSite>,
-    n: usize,
-) -> Box<[SpecCalleeKind]> {
-    let mut kinds: Vec<Option<SpecCalleeKind>> = vec![None; n];
-    for site in sites.values() {
-        debug_assert!(kinds[site.slot].is_none(), "one site per slot");
-        kinds[site.slot] = Some(site.kind);
-    }
-    kinds
-        .into_iter()
-        .map(|k| k.expect("spec slots are numbered densely"))
-        .collect()
-}
-
 /// A speculated direct-call site: an `Op::Call` whose callee slot provably
 /// holds the constant symbol `sym`, fbound at compile time to the bytecode
 /// object or fixed-arity builtin subr `expected_bits` (see `kind`). `slot`
@@ -1884,142 +1867,6 @@ const CBSYM_SPECIAL_NAMES: &[&str] = &[
     "%%defconst",
     "%%unimplemented-elc-bytecode",
 ];
-
-/// Per-site speculation state, baked into generated code by raw address and
-/// read by `neovm_jit_call_spec`. `epoch` is the obarray `function_epoch` at
-/// which this site's callee binding was last validated. `leaf` lazily caches a
-/// `*const CompiledLeaf` (as `usize` bits; 0 = none) for the armed callee, so
-/// repeat calls skip the compiled-cache hash lookup (the V3 fast path). The
-/// leaf pointer is cleared whenever revalidation fails (the binding changed),
-/// and is sound while set because the tagged-heap identity is stable during
-/// native execution (so `cache::clear()` cannot fire mid-call to free the leaf —
-/// see `resolve_compiled_leaf_ptr`; NOT "the cache never evicts", audit #1).
-/// `repr(C)` pins the field order the baked pointer arithmetic relies on.
-///
-/// `direct_consts` is the shim's own fast-path key: the cached leaf's
-/// constant base when that leaf takes this site's call -- as the generated
-/// code laid it out, or normalized into a frame buffer of at most
-/// [`FAST_PATH_MAX_ARITY`] words (missing `&optional` slots nil-filled, a
-/// `&rest` tail consed into the last slot) -- 0 otherwise. With it set the
-/// shim enters the leaf without re-classifying the callee, the leaf or the
-/// call; it is armed together with `leaf` and cleared with it.
-#[repr(C)]
-pub(crate) struct SpecSlot {
-    epoch: AtomicU64,
-    leaf: AtomicU64,
-    direct_consts: AtomicU64,
-}
-
-/// Largest callee arity the spec shim's fast path frames itself (a short
-/// call to a callee with `&optional` slots is nil-filled, and a `&rest`
-/// callee's tail consed, into a buffer of this many words on the shim's
-/// stack); wider callees keep the slow half.
-pub(crate) const FAST_PATH_MAX_ARITY: usize = 16;
-
-impl SpecSlot {
-    /// A slot armed at `epoch` with no cached leaf.
-    pub(crate) const fn at_epoch(epoch: u64) -> Self {
-        Self {
-            epoch: AtomicU64::new(epoch),
-            leaf: AtomicU64::new(0),
-            direct_consts: AtomicU64::new(0),
-        }
-    }
-
-    /// The cached callee leaf, null when none.
-    #[inline(always)]
-    pub(crate) fn leaf_ptr(&self) -> *const CompiledLeaf {
-        self.leaf.load(Ordering::Relaxed) as *const CompiledLeaf
-    }
-
-    /// Cache `leaf` for the armed callee; `direct_consts` is the callee's
-    /// constant base when the leaf takes the site's call (the shim's
-    /// fast-path key), null otherwise, with [`Self::KEY_SHORT_CALL`] set
-    /// when the fast path builds the leaf's frame (a short call, nil-filled,
-    /// or a `&rest` leaf, its tail consed) and [`Self::KEY_FRAMED`] when the
-    /// leaf runs under its own
-    /// native frame. The base is 8-byte aligned, so the low bits are free;
-    /// folding the two facts into the word the fast path loads anyway
-    /// keeps its pure, handler-free case at one test each instead of the
-    /// leaf's arity load and its three eligibility loads.
-    #[inline(always)]
-    pub(crate) fn arm_leaf(
-        &self,
-        leaf: *const CompiledLeaf,
-        direct_consts: *const Value,
-        short_call: bool,
-        framed: bool,
-    ) {
-        debug_assert!(!self.holds_subr_binding(), "arm_leaf on a subr site's slot");
-        self.leaf.store(leaf as usize as u64, Ordering::Relaxed);
-        let key = if direct_consts.is_null() {
-            0
-        } else {
-            debug_assert_eq!(direct_consts as usize & Self::KEY_FLAGS as usize, 0);
-            direct_consts as usize as u64
-                | if short_call { Self::KEY_SHORT_CALL } else { 0 }
-                | if framed { Self::KEY_FRAMED } else { 0 }
-        };
-        self.direct_consts.store(key, Ordering::Relaxed);
-    }
-
-    /// `direct_consts` flag: the site's call is not the leaf's frame as laid
-    /// out -- short of its arity (nil-filled `&optional` slots) or to a
-    /// `&rest` leaf (the tail consed into its last slot) -- so the fast path
-    /// builds the frame in a buffer of [`FAST_PATH_MAX_ARITY`] words.
-    pub(crate) const KEY_SHORT_CALL: u64 = 1;
-    /// `direct_consts` flag: the leaf runs under its own native frame.
-    pub(crate) const KEY_FRAMED: u64 = 2;
-    /// The flag bits of the key; the rest is the constant base.
-    pub(crate) const KEY_FLAGS: u64 = 3;
-
-    /// Drop the cached leaf (and with it the fast-path key).
-    #[inline(always)]
-    pub(crate) fn clear_leaf(&self) {
-        debug_assert!(
-            !self.holds_subr_binding(),
-            "clear_leaf on a subr site's slot would erase its binding words"
-        );
-        self.direct_consts.store(0, Ordering::Relaxed);
-        self.leaf.store(0, Ordering::Relaxed);
-    }
-
-    /// Give a `SubrGeneral` site's slot its IMMUTABLE binding words, written
-    /// once when the slot is built: `leaf` holds the expected subr's bits and
-    /// `direct_consts` the site's symbol (p1-0-integration §3.1). A leaf
-    /// builtin's Bcall trampoline then gets the symbol, the expected binding
-    /// and the armed epoch from the one slot pointer, keeping the argument
-    /// registers for the call's own arguments. The subr shims never read
-    /// these two words; nothing may clear them (`clear_leaf` asserts): a
-    /// cleared slot would make every re-validation fail -- a permanent,
-    /// silent fall to the reference path.
-    pub(crate) fn bind_subr(&self, sym: u32, expected: u64) {
-        debug_assert!(
-            Value::from_bits(expected as usize).is_veclike(),
-            "a subr binding is a tagged subr object"
-        );
-        self.leaf.store(expected, Ordering::Relaxed);
-        self.direct_consts.store(u64::from(sym), Ordering::Relaxed);
-    }
-
-    /// Whether this slot carries a subr site's binding words
-    /// ([`Self::bind_subr`]). In-band: a bytecode site's `leaf` is null or an
-    /// aligned `CompiledLeaf` pointer (tag bits 0), a subr binding is a
-    /// tagged veclike. Slot walkers must skip these slots.
-    #[inline(always)]
-    pub(crate) fn holds_subr_binding(&self) -> bool {
-        self.leaf.load(Ordering::Relaxed) & TAG_MASK as u64 != 0
-    }
-
-    /// A subr site's `(symbol, expected subr bits)` ([`Self::bind_subr`]).
-    #[inline(always)]
-    pub(crate) fn subr_binding(&self) -> (SymId, u64) {
-        (
-            SymId(self.direct_consts.load(Ordering::Relaxed) as u32),
-            self.leaf.load(Ordering::Relaxed),
-        )
-    }
-}
 
 /// Find direct-call speculation sites: the byte-compiler's standard call
 /// shape `Constant(f) arg-push* Call(n)` where every op between the callee
@@ -3549,16 +3396,22 @@ pub fn lower_leaf_full_osr(
     let (spec_sites, spec_slots): (HashMap<usize, SpecSite>, Box<[SpecSlot]>) = match obarray {
         Some(ob) => {
             let sites = find_spec_sites(ops, constants, &cfg.leaders, ob, true);
-            let slots: Box<[SpecSlot]> = (0..sites.len()).map(|_| SpecSlot::at_epoch(0)).collect();
             // Arm every slot with the epoch the bindings were observed at; any
             // bump before first execution self-heals via shim re-validation.
             let epoch = ob.function_epoch();
+            let mut slots: Vec<Option<SpecSlot>> = (0..sites.len()).map(|_| None).collect();
             for site in sites.values() {
-                slots[site.slot].epoch.store(epoch, Ordering::Relaxed);
-                if site.kind == SpecCalleeKind::SubrGeneral {
-                    slots[site.slot].bind_subr(site.sym, site.expected_bits);
-                }
+                slots[site.slot] = Some(SpecSlot::for_site(
+                    site.kind,
+                    epoch,
+                    site.sym,
+                    site.expected_bits,
+                ));
             }
+            let slots: Box<[SpecSlot]> = slots
+                .into_iter()
+                .map(|slot| slot.expect("spec slots are numbered densely"))
+                .collect();
             (sites, slots)
         }
         None => (HashMap::new(), Box::from([])),
@@ -4833,6 +4686,8 @@ mod dispatch;
 pub use dispatch::*;
 
 pub(crate) mod jit_layout;
+pub(crate) mod spec_slot;
+pub(crate) use spec_slot::{FAST_PATH_MAX_ARITY, SpecSlot, SpecSlotKind, spec_slot_kinds_of};
 pub(crate) mod stack_guard;
 
 pub(crate) mod cold_exits;

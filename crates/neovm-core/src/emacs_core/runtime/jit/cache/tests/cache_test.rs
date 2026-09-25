@@ -730,7 +730,7 @@ fn install_step(ev: &mut crate::emacs_core::eval::Context, name: &str) -> Value 
 /// leaf: the words of other slot kinds are not leaf pointers.
 #[test]
 fn unlink_spec_slots_to_clears_only_bytecode_slots_caching_the_dead_leaf() {
-    use crate::emacs_core::jit::compile::SpecCalleeKind;
+    use crate::emacs_core::jit::compile::SpecSlotKind;
     let mut ev = crate::emacs_core::eval::Context::new();
     let step = install_step(&mut ev, "unlink-kind-step");
     // (lambda (x) (unlink-kind-step x))
@@ -743,7 +743,7 @@ fn unlink_spec_slots_to_clears_only_bytecode_slots_caching_the_dead_leaf() {
     let mut leaf =
         crate::emacs_core::jit::compile::compile_bytecode_function_with(&f, Some(&ev.obarray))
             .expect("compiles");
-    assert_eq!(&*leaf.spec_slot_kinds, &[SpecCalleeKind::Bytecode]);
+    assert_eq!(&*leaf.spec_slot_kinds, &[SpecSlotKind::Bytecode]);
     let other = lexical_fn(vec![Op::Constant(0), Op::Return], vec![Value::NIL], 0);
     let dead = crate::emacs_core::jit::compile::compile_bytecode_function_with(&other, None)
         .expect("compiles");
@@ -759,14 +759,17 @@ fn unlink_spec_slots_to_clears_only_bytecode_slots_caching_the_dead_leaf() {
     assert_eq!(leaf.unlink_spec_slots_to(dead_ptr), 1);
     assert!(leaf.spec_slots[0].leaf_ptr().is_null(), "cleared");
     // The same word in a slot of another kind is left alone.
-    leaf.spec_slot_kinds = Box::new([SpecCalleeKind::SubrGeneral]);
-    leaf.spec_slots[0].arm_leaf(dead_ptr, std::ptr::null(), false, false);
-    assert_eq!(leaf.unlink_spec_slots_to(dead_ptr), 0);
-    assert_eq!(
-        leaf.spec_slots[0].leaf_ptr(),
-        dead_ptr,
-        "a subr slot is untouched"
-    );
+    for kind in [SpecSlotKind::Subr, SpecSlotKind::Source] {
+        leaf.spec_slot_kinds = Box::new([kind]);
+        leaf.spec_slots[0].clear_leaf();
+        leaf.spec_slots[0].arm_leaf(dead_ptr, std::ptr::null(), false, false);
+        assert_eq!(leaf.unlink_spec_slots_to(dead_ptr), 0);
+        assert_eq!(
+            leaf.spec_slots[0].leaf_ptr(),
+            dead_ptr,
+            "a {kind:?} slot is untouched"
+        );
+    }
 }
 
 /// The thread-wide walk reaches the spec slots of cached leaves: a caller's

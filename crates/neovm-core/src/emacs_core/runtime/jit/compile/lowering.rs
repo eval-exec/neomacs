@@ -1385,7 +1385,7 @@ fn emit_inline_record_type_of(
     let data_off = core::mem::offset_of!(VectorObj, data);
     let type_off = core::mem::offset_of!(VecLikeHeader, type_tag);
     let ob = super::jit_layout::CONTEXT_OBARRAY_OFFSET;
-    let slot_epoch_off = core::mem::offset_of!(super::SpecSlot, epoch);
+    let slot_epoch_off = super::spec_slot::SPEC_SLOT_EPOCH_OFFSET;
     let flags = MemFlagsData::trusted();
     debug_assert_eq!(Value::NIL.bits(), 0, "the clear test ORs nil words");
     let record_tag = VecLikeType::Record as u8 as i64;
@@ -2472,14 +2472,20 @@ pub(super) fn plan_mir_leaf_for_jit(
     for (slot, site) in sites.values_mut().enumerate() {
         site.slot = slot;
     }
-    let slots: Box<[super::SpecSlot]> = (0..sites.len())
-        .map(|_| super::SpecSlot::at_epoch(ob.function_epoch()))
-        .collect();
+    let epoch = ob.function_epoch();
+    let mut slots: Vec<Option<super::SpecSlot>> = (0..sites.len()).map(|_| None).collect();
     for site in sites.values() {
-        if site.kind == SpecCalleeKind::SubrGeneral {
-            slots[site.slot].bind_subr(site.sym, site.expected_bits);
-        }
+        slots[site.slot] = Some(super::SpecSlot::for_site(
+            site.kind,
+            epoch,
+            site.sym,
+            site.expected_bits,
+        ));
     }
+    let slots: Box<[super::SpecSlot]> = slots
+        .into_iter()
+        .map(|slot| slot.expect("spec slots are numbered densely"))
+        .collect();
     plan_mir_leaf_with_spec(m, sites, slots)
 }
 

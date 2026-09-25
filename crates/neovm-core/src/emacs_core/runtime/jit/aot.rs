@@ -99,7 +99,9 @@ pub(crate) const ABI_TAG: u32 = compute_abi_tag();
 /// §3.4). AOT code reaches the first three through per-cell sidecar
 /// addresses and never stores the new two, so their offsets are unchanged;
 /// the bump re-tags once for the layout change.
-const ABI_TAG_VERSION: u32 = 13;
+/// v14: `SpecSlot` v2 is four words (a `direct_entry` word), so an AOT spec
+/// site indexes the sidecar's slot array with a 32-byte stride.
+const ABI_TAG_VERSION: u32 = 14;
 
 /// Format version of the AOT descriptor spec-section + the runtime spec ABI
 /// (`SpecSlot`/`spec_expected` sidecar bases, the loader re-classify+arm protocol).
