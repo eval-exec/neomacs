@@ -1684,6 +1684,40 @@ pub struct LayoutStats {
     /// layout makes the next edit copy the whole buffer; steady-state typing
     /// under `NEOMACS_TEXT_SNAPSHOT=share` must keep this at 0.
     pub buffer_text_cow_copies: usize,
+    /// Mini-windows that stood still this frame: every row reused through the
+    /// cursor-only replay (`NEOMACS_LAYOUT_MINI_STILL`).
+    pub mini_window_still: usize,
+}
+
+#[cfg(test)]
+thread_local! {
+    static MINI_STILL_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// Force `NEOMACS_LAYOUT_MINI_STILL` on this thread (tests only).
+#[cfg(test)]
+pub(crate) fn set_mini_window_still_for_test(enabled: Option<bool>) {
+    MINI_STILL_OVERRIDE.with(|cell| cell.set(enabled));
+}
+
+/// `NEOMACS_LAYOUT_MINI_STILL=on` (P3.5 D): the mini-window is retained and
+/// may take the cursor-only replay when nothing it displays changed. Read
+/// once per process; default off.
+pub(crate) fn mini_window_still_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(enabled) = MINI_STILL_OVERRIDE.with(|cell| cell.get()) {
+        return enabled;
+    }
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        matches!(
+            std::env::var("NEOMACS_LAYOUT_MINI_STILL")
+                .ok()
+                .map(|value| value.trim().to_ascii_lowercase())
+                .as_deref(),
+            Some("on" | "1" | "true" | "yes")
+        )
+    })
 }
 
 impl LayoutStats {

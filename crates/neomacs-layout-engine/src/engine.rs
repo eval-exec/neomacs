@@ -1940,12 +1940,25 @@ impl LayoutEngine {
                     // The mini-window is probe-excluded from retention: its
                     // layout runs `resize_mini_window` measurement passes whose
                     // results must not become a reusable matrix, and it is one
-                    // or two rows tall, so the fast paths buy nothing.  It is
-                    // re-walked every frame (the phase tests assert exactly this
-                    // by counting the content window's classification).
+                    // or two rows tall, so the scroll and edit paths buy
+                    // nothing.  It is re-walked every frame (the phase tests
+                    // assert exactly this by counting the content window's
+                    // classification) -- unless NEOMACS_LAYOUT_MINI_STILL lets
+                    // it stand still: GNU's `redisplay_window` leaves an echo
+                    // area it "already displayed" alone, and a retained key
+                    // equal in every field (the displayed echo or minibuffer
+                    // buffer and its ticks, point, cursor role, geometry
+                    // including the resize measurement's start) is exactly
+                    // that, so the cursor-only replay reuses every row.
                     if params.is_minibuffer() {
+                        let cursor_only = if crate::incremental_layout::mini_window_still_enabled()
+                        {
+                            self.build_cursor_only_replay(params, *layout_box, evaluator)
+                        } else {
+                            None
+                        };
                         return IncrementalWindowPlan {
-                            cursor_only: None,
+                            cursor_only,
                             scroll: None,
                             is_edit: false,
                         };
@@ -2777,6 +2790,13 @@ impl LayoutEngine {
                 crate::display_status_line::chrome_generation_record()
                     .into_iter()
                     .collect();
+            let mini_windows_stand_still = crate::incremental_layout::mini_window_still_enabled();
+            let mini_windows: rustc_hash::FxHashSet<DisplayWindowId> = frame_state
+                .window_infos
+                .iter()
+                .filter(|info| info.is_minibuffer)
+                .map(|info| info.window_id)
+                .collect();
             for entry in &mut frame_state.window_matrices {
                 let window_id = entry.window_id;
                 let cursor_only = self.cursor_only_window_ids.contains(&window_id);
@@ -2804,7 +2824,14 @@ impl LayoutEngine {
                     }
                 }
                 next_layout_stats.relaid_chrome_rows += enabled_chrome;
-                if cursor_only {
+                let is_mini_window = mini_windows.contains(&window_id);
+                if is_mini_window && cursor_only {
+                    // A mini-window standing still is its own class (the
+                    // content windows' class counts keep meaning what they
+                    // did); its row is reused like any other.
+                    next_layout_stats.mini_window_still += 1;
+                    next_layout_stats.reused_rows += enabled_body;
+                } else if cursor_only {
                     // Body rows were reused verbatim (0 relaid); chrome re-walked.
                     next_layout_stats.reused_rows += enabled_body;
                     next_layout_stats.record_window_class(LayoutClass::CursorOnly);
@@ -2864,8 +2891,11 @@ impl LayoutEngine {
 
                 // Probe-pass exclusion: a window that laid out <=1 enabled row
                 // is the scroll-off hazard (spec §4.1); never retain it as a
-                // clean reusable matrix.
-                if enabled_body + enabled_chrome <= 1 {
+                // clean reusable matrix. The mini-window is one row by nature,
+                // not by a probe (see Phase A).
+                if enabled_body + enabled_chrome <= 1
+                    && !(mini_windows_stand_still && is_mini_window)
+                {
                     continue;
                 }
                 if let Some(key) = key_map.get(&window_id) {
@@ -3002,7 +3032,7 @@ impl LayoutEngine {
             {
                 let _ = writeln!(
                     f,
-                    "full={} cursor_only={} scroll={} edit={} relaid_body={} relaid_chrome={} reused={} reused_shifted={} reused_chrome={} snapshots={} compose_bytes={} text_cow_copies={}",
+                    "full={} cursor_only={} scroll={} edit={} relaid_body={} relaid_chrome={} reused={} reused_shifted={} reused_chrome={} snapshots={} compose_bytes={} text_cow_copies={} mini_still={}",
                     s.full_windows,
                     s.cursor_only_windows,
                     s.scroll_windows,
@@ -3015,6 +3045,7 @@ impl LayoutEngine {
                     s.buffer_snapshots_built,
                     s.composition_bytes_scanned,
                     s.buffer_text_cow_copies,
+                    s.mini_window_still,
                 );
             }
         }

@@ -35,6 +35,7 @@ mod display_motion;
 
 #[path = "../../engine_layout_validity_test.rs"]
 mod layout_validity;
+mod mini_window_still_test;
 mod text_snapshot_cow_test;
 
 fn test_image_load(id: u32) -> neomacs_display_protocol::ImageLoadToken {
@@ -3993,6 +3994,8 @@ fn relative_line_numbers_follow_point_across_incremental_redisplay() {
 /// guarantee (spec §3) — silently staying cursor-only here would ship stale rows.
 #[test]
 fn phase1_overlay_change_bails_to_full() {
+    // Counts the mini-window's full walk (NEOMACS_LAYOUT_MINI_STILL off).
+    crate::incremental_layout::set_mini_window_still_for_test(Some(false));
     let text = "(defun f (a b) (+ a b))\n".repeat(40);
     let (mut eval, frame_id, buf_id, _win) = incr_editing_frame(&text, 800, 600);
     let mut engine = LayoutEngine::new();
@@ -4402,6 +4405,8 @@ fn scroll_window_to(
 /// are walked, and chrome is re-walked. Was the Phase 0a full-rebuild baseline.
 #[test]
 fn phase2_scroll_is_pure_scroll() {
+    // Counts the mini-window's full walk (NEOMACS_LAYOUT_MINI_STILL off).
+    crate::incremental_layout::set_mini_window_still_for_test(Some(false));
     let line = "(defun f (a b) (+ a b))\n"; // 24 bytes incl newline
     let text = line.repeat(80);
     let (mut eval, frame_id, buf_id, selected_window) = incr_editing_frame(&text, 800, 600);
@@ -4682,6 +4687,8 @@ fn laying_out_one_frame_keeps_another_frames_retained_matrices() {
 /// requirement.
 #[test]
 fn phase3_multi_window_same_buffer_replays_the_edit_in_both_windows() {
+    // Counts the mini-window's full walk (NEOMACS_LAYOUT_MINI_STILL off).
+    crate::incremental_layout::set_mini_window_still_for_test(Some(false));
     let text = "(defun f (a b) (+ a b))\n".repeat(40);
     let (mut eval, frame_id, buf_id, selected_window) = incr_editing_frame(&text, 800, 600);
     eval.frame_manager_mut()
@@ -30585,6 +30592,8 @@ fn enabled_body_row_damage(
 /// cell compare, so the screen kept the pre-edit text.
 #[test]
 fn phase5_below_reuse_edit_marks_only_the_edited_row_relaid() {
+    // Counts the mini-window's full walk (NEOMACS_LAYOUT_MINI_STILL off).
+    crate::incremental_layout::set_mini_window_still_for_test(Some(false));
     use neomacs_display_protocol::glyph_matrix::RowDamage;
 
     let text = "(defun f (a b) (+ a b))\n".repeat(40);

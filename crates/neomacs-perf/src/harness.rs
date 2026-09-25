@@ -1414,6 +1414,8 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     "NEOMACS_TTY_DAMAGE_REPORT_FILE",
     // Chrome string positions from chrome rows: `frame` (default) or `rows`.
     "NEOMACS_PRESENT_CHROME_POS",
+    // The mini-window stands still when what it shows is unchanged: `on`.
+    "NEOMACS_LAYOUT_MINI_STILL",
 ];
 
 pub(crate) fn configure_benchmark_environment(command: &mut Command, sandbox: &MelpaSandbox) {
