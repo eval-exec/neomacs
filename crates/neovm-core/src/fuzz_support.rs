@@ -8,9 +8,23 @@ use std::fmt;
 
 use strum::IntoEnumIterator;
 
+use crate::emacs_core::emacs_char;
 use crate::emacs_core::regex_emacs::{
     self, DefaultSyntaxLookup, MatchRegisters, RegexEngineOverride,
 };
+
+/// Representation of the searched text.
+///
+/// A multibyte target is a Lisp string or buffer holding Emacs's internal
+/// multibyte form; a unibyte target is one byte per character (a unibyte
+/// string or buffer), which case folding and the fastmap read differently.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, strum::Display, strum::EnumIter)]
+#[strum(serialize_all = "kebab-case")]
+pub enum SearchTarget {
+    #[default]
+    Multibyte,
+    Unibyte,
+}
 
 /// One regexp differential case.
 ///
@@ -23,6 +37,7 @@ pub struct RegexCase<'a> {
     case_fold: bool,
     start: usize,
     point: usize,
+    target: SearchTarget,
 }
 
 impl<'a> RegexCase<'a> {
@@ -39,7 +54,14 @@ impl<'a> RegexCase<'a> {
             case_fold,
             start,
             point,
+            target: SearchTarget::Multibyte,
         }
+    }
+
+    /// The same case searched in a text of representation `target`.
+    #[must_use]
+    pub const fn with_target(self, target: SearchTarget) -> Self {
+        Self { target, ..self }
     }
 
     fn start(self) -> usize {
@@ -136,13 +158,35 @@ pub fn check_regex_differential(
     case: RegexCase<'_>,
     differential: RegexDifferential,
 ) -> Result<RegexCheck, RegexDivergence> {
-    let compiled = match regex_emacs::regex_compile(case.pattern, false, case.case_fold) {
+    let mut compiled = match regex_emacs::regex_compile(case.pattern, false, case.case_fold) {
         Ok(compiled) => compiled,
         Err(_) => {
             return Ok(RegexCheck::NotApplicable(
                 RegexNotApplicable::CompileRejected,
             ));
         }
+    };
+    // The search front end fixes the target representation after compiling
+    // (`compile_lisp_pattern_with_posix_translation`); do the same.
+    compiled.target_multibyte = case.target == SearchTarget::Multibyte;
+
+    // Every Lisp string and buffer holds VALID internal multibyte text, and
+    // the candidate scans are exact only there: GNU's own byte-indexed
+    // `fastmap[*d]` loop tests the lead byte of an overlong `E0 81 81`, which
+    // the matcher decodes to `A`.  Give the scans the text a Lisp string made
+    // of these bytes would hold (GNU `str_as_multibyte`: an invalid sequence
+    // becomes raw-byte characters).  The engine differential keeps the raw
+    // bytes: both engines decode the text the same way.
+    let valid_text;
+    let case = match (differential, case.target) {
+        (RegexDifferential::SearchOptimizations, SearchTarget::Multibyte) => {
+            valid_text = emacs_char::str_as_multibyte(case.text);
+            RegexCase {
+                text: &valid_text,
+                ..case
+            }
+        }
+        _ => case,
     };
 
     match differential {
@@ -157,14 +201,17 @@ pub fn check_regex_differential(
     let mut comparisons = 0;
     for operation in RegexOperation::iter() {
         if differential == RegexDifferential::SearchOptimizations
-            && operation != RegexOperation::SearchForward
+            && operation == RegexOperation::Match
         {
+            // An anchored match has no candidate scan to optimize.
             continue;
         }
 
         let comparison = match differential {
             RegexDifferential::PikeVm => compare_engines(&compiled, case, operation),
-            RegexDifferential::SearchOptimizations => compare_search_optimizations(&compiled, case),
+            RegexDifferential::SearchOptimizations => {
+                compare_search_optimizations(&compiled, case, operation)
+            }
         };
         let Some((oracle, candidate)) = comparison else {
             return Ok(RegexCheck::NotApplicable(
@@ -210,16 +257,21 @@ fn compare_engines(
 fn compare_search_optimizations(
     compiled: &regex_emacs::CompiledPattern,
     case: RegexCase<'_>,
+    operation: RegexOperation,
 ) -> Option<(MatchResult, MatchResult)> {
     let _ = regex_emacs::take_matcher_overflow();
     let oracle = normalize(regex_emacs::with_fastmap_disabled(|| {
-        run_operation(compiled, case, RegexOperation::SearchForward)
+        run_operation(compiled, case, operation)
     }));
     if regex_emacs::take_matcher_overflow() {
         return None;
     }
 
-    let candidate = normalize(run_operation(compiled, case, RegexOperation::SearchForward));
+    // A search builds its lazily derived scanners only once the text is long
+    // enough to repay them; build them now so a short generated text still
+    // runs every optimized scan, not only the per-character loops.
+    regex_emacs::build_search_optimizations(compiled);
+    let candidate = normalize(run_operation(compiled, case, operation));
     if regex_emacs::take_matcher_overflow() {
         return None;
     }

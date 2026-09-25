@@ -8123,6 +8123,14 @@ fn fastmap_force_disabled() -> bool {
     false
 }
 
+/// Build every scanner a search derives lazily from `pattern`, as the first
+/// search long enough to use them would.  The differential checker calls this
+/// so a short generated text still exercises the optimized scans.
+#[cfg(any(test, feature = "fuzzing"))]
+pub(crate) fn build_search_optimizations(pattern: &CompiledPattern) {
+    let _ = pattern.literal_prefilter();
+}
+
 /// A compact, allocation-free candidate set for the memchr skip loop.
 #[derive(Clone, Copy)]
 enum SparseAsciiFastmap {

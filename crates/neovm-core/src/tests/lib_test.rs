@@ -135,6 +135,51 @@ fn regex_fuzz_support_checks_search_optimizations_without_a_prefilter() {
     let case = RegexCase::new("a", b"zzza", false, 0, 0);
     assert!(matches!(
         check_regex_differential(case, RegexDifferential::SearchOptimizations),
-        Ok(RegexCheck::Equivalent { comparisons: 1 })
+        Ok(RegexCheck::Equivalent { comparisons: 2 })
     ));
+}
+
+/// The search-optimization differential compares a forward AND a backward
+/// search, over multibyte and unibyte texts, case-folded or not.
+#[test]
+fn regex_fuzz_support_checks_search_optimizations_both_ways_in_both_representations() {
+    use crate::fuzz_support::{
+        RegexCase, RegexCheck, RegexDifferential, SearchTarget, check_regex_differential,
+    };
+    use strum::IntoEnumIterator;
+
+    let text = b"x\xc9y\xe9 (DEFUN a) (defun b) z";
+    for target in SearchTarget::iter() {
+        for case_fold in [false, true] {
+            for pattern in ["(defun \\([a-z]+\\)", "é", "[É]", "y"] {
+                for start in [0, 5, text.len()] {
+                    let case =
+                        RegexCase::new(pattern, text, case_fold, start, start).with_target(target);
+                    assert_eq!(
+                        check_regex_differential(case, RegexDifferential::SearchOptimizations),
+                        Ok(RegexCheck::Equivalent { comparisons: 2 }),
+                        "{pattern:?} fold={case_fold} target={target} start={start}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// A multibyte search target is valid internal text, as every Lisp string and
+/// buffer is.  Raw bytes that are not (an overlong `E0 81 81`, which the
+/// matcher decodes to `A`) become raw-byte characters first, as they would in
+/// a Lisp string: GNU's byte-indexed fastmap never sees an overlong form.
+#[test]
+fn regex_fuzz_support_searches_multibyte_targets_as_valid_internal_text() {
+    use crate::fuzz_support::{RegexCase, RegexCheck, RegexDifferential, check_regex_differential};
+
+    for case_fold in [false, true] {
+        let case = RegexCase::new("A", &[0xE0, 0x81, 0x81, b'x'], case_fold, 0, 0);
+        assert_eq!(
+            check_regex_differential(case, RegexDifferential::SearchOptimizations),
+            Ok(RegexCheck::Equivalent { comparisons: 2 }),
+            "fold={case_fold}"
+        );
+    }
 }

@@ -21,7 +21,11 @@ cargo +nightly fuzz run regex_pike_vm --fuzz-dir crates/neovm-core/fuzz -- \
 `regex_pike_vm` compares the pure backtracker with the eligible Pike VM for
 anchored matching and forward/backward search. `regex_search_optimizations`
 compares exhaustive candidate scanning with production fastmap and prefilter
-skips.
+skips, for forward and backward search, with the lazily built scanners
+forced even on short texts. Each case searches a multibyte or a unibyte text
+(`unibyte_target`); a multibyte text is first made valid internal text, as
+every Lisp string and buffer is. Adding `unibyte_target` changed the wire
+format, so corpora saved before it replay as different cases.
 
 The weekly and manually dispatched `regex-fuzz` CI job runs both targets for
 five minutes, restores the evolving corpora from the preceding run, and uploads

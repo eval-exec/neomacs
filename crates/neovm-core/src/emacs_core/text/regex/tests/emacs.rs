@@ -1,5 +1,7 @@
 use super::*;
-use crate::fuzz_support::{RegexCase, RegexCheck, RegexDifferential, check_regex_differential};
+use crate::fuzz_support::{
+    RegexCase, RegexCheck, RegexDifferential, SearchTarget, check_regex_differential,
+};
 
 #[test]
 fn prepared_search_context_preserves_marker_bounds_narrowing_and_zero_counts() {
@@ -2153,33 +2155,64 @@ fn pf_gen_text(rng: &mut FuzzRng, keywords: &[String], max_len: usize) -> Vec<u8
 struct PfFuzzCounts {
     compiled: usize,
     with_prefilter: usize,
-    /// Forward differential comparisons that actually ran the PREFILTER path
-    /// (candidate had `prefilter.is_some()`).  This is the number that matters
-    /// for the soundness gate — every one asserts prefilter-on == skip-off.
+    /// Differential checks (a forward and a backward search each) on the
+    /// exhaustively compared cases: those with `prefilter.is_some()`, and every
+    /// case-folded case.  This is the number that matters for the soundness
+    /// gate — every one asserts optimized scan == skip-off.
     pf_forward_cmp: usize,
+}
+
+/// Characters whose case folding is a trap for an ASCII candidate scan: each
+/// has an ASCII case partner in Unicode (K/k, ſ/s, İ/i, ı/I) that Emacs's
+/// standard case table deliberately leaves out (characters.el:803-812), plus
+/// ordinary non-ASCII case pairs.
+const FOLD_TRAP_CHARS: &[char] = &[
+    '\u{212A}', 'ſ', 'İ', 'ı', 'É', 'é', 'ẞ', 'ß', 'Σ', 'ς', 'Ａ',
+];
+
+/// Randomly flip the case of ASCII letters and splice in fold traps, so a
+/// case-folded search meets every spelling of its keywords.
+fn scramble_case(rng: &mut FuzzRng, text: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(text.len() + 8);
+    for &b in text {
+        if b.is_ascii_alphabetic() && rng.chance(1, 2) {
+            out.push(b ^ 0x20);
+        } else {
+            out.push(b);
+        }
+        if rng.chance(1, 16) {
+            let c = rng.pick_char(FOLD_TRAP_CHARS);
+            let mut buf = [0u8; 4];
+            out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+        }
+    }
+    out
 }
 
 /// Run one prefilter fuzz stream.  Only cases that actually BUILD a prefilter
 /// exercise the feature, so they get the exhaustive comparison (2 buffers × 3
-/// starts × forward+anchored); the backtracker verifies every candidate, so a
-/// divergence there = an unsound literal skip.  Cases with NO prefilter can't
-/// diverge on the prefilter path, so they are only lightly sampled (a cheap
-/// forward comparison that also keeps the fastmap path honest) — this keeps the
-/// run fast enough to fit the test timeout while still driving ≥320k prefilter
-/// comparisons.  `general_1_in` (0 = never) mixes in arbitrary `gen_regex`
-/// patterns for breadth.
+/// starts × forward+backward); the backtracker verifies every candidate, so a
+/// divergence there = an unsound literal skip.  A case-folded search always
+/// runs a folded candidate scan, so every case-folded case gets it too.  Other
+/// cases with NO prefilter can't diverge on the prefilter path, so they are
+/// only lightly sampled (a cheap comparison that also keeps the fastmap path
+/// honest) — this keeps the run fast enough to fit the test timeout while
+/// still driving ≥320k prefilter comparisons.  `general_1_in` (0 = never)
+/// mixes in arbitrary `gen_regex` patterns for breadth.
 fn run_prefilter_fuzz(
     cases: usize,
     base_seed: u64,
     text_max: usize,
     general_1_in: u32,
+    case_fold: bool,
+    target: SearchTarget,
 ) -> PfFuzzCounts {
     let mut c = PfFuzzCounts::default();
     for i in 0..cases {
         let seed = base_seed.wrapping_add(i as u64);
         let mut rng = FuzzRng::new(seed);
 
-        let (pat, keywords) = if general_1_in > 0 && rng.chance(1, general_1_in as u64) {
+        let (mut pat, keywords) = if general_1_in > 0 && rng.chance(1, general_1_in as u64) {
             let mut p = String::new();
             let depth = 2 + rng.below(2) as u32;
             gen_regex(&mut rng, &mut p, depth, true, false);
@@ -2187,8 +2220,13 @@ fn run_prefilter_fuzz(
         } else {
             pf_gen_pattern(&mut rng)
         };
+        if case_fold && rng.chance(1, 3) {
+            // An upper-case literal is stored folded; a flipped escape letter
+            // (`\w` -> `\W`) is still a valid pattern.
+            pat = pat.to_ascii_uppercase();
+        }
 
-        let cp = match regex_compile(&pat, false, false) {
+        let cp = match regex_compile(&pat, false, case_fold) {
             Ok(cp) => cp,
             Err(_) => continue,
         };
@@ -2199,24 +2237,29 @@ fn run_prefilter_fuzz(
         }
 
         let check_case = |text: &[u8], start: usize| {
-            let case = RegexCase::new(&pat, text, false, start, start);
+            let case = RegexCase::new(&pat, text, case_fold, start, start).with_target(target);
             let check = check_regex_differential(case, RegexDifferential::SearchOptimizations)
                 .unwrap_or_else(|divergence| {
                     panic!(
-                        "{divergence} at seed {seed}: pattern={pat:?} \
-                         has_prefilter={has_pf} text={text:?} start={start}"
+                        "{divergence} at seed {seed}: pattern={pat:?} fold={case_fold} \
+                         target={target} has_prefilter={has_pf} text={text:?} start={start}"
                     );
                 });
-            assert_eq!(check, RegexCheck::Equivalent { comparisons: 1 });
+            assert_eq!(check, RegexCheck::Equivalent { comparisons: 2 });
         };
 
-        if has_pf {
+        if has_pf || case_fold {
             // The gate: exercise the prefilter over planted-keyword + noise
             // buffers at head/middle/tail starts.
-            let texts = [
+            let mut texts = [
                 pf_gen_text(&mut rng, &keywords, text_max),
                 gen_text(&mut rng, text_max),
             ];
+            if case_fold {
+                for text in &mut texts {
+                    *text = scramble_case(&mut rng, text);
+                }
+            }
             for text in &texts {
                 for &start in &[0usize, text.len() / 2, text.len()] {
                     let start = start.min(text.len());
@@ -2239,7 +2282,7 @@ fn run_prefilter_fuzz(
 fn prefilter_fuzz_smoke() {
     crate::test_utils::init_test_tracing();
     // Mix in general patterns (1-in-3) for breadth on the cheap smoke path.
-    let c = run_prefilter_fuzz(4_000, 0x5EED_1234, 24, 3);
+    let c = run_prefilter_fuzz(4_000, 0x5EED_1234, 24, 3, false, SearchTarget::Multibyte);
     eprintln!(
         "prefilter smoke: compiled={} with_prefilter={} pf_forward_cmp={}",
         c.compiled, c.with_prefilter, c.pf_forward_cmp
@@ -2252,6 +2295,35 @@ fn prefilter_fuzz_smoke() {
         c.with_prefilter,
         c.compiled
     );
+}
+
+/// The same stream over the other search shapes: case-folded searches in
+/// multibyte and unibyte text, and exact searches in unibyte text.
+#[test]
+fn search_optimization_fuzz_smoke_across_folding_and_targets() {
+    crate::test_utils::init_test_tracing();
+    for (case_fold, target, seed) in [
+        (true, SearchTarget::Multibyte, 0xF01D_0001),
+        (true, SearchTarget::Unibyte, 0xF01D_0002),
+        (false, SearchTarget::Unibyte, 0xF01D_0003),
+    ] {
+        let c = run_prefilter_fuzz(1_500, seed, 24, 3, case_fold, target);
+        tracing::info!(
+            case_fold,
+            %target,
+            compiled = c.compiled,
+            with_prefilter = c.with_prefilter,
+            checks = c.pf_forward_cmp,
+            "search optimization fuzz smoke"
+        );
+        assert!(c.compiled > 1_000, "the generator must compile most cases");
+        if case_fold {
+            assert!(
+                c.pf_forward_cmp >= 6 * c.compiled,
+                "every case-folded case is compared exhaustively"
+            );
+        }
+    }
 }
 
 // ---- prefilter: targeted extraction-shape unit tests ---------------------
@@ -2268,7 +2340,7 @@ fn assert_prefilter_equiv(pat: &str, case_fold: bool, text: &[u8]) {
             });
         assert_eq!(
             check,
-            RegexCheck::Equivalent { comparisons: 1 },
+            RegexCheck::Equivalent { comparisons: 2 },
             "prefilter diverged for {pat:?} @ start={start}"
         );
     }
