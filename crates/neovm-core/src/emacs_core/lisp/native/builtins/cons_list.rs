@@ -1780,11 +1780,28 @@ pub(crate) fn builtin_elt(args: Vec<Value>) -> EvalResult {
     }
 }
 
+/// The byte-code `elt` (`Op::Elt`): [`bytecode_elt_values`]. (The Lisp
+/// function `elt` is [`builtin_elt`], `Felt`.)
 pub(crate) fn builtin_elt_2(
     _eval: &mut super::eval::Context,
     sequence: Value,
     n: Value,
 ) -> EvalResult {
+    bytecode_elt_values(sequence, n)
+}
+
+/// GNU `Belt` (`bytecode.c`), the byte-code `elt`: on a cons with a count
+/// of 0..127 it walks inline exactly like `Bnth` -- a non-list tail
+/// signals with that TAIL -- where `Felt` ([`builtin_elt_values`]) signals
+/// with the whole list: byte-compiled `(elt '(1 . 2) 3)` is
+/// `(wrong-type-argument listp 2)` in GNU. Everything else is `Felt`'s.
+pub(crate) fn bytecode_elt_values(sequence: Value, n: Value) -> EvalResult {
+    if sequence.is_cons()
+        && let Some(count) = n.as_fixnum()
+        && (0..=127).contains(&count)
+    {
+        return bytecode_nth_values(n, sequence);
+    }
     builtin_elt_values(sequence, n)
 }
 

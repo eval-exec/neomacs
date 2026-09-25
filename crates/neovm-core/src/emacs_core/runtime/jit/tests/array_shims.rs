@@ -738,6 +738,90 @@ fn byte_code_nth_reports_the_tail_it_stops_at() {
     );
 }
 
+/// Byte-code `elt` is GNU `Belt`: on a cons with a count of 0..127 it
+/// walks like `Bnth` and signals with the non-list TAIL it stops at, where
+/// the `elt` function (`Felt`) signals with the whole list. The
+/// interpreter's opcode, the compiled table-shim site and the compiled leaf
+/// site agree; the expected answers are GNU Emacs 31.1's for the same
+/// byte-compiled `(lambda (s n) (elt s n))` (the list forms are also the
+/// `oracle_jit_leaf_opcode_error_data` oracle case).
+#[test]
+fn byte_code_elt_reports_the_tail_it_stops_at() {
+    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+    let mut eval = Context::new();
+    let ctx_ptr = &mut eval as *mut Context as *mut u8;
+    let f = lexical_fn(
+        2,
+        vec![Op::StackRef(1), Op::StackRef(1), Op::Elt, Op::Return],
+        vec![],
+    );
+    force_leaf_knob_for_test(Some(LeafKnob::OFF));
+    let table_site = compile_bytecode_function(&f).expect("elt compiles");
+    force_leaf_knob_for_test(Some(LeafKnob::ALL));
+    let leaf_site = compile_bytecode_function(&f).expect("elt compiles");
+    force_leaf_knob_for_test(None);
+    let cases = [
+        ("'(a b)", "0", "a"),
+        ("'(a b)", "1", "b"),
+        ("'(a b)", "2", "nil"),
+        ("'(a b)", "-1", "a"),
+        ("nil", "3", "nil"),
+        (
+            "'(a . b)",
+            "1",
+            "signal wrong-type-argument [\"listp\", \"b\"]",
+        ),
+        (
+            "'(a . b)",
+            "2",
+            "signal wrong-type-argument [\"listp\", \"b\"]",
+        ),
+        (
+            "'(a b . c)",
+            "3",
+            "signal wrong-type-argument [\"listp\", \"c\"]",
+        ),
+        (
+            "'(a . b)",
+            "200",
+            "signal wrong-type-argument [\"listp\", \"(a . b)\"]",
+        ),
+        (
+            "'(a)",
+            "'z",
+            "signal wrong-type-argument [\"integerp\", \"z\"]",
+        ),
+        ("'(a b)", "(expt 2 70)", "nil"),
+        ("[1 2]", "1", "2"),
+        ("[1 2]", "5", "signal args-out-of-range [\"[1 2]\", \"5\"]"),
+        ("\"ab\"", "1", "98"),
+        (
+            "5",
+            "0",
+            "signal wrong-type-argument [\"sequencep\", \"5\"]",
+        ),
+    ];
+    for (seq, n, want) in cases {
+        let pair = eval.eval_str(&format!("(cons {seq} {n})")).expect("args");
+        let args = [pair.cons_car(), pair.cons_cdr()];
+        let interpreted = interpret(&mut eval, &f, args.to_vec());
+        assert_eq!(interpreted, want, "interpreted (elt {seq} {n})");
+        for (site, leaf) in [("table", &table_site), ("leaf", &leaf_site)] {
+            let compiled = native(ctx_ptr, leaf, &args, "elt");
+            assert_eq!(compiled, want, "compiled {site} (elt {seq} {n})");
+        }
+    }
+    // The function keeps `Felt`'s whole-list error.
+    assert_eq!(
+        print_value(
+            &eval
+                .eval_str("(condition-case e (elt '(a . b) 2) (error e))")
+                .expect("elt function")
+        ),
+        "(wrong-type-argument listp (a . b))"
+    );
+}
+
 /// Compiled `aref` reads a plain vector's or record's slot inline, calling
 /// `neovm_jit_aref` for every other shape: a tagged char-table or
 /// bool-vector vector, a string, a bool-vector, an out-of-range or

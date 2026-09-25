@@ -180,7 +180,7 @@ pub(crate) fn nthcdr(_: &Context, n: Value, list: Value) -> LeafResult {
     Ok(builtin_nthcdr_values(n, list)?)
 }
 
-/// `Belt` (`Op::Elt`).
+/// `Belt` (`Op::Elt`): a short list walk signals with the tail, like `Bnth`.
 pub(crate) static ELT: LeafSpec = LeafSpec::new(
     LeafId::Elt,
     "elt",
@@ -192,7 +192,7 @@ pub(crate) static ELT: LeafSpec = LeafSpec::new(
 );
 
 pub(crate) fn elt(_: &Context, sequence: Value, n: Value) -> LeafResult {
-    Ok(builtin_elt_values(sequence, n)?)
+    Ok(bytecode_elt_values(sequence, n)?)
 }
 
 /// `Bmemq` (`Op::Memq`). Compiled `memq` sites keep their value shim
