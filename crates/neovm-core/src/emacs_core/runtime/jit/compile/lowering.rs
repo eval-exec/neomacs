@@ -249,10 +249,10 @@ pub(crate) fn stack_as_f64_or_promote(
     fb: &mut FunctionBuilder,
     deopt: Block,
     stack: &[ClifValue],
-    stack_raw: &[bool],
+    reps: &[SlotRep],
     k: usize,
 ) -> ClifValue {
-    if stack_raw[k] {
+    if reps[k] == SlotRep::RawFixnum {
         return fb.ins().fcvt_from_sint(types::F64, stack[k]);
     }
     let v = stack[k];
@@ -293,10 +293,10 @@ pub(crate) fn stack_as_f64_and_int(
     fb: &mut FunctionBuilder,
     deopt: Block,
     stack: &[ClifValue],
-    stack_raw: &[bool],
+    reps: &[SlotRep],
     k: usize,
 ) -> (ClifValue, ClifValue) {
-    if stack_raw[k] {
+    if reps[k] == SlotRep::RawFixnum {
         let f = fb.ins().fcvt_from_sint(types::F64, stack[k]);
         return (f, stack[k]);
     }
@@ -385,11 +385,11 @@ pub(crate) fn emit_float_arith(
 fn both_float_test(
     fb: &mut FunctionBuilder,
     stack: &[ClifValue],
-    stack_raw: &[bool],
+    reps: &[SlotRep],
     i: usize,
     j: usize,
 ) -> ClifValue {
-    if stack_raw[i] || stack_raw[j] {
+    if reps[i] == SlotRep::RawFixnum || reps[j] == SlotRep::RawFixnum {
         return fb.ins().iconst(types::I8, 0);
     }
     both_tag_test(
@@ -409,11 +409,11 @@ fn both_float_test(
 fn both_fixnum_test(
     fb: &mut FunctionBuilder,
     stack: &[ClifValue],
-    stack_raw: &[bool],
+    reps: &[SlotRep],
     i: usize,
     j: usize,
 ) -> ClifValue {
-    match (stack_raw[i], stack_raw[j]) {
+    match (reps[i] == SlotRep::RawFixnum, reps[j] == SlotRep::RawFixnum) {
         (true, true) => fb.ins().iconst(types::I8, 1),
         (true, false) => fixnum_tag_test(fb, stack[j]),
         (false, true) => fixnum_tag_test(fb, stack[i]),
@@ -1665,7 +1665,7 @@ pub(crate) fn lower_mir_inst_via_baseline(
     };
     let base_len = stack.len();
     // Everything is tagged already, so the emitter's own retag pass is a no-op.
-    let mut stack_raw: Vec<bool> = vec![false; base_len];
+    let mut reps: Vec<SlotRep> = vec![SlotRep::Tagged; base_len];
     let mut dispatch: Vec<PendingDispatch> = Vec::new();
     let deopts_before = pending.len();
     lower_simple_op(
@@ -1675,7 +1675,7 @@ pub(crate) fn lower_mir_inst_via_baseline(
         signal_exit,
         &m.constants,
         &mut stack,
-        &mut stack_raw,
+        &mut reps,
         Some(rt),
         &[],
         &mut dispatch,
@@ -1714,7 +1714,10 @@ pub(crate) fn lower_mir_inst_via_baseline(
     if produces == 1 {
         cval[r] = stack.pop();
         cval_raw[r] = false;
-        debug_assert!(!stack_raw.pop().unwrap_or(false), "results are tagged");
+        debug_assert!(
+            matches!(reps.pop(), None | Some(SlotRep::Tagged)),
+            "results are tagged"
+        );
     }
     Ok(())
 }
@@ -1839,7 +1842,7 @@ pub(crate) fn mir_deopt_block(
 ) -> Result<Block, CompileError> {
     if precise {
         let mut stack = Vec::with_capacity(inst.pre_stack.len());
-        let mut raw = Vec::with_capacity(inst.pre_stack.len());
+        let mut reps = Vec::with_capacity(inst.pre_stack.len());
         let mut cons_rebuilds: Vec<ConsReconstruction> = Vec::new();
         let mut rebuilt: Option<HashMap<mir::MirValue, usize>> = None;
         for (slot, &v) in inst.pre_stack.iter().enumerate() {
@@ -1855,7 +1858,7 @@ pub(crate) fn mir_deopt_block(
                 // This placeholder is replaced before spilling. Repeated
                 // references to the same virtual cons must get ONE object.
                 stack.push(car.0);
-                raw.push(false);
+                reps.push(SlotRep::Tagged);
                 let rebuilt = rebuilt.get_or_insert_with(HashMap::new);
                 if let Some(&i) = rebuilt.get(&v) {
                     cons_rebuilds[i].slots.push(slot);
@@ -1873,10 +1876,10 @@ pub(crate) fn mir_deopt_block(
                 }
             } else {
                 stack.push(cval[v.0 as usize].ok_or(CompileError::BadOperand)?);
-                raw.push(cval_raw[v.0 as usize]);
+                reps.push(SlotRep::raw_if(cval_raw[v.0 as usize]));
             }
         }
-        let block = deopt_site(fb, inst.pc, 0, &stack, &raw, pending);
+        let block = deopt_site(fb, inst.pc, 0, &stack, &reps, pending);
         let site = pending.last_mut().expect("deopt_site queues one site");
         debug_assert!(site.region.is_none(), "MIR carries its own call framestate");
         site.cons_rebuilds = cons_rebuilds;
@@ -4282,11 +4285,11 @@ pub(crate) struct PendingDeopt {
     /// with the caller's pre-call stack, and re-runs the whole call.
     pub(crate) region: Option<RegionDeopt>,
     pub(crate) stack: Vec<ClifValue>,
-    /// Per-slot raw mask snapshot (cross-op unboxing): `true` slots hold an
-    /// untagged i64 and must be retagged in the cold deopt block before the
+    /// Per-slot representation snapshot: a [`SlotRep::RawFixnum`] slot holds
+    /// an untagged i64 and is retagged in the cold deopt block before the
     /// framestate spill, since `run_resumed_frame` reads them back as tagged
     /// `Value`s.
-    pub(crate) stack_raw: Vec<bool>,
+    pub(crate) reps: Vec<SlotRep>,
 }
 
 /// What a deopt inside an inlined region resumes with: the caller's operand
@@ -4299,7 +4302,7 @@ pub(crate) struct PendingDeopt {
 pub(crate) struct RegionDeopt {
     pub(crate) call_site_pc: usize,
     pub(crate) stack: Vec<ClifValue>,
-    pub(crate) stack_raw: Vec<bool>,
+    pub(crate) reps: Vec<SlotRep>,
 }
 
 thread_local! {
@@ -4335,7 +4338,7 @@ pub(crate) fn emit_region_entry_guard(
     region: &super::super::inline::InlineRegion,
     handlers_len: usize,
     stack: &[ClifValue],
-    stack_raw: &[bool],
+    reps: &[SlotRep],
     pending: &mut Vec<PendingDeopt>,
 ) -> Result<(), CompileError> {
     // `frame_base` came from the UNFUSED caller's depths and `stack` is the
@@ -4348,15 +4351,8 @@ pub(crate) fn emit_region_entry_guard(
     }
     // The callee object sits one slot below the first argument.
     let slot = region.frame_base - 1;
-    let (v, raw) = (stack[slot], stack_raw[slot]);
-    let dsite = deopt_site(
-        fb,
-        region.call_site_pc,
-        handlers_len,
-        stack,
-        stack_raw,
-        pending,
-    );
+    let (v, raw) = (stack[slot], reps[slot] == SlotRep::RawFixnum);
+    let dsite = deopt_site(fb, region.call_site_pc, handlers_len, stack, reps, pending);
     // A raw slot holds an untagged fixnum, which is never a bytecode object:
     // retagging makes the comparison false, so such a site simply deopts.
     let v = if raw { retag_fixnum(fb, v) } else { v };
@@ -4367,13 +4363,14 @@ pub(crate) fn emit_region_entry_guard(
 }
 
 /// Queue (and return) the precise-deopt block for the guard-emitting op at
-/// bytecode index `pc`, capturing the pre-op operand stack + its raw mask.
+/// bytecode index `pc`, capturing the pre-op operand stack + its slot
+/// representations.
 pub(crate) fn deopt_site(
     fb: &mut FunctionBuilder,
     pc: usize,
     handlers_len: usize,
     stack: &[ClifValue],
-    stack_raw: &[bool],
+    reps: &[SlotRep],
     pending: &mut Vec<PendingDeopt>,
 ) -> Block {
     let block = fb.create_block();
@@ -4401,7 +4398,7 @@ pub(crate) fn deopt_site(
         handlers_len,
         region,
         stack: stack.to_vec(),
-        stack_raw: stack_raw.to_vec(),
+        reps: reps.to_vec(),
     });
     block
 }
@@ -4489,13 +4486,13 @@ pub(crate) fn emit_pending_deopts(
         // Inside an inlined region the interpreter must resume at the CALL,
         // with the stack the caller had before it — the region's own operand
         // stack means nothing to it.
-        let (pc, stack, stack_raw) = match &pd.region {
+        let (pc, stack, reps) = match &pd.region {
             Some(region) => (
                 region.call_site_pc,
                 region.stack.as_slice(),
-                region.stack_raw.as_slice(),
+                region.reps.as_slice(),
             ),
-            None => (pd.pc, pd.stack.as_slice(), pd.stack_raw.as_slice()),
+            None => (pd.pc, pd.stack.as_slice(), pd.reps.as_slice()),
         };
         // Baseline sites borrow their snapshots unchanged. Only a virtual
         // cons needs a mutable copy; its aliases share one reconstructed cell.
@@ -4509,14 +4506,18 @@ pub(crate) fn emit_pending_deopts(
             let call = fb.ins().call(cons.allocator, &[car, cdr]);
             let value = fb.inst_results(call)[0];
             for &slot in &cons.slots {
-                debug_assert!(!stack_raw[slot]);
+                debug_assert_eq!(reps[slot], SlotRep::Tagged);
                 stack.to_mut()[slot] = value;
             }
         }
         for (j, &v) in stack.iter().enumerate() {
             // Retag raw fixnum slots in the COLD deopt block (zero hot-path cost):
             // the framestate is read back as tagged Values by run_resumed_frame.
-            let tagged = if stack_raw[j] { retag_fixnum(fb, v) } else { v };
+            let tagged = if reps[j] == SlotRep::RawFixnum {
+                retag_fixnum(fb, v)
+            } else {
+                v
+            };
             fb.ins()
                 .store(MemFlagsData::trusted(), tagged, spill_base, (j * 8) as i32);
         }
@@ -4601,6 +4602,9 @@ pub(crate) struct PendingDispatch {
     pub(crate) block: Block,
     pub(crate) handlers: Vec<HandlerStatic>,
     pub(crate) stack: Vec<ClifValue>,
+    /// `stack`'s slot representations: never [`SlotRep::RawFixnum`] (every
+    /// signal site runs after the raw retag).
+    pub(crate) reps: Vec<SlotRep>,
 }
 
 /// Where a `STATUS_SIGNAL` site should branch: with no active handlers, the
@@ -4612,15 +4616,22 @@ pub(crate) fn signal_target_for_site(
     handlers: &[HandlerStatic],
     pending: &mut Vec<PendingDispatch>,
     stack: &[ClifValue],
+    reps: &[SlotRep],
 ) -> Block {
     if handlers.is_empty() {
         return *signal_exit.get_or_insert_with(|| fb.create_block());
     }
     let block = fb.create_block();
+    let reps = &reps[..stack.len()];
+    debug_assert!(
+        !reps.contains(&SlotRep::RawFixnum),
+        "signal snapshots are taken after the raw retag"
+    );
     pending.push(PendingDispatch {
         block,
         handlers: handlers.to_vec(),
         stack: stack.to_vec(),
+        reps: reps.to_vec(),
     });
     block
 }
@@ -4651,6 +4662,7 @@ pub(crate) fn emit_pending_dispatches(
         // nothing, a later site that did). A join with a different store
         // history — rule 3 on `RootWinCarry`. Cold code; nothing to save.
         rootwin_carry_reset();
+        debug_assert!(pd.reps.iter().all(|&rep| rep == SlotRep::Tagged));
         let saved = if pd.stack.is_empty() {
             CondRoots::NONE
         } else {
@@ -4698,6 +4710,24 @@ pub(crate) fn emit_pending_dispatches(
     Ok(())
 }
 
+/// How baseline model-stack slot `k` holds its value: the lowering keeps one
+/// per `stack` slot, in lockstep. Lowering-time only — nothing here reaches
+/// runtime metadata (deopt spills stay all-tagged).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SlotRep {
+    /// `stack[k]` is a tagged Lisp `Value`.
+    Tagged,
+    /// `stack[k]` is an untagged, proven fixnum (cross-op fixnum unboxing).
+    RawFixnum,
+}
+
+impl SlotRep {
+    /// [`SlotRep::RawFixnum`] when `raw`, else [`SlotRep::Tagged`].
+    pub(crate) fn raw_if(raw: bool) -> Self {
+        if raw { Self::RawFixnum } else { Self::Tagged }
+    }
+}
+
 /// Get model-stack slot `k` as a RAW (untagged) fixnum i64 for arithmetic. If the
 /// slot is already raw (a prior fixnum arithmetic result in this block), return it
 /// directly — the cross-op fast path: no re-guard, no re-untag. Otherwise guard it
@@ -4706,15 +4736,16 @@ pub(crate) fn stack_as_raw(
     fb: &mut FunctionBuilder,
     deopt: Block,
     stack: &[ClifValue],
-    stack_raw: &[bool],
+    reps: &[SlotRep],
     k: usize,
     known: &HashSet<ClifValue>,
 ) -> ClifValue {
-    if stack_raw[k] {
-        stack[k]
-    } else {
-        guard_fixnum(fb, deopt, stack[k], known);
-        sshr_imm_p(fb, stack[k], FIXNUM_SHIFT as i64)
+    match reps[k] {
+        SlotRep::RawFixnum => stack[k],
+        SlotRep::Tagged => {
+            guard_fixnum(fb, deopt, stack[k], known);
+            sshr_imm_p(fb, stack[k], FIXNUM_SHIFT as i64)
+        }
     }
 }
 
@@ -4725,12 +4756,12 @@ pub(crate) fn stack_as_raw(
 pub(crate) fn stack_force_tagged(
     fb: &mut FunctionBuilder,
     stack: &mut [ClifValue],
-    stack_raw: &mut [bool],
+    reps: &mut [SlotRep],
     k: usize,
 ) {
-    if stack_raw[k] {
+    if reps[k] == SlotRep::RawFixnum {
         stack[k] = retag_fixnum(fb, stack[k]);
-        stack_raw[k] = false;
+        reps[k] = SlotRep::Tagged;
     }
 }
 
@@ -4741,14 +4772,14 @@ pub(crate) fn stack_force_tagged(
 pub(crate) fn retag_all_raw(
     fb: &mut FunctionBuilder,
     stack: &mut [ClifValue],
-    stack_raw: &mut [bool],
+    reps: &mut [SlotRep],
 ) {
     for k in 0..stack.len() {
-        stack_force_tagged(fb, stack, stack_raw, k);
+        stack_force_tagged(fb, stack, reps, k);
     }
 }
 
-/// Ops that participate in cross-op fixnum unboxing: they maintain `stack_raw`
+/// Ops that participate in cross-op fixnum unboxing: they maintain `reps`
 /// themselves (arithmetic produces raw results, comparisons consume raw operands,
 /// stack shuffles move the raw flags, VarRef tags a separate slow-path snapshot).
 /// EVERY OTHER op force-tags the stack first
@@ -4806,7 +4837,7 @@ fn lower_generic_arith_site(
     rt: &RtCtx,
     op: &Op,
     stack: &mut Vec<ClifValue>,
-    stack_raw: &mut Vec<bool>,
+    reps: &mut Vec<SlotRep>,
     handlers: &[HandlerStatic],
     pending: &mut Vec<PendingDispatch>,
     signal_exit: &mut Option<Block>,
@@ -4816,11 +4847,11 @@ fn lower_generic_arith_site(
     if stack.len() < nargs {
         return Err(CompileError::StackUnderflow);
     }
-    retag_all_raw(fb, stack, stack_raw);
+    retag_all_raw(fb, stack, reps);
     let at = stack.len() - nargs;
     let operands: Vec<ClifValue> = stack[at..].to_vec();
     stack.truncate(at);
-    stack_raw.truncate(at);
+    reps.truncate(at);
 
     let res_var = fb.declare_var(types::I64);
     let fix_b = fb.create_block();
@@ -4921,7 +4952,7 @@ fn lower_generic_arith_site(
     let status = fb.inst_results(call)[0];
     emit_cond_residual_roots_post(fb, rt, saved);
     rootwin_carry_meet(&carry_fast);
-    let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack);
+    let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack, reps);
     let ok_b = fb.create_block();
     let ok = icmp_imm_p(fb, IntCC::Equal, status, STATUS_OK);
     fb.ins().brif(ok, ok_b, &[], se, &[]);
@@ -4936,7 +4967,7 @@ fn lower_generic_arith_site(
     fb.switch_to_block(merge);
     fb.seal_block(merge);
     stack.push(fb.use_var(res_var));
-    stack_raw.push(false);
+    reps.push(SlotRep::Tagged);
     Ok(())
 }
 
@@ -4951,8 +4982,9 @@ pub(crate) fn lower_simple_op(
     signal_exit: &mut Option<Block>,
     constants: &[Value],
     stack: &mut Vec<ClifValue>,
-    // Per-slot raw mask (cross-op unboxing), kept in lockstep with `stack`.
-    stack_raw: &mut Vec<bool>,
+    // Per-slot representations (cross-op unboxing), kept in lockstep with
+    // `stack`.
+    reps: &mut Vec<SlotRep>,
     rt: Option<&RtCtx>,
     handlers: &[HandlerStatic],
     pending: &mut Vec<PendingDispatch>,
@@ -4986,22 +5018,13 @@ pub(crate) fn lower_simple_op(
     // their gc_push / signal snapshot / shim args never observe a raw slot (closes
     // the GC-root + dispatch-snapshot soundness holes in one place).
     if !op_preserves_raw(op) {
-        retag_all_raw(fb, stack, stack_raw);
+        retag_all_raw(fb, stack, reps);
     }
     if let Some(rt) = rt
         && !aot
         && super::arith_site_takes_generic(op, pc)
     {
-        return lower_generic_arith_site(
-            fb,
-            rt,
-            op,
-            stack,
-            stack_raw,
-            handlers,
-            pending,
-            signal_exit,
-        );
+        return lower_generic_arith_site(fb, rt, op, stack, reps, handlers, pending, signal_exit);
     }
     match op {
         // A `make-closure`-patched slot: per-instance, so load it through the
@@ -5014,7 +5037,7 @@ pub(crate) fn lower_simple_op(
                 .ins()
                 .load(types::I64, MemFlagsData::trusted(), base, off);
             stack.push(cv);
-            stack_raw.push(false);
+            reps.push(SlotRep::Tagged);
         }
         Op::Constant(idx) => {
             let v = constants
@@ -5041,25 +5064,25 @@ pub(crate) fn lower_simple_op(
                 fb.ins().iconst(types::I64, v.bits() as i64)
             };
             stack.push(cv);
-            stack_raw.push(false);
+            reps.push(SlotRep::Tagged);
         }
         Op::Nil => {
             stack.push(fb.ins().iconst(types::I64, Value::NIL.bits() as i64));
-            stack_raw.push(false);
+            reps.push(SlotRep::Tagged);
         }
         Op::True => {
             stack.push(fb.ins().iconst(types::I64, Value::T.bits() as i64));
-            stack_raw.push(false);
+            reps.push(SlotRep::Tagged);
         }
         Op::Pop => {
             stack.pop().ok_or(CompileError::StackUnderflow)?;
-            stack_raw.pop();
+            reps.pop();
         }
         Op::Dup => {
             let top = *stack.last().ok_or(CompileError::StackUnderflow)?;
-            let top_raw = *stack_raw.last().ok_or(CompileError::StackUnderflow)?;
+            let top_raw = *reps.last().ok_or(CompileError::StackUnderflow)?;
             stack.push(top);
-            stack_raw.push(top_raw);
+            reps.push(top_raw);
         }
         Op::StackRef(n) => {
             // 0 = top of stack, 1 = one below, ...
@@ -5069,20 +5092,20 @@ pub(crate) fn lower_simple_op(
                 .checked_sub(1 + n)
                 .ok_or(CompileError::StackUnderflow)?;
             stack.push(stack[idx]);
-            stack_raw.push(stack_raw[idx]);
+            reps.push(reps[idx]);
         }
         Op::StackSet(n) => {
             // Assign TOS into the slot N below TOS, then pop TOS (N = 0 == pop).
             let n = *n as usize;
             let top = stack.pop().ok_or(CompileError::StackUnderflow)?;
-            let top_raw = stack_raw.pop().ok_or(CompileError::StackUnderflow)?;
+            let top_raw = reps.pop().ok_or(CompileError::StackUnderflow)?;
             if n != 0 {
                 let idx = stack
                     .len()
                     .checked_sub(n)
                     .ok_or(CompileError::StackUnderflow)?;
                 stack[idx] = top;
-                stack_raw[idx] = top_raw;
+                reps[idx] = top_raw;
             }
         }
         Op::DiscardN(raw) => {
@@ -5095,12 +5118,12 @@ pub(crate) fn lower_simple_op(
                 if preserve_tos {
                     let target = len.checked_sub(1 + n).ok_or(CompileError::StackUnderflow)?;
                     stack[target] = stack[len - 1];
-                    stack_raw[target] = stack_raw[len - 1];
+                    reps[target] = reps[len - 1];
                 } else if n > len {
                     return Err(CompileError::StackUnderflow);
                 }
                 stack.truncate(len - n);
-                stack_raw.truncate(len - n);
+                reps.truncate(len - n);
             }
         }
         Op::Add | Op::Sub | Op::Mul | Op::Div => {
@@ -5108,7 +5131,7 @@ pub(crate) fn lower_simple_op(
             if n < 2 {
                 return Err(CompileError::StackUnderflow);
             }
-            let dsite = deopt_site(fb, pc, handlers.len(), stack, stack_raw, deopt_sites);
+            let dsite = deopt_site(fb, pc, handlers.len(), stack, reps, deopt_sites);
             // FLOAT SITE: the interpreter has seen floats here, so predict
             // floats — ONE combined tag test and branch, then unbox and
             // compute; that is no more than the old float-only arm paid, and
@@ -5124,7 +5147,7 @@ pub(crate) fn lower_simple_op(
                     super::active_numeric_feedback(pc),
                     crate::emacs_core::jit::NumericFeedback::Float
                 )
-                && !(stack_raw[n - 1] && stack_raw[n - 2])
+                && !(reps[n - 1] == SlotRep::RawFixnum && reps[n - 2] == SlotRep::RawFixnum)
             {
                 let res_var = fb.declare_var(types::I64);
                 let ff_b = fb.create_block();
@@ -5132,7 +5155,7 @@ pub(crate) fn lower_simple_op(
                 let fix_b = fb.create_block();
                 let mix_b = fb.create_block();
                 let merge = fb.create_block();
-                let both_float = both_float_test(fb, stack, stack_raw, n - 2, n - 1);
+                let both_float = both_float_test(fb, stack, reps, n - 2, n - 1);
                 fb.ins().brif(both_float, ff_b, &[], slow_b, &[]);
 
                 // Both floats (the predicted case): unbox and compute.
@@ -5148,17 +5171,17 @@ pub(crate) fn lower_simple_op(
                 // Not both floats: both fixnums, or a mix, or a non-number.
                 fb.switch_to_block(slow_b);
                 fb.seal_block(slow_b);
-                let both_fix = both_fixnum_test(fb, stack, stack_raw, n - 2, n - 1);
+                let both_fix = both_fixnum_test(fb, stack, reps, n - 2, n - 1);
                 fb.ins().brif(both_fix, fix_b, &[], mix_b, &[]);
 
                 fb.switch_to_block(fix_b);
                 fb.seal_block(fix_b);
-                let a = if stack_raw[n - 2] {
+                let a = if reps[n - 2] == SlotRep::RawFixnum {
                     stack[n - 2]
                 } else {
                     sshr_imm_p(fb, stack[n - 2], FIXNUM_SHIFT as i64)
                 };
-                let b = if stack_raw[n - 1] {
+                let b = if reps[n - 1] == SlotRep::RawFixnum {
                     stack[n - 1]
                 } else {
                     sshr_imm_p(fb, stack[n - 1], FIXNUM_SHIFT as i64)
@@ -5174,8 +5197,8 @@ pub(crate) fn lower_simple_op(
 
                 fb.switch_to_block(mix_b);
                 fb.seal_block(mix_b);
-                let fb_val = stack_as_f64_or_promote(fb, dsite, stack, stack_raw, n - 1);
-                let fa_val = stack_as_f64_or_promote(fb, dsite, stack, stack_raw, n - 2);
+                let fb_val = stack_as_f64_or_promote(fb, dsite, stack, reps, n - 1);
+                let fa_val = stack_as_f64_or_promote(fb, dsite, stack, reps, n - 2);
                 let res = emit_float_arith(fb, op, fa_val, fb_val);
                 let boxed = box_float(fb, rt, res);
                 fb.def_var(res_var, boxed);
@@ -5185,35 +5208,35 @@ pub(crate) fn lower_simple_op(
                 fb.seal_block(merge);
                 let out = fb.use_var(res_var);
                 stack.truncate(n - 2);
-                stack_raw.truncate(n - 2);
+                reps.truncate(n - 2);
                 stack.push(out);
-                stack_raw.push(false);
+                reps.push(SlotRep::Tagged);
                 return Ok(());
             }
-            let b = stack_as_raw(fb, dsite, stack, stack_raw, n - 1, known);
-            let a = stack_as_raw(fb, dsite, stack, stack_raw, n - 2, known);
+            let b = stack_as_raw(fb, dsite, stack, reps, n - 1, known);
+            let a = stack_as_raw(fb, dsite, stack, reps, n - 2, known);
             stack.truncate(n - 2);
-            stack_raw.truncate(n - 2);
+            reps.truncate(n - 2);
             let res = match op {
                 Op::Add | Op::Sub => raw_fixnum_addsub(fb, dsite, matches!(op, Op::Sub), a, b),
                 Op::Mul => raw_fixnum_mul(fb, dsite, a, b),
                 _ => raw_fixnum_divrem(fb, dsite, false, a, b),
             };
             stack.push(res);
-            stack_raw.push(true);
+            reps.push(SlotRep::RawFixnum);
         }
         Op::Rem => {
             let n = stack.len();
             if n < 2 {
                 return Err(CompileError::StackUnderflow);
             }
-            let dsite = deopt_site(fb, pc, handlers.len(), stack, stack_raw, deopt_sites);
-            let b = stack_as_raw(fb, dsite, stack, stack_raw, n - 1, known);
-            let a = stack_as_raw(fb, dsite, stack, stack_raw, n - 2, known);
+            let dsite = deopt_site(fb, pc, handlers.len(), stack, reps, deopt_sites);
+            let b = stack_as_raw(fb, dsite, stack, reps, n - 1, known);
+            let a = stack_as_raw(fb, dsite, stack, reps, n - 2, known);
             stack.truncate(n - 2);
-            stack_raw.truncate(n - 2);
+            reps.truncate(n - 2);
             stack.push(raw_fixnum_divrem(fb, dsite, true, a, b));
-            stack_raw.push(true);
+            reps.push(SlotRep::RawFixnum);
         }
         Op::Eq => {
             // Bit-equal -> t natively; differing bits -> the read-only slow-path
@@ -5282,10 +5305,10 @@ pub(crate) fn lower_simple_op(
             if n < 1 {
                 return Err(CompileError::StackUnderflow);
             }
-            let dsite = deopt_site(fb, pc, handlers.len(), stack, stack_raw, deopt_sites);
-            let a = stack_as_raw(fb, dsite, stack, stack_raw, n - 1, known);
+            let dsite = deopt_site(fb, pc, handlers.len(), stack, reps, deopt_sites);
+            let a = stack_as_raw(fb, dsite, stack, reps, n - 1, known);
             stack.truncate(n - 1);
-            stack_raw.truncate(n - 1);
+            reps.truncate(n - 1);
             let kind = match op {
                 Op::Add1 => UnaryKind::Add1,
                 Op::Sub1 => UnaryKind::Sub1,
@@ -5293,14 +5316,14 @@ pub(crate) fn lower_simple_op(
                 _ => unreachable!("matched Add1/Sub1/Negate above"),
             };
             stack.push(raw_fixnum_unop(fb, dsite, kind, a));
-            stack_raw.push(true);
+            reps.push(SlotRep::RawFixnum);
         }
         Op::Eqlsign | Op::Lss | Op::Gtr | Op::Leq | Op::Geq => {
             let n = stack.len();
             if n < 2 {
                 return Err(CompileError::StackUnderflow);
             }
-            let dsite = deopt_site(fb, pc, handlers.len(), stack, stack_raw, deopt_sites);
+            let dsite = deopt_site(fb, pc, handlers.len(), stack, reps, deopt_sites);
             // FLOAT SITE — same float-first dispatch as the arithmetic ops.
             // Both floats: a plain IEEE `fcmp` (ordered: every relation is
             // false against NaN, as the builtins are). Both fixnums: integer
@@ -5310,7 +5333,7 @@ pub(crate) fn lower_simple_op(
             if matches!(
                 super::active_numeric_feedback(pc),
                 crate::emacs_core::jit::NumericFeedback::Float
-            ) && !(stack_raw[n - 1] && stack_raw[n - 2])
+            ) && !(reps[n - 1] == SlotRep::RawFixnum && reps[n - 2] == SlotRep::RawFixnum)
             {
                 let res_var = fb.declare_var(types::I64);
                 let ff_b = fb.create_block();
@@ -5334,7 +5357,7 @@ pub(crate) fn lower_simple_op(
                     Op::Leq => cranelift_codegen::ir::condcodes::FloatCC::LessThanOrEqual,
                     _ => cranelift_codegen::ir::condcodes::FloatCC::GreaterThanOrEqual,
                 };
-                let both_float = both_float_test(fb, stack, stack_raw, n - 2, n - 1);
+                let both_float = both_float_test(fb, stack, reps, n - 2, n - 1);
                 fb.ins().brif(both_float, ff_b, &[], slow_b, &[]);
 
                 fb.switch_to_block(ff_b);
@@ -5348,17 +5371,17 @@ pub(crate) fn lower_simple_op(
 
                 fb.switch_to_block(slow_b);
                 fb.seal_block(slow_b);
-                let both_fix = both_fixnum_test(fb, stack, stack_raw, n - 2, n - 1);
+                let both_fix = both_fixnum_test(fb, stack, reps, n - 2, n - 1);
                 fb.ins().brif(both_fix, fix_b, &[], mix_b, &[]);
 
                 fb.switch_to_block(fix_b);
                 fb.seal_block(fix_b);
-                let a = if stack_raw[n - 2] {
+                let a = if reps[n - 2] == SlotRep::RawFixnum {
                     stack[n - 2]
                 } else {
                     sshr_imm_p(fb, stack[n - 2], FIXNUM_SHIFT as i64)
                 };
-                let b = if stack_raw[n - 1] {
+                let b = if reps[n - 1] == SlotRep::RawFixnum {
                     stack[n - 1]
                 } else {
                     sshr_imm_p(fb, stack[n - 1], FIXNUM_SHIFT as i64)
@@ -5370,8 +5393,8 @@ pub(crate) fn lower_simple_op(
 
                 fb.switch_to_block(mix_b);
                 fb.seal_block(mix_b);
-                let (fb_val, ib) = stack_as_f64_and_int(fb, dsite, stack, stack_raw, n - 1);
-                let (fa_val, ia) = stack_as_f64_and_int(fb, dsite, stack, stack_raw, n - 2);
+                let (fb_val, ib) = stack_as_f64_and_int(fb, dsite, stack, reps, n - 1);
+                let (fa_val, ia) = stack_as_f64_and_int(fb, dsite, stack, reps, n - 2);
                 let cf = fb.ins().fcmp(fcc, fa_val, fb_val);
                 let tie = fb.ins().fcmp(
                     cranelift_codegen::ir::condcodes::FloatCC::Equal,
@@ -5388,12 +5411,12 @@ pub(crate) fn lower_simple_op(
                 fb.seal_block(merge);
                 let out = fb.use_var(res_var);
                 stack.truncate(n - 2);
-                stack_raw.truncate(n - 2);
+                reps.truncate(n - 2);
                 stack.push(out);
-                stack_raw.push(false);
+                reps.push(SlotRep::Tagged);
                 return Ok(());
             }
-            let (a, b) = if !stack_raw[n - 2] && !stack_raw[n - 1] {
+            let (a, b) = if reps[n - 2] == SlotRep::Tagged && reps[n - 1] == SlotRep::Tagged {
                 // Fixnum tagging (4*x + 2) preserves signed integer order.
                 // Keep tagged operands when neither came from raw arithmetic;
                 // otherwise retain the existing cross-op unboxed path.
@@ -5402,12 +5425,12 @@ pub(crate) fn lower_simple_op(
                 guard_fixnum(fb, dsite, a, known);
                 (a, b)
             } else {
-                let b = stack_as_raw(fb, dsite, stack, stack_raw, n - 1, known);
-                let a = stack_as_raw(fb, dsite, stack, stack_raw, n - 2, known);
+                let b = stack_as_raw(fb, dsite, stack, reps, n - 1, known);
+                let a = stack_as_raw(fb, dsite, stack, reps, n - 2, known);
                 (a, b)
             };
             stack.truncate(n - 2);
-            stack_raw.truncate(n - 2);
+            reps.truncate(n - 2);
             let cc = match op {
                 Op::Eqlsign => IntCC::Equal,
                 Op::Lss => IntCC::SignedLessThan,
@@ -5421,7 +5444,7 @@ pub(crate) fn lower_simple_op(
             let t = fb.ins().iconst(types::I64, Value::T.bits() as i64);
             let nil = fb.ins().iconst(types::I64, Value::NIL.bits() as i64);
             stack.push(fb.ins().select(cond, t, nil));
-            stack_raw.push(false);
+            reps.push(SlotRep::Tagged);
         }
         Op::Null | Op::Not | Op::Consp | Op::Stringp | Op::Listp => {
             let a = stack.pop().ok_or(CompileError::StackUnderflow)?;
@@ -5437,7 +5460,7 @@ pub(crate) fn lower_simple_op(
         Op::Car | Op::Cdr => {
             // Non-raw: the top-of-fn retag_all_raw already tagged the stack; the
             // deopt snapshot's mask is all-false (cold retag is a no-op here).
-            let dsite = deopt_site(fb, pc, handlers.len(), stack, stack_raw, deopt_sites);
+            let dsite = deopt_site(fb, pc, handlers.len(), stack, reps, deopt_sites);
             let a = stack.pop().ok_or(CompileError::StackUnderflow)?;
             let is_cdr = matches!(op, Op::Cdr);
             stack.push(lower_car_cdr(fb, Some(dsite), is_cdr, false, a));
@@ -5455,13 +5478,13 @@ pub(crate) fn lower_simple_op(
             if n < 2 {
                 return Err(CompileError::StackUnderflow);
             }
-            let dsite = deopt_site(fb, pc, handlers.len(), stack, stack_raw, deopt_sites);
-            let b = stack_as_raw(fb, dsite, stack, stack_raw, n - 1, known);
-            let a = stack_as_raw(fb, dsite, stack, stack_raw, n - 2, known);
+            let dsite = deopt_site(fb, pc, handlers.len(), stack, reps, deopt_sites);
+            let b = stack_as_raw(fb, dsite, stack, reps, n - 1, known);
+            let a = stack_as_raw(fb, dsite, stack, reps, n - 2, known);
             stack.truncate(n - 2);
-            stack_raw.truncate(n - 2);
+            reps.truncate(n - 2);
             stack.push(raw_fixnum_maxmin(fb, matches!(op, Op::Min), a, b));
-            stack_raw.push(true);
+            reps.push(SlotRep::RawFixnum);
         }
         Op::Integerp | Op::Numberp => {
             // Fixnum tag -> t natively; anything else (bignum/float/non-number)
@@ -5617,9 +5640,11 @@ pub(crate) fn lower_simple_op(
             // its integers raw across the inline read and the continuation;
             // only the fallback needs tagged roots and a signal snapshot.
             let mut tagged = std::borrow::Cow::Borrowed(stack.as_slice());
-            for (i, &raw) in stack_raw.iter().enumerate() {
-                if raw {
+            let mut tagged_reps = std::borrow::Cow::Borrowed(reps.as_slice());
+            for (i, &rep) in reps.iter().enumerate() {
+                if rep == SlotRep::RawFixnum {
                     tagged.to_mut()[i] = retag_fixnum(fb, stack[i]);
+                    tagged_reps.to_mut()[i] = SlotRep::Tagged;
                 }
             }
             let saved = if tagged.is_empty() {
@@ -5633,7 +5658,8 @@ pub(crate) fn lower_simple_op(
             let status = fb.inst_results(call)[0];
             emit_cond_residual_roots_post(fb, rt, saved);
             rootwin_carry_meet(&carry_fast);
-            let se = signal_target_for_site(fb, signal_exit, handlers, pending, &tagged);
+            let se =
+                signal_target_for_site(fb, signal_exit, handlers, pending, &tagged, &tagged_reps);
             let slow_ok = fb.create_block();
             let ok = icmp_imm_p(fb, IntCC::Equal, status, STATUS_OK);
             fb.ins().brif(ok, slow_ok, &[], se, &[]);
@@ -5647,7 +5673,7 @@ pub(crate) fn lower_simple_op(
             fb.switch_to_block(cont);
             fb.seal_block(cont);
             stack.push(fb.use_var(res));
-            stack_raw.push(false);
+            reps.push(SlotRep::Tagged);
         }
         Op::VarSet(idx) => {
             // Assign through the runtime (may run variable watchers — arbitrary
@@ -5665,7 +5691,7 @@ pub(crate) fn lower_simple_op(
             let call = fb.ins().call(rt.refs.varset, &[vmctx, sym_v, val]);
             let status = fb.inst_results(call)[0];
             emit_cond_residual_roots_post(fb, rt, saved);
-            let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack);
+            let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack, reps);
             let cont = fb.create_block();
             let ok = icmp_imm_p(fb, IntCC::Equal, status, STATUS_OK);
             fb.ins().brif(ok, cont, &[], se, &[]);
@@ -5735,7 +5761,7 @@ pub(crate) fn lower_simple_op(
                 && let Some((_, _, _, _, SpecCalleeKind::ArithIntrinsic { op })) = spec
                 && arith_op_inlines(op)
             {
-                let dsite = deopt_site(fb, pc, handlers.len(), stack, stack_raw, deopt_sites);
+                let dsite = deopt_site(fb, pc, handlers.len(), stack, reps, deopt_sites);
                 let sp = stack.len();
                 let is_lognot = op == ARITH_KIND_LOGNOT as u8;
                 let a = stack[sp - if is_lognot { 1 } else { 2 }];
@@ -5779,9 +5805,9 @@ pub(crate) fn lower_simple_op(
                 };
                 // Drop callee + args, push the tagged fixnum result.
                 stack.truncate(args_at - 1);
-                stack_raw.truncate(args_at - 1);
+                reps.truncate(args_at - 1);
                 stack.push(res);
-                stack_raw.push(false);
+                reps.push(SlotRep::Tagged);
                 return Ok(());
             }
             // Pred/EqIncl sites pass their 1–2 args in REGISTERS on the direct
@@ -5979,7 +6005,7 @@ pub(crate) fn lower_simple_op(
             // STATUS_OK -> continue with the result; STATUS_NEED_GENERIC (subr
             // spec sites only) -> the generic fallback block; anything else is
             // STATUS_SIGNAL -> propagate via the handler-aware signal target.
-            let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack);
+            let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack, reps);
             let cont = fb.create_block();
             let ok = icmp_imm_p(fb, IntCC::Equal, status, STATUS_OK);
             if let Some(gen_block) = generic_fallback {
@@ -6024,7 +6050,8 @@ pub(crate) fn lower_simple_op(
                 let status_gen = fb.inst_results(call_gen)[0];
                 emit_cond_residual_roots_post(fb, rt, saved_gen);
                 rootwin_carry_meet(&carry_fast);
-                let se_gen = signal_target_for_site(fb, signal_exit, handlers, pending, stack);
+                let se_gen =
+                    signal_target_for_site(fb, signal_exit, handlers, pending, stack, reps);
                 let ok_gen = icmp_imm_p(fb, IntCC::Equal, status_gen, STATUS_OK);
                 fb.ins().brif(ok_gen, cont, &[], se_gen, &[]);
             } else {
@@ -6085,7 +6112,7 @@ pub(crate) fn lower_simple_op(
             emit_cond_residual_roots_post(fb, rt, saved);
             let cont = fb.create_block();
             let signal =
-                signal_target_for_site(fb, signal_exit, handlers, pending, stack.as_slice());
+                signal_target_for_site(fb, signal_exit, handlers, pending, stack.as_slice(), reps);
             let ok = icmp_imm_p(fb, IntCC::Equal, status, STATUS_OK);
             fb.ins().brif(ok, cont, &[], signal, &[]);
             fb.switch_to_block(cont);
@@ -6109,7 +6136,7 @@ pub(crate) fn lower_simple_op(
             emit_cond_residual_roots_post(fb, rt, saved);
             let cont = fb.create_block();
             let signal =
-                signal_target_for_site(fb, signal_exit, handlers, pending, stack.as_slice());
+                signal_target_for_site(fb, signal_exit, handlers, pending, stack.as_slice(), reps);
             let ok = icmp_imm_p(fb, IntCC::Equal, status, STATUS_OK);
             fb.ins().brif(ok, cont, &[], signal, &[]);
             fb.switch_to_block(cont);
@@ -6154,7 +6181,7 @@ pub(crate) fn lower_simple_op(
                 .call(rt.refs.save_window_excursion, &[vmctx, body, out_addr]);
             let status = fb.inst_results(call)[0];
             emit_cond_residual_roots_post(fb, rt, saved);
-            let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack);
+            let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack, reps);
             let cont = fb.create_block();
             let ok = icmp_imm_p(fb, IntCC::Equal, status, STATUS_OK);
             fb.ins().brif(ok, cont, &[], se, &[]);
@@ -6202,7 +6229,7 @@ pub(crate) fn lower_simple_op(
 
             fb.switch_to_block(sentinel);
             fb.seal_block(sentinel);
-            let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack);
+            let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack, reps);
             let gen_block = fb.create_block();
             let need_gen = icmp_imm_p(fb, IntCC::Equal, word, dispatch::VALUE_SHIM_NEED_GENERIC);
             fb.ins().brif(need_gen, gen_block, &[], se, &[]);
@@ -6234,7 +6261,7 @@ pub(crate) fn lower_simple_op(
             let status_gen = fb.inst_results(call_gen)[0];
             emit_cond_residual_roots_post(fb, rt, saved_gen);
             rootwin_carry_meet(&carry_fast);
-            let se_gen = signal_target_for_site(fb, signal_exit, handlers, pending, stack);
+            let se_gen = signal_target_for_site(fb, signal_exit, handlers, pending, stack, reps);
             let gen_ok = fb.create_block();
             let ok_gen = icmp_imm_p(fb, IntCC::Equal, status_gen, STATUS_OK);
             fb.ins().brif(ok_gen, gen_ok, &[], se_gen, &[]);
@@ -6388,7 +6415,7 @@ pub(crate) fn lower_simple_op(
                 (None, None) => unreachable!("a call is emitted unless the read inlined"),
             };
             emit_cond_residual_roots_post(fb, rt, saved);
-            let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack);
+            let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack, reps);
             let cont = fb.create_block();
             let ok = icmp_imm_p(fb, IntCC::Equal, status, STATUS_OK);
             if let Some(gen_block) = generic_fallback {
@@ -6425,7 +6452,8 @@ pub(crate) fn lower_simple_op(
                 let status_gen = fb.inst_results(call_gen)[0];
                 emit_cond_residual_roots_post(fb, rt, saved_gen);
                 rootwin_carry_meet(&carry_fast);
-                let se_gen = signal_target_for_site(fb, signal_exit, handlers, pending, stack);
+                let se_gen =
+                    signal_target_for_site(fb, signal_exit, handlers, pending, stack, reps);
                 let ok_gen = icmp_imm_p(fb, IntCC::Equal, status_gen, STATUS_OK);
                 fb.ins().brif(ok_gen, cont, &[], se_gen, &[]);
             } else {
@@ -6496,7 +6524,7 @@ pub(crate) fn lower_simple_op(
                     .call(rt.refs.builtin_slice, &[idx_v, args_addr, n_val, out_addr]);
                 let status = fb.inst_results(call)[0];
                 emit_cond_residual_roots_post(fb, rt, saved);
-                let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack);
+                let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack, reps);
                 let cont = fb.create_block();
                 let ok = icmp_imm_p(fb, IntCC::Equal, status, STATUS_OK);
                 fb.ins().brif(ok, cont, &[], se, &[]);
@@ -6557,7 +6585,7 @@ pub(crate) fn lower_simple_op(
                     .ins()
                     .call(value_shim, &[vmctx, operands[0], operands[1]]);
                 let word = fb.inst_results(call)[0];
-                let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack);
+                let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack, reps);
                 let cont = fb.create_block();
                 let tag = band_imm_p(fb, word, TAG_MASK as i64);
                 let is_signal = icmp_imm_p(
@@ -6611,7 +6639,7 @@ pub(crate) fn lower_simple_op(
             let call = fb.ins().call(shim, &call_args);
             let status = fb.inst_results(call)[0];
             emit_cond_residual_roots_post(fb, rt, saved);
-            let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack);
+            let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack, reps);
             let cont = fb.create_block();
             let ok = icmp_imm_p(fb, IntCC::Equal, status, STATUS_OK);
             fb.ins().brif(ok, cont, &[], se, &[]);

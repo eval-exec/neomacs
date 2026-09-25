@@ -2281,7 +2281,7 @@ pub fn testkit_baseline_aot_selftest(dir: &std::path::Path) -> Result<(), String
 /// fixnums on the operand stack, so at the outer `Mul`'s deopt the pre-op stack is
 /// `[a, b, (a+1), (b+1)]` (DEPTH 4 > 2) with `(a+1)`/`(b+1)` as LIVE RAW slots.
 /// Forcing the `Mul` to overflow exercises emit_pending_deopts'
-/// raw-slot-retag (stack_raw[j] → re-tag to a tagged Value) + the spill of a
+/// raw-slot-retag (a `SlotRep::RawFixnum` slot → re-tag to a tagged Value) + the spill of a
 /// deeper framestate — the cold path the audit flagged as AOT-uncovered. AOT ==
 /// interp proves the deeper restore is correct.
 #[doc(hidden)]

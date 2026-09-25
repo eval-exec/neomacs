@@ -3080,12 +3080,12 @@ fn write_edge_stack_to_vars(
     fb: &mut FunctionBuilder,
     vars: &[Variable],
     stack: &[ClifValue],
-    stack_raw: &[bool],
+    reps: &[SlotRep],
     variable_raw: &[bool],
 ) {
-    debug_assert_eq!(stack.len(), stack_raw.len());
-    for (slot, (&value, &raw)) in stack.iter().zip(stack_raw).enumerate() {
-        let value = match (raw, variable_raw[slot]) {
+    debug_assert_eq!(stack.len(), reps.len());
+    for (slot, (&value, &rep)) in stack.iter().zip(reps).enumerate() {
+        let value = match (rep == SlotRep::RawFixnum, variable_raw[slot]) {
             (true, false) => retag_fixnum(fb, value),
             (false, true) => lowering::sshr_imm_p(fb, value, FIXNUM_SHIFT as i64),
             _ => value,
@@ -3191,7 +3191,8 @@ fn emit_backedge_jump_with_args(
     let call = fb.ins().call(rt.refs.backedge, &[vmctx]);
     let status = fb.inst_results(call)[0];
     emit_cond_residual_roots_post(fb, rt, saved);
-    let se = signal_target_for_site(fb, signal_exit, handlers, pending, vals);
+    let tagged_reps = vec![SlotRep::Tagged; vals.len()];
+    let se = signal_target_for_site(fb, signal_exit, handlers, pending, vals, &tagged_reps);
     let ok = lowering::icmp_imm_p(fb, IntCC::Equal, status, STATUS_OK);
     fb.ins().brif(ok, target_block, target_args, se, &[]);
 }
@@ -4028,8 +4029,8 @@ fn build_leaf_fn<M: Module>(
                 .iter()
                 .map(|&var| fb.use_var(var))
                 .collect();
-            let raw = vec![false; seed_count];
-            let deopt = deopt_site(&mut fb, pc, 0, &stack, &raw, &mut entry_deopts);
+            let reps = vec![SlotRep::Tagged; seed_count];
+            let deopt = deopt_site(&mut fb, pc, 0, &stack, &reps, &mut entry_deopts);
             let unknown = HashSet::new();
             for (&value, &known) in stack.iter().zip(slots) {
                 if known {
@@ -4073,7 +4074,10 @@ fn build_leaf_fn<M: Module>(
             };
             let mut stack: Vec<ClifValue> = (0..depth).map(|k| fb.use_var(vars[k])).collect();
             // OSR slot representations are uniform at all reachable leaders.
-            let mut stack_raw = variable_raw[..depth].to_vec();
+            let mut reps: Vec<SlotRep> = variable_raw[..depth]
+                .iter()
+                .map(|&raw| SlotRep::raw_if(raw))
+                .collect();
             // Cross-block known-fixnum operands at this block's entry: each slot
             // the dataflow analysis proved fixnum maps to its just-materialized
             // ClifValue. StackRef/Dup keep the same ClifValue, so the set stays
@@ -4115,7 +4119,7 @@ fn build_leaf_fn<M: Module>(
                             lowering::set_active_region(Some(lowering::RegionDeopt {
                                 call_site_pc: region.call_site_pc,
                                 stack: stack.clone(),
-                                stack_raw: stack_raw.clone(),
+                                reps: reps.clone(),
                             }));
                             // ...and the splice is a speculation, so check the
                             // slot still holds the callee whose body is next.
@@ -4124,7 +4128,7 @@ fn build_leaf_fn<M: Module>(
                                 &region,
                                 handlers.len(),
                                 &stack,
-                                &stack_raw,
+                                &reps,
                                 &mut pending_deopt,
                             )?;
                         }
@@ -4154,7 +4158,7 @@ fn build_leaf_fn<M: Module>(
                         | Op::PushConditionCaseRaw(_)
                         | Op::PushCatch(_)
                 ) {
-                    retag_all_raw(&mut fb, &mut stack, &mut stack_raw);
+                    retag_all_raw(&mut fb, &mut stack, &mut reps);
                 }
                 match op {
                     Op::Return => {
@@ -4181,13 +4185,14 @@ fn build_leaf_fn<M: Module>(
                             &handlers,
                             &mut pending,
                             &stack,
+                            &reps,
                         );
                         fb.ins().jump(se, &[]);
                         terminated = true;
                         break;
                     }
                     Op::Goto(t) => {
-                        write_edge_stack_to_vars(&mut fb, &vars, &stack, &stack_raw, &variable_raw);
+                        write_edge_stack_to_vars(&mut fb, &vars, &stack, &reps, &variable_raw);
                         let tu = *t as usize;
                         if tu <= i {
                             // Backward jump: bump the quit counter and poll on
@@ -4216,13 +4221,13 @@ fn build_leaf_fn<M: Module>(
                     }
                     Op::GotoIfNil(t) | Op::GotoIfNotNil(t) => {
                         let cond = stack.pop().ok_or(CompileError::StackUnderflow)?;
-                        let raw = stack_raw.pop().ok_or(CompileError::StackUnderflow)?;
-                        let cond = if raw {
+                        let rep = reps.pop().ok_or(CompileError::StackUnderflow)?;
+                        let cond = if rep == SlotRep::RawFixnum {
                             retag_fixnum(&mut fb, cond)
                         } else {
                             cond
                         };
-                        write_edge_stack_to_vars(&mut fb, &vars, &stack, &stack_raw, &variable_raw);
+                        write_edge_stack_to_vars(&mut fb, &vars, &stack, &reps, &variable_raw);
                         let is_nil =
                             fb.ins()
                                 .icmp_imm_u(IntCC::Equal, cond, Value::NIL.bits() as i64);
@@ -4269,13 +4274,13 @@ fn build_leaf_fn<M: Module>(
                         // all (depth D); the fall-through (depth D-1) ignores the
                         // top slot — implementing the "ElsePop".
                         let cond = *stack.last().ok_or(CompileError::StackUnderflow)?;
-                        let raw = *stack_raw.last().ok_or(CompileError::StackUnderflow)?;
-                        let cond = if raw {
+                        let rep = *reps.last().ok_or(CompileError::StackUnderflow)?;
+                        let cond = if rep == SlotRep::RawFixnum {
                             retag_fixnum(&mut fb, cond)
                         } else {
                             cond
                         };
-                        write_edge_stack_to_vars(&mut fb, &vars, &stack, &stack_raw, &variable_raw);
+                        write_edge_stack_to_vars(&mut fb, &vars, &stack, &reps, &variable_raw);
                         let is_nil =
                             fb.ins()
                                 .icmp_imm_u(IntCC::Equal, cond, Value::NIL.bits() as i64);
@@ -4324,8 +4329,8 @@ fn build_leaf_fn<M: Module>(
                         let rt_ref = rt.as_ref().ok_or(CompileError::UnsupportedOp("switch"))?;
                         let table = stack.pop().ok_or(CompileError::StackUnderflow)?;
                         let dispatch = stack.pop().ok_or(CompileError::StackUnderflow)?;
-                        stack_raw.truncate(stack.len());
-                        write_edge_stack_to_vars(&mut fb, &vars, &stack, &stack_raw, &variable_raw);
+                        reps.truncate(stack.len());
+                        write_edge_stack_to_vars(&mut fb, &vars, &stack, &reps, &variable_raw);
                         let vmctx = fb.use_var(rt_ref.vmctx_var);
                         let call = fb
                             .ins()
@@ -4338,6 +4343,7 @@ fn build_leaf_fn<M: Module>(
                             &handlers,
                             &mut pending,
                             &stack,
+                            &reps,
                         );
                         let fall = block_for[&(i + 1)];
                         // miss -> fall through
@@ -4436,8 +4442,8 @@ fn build_leaf_fn<M: Module>(
                             }
                             _ => unreachable!("matched Push* above"),
                         }
-                        stack_raw.truncate(stack.len());
-                        write_edge_stack_to_vars(&mut fb, &vars, &stack, &stack_raw, &variable_raw);
+                        reps.truncate(stack.len());
+                        write_edge_stack_to_vars(&mut fb, &vars, &stack, &reps, &variable_raw);
                         // Placeholder error-value slot for the never-taken
                         // anchor edge (real entries define it from the shim).
                         let nil = fb.ins().iconst(types::I64, Value::NIL.bits() as i64);
@@ -4477,7 +4483,7 @@ fn build_leaf_fn<M: Module>(
                             &mut signal_exit,
                             constants,
                             &mut stack,
-                            &mut stack_raw,
+                            &mut reps,
                             rt.as_ref(),
                             &handlers,
                             &mut pending,
@@ -4498,18 +4504,18 @@ fn build_leaf_fn<M: Module>(
                         if op_preserves_raw(other) {
                             debug_assert_eq!(
                                 stack.len(),
-                                stack_raw.len(),
-                                "raw-preserving op left stack_raw desynced"
+                                reps.len(),
+                                "raw-preserving op left reps desynced"
                             );
                         } else {
-                            stack_raw.resize(stack.len(), false);
+                            reps.resize(stack.len(), SlotRep::Tagged);
                         }
                     }
                 }
             }
             if !terminated {
                 // Fall through with the uniform variable representations.
-                write_edge_stack_to_vars(&mut fb, &vars, &stack, &stack_raw, &variable_raw);
+                write_edge_stack_to_vars(&mut fb, &vars, &stack, &reps, &variable_raw);
                 fb.ins().jump(block_for[&end], &[]);
             }
             // Keep failed-guard reconstruction out of the ordinary emitted
