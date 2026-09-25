@@ -49,7 +49,7 @@ use crate::window_output::{
 use neomacs_display_protocol::frame_glyphs::{
     CursorStyle, DisplaySlotId, GlyphRowRole, PhysCursor,
 };
-use neomacs_display_protocol::glyph_matrix::{FaceFillItem, GlyphArea};
+use neomacs_display_protocol::glyph_matrix::{FaceFillItem, GlyphArea, GlyphType};
 use neomacs_display_protocol::types::{Color, DisplayWindowId, Rect};
 use neovm_core::buffer::BufferId;
 use neovm_core::window::{FrameId, WindowId};
@@ -392,7 +392,19 @@ fn decorate_window_cursor(
                 let mut width = char_w;
                 for glyph in &row.glyphs[GlyphArea::Text.index()] {
                     if row.glyph_covers_buffer_charpos(glyph, point) {
-                        width = glyph.pixel_width;
+                        // As the walk sizes it (`resolve_cursor_geometry`,
+                        // GNU `get_phys_cursor_geometry`): on a stretch --
+                        // a TAB -- the cursor is one column wide unless
+                        // `x-stretch-cursor` is set; a bar keeps its own.
+                        width = if matches!(glyph.glyph_type, GlyphType::Stretch { .. })
+                            && !params.x_stretch_cursor
+                            && !matches!(style, CursorStyle::Bar(_))
+                        {
+                            crate::display_row::width::DisplayRowCharWidthPolicy::new(char_w)
+                                .fallback()
+                        } else {
+                            glyph.pixel_width
+                        };
                         break;
                     }
                 }

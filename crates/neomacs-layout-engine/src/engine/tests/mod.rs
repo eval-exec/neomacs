@@ -40,6 +40,7 @@ mod edit_sync_engine_test;
 mod layout_validity;
 mod mini_window_still_test;
 mod mode_line_gate_engine_test;
+mod replay_cursor_on_tab_test;
 mod text_snapshot_cow_test;
 
 fn test_image_load(id: u32) -> neomacs_display_protocol::ImageLoadToken {
