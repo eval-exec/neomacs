@@ -57,13 +57,15 @@
 //!
 //! [`TierI`] maps a body's address to a [`TierEntry`].  Calls are counted per
 //! body (all closures cconv makes from one `lambda` share the body cons); the
-//! entry of a compiled body roots every heap value its nodes hold (the body,
-//! the arglist and every form and constant) through [`TierI::trace_roots`], so
-//! a compiled key can never be recycled and a node's identity compare can
-//! never match a new object at a reused address.  Compiled entries are never
-//! dropped; past [`MAX_COMPILED_BODIES`] nothing more is compiled.  Entries
-//! that only count heat are not rooted: their key is a number that is never
-//! dereferenced, so a recycled address only moves a heat count.
+//! entry of a compiled body roots the body and the arglist through
+//! [`TierI::trace_roots`] (root group `misc`), so a compiled key can never be
+//! recycled.  The nodes' own values need no root: every one is compared with
+//! the live object at its position before use, and what the executor then
+//! does depends only on that live object (`compile::TierCode::roots`).
+//! Compiled entries are never dropped; past [`MAX_COMPILED_BODIES`] nothing
+//! more is compiled.  Entries that only count heat are not rooted: their key
+//! is a number that is never dereferenced, so a recycled address only moves a
+//! heat count.
 //!
 //! No tiered code runs once any thread other than the main one exists: the
 //! cooperative-thread continuations (`Flow::ThreadBlocked`) are mirrored, but
@@ -504,7 +506,12 @@ impl TierI {
 
     /// The census and coverage tables: the hottest bodies by work, with the
     /// names of the functions whose cells hold them.
-    fn report_lines(&self, names: &FxHashMap<usize, String>, limit: usize) -> Vec<String> {
+    fn report_lines(
+        &self,
+        obarray: &Obarray,
+        names: &FxHashMap<usize, String>,
+        limit: usize,
+    ) -> Vec<String> {
         let mut rows: Vec<(&usize, &TierEntry)> = self.entries.iter().collect();
         let work = |entry: &TierEntry| entry.calls.saturating_mul(u64::from(entry.forms.max(1)));
         rows.sort_by(|a, b| work(b.1).cmp(&work(a.1)).then(b.1.calls.cmp(&a.1.calls)));
@@ -540,10 +547,13 @@ impl TierI {
                 entry.calls,
                 entry.forms
             ));
+            // A fresh compile of the live body: the stored nodes may hold
+            // objects a mutation freed (see `TierCode::roots`).
             if let Some(code) = &entry.code
                 && trees.len() < REPORT_TREES
+                && let Some(fresh) = compile_body(obarray, code.arglist, code.body)
             {
-                let mut tree = code.describe();
+                let mut tree = fresh.describe();
                 if tree.len() > REPORT_TREE_CHARS {
                     let mut end = REPORT_TREE_CHARS;
                     while !tree.is_char_boundary(end) {
@@ -616,7 +626,7 @@ impl Context {
             }
         }
         let mut lines = vec![self.tier_i.stats.report()];
-        lines.extend(self.tier_i.report_lines(&names, limit));
+        lines.extend(self.tier_i.report_lines(&self.obarray, &names, limit));
         lines
     }
 
@@ -626,7 +636,8 @@ impl Context {
         let cell = self.obarray.symbol_function_id(intern(name))?;
         let body = cell.closure_body_value()?;
         let entry = self.tier_i.entries.get(&body.bits())?;
-        entry.code.as_ref().map(|code| code.describe())
+        let code = entry.code.as_ref()?;
+        compile_body(&self.obarray, code.arglist, code.body).map(|fresh| fresh.describe())
     }
 
     /// Log the report at `kill-emacs` when the knob is on (and write it to

@@ -277,7 +277,8 @@ impl fmt::Display for CompileSummary {
 
 /// A compiled lambda body.
 pub(crate) struct TierCode {
-    /// The arglist and body it was compiled from.
+    /// The arglist and body it was compiled from.  The registry roots both
+    /// (the body is its key): see [`TierCode::roots`].
     pub(super) arglist: Value,
     pub(super) body: Value,
     /// The formals in arglist order; formal I owns slot I.
@@ -286,12 +287,27 @@ pub(crate) struct TierCode {
     pub(super) nslots: usize,
     /// The body forms.
     pub(super) seq: Seq,
-    /// Every heap value the nodes hold.
+    /// The heap values the registry roots: the body and the arglist.
     roots: Box<[Value]>,
     summary: CompileSummary,
 }
 
 impl TierCode {
+    /// What the registry roots for this code: the body (the registry's key,
+    /// so no other body can take its address) and the arglist.
+    ///
+    /// The nodes' own values are not rooted.  They need not be: every one
+    /// the executor uses is first compared with the live object at its
+    /// position (`eq`), and what it then does depends only on that live
+    /// object -- a constant or island node yields or evaluates the very
+    /// object compared, a form node re-reads its live head and argument
+    /// list, a binder re-reads its live element and symbol, and head
+    /// classes are re-derived from function cells under the function epoch.
+    /// So a node whose object was freed after a mutation of the body, and a
+    /// new object allocated at the same address and put at the same
+    /// position, still behaves as the tree walker would on the new object.
+    /// Only [`TierCode::describe`] prints node values as they were compiled;
+    /// the report therefore describes a fresh compile of the live body.
     pub(super) fn roots(&self) -> &[Value] {
         &self.roots
     }
@@ -416,7 +432,6 @@ impl Compiler<'_> {
         if self.refused {
             return Node::Eval(form);
         }
-        self.root(form);
         if form.is_symbol_with_pos() {
             return Node::Eval(form);
         }
@@ -488,7 +503,6 @@ impl Compiler<'_> {
                 Op::Call(self.seq(tail))
             }
         };
-        self.root(tail);
         let leaf_args = match &op {
             Op::Call(args) => args
                 .0
@@ -560,7 +574,6 @@ impl Compiler<'_> {
             H::UnwindProtect => {
                 let (body, cleanup) = split(tail)?;
                 proper_list(cleanup)?;
-                self.root(cleanup);
                 Op::UnwindProtect {
                     body: self.node(body),
                 }
@@ -570,7 +583,6 @@ impl Compiler<'_> {
                 plain_symbol(var)?;
                 let (body, handlers) = split(rest)?;
                 proper_list(handlers)?;
-                self.root(handlers);
                 Op::ConditionCase {
                     body: self.node(body),
                 }
@@ -607,7 +619,6 @@ impl Compiler<'_> {
             }
             let (test, body) = split(clause)?;
             proper_list(body)?;
-            self.root(clause);
             clauses.push(CondClause {
                 clause,
                 test: self.node(test),
@@ -663,7 +674,6 @@ impl Compiler<'_> {
                     (sym, Some(init))
                 }
             };
-            self.root(element);
             let init = init.map(|init| self.node(init));
             if star {
                 let slot = self.bind(sym)?;
@@ -687,7 +697,6 @@ impl Compiler<'_> {
                 binding.slot = self.bind(binding.sym)?;
             }
         }
-        self.root(varlist);
         let body = self.seq(body);
         self.scope.truncate(scope_mark);
         Some(LetOp {

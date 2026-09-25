@@ -39,3 +39,23 @@ fn lazy_frames_values() {
         assert!(!parse_tier_i_lazy_frames(Some(off)), "{off}");
     }
 }
+
+/// A fresh runtime context takes the process's `NEOVM_TIER_I`, so a whole
+/// suite run under the knob (the soak) exercises Tier-I everywhere.
+#[test]
+fn a_fresh_context_takes_the_process_knob() {
+    crate::test_utils::init_test_tracing();
+    let expected = parse_tier_i_knob(std::env::var("NEOVM_TIER_I").ok().as_deref());
+    let mut eval = crate::test_utils::runtime_startup_context();
+    assert_eq!(eval.tier_i.mode(), expected);
+    eval.eval_str("(progn (defun ti-knob-probe (x) (list x)) (ti-knob-probe 1) (ti-knob-probe 2))")
+        .expect("evaluates");
+    if expected == TierIMode::On || expected == TierIMode::Verify {
+        use crate::emacs_core::eval::TierIEvent;
+        assert!(
+            eval.tier_i.stats().count(TierIEvent::Run) > 0,
+            "{}",
+            eval.tier_i.stats().report()
+        );
+    }
+}
