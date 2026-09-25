@@ -216,7 +216,7 @@ fn spec_subr_stack_results_arity_and_signal_frame() {
     install_frame_probe(&mut eval, "car");
     let car = intern("car");
     let subr = Value::subr_from_sym_id(car);
-    let mut call = |eval: &mut Context, args: &[Value]| -> EvalResult {
+    let call = |eval: &mut Context, args: &[Value]| -> EvalResult {
         let before = eval.specpdl.len();
         let args_start = eval.bc_buf.len();
         eval.bc_buf.extend_from_slice(args);
