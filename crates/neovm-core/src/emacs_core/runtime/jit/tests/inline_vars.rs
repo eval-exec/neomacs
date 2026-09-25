@@ -780,3 +780,70 @@ fn osr_into_a_let_unbinds_inline_what_the_interpreter_bound() {
         assert_eq!(answers[0], answers[1], "nested={nested}");
     }
 }
+
+/// `(lambda (c) (if c (varbind A 5) (varbind B 5)) (ivt-body) (unbind 1))`,
+/// hand-assembled: the `unbind` pops whichever binding its path made.
+fn two_path_bind(a: &str, b: &str) -> (Vec<Op>, Vec<Value>) {
+    let ops = vec![
+        Op::StackRef(0),
+        Op::GotoIfNil(5),
+        Op::Constant(2),
+        Op::VarBind(0),
+        Op::Goto(7),
+        Op::Constant(2),
+        Op::VarBind(1),
+        Op::Constant(3),
+        Op::Call(0),
+        Op::Unbind(1),
+        Op::Return,
+    ];
+    let constants = vec![
+        Value::symbol(a),
+        Value::symbol(b),
+        Value::make_int(5),
+        Value::symbol("ivt-body"),
+    ];
+    (ops, constants)
+}
+
+/// The static binding sites of an `unbind` are met over every path into it:
+/// when both paths bound the same symbol the `unbind` is inline, when they
+/// bound different ones it is the shim's -- and either way each path's
+/// binding is undone.
+#[test]
+fn unbind_sites_meet_across_paths() {
+    for (a, b, inline) in [
+        ("ivt-plain", "ivt-plain", true),
+        ("ivt-plain", "ivt-loc", false),
+    ] {
+        let mut ev = fixture();
+        warm(&mut ev, &["ivt-loc"]);
+        eval_ok(
+            &mut ev,
+            "(fset 'ivt-body (lambda () (list ivt-plain ivt-loc)))",
+        );
+        let (ops, constants) = two_path_bind(a, b);
+        force_inline_vars_for_test(Some(ALL));
+        reset_inline_var_sites();
+        let leaf =
+            with_compile_env_for_test(&ev, || lower_leaf(&ops, &constants, 1)).expect("lowers");
+        force_inline_vars_for_test(None);
+        assert_eq!(
+            inline_var_sites(InlineVarOp::Unbind),
+            u32::from(inline),
+            "{a} {b}"
+        );
+        for c in [Value::T, Value::NIL] {
+            let (got, called) = run(&mut ev, &leaf, &[c]);
+            let bound = if c.is_nil() { b } else { a };
+            let want = if bound == "ivt-plain" {
+                "(5 11)"
+            } else {
+                "(1 5)"
+            };
+            assert_eq!(got, want, "{a} {b} {c:?}");
+            assert_eq!(called.unbind, usize::from(!inline), "{a} {b} {c:?}");
+            assert_eq!(eval(&mut ev, "(list ivt-plain ivt-loc)"), "(1 11)");
+        }
+    }
+}
