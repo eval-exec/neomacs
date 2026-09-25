@@ -1899,9 +1899,23 @@ fn read_dfa_mode() -> DfaMode {
     if mode != DfaMode::Off
         && super::regex_knob_on(std::env::var("NEOVM_REGEX_DFA_STATS").ok().as_deref())
     {
+        STATS_ON.store(true, std::sync::atomic::Ordering::Relaxed);
         register_stats_report();
     }
+    if mode == DfaMode::Verify {
+        STATS_ON.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     mode
+}
+
+/// Whether the filter keeps its counters: under `NEOVM_REGEX_DFA_STATS=1`,
+/// in verify mode (its contradicted verdicts are counted), and in tests.
+/// Otherwise a search pays for none of them.
+static STATS_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[inline]
+fn stats_on() -> bool {
+    cfg!(any(test, feature = "fuzzing")) || STATS_ON.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Counters of the candidate filter on this thread (the regexp engine runs
@@ -1974,6 +1988,9 @@ thread_local! {
 
 #[inline]
 fn stat(update: impl FnOnce(&mut DfaStats)) {
+    if !stats_on() {
+        return;
+    }
     STATS.with(|cell| {
         if let Ok(mut stats) = cell.try_borrow_mut() {
             update(&mut stats);
@@ -2090,6 +2107,9 @@ pub(crate) struct DfaLease<'p> {
 
 impl Drop for DfaLease<'_> {
     fn drop(&mut self) {
+        if !stats_on() {
+            return;
+        }
         let delta = match (&*self.slot, self.counters_before) {
             (DfaSlot::Live(live), Some(before)) => {
                 let now = live.dfa.counters;
@@ -2163,7 +2183,7 @@ impl<'p> DfaLease<'p> {
         max_stop: usize,
     ) -> Option<Self> {
         let mode = dfa_mode();
-        if pattern.uses_syntax {
+        if stats_on() && pattern.uses_syntax {
             if syntax.position_dependent() {
                 stat(|s| s.positional += 1);
             }
@@ -2174,11 +2194,7 @@ impl<'p> DfaLease<'p> {
         let mut slot = pattern.dfa.0.try_borrow_mut().ok()?;
         let mut counters_before = None;
         match &mut *slot {
-            // A lookup with no table identity could not key the classes the
-            // build would need (see `ClassContext::of_search`).
-            DfaSlot::Cold { .. } => {
-                syntax.class_cache_key()?;
-            }
+            DfaSlot::Cold { .. } => {}
             DfaSlot::Live(live) => {
                 if live.holiday > 0 {
                     live.holiday -= 1;
@@ -2241,6 +2257,18 @@ impl<'p> DfaLease<'p> {
             return self.settle(
                 verdict, scratch, pattern, text, pos, stop, syntax, point, regs,
             );
+        }
+        // A pattern whose candidates keep matching never leaves the cold
+        // state: it costs one branch more than the matcher alone.
+        if let DfaSlot::Cold { failed } = &mut *self.slot {
+            let found = classic_candidate(scratch, pattern, text, pos, stop, syntax, point, regs);
+            if found.is_none() && !matcher_overflow_pending() {
+                *failed += 1;
+                if *failed >= COLD_THRESHOLD {
+                    self.build(pattern, syntax);
+                }
+            }
+            return found;
         }
         self.candidate_slow(scratch, pattern, text, pos, stop, syntax, point, regs)
     }
@@ -2369,7 +2397,10 @@ impl<'p> DfaLease<'p> {
         match Nfa::build(pattern) {
             Ok(nfa) => {
                 let mut dfa = ExistenceDfa::new(nfa);
+                // A lookup with no table identity cannot key the classes: stay
+                // cold, and count the failures toward another try from zero.
                 let Some(context) = ClassContext::of_search(pattern, dfa.nfa(), syntax) else {
+                    *self.slot = DfaSlot::Cold { failed: 0 };
                     return;
                 };
                 dfa.classes.sync(context);
