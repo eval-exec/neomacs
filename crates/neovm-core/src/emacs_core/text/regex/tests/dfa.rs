@@ -533,3 +533,407 @@ fn class_context_reads_only_what_the_classes_depend_on() {
     }
     assert_eq!(ClassContext::of_search(&syntax, &nfa, &NoIdentity), None);
 }
+
+// ---------------------------------------------------------------------------
+// The lazy DFA (C4)
+// ---------------------------------------------------------------------------
+
+use crate::emacs_core::regex_emacs::{
+    MatchRegisters, MatchScratch, re_match_internal, take_fail_stack_probe, take_matcher_overflow,
+    take_pike_fallback,
+};
+
+struct DfaRng(u64);
+
+impl DfaRng {
+    fn below(&mut self, n: usize) -> usize {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        (self.0 % n.max(1) as u64) as usize
+    }
+
+    fn pick<'a>(&mut self, items: &[&'a str]) -> &'a str {
+        items[self.below(items.len())]
+    }
+}
+
+const GEN_ATOMS: &[&str] = &[
+    "a",
+    "b",
+    "c",
+    "x",
+    "A",
+    " ",
+    "-",
+    "_",
+    ":",
+    "\n",
+    "é",
+    "中",
+    "Ж",
+    ".",
+    "[a-c]",
+    "[^a-c\n]",
+    "[[:alpha:]]",
+    "[[:space:]]",
+    "[[:upper:]]",
+    "[[:word:]]",
+    "[[:punct:]]",
+    "[é-ü]",
+    "\\w",
+    "\\W",
+    "\\s-",
+    "\\s_",
+    "\\sw",
+    "\\S-",
+    "\\cg",
+    "\\C|",
+    "\\(?:\\w\\|\\s_\\)",
+];
+const GEN_ZERO_WIDTH: &[&str] = &[
+    "^", "$", "\\`", "\\'", "\\b", "\\B", "\\<", "\\>", "\\_<", "\\_>", "\\=",
+];
+const GEN_QUANTIFIERS: &[&str] = &["", "", "", "*", "+", "?", "*?", "+?", "??"];
+
+/// A random pattern over the whole eligible vocabulary, quantifiers nested.
+fn gen_pattern(rng: &mut DfaRng, depth: usize) -> String {
+    let mut out = String::new();
+    let arms = 1 + rng.below(3);
+    for arm in 0..arms {
+        if arm > 0 {
+            out.push_str("\\|");
+        }
+        for _ in 0..1 + rng.below(4) {
+            let atom = match rng.below(if depth == 0 { 6 } else { 9 }) {
+                0..=3 => rng.pick(GEN_ATOMS).to_string(),
+                4 | 5 => rng.pick(GEN_ZERO_WIDTH).to_string(),
+                6 | 7 => format!("\\(?:{}\\)", gen_pattern(rng, depth - 1)),
+                _ => format!("\\({}\\)", gen_pattern(rng, depth - 1)),
+            };
+            out.push_str(&atom);
+            if !GEN_ZERO_WIDTH.contains(&atom.as_str()) {
+                out.push_str(rng.pick(GEN_QUANTIFIERS));
+            }
+        }
+    }
+    out
+}
+
+/// A random valid multibyte text (raw bytes encoded as Emacs does).
+fn gen_text(rng: &mut DfaRng, max_len: usize) -> Vec<u8> {
+    const PIECES: &[&str] = &[
+        "a", "b", "c", "x", "A", "B", " ", " ", "\n", "-", "_", ":", "!", "é", "É", "中", "日",
+        "Ж", "α", "K", "ab", "cab",
+    ];
+    let mut text = Vec::new();
+    for _ in 0..rng.below(max_len) {
+        if rng.below(12) == 0 {
+            text.extend(encode(emacs_char::byte8_to_char(
+                0x80 + rng.below(0x80) as u8,
+            )));
+        } else {
+            text.extend_from_slice(rng.pick(PIECES).as_bytes());
+        }
+    }
+    text
+}
+
+fn char_boundaries(text: &[u8], multibyte: bool) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut d = 0;
+    while d < text.len() {
+        out.push(d);
+        d += re_text_char(text, d, multibyte).map_or(1, |(_, len)| len);
+    }
+    out.push(text.len());
+    out
+}
+
+/// Every verdict of the DFA against the matcher at every candidate of
+/// `text`, for a few stops and points.  Returns (yes, no, unknown).
+fn check_dfa_against_matcher(
+    compiled: &CompiledPattern,
+    dfa: &mut ExistenceDfa,
+    text: &[u8],
+    syntax: &dyn SyntaxLookup,
+    label: &str,
+) -> (usize, usize, usize) {
+    let context = ClassContext::of_search(compiled, dfa.nfa(), syntax)
+        .expect("test lookups have a class identity");
+    dfa.classes_mut().sync(context);
+    dfa.begin_search();
+    let boundaries = char_boundaries(text, compiled.target_multibyte);
+    let mut tally = (0, 0, 0);
+    let stops = [text.len(), boundaries[boundaries.len() / 2]];
+    for &stop in &stops {
+        for &point in &[0, boundaries[boundaries.len() / 3], text.len()] {
+            // One pass over the candidates is one search.
+            dfa.begin_search();
+            for &p in boundaries.iter().filter(|&&p| p <= stop) {
+                let verdict = dfa.anchored_exists(compiled, text, p, stop, point, syntax);
+                let _ = take_matcher_overflow();
+                let matched = re_match(compiled, text, p, stop, syntax, point);
+                if take_matcher_overflow() {
+                    continue;
+                }
+                let where_ = || {
+                    format!(
+                        "{label}: at {p} stop {stop} point {point} in {:?}: {verdict:?} vs {:?}",
+                        String::from_utf8_lossy(text),
+                        matched.as_ref().map(|m| m.0)
+                    )
+                };
+                match verdict {
+                    Exists::Yes => {
+                        assert!(matched.is_some(), "{}", where_());
+                        tally.0 += 1;
+                    }
+                    Exists::No { .. } => {
+                        assert!(matched.is_none(), "{}", where_());
+                        tally.1 += 1;
+                    }
+                    Exists::Unknown => tally.2 += 1,
+                }
+            }
+        }
+    }
+    tally
+}
+
+/// Existence against the backtracker: a random pattern's verdict at every
+/// candidate of random texts, in both representations, case-folded or not.
+#[test]
+fn dfa_verdicts_agree_with_the_matcher_on_random_patterns() {
+    let mut rng = DfaRng(0xDFA0_5EED);
+    let mut totals = (0usize, 0usize, 0usize);
+    let mut eligible = 0usize;
+    for case in 0..1_500 {
+        let source = gen_pattern(&mut rng, 2);
+        let case_fold = rng.below(3) == 0;
+        let Ok(mut compiled) = regex_compile(&source, rng.below(5) == 0, case_fold) else {
+            continue;
+        };
+        let multibyte = rng.below(4) != 0;
+        compiled.target_multibyte = multibyte;
+        let Ok(nfa) = Nfa::build(&compiled) else {
+            continue;
+        };
+        eligible += 1;
+        let mut dfa = ExistenceDfa::new(nfa);
+        for _ in 0..3 {
+            let text = if multibyte {
+                gen_text(&mut rng, 14)
+            } else {
+                (0..rng.below(14))
+                    .map(|_| b"ab \n-_:x\xe9\xa9"[rng.below(10)])
+                    .collect()
+            };
+            let lookup: &dyn SyntaxLookup = if rng.below(2) == 0 {
+                &DefaultSyntaxLookup
+            } else {
+                &CustomTableLookup
+            };
+            let tally = check_dfa_against_matcher(
+                &compiled,
+                &mut dfa,
+                &text,
+                lookup,
+                &format!("case {case} {source:?} fold={case_fold} mb={multibyte}"),
+            );
+            totals.0 += tally.0;
+            totals.1 += tally.1;
+            totals.2 += tally.2;
+        }
+    }
+    tracing::info!(eligible, ?totals, "existence DFA vs matcher");
+    assert!(eligible > 500, "{eligible}");
+    assert!(totals.0 > 1_000 && totals.1 > 10_000, "{totals:?}");
+    assert_eq!(totals.2, 0, "no verdict is left undecided");
+}
+
+/// The org font-lock patterns of the P3.3 census over an org-like text.
+#[test]
+fn dfa_verdicts_agree_on_org_font_lock_patterns() {
+    let text = "* TODO [#A] Heading :tag:work:\n  - item :: description\n  + deep item\n\
+                | a | b |\n|---+---|\n| =x= | *y* |\n:PROPERTIES:\n:ID: 42\n:END:\n\
+                Some [[https://example.org][link]] and <mailto:x@y> text.\n\
+                ** DONE Sub :ARCHIVE:\n#+BEGIN_SRC elisp\n(defun f () 1)\n#+END_SRC\n";
+    for source in [
+        "^[ \t]*|\\(?:.*?|\\)? *\\(:?=[^|\n]*\\)",
+        "\\(?:^[ \t]*[-+]\\|^[ \t]+[*]\\)[ \t]+\\(.*?[ \t]+::\\)\\([ \t]+\\|$\\)",
+        "^\\*+.*?\\(\\[#\\([A-Z]\\|[0-9]\\|[1-5][0-9]\\)\\] ?\\)",
+        "| *\\(<[lrc]?[0-9]*>\\)",
+        "^\\*+ \\(.*:ARCHIVE:.*\\)",
+        "^\\*+ \\(?:.*[ \t]\\)?\\(:\\([[:alnum:]_@#%:]+\\):\\)[ \t]*$",
+        "^[ \t]*|\\( *\\([$!_^/]\\) *\\|.*\\)|",
+        "^[ \t]*| *\\([#*]\\) *|",
+        "^[ \t]*\\(:\\(?: .*\\|$\\)\n?\\)",
+        "^\\(\\*+\\)\\(?: +\\(?:DONE\\)\\)\\(?: +\\(.*?\\)\\)?[ \t]*$",
+        "\\(\\[\\[\\([^]]+\\)\\]\\(?:\\[\\([^]]+\\)\\]\\)?\\]\\|<\\(mailto\\|https?\\):\\([^>]+\\)>\\|\\<\\(https?\\|mailto\\):\\([^ \t\n]+\\)\\)",
+        "(\\(\\(?:\\w\\|\\s_\\|\\\\.\\)+\\)\\_>",
+    ] {
+        for case_fold in [false, true] {
+            let compiled = regex_compile(source, false, case_fold).unwrap();
+            let nfa = Nfa::build(&compiled).unwrap_or_else(|why| panic!("{source:?}: {why:?}"));
+            let mut dfa = ExistenceDfa::new(nfa);
+            let tally = check_dfa_against_matcher(
+                &compiled,
+                &mut dfa,
+                text.as_bytes(),
+                &DefaultSyntaxLookup,
+                source,
+            );
+            assert_eq!(tally.2, 0);
+            assert!(tally.1 > 0, "{source:?} rejects some candidates");
+        }
+    }
+}
+
+/// A syntax lookup whose `WORD_BOUNDARY_P` separates CJK from other word
+/// constituents, as GNU's char-script-table does.
+struct ScriptBoundaryLookup;
+
+impl SyntaxLookup for ScriptBoundaryLookup {
+    fn char_syntax(&self, c: char) -> SyntaxClass {
+        DefaultSyntaxLookup.char_syntax(c)
+    }
+
+    fn char_has_category(&self, c: char, cat: u8) -> bool {
+        DefaultSyntaxLookup.char_has_category(c, cat)
+    }
+
+    fn word_boundary_between(&self, c1: char, c2: char) -> bool {
+        if c1 as u32 <= 0xFF && c2 as u32 <= 0xFF {
+            return false;
+        }
+        let cjk = |c: char| ('\u{3000}'..='\u{9FFF}').contains(&c);
+        cjk(c1) != cjk(c2)
+    }
+
+    fn cache_key(&self) -> SyntaxCacheKey {
+        SyntaxCacheKey::Standard
+    }
+
+    fn class_cache_key(&self) -> Option<LookupClassKey> {
+        Some(LookupClassKey::Tables {
+            syntax: 1,
+            category: 1,
+        })
+    }
+
+    fn position_dependent(&self) -> bool {
+        false
+    }
+}
+
+/// `\b` between CJK and Latin word constituents is decided per character
+/// pair (the SLOW transitions), never from a cached class.
+#[test]
+fn word_boundaries_between_scripts_are_decided_per_pair() {
+    let text = "ab中文cd日本x αβ中".as_bytes();
+    for source in [
+        "\\b",
+        "\\B",
+        "\\<",
+        "\\>",
+        "\\w\\b\\w",
+        "\\w\\B\\w+",
+        "中\\b",
+    ] {
+        let compiled = regex_compile(source, false, false).unwrap();
+        let Ok(nfa) = Nfa::build(&compiled) else {
+            continue;
+        };
+        let mut dfa = ExistenceDfa::new(nfa);
+        for _ in 0..2 {
+            let tally =
+                check_dfa_against_matcher(&compiled, &mut dfa, text, &ScriptBoundaryLookup, source);
+            assert_eq!(tally.2, 0);
+        }
+        assert!(
+            dfa.counters.slow_transitions > 0 || !source.contains('w'),
+            "{source:?}"
+        );
+    }
+}
+
+/// The overflow bound's premise for a rejected candidate: the backtracker's
+/// deepest fail stack there stays below `(consumed + 1) * 2 * push sites`.
+#[test]
+fn a_rejected_candidate_stays_within_the_overflow_bound() {
+    let mut rng = DfaRng(0x0B0_0D);
+    let syntax = DefaultSyntaxLookup;
+    let mut measured = 0usize;
+    for _ in 0..1_500 {
+        let source = gen_pattern(&mut rng, 2);
+        let Ok(compiled) = regex_compile(&source, rng.below(4) == 0, false) else {
+            continue;
+        };
+        let Ok(nfa) = Nfa::build(&compiled) else {
+            continue;
+        };
+        let sites = nfa.push_sites;
+        let mut dfa = ExistenceDfa::new(nfa);
+        let context = ClassContext::of_search(&compiled, dfa.nfa(), &syntax).unwrap();
+        dfa.classes_mut().sync(context);
+        let text = gen_text(&mut rng, 24);
+        for p in char_boundaries(&text, true) {
+            let Exists::No { consumed } =
+                dfa.anchored_exists(&compiled, &text, p, text.len(), 0, &syntax)
+            else {
+                continue;
+            };
+            let _ = take_fail_stack_probe();
+            let _ = take_matcher_overflow();
+            // The backtrack budget caps the exponential shapes; the depth
+            // bound holds at every step of the run, however it ends.
+            let mut scratch = MatchScratch::default();
+            let mut registers = MatchRegisters::default();
+            let found = re_match_internal(
+                &mut scratch,
+                &compiled,
+                &text,
+                p,
+                text.len(),
+                &syntax,
+                0,
+                true,
+                &mut registers,
+            );
+            let gave_up = take_pike_fallback();
+            assert!(gave_up || found.is_none(), "{source:?} at {p}");
+            let probe = take_fail_stack_probe();
+            assert!(
+                probe.max_depth <= (consumed + 1) * 2 * sites,
+                "{source:?} at {p}: depth {} consumed {consumed} sites {sites}",
+                probe.max_depth
+            );
+            measured += 1;
+        }
+    }
+    assert!(measured > 5_000, "{measured}");
+}
+
+/// The cache is cleared past its cap and relearned, with the same verdicts.
+#[test]
+fn a_full_cache_is_cleared_and_relearned() {
+    // Many distinct literal prefixes: one state per prefix position.
+    let words: Vec<String> = (0..700).map(|i| format!("w{i:03}q")).collect();
+    let source = words.join("\\|");
+    let compiled = regex_compile(&source, false, false).unwrap();
+    let nfa = Nfa::build(&compiled).unwrap();
+    let mut dfa = ExistenceDfa::new(nfa);
+    let text: String = (0..700).map(|i| format!("w{i:03}x ")).collect();
+    let tally = check_dfa_against_matcher(
+        &compiled,
+        &mut dfa,
+        text.as_bytes(),
+        &DefaultSyntaxLookup,
+        "many prefixes",
+    );
+    assert_eq!(tally.0, 0);
+    assert!(tally.1 > 0);
+    assert!(dfa.counters.clears > 0, "{:?}", dfa.counters);
+    assert_eq!(dfa.gave_up(), None);
+}

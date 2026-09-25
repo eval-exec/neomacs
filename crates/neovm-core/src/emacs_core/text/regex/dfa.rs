@@ -984,6 +984,461 @@ impl CharClasses {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The lazy DFA (C4)
+// ---------------------------------------------------------------------------
+
+/// The DFA's verdict on one candidate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Exists {
+    /// No match starts at the candidate: every path died having consumed at
+    /// most `consumed` bytes (the backtracker's fail stack is bounded by it).
+    No { consumed: usize },
+    /// Some match starts at the candidate.
+    Yes,
+    /// Not decided (quit pending, or a state cap was hit): run the matcher.
+    Unknown,
+}
+
+/// Transition-table entries below the stride are sentinels; real entries are
+/// row offsets, `(state index + 1) * stride`.
+const UNKNOWN: u32 = 0;
+const DEAD: u32 = 1;
+const MATCH: u32 = 2;
+/// The transition depends on the character pair (two word constituents, one
+/// above U+00FF): computed at every use, never cached.
+const SLOW: u32 = 3;
+const MIN_STRIDE_SHIFT: u32 = 3;
+
+/// The cache is cleared at the next candidate once it holds this many bytes.
+const MEMORY_CAP: usize = 64 * 1024;
+/// Within one candidate the cache may grow to this before the candidate is
+/// left undecided.
+const MEMORY_HARD_CAP: usize = 4 * MEMORY_CAP;
+/// A quit is polled every this many bytes stepped.
+const QUIT_POLL_BYTES: usize = 64 * 1024;
+
+/// A DFA state: the NFA kernel (where threads resume, before the closure)
+/// and the facts about the character before the position.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct StateKey {
+    kernel: Box<[KernelItem]>,
+    prev: Facts,
+}
+
+/// Counters of one DFA (reported under `NEOVM_REGEX_DFA_STATS`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct DfaCounters {
+    pub(crate) yes: u64,
+    pub(crate) no: u64,
+    pub(crate) unknown: u64,
+    pub(crate) states: u64,
+    pub(crate) clears: u64,
+    pub(crate) slow_transitions: u64,
+    pub(crate) bytes: u64,
+}
+
+/// Why a DFA gave up on its pattern for good.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DfaGaveUp {
+    TooManyClasses,
+    /// The cache kept overflowing (4 clears in one search).
+    StateExplosion,
+}
+
+/// The anchored existence DFA of one pattern (see the module docs).
+pub(crate) struct ExistenceDfa {
+    nfa: Nfa,
+    classes: CharClasses,
+    /// Facts a state keeps about the previous character: the class facts
+    /// plus [`Facts::EDGE`] when some assertion tests the text start.
+    prev_mask: Facts,
+    stride_shift: u32,
+    trans: Vec<u32>,
+    states: Vec<StateKey>,
+    state_ids: FxHashMap<StateKey, u32>,
+    /// Start state index + 1 per previous-character facts (0: not built).
+    start: [u32; 32],
+    scratch: ClosureScratch,
+    positions: Vec<u16>,
+    kernel: Vec<KernelItem>,
+    memory: usize,
+    clears_this_search: u32,
+    pub(crate) counters: DfaCounters,
+    gave_up: Option<DfaGaveUp>,
+}
+
+impl ExistenceDfa {
+    pub(crate) fn new(nfa: Nfa) -> Self {
+        let mask = nfa.fact_mask();
+        let reads_edge = nfa.assertions.intersects(
+            Assertions::BEG_LINE | Assertions::BEG_BUF | Assertions::WORD | Assertions::SYMBOL,
+        );
+        let prev_mask = if reads_edge { mask | Facts::EDGE } else { mask };
+        let mut dfa = Self {
+            classes: CharClasses::new(mask),
+            nfa,
+            prev_mask,
+            stride_shift: MIN_STRIDE_SHIFT,
+            trans: Vec::new(),
+            states: Vec::new(),
+            state_ids: FxHashMap::default(),
+            start: [0; 32],
+            scratch: ClosureScratch::default(),
+            positions: Vec::new(),
+            kernel: Vec::new(),
+            memory: 0,
+            clears_this_search: 0,
+            counters: DfaCounters::default(),
+            gave_up: None,
+        };
+        dfa.trans.resize(dfa.stride(), UNKNOWN);
+        dfa
+    }
+
+    pub(crate) fn nfa(&self) -> &Nfa {
+        &self.nfa
+    }
+
+    pub(crate) fn classes_mut(&mut self) -> &mut CharClasses {
+        &mut self.classes
+    }
+
+    /// Why this DFA stopped deciding for good, if it did.
+    pub(crate) fn gave_up(&self) -> Option<DfaGaveUp> {
+        self.gave_up
+    }
+
+    /// Start a search: per-search limits reset.
+    pub(crate) fn begin_search(&mut self) {
+        self.clears_this_search = 0;
+    }
+
+    #[inline]
+    fn stride(&self) -> usize {
+        1 << self.stride_shift
+    }
+
+    #[inline]
+    fn row_of(&self, index: u32) -> u32 {
+        (index + 1) << self.stride_shift
+    }
+
+    #[inline]
+    fn index_of(&self, row: u32) -> u32 {
+        (row >> self.stride_shift) - 1
+    }
+
+    /// Drop every state and transition, keeping the NFA and the classes.
+    fn clear_states(&mut self) {
+        self.states.clear();
+        self.state_ids.clear();
+        self.trans.clear();
+        self.trans.resize(self.stride(), UNKNOWN);
+        self.start = [0; 32];
+        self.memory = 0;
+        self.counters.clears += 1;
+        self.clears_this_search += 1;
+        if self.clears_this_search >= 4 {
+            self.gave_up = Some(DfaGaveUp::StateExplosion);
+        }
+    }
+
+    /// Widen the rows when the classes outgrow them (all transitions are
+    /// dropped: they are relearned lazily).
+    fn fit_classes(&mut self) {
+        let classes = self.classes.len();
+        if classes <= self.stride() {
+            return;
+        }
+        while (1usize << self.stride_shift) < classes {
+            self.stride_shift += 1;
+        }
+        self.trans.clear();
+        self.trans
+            .resize((self.states.len() + 1) << self.stride_shift, UNKNOWN);
+        self.memory = self.trans.len() * 4
+            + self
+                .states
+                .iter()
+                .map(|state| state.kernel.len() * 4 + 48)
+                .sum::<usize>();
+    }
+
+    /// The row of the state `(kernel, prev)`, added if new.
+    fn intern_state(&mut self, kernel: &[KernelItem], prev: Facts) -> u32 {
+        let key = StateKey {
+            kernel: kernel.into(),
+            prev,
+        };
+        if let Some(&index) = self.state_ids.get(&key) {
+            return self.row_of(index);
+        }
+        let index = self.states.len() as u32;
+        self.memory += key.kernel.len() * 4 + 48 + self.stride() * 4;
+        self.states.push(key.clone());
+        self.state_ids.insert(key, index);
+        self.trans.resize(self.trans.len() + self.stride(), UNKNOWN);
+        self.counters.states += 1;
+        self.row_of(index)
+    }
+
+    fn start_row(&mut self, prev: Facts) -> u32 {
+        let slot = prev.bits() as usize;
+        match self.start[slot] {
+            0 => {
+                let row = self.intern_state(&[kernel_item(0, 0)], prev);
+                self.start[slot] = self.index_of(row) + 1;
+                row
+            }
+            index => self.row_of(index - 1),
+        }
+    }
+
+    /// Whether a transition out of a state with previous-character `prev`
+    /// on a character of class `class` depends on the character pair.
+    #[inline]
+    fn pair_dependent(&self, prev: Facts, class: u8) -> bool {
+        if !self.nfa.assertions.intersects(Assertions::WORD) {
+            return false;
+        }
+        let current = self.classes.facts(class);
+        prev.contains(Facts::WORD)
+            && current.contains(Facts::WORD)
+            && (prev.contains(Facts::WIDE_WORD) || current.contains(Facts::WIDE_WORD))
+    }
+
+    /// Compute the transition out of the state at `row` on the character of
+    /// class `class` at `at.d`: the closure at `at`, then every consuming
+    /// position whose predicate accepts the class.  Cached unless `cache` is
+    /// false or the pair decides it.
+    fn transition(&mut self, row: u32, class: u8, at: &Place<'_>, cache: bool) -> u32 {
+        let index = self.index_of(row) as usize;
+        let prev = self.states[index].prev;
+        let kernel = std::mem::take(&mut self.kernel);
+        let mut positions = std::mem::take(&mut self.positions);
+        positions.clear();
+        let accept = {
+            let state = &self.states[index];
+            self.nfa
+                .closure(&state.kernel, at, &mut self.scratch, &mut positions)
+        };
+        let result = if accept {
+            self.kernel = kernel;
+            MATCH
+        } else {
+            let mut next = kernel;
+            next.clear();
+            let key = self.classes.key(class);
+            for &position in &positions {
+                let position = self.nfa.positions[position as usize];
+                if key.accepts(position.predicate) {
+                    next.push(position.next);
+                }
+            }
+            next.sort_unstable();
+            next.dedup();
+            let result = if next.is_empty() {
+                DEAD
+            } else {
+                let facts = self.classes.facts(class);
+                let facts = Facts(facts.bits() & self.prev_mask.bits());
+                self.intern_state(&next, facts)
+            };
+            self.kernel = next;
+            result
+        };
+        self.positions = positions;
+        let slow = self.pair_dependent(prev, class);
+        if slow {
+            self.counters.slow_transitions += 1;
+        }
+        if cache {
+            let entry = &mut self.trans[row as usize + class as usize];
+            *entry = if slow { SLOW } else { result };
+        }
+        result
+    }
+
+    /// The closure of the state at `row` at `at`, and the consuming step on
+    /// the character there, never cached: a special position (point for a
+    /// `\=` pattern).  Returns the next row, `MATCH` or `DEAD`.
+    fn special_transition(&mut self, row: u32, class: u8, at: &Place<'_>) -> u32 {
+        self.transition(row, class, at, false)
+    }
+
+    /// Whether the state at `row`, at `at` (the match stop), accepts.
+    fn accepts_at(&mut self, row: u32, at: &Place<'_>) -> bool {
+        let index = self.index_of(row) as usize;
+        let mut positions = std::mem::take(&mut self.positions);
+        positions.clear();
+        let accept = self.nfa.closure(
+            &self.states[index].kernel,
+            at,
+            &mut self.scratch,
+            &mut positions,
+        );
+        self.positions = positions;
+        accept
+    }
+
+    /// Can a match of `pattern` start at `p` and end by `stop`?  The same
+    /// question the backtracker answers at the candidate, without registers.
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn anchored_exists(
+        &mut self,
+        pattern: &CompiledPattern,
+        text: &[u8],
+        p: usize,
+        stop: usize,
+        point: usize,
+        syntax: &dyn SyntaxLookup,
+    ) -> Exists {
+        if self.gave_up.is_some() {
+            return Exists::Unknown;
+        }
+        if self.memory > MEMORY_CAP {
+            self.clear_states();
+            if self.gave_up.is_some() {
+                return Exists::Unknown;
+            }
+        }
+        let verdict = self.run(pattern, text, p, stop, point, syntax);
+        match verdict {
+            Exists::Yes => self.counters.yes += 1,
+            Exists::No { .. } => self.counters.no += 1,
+            Exists::Unknown => self.counters.unknown += 1,
+        }
+        verdict
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run(
+        &mut self,
+        pattern: &CompiledPattern,
+        text: &[u8],
+        p: usize,
+        stop: usize,
+        point: usize,
+        syntax: &dyn SyntaxLookup,
+    ) -> Exists {
+        let base = BaseTableView(syntax);
+        let target_multibyte = pattern.target_multibyte;
+        let stop = stop.min(text.len());
+        if p > stop {
+            return Exists::No { consumed: 0 };
+        }
+        let place = |d: usize| Place {
+            text,
+            d,
+            stop,
+            point,
+            target_multibyte,
+            syntax: &base,
+        };
+        // `\=` holds at point only: that position's closure is never cached.
+        let mut special = if self.nfa.assertions.contains(Assertions::AT_DOT) && point >= p {
+            point
+        } else {
+            usize::MAX
+        };
+        let prev = Facts(
+            self.classes
+                .previous_facts(text, p, target_multibyte, &base)
+                .bits()
+                & self.prev_mask.bits(),
+        );
+        let mut row = self.start_row(prev);
+        let mut d = p;
+        let mut polled = 0usize;
+        loop {
+            // The cached loop: single-byte characters with a known class and
+            // a cached live transition.
+            let limit = stop.min(special);
+            let start = d;
+            {
+                let byte_class = &self.classes.byte_class;
+                let trans = &self.trans;
+                let stride = 1u32 << self.stride_shift;
+                while d < limit {
+                    let class = byte_class[text[d] as usize];
+                    if class == UNKNOWN_CLASS {
+                        break;
+                    }
+                    let next = trans[row as usize + class as usize];
+                    if next < stride {
+                        break;
+                    }
+                    row = next;
+                    d += 1;
+                }
+            }
+            polled += d - start;
+            if d >= stop {
+                self.counters.bytes += (d - p) as u64;
+                return if self.accepts_at(row, &place(d)) {
+                    Exists::Yes
+                } else {
+                    Exists::No { consumed: d - p }
+                };
+            }
+            if polled >= QUIT_POLL_BYTES {
+                polled = 0;
+                if crate::emacs_core::eval::tls_quit_pending() {
+                    return Exists::Unknown;
+                }
+            }
+            // One character the cached loop could not take.
+            let row_index = self.index_of(row);
+            let (class, len) = match self.classes.class_at(&self.nfa, pattern, text, d, &base) {
+                Ok(found) => found,
+                Err(TooManyClasses) => {
+                    self.gave_up = Some(DfaGaveUp::TooManyClasses);
+                    return Exists::Unknown;
+                }
+            };
+            self.fit_classes();
+            row = self.row_of(row_index);
+            let next = if d == special {
+                special = usize::MAX;
+                self.special_transition(row, class, &place(d))
+            } else {
+                match self.trans[row as usize + class as usize] {
+                    UNKNOWN => self.transition(row, class, &place(d), true),
+                    SLOW => self.transition(row, class, &place(d), false),
+                    cached => cached,
+                }
+            };
+            match next {
+                MATCH => {
+                    self.counters.bytes += (d - p) as u64;
+                    return Exists::Yes;
+                }
+                DEAD => {
+                    self.counters.bytes += (d - p) as u64;
+                    return Exists::No { consumed: d - p };
+                }
+                live => {
+                    if d + len > stop {
+                        // The character straddles the stop: no path that
+                        // consumed it can end or go on.
+                        self.counters.bytes += (d + len - p) as u64;
+                        return Exists::No {
+                            consumed: d + len - p,
+                        };
+                    }
+                    row = live;
+                    d += len;
+                }
+            }
+            if self.memory > MEMORY_HARD_CAP {
+                return Exists::Unknown;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "tests/dfa.rs"]
 mod tests;
