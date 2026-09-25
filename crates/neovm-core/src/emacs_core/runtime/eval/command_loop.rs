@@ -1576,7 +1576,8 @@ impl Context {
         // then reads the state the hooks left.
         let unchanged = self.last_redisplay_signature.as_ref() == Some(&before_signature);
         self.run_pre_redisplay_function(if unchanged { Value::NIL } else { Value::T });
-        if !force
+        let skip_when_forced = crate::emacs_core::xdisp::redisplay_idle_skip_enabled();
+        if (!force || skip_when_forced)
             && !self.echo_area_resize_exact_pending
             && self.last_redisplay_signature.is_some()
             && self.last_redisplay_signature.as_ref() == Some(&self.redisplay_signature())

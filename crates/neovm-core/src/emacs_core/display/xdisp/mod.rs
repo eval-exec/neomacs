@@ -5848,6 +5848,39 @@ fn live_window_display_context_for(
 
 #[cfg(test)]
 thread_local! {
+    static REDISPLAY_IDLE_SKIP_OVERRIDE: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Force `NEOMACS_REDISPLAY_IDLE_SKIP` on this thread (tests only).
+#[cfg(test)]
+pub(crate) fn set_redisplay_idle_skip_for_test(enabled: Option<bool>) {
+    REDISPLAY_IDLE_SKIP_OVERRIDE.with(|cell| cell.set(enabled));
+}
+
+/// `NEOMACS_REDISPLAY_IDLE_SKIP=on` (P3.5 J): `(redisplay t)` also skips the
+/// layout when the visible state is unchanged. GNU's FORCE only means "do not
+/// stop for pending input"; a redisplay with nothing to do writes nothing.
+/// Read once; default off.
+pub(crate) fn redisplay_idle_skip_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(enabled) = REDISPLAY_IDLE_SKIP_OVERRIDE.with(std::cell::Cell::get) {
+        return enabled;
+    }
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        matches!(
+            std::env::var("NEOMACS_REDISPLAY_IDLE_SKIP")
+                .ok()
+                .map(|value| value.trim().to_ascii_lowercase())
+                .as_deref(),
+            Some("on" | "1" | "true" | "yes")
+        )
+    })
+}
+
+#[cfg(test)]
+thread_local! {
     static BOUNDED_WINDOW_TEXT_OVERRIDE: std::cell::Cell<Option<bool>> =
         const { std::cell::Cell::new(None) };
 }

@@ -1428,6 +1428,8 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     "NEOMACS_LAYOUT_SCROLL_BACK",
     // posn-at-point & co. read only the text the window shows: `on`.
     "NEOMACS_POSN_BOUNDED_TEXT",
+    // `(redisplay t)` skips the layout when nothing visible changed: `on`.
+    "NEOMACS_REDISPLAY_IDLE_SKIP",
     // U2.8 builtin front-end diets: `=off` restores the general search,
     // syntax and text-property paths for a same-binary board A/B.
     "NEOVM_BUILTIN_FRONTEND",

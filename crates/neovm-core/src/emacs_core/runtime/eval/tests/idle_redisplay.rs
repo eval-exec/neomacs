@@ -49,12 +49,16 @@ fn an_idle_redisplay_skips_layout_but_runs_pre_redisplay_function() {
 }
 
 #[test]
-fn a_forced_idle_redisplay_still_lays_out() {
+fn a_forced_idle_redisplay_lays_out_unless_the_idle_skip_is_on() {
     let (mut eval, layouts) = idle_context();
     eval.eval_str("(redisplay t)").expect("first");
     eval.eval_str("(redisplay t)").expect("second");
     assert_eq!(layouts.get(), 2, "force lays out");
-    assert_eq!(prered_args(&mut eval), "(t nil)");
+    crate::emacs_core::xdisp::set_redisplay_idle_skip_for_test(Some(true));
+    eval.eval_str("(redisplay t)").expect("third");
+    crate::emacs_core::xdisp::set_redisplay_idle_skip_for_test(None);
+    assert_eq!(layouts.get(), 2, "the idle skip holds under force");
+    assert_eq!(prered_args(&mut eval), "(t nil nil)");
 }
 
 #[test]
