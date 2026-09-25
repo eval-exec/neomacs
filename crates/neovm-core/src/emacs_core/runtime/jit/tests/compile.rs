@@ -4627,6 +4627,144 @@ fn switch_jump_table_dispatches_natively() {
     assert_eq!(miss, NativeRun::Ok(Value::make_int(10).bits()));
 }
 
+/// `(lambda (x) (switch x TABLE))` lowered natively: a miss answers 10, byte
+/// offset 8 (instruction 5) answers 20, byte offset 12 (instruction 7) 30.
+fn lower_switch_on_arg(table: Value) -> CompiledLeaf {
+    let map = vec![
+        GnuByteOffsetMapEntry::new(8, 5),
+        GnuByteOffsetMapEntry::new(12, 7),
+    ];
+    lower_leaf_with_map(
+        &[
+            Op::StackRef(0), // [x x]
+            Op::Constant(0), // [x x table]
+            Op::Switch,      // [x], jump or fall through
+            Op::Constant(1), // miss: 10
+            Op::Return,
+            Op::Constant(2), // 5: 20
+            Op::Return,
+            Op::Constant(3), // 7: 30
+            Op::Return,
+        ],
+        &[
+            table,
+            Value::make_int(10),
+            Value::make_int(20),
+            Value::make_int(30),
+        ],
+        1,
+        Some(&map),
+    )
+    .expect("switch body compiles")
+}
+
+/// A `pcase` backquote dispatch: an `equal` jump table keyed by conses,
+/// answered natively through the table's switch plan.
+#[test]
+fn switch_equal_cons_table_dispatches_natively() {
+    use crate::emacs_core::value::HashTableTest;
+    let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
+    let (a, b) = (
+        Value::symbol("jit-sw-cons-a"),
+        Value::symbol("jit-sw-cons-b"),
+    );
+    let table = Value::hash_table(HashTableTest::Equal);
+    let _ = table.with_hash_table_mut(|ht| {
+        for (key, offset) in [(Value::list(vec![a, b]), 8), (Value::list(vec![a]), 12)] {
+            ht.insert(key.to_hash_key(&ht.test), key, Value::fixnum(offset));
+        }
+    });
+    let leaf = lower_switch_on_arg(table);
+    let answer = |arg: Value| match leaf.call(ctx_ptr, &[arg]) {
+        NativeRun::Ok(bits) => Value::from_bits(bits).as_fixnum(),
+        other => panic!("expected a native answer for {arg:?}, got {other:?}"),
+    };
+    for _ in 0..4 {
+        assert_eq!(answer(Value::list(vec![a, b])), Some(20));
+        assert_eq!(answer(Value::list(vec![a])), Some(30));
+        assert_eq!(answer(Value::list(vec![a, b, a])), Some(10));
+        assert_eq!(answer(Value::cons(a, b)), Some(10));
+        assert_eq!(answer(a), Some(10));
+        assert_eq!(answer(Value::make_int(7)), Some(10));
+    }
+    assert!(
+        table
+            .as_hash_table()
+            .expect("a hash table")
+            .data
+            .switch_plan
+            .shape()
+            .is_some(),
+        "native dispatch planned the jump table"
+    );
+}
+
+/// A jump table mutated after the function was compiled: a new key whose
+/// target is in the compiled target set is followed; a target outside it,
+/// or one that is not a byte offset, raises the stale-table signal exactly
+/// as before the table had a plan.
+#[test]
+fn switch_follows_mutation_after_compile() {
+    use crate::emacs_core::value::HashTableTest;
+    let mut ev = crate::emacs_core::eval::Context::new_minimal_vm_harness();
+    let ctx_ptr = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
+    let [a, b, c, d, e] =
+        ["a", "b", "c", "d", "e"].map(|n| Value::symbol(format!("jit-sw-mut-{n}")));
+    let table = Value::hash_table(HashTableTest::Eq);
+    let _ = table.with_hash_table_mut(|ht| {
+        for (key, offset) in [(a, 8), (b, 12)] {
+            ht.insert(key.to_hash_key(&ht.test), key, Value::fixnum(offset));
+        }
+    });
+    let leaf = lower_switch_on_arg(table);
+    let put = |key: Value, target: Value| {
+        let _ = table.with_hash_table_mut(|ht| {
+            ht.insert(key.to_hash_key(&ht.test), key, target);
+        });
+    };
+    for _ in 0..3 {
+        assert_eq!(
+            leaf.call(ctx_ptr, &[a]),
+            NativeRun::Ok(Value::make_int(20).bits())
+        );
+        assert_eq!(
+            leaf.call(ctx_ptr, &[c]),
+            NativeRun::Ok(Value::make_int(10).bits())
+        );
+    }
+    put(c, Value::fixnum(12));
+    assert_eq!(
+        leaf.call(ctx_ptr, &[c]),
+        NativeRun::Ok(Value::make_int(30).bits()),
+        "a new key targeting a compiled offset"
+    );
+    put(a, Value::fixnum(12));
+    assert_eq!(
+        leaf.call(ctx_ptr, &[a]),
+        NativeRun::Ok(Value::make_int(30).bits()),
+        "a retargeted key"
+    );
+    let stale = |arg: Value| {
+        assert_eq!(leaf.call(ctx_ptr, &[arg]), NativeRun::Signal, "{arg:?}");
+        match take_pending_flow().expect("the stale-table signal is stashed") {
+            crate::emacs_core::error::Flow::Signal(sig) => {
+                assert_eq!(sig.symbol_name(), "error");
+            }
+            other => panic!("expected an error signal, got {other:?}"),
+        }
+    };
+    put(d, Value::fixnum(16));
+    stale(d);
+    put(e, Value::symbol("jit-sw-mut-not-an-offset"));
+    stale(e);
+    assert_eq!(
+        leaf.call(ctx_ptr, &[b]),
+        NativeRun::Ok(Value::make_int(30).bits()),
+        "untouched keys still dispatch"
+    );
+}
+
 #[test]
 fn handler_analysis_bails_on_unbalanced_pophandler() {
     // PopHandler with no statically active handler frame.

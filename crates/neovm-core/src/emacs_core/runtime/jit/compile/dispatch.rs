@@ -2773,11 +2773,13 @@ pub(crate) const JIT_SWITCH_STALE: i64 = -2;
 
 /// `Op::Switch`: look the dispatch value up in the (statically verified
 /// compile-time constant) hash-table jump table, with the interpreter's exact
-/// key semantics: an in-place `ValueKeyProbe` under the table's own test,
-/// which falls back to a materialized key for the shapes it declines. Returns the
-/// raw fixnum target address on a hit ([`JIT_SWITCH_MISS`]/[`JIT_SWITCH_STALE`]
-/// otherwise); the generated code maps raw addresses onto the statically
-/// resolved target blocks. Pure lookup — no allocation, no lisp.
+/// key semantics: `LispHashTable::switch_target`, the table's switch plan,
+/// which answers exactly as the hashed lookup under the table's own test.
+/// Returns the raw fixnum target address on a hit
+/// ([`JIT_SWITCH_MISS`]/[`JIT_SWITCH_STALE`] otherwise); the generated code
+/// maps raw addresses onto the statically resolved target blocks. No Lisp
+/// allocation and no Lisp calls (a Rust-side plan is built on the table's
+/// second dispatch).
 /// SAFETY: same vmctx contract as [`neovm_jit_call`].
 #[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
 #[unsafe(no_mangle)]
@@ -2796,15 +2798,11 @@ pub extern "C" fn neovm_jit_switch(ctx: *mut u8, dispatch: i64, table: i64) -> i
             ));
             return JIT_SWITCH_STALE;
         };
-        // Probe the index in place (GNU `hash_lookup` runs hashfn/cmpfn over the
-        // object) instead of materializing a `HashKey` — which cost a classify,
-        // a build and a drop on every dispatch. `neovm_jit_switch` is 215K calls
-        // per org edit iteration.
-        match ht
-            .data
-            .lookup(dispatch, ht.test, ctx.symbols_with_pos_enabled)
-            .copied()
-        {
+        // Answer from the table's switch plan (a dense index, a bit scan or
+        // key programs walked with the value) rather than hashing the value on
+        // every dispatch. `neovm_jit_switch` is 215K calls per org edit
+        // iteration.
+        match ht.switch_target(dispatch, ctx.symbols_with_pos_enabled) {
             Some(v) => match v.kind() {
                 ValueKind::Fixnum(addr) if addr >= 0 => addr,
                 _ => {
