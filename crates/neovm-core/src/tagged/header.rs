@@ -447,15 +447,22 @@ pub struct LispValueVec {
 }
 
 /// Byte storage that may alias the mapped dump image — the byte twin of
-/// [`LispValueVec`]. Mapped storage is read-only; every consumer of the
+/// [`LispValueVec`]. Both kinds are read-only; every consumer of the
 /// wrapped bytes reads through `as_slice`.
 pub struct LispByteVec {
     storage: LispByteVecStorage,
 }
 
 enum LispByteVecStorage {
-    Owned(Vec<u8>),
-    Mapped { ptr: *const u8, len: usize },
+    /// Immutable bytes on the Rust heap, SHARED by clones: every
+    /// `make-closure` instance of a prototype holds the prototype's
+    /// bytecode string, so a clone is a reference-count increment, not a
+    /// copy (212K instances per elb-bytecomp row).
+    Owned(std::sync::Arc<[u8]>),
+    Mapped {
+        ptr: *const u8,
+        len: usize,
+    },
 }
 
 // Mapped bytes are read-only through shared references, same contract as
@@ -466,7 +473,15 @@ unsafe impl Sync for LispByteVecStorage {}
 impl LispByteVec {
     pub fn owned(bytes: Vec<u8>) -> Self {
         Self {
-            storage: LispByteVecStorage::Owned(bytes),
+            storage: LispByteVecStorage::Owned(bytes.into()),
+        }
+    }
+
+    /// Owned storage holding a copy of `bytes` — one allocation, where
+    /// [`Self::owned`] of a fresh `Vec` would copy twice.
+    pub fn copy_from_slice(bytes: &[u8]) -> Self {
+        Self {
+            storage: LispByteVecStorage::Owned(bytes.into()),
         }
     }
 
@@ -500,11 +515,24 @@ impl LispByteVec {
     }
 
     /// Bytes owned on the Rust heap (0 for mapped storage) — GC size
-    /// accounting.
+    /// accounting. Every holder of shared owned bytes reports their full
+    /// length, as it did when each clone was a private copy, so sharing
+    /// does not move GC pacing.
     pub fn owned_bytes(&self) -> usize {
         match &self.storage {
-            LispByteVecStorage::Owned(bytes) => bytes.capacity(),
+            LispByteVecStorage::Owned(bytes) => bytes.len(),
             LispByteVecStorage::Mapped { .. } => 0,
+        }
+    }
+
+    /// Whether `self` and `other` read the same owned allocation (tests).
+    #[cfg(test)]
+    pub(crate) fn shares_storage_with(&self, other: &Self) -> bool {
+        match (&self.storage, &other.storage) {
+            (LispByteVecStorage::Owned(a), LispByteVecStorage::Owned(b)) => {
+                std::sync::Arc::ptr_eq(a, b)
+            }
+            _ => false,
         }
     }
 }
@@ -518,9 +546,12 @@ impl std::ops::Deref for LispByteVec {
 }
 
 impl Clone for LispByteVec {
+    #[inline]
     fn clone(&self) -> Self {
         match &self.storage {
-            LispByteVecStorage::Owned(bytes) => Self::owned(bytes.clone()),
+            LispByteVecStorage::Owned(bytes) => Self {
+                storage: LispByteVecStorage::Owned(std::sync::Arc::clone(bytes)),
+            },
             LispByteVecStorage::Mapped { ptr, len } => Self {
                 storage: LispByteVecStorage::Mapped {
                     ptr: *ptr,

@@ -5913,16 +5913,16 @@ fn make_byte_code_from_parts_with_slots(
     // 1. Parse arglist
     let params = parse_arglist_value(arglist);
 
-    // 2. Extract raw bytes from bytecode string.
+    // 2. Copy the raw bytes out of the bytecode string, once.
     // Bytecode strings are unibyte and may contain arbitrary byte values
     // (including non-UTF-8), so we must access the raw bytes directly
     // rather than going through as_str() which requires valid UTF-8.
-    let raw_bytes = bytecode_str
-        .as_lisp_string()
-        .expect("validated bytecode string")
-        .as_bytes()
-        .to_vec();
-    let gnu_bytecode_bytes = Some(crate::tagged::header::LispByteVec::owned(raw_bytes.clone()));
+    let raw_bytes = crate::tagged::header::LispByteVec::copy_from_slice(
+        bytecode_str
+            .as_lisp_string()
+            .expect("validated bytecode string")
+            .as_bytes(),
+    );
     let _ = bytecode_str.with_lisp_string_mut(|string| string.pin_immovable());
 
     // 3. Extract constants from vector
@@ -5992,7 +5992,7 @@ fn make_byte_code_from_parts_with_slots(
         // bytecode string.  Required for `byte-compile-make-closure` which
         // reads the bytes via aref and passes them back to `make-byte-code`
         // when generating closure prototypes.
-        gnu_bytecode_bytes,
+        gnu_bytecode_bytes: Some(raw_bytes),
         docstring: doc,
         doc_form,
         // GNU Emacs (eval.c:2301-2303): "Bytecode objects are interactive if

@@ -326,3 +326,32 @@ fn make_closure_on_an_environment_closure_rebinds_the_environment() {
     assert_eq!(i.constants.as_slice(), &[Value::symbol("mci-k")]);
     assert_eq!(data(proto).env, Some(env));
 }
+
+/// Instances share the prototype's bytecode string storage instead of
+/// copying it, and `(aref INSTANCE 1)` still reads the prototype's bytes.
+#[test]
+fn make_closure_instances_share_the_prototype_bytes() {
+    let mut ctx = Context::new();
+    let proto = eval(
+        &mut ctx,
+        "(make-byte-code 0 \"\\300\\207\" [V0 mci-shared] 1)",
+    );
+    let a = make_closure(proto, &[Value::fixnum(1)]);
+    let b = make_closure(a, &[Value::fixnum(2)]);
+    let proto_bytes = data(proto).gnu_bytecode_bytes.as_ref().expect("bytes");
+    for instance in [a, b] {
+        let bytes = data(instance).gnu_bytecode_bytes.as_ref().expect("bytes");
+        assert!(bytes.shares_storage_with(proto_bytes));
+        assert_eq!(bytes.as_slice(), b"\xC0\x87");
+    }
+    ctx.set_variable("mci-shared-proto", proto);
+    ctx.set_variable("mci-shared-a", a);
+    assert_eq!(
+        eval(
+            &mut ctx,
+            "(list (equal (aref mci-shared-a 1) (aref mci-shared-proto 1)) \
+             (multibyte-string-p (aref mci-shared-a 1)) (aref mci-shared-a 1))"
+        ),
+        eval(&mut ctx, "'(t nil \"\\300\\207\")")
+    );
+}

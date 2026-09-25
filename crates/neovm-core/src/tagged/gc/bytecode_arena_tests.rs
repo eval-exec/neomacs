@@ -1258,3 +1258,39 @@ fn tenured_page_bytecode_keeps_young_cons_child_alive() {
 fn tenured_page_bytecode_keeps_young_cons_child_alive_verified() {
     tenured_page_bytecode_keeps_young_cons_child_alive_body(true);
 }
+
+/// Owned GNU bytecode bytes are SHARED by clones (every `make-closure`
+/// instance holds its prototype's string): each holder still accounts the
+/// full length, as when each clone was a private copy, and sweeping either
+/// holder — the prototype first here — leaves the survivor's bytes intact.
+#[test]
+fn bytecode_shared_gnu_bytes_survive_the_sweep_of_either_holder() {
+    crate::test_utils::init_test_tracing();
+    let mut heap = TaggedHeap::new();
+    set_tagged_heap(&mut heap);
+
+    let proto_fn = bytecode_fn(vec![TaggedValue::fixnum(1)], 2, 4_096);
+    let instance_fn = proto_fn.clone();
+    let proto_bytes = proto_fn.gnu_bytecode_bytes.as_ref().unwrap();
+    let instance_bytes = instance_fn.gnu_bytecode_bytes.as_ref().unwrap();
+    assert!(proto_bytes.shares_storage_with(instance_bytes));
+    assert_eq!(proto_bytes.owned_bytes(), 4_096);
+    assert_eq!(instance_bytes.owned_bytes(), 4_096);
+
+    let proto = heap.alloc_bytecode(proto_fn);
+    let instance = heap.alloc_bytecode(instance_fn);
+    let per_object = |b: TaggedValue| {
+        TaggedHeap::object_bytes_from_header(b.as_veclike_ptr().unwrap() as *const GcHeader)
+    };
+    assert_eq!(per_object(proto), per_object(instance));
+    assert!(per_object(instance) >= size_of::<ByteCodeObj>() + 4_096);
+
+    heap.collect_exact(std::iter::once(instance));
+    assert!(!heap.bytecode_arena.owns(bc_ptr(proto)));
+    let obj = unsafe { &*(instance.as_veclike_ptr().unwrap() as *const ByteCodeObj) };
+    let bytes = obj.data.gnu_bytecode_bytes.as_deref().unwrap();
+    assert_eq!(bytes.len(), 4_096);
+    assert!(bytes.iter().all(|&b| b == 0xAA));
+    assert_eq!(heap.live_bytes(), per_object(instance));
+    heap.assert_object_arenas_coherent();
+}
