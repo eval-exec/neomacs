@@ -12,6 +12,7 @@ mod overlay_order;
 pub mod position;
 pub mod shared;
 pub mod text;
+pub(crate) mod text_index;
 pub mod text_props;
 pub mod text_snapshot;
 pub mod undo;

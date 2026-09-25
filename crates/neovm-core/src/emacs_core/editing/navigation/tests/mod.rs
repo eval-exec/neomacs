@@ -1157,4 +1157,5 @@ fn test_forward_char_honors_narrowing_beginning() {
     assert_eq!(pos, 3);
 }
 
+mod line_index;
 mod selective_display_gnu;

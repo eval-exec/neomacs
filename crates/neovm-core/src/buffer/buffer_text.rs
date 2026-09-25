@@ -41,7 +41,10 @@ use super::text::{
 };
 #[cfg(test)]
 use super::text::{GapDebugLayout, TextBackendDebugLayout};
+use super::text_index::TextLineIndex;
 use super::text_props::{ObjectIntervalRun, PropertyInterval, TextPropertyTable};
+
+mod line_index;
 
 #[cfg(test)]
 static CHAR_POS_TO_EMACS_BYTE_POS_CALLS: std::sync::atomic::AtomicUsize =
@@ -300,6 +303,10 @@ struct BufferTextStorage {
     /// [`SyntaxSafePositions`]). Per storage, so indirect buffers share it
     /// and `buffer-swap-text` carries it with the text it describes.
     syntax_safe_positions: RefCell<SyntaxSafePositions>,
+    /// The text line index (`NEOVM_TEXT_LINE_INDEX`, see `line_index`):
+    /// `None` until a line query on large enough text builds it. Outside the
+    /// shared `backend`; a snapshot starts without one.
+    text_index: RefCell<Option<Rc<TextLineIndex>>>,
 }
 
 /// Validity key of a [`SyntaxSafePositions`] index: everything a forward
@@ -464,6 +471,8 @@ impl Clone for BufferTextStorage {
             syntax_char_run_memo_cursor: self.syntax_char_run_memo_cursor.clone(),
             // A snapshot starts without the index; it is rebuilt on demand.
             syntax_safe_positions: RefCell::new(SyntaxSafePositions::default()),
+            // Likewise the line index (P3.0 §3.9).
+            text_index: RefCell::new(None),
         }
     }
 }
@@ -535,6 +544,7 @@ impl BufferText {
                 syntax_char_run_memo: RefCell::new([SyntaxCharRunMemoEntry::default(); 4]),
                 syntax_char_run_memo_cursor: Cell::new(0),
                 syntax_safe_positions: RefCell::new(SyntaxSafePositions::default()),
+                text_index: RefCell::new(None),
             })),
         }
     }
@@ -877,6 +887,7 @@ impl BufferText {
         ));
         storage.virtual_gap = gap_compat;
         Self::finish_backend_shape_change(&mut storage);
+        storage.drop_line_index();
     }
 
     pub fn is_multibyte(&self) -> bool {
@@ -890,6 +901,7 @@ impl BufferText {
         }
         backend_mut(&mut storage.backend).set_multibyte(multibyte);
         Self::finish_backend_content_mutation(&mut storage);
+        storage.drop_line_index();
     }
 
     pub fn is_empty(&self) -> bool {
@@ -1111,6 +1123,20 @@ impl BufferText {
         if n == 0 || from >= limit {
             return (from, 0);
         }
+        if let Some(found) = self.line_index_nth_newline(from, limit, n) {
+            return found;
+        }
+        self.scan_nth_newline_emacs_byte(from, limit, n)
+    }
+
+    /// [`Self::nth_newline_emacs_byte`] by scanning, for a clamped, non-empty
+    /// range and `n >= 1`.
+    fn scan_nth_newline_emacs_byte(
+        &self,
+        from: EmacsBytePos,
+        limit: EmacsBytePos,
+        n: usize,
+    ) -> (EmacsBytePos, usize) {
         let mut base = from;
         let mut crossed = 0usize;
         let mut past_last = from;
@@ -1177,25 +1203,14 @@ impl BufferText {
     }
 
     /// Number of `\n` in the logical emacs-byte range `[from, limit)`, counted
-    /// over the backend's contiguous chunks with no copy.
+    /// over the backend's contiguous chunks with no copy (or taken from the
+    /// text line index).
     pub(crate) fn count_newlines_emacs_byte(
         &self,
         from: EmacsBytePos,
         limit: EmacsBytePos,
     ) -> usize {
-        let total = self.emacs_byte_end_pos();
-        let from = from.min(total);
-        let limit = limit.min(total);
-        if from >= limit {
-            return 0;
-        }
-        let mut count = 0usize;
-        let _ =
-            self.for_each_emacs_byte_range_chunk::<()>(EmacsByteRange::new(from, limit), |chunk| {
-                count += memchr::memchr_iter(b'\n', chunk).count();
-                Ok::<(), ()>(())
-            });
-        count
+        self.count_line_ends_emacs_byte(from, limit, LineEnd::Newline)
     }
 
     /// Number of line ends in the logical emacs-byte range `[from, limit)`:
@@ -1207,19 +1222,34 @@ impl BufferText {
         limit: EmacsBytePos,
         line_end: LineEnd,
     ) -> usize {
-        if line_end == LineEnd::Newline {
-            return self.count_newlines_emacs_byte(from, limit);
-        }
         let total = self.emacs_byte_end_pos();
         let from = from.min(total);
         let limit = limit.min(total);
         if from >= limit {
             return 0;
         }
+        if let Some(count) = self.line_index_count(from, limit, line_end) {
+            return count;
+        }
+        self.scan_line_ends_emacs_byte(from, limit, line_end)
+    }
+
+    /// [`Self::count_line_ends_emacs_byte`] by scanning, for a clamped range.
+    fn scan_line_ends_emacs_byte(
+        &self,
+        from: EmacsBytePos,
+        limit: EmacsBytePos,
+        line_end: LineEnd,
+    ) -> usize {
         let mut count = 0usize;
         let _ =
             self.for_each_emacs_byte_range_chunk::<()>(EmacsByteRange::new(from, limit), |chunk| {
-                count += memchr::memchr2_iter(b'\n', b'\r', chunk).count();
+                count += match line_end {
+                    LineEnd::Newline => memchr::memchr_iter(b'\n', chunk).count(),
+                    LineEnd::NewlineOrCarriageReturn => {
+                        memchr::memchr2_iter(b'\n', b'\r', chunk).count()
+                    }
+                };
                 Ok::<(), ()>(())
             });
         count
@@ -1241,6 +1271,9 @@ impl BufferText {
             &mut storage,
             PositionEdit::insert(pos, extent),
         );
+        if storage.text_index.get_mut().is_some() {
+            Self::line_index_after_insert(&mut storage, pos, bytes);
+        }
     }
 
     pub(crate) fn delete_measured_range(&mut self, range: TextEditRange) {
@@ -1248,12 +1281,18 @@ impl BufferText {
             return;
         }
         let mut storage = self.storage.borrow_mut();
+        if storage.text_index.get_mut().is_some() {
+            Self::line_index_before_delete(&mut storage, range.byte_range());
+        }
         Self::note_virtual_gap_delete(&mut storage, range);
         backend_mut(&mut storage.backend).delete_measured_range(range);
         Self::finish_backend_content_mutation_with_edit(
             &mut storage,
             PositionEdit::replace(range, TextExtent::ZERO),
         );
+        if storage.text_index.get_mut().is_some() {
+            Self::line_index_after_delete(&mut storage, range.byte_start());
+        }
     }
 
     pub(crate) fn replace_measured_range(&mut self, replacement: TextReplacement, bytes: &[u8]) {
@@ -1261,12 +1300,18 @@ impl BufferText {
             return;
         }
         let mut storage = self.storage.borrow_mut();
+        if storage.text_index.get_mut().is_some() {
+            Self::line_index_before_delete(&mut storage, replacement.old_range().byte_range());
+        }
         Self::note_virtual_gap_replace(&mut storage, replacement);
         backend_mut(&mut storage.backend).replace_measured_range(replacement, bytes);
         Self::finish_backend_content_mutation_with_edit(
             &mut storage,
             PositionEdit::replace(replacement.old_range(), replacement.new_extent()),
         );
+        if storage.text_index.get_mut().is_some() {
+            Self::line_index_after_insert(&mut storage, replacement.byte_start(), bytes);
+        }
     }
 
     pub(crate) fn replace_same_len_measured_range(
@@ -1283,12 +1328,18 @@ impl BufferText {
             "replace_same_len_range: measured old and new byte lengths must match"
         );
         let mut storage = self.storage.borrow_mut();
+        if storage.text_index.get_mut().is_some() {
+            Self::line_index_before_delete(&mut storage, replacement.old_range().byte_range());
+        }
         Self::note_virtual_gap_same_len_replace(&mut storage, replacement, bytes);
         backend_mut(&mut storage.backend).replace_same_len_measured_range(replacement, bytes);
         Self::finish_backend_content_mutation_with_edit(
             &mut storage,
             PositionEdit::replace(replacement.old_range(), replacement.new_extent()),
         );
+        if storage.text_index.get_mut().is_some() {
+            Self::line_index_after_insert(&mut storage, replacement.byte_start(), bytes);
+        }
     }
 
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
@@ -1520,6 +1571,7 @@ impl BufferText {
             kind,
         ));
         Self::finish_backend_content_mutation(&mut storage);
+        storage.drop_line_index();
         storage.virtual_gap = Self::initial_virtual_gap_for_backend(
             &storage.backend,
             storage.metrics,

@@ -207,6 +207,14 @@ fn move_by_lines_narrowed(
         // Short of N means the range ran out: GNU leaves point at ZV.
         pos = if crossed as i64 == n { end.get() } else { zv };
     } else {
+        // Many lines back: the text line index answers in one descent.
+        if let Some((start, lines)) = buf.lines_backward_emacs_byte(
+            EmacsBytePos::new(pos),
+            EmacsBytePos::new(begv),
+            n.unsigned_abs() as usize,
+        ) {
+            return (start.get(), -(lines as i64));
+        }
         for _ in 0..(-n) {
             let bol = line_beginning_byte_narrowed(buf, pos, begv);
             if bol <= begv {

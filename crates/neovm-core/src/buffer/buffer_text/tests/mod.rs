@@ -1336,3 +1336,4 @@ fn anchor_table_stays_sorted_bounded_and_exact_across_a_front_insert() {
 }
 
 mod cow_snapshot_test;
+mod line_index_test;

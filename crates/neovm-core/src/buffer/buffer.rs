@@ -3662,6 +3662,23 @@ impl Buffer {
         self.text.nth_newline_emacs_byte(from, limit, n)
     }
 
+    /// Whether this buffer's text holds a line index now (tests).
+    #[cfg(test)]
+    pub(crate) fn has_line_index_for_test(&self) -> bool {
+        self.text.has_line_index_for_test()
+    }
+
+    /// `forward-line -N`'s motion from the text line index, or `None` to
+    /// walk back line by line.  See [`BufferText::lines_backward_emacs_byte`].
+    pub(crate) fn lines_backward_emacs_byte(
+        &self,
+        from: EmacsBytePos,
+        floor: EmacsBytePos,
+        n: usize,
+    ) -> Option<(EmacsBytePos, usize)> {
+        self.text.lines_backward_emacs_byte(from, floor, n)
+    }
+
     /// Last `\n` in logical emacs-byte range `[floor, from)`, scanned in
     /// place.  See [`BufferText::prev_newline_emacs_byte`].
     pub(crate) fn prev_newline_emacs_byte(
