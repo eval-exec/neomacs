@@ -8225,6 +8225,27 @@ struct FoldedScans {
 #[cold]
 #[inline(never)]
 fn build_folded_scan(pattern: &CompiledPattern, table: &CaseTranslation) -> FoldedScan {
+    let scan = fold_translation_into_fastmap(pattern, table);
+    let multibyte = pattern.target_multibyte;
+    match &scan {
+        FoldedScan::Table(accept) => tracing::debug!(
+            target: "neovm::regex",
+            accepted_bytes = accept.iter().filter(|&&accepted| accepted).count(),
+            multibyte,
+            "case-folded candidate scan: table"
+        ),
+        _ => tracing::debug!(
+            target: "neovm::regex",
+            ?scan,
+            multibyte,
+            "case-folded candidate scan"
+        ),
+    }
+    scan
+}
+
+/// The body of [`build_folded_scan`].
+fn fold_translation_into_fastmap(pattern: &CompiledPattern, table: &CaseTranslation) -> FoldedScan {
     if table.ascii_preimage() != AsciiPreimage::AsciiOnly {
         return FoldedScan::PerChar;
     }
@@ -8246,26 +8267,10 @@ fn build_folded_scan(pattern: &CompiledPattern, table: &CaseTranslation) -> Fold
             }
         }
     }
-    let scan = match sparse_ascii_fastmap(&accept) {
+    match sparse_ascii_fastmap(&accept) {
         Some(bytes) => FoldedScan::Sparse(bytes),
         None => FoldedScan::Table(Box::new(accept)),
-    };
-    let multibyte = pattern.target_multibyte;
-    match &scan {
-        FoldedScan::Table(accept) => tracing::debug!(
-            target: "neovm::regex",
-            accepted_bytes = accept.iter().filter(|&&accepted| accepted).count(),
-            multibyte,
-            "case-folded candidate scan: table"
-        ),
-        _ => tracing::debug!(
-            target: "neovm::regex",
-            ?scan,
-            multibyte,
-            "case-folded candidate scan"
-        ),
     }
-    scan
 }
 
 /// Derive a small (1–3 byte), pure ASCII set once per compiled fastmap.
@@ -8682,7 +8687,61 @@ pub(crate) fn re_search(
         // Backward search
         let end = start.saturating_sub((-range) as usize);
         if use_fastmap {
-            if let Some(table) = translate
+            // A case-folded search scans with its folded table, as forward,
+            // built by the first search long enough to repay it.
+            let folded = match translate {
+                Some(table) if start <= text_len => {
+                    pattern.folded_scan(table, start - end >= PREFILTER_MIN_BUILD_SPAN)
+                }
+                _ => None,
+            };
+            if let Some(scan @ (FoldedScan::Sparse(_) | FoldedScan::Table(_))) = folded {
+                // Candidates descend from `start` to `end`: GNU's backward
+                // `re_search_2` tests one position per step.  The end of the
+                // text (no byte to test) is tried unconditionally, as the
+                // per-character loops do.
+                let mut upper = start;
+                if upper == text_len {
+                    if let Some(result) = try_candidate!(text_len, start) {
+                        return Some((text_len, result.1));
+                    }
+                    if end == text_len {
+                        return None;
+                    }
+                    upper = text_len - 1;
+                }
+                // Invariant: `end <= upper < text_len`.
+                loop {
+                    let window = &text[end..=upper];
+                    let found = match scan {
+                        FoldedScan::Sparse(SparseAsciiFastmap::One(b0)) => {
+                            memchr::memrchr(*b0, window)
+                        }
+                        FoldedScan::Sparse(SparseAsciiFastmap::Two(b0, b1)) => {
+                            memchr::memrchr2(*b0, *b1, window)
+                        }
+                        FoldedScan::Sparse(SparseAsciiFastmap::Three(b0, b1, b2)) => {
+                            memchr::memrchr3(*b0, *b1, *b2, window)
+                        }
+                        FoldedScan::Table(accept) => {
+                            window.iter().rposition(|&b| accept[b as usize])
+                        }
+                        FoldedScan::PerChar => unreachable!("excluded by the pattern above"),
+                    };
+                    let Some(idx) = found else {
+                        return None;
+                    };
+                    let cand = end + idx;
+                    // Backward candidates end at `start` (see below).
+                    if let Some(result) = try_candidate!(cand, start) {
+                        return Some((cand, result.1));
+                    }
+                    if cand == end {
+                        return None;
+                    }
+                    upper = cand - 1;
+                }
+            } else if let Some(table) = translate
                 && pattern.target_multibyte
             {
                 for pos in (end..=start).rev() {

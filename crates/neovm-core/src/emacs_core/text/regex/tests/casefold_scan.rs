@@ -157,6 +157,7 @@ fn scan_positions(text: &[u8], repr: TextRepr) -> Vec<usize> {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ScanDirections {
     Forward,
+    Both,
 }
 
 /// Every folded scan finds exactly what the exhaustive scan finds, before and
@@ -212,6 +213,73 @@ fn assert_folded_scans_agree(directions: ScanDirections) {
 fn folded_scan_agrees_with_exhaustive_candidates_forward() {
     crate::test_utils::init_test_tracing();
     assert_folded_scans_agree(ScanDirections::Forward);
+}
+
+/// Backward searches too: a limit below the start searches backward.
+#[test]
+fn folded_scan_agrees_with_exhaustive_candidates_both_ways() {
+    crate::test_utils::init_test_tracing();
+    assert_folded_scans_agree(ScanDirections::Both);
+}
+
+/// A long backward search builds the scan and walks it with memrchr: each
+/// candidate is tried from the nearest one down, as GNU steps backward.
+#[test]
+fn folded_scan_backward_finds_the_nearest_candidate_first() {
+    crate::test_utils::init_test_tracing();
+    let cp = regex_compile("(defun \\([a-z]+\\)", false, true).expect("compile");
+    let table = cp.translate.clone().expect("folded");
+    let mut text = b"(DeFun one) (defun two) (DEFUN (".to_vec();
+    text.extend(std::iter::repeat_n(b'x', 400));
+    text.extend_from_slice(b"(Defun three)");
+    let search = |start: usize, bound: usize| {
+        re_search(
+            &cp,
+            &text,
+            start,
+            bound as isize - start as isize,
+            &DefaultSyntaxLookup,
+            start,
+        )
+        .map(|(pos, regs)| (pos, regs.end[0], regs.start[1]))
+    };
+    // (start, bound): the match may not extend past `start`.
+    let probes = [
+        (text.len(), 0),
+        (431, 0),
+        (20, 0),
+        (text.len(), 13),
+        (30, 13),
+    ];
+    let exhaustive: Vec<_> = with_fastmap_disabled(|| {
+        probes
+            .iter()
+            .map(|&(start, bound)| search(start, bound))
+            .collect()
+    });
+    assert_eq!(
+        exhaustive,
+        [
+            Some((432, 444, 439)),
+            Some((12, 22, 19)),
+            // `[a-z]+` stops at the search start: "(defun t".
+            Some((12, 20, 19)),
+            Some((432, 444, 439)),
+            None,
+        ]
+    );
+    let scanned: Vec<_> = probes
+        .iter()
+        .map(|&(start, bound)| search(start, bound))
+        .collect();
+    assert_eq!(scanned, exhaustive);
+    assert!(
+        matches!(
+            cp.folded_scan(&table, false),
+            Some(FoldedScan::Sparse(SparseAsciiFastmap::One(b'(')))
+        ),
+        "a long backward search builds the scan"
+    );
 }
 
 /// A folded scan is built with the fastmap it folds: a rebaked fastmap never
