@@ -4838,6 +4838,9 @@ mod predicate_branch_tests;
 #[path = "tests/spec_gate.rs"]
 mod spec_gate_tests;
 #[cfg(test)]
+#[path = "tests/switch_dispatch.rs"]
+mod switch_dispatch_tests;
+#[cfg(test)]
 #[path = "tests/compile.rs"]
 mod tests;
 #[cfg(test)]
