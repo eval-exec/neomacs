@@ -3209,6 +3209,65 @@ fn write_edge_stack_to_vars(
     }
 }
 
+/// The baseline's landings for [`switch_dispatch::emit_switch_dispatch`]: a
+/// forward target is its leader block; a backward one is a trampoline that
+/// polls through [`emit_backedge_jump`], exactly like a `Goto` back-edge, and
+/// is created once per target however many hits branch to it.
+struct BaselineSwitchLandings<'a> {
+    /// The switch's instruction index: a target at or before it is backward.
+    site: usize,
+    targets: &'a [(i64, usize)],
+    block_for: &'a HashMap<usize, Block>,
+    entry_depth: &'a HashMap<usize, usize>,
+    rt: &'a RtCtx,
+    backedge_counter: Option<StackSlot>,
+    signal_exit: &'a mut Option<Block>,
+    vars: &'a [Variable],
+    variable_raw: &'a [bool],
+    handlers: &'a [HandlerStatic],
+    pending: &'a mut Vec<PendingDispatch>,
+    /// The trampoline made for each backward target, by target index.
+    trampolines: Vec<(usize, Block)>,
+    /// Trampolines made but not yet filled, in the order they were made.
+    unfilled: Vec<(usize, Block)>,
+}
+
+impl switch_dispatch::SwitchLandings for BaselineSwitchLandings<'_> {
+    fn landing(&mut self, fb: &mut FunctionBuilder, k: usize) -> Block {
+        let target = self.targets[k].1;
+        if target > self.site {
+            return self.block_for[&target];
+        }
+        if let Some(&(_, tramp)) = self.trampolines.iter().find(|&&(made, _)| made == k) {
+            return tramp;
+        }
+        let tramp = fb.create_block();
+        self.trampolines.push((k, tramp));
+        self.unfilled.push((k, tramp));
+        tramp
+    }
+
+    fn fill_pending(&mut self, fb: &mut FunctionBuilder) {
+        for (k, tramp) in std::mem::take(&mut self.unfilled) {
+            let target = self.targets[k].1;
+            fb.switch_to_block(tramp);
+            fb.seal_block(tramp);
+            emit_backedge_jump(
+                fb,
+                self.rt,
+                self.backedge_counter.expect("backedge implies counter"),
+                self.signal_exit,
+                self.vars,
+                self.variable_raw,
+                self.entry_depth[&target],
+                self.block_for[&target],
+                self.handlers,
+                self.pending,
+            );
+        }
+    }
+}
+
 /// Emit a backward jump with the interpreter's `branch_to!` parity: bump the
 /// u8 quit counter; on every wrap (each 255th backward jump — counter resets to
 /// 1, exactly like the interpreter) root the live operand stack and call the
@@ -4474,12 +4533,8 @@ fn build_leaf_fn<M: Module>(
                         break;
                     }
                     Op::Switch => {
-                        // [dispatch table] -> shim lookup (the interpreter's
-                        // exact hash-key semantics) returning the raw fixnum
-                        // address; map it onto the statically resolved targets
-                        // with a compare chain. Miss -> fall through. A raw
-                        // address outside the static set or a mutated table ->
-                        // loud signal (out-of-contract self-modification).
+                        // [dispatch table] -> a static target, or fall
+                        // through on a miss (`switch_dispatch`).
                         let rt_ref = rt.as_ref().ok_or(CompileError::UnsupportedOp("switch"))?;
                         let table = stack.pop().ok_or(CompileError::StackUnderflow)?;
                         let dispatch = stack.pop().ok_or(CompileError::StackUnderflow)?;
@@ -4492,11 +4547,6 @@ fn build_leaf_fn<M: Module>(
                             &mut reps,
                             &variable_raw,
                         );
-                        let vmctx = fb.use_var(rt_ref.vmctx_var);
-                        let call = fb
-                            .ins()
-                            .call(rt_ref.refs.switch_lookup, &[vmctx, dispatch, table]);
-                        let addr = fb.inst_results(call)[0];
                         let targets = cfg.switch_targets.get(&i).expect("resolved in analyze");
                         let sig = signal_target_for_site(
                             &mut fb,
@@ -4507,57 +4557,31 @@ fn build_leaf_fn<M: Module>(
                             &reps,
                         );
                         let fall = block_for[&(i + 1)];
-                        // miss -> fall through
-                        let miss =
-                            lowering::icmp_imm_p(&mut fb, IntCC::Equal, addr, JIT_SWITCH_MISS);
-                        let chain = fb.create_block();
-                        fb.ins().brif(miss, fall, &[], chain, &[]);
-                        fb.switch_to_block(chain);
-                        fb.seal_block(chain);
-                        // stale (-2): the shim stashed the flow already.
-                        let stale =
-                            lowering::icmp_imm_p(&mut fb, IntCC::Equal, addr, JIT_SWITCH_STALE);
-                        let mut cur_blk = fb.create_block();
-                        fb.ins().brif(stale, sig, &[], cur_blk, &[]);
-                        for &(raw, target) in targets {
-                            fb.switch_to_block(cur_blk);
-                            fb.seal_block(cur_blk);
-                            let next = fb.create_block();
-                            let hit = lowering::icmp_imm_p(&mut fb, IntCC::Equal, addr, raw);
-                            if target <= i {
-                                // Backward jump-table edge: poll through a
-                                // trampoline, exactly like Goto back-edges.
-                                let tramp = fb.create_block();
-                                fb.ins().brif(hit, tramp, &[], next, &[]);
-                                fb.switch_to_block(tramp);
-                                fb.seal_block(tramp);
-                                let (rt_b, slot) = (
-                                    rt.as_ref().expect("backedge implies rt"),
-                                    backedge_counter.expect("backedge implies counter"),
-                                );
-                                emit_backedge_jump(
-                                    &mut fb,
-                                    rt_b,
-                                    slot,
-                                    &mut signal_exit,
-                                    &vars,
-                                    &variable_raw,
-                                    cfg.entry_depth[&target],
-                                    block_for[&target],
-                                    &handlers,
-                                    &mut pending,
-                                );
-                            } else {
-                                fb.ins().brif(hit, block_for[&target], &[], next, &[]);
-                            }
-                            cur_blk = next;
-                        }
-                        // Exhausted: a hit whose address is not in the static
-                        // set — stash the stale-table signal and propagate.
-                        fb.switch_to_block(cur_blk);
-                        fb.seal_block(cur_blk);
-                        fb.ins().call(rt_ref.refs.switch_stale, &[]);
-                        fb.ins().jump(sig, &[]);
+                        let mut landings = BaselineSwitchLandings {
+                            site: i,
+                            targets,
+                            block_for: &block_for,
+                            entry_depth: &cfg.entry_depth,
+                            rt: rt_ref,
+                            backedge_counter,
+                            signal_exit: &mut signal_exit,
+                            vars: &vars,
+                            variable_raw: &variable_raw,
+                            handlers: &handlers,
+                            pending: &mut pending,
+                            trampolines: Vec::new(),
+                            unfilled: Vec::new(),
+                        };
+                        switch_dispatch::emit_switch_dispatch(
+                            &mut fb,
+                            rt_ref,
+                            dispatch,
+                            table,
+                            targets,
+                            fall,
+                            sig,
+                            &mut landings,
+                        );
                         terminated = true;
                         break;
                     }
@@ -4778,6 +4802,7 @@ pub use shims::*;
 
 mod dispatch;
 pub use dispatch::*;
+
 #[cfg(test)]
 #[path = "tests/arith_generic_integer.rs"]
 mod arith_generic_integer_tests;
@@ -4805,6 +4830,7 @@ mod observability_tests;
 #[cfg(test)]
 #[path = "tests/osr_bindings.rs"]
 mod osr_binding_tests;
+pub(crate) mod switch_dispatch;
 
 #[cfg(test)]
 #[path = "tests/eq_swp_prefilter.rs"]
