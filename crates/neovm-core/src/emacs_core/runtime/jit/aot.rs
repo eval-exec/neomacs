@@ -4929,5 +4929,8 @@ pub(crate) mod test_support {
 }
 
 #[cfg(test)]
+#[path = "aot/tests/lazy_prewarm_test.rs"]
+mod lazy_prewarm_tests;
+#[cfg(test)]
 #[path = "aot/tests/aot_test.rs"]
 mod tests;
