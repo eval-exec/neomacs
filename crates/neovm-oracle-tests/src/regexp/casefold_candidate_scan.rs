@@ -160,3 +160,61 @@ fn oracle_prop_regexp_casefold_scan_custom_case_table() {
     ]];
     assert_oracle_parity_expect(form, expect);
 }
+
+#[test]
+fn oracle_prop_regexp_casefold_scan_long_buffer() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+
+    // Over 16 KiB, so neomacs checks the whole case-canon table and runs its
+    // fast scans; summarized, since there are hundreds of matches.
+    let form = r#"(let ((case-fold-search t)
+      (text (concat "(DEFUN alpha-1 ()) (Defun beta) (defun gamma) "
+                    "(deſun sigma) (dİfun x) (Key) (defın y) "
+                    "BYTE-COMPILE byte-compile Byte-Compile-x xbyte-compile "
+                    "let LET* Let*x let* (LET) (CATCH (Throw (rEqUiRe "
+                    "İıſK ßẞ Σσς Ａ 中文\n")))
+  (with-temp-buffer
+    (dotimes (i 120)
+      (insert text (make-string (* 3 (% i 7)) ?.) "\n"))
+    (let* ((summary (lambda (positions)
+                      (list (length positions)
+                            (apply #'+ (mapcar #'car positions))
+                            (apply #'+ (mapcar #'cdr positions))
+                            (car positions)
+                            (car (last positions)))))
+           (fwd (lambda (re &optional start bound)
+                  (goto-char (or start (point-min)))
+                  (let (acc)
+                    (while (re-search-forward re bound t)
+                      (push (cons (match-beginning 0) (match-end 0)) acc))
+                    (funcall summary (nreverse acc)))))
+           (bwd (lambda (re &optional start bound)
+                  (goto-char (or start (point-max)))
+                  (let (acc)
+                    (while (re-search-backward re bound t)
+                      (push (cons (match-beginning 0) (match-end 0)) acc))
+                    (funcall summary (nreverse acc))))))
+      (list
+       (buffer-size)
+       (mapcar (lambda (re)
+                 (list re
+                       (funcall fwd re)
+                       (funcall bwd re)
+                       (funcall fwd re 5000 12000)
+                       (funcall bwd re 12000 5000)))
+               '("(defun \\([-a-z0-9]+\\)"
+                 "\\_<byte-compile\\_>"
+                 "\\_<let\\*?\\_>"
+                 "(\\(catch\\|throw\\|defun\\|provide\\|require\\)"
+                 "k" "s" "i" "compile-x" "ß" "σ"))
+       (let ((s (buffer-string)))
+         (mapcar (lambda (start)
+                   (list start
+                         (string-match "(defun \\([-a-z0-9]+\\)" s start)
+                         (string-match "\\(byte\\)-compile\\_>" s start)))
+                 '(0 1000 8000 15000)))))))"#;
+    let expect = expect_test::expect![[
+        r#""OK (26031 ((\"(defun \\\\([-a-z0-9]+\\\\)\" (360 4650336 4654776 (1 . 15) (25856 . 25868)) (360 4650336 4654776 (25856 . 25868) (1 . 15)) (97 828413 829609 (5009 . 5021) (11959 . 11971)) (97 828413 829609 (11959 . 11971) (5009 . 5021))) (\"\\\\_<byte-compile\\\\_>\" (240 3118344 3121224 (87 . 99) (25923 . 25935)) (240 3118344 3121224 (25923 . 25935) (87 . 99)) (64 539868 540636 (5063 . 5075) (11803 . 11815)) (64 539868 540636 (11803 . 11815) (5063 . 5075))) (\"\\\\_<let\\\\*?\\\\_>\" (480 6264768 6266448 (142 . 145) (25986 . 25989)) (480 6264768 6266448 (25986 . 25989) (142 . 145)) (128 1087224 1087672 (5118 . 5121) (11866 . 11869)) (128 1087224 1087672 (11866 . 11869) (5118 . 5121))) (\"(\\\\(catch\\\\|throw\\\\|defun\\\\|provide\\\\|require\\\\)\" (720 9357192 9361752 (1 . 7) (26005 . 26013)) (720 9357192 9361752 (26005 . 26013) (1 . 7)) (193 1646039 1647261 (5009 . 5015) (11959 . 11965)) (193 1646039 1647261 (11959 . 11965) (5009 . 5015))) (\"k\" (0 0 0 nil nil) (0 0 0 nil nil) (0 0 0 nil nil) (0 0 0 nil nil)) (\"s\" (120 1554432 1554552 (54 . 55) (25877 . 25878)) (120 1554432 1554552 (25877 . 25878) (54 . 55)) (33 280650 280683 (5030 . 5031) (11980 . 11981)) (33 280650 280683 (11980 . 11981) (5030 . 5031))) (\"i\" (720 9372552 9373272 (55 . 56) (26010 . 26011)) (720 9372552 9373272 (26010 . 26011) (55 . 56)) (193 1636257 1636450 (5031 . 5032) (11981 . 11982)) (193 1636257 1636450 (11981 . 11982) (5031 . 5032))) (\"compile-x\" (120 1562112 1563192 (118 . 127) (25941 . 25950)) (120 1562112 1563192 (25941 . 25950) (118 . 127)) (32 270718 271006 (5094 . 5103) (11821 . 11830)) (32 270718 271006 (11821 . 11830) (5094 . 5103))) (\"ß\" (240 3143064 3143304 (196 . 197) (26020 . 26021)) (240 3143064 3143304 (26020 . 26021) (196 . 197)) (64 546460 546524 (5172 . 5173) (11900 . 11901)) (64 546460 546524 (11900 . 11901) (5172 . 5173))) (\"σ\" (360 4715856 4716216 (199 . 200) (26024 . 26025)) (360 4715856 4716216 (26024 . 26025) (199 . 200)) (96 820026 820122 (5175 . 5176) (11904 . 11905)) (96 820026 820122 (11904 . 11905) (5175 . 5176)))) ((0 0 86) (1000 1070 1156) (8000 8014 8100) (15000 15190 15050)))""#
+    ]];
+    assert_oracle_parity_expect(form, expect);
+}

@@ -384,8 +384,8 @@ pub(crate) struct CompiledPattern {
     /// bytes from the match start (see `build_literal_prefilter`).  `None` when
     /// no such literal set could be proven (fall back to the fastmap — always
     /// correct).  A case-folded pattern gets the ASCII case variants of its
-    /// literals, and only under a translation that folds nothing non-ASCII
-    /// into ASCII (see [`fold_prefix_literals`]).  Never set for patterns whose
+    /// literals, used only while its translation folds nothing non-ASCII into
+    /// ASCII (see [`fold_prefix_literals`]).  Never set for patterns whose
     /// only required literals are single bytes (the fastmap's memchr already
     /// handles those).
     ///
@@ -455,6 +455,9 @@ pub struct CaseTranslation {
     /// Memo for codes from 256 up when backed by a char-table, allocated on
     /// the first such code (see [`WideTranslationMemo`]).
     wide: std::cell::OnceCell<Box<WideTranslationMemo>>,
+    /// [`CaseTranslation::ascii_preimage`] of a char-table, and the
+    /// char-table write tick it was computed at.
+    ascii_preimage_memo: std::cell::Cell<Option<(u64, AsciiPreimage)>>,
 }
 
 /// Direct-mapped memo of a char-table translation for codes from 256 up.
@@ -515,25 +518,152 @@ const CASE_TRANSLATION_UNFILLED: u32 = u32::MAX;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AsciiPreimage {
     /// Only ASCII characters translate to ASCII, and every ASCII character
-    /// translates to ASCII: the hardwired standard translation.  GNU's
-    /// characters.el:803-812 leaves out the same pairs (İ, ı, ſ, K) "because
-    /// that makes searches slow".  Proven over every character code by
-    /// `standard_translation_keeps_non_ascii_out_of_ascii`.
+    /// translates to ASCII.  Always true of the hardwired standard
+    /// translation (proven over every character code by
+    /// `standard_translation_keeps_non_ascii_out_of_ascii`), and of GNU's
+    /// standard case table, whose characters.el:803-812 leaves out the pairs
+    /// that would break it (İ, ı, ſ, K) "because that makes searches slow".
+    /// A case-canon char-table has it for as long as its entries say so.
     AsciiOnly,
-    /// A case-canon char-table: any character may map into ASCII, and the
-    /// table can be edited in place after a pattern is compiled.
+    /// Some character may translate into ASCII from outside it, or out of
+    /// ASCII from inside it.
     Unknown,
 }
 
 impl CaseTranslation {
-    /// Which characters this translation can map into ASCII.
+    /// Which characters this translation maps into ASCII, as the matcher
+    /// and the per-character scans read it NOW.
+    ///
+    /// A char-table translation reads its codes below 256 through the byte
+    /// memo, which freezes a slot at first use, and the rest through the wide
+    /// memo, which follows the char-table write tick; the table itself can be
+    /// edited in place.  So the answer holds until the next char-table write:
+    /// it is memoized by the write tick, and every search asks again.  Asking
+    /// fills the ASCII slots of the byte memo.
     #[inline]
     pub(crate) fn ascii_preimage(&self) -> AsciiPreimage {
+        self.ascii_preimage_for(CharTableWalk::Allowed)
+    }
+
+    /// [`Self::ascii_preimage`] for a search that only repays walking the
+    /// whole char-table when it scans `span` bytes or more: a shorter one
+    /// takes `Unknown` (the per-character loops) rather than walk, unless the
+    /// table was already walked at this write tick.
+    #[inline]
+    fn ascii_preimage_for_span(&self, span: usize) -> AsciiPreimage {
+        self.ascii_preimage_for(if span >= CHAR_TABLE_WALK_MIN_SPAN {
+            CharTableWalk::Allowed
+        } else {
+            CharTableWalk::OnlyIfWalked
+        })
+    }
+
+    #[inline]
+    fn ascii_preimage_for(&self, walk: CharTableWalk) -> AsciiPreimage {
         match self.table {
             None => AsciiPreimage::AsciiOnly,
-            Some(_) => AsciiPreimage::Unknown,
+            Some(table) => {
+                let tick = crate::emacs_core::chartable::char_table_write_tick();
+                match self.ascii_preimage_memo.get() {
+                    Some((at, preimage)) if at == tick => preimage,
+                    _ => self.recheck_ascii_preimage(table, tick, walk),
+                }
+            }
         }
     }
+
+    #[cold]
+    #[inline(never)]
+    fn recheck_ascii_preimage(
+        &self,
+        table: crate::emacs_core::value::Value,
+        tick: u64,
+        walk: CharTableWalk,
+    ) -> AsciiPreimage {
+        let Some(folds_into_ascii) = char_table_folds_into_ascii(&table, tick, walk) else {
+            // Not worth a walk: answer for this search only.
+            return AsciiPreimage::Unknown;
+        };
+        let ascii_escapes = (0..0x80u32).any(|c| self.translate(c) >= 0x80);
+        // A frozen slot is what the matcher reads for these codes; an unfilled
+        // one will be filled from the table as it is now, which the walk
+        // below covers.
+        let frozen_latin1_into_ascii = self.byte[0x80..].iter().any(|slot| {
+            let translated = slot.get();
+            translated != CASE_TRANSLATION_UNFILLED && translated < 0x80
+        });
+        let preimage = if ascii_escapes || frozen_latin1_into_ascii || folds_into_ascii {
+            AsciiPreimage::Unknown
+        } else {
+            AsciiPreimage::AsciiOnly
+        };
+        tracing::debug!(
+            target: "neovm::regex",
+            ?preimage,
+            tick,
+            "case-canon char-table ASCII preimage"
+        );
+        self.ascii_preimage_memo.set(Some((tick, preimage)));
+        preimage
+    }
+}
+
+/// Whether finding a char-table translation's [`AsciiPreimage`] may walk the
+/// whole table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CharTableWalk {
+    Allowed,
+    /// Only reuse a walk already made at the current write tick.
+    OnlyIfWalked,
+}
+
+/// Bytes a search must span before it walks a case-canon char-table to learn
+/// its [`AsciiPreimage`].  The walk visits every slot of the table (the
+/// standard canon table covers all of Unicode's case pairs), which the
+/// per-character scan of this many bytes, at about 18 instructions a byte,
+/// repays; it recurs only after a char-table write.
+const CHAR_TABLE_WALK_MIN_SPAN: usize = 16 * 1024;
+
+thread_local! {
+    /// The last char-table walked by [`char_table_folds_into_ascii`]:
+    /// `(table bits, char-table write tick, folds)`.
+    static CHAR_TABLE_ASCII_FOLD: std::cell::Cell<Option<(usize, u64, bool)>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Whether `table` translates some character from 0x80 up into ASCII
+/// (`translate_char`: an entry that is a character code below 0x80).
+/// Memoized by (table identity, write tick) across every translation of the
+/// table, since the walk visits every slot of the table: a write to any
+/// char-table moves the tick, and so does creating one, which could reuse a
+/// collected table's address.  `None`: not walked at this tick, and `walk`
+/// does not allow it.
+#[cold]
+#[inline(never)]
+fn char_table_folds_into_ascii(
+    table: &crate::emacs_core::value::Value,
+    tick: u64,
+    walk: CharTableWalk,
+) -> Option<bool> {
+    let bits = table.bits();
+    if let Some((memo_bits, memo_tick, folds)) = CHAR_TABLE_ASCII_FOLD.with(|memo| memo.get())
+        && memo_bits == bits
+        && memo_tick == tick
+    {
+        return Some(folds);
+    }
+    if walk == CharTableWalk::OnlyIfWalked {
+        return None;
+    }
+    let folds =
+        crate::emacs_core::chartable::char_table_may_hold_value_from(table, 0x80, &mut |value| {
+            matches!(
+                value.kind(),
+                crate::emacs_core::value::ValueKind::Fixnum(code) if (0..0x80).contains(&code)
+            )
+        });
+    CHAR_TABLE_ASCII_FOLD.with(|memo| memo.set(Some((bits, tick, folds))));
+    Some(folds)
 }
 
 impl CaseTranslation {
@@ -557,6 +687,7 @@ impl CaseTranslation {
             byte,
             table: None,
             wide: std::cell::OnceCell::new(),
+            ascii_preimage_memo: std::cell::Cell::new(None),
         }
     }
 
@@ -581,6 +712,7 @@ impl CaseTranslation {
             byte: std::array::from_fn(|_| std::cell::Cell::new(CASE_TRANSLATION_UNFILLED)),
             table: Some(table),
             wide: std::cell::OnceCell::new(),
+            ascii_preimage_memo: std::cell::Cell::new(None),
         }
     }
 
@@ -7936,9 +8068,10 @@ const PREFILTER_BUDGET: usize = 16_384;
 ///
 /// A case-folded pattern stores its literals translated; its needles are
 /// every ASCII spelling of each literal's ASCII prefix
-/// ([`fold_prefix_literals`]).  That is sound only when no non-ASCII
-/// character translates into ASCII (`AsciiPreimage::AsciiOnly`); a case-canon
-/// char-table makes no such promise, so it gets no prefilter.  Patterns whose
+/// ([`fold_prefix_literals`]).  That is sound only while no non-ASCII
+/// character translates into ASCII (`AsciiPreimage::AsciiOnly`): a case-canon
+/// char-table that does not meet it at build time gets no prefilter, and
+/// `re_search` checks it again before using one.  Patterns whose
 /// only required literals are single bytes are skipped too — the fastmap's
 /// `memchr` already covers those, so a prefilter would add cost without
 /// narrowing the candidate set.
@@ -7997,6 +8130,13 @@ fn build_literal_prefilter(pattern: &CompiledPattern) -> Option<LiteralPrefilter
     // fastmap path is at least as good).
     if !pf.is_fast() {
         return None;
+    }
+    if fold.is_some() {
+        tracing::debug!(
+            target: "neovm::regex",
+            needles = literals.len(),
+            "case-folded literal prefilter"
+        );
     }
     Some(LiteralPrefilter { pf, offset: 0 })
 }
@@ -8070,12 +8210,6 @@ fn fold_prefix_literals(table: &CaseTranslation, literals: &[Vec<u8>]) -> Option
                 continue 'caps;
             }
         }
-        tracing::debug!(
-            target: "neovm::regex",
-            needles = out.len(),
-            cap,
-            "case-folded literal prefilter"
-        );
         return Some(out);
     }
     None
@@ -8323,9 +8457,12 @@ struct FoldedScans {
 ///   `E0 81 81`, which no Lisp string or buffer holds, decodes to ASCII.)
 /// - The end of the text is tried by both, when in range.
 ///
-/// A char-table translation fills its byte memo lazily from a table that can
-/// change in place, so tabulating it would freeze slots the loops still read
-/// live: only the constant standard translation is tabulated.
+/// A case-canon char-table translation qualifies while it is `AsciiOnly`:
+/// asking fills its ASCII byte-memo slots, which the table then reads (and
+/// the matcher reads) as frozen from then on, exactly as the loops would
+/// after meeting those bytes; the unibyte table fills the other slots the
+/// same way.  A later char-table write can make it `Unknown`, so every
+/// search checks `ascii_preimage` before using a scan built here.
 #[cold]
 #[inline(never)]
 fn build_folded_scan(pattern: &CompiledPattern, table: &CaseTranslation) -> FoldedScan {
@@ -8549,7 +8686,19 @@ pub(crate) fn re_search(
             // Whether this search is long enough to build a lazily derived
             // scanner it finds missing (it always uses one already built).
             let long_span = text_len.saturating_sub(start) >= PREFILTER_MIN_BUILD_SPAN;
-            let prefilter = if long_span {
+            // The folded scans and the folded prefilter are exact only while
+            // no non-ASCII character translates into ASCII; a case-canon
+            // char-table can stop meeting that after they were built.
+            let folds_exactly = match translate {
+                None => true,
+                Some(table) => {
+                    table.ascii_preimage_for_span(end.saturating_sub(start))
+                        == AsciiPreimage::AsciiOnly
+                }
+            };
+            let prefilter = if !folds_exactly {
+                None
+            } else if long_span {
                 pattern.literal_prefilter()
             } else {
                 pattern.prefilter.get().and_then(Option::as_ref)
@@ -8623,8 +8772,8 @@ pub(crate) fn re_search(
                 // per byte, or memchr when 1-3 ASCII bytes can start a
                 // match.  No per-byte `CaseTranslation::translate` remains.
                 let folded = match translate {
-                    Some(table) => pattern.folded_scan(table, long_span),
-                    None => None,
+                    Some(table) if folds_exactly => pattern.folded_scan(table, long_span),
+                    _ => None,
                 };
                 let sparse = match (translate, folded) {
                     (None, _) => pattern.sparse_ascii_fastmap(),
@@ -8797,7 +8946,11 @@ pub(crate) fn re_search(
             // A case-folded search scans with its folded table, as forward,
             // built by the first search long enough to repay it.
             let folded = match translate {
-                Some(table) if start <= text_len => {
+                Some(table)
+                    if start <= text_len
+                        && table.ascii_preimage_for_span(start - end)
+                            == AsciiPreimage::AsciiOnly =>
+                {
                     pattern.folded_scan(table, start - end >= PREFILTER_MIN_BUILD_SPAN)
                 }
                 _ => None,

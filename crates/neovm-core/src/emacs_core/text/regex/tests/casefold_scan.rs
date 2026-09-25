@@ -37,14 +37,72 @@ fn standard_translation_keeps_non_ascii_out_of_ascii() {
     );
 }
 
-/// A case-canon char-table can fold anything into ASCII, so it makes no
-/// claim.
-#[test]
-fn char_table_translation_makes_no_ascii_preimage_claim() {
-    crate::test_utils::init_test_tracing();
+/// A case-canon char-table for tests: `folds` maps each character to its
+/// canonical form; every other character translates to itself.
+fn case_canon_table(folds: &[(char, char)]) -> Value {
     let table = Value::make_char_table(Value::symbol("case-table"), Value::NIL, 3);
+    for &(from, to) in folds {
+        fold_in_place(table, from, Some(to));
+    }
+    table
+}
+
+/// Edit one entry of a case-canon char-table in place; `None` clears it.
+fn fold_in_place(table: Value, from: char, to: Option<char>) {
+    let value = to.map_or(Value::NIL, |to| Value::fixnum(to as i64));
+    crate::emacs_core::chartable::ct_set_single(&table, from as i64, value);
+}
+
+/// Upper case folds to lower case in ASCII, Latin-1 and Greek.
+const CANON_FOLDS: &[(char, char)] = &[
+    ('A', 'a'),
+    ('D', 'd'),
+    ('E', 'e'),
+    ('F', 'f'),
+    ('K', 'k'),
+    ('N', 'n'),
+    ('U', 'u'),
+    ('Y', 'y'),
+    ('É', 'é'),
+    ('Σ', 'σ'),
+    ('ς', 'σ'),
+];
+
+/// A case-canon char-table is `AsciiOnly` while its entries keep non-ASCII
+/// out of ASCII and ASCII in it; the answer follows in-place edits, and a
+/// byte-memo slot the matcher has frozen counts as it was frozen.
+#[test]
+fn char_table_translation_ascii_preimage_follows_the_table() {
+    crate::test_utils::init_test_tracing();
+    let table = case_canon_table(CANON_FOLDS);
     let translation = CaseTranslation::from_char_table(table);
+    assert_eq!(translation.ascii_preimage(), AsciiPreimage::AsciiOnly);
+    // The Kelvin sign folded into `k`, as GNU's standard table refuses to.
+    fold_in_place(table, '\u{212A}', Some('k'));
     assert_eq!(translation.ascii_preimage(), AsciiPreimage::Unknown);
+    fold_in_place(table, '\u{212A}', None);
+    assert_eq!(translation.ascii_preimage(), AsciiPreimage::AsciiOnly);
+    // `É` folded into `e`, and the matcher meets `É` while it is.
+    fold_in_place(table, 'É', Some('e'));
+    assert_eq!(translation.ascii_preimage(), AsciiPreimage::Unknown);
+    assert_eq!(translation.translate('É' as u32), 'e' as u32);
+    fold_in_place(table, 'É', Some('é'));
+    assert_eq!(
+        translation.ascii_preimage(),
+        AsciiPreimage::Unknown,
+        "the frozen slot still folds É into ASCII"
+    );
+    assert_eq!(
+        CaseTranslation::from_char_table(table).ascii_preimage(),
+        AsciiPreimage::AsciiOnly,
+        "a fresh translation freezes nothing"
+    );
+    // ASCII folded out of ASCII.
+    fold_in_place(table, 'Z', Some('ž'));
+    assert_eq!(
+        CaseTranslation::from_char_table(table).ascii_preimage(),
+        AsciiPreimage::Unknown
+    );
 }
 
 /// Compile `pattern` case-folded for a `repr` text and build its folded scan.
@@ -87,19 +145,31 @@ fn folded_scan_kind_matches_the_pattern_shape() {
     assert!(matches!(unibyte("(defun"), FoldedScan::Sparse(One(b'('))));
     assert!(matches!(unibyte("é"), FoldedScan::Table(_)));
 
-    // A case-canon char-table can change after compile: no tabulation.
-    let table = Value::make_char_table(Value::symbol("case-table"), Value::NIL, 3);
-    let cp = regex_compile_lisp_with_translation(
-        &crate::heap_types::LispString::from_utf8("k"),
+    // A case-canon char-table is tabulated while it is `AsciiOnly`, and not
+    // when it folds a non-ASCII character into ASCII.
+    let char_table_scan = |folds: &[(char, char)]| {
+        let cp = compile_with_char_table("k", case_canon_table(folds));
+        let translation = cp.translate.clone().expect("a case-folded pattern");
+        cp.folded_scan(&translation, true).expect("built").clone()
+    };
+    assert!(matches!(
+        char_table_scan(CANON_FOLDS),
+        FoldedScan::Sparse(Two(b'K', b'k'))
+    ));
+    assert!(matches!(
+        char_table_scan(&[('K', 'k'), ('\u{212A}', 'k')]),
+        FoldedScan::PerChar
+    ));
+}
+
+/// Compile `pattern` case-folded through the case-canon char-table `table`.
+fn compile_with_char_table(pattern: &str, table: Value) -> CompiledPattern {
+    regex_compile_lisp_with_translation(
+        &crate::heap_types::LispString::from_utf8(pattern),
         false,
         Some(CaseTranslation::from_char_table(table)),
     )
-    .expect("compile");
-    let translation = cp.translate.clone().expect("a case-folded pattern");
-    assert!(matches!(
-        cp.folded_scan(&translation, true),
-        Some(FoldedScan::PerChar)
-    ));
+    .expect("compile")
 }
 
 /// Patterns covering every folded scan shape and the fastmap gates.
@@ -469,4 +539,173 @@ fn casefold_candidate_entries_drop_to_literal_hits() {
     );
     let exhaustive = with_fastmap_disabled(|| search(&memchr_only));
     assert_eq!(exhaustive, (None, text.len() as u64 + 1));
+}
+
+/// A case-canon char-table translation gets the folded scans and prefilter
+/// while it is `AsciiOnly`, and every search stops using them the moment an
+/// in-place edit folds a non-ASCII character into ASCII.
+#[test]
+fn folded_scans_follow_a_char_table_translation() {
+    crate::test_utils::init_test_tracing();
+    let syntax = DefaultSyntaxLookup;
+    let texts: [&[u8]; 3] = [
+        "xK(DEFUN a)(defun b)k Kk \u{212A}ey (key)".as_bytes(),
+        "ÉéΣσς (Defun é) \u{212A} k\nK ſ".as_bytes(),
+        b"x\xC9y\xE9 (DEFUN a) k K \xDF\xFF",
+    ];
+    for pattern in [
+        "(defun \\([a-z]+\\)",
+        "k",
+        "defun",
+        "[a-c]x",
+        "σ",
+        "é",
+        "key",
+    ] {
+        for repr in [TextRepr::Multibyte, TextRepr::Unibyte] {
+            let mut cp = compile_with_char_table(pattern, case_canon_table(CANON_FOLDS));
+            cp.target_multibyte = repr == TextRepr::Multibyte;
+            for text in texts {
+                let positions = scan_positions(text, repr);
+                for &start in &positions {
+                    for &limit in &positions {
+                        let search = || {
+                            re_search(
+                                &cp,
+                                text,
+                                start,
+                                limit as isize - start as isize,
+                                &syntax,
+                                start,
+                            )
+                            .map(|(pos, regs)| (pos, regs.start, regs.end))
+                        };
+                        let expected = with_fastmap_disabled(search);
+                        let unbuilt = search();
+                        build_search_optimizations(&cp);
+                        let built = search();
+                        let context = format!("{pattern:?} {repr:?} {text:x?} {start} -> {limit}");
+                        assert_eq!(unbuilt, expected, "per-character loop: {context}");
+                        assert_eq!(built, expected, "folded scan: {context}");
+                    }
+                }
+            }
+        }
+    }
+
+    // Built while `AsciiOnly`: the scan and the prefilter exist.
+    let table = case_canon_table(CANON_FOLDS);
+    let cp = compile_with_char_table("key", table);
+    let translation = cp.translate.clone().expect("folded");
+    build_search_optimizations(&cp);
+    assert!(cp.literal_prefilter().is_some());
+    assert!(matches!(
+        cp.folded_scan(&translation, false),
+        Some(FoldedScan::Sparse(SparseAsciiFastmap::Two(b'K', b'k')))
+    ));
+    let text = "(\u{212A}ey) (KEY)".as_bytes();
+    let search = || {
+        re_search(&cp, text, 0, text.len() as isize, &syntax, 0)
+            .map(|(pos, regs)| (pos, regs.end[0]))
+    };
+    let kelvin_ey = Some((1, 6));
+    let upper_key = Some((9, 12));
+    assert_eq!(with_fastmap_disabled(search), upper_key);
+    assert_eq!(search(), upper_key);
+    // Now the table folds the Kelvin sign into `k`: the exhaustive scan finds
+    // it first, and so must the search with the fast scans built.
+    fold_in_place(table, '\u{212A}', Some('k'));
+    assert_eq!(with_fastmap_disabled(search), kelvin_ey);
+    assert_eq!(search(), kelvin_ey);
+    // And backward.
+    let backward = || re_search(&cp, text, 8, -8, &syntax, 8).map(|(pos, regs)| (pos, regs.end[0]));
+    assert_eq!(with_fastmap_disabled(backward), kelvin_ey);
+    assert_eq!(backward(), kelvin_ey);
+    fold_in_place(table, '\u{212A}', None);
+    assert_eq!(search(), upper_key);
+}
+
+/// Lisp buffer searches translate through the buffer's case-canon
+/// char-table, the standard one included (its identity is not known after a
+/// dump is loaded, and the hardwired translation would not fold σ/ς or µ/μ
+/// as GNU's table does).  The fast scans must engage there: a case-folded
+/// `re-search-forward` over 5000 `(` enters the matcher a handful of times,
+/// and finds what the exhaustive scan finds.
+#[test]
+fn lisp_case_folded_search_engages_the_fast_scans() {
+    crate::test_utils::init_test_tracing();
+    let form = r#"(with-temp-buffer
+                    (dotimes (_ 5000) (insert "( x "))
+                    (insert "(DEFUN abc) (\x212Aey)")
+                    (goto-char (point-min))
+                    (let ((case-fold-search t))
+                      (list (re-search-forward "(defun \\([a-z]+\\)" nil t)
+                            (match-beginning 1)
+                            (progn (goto-char (point-max))
+                                   (re-search-backward "(defun" nil t))
+                            (progn (goto-char (point-min))
+                                   (re-search-forward "(key" nil t))
+                            (string-match "σ" "ς")
+                            (string-match "k" (string #x212A)))))"#;
+    let eval = |form: &str| {
+        let before = matcher_entry_count();
+        let result = crate::test_utils::runtime_startup_eval_one(form);
+        (result, matcher_entry_count() - before)
+    };
+    // Each evaluation in the cached runtime makes searches of its own, and
+    // the first one also builds the runtime.
+    let _ = eval("nil");
+    let (_, baseline) = eval("nil");
+    let (fast, fast_entries) = eval(form);
+    let (exhaustive, exhaustive_entries) = with_fastmap_disabled(|| eval(form));
+    assert_eq!(exhaustive, "OK (20011 20008 20001 nil 0 nil)");
+    assert_eq!(fast, exhaustive);
+    assert!(
+        exhaustive_entries > baseline + 40_000,
+        "the exhaustive scan tries every position: {exhaustive_entries} (baseline {baseline})"
+    );
+    assert!(
+        fast_entries < baseline + 10,
+        "the fast scans should skip to the literals: {fast_entries} (baseline {baseline})"
+    );
+}
+
+/// A search too short to repay walking a char-table does not walk it: it
+/// runs the per-character loop until a long search has walked the table at
+/// the current write tick, and again after the next char-table write.
+#[test]
+fn char_table_walk_waits_for_a_long_search() {
+    crate::test_utils::init_test_tracing();
+    let table = case_canon_table(CANON_FOLDS);
+    let cp = compile_with_char_table("(defun x", table);
+    let mut short = b"( ".repeat(200);
+    short.extend_from_slice(b"(DEFUN x");
+    let mut long = b"( ".repeat(CHAR_TABLE_WALK_MIN_SPAN);
+    long.extend_from_slice(b"(DEFUN x");
+    let entries = |text: &[u8]| {
+        let before = matcher_entry_count();
+        let found = re_search(&cp, text, 0, text.len() as isize, &DefaultSyntaxLookup, 0);
+        assert_eq!(found.map(|(pos, _)| pos), Some(text.len() - 8));
+        matcher_entry_count() - before
+    };
+    // The per-character loop enters the matcher at every `(`.
+    assert_eq!(entries(&short), 201, "short search, table not walked");
+    assert_eq!(
+        entries(&long),
+        1,
+        "a long search walks and uses the prefilter"
+    );
+    assert_eq!(
+        entries(&short),
+        1,
+        "walked at this tick: short searches use it"
+    );
+    fold_in_place(table, 'Ω', Some('ω'));
+    assert_eq!(
+        entries(&short),
+        201,
+        "a char-table write: not walked again yet"
+    );
+    assert_eq!(entries(&long), 1);
+    assert_eq!(entries(&short), 1);
 }

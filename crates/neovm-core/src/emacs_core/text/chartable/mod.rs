@@ -2867,6 +2867,64 @@ fn run_key(start: i64, end: i64) -> Value {
     }
 }
 
+/// Whether some character at or above `from` may look up (as `ct_lookup`
+/// does: its own entry, else the table's default, else the parent's) a value
+/// satisfying `pred`.  Visits the table's slots in place, allocating
+/// nothing.  Over-approximates: the default or the parent counts even when no
+/// entry falls back to it.  A char-code property table, whose values are
+/// stored compressed, and anything that is not a char-table answer `true`.
+pub(crate) fn char_table_may_hold_value_from(
+    table: &Value,
+    from: i64,
+    pred: &mut dyn FnMut(Value) -> bool,
+) -> bool {
+    if !is_char_table(table) || is_char_code_property_table(table) {
+        return true;
+    }
+    let Some(obj) = table.as_char_table_obj() else {
+        return ct_effective_runs(table)
+            .iter()
+            .any(|run| run.end >= from && pred(run.value));
+    };
+    let fallback = if !obj.defalt.is_nil() {
+        pred(obj.defalt)
+    } else {
+        is_char_table(&obj.parent) && char_table_may_hold_value_from(&obj.parent, from, pred)
+    };
+    fallback
+        || obj
+            .contents
+            .iter()
+            .copied()
+            .enumerate()
+            .any(|(idx, value)| {
+                let start = idx as i64 * GNU_CHARTAB_CHARS[0];
+                let end = (start + GNU_CHARTAB_CHARS[0] - 1).min(MAX_CHAR);
+                end >= from && slot_may_hold_value_from(value, from, pred)
+            })
+}
+
+/// [`char_table_may_hold_value_from`] for one slot: a leaf value, or a
+/// sub-char-table whose slots are visited in turn.
+fn slot_may_hold_value_from(value: Value, from: i64, pred: &mut dyn FnMut(Value) -> bool) -> bool {
+    if !is_sub_char_table(value) {
+        return !value.is_nil() && pred(value);
+    }
+    let Some(obj) = value.as_sub_char_table_obj() else {
+        return true;
+    };
+    let min_char = obj.min_char as i64;
+    let span = GNU_CHARTAB_CHARS[obj.depth as usize];
+    obj.contents
+        .iter()
+        .copied()
+        .enumerate()
+        .any(|(idx, child)| {
+            let end = (min_char + idx as i64 * span + span - 1).min(MAX_CHAR);
+            end >= from && slot_may_hold_value_from(child, from, pred)
+        })
+}
+
 pub(crate) fn for_each_non_nil_char_table_run<F>(table: &Value, mut f: F)
 where
     F: FnMut(Value, Value),

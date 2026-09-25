@@ -2049,3 +2049,48 @@ fn put_unicode_property_internal_rejects_nil_char_table() {
         "char-table-p",
     );
 }
+
+/// `char_table_may_hold_value_from` sees what `ct_lookup` would return for
+/// every character from `from` up: own entries at any depth and in ranges,
+/// the default, the parent; and nothing below `from`.
+#[test]
+fn char_table_may_hold_value_from_sees_entries_ranges_default_and_parent() {
+    crate::test_utils::init_test_tracing();
+    let ascii =
+        |value: Value| matches!(value.kind(), ValueKind::Fixnum(code) if (0..0x80).contains(&code));
+    let holds =
+        |table: &Value| char_table_may_hold_value_from(table, 0x80, &mut |value| ascii(value));
+
+    let table = Value::make_char_table(Value::symbol("case-table"), Value::NIL, 3);
+    ct_set_single(&table, 'A' as i64, Value::fixnum('a' as i64));
+    ct_set_single(&table, 0xC9, Value::fixnum(0xE9));
+    assert!(
+        !holds(&table),
+        "an entry below `from`, and non-ASCII values"
+    );
+    ct_set_single(&table, 0x212A, Value::fixnum('k' as i64));
+    assert!(holds(&table), "an entry deep in a sub-char-table");
+    ct_set_single(&table, 0x212A, Value::NIL);
+    assert!(!holds(&table));
+
+    builtin_set_char_table_range(
+        vec![
+            table,
+            Value::cons(Value::fixnum(0x1_0000), Value::fixnum(0x2_FFFF)),
+            Value::fixnum('z' as i64),
+        ],
+        None,
+    )
+    .expect("set range");
+    assert!(holds(&table), "a range entry");
+
+    let parent = Value::make_char_table(Value::symbol("case-table"), Value::NIL, 3);
+    ct_set_single(&parent, 0x4E2D, Value::fixnum('x' as i64));
+    let child = Value::make_char_table(Value::symbol("case-table"), Value::NIL, 3);
+    assert!(!holds(&child));
+    builtin_set_char_table_parent(vec![child, parent]).expect("set parent");
+    assert!(holds(&child), "the parent's entry shows through a nil one");
+
+    let defaulted = make_char_table_value(Value::symbol("case-table"), Value::fixnum('y' as i64));
+    assert!(holds(&defaulted), "the default shows through a nil entry");
+}

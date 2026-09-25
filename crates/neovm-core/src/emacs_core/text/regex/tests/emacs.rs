@@ -2415,9 +2415,10 @@ fn prefilter_none_for_leading_nonliteral() {
 
 #[test]
 fn prefilter_none_for_custom_case_table() {
-    // A case-canon char-table may fold any character into a needle byte, so
-    // its patterns get no prefilter; the standard translation's do.
+    // A case-canon char-table that folds a non-ASCII character into a needle
+    // byte gets no prefilter; the standard translation does.
     let table = Value::make_char_table(Value::symbol("case-table"), Value::NIL, 3);
+    crate::emacs_core::chartable::ct_set_single(&table, 0x212A, Value::fixnum('d' as i64));
     let cp = regex_compile_lisp_with_translation(
         &crate::heap_types::LispString::from_utf8("defun"),
         false,
