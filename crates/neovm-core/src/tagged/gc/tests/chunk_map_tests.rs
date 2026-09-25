@@ -139,6 +139,44 @@ fn the_radix_answers_none_until_set_and_after_clear() {
     assert_eq!(map.get(0x10_0000_0000), ChunkEntry::NONE);
 }
 
+/// The heap's handle (`HeapChunkMap`, which skips the `Arc` hop) answers
+/// exactly as the shared map it wraps, before and after writes through the
+/// shared map, for every address shape the oracles ask about.
+#[test]
+fn the_heap_handle_answers_as_the_shared_map() {
+    let shared = std::sync::Arc::new(ChunkMap::new());
+    let handle = HeapChunkMap::new(shared.clone());
+    let base = 0x5555_0001_0000usize;
+    let far = base + (1usize << 33);
+    let probes = |handle: &HeapChunkMap| {
+        for addr in [
+            0usize,
+            8,
+            base,
+            base + 0x40,
+            base + 0xffff,
+            base + 0x1_0000,
+            base - 1,
+            far,
+            far + 0x8000,
+            0x7fff_ffff_0000,
+            1 << 47,
+            usize::MAX,
+        ] {
+            assert_eq!(handle.get(addr), shared.get(addr), "{addr:#x}");
+        }
+    };
+    probes(&handle);
+    shared.set(base, ChunkEntry::new(ChunkClass::String, 7));
+    shared.set(far, ChunkEntry::new(ChunkClass::Cons, 3));
+    probes(&handle);
+    assert!(handle.get(base + 0x40).is(ChunkClass::String));
+    assert_eq!(handle.get(far).index(), 3);
+    shared.set(base, ChunkEntry::NONE);
+    probes(&handle);
+    assert!(std::sync::Arc::ptr_eq(handle.shared(), &shared));
+}
+
 #[test]
 fn entries_pack_class_and_index() {
     for class in [

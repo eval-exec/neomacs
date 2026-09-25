@@ -357,7 +357,7 @@ impl TaggedHeap {
             self.handshake.last_start_bcsnap_us = 0;
             self.handshake.probe_cons_blocks = self.cons_blocks.len();
             return PageSnapshot::ChunkMap {
-                map: map.clone(),
+                map: map.shared().clone(),
                 start_count,
             };
         }

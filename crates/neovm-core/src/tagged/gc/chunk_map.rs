@@ -195,6 +195,69 @@ impl ChunkMap {
     }
 }
 
+/// The heap's handle on its chunk map: the shared map (the arenas' page
+/// writers and each concurrent mark's job hold clones) plus a copy of its
+/// level-1 base pointer, stored inline in the heap.
+///
+/// A lookup through the handle is three dependent loads -- the level-1 base
+/// out of the heap, the leaf pointer, the entry -- where one through the
+/// `Arc` is four (the `Arc`'s inner pointer first). The ownership oracles
+/// run once per non-cons object the mutator marks, about 650K times per
+/// cycle on the P5 probe's termination drains, so the hop is not free.
+pub(crate) struct HeapChunkMap {
+    map: std::sync::Arc<ChunkMap>,
+    /// `map.l1`'s base: valid for as long as `map` is.
+    l1: std::ptr::NonNull<AtomicPtr<ChunkLeaf>>,
+}
+
+// SAFETY: `l1` points into `map`'s level-1 table, which the handle keeps
+// alive and which is only ever accessed through atomics.
+unsafe impl Send for HeapChunkMap {}
+unsafe impl Sync for HeapChunkMap {}
+
+impl HeapChunkMap {
+    pub(crate) fn new(map: std::sync::Arc<ChunkMap>) -> Self {
+        let l1 = std::ptr::NonNull::new(map.l1.as_ptr() as *mut AtomicPtr<ChunkLeaf>)
+            .expect("a boxed slice's pointer is never null");
+        Self { map, l1 }
+    }
+
+    /// The shared map, for the page writers and the GC thread's snapshot.
+    pub(crate) fn shared(&self) -> &std::sync::Arc<ChunkMap> {
+        &self.map
+    }
+
+    /// [`ChunkMap::get`] without the `Arc` hop.
+    #[inline(always)]
+    pub(crate) fn get(&self, addr: usize) -> ChunkEntry {
+        let hi = addr >> L1_SHIFT;
+        if hi >= L1_LEN {
+            return ChunkEntry::NONE;
+        }
+        // SAFETY: `l1` is the live level-1 table of `L1_LEN` entries and
+        // `hi < L1_LEN`.
+        let leaf = unsafe { &*self.l1.as_ptr().add(hi) }.load(Ordering::Acquire);
+        if leaf.is_null() {
+            return ChunkEntry::NONE;
+        }
+        // SAFETY: as in `ChunkMap::get`.
+        let word = unsafe {
+            (*leaf)
+                .0
+                .get_unchecked((addr >> GRANULE_SHIFT) & (LEAF_LEN - 1))
+        };
+        ChunkEntry(word.load(Ordering::Acquire))
+    }
+}
+
+impl std::ops::Deref for HeapChunkMap {
+    type Target = ChunkMap;
+
+    fn deref(&self) -> &ChunkMap {
+        &self.map
+    }
+}
+
 impl Drop for ChunkMap {
     fn drop(&mut self) {
         for slot in self.l1.iter() {

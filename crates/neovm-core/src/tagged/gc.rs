@@ -350,7 +350,7 @@ pub struct TaggedHeap {
     /// has an entry, and the ownership oracles and the GC thread classify
     /// through it instead of the per-class registries. Shared with the
     /// arenas (their page writers) and each concurrent mark's job.
-    chunk_map: Option<std::sync::Arc<ChunkMap>>,
+    chunk_map: Option<HeapChunkMap>,
     /// Cons cell block allocator.
     cons_blocks: Vec<ConsBlock>,
     /// Base-address lookup for O(1) cons block ownership and marking.
@@ -947,7 +947,7 @@ impl TaggedHeap {
             region_book: RegionBook::new(),
             region_stats: RegionStats::default(),
             identity: next_tagged_heap_identity(),
-            chunk_map: chunk_map.clone(),
+            chunk_map: chunk_map.clone().map(HeapChunkMap::new),
             cons_blocks: Vec::new(),
             cons_block_index_by_base: FxHashMap::default(),
             mark_cons_block_cache: None,
@@ -2538,7 +2538,7 @@ mod jit_state;
 mod knobs;
 
 mod chunk_map;
-use chunk_map::{CHUNK_CLASS_COUNT, ChunkClass, ChunkEntry, ChunkMap, PageSnapshot};
+use chunk_map::{CHUNK_CLASS_COUNT, ChunkClass, ChunkEntry, ChunkMap, HeapChunkMap, PageSnapshot};
 
 mod census;
 #[cfg(test)]

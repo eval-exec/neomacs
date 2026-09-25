@@ -676,7 +676,7 @@ impl TaggedHeap {
         let block_index = match self.mark_cons_block_cache {
             Some(cache) if cache.block_base == block_base => cache.block_index,
             _ => {
-                let found = match self.chunk_map.as_deref() {
+                let found = match self.chunk_map.as_ref() {
                     Some(map) => {
                         let entry = map.get(addr);
                         entry.is(ChunkClass::Cons).then(|| entry.index())
@@ -1470,45 +1470,62 @@ impl TaggedHeap {
     /// alloc-bit tests; only an address on no block or page consults the
     /// residual `Box` addr-set. A page owns its whole 64 KiB granule, so an
     /// address on another class's page is not an object of this one.
-    #[inline]
+    ///
+    /// The map path is `#[inline(always)]` and the registry path is out of
+    /// line: `mark_value` asks one of these for every non-cons object it
+    /// marks (about 650K per cycle on the P5 probe's termination drains), and
+    /// as a call the map path's prologue, epilogue and reloaded heap fields
+    /// were a third of its ~30 instructions.
+    #[inline(always)]
     pub(super) fn owns_float_object(&self, ptr: *const u8) -> bool {
-        if let Some(map) = self.chunk_map.as_deref() {
+        if let Some(map) = self.chunk_map.as_ref() {
             let addr = ptr as usize;
             let entry = map.get(addr);
             return if entry.is(ChunkClass::Float) {
                 self.float_arena.owns_in_page(entry.index(), addr)
             } else {
-                entry == ChunkEntry::NONE
-                    && !ptr.is_null()
-                    && self.non_cons_object_addrs.contains(&addr)
+                entry == ChunkEntry::NONE && self.owns_boxed_object(addr)
             };
         }
+        self.owns_float_object_by_registry(ptr)
+    }
+
+    #[inline(never)]
+    fn owns_float_object_by_registry(&self, ptr: *const u8) -> bool {
         !ptr.is_null()
             && (self.float_arena.owns(ptr) || self.non_cons_object_addrs.contains(&(ptr as usize)))
     }
 
-    #[inline]
+    #[inline(always)]
     pub(super) fn owns_string_object(&self, ptr: *const u8) -> bool {
-        if let Some(map) = self.chunk_map.as_deref() {
+        if let Some(map) = self.chunk_map.as_ref() {
             let addr = ptr as usize;
             let entry = map.get(addr);
             return if entry.is(ChunkClass::String) {
                 self.string_arena.owns_in_page(entry.index(), addr)
             } else {
-                entry == ChunkEntry::NONE
-                    && !ptr.is_null()
-                    && self.non_cons_object_addrs.contains(&addr)
+                entry == ChunkEntry::NONE && self.owns_boxed_object(addr)
             };
         }
+        self.owns_string_object_by_registry(ptr)
+    }
+
+    #[inline(never)]
+    fn owns_string_object_by_registry(&self, ptr: *const u8) -> bool {
         !ptr.is_null()
             && (self.string_arena.owns(ptr) || self.non_cons_object_addrs.contains(&(ptr as usize)))
     }
 
-    #[inline]
+    #[inline(always)]
     pub(super) fn owns_veclike_object(&self, ptr: *const u8) -> bool {
-        if let Some(map) = self.chunk_map.as_deref() {
+        if let Some(map) = self.chunk_map.as_ref() {
             return self.owns_veclike_object_by_chunk(map, ptr);
         }
+        self.owns_veclike_object_by_registry(ptr)
+    }
+
+    #[inline(never)]
+    fn owns_veclike_object_by_registry(&self, ptr: *const u8) -> bool {
         // `VecLikeType::Vector`, `ByteCode`, `Lambda`, `Macro`, `Record`
         // (incl. the `WindowConfiguration` tag — same `RecordObj`),
         // `SymbolWithPos`, `Marker` and `Bignum` are paged (each in its own
@@ -1528,8 +1545,8 @@ impl TaggedHeap {
 
     /// [`Self::owns_veclike_object`] through the chunk map: the granule's
     /// class picks the arena, whose page answers.
-    #[inline]
-    fn owns_veclike_object_by_chunk(&self, map: &ChunkMap, ptr: *const u8) -> bool {
+    #[inline(always)]
+    fn owns_veclike_object_by_chunk(&self, map: &HeapChunkMap, ptr: *const u8) -> bool {
         let addr = ptr as usize;
         let entry = map.get(addr);
         let index = entry.index();
@@ -1542,9 +1559,18 @@ impl TaggedHeap {
             ChunkClass::SymbolWithPos => self.symbol_with_pos_arena.owns_in_page(index, addr),
             ChunkClass::Marker => self.marker_arena.owns_in_page(index, addr),
             ChunkClass::Bignum => self.bignum_arena.owns_in_page(index, addr),
-            ChunkClass::None => !ptr.is_null() && self.non_cons_object_addrs.contains(&addr),
+            ChunkClass::None => self.owns_boxed_object(addr),
             ChunkClass::Cons | ChunkClass::Float | ChunkClass::String => false,
         }
+    }
+
+    /// The residual `Box` addr-set's answer for an address on no heap block
+    /// or page (the chunk map's `None`): hash tables, char-tables, buffers
+    /// and the other boxed kinds, plus everything not this heap's. Out of
+    /// line: the page classes are the common case.
+    #[inline(never)]
+    fn owns_boxed_object(&self, addr: usize) -> bool {
+        addr != 0 && self.non_cons_object_addrs.contains(&addr)
     }
 
     /// Tag-dispatched ownership for a heap value whose raw object address is

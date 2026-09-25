@@ -749,7 +749,7 @@ impl<T: PagedObject> ObjectArena<T> {
 
     /// [`Self::owns`] for an address the chunk map already placed in page
     /// `index` of this arena: the stride, tail and alloc-bit tests only.
-    #[inline]
+    #[inline(always)]
     pub(super) fn owns_in_page(&self, index: usize, addr: usize) -> bool {
         let page = &self.pages[index];
         debug_assert_eq!(addr & !(OBJECT_PAGE_ALIGN - 1), page.base_addr());

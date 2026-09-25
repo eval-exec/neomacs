@@ -792,7 +792,7 @@ impl TaggedHeap {
             let ptr = value.xcons_ptr();
             if ConsBlock::ptr_is_cell_aligned(ptr) {
                 let base = ConsBlock::block_base_for_ptr(ptr);
-                let found = match self.chunk_map.as_deref() {
+                let found = match self.chunk_map.as_ref() {
                     Some(map) => {
                         let entry = map.get(ptr as usize);
                         entry.is(ChunkClass::Cons).then(|| entry.index())
