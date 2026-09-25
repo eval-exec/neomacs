@@ -1804,6 +1804,19 @@ fn builtin_looking_at_with_state_and_syntax_properties(
     let buf = buffers
         .current_buffer()
         .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+    if crate::emacs_core::eval::builtin_frontend_on() {
+        // Publish the registers into the match data in place (U2.8).
+        let mut regs = super::regex::SearchRegisters::default();
+        let matched =
+            super::regex::looking_at_compiled_into(buf, compiled, match_context, &mut regs);
+        if matched
+            && !inhibit_modify
+            && let Some(match_data) = match_data
+        {
+            regs.publish_buffer_into(buf, match_data);
+        }
+        return Ok(Value::bool_val(matched));
+    }
     let result = super::regex::looking_at_compiled(buf, compiled, match_context);
 
     match result {

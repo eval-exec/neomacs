@@ -4370,10 +4370,11 @@ fn literal_register_reuse_discards_captures_and_publishes_character_positions() 
             for backward in [false, true] {
                 let mut buf = make_test_buffer_with_backend(text, kind);
                 // A prior result with enough captures to spill inline storage.
-                let mut regs = SearchRegisters(EngineMatchData::new(
+                let mut regs = SearchRegisters(SearchRegistersKind::Groups(EngineMatchData::new(
                     std::iter::repeat_n(Some(MatchGroup::new(0, 1)), 12).collect(),
-                ));
-                let mut published = Some(regs.0.publish_buffer(&buf));
+                )));
+                let mut published = None;
+                regs.publish_buffer_into(&buf, &mut published);
                 for pattern in ["ab", "b", "", "absent"] {
                     let start = if backward { text.len() } else { 0 };
                     buf.goto_emacs_byte_pos(crate::buffer::EmacsBytePos::new(start));

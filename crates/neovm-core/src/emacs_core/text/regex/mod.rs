@@ -602,16 +602,70 @@ struct EngineMatchData {
 /// into the evaluator's match data in place -- GNU's global `search_regs`,
 /// without the ~180-byte result a by-value search success copied at every
 /// hop between the matcher and the match-data slot.
-#[derive(Default)]
-pub(crate) struct SearchRegisters(EngineMatchData);
+pub(crate) struct SearchRegisters(SearchRegistersKind);
+
+enum SearchRegistersKind {
+    /// Registers as buffer byte ranges: a literal search, the zero-count
+    /// match, and every regexp search with the U2.8 knob off.
+    Groups(EngineMatchData),
+    /// The regexp engine's registers, moved in untouched, and the buffer
+    /// byte position their offsets count from. Publishing converts them to
+    /// Lisp positions in one pass (U2.8), where the byte-range form walked
+    /// them twice: into byte ranges here, then into positions at publish.
+    Engine { regs: MatchRegisters, offset: usize },
+}
+
+impl Default for SearchRegisters {
+    fn default() -> Self {
+        Self(SearchRegistersKind::Groups(EngineMatchData::default()))
+    }
+}
 
 impl SearchRegisters {
     /// An empty match at POS and no other register: GNU `search_buffer`'s
     /// `set_search_regs (pos_byte, 0)` for a search made zero times.
     pub(crate) fn empty_match_at(pos: EmacsBytePos) -> Self {
-        Self(EngineMatchData::new(gnu_single_group_vec(Some(
-            MatchGroup::new(pos.get(), pos.get()),
-        ))))
+        Self(SearchRegistersKind::Groups(EngineMatchData::new(
+            gnu_single_group_vec(Some(MatchGroup::new(pos.get(), pos.get()))),
+        )))
+    }
+
+    /// A literal match: one register, GNU's padded register count.
+    fn set_single_group(&mut self, group: MatchGroup) {
+        match &mut self.0 {
+            SearchRegistersKind::Groups(groups) => groups.set_single_group(group),
+            SearchRegistersKind::Engine { .. } => {
+                let mut groups = EngineMatchData::default();
+                groups.set_single_group(group);
+                self.0 = SearchRegistersKind::Groups(groups);
+            }
+        }
+    }
+
+    /// Take a buffer regexp search's registers, found in text starting at
+    /// buffer byte OFFSET, and answer where the match's group 0 lies.
+    fn set_engine_registers(&mut self, regs: MatchRegisters, offset: usize) -> EmacsByteRange {
+        let group0 = EmacsByteRange::new(
+            EmacsBytePos::new(regs.start[0] as usize + offset),
+            EmacsBytePos::new(regs.end[0] as usize + offset),
+        );
+        self.0 = if crate::emacs_core::eval::builtin_frontend_on() {
+            SearchRegistersKind::Engine { regs, offset }
+        } else {
+            SearchRegistersKind::Groups(buffer_engine_match_data_from_registers(&regs, offset))
+        };
+        group0
+    }
+
+    /// These registers as byte ranges, for a caller that publishes a
+    /// [`BufferSearchSuccess`].
+    fn into_engine_match_data(self) -> EngineMatchData {
+        match self.0 {
+            SearchRegistersKind::Groups(groups) => groups,
+            SearchRegistersKind::Engine { regs, offset } => {
+                buffer_engine_match_data_from_registers(&regs, offset)
+            }
+        }
     }
 
     /// Publish these registers, in Lisp character positions of BUF, as the
@@ -623,15 +677,82 @@ impl SearchRegisters {
         {
             *id = buf.id;
             groups.clear();
-            self.0.fill_buffer_groups(buf, groups);
+            self.fill_buffer_groups(buf, groups);
             #[cfg(debug_assertions)]
             {
                 match_data.read_mask = Default::default();
             }
             return;
         }
-        *target = Some(self.0.publish_buffer(buf));
+        let mut groups = smallvec::SmallVec::new();
+        self.fill_buffer_groups(buf, &mut groups);
+        *target = Some(MatchData {
+            kind: MatchDataKind::Buffer { id: buf.id, groups },
+            #[cfg(debug_assertions)]
+            read_mask: Default::default(),
+        });
     }
+
+    fn fill_buffer_groups(
+        &self,
+        buf: &Buffer,
+        groups: &mut smallvec::SmallVec<
+            [Option<LispCharMatchRange>; GNU_SEARCH_REGS_BASE_CAPACITY],
+        >,
+    ) {
+        match &self.0 {
+            SearchRegistersKind::Groups(engine_match) => {
+                engine_match.fill_buffer_groups(buf, groups)
+            }
+            SearchRegistersKind::Engine { regs, offset } => {
+                fill_buffer_groups_from_registers(buf, regs, *offset, groups)
+            }
+        }
+    }
+}
+
+/// [`EngineMatchData::fill_buffer_groups`] of
+/// [`buffer_engine_match_data_from_registers`]`(REGS, OFFSET)`, in one pass:
+/// each participating register pair converted straight to Lisp positions of
+/// BUF, then GNU's padding of unset registers.
+fn fill_buffer_groups_from_registers(
+    buf: &Buffer,
+    regs: &MatchRegisters,
+    offset: usize,
+    groups: &mut smallvec::SmallVec<[Option<LispCharMatchRange>; GNU_SEARCH_REGS_BASE_CAPACITY]>,
+) {
+    let num_regs = regs.num_regs();
+    let capacity = gnu_search_regs_capacity(num_regs);
+    groups.reserve(capacity);
+    #[cfg(debug_assertions)]
+    match_stats::count_publish(&buffer_engine_match_data_from_registers(regs, offset).groups);
+    let registers = regs.start.iter().zip(regs.end.iter());
+    // As `EngineMatchData::fill_buffer_groups`: one `Z == Z_BYTE` test for
+    // the whole set.
+    if let Some(end) = buf.text_single_byte_chars_end() {
+        let lisp = |pos: i64| {
+            LispMatchPosition::new(EmacsBytePos::new(pos as usize + offset).min(end).get() + 1)
+        };
+        for (&start, &stop) in registers {
+            groups.push((start >= 0 && stop >= 0).then(|| LispCharMatchRange {
+                start: lisp(start),
+                end: lisp(stop),
+            }));
+        }
+    } else {
+        let lisp = |pos: i64| {
+            LispMatchPosition::from_buffer_position(
+                buf.emacs_byte_pos_to_lisp_char_pos(EmacsBytePos::new(pos as usize + offset)),
+            )
+        };
+        for (&start, &stop) in registers {
+            groups.push((start >= 0 && stop >= 0).then(|| LispCharMatchRange {
+                start: lisp(start),
+                end: lisp(stop),
+            }));
+        }
+    }
+    groups.resize(groups.len().max(capacity), None);
 }
 
 /// A successful buffer search ready to commit to evaluator state.
@@ -2824,7 +2945,7 @@ pub(crate) fn search_forward(
 ) -> Result<Option<BufferSearchSuccess>, String> {
     let mut regs = SearchRegisters::default();
     let point = search_forward_into(buf, pattern, bound, noerror, case_fold, &mut regs)?;
-    Ok(point.map(|point| BufferSearchSuccess::new(buf, point, regs.0)))
+    Ok(point.map(|point| BufferSearchSuccess::new(buf, point, regs.into_engine_match_data())))
 }
 
 pub(crate) fn search_forward_into(
@@ -2871,7 +2992,7 @@ pub(crate) fn search_forward_into(
     if let Some(found) = found {
         let matched = found.shift(start.get());
         let match_end = matched.end();
-        out.0.set_single_group(matched);
+        out.set_single_group(matched);
         Ok(Some(EmacsBytePos::new(match_end)))
     } else if noerror {
         // When noerror is t, don't move point.
@@ -2901,7 +3022,7 @@ pub(crate) fn search_backward(
 ) -> Result<Option<BufferSearchSuccess>, String> {
     let mut regs = SearchRegisters::default();
     let point = search_backward_into(buf, pattern, bound, noerror, case_fold, &mut regs)?;
-    Ok(point.map(|point| BufferSearchSuccess::new(buf, point, regs.0)))
+    Ok(point.map(|point| BufferSearchSuccess::new(buf, point, regs.into_engine_match_data())))
 }
 
 pub(crate) fn search_backward_into(
@@ -2945,7 +3066,7 @@ pub(crate) fn search_backward_into(
     if let Some(found) = found {
         let matched = found.shift(limit.get());
         let point = matched.start();
-        out.0.set_single_group(matched);
+        out.set_single_group(matched);
         Ok(Some(EmacsBytePos::new(point)))
     } else if noerror {
         Ok(None)
@@ -3238,7 +3359,7 @@ pub(crate) fn re_search_forward_lisp_with_posix(
         match_context,
         &mut regs,
     )?;
-    Ok(point.map(|point| BufferSearchSuccess::new(buf, point, regs.0)))
+    Ok(point.map(|point| BufferSearchSuccess::new(buf, point, regs.into_engine_match_data())))
 }
 
 pub(crate) fn re_search_forward_lisp_with_posix_into(
@@ -3296,12 +3417,8 @@ pub(crate) fn re_search_forward_lisp_with_posix_into(
         return Err(regex_emacs::MATCHER_OVERFLOW_MESSAGE.to_string());
     }
     if let Some((_pos, regs)) = search_result {
-        let engine_match = buffer_engine_match_data_from_registers(&regs, region_start.get());
-        let point = EmacsBytePos::new(engine_match.group(0).unwrap().end());
-        {
-            out.0 = engine_match;
-            Ok(Some(point))
-        }
+        let group0 = out.set_engine_registers(regs, region_start.get());
+        Ok(Some(group0.end()))
     } else if noerror {
         Ok(None)
     } else {
@@ -3356,12 +3473,8 @@ pub(crate) fn re_search_forward_compiled_into(
         return Err(regex_emacs::MATCHER_OVERFLOW_MESSAGE.to_string());
     }
     if let Some((_pos, regs)) = search_result {
-        let engine_match = buffer_engine_match_data_from_registers(&regs, region_start.get());
-        let point = EmacsBytePos::new(engine_match.group(0).unwrap().end());
-        {
-            out.0 = engine_match;
-            Ok(Some(point))
-        }
+        let group0 = out.set_engine_registers(regs, region_start.get());
+        Ok(Some(group0.end()))
     } else if noerror {
         Ok(None)
     } else {
@@ -3422,12 +3535,8 @@ pub(crate) fn re_search_backward_lisp_with_posix_into(
         return Err(regex_emacs::MATCHER_OVERFLOW_MESSAGE.to_string());
     }
     if let Some((_pos, regs)) = search_result {
-        let engine_match = buffer_engine_match_data_from_registers(&regs, region_start.get());
-        let point = EmacsBytePos::new(engine_match.group(0).unwrap().start());
-        {
-            out.0 = engine_match;
-            Ok(Some(point))
-        }
+        let group0 = out.set_engine_registers(regs, region_start.get());
+        Ok(Some(group0.start()))
     } else if noerror {
         Ok(None)
     } else {
@@ -3479,12 +3588,8 @@ pub(crate) fn re_search_backward_compiled_into(
         return Err(regex_emacs::MATCHER_OVERFLOW_MESSAGE.to_string());
     }
     if let Some((_pos, regs)) = search_result {
-        let engine_match = buffer_engine_match_data_from_registers(&regs, region_start.get());
-        let point = EmacsBytePos::new(engine_match.group(0).unwrap().start());
-        {
-            out.0 = engine_match;
-            Ok(Some(point))
-        }
+        let group0 = out.set_engine_registers(regs, region_start.get());
+        Ok(Some(group0.start()))
     } else if noerror {
         Ok(None)
     } else {
@@ -3635,6 +3740,37 @@ pub(crate) fn looking_at_compiled(
     )
     .map(|(_end, regs)| buffer_engine_match_data_from_registers(&regs, region_start.get()));
     Ok(engine_match.map(|engine_match| engine_match.publish_buffer(buf)))
+}
+
+/// [`looking_at_compiled`] into the caller's register storage: `true` when
+/// the pattern matches at point, with the match's registers in OUT for
+/// [`SearchRegisters::publish_buffer_into`]. The match data is published in
+/// place instead of built and moved (U2.8).
+pub(crate) fn looking_at_compiled_into(
+    buf: &Buffer,
+    compiled: &CompiledPattern,
+    match_context: BufferRegexpMatchContext<'_>,
+    out: &mut SearchRegisters,
+) -> bool {
+    let start = buf.point_emacs_byte_pos();
+    let accessible = buf.accessible_emacs_byte_region();
+    if start > accessible.end() {
+        return false;
+    }
+    let region_start = forward_search_slice_start(buf, accessible.range(), start);
+    let start_rel = start.get() - region_start.get();
+    let syn = buffer_regexp_syntax_lookup(buf, region_start, match_context);
+    match with_buffer_emacs_bytes_for_search(
+        buf,
+        EmacsByteRange::new(region_start, accessible.end()),
+        |text| regex_emacs::re_match(compiled, text, start_rel, text.len(), &syn, start_rel),
+    ) {
+        Some((_end, regs)) => {
+            out.set_engine_registers(regs, region_start.get());
+            true
+        }
+        None => false,
+    }
 }
 
 /// Test whether STRING matches PATTERN starting at byte offset 0.
