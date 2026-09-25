@@ -504,6 +504,36 @@ pub fn runtime_startup_eval_all(src: &str) -> Vec<String> {
     results
 }
 
+/// The transcript an oracle test's inline expectation holds.
+///
+/// `neovm-oracle-tests` stores GNU's answer as the Rust-debug rendering of
+/// its transcript (`inline_expect_payload`); this undoes that rendering so an
+/// in-process twin of an oracle test can compare [`format_eval_result`]
+/// output with the answer GNU gave.
+pub fn oracle_expect_transcript(debug_rendered: &str) -> String {
+    let inner = debug_rendered
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .expect("a debug-rendered string");
+    let mut out = String::new();
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('n') => out.push('\n'),
+                Some('t') => out.push('\t'),
+                Some('r') => out.push('\r'),
+                Some('0') => out.push('\0'),
+                Some(other) => out.push(other),
+                None => {}
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Evaluate the first form from SRC in a cached runtime-startup evaluator and
 /// return the formatted result.
 pub fn runtime_startup_eval_one(src: &str) -> String {

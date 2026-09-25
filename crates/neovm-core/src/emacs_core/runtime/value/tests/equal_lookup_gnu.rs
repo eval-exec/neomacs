@@ -3,31 +3,7 @@
 //! answers GNU 31.1 gave there (`NEOVM_ORACLE_MODE=refresh UPDATE_EXPECT=1`):
 //! the oracle suite runs the release binary, this runs the same forms
 //! through the evaluator a unit test can build.
-use crate::test_utils::runtime_startup_eval_one;
-
-/// The oracle's inline expectation is the Rust-debug rendering of the
-/// transcript; undo that to compare with `format_eval_result`.
-fn gnu_transcript(debug_rendered: &str) -> String {
-    let inner = debug_rendered
-        .strip_prefix('"')
-        .and_then(|s| s.strip_suffix('"'))
-        .expect("a debug-rendered string");
-    let mut out = String::new();
-    let mut chars = inner.chars();
-    while let Some(c) = chars.next() {
-        if c == '\\' {
-            match chars.next() {
-                Some('n') => out.push('\n'),
-                Some('t') => out.push('\t'),
-                Some(other) => out.push(other),
-                None => {}
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
+use crate::test_utils::{oracle_expect_transcript, runtime_startup_eval_one};
 
 #[test]
 fn equal_hash_long_and_huge_keys_are_found() {
@@ -50,7 +26,7 @@ fn equal_hash_long_and_huge_keys_are_found() {
 "#;
     assert_eq!(
         runtime_startup_eval_one(form),
-        gnu_transcript(r#""OK (long nil huge huge nil nil 2)""#)
+        oracle_expect_transcript(r#""OK (long nil huge huge nil nil 2)""#)
     );
 }
 
@@ -80,7 +56,7 @@ fn equal_hash_keys_sharing_the_hashed_prefix_stay_distinct() {
 "#;
     assert_eq!(
         runtime_startup_eval_one(form),
-        gnu_transcript(r#""OK (50 42 nil 50 14 none (49 gone 41))""#)
+        oracle_expect_transcript(r#""OK (50 42 nil 50 14 none (49 gone 41))""#)
     );
 }
 
@@ -113,7 +89,7 @@ fn equal_hash_mutated_keys_compare_the_live_object() {
 "#;
     assert_eq!(
         runtime_startup_eval_one(form),
-        gnu_transcript(r#""OK (nil nil v nil v 2 new ((5 2) (1 2)))""#)
+        oracle_expect_transcript(r#""OK (nil nil v nil v 2 new ((5 2) (1 2)))""#)
     );
 }
 
@@ -141,7 +117,7 @@ fn equal_hash_circular_and_deep_keys() {
 "#;
     assert_eq!(
         runtime_startup_eval_one(form),
-        gnu_transcript(
+        oracle_expect_transcript(
             r#""OK (cycle cycle deep (error (error \"Stack overflow in equal\")) (error (error \"Stack overflow in equal\")) (error (error \"Stack overflow in equal\")) 2)""#
         )
     );
@@ -163,7 +139,7 @@ fn equal_hash_iteration_and_printing_keep_insertion_order() {
 "#;
     assert_eq!(
         runtime_startup_eval_one(form),
-        gnu_transcript(
+        oracle_expect_transcript(
             r##""OK ((((a) . 3) ((late) . 0) ([1 2] . 5) (\"s\" . 3) (1.5 . 3) ((1 2 3 4 5 6 7 8 9 10) . 22) (sym . 3) (7 . 1)) 8 \"#s(hash-table test equal data ((a) 3 (late) 0 [1 2] 5 \\\"s\\\" 3 1.5 3 (1 2 3 4 5 6 7 8 9 10) 22 sym 3 7 1))\")""##
         )
     );
