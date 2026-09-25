@@ -4625,6 +4625,7 @@ fn define_leaf_into_module(
         entry_name,
         Linkage::Export,
         /*aot=*/ true,
+        /*entry_counter=*/ None, // AOT code never counts entries
     )?;
 
     // R1c-3: emit the descriptor as an exported, read-only data object so the

@@ -152,7 +152,7 @@ thread_local! {
     /// dropped (heap-swap `clear`, OSR eviction), so the exit report's
     /// totals still include them. Cold: touched only when leaves are dropped.
     static DROPPED_LEAF_TOTALS: std::cell::Cell<LeafTotals> =
-        const { std::cell::Cell::new(LeafTotals { leaves: 0, deopt_at: 0, deopt_rerun: 0, signals: 0 }) };
+        const { std::cell::Cell::new(LeafTotals { leaves: 0, entries: 0, deopt_at: 0, deopt_rerun: 0, signals: 0 }) };
 }
 
 /// Fold a leaf that is about to leave every cache into the dropped totals.

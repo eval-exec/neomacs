@@ -250,10 +250,11 @@ impl LeafTier {
 /// Per-leaf observability counters, kept in release builds.
 ///
 /// Boxed in [`CompiledLeaf`] so the leaf carries one pointer, moving its hot
-/// fields as little as possible. Every counter is written only on a cold
-/// exit (a precise deopt, a rerun-from-start, a signal), on the owning
-/// thread (`CompiledLeaf` is `!Send`), so plain `Cell`s suffice and no hot
-/// path pays anything.
+/// fields as little as possible, and so `entries` has a stable address the
+/// generated prologue can bake (see [`Self::entry_counter`]). Every other
+/// counter is written only on a cold exit (a precise deopt, a
+/// rerun-from-start, a signal), on the owning thread (`CompiledLeaf` is
+/// `!Send`), so plain `Cell`s suffice and no hot path pays anything.
 pub(crate) struct LeafObs {
     /// The `compiled_id` this leaf was cached under; 0 = built outside the
     /// cache (tests, the AOT emit path).
@@ -263,6 +264,14 @@ pub(crate) struct LeafObs {
     /// The entry name it was declared under (`lisp:<fn>#<id>:<tier>`) when
     /// naming was on at compile time; `None` = the legacy static name.
     pub(crate) label: Option<Box<str>>,
+    /// Whether the generated prologue counts entries into `entries` (only
+    /// when entry counting was on at compile time; the default code carries
+    /// no counter at all).
+    pub(crate) entry_counted: bool,
+    /// Native entries, every path (interpreter seam, armed direct entry, spec
+    /// fast path, native-to-native, OSR transfer), including runs that later
+    /// deopt. Written by the generated code through `Cell::as_ptr`.
+    pub(crate) entries: Cell<u64>,
     /// Precise deopts (`STATUS_DEOPT_AT`) — every one runs
     /// [`CompiledLeaf::deopt_at_outcome`].
     pub(crate) deopt_at: Cell<u64>,
@@ -280,17 +289,26 @@ pub(crate) struct LeafObs {
 impl LeafObs {
     const MAX_DEOPT_PCS: usize = 8;
 
-    pub(crate) fn new() -> Box<Self> {
+    pub(crate) fn new(entry_counted: bool) -> Box<Self> {
         Box::new(LeafObs {
             id: 0,
             osr_pc: None,
             label: None,
+            entry_counted,
+            entries: Cell::new(0),
             deopt_at: Cell::new(0),
             deopt_rerun: Cell::new(0),
             signals: Cell::new(0),
             deopt_pcs: RefCell::new(SmallVec::new()),
             deopt_pc_overflow: Cell::new(0),
         })
+    }
+
+    /// The cell the generated prologue increments, when this leaf was
+    /// compiled with entry counting (the address is baked, so the leaf must
+    /// keep this `Box` for its whole life — it does).
+    pub(crate) fn entry_counter(&self) -> Option<&Cell<u64>> {
+        self.entry_counted.then_some(&self.entries)
     }
 
     /// Count a precise deopt resuming at `pc`. Only called from the already
@@ -329,6 +347,8 @@ impl LeafObs {
         LeafObsSnapshot {
             id: self.id,
             osr_pc: self.osr_pc,
+            entry_counted: self.entry_counted,
+            entries: self.entries.get(),
             deopt_at: self.deopt_at.get(),
             deopt_rerun: self.deopt_rerun.get(),
             signals: self.signals.get(),
@@ -343,6 +363,8 @@ impl LeafObs {
 pub(crate) struct LeafObsSnapshot {
     pub(crate) id: u64,
     pub(crate) osr_pc: Option<u32>,
+    pub(crate) entry_counted: bool,
+    pub(crate) entries: u64,
     pub(crate) deopt_at: u64,
     pub(crate) deopt_rerun: u64,
     pub(crate) signals: u64,
@@ -356,6 +378,7 @@ pub(crate) struct LeafObsSnapshot {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct LeafTotals {
     pub(crate) leaves: u64,
+    pub(crate) entries: u64,
     pub(crate) deopt_at: u64,
     pub(crate) deopt_rerun: u64,
     pub(crate) signals: u64,
@@ -365,6 +388,7 @@ impl LeafTotals {
     /// Add one leaf's counters.
     pub(crate) fn add(&mut self, s: &LeafObsSnapshot) {
         self.leaves += 1;
+        self.entries += s.entries;
         self.deopt_at += s.deopt_at;
         self.deopt_rerun += s.deopt_rerun;
         self.signals += s.signals;
@@ -701,7 +725,8 @@ impl CompiledLeaf {
             reloc_data,
             sidecar: Some(sidecar),
             dynamic_prefix: 0,
-            obs: LeafObs::new(),
+            // AOT code never carries the entry counter.
+            obs: LeafObs::new(false),
             entry,
             _backing: LeafBacking::Aot(backing),
         }

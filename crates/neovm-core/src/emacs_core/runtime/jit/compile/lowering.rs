@@ -2350,6 +2350,9 @@ pub(super) fn lower_mir_with_plan(
     let entry_name = label.as_deref().unwrap_or("__neovm_mir_leaf");
     #[cfg(test)]
     super::super::stats::perf_map::record_entry_name_for_test(entry_name);
+    // Before the build: with entry counting on, the prologue bakes the
+    // address of `obs.entries`.
+    let mut obs = LeafObs::new(super::super::stats::entry_counting_enabled());
 
     // Build + define the leaf into the module via the module-generic seam
     // (`build_mir_leaf_fn`). The buffers are owned here and threaded in by
@@ -2366,6 +2369,7 @@ pub(super) fn lower_mir_with_plan(
         entry_name,
         Linkage::Local,
         /*aot=*/ false,
+        obs.entry_counter(),
     )?;
 
     // --- JIT-only module epilogue (the wrapper). ----------------------------
@@ -2373,7 +2377,6 @@ pub(super) fn lower_mir_with_plan(
         .finalize_definitions()
         .map_err(|e| CompileError::Backend(BackendError::Finalize(e.to_string())))?;
     let entry = module.get_finalized_function(fid);
-    let mut obs = LeafObs::new();
     obs.label = label.map(String::into_boxed_str);
 
     Ok(CompiledLeaf {
@@ -2643,6 +2646,8 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
     // the per-thread `LeafSidecar`, since the addresses are session-specific). The
     // CLIF body is otherwise identical — same RESULTS either way.
     aot: bool,
+    // JIT only, and only under entry counting: see `build_leaf_fn`.
+    entry_counter: Option<&core::cell::Cell<u64>>,
 ) -> Result<cranelift_module::FuncId, CompileError> {
     imm_pool_reset();
     guards_emitted_reset();
@@ -2797,6 +2802,10 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
         let entry = fb.create_block();
         fb.append_block_params_for_function_params(entry);
         fb.switch_to_block(entry);
+        if let Some(counter) = entry_counter {
+            debug_assert!(!aot, "AOT code never counts entries");
+            emit_entry_count(&mut fb, ptr_ty, counter);
+        }
         let vmctx_param = fb.block_params(entry)[0];
         if let Some(slot) = backedge_counter {
             let one = fb.ins().iconst(types::I64, 1);
@@ -3737,6 +3746,23 @@ pooled_binop!(bor_imm_p, bor, bor_imm_u);
 pooled_binop!(sshr_imm_p, sshr, sshr_imm_u);
 pooled_binop!(ushr_imm_p, ushr, ushr_imm_u);
 pooled_binop!(ishl_imm_p, ishl, ishl_imm_u);
+
+/// `*counter += 1` through a baked address (a load, an add and a store): the
+/// instructions a leaf's entry block starts with when entry counting was on
+/// at compile time
+/// (`stats::entry_counting_enabled`). Never emitted otherwise, so default
+/// code is unchanged. A Rust `Cell` in the leaf's `LeafObs`, not the Lisp
+/// heap: no barrier, no safepoint, and it runs before any guard.
+pub(crate) fn emit_entry_count(
+    fb: &mut FunctionBuilder,
+    ptr_ty: Type,
+    counter: &core::cell::Cell<u64>,
+) {
+    let addr = fb.ins().iconst(ptr_ty, counter.as_ptr() as i64);
+    let n = fb.ins().load(types::I64, MemFlagsData::trusted(), addr, 0);
+    let n1 = fb.ins().iadd_imm_s(n, 1);
+    fb.ins().store(MemFlagsData::trusted(), n1, addr, 0);
+}
 
 /// `NEOVM_JIT_DUMP_CLIF=<path>`: append every lowered function's CLIF (with
 /// an `;; ops=N` header) to `path` — the IR-composition census.

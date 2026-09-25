@@ -579,6 +579,21 @@ fn report_requested() -> bool {
     summary_enabled() || super::compile::jit_profile_path().is_some()
 }
 
+/// Whether JIT compiles emit the per-leaf native-entry counter into the
+/// leaf prologue (`lowering::emit_entry_count`): whenever a report is
+/// requested (`NEOVM_JIT_COMPILE_STATS`, `NEOVM_JIT_STATS_FILE`,
+/// `NEOVM_JIT_PROFILE`). Decided at compile time, so with every report knob
+/// off the generated code carries no counter at all. Read only on the
+/// compile-miss path.
+pub(crate) fn entry_counting_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(o) = OBSERVE_OVERRIDE.with(Cell::get) {
+        return o.entry_count;
+    }
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(report_requested)
+}
+
 /// Whether compiled leaves are declared under per-function names
 /// (`lisp:<fn>#<id>:<tier>`, see [`perf_map`]): whenever a report is
 /// requested, under `PERF_BUILDID_DIR` (cranelift-jit writes
@@ -611,6 +626,23 @@ pub fn report_at_exit(ctx: &crate::emacs_core::eval::Context) {
     if summary_enabled() {
         for (tag, line) in report.render() {
             report_line(tag, &line);
+        }
+    }
+    if let Some(path) = super::compile::jit_profile_path() {
+        let rows = report.profile_leaf_rows();
+        if !rows.is_empty() {
+            let mut file = match std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+            {
+                Ok(file) => file,
+                Err(err) => {
+                    tracing::warn!(target: "neovm_jit", path, %err, "NEOVM_JIT_PROFILE cannot be opened");
+                    return;
+                }
+            };
+            let _ = file.write_all(rows.concat().as_bytes());
         }
     }
     tracing::debug!(
@@ -735,6 +767,8 @@ fn leaf_report_rows(
                     super::compile::lowering::RegallocChoice::Full => "full",
                 },
                 clif_insts: row.clif_insts,
+                entry_counted: row.obs.entry_counted,
+                entries: row.obs.entries,
                 deopt_at: row.obs.deopt_at,
                 deopt_rerun: row.obs.deopt_rerun,
                 signals: row.obs.signals,
@@ -765,6 +799,8 @@ pub(crate) struct ObserveOverride {
     pub(crate) stats: bool,
     /// [`naming_enabled`].
     pub(crate) naming: bool,
+    /// [`entry_counting_enabled`].
+    pub(crate) entry_count: bool,
 }
 
 #[cfg(test)]

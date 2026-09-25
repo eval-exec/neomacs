@@ -78,6 +78,12 @@ pub(crate) fn active_label(tier: LabelTier) -> Option<String> {
     })
 }
 
+/// The sanitized name of the function being compiled, if a naming compile
+/// is in progress (the `NEOVM_JIT_PROFILE` row's `name` column).
+pub(crate) fn active_label_name() -> Option<String> {
+    ACTIVE_LABEL.with(|l| l.borrow().as_ref().map(|a| a.name.to_string()))
+}
+
 /// The label format: `lisp:<name>#<id>:baseline|mir|osr@<pc>`.
 pub(crate) fn format_label(name: &str, id: u64, tier: LabelTier) -> String {
     match tier {

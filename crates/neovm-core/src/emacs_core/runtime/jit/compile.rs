@@ -250,10 +250,15 @@ pub fn compile_bytecode_function(f: &ByteCodeFunction) -> Result<CompiledLeaf, C
 /// helps little)? Set `NEOVM_JIT_PROFILE=<path>` to append one CSV row per
 /// compile attempt: `ops,arith,calls,alloc,listops,varops,preds,backedges,
 /// has_loop,compiled,inlinable,arity,reason,fingerprint,compile_us,call_heavy,
-/// clif_insts,clif_blocks` (`reason` = the `CompileError` or `-`;
-/// `fingerprint` = the first symbol constants; `compile_us` = wall time of
-/// the attempt; `clif_*` = the Cranelift IR the body lowered to, 0 if it
-/// did not). Used to justify (or
+/// clif_insts,clif_blocks,compiled_id,tier,name` (`reason` = the
+/// `CompileError` or `-`; `fingerprint` = the first symbol constants;
+/// `compile_us` = wall time of the attempt; `clif_*` = the Cranelift IR the
+/// body lowered to, 0 if it did not; `compiled_id` = the cache id, `-` if
+/// none; `tier` = `baseline`/`mir` or `-`; `name` = the perf-map label's
+/// function name, commas as `;`). At exit the report appends one
+/// `#leaf,compiled_id,name,tier,osr_pc,entries,deopt_at,deopt_rerun,signals,
+/// top_deopt_pc` row per leaf (`stats::report_at_exit`), joinable on
+/// `compiled_id`. Used to justify (or
 /// not) the optimizing Tier-2 investment, and by the 2026-09-05 census
 /// (`tmp/rr/wf2/census/report.py`).
 pub(crate) fn jit_profile_path() -> Option<&'static str> {
@@ -432,8 +437,15 @@ fn jit_profile_emit(
             .unwrap_or(0),
         None => 0,
     };
+    let compiled_id = f
+        .jit_runtime()
+        .compiled_id()
+        .map_or_else(|| "-".to_string(), |id| id.to_string());
+    let tier = result.map_or("-", |l| l.tier().name());
+    let name = super::stats::perf_map::active_label_name()
+        .map_or_else(|| "-".to_string(), |n| n.replace(',', ";"));
     let line = format!(
-        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+        "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
         ops.len(),
         arith,
         calls,
@@ -452,6 +464,9 @@ fn jit_profile_emit(
         u8::from(call_heavy),
         clif_insts,
         clif_blocks,
+        compiled_id,
+        tier,
+        name,
     );
     use std::io::Write;
     if let Ok(mut file) = std::fs::OpenOptions::new()
@@ -3467,6 +3482,9 @@ pub fn lower_leaf_full_osr(
     let entry_name = label.as_deref().unwrap_or("__neovm_jit_leaf");
     #[cfg(test)]
     super::stats::perf_map::record_entry_name_for_test(entry_name);
+    // Allocated before the build: with entry counting on, the prologue bakes
+    // the address of `obs.entries`.
+    let mut obs = LeafObs::new(super::stats::entry_counting_enabled());
 
     // Build + define the leaf into the module via the module-generic seam
     // (`build_leaf_fn`). Buffers (`spec_slots`/`deopt_*`/`reloc_data`) are owned
@@ -3493,6 +3511,7 @@ pub fn lower_leaf_full_osr(
         Linkage::Local,
         osr_pc,
         dynamic_prefix,
+        obs.entry_counter(),
     )?;
 
     // --- JIT-only module epilogue (the wrapper). ----------------------------
@@ -3501,7 +3520,6 @@ pub fn lower_leaf_full_osr(
         .map_err(|e| CompileError::Backend(BackendError::Finalize(e.to_string())))?;
 
     let entry = module.get_finalized_function(fid);
-    let mut obs = LeafObs::new();
     obs.label = label.map(String::into_boxed_str);
     Ok(CompiledLeaf {
         tier: LeafTier::Baseline,
@@ -3655,6 +3673,7 @@ pub(crate) fn build_baseline_leaf_object<M: Module>(
         Linkage::Export,
         /*osr_pc=*/ None, // OSR is JIT-only
         /*dynamic_prefix=*/ 0, // AOT never targets a patched source
+        /*entry_counter=*/ None, // AOT code never counts entries
     )?;
     Ok(BaselineAotMeta {
         arity,
@@ -3733,6 +3752,10 @@ fn build_leaf_fn<M: Module>(
     // constant slots load through the callee constant base in the 4th entry
     // param instead of baking. 0 = plain function / AOT.
     dynamic_prefix: usize,
+    // JIT only, and only when entry counting was on at compile time: the
+    // leaf's `LeafObs::entries` cell, incremented first thing in the entry
+    // block (`lowering::emit_entry_count`). `None` = no counter at all.
+    entry_counter: Option<&core::cell::Cell<u64>>,
 ) -> Result<cranelift_module::FuncId, CompileError> {
     let variable_raw = uniform_raw_osr_slots(cfg, known_fixnum_slots, osr_pc);
     let has_raw_slots = variable_raw.iter().any(|&raw| raw);
@@ -3855,6 +3878,10 @@ fn build_leaf_fn<M: Module>(
         let entry = fb.create_block();
         fb.append_block_params_for_function_params(entry);
         fb.switch_to_block(entry);
+        if let Some(counter) = entry_counter {
+            debug_assert!(!aot, "AOT code never counts entries");
+            lowering::emit_entry_count(&mut fb, ptr_ty, counter);
+        }
         let vmctx_param = fb.block_params(entry)[0];
         let args_ptr = fb.block_params(entry)[1];
         let out_ptr = fb.block_params(entry)[2];

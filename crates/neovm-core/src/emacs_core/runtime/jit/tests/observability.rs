@@ -441,3 +441,116 @@ fn jit_obs_label_absent_without_naming() {
     };
     assert_eq!(last_entry_name_for_test(), legacy);
 }
+
+fn force_entry_count(on: bool) {
+    crate::emacs_core::jit::stats::force_observe_for_test(
+        crate::emacs_core::jit::stats::ObserveOverride {
+            entry_count: on,
+            ..Default::default()
+        },
+    );
+}
+
+/// The entry counter is emitted only when entry counting is on at compile
+/// time: a few more CLIF instructions (load, add, store through a baked
+/// address), and none by default.
+#[test]
+fn jit_obs_entry_counter_absent_by_default() {
+    let ops = [Op::Constant(0), Op::Constant(1), Op::Add, Op::Return];
+    let consts = [Value::make_int(40), Value::make_int(2)];
+    force_entry_count(false);
+    let off = lower_nullary_leaf(&ops, &consts).expect("compiles");
+    force_entry_count(true);
+    let on = lower_nullary_leaf(&ops, &consts).expect("compiles");
+    assert!(!off.obs.entry_counted);
+    assert!(on.obs.entry_counted);
+    assert!(on.clif_insts > off.clif_insts, "baseline");
+    assert_eq!(off.call_for_test(&[]), Some(Value::make_int(42).bits()));
+    assert_eq!(on.call_for_test(&[]), Some(Value::make_int(42).bits()));
+    assert_eq!(off.obs.entries.get(), 0, "no counter in default code");
+    assert_eq!(on.obs.entries.get(), 1);
+
+    let mir_ops = vec![Op::StackRef(1), Op::StackRef(1), Op::Add, Op::Return];
+    let m = mir::build_mir(&mir_ops, &[], 2).expect("builds");
+    force_entry_count(false);
+    let off = lower_mir_pure(&m).expect("lowers");
+    force_entry_count(true);
+    let on = lower_mir_pure(&m).expect("lowers");
+    assert!(on.clif_insts > off.clif_insts, "mir");
+    let args = [Value::make_int(1), Value::make_int(2)];
+    assert_eq!(on.call_for_test(&args), Some(Value::make_int(3).bits()));
+    assert_eq!(off.call_for_test(&args), Some(Value::make_int(3).bits()));
+    assert_eq!(on.obs.entries.get(), 1);
+    assert_eq!(off.obs.entries.get(), 0);
+}
+
+/// With the counter on, every native entry counts — through the tier-up
+/// seam, the speculated native-to-native call, and runs that deopt.
+#[test]
+fn jit_obs_entry_counter_counts_every_path() {
+    force_profit_gate_for_test(false);
+    force_entry_count(true);
+    let mut ev = Context::new();
+    // Seam: (lambda (x) (+ x 1)) through try_run_compiled.
+    let f = function(
+        vec![Op::StackRef(0), Op::Constant(0), Op::Add, Op::Return],
+        vec![Value::make_int(1)],
+        1,
+    );
+    let f_val = Value::make_bytecode(f.clone());
+    let ctx = &mut ev as *mut Context;
+    for i in 0..4 {
+        crate::emacs_core::jit::try_run_compiled(ctx, &f, f_val, &[Value::make_int(i)])
+            .expect("no signal");
+    }
+    // A run that deopts was still an entry.
+    crate::emacs_core::jit::try_run_compiled(ctx, &f, f_val, &[Value::NIL]).expect("no signal");
+    let id = f.jit_runtime().compiled_id().expect("compiled");
+    let obs = row_for(id, cache::LeafState::Live).obs;
+    assert!(obs.entry_counted);
+    assert_eq!(obs.entries, 5, "{obs:?}");
+
+    // Native-to-native: F calls a multi-block callee through its spec site.
+    let step = install(
+        &mut ev,
+        "jit-obs-entry-step",
+        function(
+            vec![
+                Op::StackRef(0),
+                Op::GotoIfNil(5),
+                Op::StackRef(0),
+                Op::Sub1,
+                Op::Return,
+                Op::Constant(0),
+                Op::Return,
+            ],
+            vec![Value::make_int(0)],
+            1,
+        ),
+    );
+    let caller = function(
+        vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return],
+        vec![step],
+        1,
+    );
+    let leaf = compile_bytecode_function_with(&caller, Some(&ev.obarray)).expect("compiles");
+    let ctx = &mut ev as *mut Context as *mut u8;
+    for _ in 0..3 {
+        assert_eq!(
+            leaf.call(ctx, &[Value::make_int(5)]),
+            NativeRun::Ok(Value::make_int(4).bits())
+        );
+    }
+    assert_eq!(leaf.obs.entries.get(), 3, "the caller, entered directly");
+    let step_id = ev
+        .obarray
+        .symbol_function_id(step.as_symbol_id().unwrap())
+        .and_then(|v| v.get_bytecode_data())
+        .and_then(|bc| bc.jit_runtime().compiled_id())
+        .expect("the speculated call compiled the callee");
+    assert_eq!(
+        row_for(step_id, cache::LeafState::Live).obs.entries,
+        3,
+        "the callee, entered from native code"
+    );
+}

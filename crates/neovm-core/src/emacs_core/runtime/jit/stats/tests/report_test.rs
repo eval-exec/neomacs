@@ -50,8 +50,14 @@ fn jit_final_report_renders_every_section() {
         }),
         redefined_top: "cl--generic-dispatcher=41".to_string(),
         leaves: vec![
-            leaf_row(37, 5_999_998, 0),
-            leaf_row(38, 0, 0),
+            LeafReportRow {
+                entries: 6_000_000,
+                ..leaf_row(37, 5_999_998, 0)
+            },
+            LeafReportRow {
+                entries: 77,
+                ..leaf_row(38, 0, 0)
+            },
             LeafReportRow {
                 state: "retired",
                 ..leaf_row(39, 0, 2)
@@ -59,6 +65,7 @@ fn jit_final_report_renders_every_section() {
         ],
         dropped: crate::emacs_core::jit::compile::LeafTotals {
             leaves: 1,
+            entries: 10,
             deopt_at: 5,
             deopt_rerun: 0,
             signals: 1,
@@ -77,6 +84,7 @@ fn jit_final_report_renders_every_section() {
             "neovm-jit-final-fn-epoch-top",
             "neovm-jit-final-leaf",
             "neovm-jit-final-leaf",
+            "neovm-jit-final-leaf",
         ]
     );
     let head = body_of(&lines, ReportTag::Final);
@@ -93,8 +101,9 @@ fn jit_final_report_renders_every_section() {
     assert_eq!(body_of(&lines, ReportTag::FinalInline), "-", "empty census");
     assert_eq!(
         body_of(&lines, ReportTag::FinalRuns),
-        "entries_seam=4975 deopt_at=6000003 deopt_rerun=2 signals=1 osr_transfers=2 \
-         seam_fallbacks=17 leaves_live=2 leaves_retired=1 leaves_osr=0 leaves_dropped=1"
+        "entries_all=6000087 entries_seam=4975 deopt_at=6000003 deopt_rerun=2 signals=1 \
+         osr_transfers=2 seam_fallbacks=17 leaves_live=2 leaves_retired=1 leaves_osr=0 \
+         leaves_dropped=1"
     );
     let leaf_lines: Vec<&str> = lines
         .iter()
@@ -104,12 +113,14 @@ fn jit_final_report_renders_every_section() {
     assert_eq!(
         leaf_lines,
         [
-            "id=37 name=j4-add tier=mir state=live osr_pc=- deopt_at=5999998 deopt_rerun=0 \
-             signals=0 regalloc=fast clif=58 pcs=12:5999998/Mul,other:3",
-            "id=39 name=j4-add tier=mir state=retired osr_pc=- deopt_at=0 deopt_rerun=2 \
-             signals=0 regalloc=fast clif=58 pcs=-",
+            "id=37 name=j4-add tier=mir state=live osr_pc=- entries=6000000 deopt_at=5999998 \
+             deopt_rerun=0 signals=0 regalloc=fast clif=58 pcs=12:5999998/Mul,other:3",
+            "id=39 name=j4-add tier=mir state=retired osr_pc=- entries=0 deopt_at=0 \
+             deopt_rerun=2 signals=0 regalloc=fast clif=58 pcs=-",
+            "id=38 name=j4-add tier=mir state=live osr_pc=- entries=77 deopt_at=0 \
+             deopt_rerun=0 signals=0 regalloc=fast clif=58 pcs=-",
         ],
-        "only leaves that deopted, most first"
+        "the leaves that deopted, most first, then the rest by entries"
     );
 
     assert_eq!(
@@ -164,6 +175,8 @@ fn leaf_row(id: u64, deopt_at: u64, deopt_rerun: u64) -> LeafReportRow {
         osr_pc: None,
         regalloc: "fast",
         clif_insts: 58,
+        entry_counted: true,
+        entries: 0,
         deopt_at,
         deopt_rerun,
         signals: 0,
@@ -183,10 +196,67 @@ fn jit_final_report_leaf_rows_sorted_by_deopts() {
     let mut rows: Vec<LeafReportRow> = (1..=40).map(|id| leaf_row(id, id % 7, 0)).collect();
     rows.push(leaf_row(100, 0, 50));
     let ranked = ranked_leaves(&rows);
+    let ranked: Vec<&LeafReportRow> = ranked
+        .into_iter()
+        .filter(|r| r.deopt_at + r.deopt_rerun > 0)
+        .collect();
     assert_eq!(ranked.len(), super::report::LEAF_ROWS_PER_SECTION);
     assert_eq!(ranked[0].id, 100, "a rerun deopt counts too");
     let deopts: Vec<u64> = ranked.iter().map(|r| r.deopt_at + r.deopt_rerun).collect();
     assert!(deopts.windows(2).all(|w| w[0] >= w[1]), "{deopts:?}");
     assert_eq!(ranked[1].id, 6, "ties break by id: 6, 13, 20, ...");
     assert!(ranked.iter().all(|r| r.deopt_at + r.deopt_rerun > 0));
+}
+
+/// The entries section never repeats a leaf the deopt section printed, and
+/// is capped on its own.
+#[test]
+fn jit_final_report_leaf_rows_then_by_entries() {
+    let mut rows: Vec<LeafReportRow> = (1..=40)
+        .map(|id| LeafReportRow {
+            entries: id * 10,
+            ..leaf_row(id, 0, 0)
+        })
+        .collect();
+    rows[39].deopt_at = 1; // id 40: most entries, but also deopted
+    let ranked = ranked_leaves(&rows);
+    let ids: Vec<u64> = ranked.iter().map(|r| r.id).collect();
+    assert_eq!(ids[0], 40, "the deopt section first");
+    assert_eq!(&ids[1..4], &[39, 38, 37], "then by entries, most first");
+    assert_eq!(ids.len(), 1 + super::report::LEAF_ROWS_PER_SECTION);
+    assert_eq!(ids.iter().filter(|&&id| id == 40).count(), 1, "no repeat");
+}
+
+/// The `#leaf` rows appended to `NEOVM_JIT_PROFILE` have fewer than 13
+/// columns, so the census reader (which keeps rows with >= 13) skips them,
+/// and a comma in a name cannot add a column.
+#[test]
+fn jit_final_report_profile_leaf_rows_have_fewer_than_13_columns() {
+    let report = FinalReport {
+        leaves: vec![
+            LeafReportRow {
+                name: Some("weird,name".to_string()),
+                entries: 9,
+                osr_pc: Some(7),
+                ..leaf_row(5, 3, 1)
+            },
+            LeafReportRow {
+                entry_counted: false,
+                name: None,
+                ..leaf_row(6, 0, 0)
+            },
+        ],
+        ..FinalReport::default()
+    };
+    let rows = report.profile_leaf_rows();
+    assert_eq!(
+        rows,
+        [
+            "#leaf,5,weird;name,mir,7,9,3,1,0,12:3\n",
+            "#leaf,6,-,mir,-,-,0,0,0,-\n",
+        ]
+    );
+    for row in &rows {
+        assert_eq!(row.trim_end().split(',').count(), 10, "{row}");
+    }
 }
