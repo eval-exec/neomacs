@@ -24,7 +24,10 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
-use super::compile::{CompiledLeaf, NativeRun, stash_pending_flow, take_pending_flow};
+use super::compile::{
+    CompiledLeaf, LeafObsSnapshot, LeafTier, LeafTotals, NativeRun, stash_pending_flow,
+    take_pending_flow,
+};
 use super::stats;
 use crate::emacs_core::bytecode::ByteCodeFunction;
 use crate::emacs_core::error::Flow;
@@ -93,7 +96,9 @@ impl DenseCache {
         if self.slots.len() <= idx {
             self.slots.resize_with(idx + 1, || None);
         }
-        self.slots[idx] = Some(entry);
+        if let Some(CacheEntry::Compiled(old)) = self.slots[idx].replace(entry) {
+            fold_dropped_leaf(&old);
+        }
     }
 
     /// `entry(id).or_insert_with(f)` equivalent.
@@ -128,10 +133,100 @@ impl DenseCache {
     }
 
     fn clear(&mut self) {
+        for entry in self.slots.iter().flatten() {
+            if let CacheEntry::Compiled(leaf) = entry {
+                fold_dropped_leaf(leaf);
+            }
+        }
+        for leaf in &self.retired {
+            fold_dropped_leaf(leaf);
+        }
         self.slots.clear();
         self.retired.clear();
         bump_leaf_slot_epoch();
     }
+}
+
+thread_local! {
+    /// Summed observability counters of the leaves this thread's caches
+    /// dropped (heap-swap `clear`, OSR eviction), so the exit report's
+    /// totals still include them. Cold: touched only when leaves are dropped.
+    static DROPPED_LEAF_TOTALS: std::cell::Cell<LeafTotals> =
+        const { std::cell::Cell::new(LeafTotals { leaves: 0, deopt_at: 0, deopt_rerun: 0, signals: 0 }) };
+}
+
+/// Fold a leaf that is about to leave every cache into the dropped totals.
+#[cold]
+fn fold_dropped_leaf(leaf: &CompiledLeaf) {
+    let snap = leaf.obs.snapshot();
+    DROPPED_LEAF_TOTALS.with(|t| {
+        let mut totals = t.get();
+        totals.add(&snap);
+        t.set(totals);
+    });
+}
+
+/// Where a reported leaf sits in this thread's caches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::IntoStaticStr)]
+#[strum(serialize_all = "lowercase")]
+pub(crate) enum LeafState {
+    /// The current leaf of its `compiled_id`.
+    Live,
+    /// Replaced (re-tier, stale inline, patched-prefix widening) but kept
+    /// allocated for any spec slot still pointing at it.
+    Retired,
+    /// An OSR variant, entered only from the interpreter.
+    Osr,
+}
+
+/// One leaf's line in the exit report (read at exit, on the owning thread).
+#[derive(Clone, Debug)]
+pub(crate) struct LeafRow {
+    pub(crate) id: u64,
+    pub(crate) tier: LeafTier,
+    pub(crate) state: LeafState,
+    pub(crate) regalloc: RegallocChoice,
+    pub(crate) clif_insts: u32,
+    pub(crate) obs: LeafObsSnapshot,
+}
+
+impl LeafRow {
+    fn of(id: u64, leaf: &CompiledLeaf, state: LeafState) -> Self {
+        LeafRow {
+            id,
+            tier: leaf.tier(),
+            state,
+            regalloc: leaf.regalloc,
+            clif_insts: leaf.clif_insts,
+            obs: leaf.obs.snapshot(),
+        }
+    }
+}
+
+/// Every leaf this thread still holds (live, retired, OSR), plus the summed
+/// counters of the leaves it dropped. Report-time only.
+pub(crate) fn leaf_report_rows() -> (Vec<LeafRow>, LeafTotals) {
+    let mut rows = Vec::new();
+    COMPILED.with(|c| {
+        let cache = c.borrow();
+        for (id, entry) in cache.iter() {
+            if let CacheEntry::Compiled(leaf) = entry {
+                rows.push(LeafRow::of(id, leaf, LeafState::Live));
+            }
+        }
+        for leaf in &cache.retired {
+            rows.push(LeafRow::of(leaf.obs.id, leaf, LeafState::Retired));
+        }
+    });
+    OSR_CACHE.with(|c| {
+        for (&(id, _), entry) in c.borrow().iter() {
+            if let Some(entry) = entry {
+                rows.push(LeafRow::of(id, &entry.leaf, LeafState::Osr));
+            }
+        }
+    });
+    rows.sort_by_key(|r| (r.id, r.obs.osr_pc));
+    (rows, DROPPED_LEAF_TOTALS.with(std::cell::Cell::get))
 }
 
 /// Validity epoch of every `RuntimeState::leaf_slot`: bumped whenever a
@@ -267,7 +362,12 @@ fn osr_body_has_unsupported_state(func: &ByteCodeFunction) -> bool {
 /// (params on the operand stack, so the seeded snapshot carries them), no
 /// handler/save ops, and the loop header has well-defined operand and binding
 /// depths with no active handlers. Both depths are checked against the live VM.
-fn compile_osr_leaf(obarray: &Obarray, func: &ByteCodeFunction, osr_pc: usize) -> Option<OsrEntry> {
+fn compile_osr_leaf(
+    obarray: &Obarray,
+    func: &ByteCodeFunction,
+    osr_pc: usize,
+    id: u64,
+) -> Option<OsrEntry> {
     let dbg = std::env::var_os("NEOMACS_OSR_DEBUG").is_some();
     if !func.lexical || osr_body_has_unsupported_state(func) {
         if dbg {
@@ -318,7 +418,7 @@ fn compile_osr_leaf(obarray: &Obarray, func: &ByteCodeFunction, osr_pc: usize) -
     // Same feedback the tier-up compile sees: without it every Float site
     // read FixnumOnly and an OSR'd float loop deopted straight back.
     let _numeric = super::compile::publish_numeric_feedback(func);
-    let leaf = match super::compile::lower_leaf_full_osr(
+    let mut leaf = match super::compile::lower_leaf_full_osr(
         ops,
         &func.constants,
         native_arity,
@@ -338,6 +438,8 @@ fn compile_osr_leaf(obarray: &Obarray, func: &ByteCodeFunction, osr_pc: usize) -
     if dbg {
         eprintln!("OSR_DEBUG compiled: pc={osr_pc} depth={entry_depth} binds={bind_depth}");
     }
+    leaf.obs.id = id;
+    leaf.obs.osr_pc = u32::try_from(osr_pc).ok();
     Some(OsrEntry {
         leaf: Rc::new(leaf),
         stack_depth: entry_depth,
@@ -375,7 +477,7 @@ pub(crate) fn try_run_osr(
     let cached = OSR_CACHE.with(|c| {
         c.borrow_mut()
             .entry((id, osr_pc))
-            .or_insert_with(|| compile_osr_leaf(obarray, func, osr_pc))
+            .or_insert_with(|| compile_osr_leaf(obarray, func, osr_pc, id))
             .clone()
     });
     let OsrEntry {
@@ -526,7 +628,8 @@ fn compile_cache_entry(
     let result = compile_bytecode_function_requested(func, obarray, request);
     stats::record_compile(started.elapsed(), func.executable_ops().len(), &result);
     match result {
-        Ok(leaf) => {
+        Ok(mut leaf) => {
+            leaf.obs.id = id;
             register_inline_deps(id, &leaf);
             CacheEntry::Compiled(Rc::new(leaf))
         }
@@ -569,7 +672,15 @@ fn compile_cache_entry(
 /// was compiled under the narrower one (`RuntimeState::note_patched_prefix`).
 pub(crate) fn evict_compiled(id: u64) {
     COMPILED.with(|c| c.borrow_mut().remove(id));
-    OSR_CACHE.with(|c| c.borrow_mut().retain(|(fid, _), _| *fid != id));
+    OSR_CACHE.with(|c| {
+        c.borrow_mut().retain(|(fid, _), entry| {
+            let keep = *fid != id;
+            if !keep && let Some(entry) = entry {
+                fold_dropped_leaf(&entry.leaf);
+            }
+            keep
+        })
+    });
 }
 
 /// Evictions after which a callee counts as unstable (see `INLINE_EVICTIONS`).
@@ -858,12 +969,13 @@ pub(crate) fn prepopulate_aot_leaves(leaves: Vec<(u64, CompiledLeaf)>) -> Vec<u6
     let mut inserted = Vec::new();
     COMPILED.with(|c| {
         let mut cache = c.borrow_mut();
-        for (id, leaf) in leaves {
+        for (id, mut leaf) in leaves {
             // INSERT-IF-ABSENT: never clobber a pre-existing entry (a JIT leaf the
             // hook compiled may be spec-slot-referenced + INLINE_DEPS-registered).
             // AOT leaves never inline → no inline deps to register; their reloc
             // consts are rooted via the COMPILED walk in collect_jit_reloc_gc_roots.
             if cache.get(id).is_none() {
+                leaf.obs.id = id;
                 cache.insert(id, CacheEntry::Compiled(Rc::new(leaf)));
                 inserted.push(id);
             }
@@ -890,7 +1002,13 @@ pub(crate) fn clear() {
     COMPILED.with(|c| c.borrow_mut().clear());
     INLINE_DEPS.with(|m| m.borrow_mut().clear());
     INLINE_EVICTIONS.with(|m| m.borrow_mut().clear());
-    OSR_CACHE.with(|c| c.borrow_mut().clear());
+    OSR_CACHE.with(|c| {
+        let mut osr = c.borrow_mut();
+        for entry in osr.values().flatten() {
+            fold_dropped_leaf(&entry.leaf);
+        }
+        osr.clear();
+    });
     // Every remembered NotCompilable verdict is now as stale as the cache.
     REJECTION_EPOCH.fetch_add(1, Ordering::Relaxed);
 }
@@ -1035,7 +1153,7 @@ pub fn try_run_compiled(
                 && func.jit_runtime().patched_prefix() == 0
             {
                 let native_arity = func.params.required.len();
-                if let Some(leaf) = super::aot::try_load_leaf(
+                if let Some(mut leaf) = super::aot::try_load_leaf(
                     func.executable_ops(),
                     &func.constants,
                     native_arity,
@@ -1046,6 +1164,7 @@ pub fn try_run_compiled(
                 ) {
                     // AOT leaves never inline → no inline deps to register. Their
                     // reloc consts are rooted via the COMPILED walk (R1c-8).
+                    leaf.obs.id = id;
                     stats::record_aot_load(func.executable_ops().len());
                     return CacheEntry::Compiled(Rc::new(leaf));
                 }
@@ -1404,6 +1523,7 @@ pub(crate) fn direct_call_cold(
 ) -> NativeCallOutcome {
     use super::compile::{STATUS_DEOPT_AT, STATUS_SIGNAL, shim_panic_pending};
     if status == STATUS_SIGNAL {
+        leaf.obs.note_signal();
         // A panic one of the callee's shims contained: leave its marker for
         // the caller leaf's healing exit (`cold_frame_exit` / the match
         // shim restore the boundary only while it is set); folding it here
@@ -1432,6 +1552,7 @@ pub(crate) fn direct_call_cold(
     }
     // STATUS_DEOPT: rerun-from-start — sound only for side-effect-free bodies
     // (the same defensive rule invoke_native applies).
+    leaf.obs.note_deopt_rerun();
     leaf.assert_rerunnable();
     NativeCallOutcome::Fallback
 }

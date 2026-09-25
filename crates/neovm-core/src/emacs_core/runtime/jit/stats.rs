@@ -23,7 +23,7 @@ use std::io::Write;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use super::compile::{CompileError, CompiledLeaf};
+use super::compile::{CompileError, CompiledLeaf, LeafTotals};
 
 /// Upper bounds (exclusive, µs) of the first seven histogram buckets; the
 /// eighth bucket is everything >= 10ms.
@@ -318,6 +318,9 @@ pub(crate) enum ReportTag {
     /// Exit report: the most-redefined symbols.
     #[strum(serialize = "neovm-jit-final-fn-epoch-top")]
     FinalFnEpochTop,
+    /// Exit report: one compiled leaf (the most-deopting ones).
+    #[strum(serialize = "neovm-jit-final-leaf")]
+    FinalLeaf,
 }
 
 /// The process-wide report sink, chosen once from `NEOVM_JIT_STATS_FILE`.
@@ -605,6 +608,7 @@ fn collect_final_report(ctx: &crate::emacs_core::eval::Context) -> report::Final
     use std::sync::atomic::Ordering;
     let compile = STATS.with(Cell::get);
     let epoch = epoch::EpochCounters::snapshot();
+    let (leaves, dropped) = leaf_report_rows(ctx);
     let (since_command_loop_ms, compile_since_loop, epoch_since_loop) =
         LOOP_MARK.with(|m| match &*m.borrow() {
             Some(mark) => (
@@ -627,6 +631,99 @@ fn collect_final_report(ctx: &crate::emacs_core::eval::Context) -> report::Final
         epoch,
         epoch_since_loop,
         redefined_top: epoch::top_redefined(16),
+        leaves,
+        dropped,
+    }
+}
+
+/// `compiled_id` -> (name, function) for every interned symbol whose function
+/// cell holds an already-compiled bytecode object. One obarray walk, at exit,
+/// under a knob. Read-only: never materializes a pdump stub, never assigns a
+/// `compiled_id`, never interns.
+fn exit_name_index(
+    ob: &crate::emacs_core::symbol::Obarray,
+) -> rustc_hash::FxHashMap<
+    u64,
+    (
+        crate::emacs_core::intern::NameId,
+        &'static crate::emacs_core::bytecode::ByteCodeFunction,
+    ),
+> {
+    let mut index = rustc_hash::FxHashMap::default();
+    for (name, f) in ob.interned_function_cells_with_names() {
+        let Some(bc) = f.bytecode_data_if_materialized() else {
+            continue;
+        };
+        let Some(id) = bc.jit_runtime().compiled_id() else {
+            continue;
+        };
+        index.entry(id).or_insert((name, bc));
+    }
+    index
+}
+
+/// The cache's leaf rows, named through the exit index and with each
+/// precise-deopt pc annotated with its bytecode op when it indexes the
+/// named function's body (a fused body's pcs may not; those print bare).
+fn leaf_report_rows(
+    ctx: &crate::emacs_core::eval::Context,
+) -> (Vec<report::LeafReportRow>, LeafTotals) {
+    let (rows, dropped) = super::cache::leaf_report_rows();
+    if rows.is_empty() {
+        return (Vec::new(), dropped);
+    }
+    let names = exit_name_index(&ctx.obarray);
+    let rows = rows
+        .into_iter()
+        .map(|row| {
+            let named = names.get(&row.id);
+            let name = named.map(|(name, _)| {
+                epoch::report_token(
+                    crate::emacs_core::intern::resolve_name_lisp_string(*name)
+                        .as_utf8_str()
+                        .unwrap_or("<non-utf8>"),
+                )
+            });
+            let ops = named.map(|(_, bc)| bc.executable_ops());
+            let deopt_pcs = row
+                .obs
+                .deopt_pcs
+                .iter()
+                .map(|&(pc, n)| {
+                    let op = ops
+                        .and_then(|ops| ops.get(pc as usize))
+                        .map(|op| op_name(op));
+                    (pc, n, op)
+                })
+                .collect();
+            report::LeafReportRow {
+                id: row.id,
+                name,
+                tier: row.tier.name(),
+                state: row.state.into(),
+                osr_pc: row.obs.osr_pc,
+                regalloc: match row.regalloc {
+                    super::compile::lowering::RegallocChoice::Fast => "fast",
+                    super::compile::lowering::RegallocChoice::Full => "full",
+                },
+                clif_insts: row.clif_insts,
+                deopt_at: row.obs.deopt_at,
+                deopt_rerun: row.obs.deopt_rerun,
+                signals: row.obs.signals,
+                deopt_pcs,
+                deopt_pc_overflow: row.obs.deopt_pc_overflow,
+            }
+        })
+        .collect();
+    (rows, dropped)
+}
+
+/// A bytecode op's variant name (`Mul`, `Call`), without operands.
+fn op_name(op: &crate::emacs_core::bytecode::opcode::Op) -> String {
+    let debug = format!("{op:?}");
+    match debug.find(['(', ' ', '{']) {
+        Some(end) => debug[..end].to_string(),
+        None => debug,
     }
 }
 

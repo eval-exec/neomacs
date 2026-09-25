@@ -3536,6 +3536,7 @@ pub fn lower_leaf_full_osr(
         // callee's constant base, read only when `dynamic_prefix > 0`.
         sidecar: None,
         dynamic_prefix: u32::try_from(dynamic_prefix).expect("patched prefix fits u32"),
+        obs: LeafObs::new(),
         entry,
         _backing: LeafBacking::Jit(module),
     })
@@ -4560,6 +4561,9 @@ mod mir_inline_guards;
 #[cfg(test)]
 #[path = "tests/mir_named_calls.rs"]
 mod mir_named_calls_tests;
+#[cfg(test)]
+#[path = "tests/observability.rs"]
+mod observability_tests;
 #[cfg(test)]
 #[path = "tests/osr_bindings.rs"]
 mod osr_binding_tests;

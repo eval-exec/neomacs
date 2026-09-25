@@ -143,12 +143,18 @@ pub(crate) fn top_redefined(n: usize) -> String {
     })
 }
 
-/// A symbol's name for a report line, never panicking on odd names:
-/// whitespace and `,`/`=` (the line's separators) become `_`.
+/// A symbol's name for a report line (see [`report_token`]).
 pub(crate) fn symbol_label(sym: SymId) -> String {
-    let name = crate::emacs_core::intern::resolve_sym_lisp_string(sym)
-        .as_utf8_str()
-        .unwrap_or("<non-utf8>");
+    report_token(
+        crate::emacs_core::intern::resolve_sym_lisp_string(sym)
+            .as_utf8_str()
+            .unwrap_or("<non-utf8>"),
+    )
+}
+
+/// A Lisp name made safe as one token of a report line: whitespace, control
+/// characters and `,`/`=` (the line's separators) become `_`.
+pub(crate) fn report_token(name: &str) -> String {
     name.chars()
         .map(|c| {
             if c.is_whitespace() || c.is_control() || c == ',' || c == '=' {

@@ -4,6 +4,7 @@
 //! parent's view of its private items (`use super::*`).
 
 use super::*;
+use std::cell::{Cell, RefCell};
 
 /// Why a bytecode body could not be compiled by this baseline tier.
 ///
@@ -246,6 +247,126 @@ impl LeafTier {
     }
 }
 
+/// Per-leaf observability counters, kept in release builds.
+///
+/// Boxed in [`CompiledLeaf`] so the leaf carries one pointer, moving its hot
+/// fields as little as possible. Every counter is written only on a cold
+/// exit (a precise deopt, a rerun-from-start, a signal), on the owning
+/// thread (`CompiledLeaf` is `!Send`), so plain `Cell`s suffice and no hot
+/// path pays anything.
+pub(crate) struct LeafObs {
+    /// The `compiled_id` this leaf was cached under; 0 = built outside the
+    /// cache (tests, the AOT emit path).
+    pub(crate) id: u64,
+    /// The loop header an OSR leaf enters at; `None` for a whole-function leaf.
+    pub(crate) osr_pc: Option<u32>,
+    /// Precise deopts (`STATUS_DEOPT_AT`) — every one runs
+    /// [`CompiledLeaf::deopt_at_outcome`].
+    pub(crate) deopt_at: Cell<u64>,
+    /// Rerun-from-start deopts (`STATUS_DEOPT`).
+    pub(crate) deopt_rerun: Cell<u64>,
+    /// Native runs that exited with `STATUS_SIGNAL`.
+    pub(crate) signals: Cell<u64>,
+    /// Precise-deopt resume pcs with counts, at most [`Self::MAX_DEOPT_PCS`]
+    /// distinct ones.
+    deopt_pcs: RefCell<SmallVec<[(u32, u64); 4]>>,
+    /// Precise deopts at a pc beyond the first [`Self::MAX_DEOPT_PCS`].
+    deopt_pc_overflow: Cell<u64>,
+}
+
+impl LeafObs {
+    const MAX_DEOPT_PCS: usize = 8;
+
+    pub(crate) fn new() -> Box<Self> {
+        Box::new(LeafObs {
+            id: 0,
+            osr_pc: None,
+            deopt_at: Cell::new(0),
+            deopt_rerun: Cell::new(0),
+            signals: Cell::new(0),
+            deopt_pcs: RefCell::new(SmallVec::new()),
+            deopt_pc_overflow: Cell::new(0),
+        })
+    }
+
+    /// Count a precise deopt resuming at `pc`. Only called from the already
+    /// cold [`CompiledLeaf::deopt_at_outcome`].
+    #[inline]
+    pub(crate) fn note_deopt_at(&self, pc: u32) {
+        self.deopt_at.set(self.deopt_at.get() + 1);
+        let mut pcs = self.deopt_pcs.borrow_mut();
+        if let Some(slot) = pcs.iter_mut().find(|(p, _)| *p == pc) {
+            slot.1 += 1;
+        } else if pcs.len() < Self::MAX_DEOPT_PCS {
+            pcs.push((pc, 1));
+        } else {
+            self.deopt_pc_overflow.set(self.deopt_pc_overflow.get() + 1);
+        }
+    }
+
+    /// Count a rerun-from-start deopt.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn note_deopt_rerun(&self) {
+        self.deopt_rerun.set(self.deopt_rerun.get() + 1);
+    }
+
+    /// Count a native run that exited with a signal.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn note_signal(&self) {
+        self.signals.set(self.signals.get() + 1);
+    }
+
+    /// A report-time copy of the counters.
+    pub(crate) fn snapshot(&self) -> LeafObsSnapshot {
+        let mut deopt_pcs: Vec<(u32, u64)> = self.deopt_pcs.borrow().iter().copied().collect();
+        deopt_pcs.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        LeafObsSnapshot {
+            id: self.id,
+            osr_pc: self.osr_pc,
+            deopt_at: self.deopt_at.get(),
+            deopt_rerun: self.deopt_rerun.get(),
+            signals: self.signals.get(),
+            deopt_pcs,
+            deopt_pc_overflow: self.deopt_pc_overflow.get(),
+        }
+    }
+}
+
+/// A copy of one leaf's [`LeafObs`] counters.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LeafObsSnapshot {
+    pub(crate) id: u64,
+    pub(crate) osr_pc: Option<u32>,
+    pub(crate) deopt_at: u64,
+    pub(crate) deopt_rerun: u64,
+    pub(crate) signals: u64,
+    /// `(pc, count)`, most frequent first.
+    pub(crate) deopt_pcs: Vec<(u32, u64)>,
+    pub(crate) deopt_pc_overflow: u64,
+}
+
+/// Summed counters of leaves a cache dropped (a heap-swap `clear`, an OSR
+/// eviction), so the exit totals still include them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LeafTotals {
+    pub(crate) leaves: u64,
+    pub(crate) deopt_at: u64,
+    pub(crate) deopt_rerun: u64,
+    pub(crate) signals: u64,
+}
+
+impl LeafTotals {
+    /// Add one leaf's counters.
+    pub(crate) fn add(&mut self, s: &LeafObsSnapshot) {
+        self.leaves += 1;
+        self.deopt_at += s.deopt_at;
+        self.deopt_rerun += s.deopt_rerun;
+        self.signals += s.signals;
+    }
+}
+
 pub struct CompiledLeaf {
     /// The tier that produced this leaf (see [`LeafTier`]).
     pub(crate) tier: LeafTier,
@@ -344,6 +465,8 @@ pub struct CompiledLeaf {
     /// (`RuntimeState::patched_prefix`). 0 for a plain function, whose 4th
     /// param the JIT ignores. AOT leaves are never built for a patched source.
     pub(crate) dynamic_prefix: u32,
+    /// Release-build deopt/signal counters (see [`LeafObs`]).
+    pub(crate) obs: Box<LeafObs>,
     // Field order matters for drop: `entry` points into `_backing`'s memory (the
     // JITModule's executable pages or the loaded `.so`'s code); keep `_backing`
     // alive — and dropped AFTER `entry` — as long as the handle exists.
@@ -574,6 +697,7 @@ impl CompiledLeaf {
             reloc_data,
             sidecar: Some(sidecar),
             dynamic_prefix: 0,
+            obs: LeafObs::new(),
             entry,
             _backing: LeafBacking::Aot(backing),
         }
@@ -925,6 +1049,7 @@ impl CompiledLeaf {
             STATUS_OK => NativeRun::Ok(out as usize),
             STATUS_SIGNAL => NativeRun::Signal,
             _ => {
+                self.obs.note_deopt_rerun();
                 // STATUS_DEOPT = rerun-from-start. A side-effecting body must never
                 // reach here: the calls-slice routes EVERY guard in a call-bearing
                 // body to precise STATUS_DEOPT_AT (the all-precise rule that closes
@@ -949,6 +1074,9 @@ impl CompiledLeaf {
         bind_frame: Option<(usize, usize)>,
         cond_base: Option<usize>,
     ) -> NativeRun {
+        // The one chokepoint every precise deopt passes (wrapped, framed,
+        // OSR and direct runs alike), so each is counted exactly once.
+        self.obs.note_deopt_at(self.deopt_meta.pc.get() as u32);
         {
             // Precise deopt: NO frame unwind — the resumed interpreter frame
             // takes ownership of the registered binds/handlers and unwinds to
@@ -1021,6 +1149,12 @@ impl CompiledLeaf {
         cond_base: Option<usize>,
         bases: Option<&JitLeafBases>,
     ) -> i64 {
+        // Every framed STATUS_SIGNAL exit comes through here; count the
+        // incoming status only (an OK exit whose cleanup signals is not a
+        // signal of this leaf's code).
+        if status == STATUS_SIGNAL {
+            self.obs.note_signal();
+        }
         let mut effective_status = status;
         // A contained shim panic exiting this leaf (no leaf-local handler
         // matched it): heal the panicked extent's evaluator residue against

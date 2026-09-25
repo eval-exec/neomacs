@@ -360,3 +360,129 @@ fn runs_with_args_and_rejects_arity_mismatch() {
         None
     );
 }
+
+fn unary_add_one() -> ByteCodeFunction {
+    // (lambda (x) (+ x 1))
+    let mut f = ByteCodeFunction::new(LambdaParams {
+        required: vec![SymId(1)],
+        optional: Vec::new(),
+        rest: None,
+    });
+    f.lexical = true;
+    f.ops = vec![Op::StackRef(0), Op::Constant(0), Op::Add, Op::Return];
+    f.constants = vec![Value::make_int(1)].into();
+    f.max_stack = 16;
+    f
+}
+
+fn deopts(obs: &LeafObsSnapshot) -> u64 {
+    obs.deopt_at + obs.deopt_rerun
+}
+
+/// A leaf replaced by its full-allocator rebuild keeps its counters as a
+/// `retired` row; the new leaf starts from zero.
+#[test]
+fn jit_obs_retired_leaf_counts_survive_retier() {
+    if forced_regalloc().is_some() {
+        return;
+    }
+    let Some(retier_at) = crate::emacs_core::jit::retier_heat() else {
+        return;
+    };
+    let f = unary_add_one();
+    let run = |arg: Value| try_run_compiled(std::ptr::null_mut(), &f, Value::NIL, &[arg]).unwrap();
+    assert_eq!(run(Value::make_int(1)), Some(Value::make_int(2).bits()));
+    assert_eq!(run(Value::NIL), None, "a nil operand deopts");
+    let id = f.jit_runtime().compiled_id().expect("compiled");
+    assert_eq!(compiled_regalloc_for_test(id), Some(RegallocChoice::Fast));
+    f.jit_runtime().set_heat_for_test(retier_at);
+    assert_eq!(run(Value::make_int(1)), Some(Value::make_int(2).bits()));
+    assert_eq!(compiled_regalloc_for_test(id), Some(RegallocChoice::Full));
+    let (rows, _) = leaf_report_rows();
+    let mine: Vec<&LeafRow> = rows.iter().filter(|r| r.id == id).collect();
+    let retired = mine
+        .iter()
+        .find(|r| r.state == LeafState::Retired)
+        .expect("the fast leaf is retired, not dropped");
+    assert_eq!(deopts(&retired.obs), 1);
+    assert_eq!(retired.regalloc, RegallocChoice::Fast);
+    let live = mine
+        .iter()
+        .find(|r| r.state == LeafState::Live)
+        .expect("the rebuilt leaf is live");
+    assert_eq!(deopts(&live.obs), 0);
+    assert_eq!(live.obs.id, id);
+}
+
+/// A heap-swap `clear` drops every leaf; their counts move to the dropped
+/// totals instead of vanishing.
+#[test]
+fn jit_obs_clear_folds_counts_into_dropped_totals() {
+    let f = unary_add_one();
+    let run = |arg: Value| try_run_compiled(std::ptr::null_mut(), &f, Value::NIL, &[arg]).unwrap();
+    assert_eq!(run(Value::NIL), None);
+    assert_eq!(run(Value::NIL), None);
+    let id = f.jit_runtime().compiled_id().expect("compiled");
+    let (rows, dropped0) = leaf_report_rows();
+    assert!(rows.iter().any(|r| r.id == id));
+    clear();
+    let (rows, dropped) = leaf_report_rows();
+    assert!(!rows.iter().any(|r| r.id == id), "cleared");
+    assert_eq!(dropped.leaves, dropped0.leaves + 1);
+    assert_eq!(
+        dropped.deopt_at + dropped.deopt_rerun,
+        dropped0.deopt_at + dropped0.deopt_rerun + 2
+    );
+}
+
+/// Evicting a function drops its OSR leaves; their counts are folded too.
+#[test]
+fn jit_obs_evict_compiled_folds_osr_counts() {
+    let leaf = super::super::compile::lower_nullary_leaf(
+        &[Op::Constant(0), Op::Nil, Op::Add, Op::Return],
+        &[Value::make_int(5)],
+    )
+    .expect("compiles");
+    assert_eq!(leaf.call_for_test(&[]), None);
+    let id = 4_241;
+    OSR_CACHE.with(|c| {
+        c.borrow_mut().insert(
+            (id, 3),
+            Some(OsrEntry {
+                leaf: Rc::new(leaf),
+                stack_depth: 0,
+                bind_depth: 0,
+            }),
+        )
+    });
+    let (rows, dropped0) = leaf_report_rows();
+    let osr = rows
+        .iter()
+        .find(|r| r.id == id && r.state == LeafState::Osr)
+        .expect("the OSR leaf is reported");
+    assert_eq!(deopts(&osr.obs), 1);
+    evict_compiled(id);
+    let (rows, dropped) = leaf_report_rows();
+    assert!(!rows.iter().any(|r| r.id == id));
+    assert_eq!(dropped.leaves, dropped0.leaves + 1);
+    assert_eq!(dropped.deopt_at, dropped0.deopt_at + 1);
+}
+
+/// A leaf the AOT prewarm inserts carries the id it was inserted under.
+#[test]
+fn jit_obs_aot_prepopulated_leaf_has_id() {
+    let leaf = super::super::compile::lower_nullary_leaf(
+        &[Op::Constant(0), Op::Return],
+        &[Value::make_int(7)],
+    )
+    .expect("compiles");
+    let id = 4_242;
+    assert_eq!(prepopulate_aot_leaves(vec![(id, leaf)]), vec![id]);
+    let (rows, _) = leaf_report_rows();
+    let row = rows
+        .iter()
+        .find(|r| r.id == id)
+        .expect("the prepopulated leaf is reported");
+    assert_eq!(row.obs.id, id);
+    assert_eq!(row.state, LeafState::Live);
+}

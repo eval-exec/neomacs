@@ -2397,6 +2397,7 @@ pub(super) fn lower_mir_with_plan(
         // MIR leaves are only built for unpatched sources (see
         // compile_bytecode_function_inner).
         dynamic_prefix: 0,
+        obs: LeafObs::new(),
         entry,
         _backing: LeafBacking::Jit(module),
     })

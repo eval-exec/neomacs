@@ -7,6 +7,81 @@
 
 use super::epoch::EpochCounters;
 use super::{CompileStats, ReportTag, format_summary};
+use crate::emacs_core::jit::compile::LeafTotals;
+
+/// How many leaves each ranked leaf section prints.
+pub(crate) const LEAF_ROWS_PER_SECTION: usize = 16;
+
+/// One compiled leaf in the exit report (plain data; see
+/// `cache::leaf_report_rows` for where the counters come from).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LeafReportRow {
+    pub(crate) id: u64,
+    /// The Lisp function currently bound to this leaf's source, if any.
+    pub(crate) name: Option<String>,
+    pub(crate) tier: &'static str,
+    pub(crate) state: &'static str,
+    pub(crate) osr_pc: Option<u32>,
+    pub(crate) regalloc: &'static str,
+    pub(crate) clif_insts: u32,
+    pub(crate) deopt_at: u64,
+    pub(crate) deopt_rerun: u64,
+    pub(crate) signals: u64,
+    /// `(pc, count, op)`, most frequent first; `op` is the bytecode op at
+    /// `pc` when the pc indexes the named function's body.
+    pub(crate) deopt_pcs: Vec<(u32, u64, Option<String>)>,
+    pub(crate) deopt_pc_overflow: u64,
+}
+
+impl LeafReportRow {
+    fn deopts(&self) -> u64 {
+        self.deopt_at + self.deopt_rerun
+    }
+
+    fn render(&self) -> String {
+        let osr = self
+            .osr_pc
+            .map_or_else(|| "-".to_string(), |pc| pc.to_string());
+        let mut pcs: Vec<String> = self
+            .deopt_pcs
+            .iter()
+            .map(|(pc, n, op)| match op {
+                Some(op) => format!("{pc}:{n}/{op}"),
+                None => format!("{pc}:{n}"),
+            })
+            .collect();
+        if self.deopt_pc_overflow > 0 {
+            pcs.push(format!("other:{}", self.deopt_pc_overflow));
+        }
+        let pcs = if pcs.is_empty() {
+            "-".to_string()
+        } else {
+            pcs.join(",")
+        };
+        format!(
+            "id={} name={} tier={} state={} osr_pc={osr} deopt_at={} deopt_rerun={} \
+             signals={} regalloc={} clif={} pcs={pcs}",
+            self.id,
+            self.name.as_deref().unwrap_or("-"),
+            self.tier,
+            self.state,
+            self.deopt_at,
+            self.deopt_rerun,
+            self.signals,
+            self.regalloc,
+            self.clif_insts,
+        )
+    }
+}
+
+/// The leaves worth a line: the top [`LEAF_ROWS_PER_SECTION`] by deopts
+/// (only those that deopted), most first. Ties break by id.
+pub(crate) fn ranked_leaves(rows: &[LeafReportRow]) -> Vec<&LeafReportRow> {
+    let mut by_deopts: Vec<&LeafReportRow> = rows.iter().filter(|r| r.deopts() > 0).collect();
+    by_deopts.sort_by(|a, b| b.deopts().cmp(&a.deopts()).then(a.id.cmp(&b.id)));
+    by_deopts.truncate(LEAF_ROWS_PER_SECTION);
+    by_deopts
+}
 
 /// Everything the exit report prints. Filled by [`super::report_at_exit`];
 /// tests build one by hand.
@@ -39,6 +114,10 @@ pub(crate) struct FinalReport {
     pub(crate) epoch_since_loop: Option<EpochCounters>,
     /// The most-redefined symbols, rendered (`name=count,...`).
     pub(crate) redefined_top: String,
+    /// Every leaf this thread still holds.
+    pub(crate) leaves: Vec<LeafReportRow>,
+    /// Summed counters of the leaves the caches dropped.
+    pub(crate) dropped: LeafTotals,
 }
 
 impl FinalReport {
@@ -70,11 +149,32 @@ impl FinalReport {
         lines.push((ReportTag::Final, head));
         lines.push((ReportTag::FinalMirBails, or_dash(&self.mir_bails)));
         lines.push((ReportTag::FinalInline, or_dash(&self.inline)));
+        let (mut deopt_at, mut deopt_rerun, mut signals) = (
+            self.dropped.deopt_at,
+            self.dropped.deopt_rerun,
+            self.dropped.signals,
+        );
+        let (mut live, mut retired, mut osr) = (0u64, 0u64, 0u64);
+        for r in &self.leaves {
+            deopt_at += r.deopt_at;
+            deopt_rerun += r.deopt_rerun;
+            signals += r.signals;
+            match r.state {
+                "live" => live += 1,
+                "retired" => retired += 1,
+                _ => osr += 1,
+            }
+        }
         lines.push((
             ReportTag::FinalRuns,
             format!(
-                "entries_seam={} osr_transfers={} seam_fallbacks={}",
-                self.compile.native_entries, self.osr_transfers, self.seam_fallbacks,
+                "entries_seam={} deopt_at={deopt_at} deopt_rerun={deopt_rerun} signals={signals} \
+                 osr_transfers={} seam_fallbacks={} leaves_live={live} leaves_retired={retired} \
+                 leaves_osr={osr} leaves_dropped={}",
+                self.compile.native_entries,
+                self.osr_transfers,
+                self.seam_fallbacks,
+                self.dropped.leaves,
             ),
         ));
         let mut fn_epoch = format!("epoch={} {}", self.function_epoch, self.epoch.render());
@@ -86,6 +186,9 @@ impl FinalReport {
         }
         lines.push((ReportTag::FinalFnEpoch, fn_epoch));
         lines.push((ReportTag::FinalFnEpochTop, or_dash(&self.redefined_top)));
+        for row in ranked_leaves(&self.leaves) {
+            lines.push((ReportTag::FinalLeaf, row.render()));
+        }
         lines
     }
 }
