@@ -257,6 +257,11 @@ pub(crate) struct CompiledPattern {
     /// Rebuilt with the fastmap, including syntax-table recomputation.
     sparse_ascii_fastmap: std::cell::OnceCell<Option<SparseAsciiFastmap>>,
 
+    /// How a case-folded search finds its next candidate: `TRANSLATE` folded
+    /// into the fastmap once, per text representation (see
+    /// [`CompiledPattern::folded_scan`]).  Rebuilt with the fastmap.
+    folded_scans: FoldedScans,
+
     /// True if the pattern was compiled for POSIX backtracking.
     pub posix: bool,
 
@@ -407,6 +412,23 @@ impl CompiledPattern {
             .get_or_init(|| build_literal_prefilter(self))
             .as_ref()
     }
+
+    /// The case-folded candidate scan for the text representation this
+    /// pattern searches, built by the first search long enough to use it (the
+    /// literal prefilter's policy).  `None`: not built yet and this search is
+    /// short -- use the per-character loop.
+    #[inline]
+    fn folded_scan(&self, table: &CaseTranslation, may_build: bool) -> Option<&FoldedScan> {
+        let cell = match TextRepr::of(self.target_multibyte) {
+            TextRepr::Unibyte => &self.folded_scans.unibyte,
+            TextRepr::Multibyte => &self.folded_scans.multibyte,
+        };
+        match cell.get() {
+            Some(scan) => Some(scan),
+            None if may_build => Some(cell.get_or_init(|| build_folded_scan(self, table))),
+            None => None,
+        }
+    }
 }
 
 /// A sound multi-literal prefilter for a compiled pattern.  See
@@ -504,10 +526,6 @@ pub(crate) enum AsciiPreimage {
 impl CaseTranslation {
     /// Which characters this translation can map into ASCII.
     #[inline]
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "read by the case-folded candidate scan")
-    )]
     pub(crate) fn ascii_preimage(&self) -> AsciiPreimage {
         match self.table {
             None => AsciiPreimage::AsciiOnly,
@@ -637,6 +655,7 @@ impl CompiledPattern {
             fastmap_translated: [false; 256],
             fastmap_accurate: false,
             sparse_ascii_fastmap: std::cell::OnceCell::new(),
+            folded_scans: FoldedScans::default(),
             posix: false,
             multibyte: true,
             target_multibyte: true,
@@ -7496,6 +7515,7 @@ fn compile_fastmap(pattern: &mut CompiledPattern, syntax: &dyn SyntaxLookup) {
     // A cached skip set describes this exact map, including the active syntax
     // table. Leave it empty until a search actually needs the ASCII shortcut.
     pattern.sparse_ascii_fastmap.take();
+    pattern.folded_scans = FoldedScans::default();
     let mut folded_multibyte_literal = false;
     compile_fastmap_walk(pattern, syntax, &mut folded_multibyte_literal);
     // `fastmap_translated` is the walk's own map; the byte-indexed `fastmap`
@@ -8129,14 +8149,123 @@ fn fastmap_force_disabled() -> bool {
 #[cfg(any(test, feature = "fuzzing"))]
 pub(crate) fn build_search_optimizations(pattern: &CompiledPattern) {
     let _ = pattern.literal_prefilter();
+    if let Some(table) = pattern.translate.as_ref() {
+        let _ = pattern.folded_scan(table, true);
+    }
 }
 
 /// A compact, allocation-free candidate set for the memchr skip loop.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum SparseAsciiFastmap {
     One(u8),
     Two(u8, u8),
     Three(u8, u8, u8),
+}
+
+/// Representation of the searched text (`CompiledPattern::target_multibyte`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TextRepr {
+    Unibyte,
+    Multibyte,
+}
+
+impl TextRepr {
+    #[inline]
+    fn of(target_multibyte: bool) -> Self {
+        if target_multibyte {
+            Self::Multibyte
+        } else {
+            Self::Unibyte
+        }
+    }
+}
+
+/// How a case-folded search finds its next fastmap candidate.
+#[derive(Clone, Debug)]
+enum FoldedScan {
+    /// The candidates are exactly the positions holding one of 1-3 ASCII
+    /// bytes: memchr finds them.
+    Sparse(SparseAsciiFastmap),
+    /// The candidates are exactly the positions `p` with `accept[text[p]]`.
+    Table(Box<[bool; 256]>),
+    /// Candidacy needs a decoded character's translated leading code, or the
+    /// translation is a char-table: keep the per-character loop.
+    PerChar,
+}
+
+/// The case-folded candidate scans of one pattern, one per text
+/// representation: the multibyte scan is derived from `fastmap_translated`,
+/// the unibyte one from `fastmap`.
+#[derive(Clone, Debug, Default)]
+struct FoldedScans {
+    unibyte: std::cell::OnceCell<FoldedScan>,
+    multibyte: std::cell::OnceCell<FoldedScan>,
+}
+
+/// Fold `TRANSLATE` into the fastmap, once per pattern and representation.
+///
+/// The result has EXACTLY the candidates of the per-character loops in
+/// `re_search`, position for position:
+///
+/// - Unibyte text: `accept[b]` is, by construction, the loops' test
+///   `fastmap[translate_byte(b)]`.
+/// - Multibyte text: the loops test every ASCII byte, which is
+///   `accept[b]`; skip continuation bytes; and test a lead byte through the
+///   translated character's leading code.  Under `AsciiPreimage::AsciiOnly`
+///   a non-ASCII character translates to a non-ASCII one, whose leading code
+///   is at least 0xC0, and the gate below has established that
+///   `fastmap_translated[0x80..]` is all false: no lead byte is a candidate
+///   in either scan.  (Valid internal text only: an overlong form such as
+///   `E0 81 81`, which no Lisp string or buffer holds, decodes to ASCII.)
+/// - The end of the text is tried by both, when in range.
+///
+/// A char-table translation fills its byte memo lazily from a table that can
+/// change in place, so tabulating it would freeze slots the loops still read
+/// live: only the constant standard translation is tabulated.
+#[cold]
+#[inline(never)]
+fn build_folded_scan(pattern: &CompiledPattern, table: &CaseTranslation) -> FoldedScan {
+    if table.ascii_preimage() != AsciiPreimage::AsciiOnly {
+        return FoldedScan::PerChar;
+    }
+    let mut accept = [false; 256];
+    match TextRepr::of(pattern.target_multibyte) {
+        TextRepr::Multibyte => {
+            // A non-ASCII leading code in the map needs the decoded character.
+            if pattern.fastmap_translated[0x80..].contains(&true) {
+                return FoldedScan::PerChar;
+            }
+            for byte in 0..0x80u8 {
+                accept[byte as usize] =
+                    pattern.fastmap_translated[ascii_translated_leading_code(table, byte)];
+            }
+        }
+        TextRepr::Unibyte => {
+            for byte in 0..=u8::MAX {
+                accept[byte as usize] = pattern.fastmap[table.translate_byte(byte) as usize];
+            }
+        }
+    }
+    let scan = match sparse_ascii_fastmap(&accept) {
+        Some(bytes) => FoldedScan::Sparse(bytes),
+        None => FoldedScan::Table(Box::new(accept)),
+    };
+    let multibyte = pattern.target_multibyte;
+    match &scan {
+        FoldedScan::Table(accept) => tracing::debug!(
+            target: "neovm::regex",
+            accepted_bytes = accept.iter().filter(|&&accepted| accepted).count(),
+            multibyte,
+            "case-folded candidate scan: table"
+        ),
+        _ => tracing::debug!(
+            target: "neovm::regex",
+            ?scan,
+            multibyte,
+            "case-folded candidate scan"
+        ),
+    }
+    scan
 }
 
 /// Derive a small (1–3 byte), pure ASCII set once per compiled fastmap.
@@ -8306,7 +8435,10 @@ pub(crate) fn re_search(
             }
         }
         if use_fastmap {
-            let prefilter = if text_len.saturating_sub(start) >= PREFILTER_MIN_BUILD_SPAN {
+            // Whether this search is long enough to build a lazily derived
+            // scanner it finds missing (it always uses one already built).
+            let long_span = text_len.saturating_sub(start) >= PREFILTER_MIN_BUILD_SPAN;
+            let prefilter = if long_span {
                 pattern.literal_prefilter()
             } else {
                 pattern.prefilter.get().and_then(Option::as_ref)
@@ -8373,123 +8505,164 @@ pub(crate) fn re_search(
                         return Some((cand, result.1));
                     }
                 }
-            } else if let Some(table) = translate
-                && pattern.target_multibyte
-            {
-                // GNU `re_search_2` (regex-emacs.c) on multibyte text:
-                // translate the WHOLE character and test the leading code of
-                // the result, stepping a character at a time.
-                while pos <= end {
-                    if pos > text_len {
-                        break;
-                    }
-                    if pos < text_len {
-                        let byte = text[pos];
-                        if byte < 0x80 {
-                            if !pattern.fastmap_translated
-                                [ascii_translated_leading_code(table, byte)]
-                            {
-                                pos += 1;
-                                continue;
-                            }
-                        } else if (byte & 0xC0) == 0x80 {
-                            pos += 1;
-                            continue;
-                        } else {
-                            let (lead, len) = multibyte_translated_leading_code(table, text, pos);
-                            if !pattern.fastmap_translated[lead] {
-                                pos += len;
-                                continue;
-                            }
-                        }
-                    }
-                    if let Some(result) = try_candidate!(pos, end) {
-                        return Some((pos, result.1));
-                    }
-                    pos += 1;
-                }
-            } else if let Some(table) = translate {
-                while pos <= end {
-                    if pos > text_len {
-                        break;
-                    }
-                    // GNU disables fastmap skipping for nullable patterns so zero-width
-                    // matches like `\\(?:...\\)\\=` are still considered at every point.
-                    //
-                    // GNU regex-emacs.c:3568 applies TRANSLATE to the input
-                    // byte before indexing the fastmap. Under case-fold that
-                    // is what lets a fastmap built for a bitmap of lowercase
-                    // characters still catch uppercase input (audit #9).
-                    if pos < text_len {
-                        let idx = table.translate_byte(text[pos]) as usize;
-                        if !pattern.fastmap[idx] {
-                            pos += 1;
-                            continue;
-                        }
-                    }
-                    if let Some(result) = try_candidate!(pos, end) {
-                        return Some((pos, result.1));
-                    }
-                    pos += 1;
-                }
-            } else if let Some(bytes) = pattern.sparse_ascii_fastmap() {
-                // The candidate first-byte set is tiny and pure ASCII
-                // (e.g. `{'('}` for the font-lock defun matchers):
-                // let memchr's SIMD scan find candidates instead of
-                // testing the fastmap byte by byte.  ASCII hits are
-                // never UTF-8 continuation bytes, so the char-boundary
-                // skip is vacuous here.  GNU uses the plain
-                // `while (range > lim && !fastmap[*d]) d++` loop; the
-                // candidate set and attempt positions are identical.
-                let hi = if end < text_len { end + 1 } else { text_len };
-                while pos <= end {
-                    if pos < text_len {
-                        let found = match bytes {
-                            SparseAsciiFastmap::One(b0) => memchr::memchr(b0, &text[pos..hi]),
-                            SparseAsciiFastmap::Two(b0, b1) => {
-                                memchr::memchr2(b0, b1, &text[pos..hi])
-                            }
-                            SparseAsciiFastmap::Three(b0, b1, b2) => {
-                                memchr::memchr3(b0, b1, b2, &text[pos..hi])
-                            }
-                        };
-                        match found {
-                            Some(idx) => pos += idx,
-                            None => {
-                                // No candidate byte before `hi`; the only
-                                // remaining attempt position is text_len
-                                // itself (when the range allows it).
-                                pos = text_len;
-                                if pos > end {
-                                    break;
+            } else {
+                // A case-folded search first folds `TRANSLATE` into the
+                // fastmap (`build_folded_scan`), which leaves one table load
+                // per byte, or memchr when 1-3 ASCII bytes can start a
+                // match.  No per-byte `CaseTranslation::translate` remains.
+                let folded = match translate {
+                    Some(table) => pattern.folded_scan(table, long_span),
+                    None => None,
+                };
+                let sparse = match (translate, folded) {
+                    (None, _) => pattern.sparse_ascii_fastmap(),
+                    (Some(_), Some(FoldedScan::Sparse(bytes))) => Some(*bytes),
+                    (Some(_), _) => None,
+                };
+                if let Some(bytes) = sparse {
+                    // The candidate first-byte set is tiny and pure ASCII
+                    // (e.g. `{'('}` for the font-lock defun matchers, or
+                    // `{'D', 'd'}` for a case-folded `defun`):
+                    // let memchr's SIMD scan find candidates instead of
+                    // testing the fastmap byte by byte.  ASCII hits are
+                    // never UTF-8 continuation bytes, so the char-boundary
+                    // skip is vacuous here.  GNU uses the plain
+                    // `while (range > lim && !fastmap[*d]) d++` loop; the
+                    // candidate set and attempt positions are identical.
+                    let hi = if end < text_len { end + 1 } else { text_len };
+                    while pos <= end {
+                        if pos < text_len {
+                            let found = match bytes {
+                                SparseAsciiFastmap::One(b0) => memchr::memchr(b0, &text[pos..hi]),
+                                SparseAsciiFastmap::Two(b0, b1) => {
+                                    memchr::memchr2(b0, b1, &text[pos..hi])
+                                }
+                                SparseAsciiFastmap::Three(b0, b1, b2) => {
+                                    memchr::memchr3(b0, b1, b2, &text[pos..hi])
+                                }
+                            };
+                            match found {
+                                Some(idx) => pos += idx,
+                                None => {
+                                    // No candidate byte before `hi`; the only
+                                    // remaining attempt position is text_len
+                                    // itself (when the range allows it).
+                                    pos = text_len;
+                                    if pos > end {
+                                        break;
+                                    }
                                 }
                             }
                         }
-                    }
-                    if let Some(result) = try_candidate!(pos, end) {
-                        return Some((pos, result.1));
-                    }
-                    pos += 1;
-                }
-            } else {
-                while pos <= end {
-                    if pos > text_len {
-                        break;
-                    }
-                    if pattern.target_multibyte && pos < text_len && (text[pos] & 0xC0) == 0x80 {
+                        if let Some(result) = try_candidate!(pos, end) {
+                            return Some((pos, result.1));
+                        }
                         pos += 1;
-                        continue;
                     }
-                    if pos < text_len && !pattern.fastmap[text[pos] as usize] {
+                } else if let Some(FoldedScan::Table(accept)) = folded {
+                    let accept: &[bool; 256] = accept;
+                    // GNU `while (range > lim && !fastmap[*d]) d++`, with
+                    // TRANSLATE and the fastmap folded into one table.  The
+                    // table admits no byte >= 0x80 of multibyte text, so no
+                    // continuation byte is ever a candidate.
+                    let hi = if end < text_len { end + 1 } else { text_len };
+                    while pos <= end {
+                        if pos < hi {
+                            match text[pos..hi].iter().position(|&b| accept[b as usize]) {
+                                Some(idx) => pos += idx,
+                                // Only the end of the text remains, when in range.
+                                None => pos = hi,
+                            }
+                        }
+                        if pos > end {
+                            break;
+                        }
+                        if let Some(result) = try_candidate!(pos, end) {
+                            return Some((pos, result.1));
+                        }
                         pos += 1;
-                        continue;
                     }
-                    if let Some(result) = try_candidate!(pos, end) {
-                        return Some((pos, result.1));
+                } else if let Some(table) = translate
+                    && pattern.target_multibyte
+                {
+                    // GNU `re_search_2` (regex-emacs.c) on multibyte text:
+                    // translate the WHOLE character and test the leading code of
+                    // the result, stepping a character at a time.
+                    while pos <= end {
+                        if pos > text_len {
+                            break;
+                        }
+                        if pos < text_len {
+                            let byte = text[pos];
+                            if byte < 0x80 {
+                                if !pattern.fastmap_translated
+                                    [ascii_translated_leading_code(table, byte)]
+                                {
+                                    pos += 1;
+                                    continue;
+                                }
+                            } else if (byte & 0xC0) == 0x80 {
+                                pos += 1;
+                                continue;
+                            } else {
+                                let (lead, len) =
+                                    multibyte_translated_leading_code(table, text, pos);
+                                if !pattern.fastmap_translated[lead] {
+                                    pos += len;
+                                    continue;
+                                }
+                            }
+                        }
+                        if let Some(result) = try_candidate!(pos, end) {
+                            return Some((pos, result.1));
+                        }
+                        pos += 1;
                     }
-                    pos += 1;
+                } else if let Some(table) = translate {
+                    while pos <= end {
+                        if pos > text_len {
+                            break;
+                        }
+                        // GNU disables fastmap skipping for nullable patterns so zero-width
+                        // matches like `\\(?:...\\)\\=` are still considered at every point.
+                        //
+                        // GNU regex-emacs.c:3568 applies TRANSLATE to the input
+                        // byte before indexing the fastmap. Under case-fold that
+                        // is what lets a fastmap built for a bitmap of lowercase
+                        // characters still catch uppercase input (audit #9).
+                        if pos < text_len {
+                            let idx = table.translate_byte(text[pos]) as usize;
+                            if !pattern.fastmap[idx] {
+                                pos += 1;
+                                continue;
+                            }
+                        }
+                        if let Some(result) = try_candidate!(pos, end) {
+                            return Some((pos, result.1));
+                        }
+                        pos += 1;
+                    }
+                } else {
+                    while pos <= end {
+                        if pos > text_len {
+                            break;
+                        }
+                        if pattern.target_multibyte && pos < text_len && (text[pos] & 0xC0) == 0x80
+                        {
+                            pos += 1;
+                            continue;
+                        }
+                        if pos < text_len && !pattern.fastmap[text[pos] as usize] {
+                            pos += 1;
+                            continue;
+                        }
+                        if let Some(result) = try_candidate!(pos, end) {
+                            return Some((pos, result.1));
+                        }
+                        pos += 1;
+                    }
                 }
-            };
+            }
         } else {
             while pos <= end {
                 if pos > text_len {
