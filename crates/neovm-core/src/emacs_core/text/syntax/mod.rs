@@ -7261,5 +7261,9 @@ mod flat_ascii_syntax_entry_cache_tests;
 mod scan_error_data_gnu_tests;
 
 #[cfg(test)]
+#[path = "tests/parse_state_divergence_gnu.rs"]
+mod parse_state_divergence_gnu_tests;
+
+#[cfg(test)]
 #[path = "tests/skip_syntax_classes.rs"]
 mod skip_syntax_classes_tests;

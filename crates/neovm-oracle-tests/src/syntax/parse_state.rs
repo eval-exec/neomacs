@@ -131,3 +131,25 @@ fn oracle_prop_scan_sexps_comments_and_unbalanced_errors() {
     let expect = expect_test::expect![[r#""OK (29 34 36 48)""#]];
     crate::common::assert_oracle_parity_expect(form, expect);
 }
+
+/// KNOWN DIVERGENCE (pinned, found by the `pps_propertize` sweep): after a
+/// STOPBEFORE stop GNU's `scan_sexps_forward` restores `prev_prev_from_syntax`
+/// (`stop:` label), so element 10 describes the character BEFORE the stop;
+/// Neomacs reports the stop character's own syntax, which is non-nil here
+/// because `(` carries the nested comment-start-first flags.
+#[test]
+fn oracle_prop_stopbefore_prev_syntax_divergence() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let form = r#"
+(with-temp-buffer
+  (let ((st (make-syntax-table)))
+    (modify-syntax-entry ?\( "()1n" st)
+    (modify-syntax-entry ?\) ")(4n" st)
+    (modify-syntax-entry ?* ". 23n" st)
+    (set-syntax-table st))
+  (insert ". (d) /x")
+  (list (parse-partial-sexp 1 5 nil t) (point)))
+"#;
+    let expect = expect_test::expect![[r#""OK ((0 nil nil nil nil nil 0 nil nil nil nil) 3)""#]];
+    crate::common::assert_oracle_divergence_expect(form, expect);
+}
