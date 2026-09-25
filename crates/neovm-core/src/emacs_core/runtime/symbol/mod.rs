@@ -613,6 +613,17 @@ pub(crate) struct BlvCacheHit {
     pub(crate) fwd: Option<&'static crate::emacs_core::forward::LispFwd>,
 }
 
+/// A `Localized` symbol's cells as `set_default_internal` sees them
+/// ([`LispSymbol::blv_default_cells`]); copied out like [`BlvCacheHit`].
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct BlvDefaultCells {
+    /// `(SYMBOL . DEFAULT-VALUE)`; also the loaded cell whenever the
+    /// default is what is loaded, so one store reaches both.
+    pub(crate) defcell: Value,
+    /// The forwarder whose type rule the value obeys.
+    pub(crate) fwd: Option<&'static crate::emacs_core::forward::LispFwd>,
+}
+
 /// Mirrors GNU `swap_in_symval_forwarding` (`src/data.c:1539-1571`).
 ///
 /// Loads the BLV's `valcell` from the current buffer's
@@ -880,6 +891,23 @@ impl LispSymbol {
             defcell: blv.defcell,
             found: blv.found,
             local_if_set: blv.local_if_set,
+            fwd: blv.fwd,
+        })
+    }
+
+    /// A `Localized` symbol's default cell and forwarder, whatever buffer
+    /// the cache is loaded for: what `set_default_internal`
+    /// needs (it writes `defcell` in any buffer). `None` for any other
+    /// redirect.
+    #[inline]
+    pub(crate) fn blv_default_cells(&self) -> Option<BlvDefaultCells> {
+        if self.flags.redirect() != SymbolRedirect::Localized {
+            return None;
+        }
+        // SAFETY: as in `blv_cache_hit`.
+        let blv = unsafe { &*self.val.blv };
+        Some(BlvDefaultCells {
+            defcell: blv.defcell,
             fwd: blv.fwd,
         })
     }

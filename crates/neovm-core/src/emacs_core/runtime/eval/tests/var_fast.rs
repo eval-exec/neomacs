@@ -334,6 +334,10 @@ enum Body {
     KillAll,
     /// A `setq` of the variable inside the binding (tree walker).
     Setq,
+    /// A signal out of the binding: the engine's own unwinding restores it.
+    Signal,
+    /// A full collection inside the binding.
+    Gc,
 }
 
 fn body_form(body: Body, var: &str) -> String {
@@ -348,6 +352,8 @@ fn body_form(body: Body, var: &str) -> String {
         Body::Watch => format!("(progn (add-variable-watcher '{var} 'vft-watcher) {obs})"),
         Body::KillAll => format!("(progn (kill-all-local-variables) {obs})"),
         Body::Setq => format!("(progn (setq {var} 500) {obs})"),
+        Body::Signal => format!("(progn {obs} (signal 'error (list '{var})))"),
+        Body::Gc => format!("(progn (garbage-collect) {obs})"),
     }
 }
 
@@ -387,6 +393,8 @@ const SCENARIOS: &[Scenario] = &[
     Scenario::Let(Body::Watch),
     Scenario::Let(Body::KillAll),
     Scenario::Let(Body::Setq),
+    Scenario::Let(Body::Signal),
+    Scenario::Let(Body::Gc),
     Scenario::LetString,
     Scenario::LetFive,
     Scenario::LetThenSetq,
@@ -1129,5 +1137,195 @@ fn bytecode_let_takes_the_bind_tier_on_both_engines() {
             0,
             "{engine:?}"
         );
+    }
+}
+
+/// Bind VAR to VALUE through the general `specbind` in a fresh fixture whose
+/// caches were loaded for the home buffer, run BODY (Lisp) inside the
+/// binding, then unwind with GNU `unbind_to`'s entry point with the unbind
+/// tier on or off; `(the tier's hits, what Lisp sees afterwards, the specpdl
+/// depth came back)`.
+fn unbind_once(var: &str, value: Value, body: &str, tier: bool) -> (u64, String, bool) {
+    let mut ev = fixture();
+    set_var_cache_tiers_for_test(&VarCacheTier::ALL);
+    for &v in FIXTURE_VARS {
+        let _ = run(&mut ev, Engine::Interpreter, &Prog::read(), v, &[]);
+    }
+    let depth = ev.specpdl.len();
+    ev.specbind_uncached(intern(var), value)
+        .expect("the general specbind binds");
+    eval_ok(&mut ev, body);
+    if tier {
+        set_var_cache_tiers_for_test(&[VarCacheTier::Unbind]);
+    } else {
+        set_var_cache_tiers_for_test(&[]);
+    }
+    reset_var_cache_events();
+    let result = ev.unbind_to_with_result(depth, Ok(Value::NIL));
+    assert!(result.is_ok(), "{var}: {result:?}");
+    let hits = var_cache_event_count(VarCacheEvent::UnbindForwarded)
+        + var_cache_event_count(VarCacheEvent::UnbindLetLocal)
+        + var_cache_event_count(VarCacheEvent::UnbindLetDefault);
+    set_var_cache_tiers_for_test(&VarCacheTier::ALL);
+    let after = eval(&mut ev, &observe_form(var));
+    let log = eval(&mut ev, "(prog1 (reverse vft-log) (setq vft-log nil))");
+    (
+        hits,
+        format!("{after} log={log}"),
+        ev.specpdl.len() == depth,
+    )
+}
+
+/// The unbind arms restore exactly what the general unwinder restores, for
+/// the shapes they take (a forwarder's `Let`, a `LetLocal` whose buffer's
+/// cache still holds it, a buffer-local `LetDefault`), and leave every other
+/// case -- a binding killed inside the `let`, a watcher added inside it, a
+/// cache loaded for another buffer, a per-buffer slot -- to the general
+/// unwinder.
+#[test]
+fn unbind_tier_restores_what_the_general_unwinder_restores() {
+    let n = Value::make_int(200);
+    let stay = "(list vft-loc)"; // keeps the caches on this buffer
+    let taken: &[(&str, &str)] = &[
+        ("vft-loc", stay),          // LetLocal
+        ("vft-lbool", stay),        // LetLocal, Bool forwarder
+        ("vft-locd", stay),         // LetDefault
+        ("vft-auto", stay),         // LetDefault, local_if_set
+        ("vft-lint", stay),         // LetDefault, Int forwarder
+        ("vft-lobj", stay),         // LetDefault, Obj forwarder
+        ("case-fold-search", stay), // LetDefault, Obj forwarder
+        ("vft-obj", stay),          // Let, forwarded Obj
+        ("vft-bool", stay),         // Let, forwarded Bool
+        ("vft-int", stay),          // Let, forwarded Int
+        ("vft-kbd", stay),          // Let, keyboard variable (bound by the general path)
+        // The default is restored whatever buffer is current.
+        ("vft-locd", "(set-buffer vft-other)"),
+    ];
+    for &(var, body) in taken {
+        let on = unbind_once(var, n, body, true);
+        let off = unbind_once(var, n, body, false);
+        assert_eq!(on.0, 1, "{var} / {body}: the tier restores it");
+        assert_eq!(off.0, 0);
+        assert_eq!(
+            (&on.1, on.2),
+            (&off.1, off.2),
+            "{var} / {body}: tier vs general"
+        );
+    }
+    let refused: &[(&str, &str)] = &[
+        // The kill wins over the restore.
+        ("vft-loc", "(kill-local-variable 'vft-loc)"),
+        ("vft-loc", "(kill-all-local-variables)"),
+        // The unlet is watched.
+        ("vft-loc", "(add-variable-watcher 'vft-loc 'vft-watcher)"),
+        ("vft-obj", "(add-variable-watcher 'vft-obj 'vft-watcher)"),
+        ("vft-locd", "(add-variable-watcher 'vft-locd 'vft-watcher)"),
+        // The cache is loaded for another buffer when the LetLocal unwinds.
+        ("vft-loc", "(progn (set-buffer vft-other) vft-loc)"),
+        // A per-buffer slot, a projected forwarder.
+        ("fill-column", stay),
+        ("gc-cons-threshold", stay),
+        // The binding was made while plain and the body localized it.
+        ("vft-plain", "(make-local-variable 'vft-plain)"),
+    ];
+    for &(var, body) in refused {
+        let value = if var == "gc-cons-threshold" {
+            Value::make_int(900_000)
+        } else {
+            n
+        };
+        let on = unbind_once(var, value, body, true);
+        let off = unbind_once(var, value, body, false);
+        assert_eq!(on.0, 0, "{var} / {body}: the general unwinder's");
+        assert_eq!(
+            (&on.1, on.2),
+            (&off.1, off.2),
+            "{var} / {body}: tier vs general"
+        );
+    }
+}
+
+/// Both engines' `unbind` takes the unbind tier.
+#[test]
+fn bytecode_unbind_takes_the_unbind_tier_on_both_engines() {
+    for &engine in ENGINES {
+        let mut ev = fixture();
+        set_var_cache_tiers_for_test(&VarCacheTier::ALL);
+        for &var in FIXTURE_VARS {
+            let _ = run(&mut ev, Engine::Interpreter, &Prog::read(), var, &[]);
+        }
+        eval_ok(&mut ev, "(fset 'vft-body (lambda () nil))");
+        reset_var_cache_events();
+        for var in ["vft-loc", "vft-locd", "vft-obj", "vft-int"] {
+            let got = run(
+                &mut ev,
+                engine,
+                &Prog::let_call(),
+                var,
+                &[Value::make_int(3)],
+            );
+            assert!(got.starts_with("(nil "), "{engine:?} {var}: {got}");
+        }
+        assert_eq!(
+            var_cache_event_count(VarCacheEvent::UnbindLetLocal),
+            1,
+            "{engine:?}"
+        );
+        assert_eq!(
+            var_cache_event_count(VarCacheEvent::UnbindLetDefault),
+            1,
+            "{engine:?}"
+        );
+        assert_eq!(
+            var_cache_event_count(VarCacheEvent::UnbindForwarded),
+            2,
+            "{engine:?}"
+        );
+        assert_eq!(
+            var_cache_event_count(VarCacheEvent::UnbindRefused),
+            0,
+            "{engine:?}"
+        );
+        // Nested bindings of one variable, one `unbind 2`.
+        reset_var_cache_events();
+        let got = run(
+            &mut ev,
+            engine,
+            &Prog::let_nested_call(),
+            "vft-loc",
+            &[Value::make_int(1), Value::make_int(2)],
+        );
+        assert_eq!(got, "(nil 11)", "{engine:?}");
+        assert_eq!(
+            var_cache_event_count(VarCacheEvent::UnbindLetLocal),
+            2,
+            "{engine:?}"
+        );
+    }
+}
+
+/// A signal out of the binding: each engine's own unwinding restores the
+/// binding (with the tiers on, so a cached bind is unwound by the general
+/// unwinder or a cached unbind arm), and the specpdl comes back.
+#[test]
+fn let_with_signal_inside_unwinds_on_both_engines() {
+    for &engine in ENGINES {
+        for tiers in [&VarCacheTier::ALL[..], &[]] {
+            let lines = transcript_with(engine, Scenario::Let(Body::Signal), tiers);
+            for var in FIXTURE_VARS {
+                let l = line(&lines, var);
+                assert!(l.ends_with("specpdl=same"), "{engine:?}: {l}");
+                assert!(
+                    l.starts_with(&format!("{var}: ERR error {var}"))
+                        || l.starts_with(&format!("{var}: ERR error vft-base")),
+                    "{engine:?}: {l}"
+                );
+            }
+            let loc = line(&lines, "vft-loc");
+            assert!(
+                loc.contains("=> (11 10 t (10 nil) home)"),
+                "{engine:?}: {loc}"
+            );
+        }
     }
 }

@@ -1479,13 +1479,15 @@ fn trivial_spec_binding_pop(binding: &SpecBinding) -> Option<TrivialSpecBindingP
 
 const _: () = assert!(!std::mem::needs_drop::<TrivialSpecBindingPop>());
 
-/// `pop_simple_specpdl_suffix` retires a `SpecBinding::Let` and a
-/// `SpecBinding::LexicalEnv` with `set_len` (GNU's `--specpdl_ptr`); that is
-/// only sound while those variants' payloads own nothing.
+/// `pop_simple_specpdl_suffix` retires a `SpecBinding::Let`, `LetLocal`,
+/// `LetDefault` and `LexicalEnv` with `set_len` (GNU's `--specpdl_ptr`);
+/// that is only sound while those variants' payloads own nothing.
 const _: () = assert!(
     !std::mem::needs_drop::<SymId>()
         && !std::mem::needs_drop::<SavedBindingValue>()
         && !std::mem::needs_drop::<Value>()
+        && !std::mem::needs_drop::<crate::buffer::BufferId>()
+        && !std::mem::needs_drop::<SavedBufferId>()
 );
 
 #[derive(Clone, Debug, Default)]

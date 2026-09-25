@@ -1326,6 +1326,10 @@ impl Context {
     /// environment a `let` saved, or a frame [`trivial_spec_binding_pop`]
     /// admits.  Stops at the first entry that is neither.
     ///
+    /// The cached unbind arms (P1.4 A4) add a `Let` of a forwarder holding
+    /// its own value, a `LetLocal` whose buffer's BLV cache still holds the
+    /// binding, and a buffer-local `LetDefault`; see `eval/var_fast.rs`.
+    ///
     /// CONTRACT: no arm here may allocate, run Lisp, or push a specpdl
     /// entry.  `unbind_to_with_result_slow` holds RESULT and the saved quit
     /// flag in unrooted locals across this call, precisely because every arm
@@ -1362,6 +1366,11 @@ impl Context {
                     if sym.redirect() != SymbolRedirect::Plainval
                         || sym.trapped_write() != SymbolTrappedWrite::Untrapped
                     {
+                        // A forwarder holding its own value: the typed store
+                        // (P1.4 A4).
+                        if self.pop_forwarded_let_cached(sym_id, old_value) {
+                            continue;
+                        }
                         break;
                     }
                     self.specpdl.pop();
@@ -1372,6 +1381,28 @@ impl Context {
                         sym_id,
                         old_value.get().unwrap_or(Value::NIL),
                     );
+                }
+                // A buffer-local binding whose buffer's BLV cache still holds
+                // it, and a buffer-local default: one cons store (P1.4 A4).
+                SpecBinding::LetLocal {
+                    sym_id,
+                    old_value,
+                    buffer_id,
+                } => {
+                    let (sym_id, old_value, buffer_id) = (*sym_id, *old_value, *buffer_id);
+                    if self.pop_let_local_cached(sym_id, old_value, buffer_id) {
+                        continue;
+                    }
+                    break;
+                }
+                SpecBinding::LetDefault {
+                    sym_id, old_value, ..
+                } => {
+                    let (sym_id, old_value) = (*sym_id, *old_value);
+                    if self.pop_let_default_cached(sym_id, old_value) {
+                        continue;
+                    }
+                    break;
                 }
                 // GNU's `unbind_to` for the
                 // `specbind (Qinternal_interpreter_environment, ...)` a

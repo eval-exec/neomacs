@@ -171,11 +171,20 @@ pub(crate) enum VarCacheEvent {
     BindForwarded,
     /// A buffer-local or forwarded `let` the tier left to the general path.
     BindRefused,
+    /// Unbind of a forwarder's `Let`: the typed store.
+    UnbindForwarded,
+    /// Unbind of a `LetLocal` whose buffer's cache still holds the binding.
+    UnbindLetLocal,
+    /// Unbind of a buffer-local `LetDefault`: the default cell.
+    UnbindLetDefault,
+    /// A non-plain `Let`, `LetLocal` or `LetDefault` the tier left to the
+    /// general unwinder.
+    UnbindRefused,
 }
 
 #[cfg(any(test, feature = "vm-profile"))]
 impl VarCacheEvent {
-    pub(crate) const ALL: [Self; 12] = [
+    pub(crate) const ALL: [Self; 16] = [
         Self::ReadLocalized,
         Self::ReadForwarded,
         Self::ReadBufferSlot,
@@ -188,6 +197,10 @@ impl VarCacheEvent {
         Self::BindLetDefault,
         Self::BindForwarded,
         Self::BindRefused,
+        Self::UnbindForwarded,
+        Self::UnbindLetLocal,
+        Self::UnbindLetDefault,
+        Self::UnbindRefused,
     ];
     const COUNT: usize = Self::ALL.len();
 
@@ -205,6 +218,10 @@ impl VarCacheEvent {
             Self::BindLetDefault => "let    localized, default (LetDefault)",
             Self::BindForwarded => "let    forwarded (Obj/Bool/Int)",
             Self::BindRefused => "let    refused -> general path",
+            Self::UnbindForwarded => "unbind forwarded Let",
+            Self::UnbindLetLocal => "unbind LetLocal (binding still loaded)",
+            Self::UnbindLetDefault => "unbind LetDefault",
+            Self::UnbindRefused => "unbind refused -> general unwinder",
         }
     }
 }
@@ -559,6 +576,171 @@ impl Context {
         fwd.commit(store);
         note(VarCacheEvent::BindForwarded);
         true
+    }
+
+    /// Retire the top specpdl entry, a `Let`, `LetLocal` or `LetDefault`
+    /// whose restore a cached unbind arm has just done: GNU's
+    /// `--specpdl_ptr`. Those variants own nothing (const-asserted beside
+    /// `trivial_spec_binding_pop`), so there is no drop glue to run.
+    #[inline(always)]
+    fn retire_top_let_entry(&mut self) {
+        debug_assert!(matches!(
+            self.specpdl.last(),
+            Some(
+                SpecBinding::Let { .. }
+                    | SpecBinding::LetLocal { .. }
+                    | SpecBinding::LetDefault { .. }
+            )
+        ));
+        // SAFETY: the top entry is one of the three payload-free variants.
+        unsafe { self.specpdl.set_len(self.specpdl.len() - 1) };
+    }
+
+    /// GNU `do_one_unbind`'s `SPECPDL_LET` arm for a forwarder that holds
+    /// its own value (Obj/Bool/Int/Kboard): the cache-hit prefix of
+    /// `unbind_to_result`'s `Let` arm, which restores a non-plain cell through
+    /// `restore_default_binding_by_id` -> `set_default_internal (UNBIND)` ->
+    /// `store_default_internal`: the descriptor's typed store of the saved
+    /// value. The top entry must be that `Let`; on `true` it is popped.
+    ///
+    /// The symbol's shape is read now, not when it was bound, so a watcher
+    /// added inside the binding still sees its `unlet` through the general
+    /// path. `false`, with nothing stored or popped, for a trapped,
+    /// projected (flag bit or mask: the default store republishes those),
+    /// uninterned or per-buffer symbol, a void saved value, a value the type
+    /// rule refuses, and when the `unbind` tier is off.
+    #[inline(never)]
+    pub(super) fn pop_forwarded_let_cached(&mut self, id: SymId, old: SavedBindingValue) -> bool {
+        if !var_cache_tier_on(VarCacheTier::Unbind) {
+            return false;
+        }
+        let Some(sym) = self.obarray.get_by_id(id) else {
+            return false;
+        };
+        if sym.write_window() & SYMCELL_INLINE_WRITE_MASK
+            != symcell_inline_write_value(SymbolRedirect::Forwarded)
+        {
+            return false;
+        }
+        let popped = match (sym.forwarded_descriptor(), old.get()) {
+            (Some(fwd), Some(old))
+                if fwd.ty != LispFwdType::BufferObj && !self.runtime_binding_has_projection(id) =>
+            {
+                match fwd.store(old) {
+                    Ok(store) => {
+                        fwd.commit(store);
+                        self.retire_top_let_entry();
+                        true
+                    }
+                    Err(_) => false,
+                }
+            }
+            _ => false,
+        };
+        note(if popped {
+            VarCacheEvent::UnbindForwarded
+        } else {
+            VarCacheEvent::UnbindRefused
+        });
+        popped
+    }
+
+    /// GNU `do_one_unbind`'s `SPECPDL_LET_LOCAL` arm when the binding's
+    /// buffer is live and its BLV cache is loaded for that buffer at the
+    /// current epoch with the buffer's own binding (`found`): exactly
+    /// `Flocal_variable_p (sym, where)` under a valid cache, the hit rule of
+    /// `has_per_buffer_binding` that `unbind_to_result`'s `LetLocal` arm
+    /// asks. The restore is then `set_internal_localized (UNBIND)`'s whole
+    /// effect on that hit: the loaded cell's cdr takes the saved value. The
+    /// top entry must be that `LetLocal`; on `true` it is popped.
+    ///
+    /// `false`, with nothing stored or popped, when the binding may be gone
+    /// (a miss, `!found`: a `kill-local-variable` inside the `let` bumped the
+    /// epoch, and the general path lets the kill win), for a trapped,
+    /// flag-projected or uninterned symbol, a void saved value, and when the
+    /// `unbind` tier is off.
+    #[inline(never)]
+    pub(super) fn pop_let_local_cached(
+        &mut self,
+        id: SymId,
+        old: Value,
+        buffer_id: crate::buffer::BufferId,
+    ) -> bool {
+        if !var_cache_tier_on(VarCacheTier::Unbind) {
+            return false;
+        }
+        let Some(sym) = self.obarray.get_by_id(id) else {
+            return false;
+        };
+        if sym.write_window() & SYMCELL_INLINE_WRITE_MASK
+            != symcell_inline_write_value(SymbolRedirect::Localized)
+        {
+            return false;
+        }
+        let popped = match sym.blv_cache_hit(buffer_id) {
+            Some(hit)
+                if hit.found && !old.is_unbound() && self.buffers.get(buffer_id).is_some() =>
+            {
+                hit.valcell.set_cdr(old);
+                self.retire_top_let_entry();
+                true
+            }
+            _ => false,
+        };
+        note(if popped {
+            VarCacheEvent::UnbindLetLocal
+        } else {
+            VarCacheEvent::UnbindRefused
+        });
+        popped
+    }
+
+    /// GNU `do_one_unbind`'s `SPECPDL_LET_DEFAULT` arm for a buffer-local
+    /// variable: `set_default_internal (UNBIND)` stores the saved value into
+    /// the default cell, whatever buffer is current (`store_default_internal`
+    /// -> `set_symbol_value_id`'s `Localized` arm), through the BLV
+    /// forwarder's type rule. The top entry must be that `LetDefault`; on
+    /// `true` it is popped.
+    ///
+    /// `false`, with nothing stored or popped, for a trapped, projected
+    /// (flag bit or mask: the default store republishes those) or uninterned
+    /// symbol, a void saved value, a value the type rule refuses, and when
+    /// the `unbind` tier is off.
+    #[inline(never)]
+    pub(super) fn pop_let_default_cached(&mut self, id: SymId, old: SavedBindingValue) -> bool {
+        if !var_cache_tier_on(VarCacheTier::Unbind) {
+            return false;
+        }
+        let Some(sym) = self.obarray.get_by_id(id) else {
+            return false;
+        };
+        if sym.write_window() & SYMCELL_INLINE_WRITE_MASK
+            != symcell_inline_write_value(SymbolRedirect::Localized)
+        {
+            return false;
+        }
+        let popped = match (sym.blv_default_cells(), old.get()) {
+            (Some(cells), Some(old)) if !self.runtime_binding_has_projection(id) => {
+                match forward_rule(cells.fwd, old) {
+                    Some(stored) => {
+                        // `valcell` is the same cons when the default is
+                        // loaded, so this one store is both of
+                        // `set_symbol_value_id`'s.
+                        cells.defcell.set_cdr(stored);
+                        self.retire_top_let_entry();
+                        true
+                    }
+                    None => false,
+                }
+            }
+            _ => false,
+        };
+        note(if popped {
+            VarCacheEvent::UnbindLetDefault
+        } else {
+            VarCacheEvent::UnbindRefused
+        });
+        popped
     }
 }
 
