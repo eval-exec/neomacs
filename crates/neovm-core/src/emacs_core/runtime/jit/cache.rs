@@ -183,6 +183,8 @@ pub(crate) enum LeafState {
 #[derive(Clone, Debug)]
 pub(crate) struct LeafRow {
     pub(crate) id: u64,
+    /// The compile-time label (`lisp:<fn>#<id>:<tier>`), when naming was on.
+    pub(crate) label: Option<Box<str>>,
     pub(crate) tier: LeafTier,
     pub(crate) state: LeafState,
     pub(crate) regalloc: RegallocChoice,
@@ -194,6 +196,7 @@ impl LeafRow {
     fn of(id: u64, leaf: &CompiledLeaf, state: LeafState) -> Self {
         LeafRow {
             id,
+            label: leaf.obs.label.clone(),
             tier: leaf.tier(),
             state,
             regalloc: leaf.regalloc,
@@ -367,6 +370,7 @@ fn compile_osr_leaf(
     func: &ByteCodeFunction,
     osr_pc: usize,
     id: u64,
+    name_hint: Option<SymId>,
 ) -> Option<OsrEntry> {
     let dbg = std::env::var_os("NEOMACS_OSR_DEBUG").is_some();
     if !func.lexical || osr_body_has_unsupported_state(func) {
@@ -418,6 +422,8 @@ fn compile_osr_leaf(
     // Same feedback the tier-up compile sees: without it every Float site
     // read FixnumOnly and an OSR'd float loop deopted straight back.
     let _numeric = super::compile::publish_numeric_feedback(func);
+    let _label = stats::naming_enabled()
+        .then(|| stats::perf_map::LeafLabelScope::enter(id, name_hint, func));
     let mut leaf = match super::compile::lower_leaf_full_osr(
         ops,
         &func.constants,
@@ -477,7 +483,13 @@ pub(crate) fn try_run_osr(
     let cached = OSR_CACHE.with(|c| {
         c.borrow_mut()
             .entry((id, osr_pc))
-            .or_insert_with(|| compile_osr_leaf(obarray, func, osr_pc, id))
+            .or_insert_with(|| {
+                // The running function's own frame is the innermost one.
+                let name_hint = stats::naming_enabled()
+                    .then(|| callee_name_hint(ctx, id))
+                    .flatten();
+                compile_osr_leaf(obarray, func, osr_pc, id, name_hint)
+            })
             .clone()
     });
     let OsrEntry {
@@ -622,8 +634,12 @@ fn compile_cache_entry(
     func: &ByteCodeFunction,
     obarray: Option<&Obarray>,
     request: CompileRequest,
+    name_hint: Option<SymId>,
 ) -> CacheEntry {
     numeric_feedback_trace(id, func);
+    // Per-function entry names (perf map, CLIF/asm dumps), only when asked.
+    let _label = stats::naming_enabled()
+        .then(|| stats::perf_map::LeafLabelScope::enter(id, name_hint, func));
     let started = Instant::now();
     let result = compile_bytecode_function_requested(func, obarray, request);
     stats::record_compile(started.elapsed(), func.executable_ops().len(), &result);
@@ -670,6 +686,38 @@ fn compile_cache_entry(
 /// leaf is only ever entered from the interpreter, never cached in a spec slot).
 /// Used when a `make-closure` widened the source's patched prefix after a leaf
 /// was compiled under the narrower one (`RuntimeState::note_patched_prefix`).
+/// The symbol naming the function whose leaf `id` is about to be compiled,
+/// for its perf-map label: the speculated callee a spec site is resolving,
+/// else the function of the innermost backtrace frame (both tier-up seams
+/// push the callee's frame before dispatching). Accepted only when that
+/// symbol's function is the bytecode with this very `compiled_id`, so a
+/// wrong frame falls back to an anonymous label. Read-only: no interning,
+/// no allocation on the Lisp heap. Cold, and only called under naming.
+#[cold]
+#[inline(never)]
+fn callee_name_hint(ctx: *const Context, id: u64) -> Option<SymId> {
+    let pending = stats::perf_map::take_pending_callee();
+    if ctx.is_null() {
+        return None;
+    }
+    // SAFETY: the dormant seam-provided Context (the same contract as
+    // try_run_compiled); shared reads of the specpdl and obarray only.
+    let ctx = unsafe { &*ctx };
+    let names_this_leaf = |sym: SymId| {
+        ctx.obarray
+            .indirect_function_id(sym)
+            .and_then(Value::bytecode_data_if_materialized)
+            .is_some_and(|bc| bc.jit_runtime().compiled_id() == Some(id))
+    };
+    if let Some(sym) = pending
+        && names_this_leaf(sym)
+    {
+        return Some(sym);
+    }
+    let sym = ctx.innermost_backtrace_function(64)?.as_symbol_id()?;
+    names_this_leaf(sym).then_some(sym)
+}
+
 pub(crate) fn evict_compiled(id: u64) {
     COMPILED.with(|c| c.borrow_mut().remove(id));
     OSR_CACHE.with(|c| {
@@ -824,6 +872,7 @@ pub(crate) fn compile_and_cache_jit_leaf(
             regalloc: RegallocPolicy::Auto,
             bypass_profit_gate: false,
         },
+        None,
     );
     let compiled = matches!(entry, CacheEntry::Compiled(_));
     COMPILED.with(|c| {
@@ -1170,7 +1219,10 @@ pub fn try_run_compiled(
                     return CacheEntry::Compiled(Rc::new(leaf));
                 }
             }
-            compile_cache_entry(id, func, obarray, request)
+            let name_hint = stats::naming_enabled()
+                .then(|| callee_name_hint(ctx, id))
+                .flatten();
+            compile_cache_entry(id, func, obarray, request, name_hint)
         }) {
             // Only run native for a valid call (lambda-list range); a mismatch
             // is a wrong-arg-count call the interpreter must signal.
@@ -1326,6 +1378,9 @@ pub(crate) fn resolve_compiled_leaf_ptr(
         match cache.get_or_insert_with(id, || {
             // SAFETY: same dormant-Context contract as try_run_compiled.
             let obarray = (!ctx.is_null()).then(|| unsafe { &(*ctx).obarray });
+            let name_hint = stats::naming_enabled()
+                .then(|| callee_name_hint(ctx, id))
+                .flatten();
             compile_cache_entry(
                 id,
                 func,
@@ -1334,6 +1389,7 @@ pub(crate) fn resolve_compiled_leaf_ptr(
                     regalloc: RegallocPolicy::Auto,
                     bypass_profit_gate: false,
                 },
+                name_hint,
             )
         }) {
             // MIR-INLINED leaves must NOT be fast-path-cached in a spec slot:

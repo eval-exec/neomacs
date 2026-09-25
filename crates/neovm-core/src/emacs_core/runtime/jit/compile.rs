@@ -3457,6 +3457,17 @@ pub fn lower_leaf_full_osr(
     let has_backedge = baseline_has_backedge(ops, &cfg);
     let needs_rt = baseline_needs_rt(ops, has_backedge);
 
+    // The entry's declared name: `lisp:<fn>#<id>:<tier>` when a naming
+    // compile is in progress (perf map, dumps), else the legacy static name.
+    // A declaration-table string only; the code is the same either way.
+    let label = super::stats::perf_map::active_label(match osr_pc {
+        Some(pc) => super::stats::perf_map::LabelTier::Osr(pc),
+        None => super::stats::perf_map::LabelTier::Baseline,
+    });
+    let entry_name = label.as_deref().unwrap_or("__neovm_jit_leaf");
+    #[cfg(test)]
+    super::stats::perf_map::record_entry_name_for_test(entry_name);
+
     // Build + define the leaf into the module via the module-generic seam
     // (`build_leaf_fn`). Buffers (`spec_slots`/`deopt_*`/`reloc_data`) are owned
     // here, threaded in by reference so their baked addresses stay stable, and
@@ -3478,7 +3489,7 @@ pub fn lower_leaf_full_osr(
         has_backedge,
         needs_rt,
         /*aot=*/ false,
-        "__neovm_jit_leaf",
+        entry_name,
         Linkage::Local,
         osr_pc,
         dynamic_prefix,
@@ -3490,6 +3501,8 @@ pub fn lower_leaf_full_osr(
         .map_err(|e| CompileError::Backend(BackendError::Finalize(e.to_string())))?;
 
     let entry = module.get_finalized_function(fid);
+    let mut obs = LeafObs::new();
+    obs.label = label.map(String::into_boxed_str);
     Ok(CompiledLeaf {
         tier: LeafTier::Baseline,
         regalloc: lowering::active_regalloc_choice(),
@@ -3536,7 +3549,7 @@ pub fn lower_leaf_full_osr(
         // callee's constant base, read only when `dynamic_prefix > 0`.
         sidecar: None,
         dynamic_prefix: u32::try_from(dynamic_prefix).expect("patched prefix fits u32"),
-        obs: LeafObs::new(),
+        obs,
         entry,
         _backing: LeafBacking::Jit(module),
     })
@@ -4517,7 +4530,7 @@ fn build_leaf_fn<M: Module>(
     lowering::dump_clif(
         &ctx.func,
         &format!(
-            "baseline ops={} rw_stores={rw_emitted} rw_elided={rw_elided}",
+            "baseline ops={} rw_stores={rw_emitted} rw_elided={rw_elided} entry={entry_name}",
             ops.len()
         ),
     );

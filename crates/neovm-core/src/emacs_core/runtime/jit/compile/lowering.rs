@@ -2344,6 +2344,13 @@ pub(super) fn lower_mir_with_plan(
     }
     let reloc_data: Box<[Value]> = reloc_vals.into_boxed_slice();
 
+    // The entry's declared name (see `lower_leaf_full_osr`).
+    let label =
+        super::super::stats::perf_map::active_label(super::super::stats::perf_map::LabelTier::Mir);
+    let entry_name = label.as_deref().unwrap_or("__neovm_mir_leaf");
+    #[cfg(test)]
+    super::super::stats::perf_map::record_entry_name_for_test(entry_name);
+
     // Build + define the leaf into the module via the module-generic seam
     // (`build_mir_leaf_fn`). The buffers are owned here and threaded in by
     // reference so their addresses (baked into the generated loads) stay stable
@@ -2356,7 +2363,7 @@ pub(super) fn lower_mir_with_plan(
         &reloc_data,
         &reloc_index,
         &plan,
-        "__neovm_mir_leaf",
+        entry_name,
         Linkage::Local,
         /*aot=*/ false,
     )?;
@@ -2366,6 +2373,8 @@ pub(super) fn lower_mir_with_plan(
         .finalize_definitions()
         .map_err(|e| CompileError::Backend(BackendError::Finalize(e.to_string())))?;
     let entry = module.get_finalized_function(fid);
+    let mut obs = LeafObs::new();
+    obs.label = label.map(String::into_boxed_str);
 
     Ok(CompiledLeaf {
         tier: LeafTier::Mir,
@@ -2397,7 +2406,7 @@ pub(super) fn lower_mir_with_plan(
         // MIR leaves are only built for unpatched sources (see
         // compile_bytecode_function_inner).
         dynamic_prefix: 0,
-        obs: LeafObs::new(),
+        obs,
         entry,
         _backing: LeafBacking::Jit(module),
     })
@@ -3476,7 +3485,7 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
     dump_clif(
         &func,
         &format!(
-            "mir blocks={} fixnum_params={n_fixnum_params} guards={} untags={} retags={} rw_stores={rw_stores} rw_elided={rw_elided}",
+            "mir blocks={} fixnum_params={n_fixnum_params} guards={} untags={} retags={} rw_stores={rw_stores} rw_elided={rw_elided} entry={entry_name}",
             m.blocks.len(),
             guards_emitted(),
             untags_emitted(),

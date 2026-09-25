@@ -473,6 +473,24 @@ impl Context {
         }
     }
 
+    /// The function of the innermost backtrace frame within `max_scan`
+    /// specpdl entries of the top — GNU `record_in_backtrace`'s FUNCTION, as
+    /// called (a symbol for `(foo ...)`). Read-only and cold: copies no
+    /// arguments (the JIT names a leaf it is about to compile with this).
+    pub(crate) fn innermost_backtrace_function(&self, max_scan: usize) -> Option<Value> {
+        self.specpdl
+            .iter()
+            .rev()
+            .take(max_scan)
+            .find_map(|entry| match entry {
+                SpecBinding::Backtrace { function, .. }
+                | SpecBinding::Backtrace1 { function, .. }
+                | SpecBinding::Backtrace2 { function, .. }
+                | SpecBinding::BacktraceNative { function, .. } => Some(*function),
+                _ => None,
+            })
+    }
+
     /// Copy the logical GNU backtrace fields from any compact physical frame.
     /// Backtrace inspection is cold; centralizing the representation split
     /// keeps callers exhaustive without putting a larger enum in the hot

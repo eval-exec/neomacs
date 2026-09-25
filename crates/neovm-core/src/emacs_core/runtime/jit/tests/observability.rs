@@ -346,3 +346,98 @@ fn jit_obs_inline_eviction_counted() {
     let d = EpochCounters::snapshot().since(&base);
     assert_eq!(d.inline_evicted_leaves, 1, "{}", d.render());
 }
+
+fn force_naming(on: bool) {
+    crate::emacs_core::jit::stats::force_observe_for_test(
+        crate::emacs_core::jit::stats::ObserveOverride {
+            naming: on,
+            ..Default::default()
+        },
+    );
+}
+
+/// Under naming, a function tiered up through the interpreter's `Bcall` is
+/// declared as `lisp:<symbol>#<id>:<tier>`, and the leaf remembers it.
+#[test]
+fn jit_obs_label_names_symbol_callee() {
+    use crate::emacs_core::jit::stats::perf_map::last_entry_name_for_test;
+    force_naming(true);
+    let mut ev = Context::new();
+    // (defun jit-obs-named (x) (+ x 1)), already hot.
+    let named = install(
+        &mut ev,
+        "jit-obs-named",
+        function(
+            vec![Op::StackRef(0), Op::Constant(0), Op::Add, Op::Return],
+            vec![Value::make_int(1)],
+            1,
+        ),
+    );
+    let callee_bc = ev
+        .obarray
+        .symbol_function_id(named.as_symbol_id().unwrap())
+        .and_then(|v| v.get_bytecode_data())
+        .expect("bytecode");
+    callee_bc.jit_runtime().set_hot_for_test();
+    // The caller runs on the interpreter: (jit-obs-named 5)
+    let caller = function(
+        vec![Op::Constant(0), Op::Constant(1), Op::Call(1), Op::Return],
+        vec![named, Value::make_int(5)],
+        0,
+    );
+    let out = Vm::from_context(&mut ev)
+        .execute(&caller, vec![])
+        .expect("runs");
+    assert_eq!(out.bits(), Value::make_int(6).bits());
+    let id = callee_bc
+        .jit_runtime()
+        .compiled_id()
+        .expect("the Bcall tier-up compiled the callee");
+    let row = row_for(id, cache::LeafState::Live);
+    let want = format!("lisp:jit-obs-named#{id}:{}", row.tier.name());
+    assert_eq!(row.label.as_deref(), Some(want.as_str()));
+    assert_eq!(last_entry_name_for_test(), want, "declared under the label");
+}
+
+/// Without a symbol to name it (here: no Context, so no backtrace), a leaf
+/// is labelled by its first symbol constants.
+#[test]
+fn jit_obs_label_falls_back_to_anon() {
+    force_naming(true);
+    let f = function(
+        vec![Op::Constant(0), Op::Return],
+        vec![Value::symbol("jit-obs-anon-const")],
+        0,
+    );
+    let got = crate::emacs_core::jit::try_run_compiled(std::ptr::null_mut(), &f, Value::NIL, &[])
+        .expect("runs");
+    assert_eq!(got, Some(Value::symbol("jit-obs-anon-const").bits()));
+    let id = f.jit_runtime().compiled_id().expect("compiled");
+    let row = row_for(id, cache::LeafState::Live);
+    let want = format!("lisp:anon[jit-obs-anon-const]#{id}:{}", row.tier.name());
+    assert_eq!(row.label.as_deref(), Some(want.as_str()));
+}
+
+/// With naming off (the default), nothing is labelled and the entry is
+/// declared under the legacy static name.
+#[test]
+fn jit_obs_label_absent_without_naming() {
+    use crate::emacs_core::jit::stats::perf_map::last_entry_name_for_test;
+    force_naming(false);
+    let f = function(
+        vec![Op::Constant(0), Op::Return],
+        vec![Value::make_int(3)],
+        0,
+    );
+    let got = crate::emacs_core::jit::try_run_compiled(std::ptr::null_mut(), &f, Value::NIL, &[])
+        .expect("runs");
+    assert_eq!(got, Some(Value::make_int(3).bits()));
+    let id = f.jit_runtime().compiled_id().expect("compiled");
+    let row = row_for(id, cache::LeafState::Live);
+    assert_eq!(row.label, None);
+    let legacy = match row.tier {
+        LeafTier::Mir => "__neovm_mir_leaf",
+        _ => "__neovm_jit_leaf",
+    };
+    assert_eq!(last_entry_name_for_test(), legacy);
+}

@@ -113,3 +113,36 @@ fn jit_report_silent_without_knobs() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(report_lines(&stderr).is_empty(), "{stderr}");
 }
+
+/// Under `PERF_BUILDID_DIR` (set by `perf record -- cmd`), cranelift-jit
+/// writes `/tmp/perf-<pid>.map`, and the JIT now declares each leaf under
+/// `lisp:<fn>#<id>:<tier>` instead of one shared anonymous name.
+#[test]
+#[ignore = "requires release executable with matching pdump"]
+fn jit_perf_map_names_under_perf_buildid_dir() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let child = Command::new(binary())
+        .current_dir(root())
+        .env("RUST_LOG", "off")
+        .env("NEOVM_JIT_THRESHOLD", "1")
+        .env("PERF_BUILDID_DIR", dir.path())
+        .args(["-Q", "--batch", "--eval", HOT, "--eval", "(kill-emacs 0)"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn neomacs");
+    let pid = child.id();
+    let out = child.wait_with_output().expect("wait");
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    let map_path = PathBuf::from(format!("/tmp/perf-{pid}.map"));
+    let map = std::fs::read_to_string(&map_path).expect("perf map written");
+    let _ = std::fs::remove_file(&map_path);
+    assert!(
+        map.lines().any(|l| l.contains(" lisp:jit-obs-probe#")),
+        "{map}"
+    );
+    assert!(
+        !map.lines().any(|l| l.ends_with(" __neovm_jit_leaf")),
+        "no anonymous leaves under naming: {map}"
+    );
+}

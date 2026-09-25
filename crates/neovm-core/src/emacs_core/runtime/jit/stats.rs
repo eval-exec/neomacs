@@ -579,6 +579,25 @@ fn report_requested() -> bool {
     summary_enabled() || super::compile::jit_profile_path().is_some()
 }
 
+/// Whether compiled leaves are declared under per-function names
+/// (`lisp:<fn>#<id>:<tier>`, see [`perf_map`]): whenever a report is
+/// requested, under `PERF_BUILDID_DIR` (cranelift-jit writes
+/// `/tmp/perf-<pid>.map` exactly then; `perf record -- cmd` sets it) and
+/// under `NEOVM_JIT_DUMP_CLIF`. Read only on compile-miss and spec re-arm
+/// paths, never per call.
+pub(crate) fn naming_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(o) = OBSERVE_OVERRIDE.with(Cell::get) {
+        return o.naming;
+    }
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        report_requested()
+            || std::env::var_os("PERF_BUILDID_DIR").is_some()
+            || std::env::var_os("NEOVM_JIT_DUMP_CLIF").is_some()
+    })
+}
+
 /// The final report, printed once when the command loop has returned
 /// (`kill-emacs`, the end of `--batch`, a batch error's exit 255). No-op
 /// unless a report knob is set. MUST run on the eval thread: it reads the
@@ -677,13 +696,22 @@ fn leaf_report_rows(
         .into_iter()
         .map(|row| {
             let named = names.get(&row.id);
-            let name = named.map(|(name, _)| {
-                epoch::report_token(
-                    crate::emacs_core::intern::resolve_name_lisp_string(*name)
-                        .as_utf8_str()
-                        .unwrap_or("<non-utf8>"),
-                )
-            });
+            // The current binding's name; a leaf whose source is no longer
+            // bound (or anonymous) falls back to its compile-time label.
+            let name = named
+                .map(|(name, _)| {
+                    epoch::report_token(
+                        crate::emacs_core::intern::resolve_name_lisp_string(*name)
+                            .as_utf8_str()
+                            .unwrap_or("<non-utf8>"),
+                    )
+                })
+                .or_else(|| {
+                    row.label
+                        .as_deref()
+                        .and_then(perf_map::label_name)
+                        .map(epoch::report_token)
+                });
             let ops = named.map(|(_, bc)| bc.executable_ops());
             let deopt_pcs = row
                 .obs
@@ -735,6 +763,8 @@ fn op_name(op: &crate::emacs_core::bytecode::opcode::Op) -> String {
 pub(crate) struct ObserveOverride {
     /// [`summary_enabled`] (`NEOVM_JIT_COMPILE_STATS=1`).
     pub(crate) stats: bool,
+    /// [`naming_enabled`].
+    pub(crate) naming: bool,
 }
 
 #[cfg(test)]
@@ -761,6 +791,7 @@ pub(crate) fn reset_compile_stats() {
 }
 
 pub(crate) mod epoch;
+pub(crate) mod perf_map;
 mod report;
 
 pub(crate) use epoch::{note_function_cell_unchanged, note_function_epoch_bump};
@@ -776,3 +807,7 @@ mod report_tests;
 #[cfg(test)]
 #[path = "stats/tests/epoch_test.rs"]
 mod epoch_tests;
+
+#[cfg(test)]
+#[path = "stats/tests/perf_map_test.rs"]
+mod perf_map_tests;

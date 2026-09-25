@@ -1297,6 +1297,15 @@ fn call_spec_slow(
                 use crate::emacs_core::jit::cache::NativeCallOutcome;
                 let outcome = if armed {
                     let target = Value::from_bits(expected as usize);
+                    // About to resolve (and maybe compile) the callee's leaf
+                    // before its backtrace frame exists: hand its symbol to
+                    // the leaf's perf-map label. Naming-only, cold.
+                    if slot.leaf_ptr().is_null() && crate::emacs_core::jit::stats::naming_enabled()
+                    {
+                        crate::emacs_core::jit::stats::perf_map::set_pending_callee(SymId(
+                            sym as u32,
+                        ));
+                    }
                     // No scratch rooting and no Vm construction on the armed
                     // fast path: nothing between the epoch proof and the
                     // callee's backtrace push (which roots the target for the

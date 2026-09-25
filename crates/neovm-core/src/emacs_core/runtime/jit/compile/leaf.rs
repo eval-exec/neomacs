@@ -260,6 +260,9 @@ pub(crate) struct LeafObs {
     pub(crate) id: u64,
     /// The loop header an OSR leaf enters at; `None` for a whole-function leaf.
     pub(crate) osr_pc: Option<u32>,
+    /// The entry name it was declared under (`lisp:<fn>#<id>:<tier>`) when
+    /// naming was on at compile time; `None` = the legacy static name.
+    pub(crate) label: Option<Box<str>>,
     /// Precise deopts (`STATUS_DEOPT_AT`) — every one runs
     /// [`CompiledLeaf::deopt_at_outcome`].
     pub(crate) deopt_at: Cell<u64>,
@@ -281,6 +284,7 @@ impl LeafObs {
         Box::new(LeafObs {
             id: 0,
             osr_pc: None,
+            label: None,
             deopt_at: Cell::new(0),
             deopt_rerun: Cell::new(0),
             signals: Cell::new(0),

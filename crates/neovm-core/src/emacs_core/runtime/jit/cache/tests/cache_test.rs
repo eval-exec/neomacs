@@ -486,3 +486,46 @@ fn jit_obs_aot_prepopulated_leaf_has_id() {
     assert_eq!(row.obs.id, id);
     assert_eq!(row.state, LeafState::Live);
 }
+
+/// The perf-map name hint only accepts a symbol whose function IS the leaf
+/// being compiled: the innermost frame's, or a speculated callee's.
+#[test]
+fn jit_obs_name_hint_rejects_mismatched_frame() {
+    let mut ev = Context::new();
+    let sym = Value::symbol("jit-obs-hint-fn");
+    let other = Value::symbol("jit-obs-hint-other");
+    let sym_id = sym.as_symbol_id().unwrap();
+    ev.obarray
+        .set_symbol_function_id(sym_id, Value::make_bytecode(unary_add_one()));
+    ev.obarray.set_symbol_function_id(
+        other.as_symbol_id().unwrap(),
+        Value::make_bytecode(unary_add_one()),
+    );
+    let id = ev
+        .obarray
+        .symbol_function_id(sym_id)
+        .and_then(|v| v.get_bytecode_data())
+        .expect("bytecode")
+        .jit_runtime()
+        .compiled_id_or_assign();
+    let ctx = &ev as *const Context;
+    assert_eq!(callee_name_hint(ctx, id), None, "no frame at all");
+    ev.push_backtrace_frame(sym, &[Value::make_int(1)]);
+    let ctx = &ev as *const Context;
+    assert_eq!(callee_name_hint(ctx, id), Some(sym_id), "its own frame");
+    ev.push_backtrace_frame(other, &[Value::make_int(1)]);
+    let ctx = &ev as *const Context;
+    assert_eq!(
+        callee_name_hint(ctx, id),
+        None,
+        "the innermost frame is another function's"
+    );
+    stats::perf_map::set_pending_callee(sym_id);
+    assert_eq!(
+        callee_name_hint(ctx, id),
+        Some(sym_id),
+        "a speculated callee's symbol wins"
+    );
+    assert_eq!(callee_name_hint(ctx, id), None, "the pending hint is taken");
+    assert_eq!(callee_name_hint(std::ptr::null(), id), None);
+}

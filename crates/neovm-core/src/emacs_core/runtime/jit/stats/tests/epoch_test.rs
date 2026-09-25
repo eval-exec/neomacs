@@ -109,7 +109,10 @@ fn jit_fn_epoch_bump_still_skips_the_disarmed_sentinel() {
 fn jit_fn_epoch_top_redefined_names_symbols() {
     let mut ev = Context::new();
     reset_epoch_counters_for_test();
-    super::force_observe_for_test(super::ObserveOverride { stats: true });
+    super::force_observe_for_test(super::ObserveOverride {
+        stats: true,
+        ..Default::default()
+    });
     let hot = Value::symbol("jit-epoch-test-hot");
     let cold = Value::symbol("jit-epoch-test-cold");
     for i in 0..3 {
