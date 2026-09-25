@@ -975,6 +975,16 @@ impl HashTableStorage {
             if entry.hash != hash || failure.is_some() {
                 return false;
             }
+            // Two strings -- what most `equal` tables are keyed by -- compare
+            // exactly as `equal`'s string arm does, without the general
+            // walk's setup.
+            if let (Some(wanted), Some(held)) =
+                (value.as_lisp_string(), stored.key.as_lisp_string())
+            {
+                return wanted.schars() == held.schars()
+                    && wanted.sbytes() == held.sbytes()
+                    && wanted.as_bytes() == held.as_bytes();
+            }
             match try_equal_value_swp(&value, &stored.key, 0, symbols_with_pos_enabled) {
                 Ok(equal) => equal,
                 Err(flow) => {
