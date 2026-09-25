@@ -6,3 +6,4 @@ mod capture_patterns;
 mod cconv_memo;
 mod lexical_comprehensive;
 mod make_closure_instance;
+mod slot_identity;
