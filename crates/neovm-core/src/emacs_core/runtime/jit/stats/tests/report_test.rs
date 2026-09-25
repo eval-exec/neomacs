@@ -260,3 +260,79 @@ fn jit_final_report_profile_leaf_rows_have_fewer_than_13_columns() {
         assert_eq!(row.trim_end().split(',').count(), 10, "{row}");
     }
 }
+
+/// End to end on a real Context: a leaf bound to a symbol is named through
+/// the exit walk, its entries and deopts are collected, and its precise
+/// deopt pc is annotated with the bytecode op there.
+#[test]
+fn jit_final_report_collects_named_leaves_from_a_context() {
+    use crate::emacs_core::bytecode::ByteCodeFunction;
+    use crate::emacs_core::bytecode::opcode::Op;
+    use crate::emacs_core::eval::Context;
+    use crate::emacs_core::intern::SymId;
+    use crate::emacs_core::value::{LambdaParams, Value};
+    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+    force_observe_for_test(ObserveOverride {
+        stats: true,
+        naming: false,
+        entry_count: true,
+    });
+    let mut ev = Context::new();
+    // (defun jit-report-add (x) (+ (identity x) 1)): the Add follows a call,
+    // so its guard is a precise deopt at pc 4.
+    let mut f = ByteCodeFunction::new(LambdaParams {
+        required: vec![SymId(1)],
+        optional: Vec::new(),
+        rest: None,
+    });
+    f.lexical = true;
+    f.ops = vec![
+        Op::Constant(0),
+        Op::StackRef(1),
+        Op::Call(1),
+        Op::Constant(1),
+        Op::Add,
+        Op::Return,
+    ];
+    f.constants = vec![Value::symbol("identity"), Value::make_int(1)].into();
+    f.max_stack = 16;
+    f.seal_hand_assembled_ops();
+    let sym = Value::symbol("jit-report-add");
+    ev.obarray
+        .set_symbol_function_id(sym.as_symbol_id().unwrap(), Value::make_bytecode(f));
+    let fval = ev
+        .obarray
+        .symbol_function_id(sym.as_symbol_id().unwrap())
+        .expect("bound");
+    let bc = fval.get_bytecode_data().expect("bytecode");
+    let ctx = &mut ev as *mut Context;
+    let run = |arg: Value| crate::emacs_core::jit::try_run_compiled(ctx, bc, fval, &[arg]);
+    assert_eq!(
+        run(Value::make_int(41)).expect("no signal"),
+        Some(Value::make_int(42).bits())
+    );
+    // (+ nil 1) signals on the interpreter after the deopt resumes.
+    assert!(run(Value::NIL).is_err(), "wrong-type-argument");
+    let id = bc.jit_runtime().compiled_id().expect("compiled");
+
+    let report = super::collect_final_report(&ev);
+    let row = report
+        .leaves
+        .iter()
+        .find(|r| r.id == id)
+        .expect("the leaf is reported");
+    assert_eq!(row.name.as_deref(), Some("jit-report-add"));
+    assert!(row.entry_counted);
+    assert_eq!(row.entries, 2, "{row:?}");
+    assert_eq!(row.deopt_at, 1, "a guard after a call is precise: {row:?}");
+    assert_eq!(row.deopt_rerun, 0, "{row:?}");
+    let (pc, n, op) = &row.deopt_pcs[0];
+    assert_eq!((*pc, *n), (4, 1), "{row:?}");
+    assert_eq!(op.as_deref(), Some("Add"));
+    let lines = report.render();
+    assert!(
+        lines.iter().any(|(tag, body)| *tag == ReportTag::FinalLeaf
+            && body.starts_with(&format!("id={id} name=jit-report-add "))),
+        "{lines:?}"
+    );
+}
