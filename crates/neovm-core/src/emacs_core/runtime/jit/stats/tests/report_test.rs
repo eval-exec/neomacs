@@ -70,6 +70,7 @@ fn jit_final_report_renders_every_section() {
             deopt_rerun: 0,
             signals: 1,
         },
+        builtin_leaves: String::new(),
     };
     let lines = report.render();
     let tags: Vec<&'static str> = lines.iter().map(|(t, _)| (*t).into()).collect();
@@ -336,5 +337,28 @@ fn jit_final_report_collects_named_leaves_from_a_context() {
         lines.iter().any(|(tag, body)| *tag == ReportTag::FinalLeaf
             && body.starts_with(&format!("id={id} name=jit-report-add "))),
         "{lines:?}"
+    );
+}
+
+/// The leaf builtin census prints after the epoch section, only when a leaf
+/// site was compiled.
+#[test]
+fn jit_final_report_prints_the_builtin_leaf_census_when_present() {
+    let with = FinalReport {
+        builtin_leaves: "nth:opcode_sites=3,bcall_sites=0,generic=0,signal=1".to_string(),
+        ..FinalReport::default()
+    };
+    let lines = with.render();
+    assert_eq!(
+        body_of(&lines, ReportTag::FinalBuiltinLeaves),
+        "nth:opcode_sites=3,bcall_sites=0,generic=0,signal=1"
+    );
+    let tag: &'static str = ReportTag::FinalBuiltinLeaves.into();
+    assert_eq!(tag, "neovm-jit-final-builtin-leaves");
+    let without = FinalReport::default().render();
+    assert!(
+        without
+            .iter()
+            .all(|(t, _)| *t != ReportTag::FinalBuiltinLeaves)
     );
 }

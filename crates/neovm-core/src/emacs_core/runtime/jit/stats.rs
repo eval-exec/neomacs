@@ -351,6 +351,10 @@ pub(crate) enum ReportTag {
     /// Exit report: one compiled leaf (the most-deopting ones).
     #[strum(serialize = "neovm-jit-final-leaf")]
     FinalLeaf,
+    /// Exit report: leaf builtin sites lowered and their cold outcomes
+    /// (`NEOVM_JIT_LEAF`); printed only when a leaf site was compiled.
+    #[strum(serialize = "neovm-jit-final-builtin-leaves")]
+    FinalBuiltinLeaves,
 }
 
 /// The process-wide report sink, chosen once from `NEOVM_JIT_STATS_FILE`.
@@ -786,6 +790,7 @@ fn collect_final_report(ctx: &crate::emacs_core::eval::Context) -> report::Final
         redefined_top: epoch::top_redefined(16),
         leaves,
         dropped,
+        builtin_leaves: super::compile::leaf_abi::render_leaf_stats(),
     }
 }
 

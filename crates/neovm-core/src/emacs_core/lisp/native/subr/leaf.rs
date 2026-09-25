@@ -34,8 +34,6 @@
 
 // Only compiled code calls leaves: without the JIT they are declarations.
 #![cfg_attr(not(feature = "jit"), allow(dead_code))]
-// TEMPORARY: the JIT's trampolines, the next commit, are the first users.
-#![allow(dead_code)]
 
 use crate::emacs_core::error::Flow;
 use crate::emacs_core::eval::Context;
@@ -123,6 +121,10 @@ pub(crate) type Leaf3 = fn(&Context, Value, Value, Value) -> LeafResult;
 
 /// A leaf body by argument count. (A zero- or four-slot shape joins when a
 /// leaf needs it; the register ABI has room for four arguments.)
+// Compiled code calls a body through its trampoline, which names the body
+// as an item so it inlines; the entry pointer is what the harnesses and the
+// trampoline tests read.
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone, Copy)]
 pub(crate) enum LeafEntry {
     L1(Leaf1),
@@ -184,6 +186,9 @@ pub(crate) enum BounceShape {
 pub(crate) type LeafFast = fn(&Context, &[Value; 4]) -> Option<Value>;
 
 /// How a leaf's trampoline contains a Rust panic in its body.
+// Like `LeafEntry`, read by the harnesses and the trampoline tests, which
+// hold each trampoline's containment to its declaration.
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone, Copy)]
 pub(crate) enum Containment {
     /// The whole body runs under `catch_unwind` (the default: bodies call
@@ -248,6 +253,7 @@ pub(crate) struct LeafSpec {
     pub(crate) effects: Effects,
     /// The shapes the body declines with [`LeafExit::Generic`].
     pub(crate) generic_when: &'static [BounceShape],
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) containment: Containment,
 }
 
@@ -342,6 +348,7 @@ pub(crate) fn record_subr_leaf(sym: SymId, leaf: Option<&'static LeafSpec>) -> L
 }
 
 /// The [`LeafShape::Bcall`] leaf of the builtin registered under `sym`.
+#[cfg_attr(not(test), allow(dead_code))] // TEMPORARY: the Bcall lowering (next commit).
 pub(crate) fn subr_leaf(sym: SymId) -> Option<&'static LeafSpec> {
     LEAF_BY_SUBR.with(|table| table.borrow().get(sym.0 as usize).copied().flatten())
 }
@@ -397,6 +404,7 @@ pub(crate) enum LeafOutcome {
 }
 
 impl LeafOutcome {
+    #[cfg(test)]
     pub(crate) fn of(result: &LeafResult) -> Self {
         match result {
             Ok(_) => LeafOutcome::Value,

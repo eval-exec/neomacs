@@ -18,8 +18,6 @@
 
 // Only compiled code calls leaves: without the JIT they are declarations.
 #![cfg_attr(not(feature = "jit"), allow(dead_code))]
-// TEMPORARY: the JIT's trampolines, the next commit, are the first users.
-#![allow(dead_code)]
 
 use super::from_value::StringDesignator;
 use super::*;
@@ -28,7 +26,7 @@ use crate::emacs_core::subr::leaf::{
     BounceShape, Containment, Effects, LeafEntry, LeafExit, LeafId, LeafResult, LeafShape, LeafSpec,
 };
 
-mod fast;
+pub(crate) mod fast;
 
 /// Reads the heap and may signal: the list, sequence and equality leaves.
 const READS: Effects = Effects::READ_HEAP.with(Effects::MAY_SIGNAL);
@@ -50,7 +48,7 @@ pub(crate) static GETHASH: LeafSpec = LeafSpec::new(
     Containment::Catch,
 );
 
-fn gethash(ctx: &Context, key: Value, table: Value, default: Value) -> LeafResult {
+pub(crate) fn gethash(ctx: &Context, key: Value, table: Value, default: Value) -> LeafResult {
     if hash_table_has_user_test(table) {
         return Err(LeafExit::Generic);
     }
@@ -74,7 +72,7 @@ pub(crate) static PLIST_GET: LeafSpec = LeafSpec::new(
     Containment::Catch,
 );
 
-fn plist_get(ctx: &Context, plist: Value, prop: Value, predicate: Value) -> LeafResult {
+pub(crate) fn plist_get(ctx: &Context, plist: Value, prop: Value, predicate: Value) -> LeafResult {
     if !predicate.is_nil() {
         return Err(LeafExit::Generic);
     }
@@ -99,7 +97,12 @@ pub(crate) static GET_CHAR_PROPERTY: LeafSpec = LeafSpec::new(
     Containment::Catch,
 );
 
-fn get_char_property(ctx: &Context, position: Value, prop: Value, object: Value) -> LeafResult {
+pub(crate) fn get_char_property(
+    ctx: &Context,
+    position: Value,
+    prop: Value,
+    object: Value,
+) -> LeafResult {
     Ok(
         crate::emacs_core::textprop::builtin_get_char_property_with_frames(
             &ctx.obarray,
@@ -125,7 +128,7 @@ pub(crate) static GET: LeafSpec = LeafSpec::new(
     Containment::Catch,
 );
 
-fn get(ctx: &Context, symbol: Value, prop: Value) -> LeafResult {
+pub(crate) fn get(ctx: &Context, symbol: Value, prop: Value) -> LeafResult {
     Ok(symbol_property_get(ctx, symbol, prop)?
         .1
         .unwrap_or(Value::NIL))
@@ -142,7 +145,7 @@ pub(crate) static LENGTH: LeafSpec = LeafSpec::new(
     Containment::Catch,
 );
 
-fn length(_: &Context, sequence: Value) -> LeafResult {
+pub(crate) fn length(_: &Context, sequence: Value) -> LeafResult {
     Ok(builtin_length_value(sequence)?)
 }
 
@@ -158,7 +161,7 @@ pub(crate) static NTH: LeafSpec = LeafSpec::new(
     Containment::FastOutside(fast::nth_fast),
 );
 
-fn nth(_: &Context, n: Value, list: Value) -> LeafResult {
+pub(crate) fn nth(_: &Context, n: Value, list: Value) -> LeafResult {
     Ok(bytecode_nth_values(n, list)?)
 }
 
@@ -173,7 +176,7 @@ pub(crate) static NTHCDR: LeafSpec = LeafSpec::new(
     Containment::Catch,
 );
 
-fn nthcdr(_: &Context, n: Value, list: Value) -> LeafResult {
+pub(crate) fn nthcdr(_: &Context, n: Value, list: Value) -> LeafResult {
     Ok(builtin_nthcdr_values(n, list)?)
 }
 
@@ -188,7 +191,7 @@ pub(crate) static ELT: LeafSpec = LeafSpec::new(
     Containment::Catch,
 );
 
-fn elt(_: &Context, sequence: Value, n: Value) -> LeafResult {
+pub(crate) fn elt(_: &Context, sequence: Value, n: Value) -> LeafResult {
     Ok(builtin_elt_values(sequence, n)?)
 }
 
@@ -205,7 +208,7 @@ pub(crate) static MEMQ: LeafSpec = LeafSpec::new(
     Containment::Catch,
 );
 
-fn memq(ctx: &Context, elt: Value, list: Value) -> LeafResult {
+pub(crate) fn memq(ctx: &Context, elt: Value, list: Value) -> LeafResult {
     Ok(builtin_memq_values(
         elt,
         list,
@@ -224,7 +227,7 @@ pub(crate) static ASSQ: LeafSpec = LeafSpec::new(
     Containment::Catch,
 );
 
-fn assq(ctx: &Context, key: Value, list: Value) -> LeafResult {
+pub(crate) fn assq(ctx: &Context, key: Value, list: Value) -> LeafResult {
     Ok(builtin_assq_values(
         key,
         list,
@@ -243,7 +246,7 @@ pub(crate) static MEMBER: LeafSpec = LeafSpec::new(
     Containment::Catch,
 );
 
-fn member(ctx: &Context, elt: Value, list: Value) -> LeafResult {
+pub(crate) fn member(ctx: &Context, elt: Value, list: Value) -> LeafResult {
     Ok(builtin_member_values(
         elt,
         list,
@@ -262,7 +265,7 @@ pub(crate) static EQUAL: LeafSpec = LeafSpec::new(
     Containment::Catch,
 );
 
-fn equal(ctx: &Context, a: Value, b: Value) -> LeafResult {
+pub(crate) fn equal(ctx: &Context, a: Value, b: Value) -> LeafResult {
     Ok(Value::bool_val(
         crate::emacs_core::value::try_equal_value_swp(&a, &b, 0, ctx.symbols_with_pos_enabled)?,
     ))
@@ -280,7 +283,7 @@ pub(crate) static STRING_EQUAL: LeafSpec = LeafSpec::new(
     Containment::Catch,
 );
 
-fn string_equal(ctx: &Context, a: Value, b: Value) -> LeafResult {
+pub(crate) fn string_equal(ctx: &Context, a: Value, b: Value) -> LeafResult {
     let a = StringDesignator::designate(ctx, a)?;
     let b = StringDesignator::designate(ctx, b)?;
     Ok(string_equal_designators(a.text(), b.text())?)
@@ -297,7 +300,7 @@ pub(crate) static STRING_LESSP: LeafSpec = LeafSpec::new(
     Containment::Catch,
 );
 
-fn string_lessp(ctx: &Context, a: Value, b: Value) -> LeafResult {
+pub(crate) fn string_lessp(ctx: &Context, a: Value, b: Value) -> LeafResult {
     let a = StringDesignator::designate(ctx, a)?;
     let b = StringDesignator::designate(ctx, b)?;
     Ok(Value::bool_val(string_ordering(a.text(), b.text()).is_lt()))

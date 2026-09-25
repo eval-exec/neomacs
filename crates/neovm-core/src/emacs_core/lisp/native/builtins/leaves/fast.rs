@@ -23,7 +23,7 @@ use crate::emacs_core::value::Value;
 /// outside that range or a non-fixnum count is `None`: the contained
 /// `bytecode_nth_values` signals or walks it. Must agree with that function
 /// wherever it answers.
-pub(super) fn nth_fast(_: &Context, args: &[Value; 4]) -> Option<Value> {
+pub(crate) fn nth_fast(_: &Context, args: &[Value; 4]) -> Option<Value> {
     let [n, list, _, _] = *args;
     let n = n.as_fixnum()?;
     if !(0..=127).contains(&n) {

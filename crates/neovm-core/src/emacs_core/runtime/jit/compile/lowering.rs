@@ -3977,6 +3977,10 @@ pub(crate) struct RtRefs {
     /// when the body has no CBSym-kind site.
     pub(crate) cbsym_spec: Option<FuncRef>,
     pub(crate) cbsym_read: Option<FuncRef>,
+    /// The calling convention of every shim above: a site that calls a
+    /// leaf builtin's trampoline by address (`call_indirect`) builds its
+    /// signature with it.
+    pub(crate) call_conv: cranelift_codegen::isa::CallConv,
 }
 
 /// Declare the runtime-shim imports into `module`/`func` and return the callable
@@ -4300,6 +4304,7 @@ pub(crate) fn declare_rt_refs<M: Module>(
         arith_spec: subr_spec_refs.map(|(_, _, _, id)| module.declare_func_in_func(id, func)),
         cbsym_spec: cbsym_spec_id.map(|id| module.declare_func_in_func(id, func)),
         cbsym_read: cbsym_read_id.map(|id| module.declare_func_in_func(id, func)),
+        call_conv,
     })
 }
 
@@ -7242,6 +7247,28 @@ fn lower_simple_op_arms(
             let at = stack.len() - arity;
             let operands: Vec<ClifValue> = stack[at..].to_vec();
             stack.truncate(at);
+            // `NEOVM_JIT_LEAF=opcode` (JIT only): call the op's leaf builtin
+            // through its bare trampoline -- register arguments, the result's
+            // own bits or a tag-`001` sentinel, no table index, status word or
+            // result slot. A leaf cannot collect or run Lisp, so, like the
+            // value shims below, the site roots nothing and stores nothing.
+            if let Some(id) = super::leaf_abi::opcode_leaf_site(other, aot) {
+                let word = super::leaf_abi::emit_bare_leaf_call(fb, rt, id, &operands);
+                let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack, reps);
+                let cont = fb.create_block();
+                let tag = band_imm_p(fb, word, TAG_MASK as i64);
+                let is_signal = icmp_imm_p(
+                    fb,
+                    IntCC::Equal,
+                    tag,
+                    super::leaf_abi::LEAF_SIGNAL & TAG_MASK as i64,
+                );
+                fb.ins().brif(is_signal, se, &[], cont, &[]);
+                fb.switch_to_block(cont);
+                fb.seal_block(cont);
+                stack.push(word);
+                return Ok(());
+            }
             let value_shim = match other {
                 Op::Aref => Some(rt.refs.aref),
                 Op::Memq => Some(rt.refs.memq),

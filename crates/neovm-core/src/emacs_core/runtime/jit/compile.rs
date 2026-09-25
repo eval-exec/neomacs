@@ -721,6 +721,117 @@ pub(crate) fn jit_eq_prefilter_on() -> bool {
     })
 }
 
+/// Which leaf-builtin emissions `NEOVM_JIT_LEAF` turns on (design
+/// `p1-2-builtin-intrinsics`; default OFF until its gate passes). Read at
+/// compile time only, so both sides of an A/B run in one binary and the off
+/// side emits exactly the former code.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub(crate) struct LeafKnob {
+    /// Opcode sites (`Op::Get`, `Op::Length`, `Op::Nth`, ...) call their
+    /// leaf's bare trampoline instead of the `builtin1`/`builtin2` table shim.
+    pub(crate) opcode: bool,
+    /// `Op::Call` sites on a builtin with a Bcall leaf (`gethash`,
+    /// `plist-get`, `get-char-property`) call its armed trampoline.
+    pub(crate) bcall: bool,
+    /// String `aref`/`aset` inline (I1/I2).
+    pub(crate) string: bool,
+}
+
+impl LeafKnob {
+    pub(crate) const OFF: Self = Self {
+        opcode: false,
+        bcall: false,
+        string: false,
+    };
+    pub(crate) const ALL: Self = Self {
+        opcode: true,
+        bcall: true,
+        string: true,
+    };
+
+    /// `off`/`0`/unset: nothing; `on`/`1`/`all`: everything; otherwise a
+    /// comma list of `opcode`, `bcall`, `string`.
+    pub(crate) fn parse(value: Option<&str>) -> Self {
+        let Some(value) = value.map(str::trim) else {
+            return Self::OFF;
+        };
+        match value {
+            "" | "0" | "off" | "false" | "no" => return Self::OFF,
+            "1" | "on" | "all" | "true" | "yes" => return Self::ALL,
+            _ => {}
+        }
+        let mut knob = Self::OFF;
+        for part in value.split(',').map(str::trim) {
+            match part {
+                "opcode" => knob.opcode = true,
+                "bcall" => knob.bcall = true,
+                "string" => knob.string = true,
+                other => tracing::warn!(
+                    target: "neovm_jit",
+                    part = other,
+                    "NEOVM_JIT_LEAF: unknown part ignored (expected opcode, bcall, string)"
+                ),
+            }
+        }
+        knob
+    }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static LEAF_KNOB_TEST_OVERRIDE: std::cell::Cell<Option<LeafKnob>> = const { std::cell::Cell::new(None) };
+    static LEAF_ONLY_TEST_OVERRIDE: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Force the leaf knob for compiles on the current thread (tests only);
+/// `None` returns to the environment's.
+#[cfg(test)]
+pub(crate) fn force_leaf_knob_for_test(knob: Option<LeafKnob>) {
+    LEAF_KNOB_TEST_OVERRIDE.with(|c| c.set(knob));
+}
+
+/// Force the `NEOVM_JIT_LEAF_ONLY` filter on the current thread (tests only).
+#[cfg(test)]
+pub(crate) fn force_leaf_only_for_test(names: Option<&[&str]>) {
+    LEAF_ONLY_TEST_OVERRIDE.with(|c| {
+        *c.borrow_mut() = names.map(|n| n.iter().map(|s| s.to_string()).collect());
+    });
+}
+
+/// The `NEOVM_JIT_LEAF` setting compiles use (read once).
+pub(crate) fn jit_leaf_knob() -> LeafKnob {
+    #[cfg(test)]
+    if let Some(knob) = LEAF_KNOB_TEST_OVERRIDE.with(|c| c.get()) {
+        return knob;
+    }
+    use std::sync::OnceLock;
+    static KNOB: OnceLock<LeafKnob> = OnceLock::new();
+    *KNOB.get_or_init(|| LeafKnob::parse(std::env::var("NEOVM_JIT_LEAF").ok().as_deref()))
+}
+
+/// Whether the leaf named `name` may be used at all:
+/// `NEOVM_JIT_LEAF_ONLY=<name>,<name>` (the builtins' Lisp names) restricts
+/// opcode and Bcall leaf sites to those leaves -- a bisection and
+/// per-builtin measurement aid. Unset: every leaf. Read at compile time.
+pub(crate) fn jit_leaf_selected(name: &str) -> bool {
+    #[cfg(test)]
+    if let Some(only) = LEAF_ONLY_TEST_OVERRIDE.with(|c| c.borrow().clone()) {
+        return only.iter().any(|n| n == name);
+    }
+    use std::sync::OnceLock;
+    static ONLY: OnceLock<Option<Vec<String>>> = OnceLock::new();
+    ONLY.get_or_init(|| {
+        std::env::var("NEOVM_JIT_LEAF_ONLY").ok().map(|v| {
+            v.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
+    })
+    .as_ref()
+    .is_none_or(|only| only.iter().any(|n| n == name))
+}
+
 #[cfg(test)]
 std::thread_local! {
     static INLINE_ARITH_TEST_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
@@ -4898,6 +5009,8 @@ fn build_leaf_fn<M: Module>(
 pub(crate) mod calls;
 use calls::{cbsym_spec_kind, named_builtin_call};
 
+pub(crate) mod leaf_abi;
+
 mod leaf;
 pub use leaf::*;
 
@@ -4919,6 +5032,9 @@ mod array_shim_tests;
 #[cfg(test)]
 #[path = "tests/inline.rs"]
 mod inline_tests;
+#[cfg(test)]
+#[path = "tests/leaf_calls.rs"]
+mod leaf_call_tests;
 #[cfg(test)]
 #[path = "tests/mir_calls.rs"]
 mod mir_calls;

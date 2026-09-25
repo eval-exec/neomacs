@@ -141,6 +141,8 @@ pub(crate) struct FinalReport {
     pub(crate) leaves: Vec<LeafReportRow>,
     /// Summed counters of the leaves the caches dropped.
     pub(crate) dropped: LeafTotals,
+    /// The leaf builtin census (`leaf_abi::render_leaf_stats`), or empty.
+    pub(crate) builtin_leaves: String,
 }
 
 impl FinalReport {
@@ -214,6 +216,9 @@ impl FinalReport {
         }
         lines.push((ReportTag::FinalFnEpoch, fn_epoch));
         lines.push((ReportTag::FinalFnEpochTop, or_dash(&self.redefined_top)));
+        if !self.builtin_leaves.is_empty() {
+            lines.push((ReportTag::FinalBuiltinLeaves, self.builtin_leaves.clone()));
+        }
         for row in ranked_leaves(&self.leaves) {
             lines.push((ReportTag::FinalLeaf, row.render()));
         }
