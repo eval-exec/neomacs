@@ -713,10 +713,10 @@ impl Context {
         if let Some((sym_id, entry)) = direct_subr_entry {
             let args = LispArgVec::from_slice(&self.bc_buf[first_arg..first_arg + nargs]);
             if entry.dispatch_kind == SubrDispatchKind::ContextCallable {
-                return self.apply_evaluator_callable_by_id(sym_id, args);
+                return self.apply_evaluator_callable_by_id(sym_id, &args);
             }
             // Value first: `unwrap_or_else` moved the whole result.
-            return match self.dispatch_subr_entry_unchecked(entry, args) {
+            return match self.dispatch_subr_entry_unchecked(entry, &args) {
                 Some(Ok(value)) => Ok(value),
                 Some(Err(flow)) => Err(flow),
                 None => Err(signal(

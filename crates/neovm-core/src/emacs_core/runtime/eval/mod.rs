@@ -6071,7 +6071,7 @@ impl Context {
                 if entry.dispatch_kind == SubrDispatchKind::SpecialForm {
                     return Err(signal(LispCondition::InvalidFunction, vec![func]));
                 }
-                self.apply_subr_object_with_entry(sym_id, func, args, entry)
+                self.apply_subr_object_with_entry(sym_id, func, &args, entry)
             }
             NamedCallTarget::Void => Err(signal(
                 LispCondition::VoidFunction,
@@ -6831,7 +6831,7 @@ impl Context {
     pub fn dispatch_subr_value(&mut self, function: Value, args: Vec<Value>) -> Option<EvalResult> {
         let sym_id = function.as_subr_id()?;
         let wrong_arity_callee = Value::symbol(resolve_sym(sym_id));
-        self.dispatch_subr_value_internal(function, args.into(), wrong_arity_callee)
+        self.dispatch_subr_value_internal(function, &args, wrong_arity_callee)
     }
 
     /// Resolve a symbol identity to its canonical subr object and call it.

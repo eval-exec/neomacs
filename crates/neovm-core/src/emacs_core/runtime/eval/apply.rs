@@ -2227,19 +2227,19 @@ impl Context {
             match entered {
                 Err(flow) => Err(flow),
                 Ok(()) => self.maybe_grow_eval_stack(|ctx| {
-                    let mut args = LispArgVec::new();
-                    args.push(arg0);
+                    let args = [arg0];
                     if ctx.obarray.function_epoch() != epoch
                         || ctx.compiler_function_overrides_active()
                     {
-                        return ctx.funcall_general_untraced(designator, args);
+                        return ctx
+                            .funcall_general_untraced(designator, LispArgVec::from_slice(&args));
                     }
                     // Re-read per call: registration may rewrite a subr's
                     // entry in place.
                     let Some((subr_sym, entry)) = subr_entry_from_value(subr) else {
                         return Err(signal(LispCondition::InvalidFunction, vec![designator]));
                     };
-                    ctx.apply_subr_object_with_entry(subr_sym, subr, args, entry)
+                    ctx.apply_subr_object_with_entry(subr_sym, subr, &args, entry)
                 }),
             }
         };
@@ -2272,20 +2272,22 @@ impl Context {
             match entered {
                 Err(flow) => Err(flow),
                 Ok(()) => self.maybe_grow_eval_stack(|ctx| {
-                    let mut args = LispArgVec::new();
-                    args.push(arg0);
-                    args.push(arg1);
+                    // A plain array, handed down as a slice: a by-value
+                    // `LispArgVec` was copied 16 bytes wide over these two
+                    // 8-byte stores (a store-forward block per call).
+                    let args = [arg0, arg1];
                     if ctx.obarray.function_epoch() != epoch
                         || ctx.compiler_function_overrides_active()
                     {
-                        return ctx.funcall_general_untraced(designator, args);
+                        return ctx
+                            .funcall_general_untraced(designator, LispArgVec::from_slice(&args));
                     }
                     // Re-read per call: registration may rewrite a subr's
                     // entry in place.
                     let Some((subr_sym, entry)) = subr_entry_from_value(subr) else {
                         return Err(signal(LispCondition::InvalidFunction, vec![designator]));
                     };
-                    ctx.apply_subr_object_with_entry(subr_sym, subr, args, entry)
+                    ctx.apply_subr_object_with_entry(subr_sym, subr, &args, entry)
                 }),
             }
         };
@@ -2771,7 +2773,7 @@ impl Context {
     pub(super) fn dispatch_subr_value_internal(
         &mut self,
         function: Value,
-        args: LispArgVec,
+        args: &[Value],
         wrong_arity_callee: Value,
     ) -> Option<EvalResult> {
         let (_, entry) = subr_entry_from_value(function)?;
@@ -2781,7 +2783,7 @@ impl Context {
     pub(super) fn dispatch_subr_entry_internal(
         &mut self,
         entry: SubrEntry,
-        args: LispArgVec,
+        args: &[Value],
         wrong_arity_callee: Value,
     ) -> Option<EvalResult> {
         let func = entry.function?;
@@ -2807,7 +2809,7 @@ impl Context {
     pub(super) fn dispatch_subr_entry_unchecked(
         &mut self,
         entry: SubrEntry,
-        args: LispArgVec,
+        args: &[Value],
     ) -> Option<EvalResult> {
         let func = entry.function?;
         Some(self.dispatch_subr_func_unchecked(func, args))
@@ -2996,12 +2998,12 @@ impl Context {
     pub(super) fn dispatch_subr_func_unchecked(
         &mut self,
         func: crate::tagged::header::SubrFn,
-        args: LispArgVec,
+        args: &[Value],
     ) -> EvalResult {
         match func {
-            crate::tagged::header::SubrFn::Many(func) => func(self, args.into_vec()),
-            crate::tagged::header::SubrFn::ManyNoContext(func) => func(args.into_vec()),
-            crate::tagged::header::SubrFn::ManySlice(func) => func(self, &args),
+            crate::tagged::header::SubrFn::Many(func) => func(self, args.to_vec()),
+            crate::tagged::header::SubrFn::ManyNoContext(func) => func(args.to_vec()),
+            crate::tagged::header::SubrFn::ManySlice(func) => func(self, args),
             crate::tagged::header::SubrFn::A0(func) => func(self),
             crate::tagged::header::SubrFn::A1(func) => {
                 func(self, args.first().copied().unwrap_or(Value::NIL))
@@ -3075,7 +3077,7 @@ impl Context {
         let Some((sym_id, entry)) = subr_entry_from_value(function) else {
             return Err(signal(LispCondition::InvalidFunction, vec![function]));
         };
-        self.apply_subr_object_with_entry(sym_id, function, args, entry)
+        self.apply_subr_object_with_entry(sym_id, function, &args, entry)
     }
 
     #[inline]
@@ -3083,7 +3085,7 @@ impl Context {
         &mut self,
         sym_id: SymId,
         function: Value,
-        args: LispArgVec,
+        args: &[Value],
         entry: SubrEntry,
     ) -> EvalResult {
         if entry.dispatch_kind == SubrDispatchKind::SpecialForm {
@@ -3274,7 +3276,7 @@ impl Context {
                 if entry.dispatch_kind == SubrDispatchKind::SpecialForm {
                     return Err(signal(LispCondition::InvalidFunction, vec![invalid_fn]));
                 }
-                self.apply_subr_object_with_entry(sym_id, func, args, entry)
+                self.apply_subr_object_with_entry(sym_id, func, &args, entry)
             }
             NamedCallTarget::Void => Err(signal(
                 LispCondition::VoidFunction,
@@ -3366,11 +3368,9 @@ impl Context {
             if let Some(flow) = self.check_funcall_subr_arity_value(subr, args.len()) {
                 return Err(flow);
             }
-            if let Some(result) = self.dispatch_subr_value_internal(
-                subr,
-                args.clone(),
-                Value::subr_from_sym_id(sym_id),
-            ) {
+            if let Some(result) =
+                self.dispatch_subr_value_internal(subr, &args, Value::subr_from_sym_id(sym_id))
+            {
                 return result;
             }
         }
@@ -3432,7 +3432,7 @@ impl Context {
     pub(super) fn apply_evaluator_callable_by_id(
         &mut self,
         sym_id: SymId,
-        args: LispArgVec,
+        args: &[Value],
     ) -> EvalResult {
         match evaluator_handler(sym_id) {
             Some(EvaluatorHandler::Callable(CallableHandler::Throw)) => {
