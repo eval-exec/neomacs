@@ -6,6 +6,7 @@ mod comprehensive_advanced;
 mod comprehensive_patterns;
 mod context_semantics;
 mod dumb_jump_corpus;
+mod engine_divergence_pins;
 mod gnu_divergence;
 mod match_strict_edge_semantics;
 mod operations;

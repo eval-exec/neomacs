@@ -1015,6 +1015,51 @@ pub(crate) fn assert_oracle_parity_expect(form: &str, expected: expect_test::Exp
     assert_oracle_parity_expect_with_sandbox(form, expected, &sandbox, EvalProgram::Normalized);
 }
 
+/// Pin a KNOWN divergence as an expected failure: `expected` is GNU's answer
+/// (written by `NEOVM_ORACLE_MODE=refresh UPDATE_EXPECT=1`, never by hand), and
+/// the test passes while Neomacs still answers something else.
+///
+/// Once Neomacs agrees with GNU the pin fails on purpose, naming the fix: the
+/// commit that fixes the divergence flips the test to
+/// [`assert_oracle_parity_expect`] with the same expectation.
+pub(crate) fn assert_oracle_divergence_expect(form: &str, expected: expect_test::Expect) {
+    ensure_nonempty_form(form).expect("form should not be empty");
+    let sandbox = oracle_sandbox(form, &[], &project_lisp_dir());
+    let eval_program = EvalProgram::Normalized;
+    let assert_still_diverges = |neovm: &CapturedEvaluation, gnu_payload: &str| {
+        let neovm_payload = inline_expect_payload(neovm);
+        assert_ne!(
+            neovm_payload, gnu_payload,
+            "the pinned divergence is FIXED: Neomacs now answers like GNU for {form}; \
+             flip this pin to assert_oracle_parity_expect"
+        );
+        tracing::info!(neovm = %neovm_payload, gnu = %gnu_payload, "pinned divergence holds");
+    };
+    match OracleMode::from_env() {
+        OracleMode::Snapshot => {
+            let neovm = run_neomacs_binary_eval_with_sandbox(&sandbox, eval_program)
+                .expect("neomacs binary eval should run");
+            assert_still_diverges(&neovm, expected.data().trim());
+        }
+        OracleMode::Verify | OracleMode::Live => {
+            let oracle = run_oracle_eval_with_sandbox(&sandbox, eval_program)
+                .expect("oracle eval should run");
+            let neovm = run_neomacs_binary_eval_with_sandbox(&sandbox, eval_program)
+                .expect("neomacs binary eval should run");
+            let gnu_payload = inline_expect_payload(&oracle);
+            if OracleMode::from_env() == OracleMode::Verify {
+                expected.assert_eq(&gnu_payload);
+            }
+            assert_still_diverges(&neovm, &gnu_payload);
+        }
+        OracleMode::Refresh => {
+            let oracle = run_oracle_eval_with_sandbox(&sandbox, eval_program)
+                .expect("oracle eval should run");
+            expected.assert_eq(&inline_expect_payload(&oracle));
+        }
+    }
+}
+
 /// Assert an Org-style workflow result while ignoring only jit-lock's
 /// volatile `fontified' string property.  Other text properties remain exact.
 pub(crate) fn assert_oracle_parity_ignoring_volatile_fontification_expect(
