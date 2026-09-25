@@ -39,7 +39,7 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::{HashKey, HashTableTest, LispHashTable, Value, ValueKind};
-use crate::tagged::value::{FIXNUM_SHIFT, TAG_CONS, TAG_FLOAT, TAG_MASK, TAG_STRING};
+use crate::tagged::value::{FIXNUM_SHIFT, TAG_CONS, TAG_FLOAT, TAG_MASK, TAG_STRING, TAG_SYMBOL};
 
 /// Keys a bit-identity scan may hold; larger all-immediate tables prefilter
 /// and hash. Matches `small_identity_scan`'s 32.
@@ -136,6 +136,44 @@ impl SwitchPlanCache {
     pub(crate) fn shape(&self) -> Option<PlanShape> {
         self.slot.get().map(PlanSlot::shape)
     }
+}
+
+/// One node of a key program JIT code answers inline: pre-order, like the
+/// plan's own programs, restricted to nodes a compare answers without a
+/// call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum InlineKeyNode {
+    /// The value's bits are exactly these: nil, t, a fixnum or a bare
+    /// symbol -- an immediate, never a heap address.
+    Imm(usize),
+    /// A cons: the car's program follows, then the cdr's.
+    Cons,
+}
+
+/// A jump table in the form JIT code answers inline
+/// (`jit/compile/switch_dispatch.rs`): what its plan answers, as long as the
+/// table's epoch is still `epoch`.
+#[derive(Debug)]
+pub(crate) struct InlineSwitchPlan {
+    /// [`super::HashTableStorage::switch_epoch`] of the contents described.
+    pub(crate) epoch: u64,
+    /// Every key, in no particular order (keys are unique under the test,
+    /// so at most one matches).
+    pub(crate) keys: Vec<InlineSwitchKey>,
+}
+
+#[derive(Debug)]
+pub(crate) struct InlineSwitchKey {
+    pub(crate) program: Vec<InlineKeyNode>,
+    /// The key's jump target: a byte offset.
+    pub(crate) target: i64,
+}
+
+/// A key node's bits as an inline immediate, or `None` for a heap object's
+/// identity (an `eq`/`eql` key), whose address JIT code must not bake.
+fn inline_immediate(bits: usize) -> Option<InlineKeyNode> {
+    (bits & TAG_MASK == TAG_SYMBOL || Value::from_bits(bits).is_fixnum())
+        .then_some(InlineKeyNode::Imm(bits))
 }
 
 /// How a planned table answers; for tracing and tests.
@@ -286,6 +324,80 @@ impl LispHashTable {
         }
         cache.seen.store(true, Ordering::Relaxed);
         self.data.lookup(value, self.test, swp).copied()
+    }
+}
+
+impl LispHashTable {
+    /// The table as JIT code may answer it inline, behind its epoch: its
+    /// plan, when every key is an immediate or a cons tree of immediates
+    /// and the programs hold at most `max_nodes` nodes in all. `None` for
+    /// anything else (weak or user-test tables, string, float, bignum and
+    /// structural-vector keys, heap identity keys, tables too large to
+    /// scan), which keep the lookup shim.
+    ///
+    /// Builds the plan when the table has none yet, exactly as its second
+    /// dispatch would: the table is being compiled into a hot function.
+    /// With `symbols-with-pos-enabled` off the plan's answer is the hashed
+    /// lookup's, so the inline answer is too; with it on only a hit is
+    /// (every matched leaf is an immediate, so the value holds no
+    /// positioned symbol there), and a miss must ask the lookup.
+    pub(crate) fn switch_inline_plan(&self, max_nodes: usize) -> Option<InlineSwitchPlan> {
+        // A weak table is mutated by the GC's sweep, which neither drops a
+        // plan nor moves the epoch.
+        if self.weakness.is_some() {
+            return None;
+        }
+        let cache = &self.data.switch_plan;
+        let slot = cache
+            .slot
+            .get_or_init(|| PlanSlot::build(self, cache.rebuilds));
+        let PlanSlot::Plan { body, .. } = slot else {
+            return None;
+        };
+        let target = |index: usize| body.targets[index].as_fixnum();
+        let mut keys = Vec::with_capacity(body.targets.len());
+        match &body.keys {
+            PlanKeys::DenseFixnum { base, slots } => {
+                for (offset, &entry) in slots.iter().enumerate() {
+                    if entry != NO_ENTRY {
+                        let key = Value::fixnum(base + offset as i64);
+                        keys.push(InlineSwitchKey {
+                            program: vec![InlineKeyNode::Imm(key.bits())],
+                            target: target(entry as usize)?,
+                        });
+                    }
+                }
+            }
+            PlanKeys::Bits(bits) => {
+                for (index, &key) in bits.iter().enumerate() {
+                    keys.push(InlineSwitchKey {
+                        program: vec![inline_immediate(key)?],
+                        target: target(index)?,
+                    });
+                }
+            }
+            PlanKeys::Nodes { starts, nodes, .. } => {
+                for index in 0..starts.len() - 1 {
+                    let program = nodes[starts[index] as usize..starts[index + 1] as usize]
+                        .iter()
+                        .map(|node| match *node {
+                            KeyNode::Cons => Some(InlineKeyNode::Cons),
+                            KeyNode::Bits(bits) => inline_immediate(bits),
+                            KeyNode::Float(_) | KeyNode::String(_) => None,
+                        })
+                        .collect::<Option<Vec<_>>>()?;
+                    keys.push(InlineSwitchKey {
+                        program,
+                        target: target(index)?,
+                    });
+                }
+            }
+        }
+        let nodes: usize = keys.iter().map(|key| key.program.len()).sum();
+        (nodes <= max_nodes).then(|| InlineSwitchPlan {
+            epoch: self.data.switch_epoch,
+            keys,
+        })
     }
 }
 

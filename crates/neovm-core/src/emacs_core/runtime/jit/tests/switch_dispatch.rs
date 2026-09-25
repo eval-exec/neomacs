@@ -22,12 +22,19 @@ fn byte_compile(ev: &mut Context, lambda_src: &str) -> Value {
     f
 }
 
-/// Run `f` on `arg` natively (a fresh compile) and through the interpreter,
-/// and require the same answer (printed: a consed answer is a fresh list on
-/// each side). Returns the printed answer.
+/// Run `f` on `arg` natively (a fresh compile, whose jump table is answered
+/// inline unless `NEOVM_JIT_INLINE_SWITCH=off`) and through the
+/// interpreter, and require the same answer (printed: a consed answer is a
+/// fresh list on each side). Returns the printed answer.
 fn native_matches_interpreter(ev: &mut Context, f: Value, arg: Value, what: &str) -> String {
     let data = f.get_bytecode_data().expect("byte-code function");
+    let before = super::switch_dispatch::inline_switch_sites_for_test();
     let leaf = compile_bytecode_function_with(data, Some(&ev.obarray)).expect("compiles");
+    assert_eq!(
+        super::switch_dispatch::inline_switch_sites_for_test() > before,
+        jit_inline_switch_on(),
+        "{what}: the jump table is answered inline exactly when the knob is on"
+    );
     let interp = Vm::from_context(ev)
         .execute(data, vec![arg])
         .expect("interprets");

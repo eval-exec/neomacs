@@ -596,6 +596,39 @@ pub(crate) fn jit_inline_aref_on() -> bool {
     })
 }
 
+#[cfg(test)]
+std::thread_local! {
+    static INLINE_SWITCH_TEST_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// Force inline jump-table dispatch on/off for compiles on the current
+/// thread (tests only); `None` returns to the environment's.
+#[cfg(test)]
+pub(crate) fn force_inline_switch_for_test(on: Option<bool>) {
+    INLINE_SWITCH_TEST_OVERRIDE.with(|c| c.set(on));
+}
+
+/// Answer a jump table whose keys are immediates, or cons trees of them,
+/// inline at its `switch` site, behind the table's mutation epoch
+/// (`switch_dispatch::InlineSwitch`), with the lookup shim as the slow path.
+/// Default on; `NEOVM_JIT_INLINE_SWITCH=off` calls `neovm_jit_switch` at
+/// every site -- the lowering before inline dispatch, CLIF-identical to it:
+/// the single-build A/B. Read at compile time only.
+pub(crate) fn jit_inline_switch_on() -> bool {
+    #[cfg(test)]
+    if let Some(on) = INLINE_SWITCH_TEST_OVERRIDE.with(|c| c.get()) {
+        return on;
+    }
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("NEOVM_JIT_INLINE_SWITCH").ok().as_deref(),
+            Some("0" | "off" | "false" | "no")
+        )
+    })
+}
+
 /// Where a `Float`-feedback arithmetic result may stay UNBOXED (a raw `f64`
 /// in the baseline model stack, `lowering::SlotRep::Flonum`) instead of being
 /// boxed by `neovm_jit_make_float` at the site. `NEOVM_JIT_FLONUM=off|local|
@@ -4557,6 +4590,18 @@ fn build_leaf_fn<M: Module>(
                             &reps,
                         );
                         let fall = block_for[&(i + 1)];
+                        let inline = if !aot && jit_inline_switch_on() {
+                            switch_dispatch::inline_switch_for_site(
+                                ops,
+                                constants,
+                                dynamic_prefix,
+                                &cfg.leaders,
+                                i,
+                                targets,
+                            )
+                        } else {
+                            None
+                        };
                         let mut landings = BaselineSwitchLandings {
                             site: i,
                             targets,
@@ -4581,6 +4626,7 @@ fn build_leaf_fn<M: Module>(
                             fall,
                             sig,
                             &mut landings,
+                            inline.as_ref(),
                         );
                         terminated = true;
                         break;
@@ -4866,6 +4912,9 @@ mod spec_gate_tests;
 #[cfg(test)]
 #[path = "tests/switch_dispatch.rs"]
 mod switch_dispatch_tests;
+#[cfg(test)]
+#[path = "tests/switch_inline.rs"]
+mod switch_inline_tests;
 #[cfg(test)]
 #[path = "tests/compile.rs"]
 mod tests;

@@ -5153,7 +5153,7 @@ macro_rules! assert_val_eq {
     }};
 }
 
-mod switch_plan;
+pub(crate) mod switch_plan;
 
 // ---------------------------------------------------------------------------
 // Tests
