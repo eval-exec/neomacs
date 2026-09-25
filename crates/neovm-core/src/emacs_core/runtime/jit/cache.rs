@@ -700,6 +700,7 @@ pub(crate) fn evict_inline_dependents(sym: SymId) {
     let Some(dependents) = INLINE_DEPS.with(|m| m.borrow_mut().remove(&sym)) else {
         return;
     };
+    stats::epoch::note_inline_evictions(dependents.len());
     INLINE_EVICTIONS.with(|m| *m.borrow_mut().entry(sym).or_default() += 1);
     COMPILED.with(|cache| {
         let mut cache = cache.borrow_mut();

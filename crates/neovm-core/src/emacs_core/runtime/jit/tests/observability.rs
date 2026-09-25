@@ -238,3 +238,111 @@ fn jit_obs_signal_exit_counted() {
         .expect("the speculated call compiled the callee");
     assert_eq!(row_for(g_id, cache::LeafState::Live).obs.signals, 2);
 }
+
+/// An epoch move for an UNRELATED symbol makes an armed site re-validate
+/// and re-arm (`spec-rearm`); rebinding its own callee is `spec-rebind`.
+#[test]
+fn jit_obs_spec_revalidation_counts_rearm_and_rebind() {
+    use crate::emacs_core::jit::stats::epoch::{EpochCounters, SpecRevalidation};
+    force_profit_gate_for_test(false);
+    let mut ev = Context::new();
+    let step = install(
+        &mut ev,
+        "jit-obs-rearm-step",
+        function(
+            vec![
+                Op::StackRef(0),
+                Op::GotoIfNil(5),
+                Op::StackRef(0),
+                Op::Sub1,
+                Op::Return,
+                Op::Constant(0),
+                Op::Return,
+            ],
+            vec![Value::make_int(0)],
+            1,
+        ),
+    );
+    let f = function(
+        vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return],
+        vec![step],
+        1,
+    );
+    let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
+    let ctx = &mut ev as *mut Context as *mut u8;
+    let call = |want: i64| {
+        assert_eq!(
+            leaf.call(ctx, &[Value::make_int(5)]),
+            NativeRun::Ok(Value::make_int(want).bits())
+        );
+    };
+    call(4);
+    call(4);
+    let base = EpochCounters::snapshot();
+    ev.eval_str("(fset 'jit-obs-rearm-unrelated (lambda () 1))")
+        .expect("unrelated fset");
+    let ctx = &mut ev as *mut Context as *mut u8;
+    assert_eq!(
+        leaf.call(ctx, &[Value::make_int(5)]),
+        NativeRun::Ok(Value::make_int(4).bits())
+    );
+    let d = EpochCounters::snapshot().since(&base);
+    if jit_force_slow_spec() {
+        assert!(d.spec_for(SpecRevalidation::Rearmed) >= 1, "{}", d.render());
+    } else {
+        assert_eq!(d.spec_for(SpecRevalidation::Rearmed), 1, "{}", d.render());
+    }
+    assert_eq!(d.spec_for(SpecRevalidation::BindingChanged), 0);
+
+    ev.eval_str("(fset 'jit-obs-rearm-step (lambda (n) (+ n 20)))")
+        .expect("rebind");
+    let ctx = &mut ev as *mut Context as *mut u8;
+    assert_eq!(
+        leaf.call(ctx, &[Value::make_int(5)]),
+        NativeRun::Ok(Value::make_int(25).bits())
+    );
+    let d = EpochCounters::snapshot().since(&base);
+    assert_eq!(
+        d.spec_for(SpecRevalidation::BindingChanged),
+        1,
+        "{}",
+        d.render()
+    );
+}
+
+/// Redefining a callee that a cached leaf inlined evicts that leaf, and the
+/// eviction is counted.
+#[test]
+fn jit_obs_inline_eviction_counted() {
+    use crate::emacs_core::jit::stats::epoch::EpochCounters;
+    let mut ev = Context::new();
+    let ctx = &mut ev as *mut Context;
+    // C = (lambda (x) (* x x)); F = (lambda (a) (C a)) inlines C.
+    let c_sym = install(
+        &mut ev,
+        "jit-obs-inline-c",
+        function(vec![Op::Dup, Op::Mul, Op::Return], vec![], 1),
+    );
+    let f = function(
+        vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return],
+        vec![c_sym],
+        1,
+    );
+    let f_val = Value::make_bytecode(f.clone());
+    let r = crate::emacs_core::jit::try_run_compiled(ctx, &f, f_val, &[Value::make_int(5)]);
+    assert!(matches!(r, Ok(Some(b)) if b == Value::make_int(25).bits()));
+    let c_id = c_sym.as_symbol_id().unwrap();
+    assert_eq!(
+        crate::emacs_core::jit::cache::inline_dependent_count_for_test(c_id),
+        1,
+        "F inlined C"
+    );
+    let base = EpochCounters::snapshot();
+    install(
+        &mut ev,
+        "jit-obs-inline-c",
+        function(vec![Op::Add1, Op::Return], vec![], 1),
+    );
+    let d = EpochCounters::snapshot().since(&base);
+    assert_eq!(d.inline_evicted_leaves, 1, "{}", d.render());
+}

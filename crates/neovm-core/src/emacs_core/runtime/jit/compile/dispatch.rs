@@ -1255,8 +1255,12 @@ fn call_spec_slow(
                     // NEOVM_JIT_FORCE_SLOW_SPEC pretends the armed epoch is stale so
                     // every call exercises the re-validate/re-arm branch.
                     (!jit_force_slow_spec() && slot_epoch == epoch) || {
+                        use crate::emacs_core::jit::stats::epoch::{
+                            SpecRevalidation, note_spec_revalidation,
+                        };
                         let cur = ctx.obarray.symbol_function_id(SymId(sym as u32));
                         if cur.is_some_and(|v| v.bits() as i64 == expected) {
+                            note_spec_revalidation(SpecRevalidation::Rearmed);
                             // Equal bits re-arm the site, but they do not
                             // prove the cached leaf still belongs to the
                             // binding: a bytecode object that was unbound,
@@ -1275,6 +1279,7 @@ fn call_spec_slow(
                             slot.epoch.store(epoch, Ordering::Relaxed);
                             true
                         } else {
+                            note_spec_revalidation(SpecRevalidation::BindingChanged);
                             // The binding changed: drop any cached callee leaf so
                             // a later re-arm can't reuse a stale callee.
                             slot.clear_leaf();

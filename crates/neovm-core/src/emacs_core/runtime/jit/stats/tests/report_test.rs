@@ -38,11 +38,14 @@ fn jit_final_report_renders_every_section() {
             e.bumps[crate::emacs_core::symbol::FunctionEpochBump::Defalias as usize] = 9877;
             e.bumps[crate::emacs_core::symbol::FunctionEpochBump::Fset as usize] = 41;
             e.unchanged_writes = 233;
+            e.spec[super::epoch::SpecRevalidation::Rearmed as usize] = 88;
+            e.spec[super::epoch::SpecRevalidation::BindingChanged as usize] = 2;
             e
         },
         epoch_since_loop: Some({
             let mut e = super::epoch::EpochCounters::default();
             e.bumps[crate::emacs_core::symbol::FunctionEpochBump::Defalias as usize] = 500;
+            e.spec[super::epoch::SpecRevalidation::Rearmed as usize] = 40;
             e
         }),
         redefined_top: "cl--generic-dispatcher=41".to_string(),
@@ -113,7 +116,8 @@ fn jit_final_report_renders_every_section() {
         body_of(&lines, ReportTag::FinalFnEpoch),
         "epoch=91234 total=9918 fset=41 defalias=9877 internal-cell-write=0 pdump-restore=0 \
          fmakunbound=0 silent-clear=0 unintern=0 subr-rewrite=0 compiler-overrides=0 \
-         unchanged-writes=233 | since_command_loop: total=500 defalias=500"
+         unchanged-writes=233 inline-evicted-leaves=0 spec-rearm=88 spec-rebind=2 \
+         | since_command_loop: total=500 defalias=500 spec-rearm=40"
     );
     assert_eq!(
         body_of(&lines, ReportTag::FinalFnEpochTop),
