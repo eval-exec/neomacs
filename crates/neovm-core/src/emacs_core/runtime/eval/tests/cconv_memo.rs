@@ -34,7 +34,7 @@ fn count(eval: &Context, event: CconvMemoEvent) -> u64 {
 #[test]
 fn knob_values() {
     crate::test_utils::init_test_tracing();
-    assert_eq!(parse_cconv_memo_knob(None), CconvMemoMode::Off);
+    assert_eq!(parse_cconv_memo_knob(None), CconvMemoMode::On);
     for off in ["", "0", "off", "OFF", "no", "false"] {
         assert_eq!(
             parse_cconv_memo_knob(Some(off)),

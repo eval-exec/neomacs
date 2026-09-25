@@ -63,10 +63,13 @@
 //! # Knob
 //!
 //! `NEOVM_CCONV_MEMO` (read once per process):
-//! - unset, `0` or `off`: closure creation exactly as it was;
+//! - `0` or `off`: closure creation exactly as it was;
 //! - `stats`: record and look up, count every outcome ([`CconvMemoEvent`]),
 //!   but always run the Lisp;
-//! - `on` (or `1`): serve hits;
+//! - unset, `on` (or `1`): serve hits -- the default since the MELPA verify
+//!   soak (942 package batches, 0 mismatches) and the board A/B
+//!   (rust-lsp-typing -42% instructions, org-journal-open -14%,
+//!   magit-status -3.9%);
 //! - `verify`: on a hit build the memo closure *and* run the Lisp, compare
 //!   them element by element, return the Lisp's closure and count
 //!   mismatches; `NEOVM_CCONV_MEMO_STRICT=1` (and test builds) panic on one.
@@ -136,7 +139,7 @@ static CCONV_MEMO_MODE: AtomicU8 = AtomicU8::new(MODE_UNREAD);
 /// The mode a value of `NEOVM_CCONV_MEMO` selects.
 pub(crate) fn parse_cconv_memo_knob(value: Option<&str>) -> CconvMemoMode {
     let Some(value) = value.map(str::trim) else {
-        return CconvMemoMode::Off;
+        return CconvMemoMode::On;
     };
     match value.to_ascii_lowercase().as_str() {
         "" | "0" | "off" | "false" | "no" => CconvMemoMode::Off,
