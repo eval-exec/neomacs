@@ -200,6 +200,117 @@ pub(crate) fn note_deopt(
     );
 }
 
+/// The reoptimization knobs (see the `jit/mod.rs` knob table), resolved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ReoptKnobs {
+    /// `NEOVM_JIT_REOPT` (default on): whether deopts widen feedback and
+    /// invalidate at all. Off, they are only counted.
+    pub(crate) enabled: bool,
+    /// `NEOVM_JIT_REOPT_STRESS=1`: the verification harness. Keeps
+    /// reoptimization on under `NEOVM_JIT_FORCE_DEOPT=1`.
+    pub(crate) stress: bool,
+    /// `NEOVM_JIT_REOPT_HEAT`: interpreted calls between an invalidation and
+    /// the recompile.
+    pub(crate) heat: u32,
+    /// `NEOVM_JIT_REOPT_MAX`: invalidations of one source before each
+    /// further one climbs a `ReoptLevel`.
+    pub(crate) max_reopts: u8,
+    /// `NEOVM_JIT_REOPT_SITE_LIMIT`: counted non-conclusive deopts at one pc
+    /// of one leaf before the forced response.
+    pub(crate) site_limit: u64,
+}
+
+impl ReoptKnobs {
+    /// `MAX_REOPTS` default.
+    pub(crate) const MAX_REOPTS: u8 = 4;
+    /// `SITE_LIMIT` default.
+    pub(crate) const SITE_LIMIT: u64 = 4;
+
+    /// The defaults (re-profile window = the tier-up threshold).
+    pub(crate) fn defaults() -> Self {
+        ReoptKnobs {
+            enabled: true,
+            stress: false,
+            heat: super::hot_threshold(),
+            max_reopts: Self::MAX_REOPTS,
+            site_limit: Self::SITE_LIMIT,
+        }
+    }
+
+    /// `NEOVM_JIT_REOPT_STRESS=1`: every limit at its most eager.
+    pub(crate) fn stress() -> Self {
+        ReoptKnobs {
+            enabled: true,
+            stress: true,
+            heat: 1,
+            max_reopts: 1,
+            site_limit: 1,
+        }
+    }
+
+    /// `NEOVM_JIT_REOPT=off`: count only.
+    pub(crate) fn off() -> Self {
+        ReoptKnobs {
+            enabled: false,
+            ..Self::defaults()
+        }
+    }
+
+    fn from_env() -> Self {
+        let var = |name: &str| std::env::var(name).ok();
+        let base = if var("NEOVM_JIT_REOPT_STRESS").as_deref() == Some("1") {
+            Self::stress()
+        } else {
+            Self::defaults()
+        };
+        let parse = |name: &str| var(name).and_then(|s| s.parse::<u64>().ok());
+        ReoptKnobs {
+            enabled: !matches!(
+                var("NEOVM_JIT_REOPT").as_deref(),
+                Some("0" | "off" | "false" | "no")
+            ),
+            stress: base.stress,
+            heat: parse("NEOVM_JIT_REOPT_HEAT")
+                .map_or(base.heat, |h| u32::try_from(h).unwrap_or(u32::MAX).max(1)),
+            max_reopts: parse("NEOVM_JIT_REOPT_MAX")
+                .map_or(base.max_reopts, |m| u8::try_from(m).unwrap_or(u8::MAX)),
+            site_limit: parse("NEOVM_JIT_REOPT_SITE_LIMIT").map_or(base.site_limit, |n| n.max(1)),
+        }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static REOPT_TEST_OVERRIDE: std::cell::Cell<Option<ReoptKnobs>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Pin the reoptimization knobs for the current thread (tests only);
+/// `None` returns to the environment's.
+#[cfg(test)]
+pub(crate) fn force_reopt_for_test(knobs: Option<ReoptKnobs>) {
+    REOPT_TEST_OVERRIDE.with(|c| c.set(knobs));
+}
+
+/// The reoptimization knobs. Read on cold paths only (deopt exits,
+/// invalidations, compiles).
+pub(crate) fn knobs() -> ReoptKnobs {
+    #[cfg(test)]
+    if let Some(k) = REOPT_TEST_OVERRIDE.with(std::cell::Cell::get) {
+        return k;
+    }
+    static KNOBS: std::sync::OnceLock<ReoptKnobs> = std::sync::OnceLock::new();
+    *KNOBS.get_or_init(ReoptKnobs::from_env)
+}
+
+/// Whether deopts reoptimize: `NEOVM_JIT_REOPT` is on, and the
+/// every-guard-fails harness (`NEOVM_JIT_FORCE_DEOPT=1`) is off unless the
+/// stress harness asked to run with it.
+pub(crate) fn reopt_enabled() -> bool {
+    let k = knobs();
+    k.enabled && (k.stress || !super::compile::jit_force_deopt())
+}
+
 #[cfg(test)]
 #[path = "reopt/tests/reopt_test.rs"]
 mod tests;

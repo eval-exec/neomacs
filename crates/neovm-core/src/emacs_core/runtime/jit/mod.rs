@@ -32,6 +32,10 @@
 //! | `NEOVM_JIT_OSR` | on | Mid-loop interpreter→native transfer (on-stack replacement); `=off` disables. |
 //! | `NEOVM_JIT_PROFIT` | on | Profitability gate (calls ≤ arith); `=off` also compiles call-heavy bodies. |
 //! | `NEOVM_JIT_INLINE` | on | Bytecode fuser: splice a constant-bytecode callee into its caller before lowering (`jit/inline.rs`); `=off` disables. |
+//! | `NEOVM_JIT_REOPT` | on | Deopt-driven reoptimization (`jit/reopt.rs`): a conclusive or repeated deopt widens the site's feedback, retires the stale leaf and recompiles after a re-profile window, with a bounded backoff ladder. `=off`/`0`/`false`/`no`: deopts are still counted (the census) but never widen feedback or invalidate — the pre-reopt behaviour and the single-build A/B arm. |
+//! | `NEOVM_JIT_REOPT_HEAT` | `NEOVM_JIT_THRESHOLD` | Re-profile window: interpreted calls between an invalidation and the recompile. |
+//! | `NEOVM_JIT_REOPT_MAX` | 4 | Invalidations of one source before each further one climbs a `ReoptLevel` (`Speculative` → `NoInline` → `BaselineOnly` → `Generic` → `Interpreter`). |
+//! | `NEOVM_JIT_REOPT_SITE_LIMIT` | 4 | Non-conclusive deopts (overflow, call-site guard, rerun, OSR entry) counted at one pc of one leaf before the forced response. |
 //! | `NEOVM_JIT_MIR_OPAQUE` | on | The MIR tier lowers shim-using ops (variable ops, builtins, `eq`, list ops) through the baseline's emitters; `=0`/`off` makes every such op bail the body to the baseline — an A/B of the adapter alone: the tier gate (`gate:loop-opaque`/`generic-call`/`inline-opaque`) applies either way, so it is not the pre-adapter gate. |
 //! | `NEOVM_VAR_CACHE` | on | P1.4 Stage A cached variable tiers (`eval/var_fast.rs`): the read, `setq`, `let` and unbind of a buffer-local or forwarded variable answered from its BLV cache or forwarder, used by the JIT var shims, the interpreter's `varset`/`varbind`/`unbind` and the tree walker's `let`; `=0`/`off`/`none` disables all four, a comma list of `read`,`set`,`bind`,`unbind` enables those (single-build A/B). |
 //!
@@ -70,6 +74,7 @@
 //! | `NEOVM_JIT_FORCE_DEOPT=1` | Every speculation guard fails → every deopt path executes. |
 //! | `NEOVM_JIT_FORCE_SLOW_SPEC=1` | Every spec-call shim takes its stale-epoch re-validate branch on every call. |
 //! | `NEOVM_JIT_FORCE_CBSYM_GENERIC=1` | Every CallBuiltinSym intrinsic bounces to its generic fallback. |
+//! | `NEOVM_JIT_REOPT_STRESS=1` | Deopt reoptimization at its most eager: site limit 1, re-profile window 1, `MAX_REOPTS` 1, so every source climbs the whole `ReoptLevel` ladder. `NEOVM_JIT_FORCE_DEOPT=1` alone makes reoptimization inert (else it would widen every site to generic and stop exercising the deopt paths); with this knob too it drives every source up the ladder. |
 //!
 //! ## AOT (`jit/aot.rs`)
 //! | Knob | Meaning |
@@ -292,6 +297,57 @@ impl NumericFeedback {
     }
 }
 
+/// How far deopt-driven reoptimization (`jit::reopt`) has pulled one
+/// source's speculation back: the ceiling every later compile of that source
+/// respects. Monotone per source; a redefinition is a new source and starts
+/// at [`ReoptLevel::Speculative`]. Runtime state only, never dumped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
+pub enum ReoptLevel {
+    /// Compile from feedback (the behaviour without reoptimization).
+    Speculative = 0,
+    /// No call site is spliced (fuser), MIR-inlined or bit-op intrinsified.
+    NoInline = 1,
+    /// `NoInline`, and the MIR tier is skipped: every guard left is a precise
+    /// baseline deopt, attributable to a pc.
+    BaselineOnly = 2,
+    /// `BaselineOnly`, and every arithmetic site takes the generic fallback:
+    /// GNU's `Bplus` shape (a fixnum fast path, else the builtin), which never
+    /// deopts.
+    Generic = 3,
+    /// Interpreter only: entry and OSR compiles refuse this source.
+    Interpreter = 4,
+}
+
+impl ReoptLevel {
+    /// The level stored as `v` (saturating to [`ReoptLevel::Interpreter`]).
+    pub const fn from_u8(v: u8) -> Self {
+        match v {
+            0 => ReoptLevel::Speculative,
+            1 => ReoptLevel::NoInline,
+            2 => ReoptLevel::BaselineOnly,
+            3 => ReoptLevel::Generic,
+            _ => ReoptLevel::Interpreter,
+        }
+    }
+
+    /// One step further back (saturating).
+    pub const fn next(self) -> Self {
+        Self::from_u8(self as u8 + 1)
+    }
+
+    /// Lower-case name for reports and traces.
+    pub const fn name(self) -> &'static str {
+        match self {
+            ReoptLevel::Speculative => "speculative",
+            ReoptLevel::NoInline => "no_inline",
+            ReoptLevel::BaselineOnly => "baseline_only",
+            ReoptLevel::Generic => "generic",
+            ReoptLevel::Interpreter => "interpreter",
+        }
+    }
+}
+
 /// A per-function feedback vector — one slot per bytecode instruction, lazily
 /// allocated on first use (when the instruction count is known). Slots for
 /// non-call instructions stay [`CallFeedback::Uninit`]. Lock-free
@@ -463,6 +519,19 @@ pub struct RuntimeState {
     /// hung tiering state on the object `make-closure` copies, so the patch
     /// width must be visible to the code that shares that state.
     patched_prefix: AtomicU32,
+    /// Deopt-driven invalidations of this source (saturating): the backoff
+    /// input of `jit::reopt`.
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    reopt_count: std::sync::atomic::AtomicU8,
+    /// [`ReoptLevel`] as `u8`: the ceiling every later compile of this source
+    /// respects. Monotone.
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    reopt_level: std::sync::atomic::AtomicU8,
+    /// `Op::Call` pcs a deopt showed must not be spliced, MIR-inlined or
+    /// intrinsified: a bitset over the body's instructions, allocated on
+    /// first use (`ops_len.div_ceil(64)` words).
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    no_inline_call_sites: OnceLock<Box<[AtomicU64]>>,
     /// Test-only: pin this function to the Tier-0 interpreter regardless of
     /// hotness (the benchmark harness measures native vs interpreter in ONE
     /// process — a hot copy and a forced-cold copy — to cancel the
@@ -747,6 +816,9 @@ impl RuntimeState {
             leaf_slot: AtomicU64::new(0),
             leaf_slot_epoch: AtomicU64::new(0),
             patched_prefix: AtomicU32::new(0),
+            reopt_count: std::sync::atomic::AtomicU8::new(0),
+            reopt_level: std::sync::atomic::AtomicU8::new(0),
+            no_inline_call_sites: OnceLock::new(),
             #[cfg(test)]
             force_interpret: std::sync::atomic::AtomicBool::new(false),
         }
@@ -1192,6 +1264,91 @@ impl RuntimeState {
     pub fn note_numeric_feedback_consumed(&self) {
         self.numeric_feedback_consumed
             .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    // --- Deopt-driven reoptimization state (`jit::reopt`). Relaxed atomics:
+    // the mutator is the only writer, as for every other field. ---
+
+    /// The ceiling every later compile of this source respects.
+    #[inline]
+    pub fn reopt_level(&self) -> ReoptLevel {
+        ReoptLevel::from_u8(self.reopt_level.load(Ordering::Relaxed))
+    }
+
+    /// Deopt-driven invalidations of this source so far (saturating).
+    #[inline]
+    pub fn reopt_count(&self) -> u8 {
+        self.reopt_count.load(Ordering::Relaxed)
+    }
+
+    /// Record one invalidation whose cause asks for at least `floor`, and
+    /// return the level later compiles must respect. Past `max_reopts`
+    /// invalidations each further one climbs one level, so a source can be
+    /// invalidated at most `max_reopts + 4` times before it is interpreted
+    /// for good.
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    pub(crate) fn note_reopt(&self, floor: ReoptLevel, max_reopts: u8) -> ReoptLevel {
+        let count = self.reopt_count().saturating_add(1);
+        self.reopt_count.store(count, Ordering::Relaxed);
+        let cur = self.reopt_level();
+        let mut next = cur.max(floor);
+        if count > max_reopts {
+            next = next.max(cur.next());
+        }
+        self.reopt_level.store(next as u8, Ordering::Relaxed);
+        next
+    }
+
+    /// Make the interpreter record numeric feedback again, until the next
+    /// compile consumes it.
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    pub(crate) fn reopen_numeric_feedback(&self) {
+        self.numeric_feedback_consumed
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Join `seen` into arithmetic site `pc`'s feedback (what a deopt proved
+    /// the site meets). Returns whether the site's slot moved.
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    pub(crate) fn widen_numeric(&self, pc: usize, ops_len: usize, seen: NumericFeedback) -> bool {
+        self.feedback.record_numeric(pc, ops_len, seen)
+    }
+
+    /// Forbid splicing, MIR-inlining or intrinsifying the call site at `pc`.
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    pub(crate) fn mark_call_site_no_inline(&self, pc: usize, ops_len: usize) {
+        let words = self.no_inline_call_sites.get_or_init(|| {
+            (0..ops_len.div_ceil(64))
+                .map(|_| AtomicU64::new(0))
+                .collect()
+        });
+        if let Some(word) = words.get(pc / 64) {
+            word.fetch_or(1 << (pc % 64), Ordering::Relaxed);
+        }
+    }
+
+    /// Whether a deopt forbade inlining the call site at `pc`.
+    #[inline]
+    pub(crate) fn call_site_no_inline(&self, pc: usize) -> bool {
+        self.no_inline_call_sites
+            .get()
+            .and_then(|words| words.get(pc / 64))
+            .is_some_and(|word| word.load(Ordering::Relaxed) & (1 << (pc % 64)) != 0)
+    }
+
+    /// Empty the interpreter's direct-entry leaf slot: only this source's
+    /// slot can hold this source's leaf, so an invalidation disarms it here
+    /// instead of bumping the global `cache::leaf_slot_epoch`.
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    pub(crate) fn disarm_leaf_slot(&self) {
+        self.leaf_slot.store(0, Ordering::Relaxed);
+    }
+
+    /// Stop serving this source as AOT-prewarmed: `dispatch_sized` would
+    /// otherwise answer `Compiled` from call 1 and skip a re-profile window.
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    pub(crate) fn clear_aot_prewarmed(&self) {
+        self.aot_prewarmed.store(false, Ordering::Relaxed);
     }
 }
 

@@ -353,3 +353,38 @@ fn census_renders_in_the_summary() {
         "{line}"
     );
 }
+
+/// `NEOVM_JIT_FORCE_DEOPT=1` alone makes reoptimization inert; the stress
+/// harness keeps it on; `NEOVM_JIT_REOPT=off` wins over both.
+#[test]
+fn reopt_inert_under_force_deopt_unless_stressed() {
+    force_deopt_for_test(false);
+    force_reopt_for_test(Some(ReoptKnobs::defaults()));
+    assert!(reopt_enabled());
+    force_deopt_for_test(true);
+    assert!(
+        !reopt_enabled(),
+        "the every-guard-fails harness keeps its deopts"
+    );
+    force_reopt_for_test(Some(ReoptKnobs::stress()));
+    assert!(reopt_enabled(), "unless the stress harness asks for both");
+    force_reopt_for_test(Some(ReoptKnobs {
+        enabled: false,
+        ..ReoptKnobs::stress()
+    }));
+    assert!(!reopt_enabled(), "off wins");
+    force_deopt_for_test(false);
+    force_reopt_for_test(Some(ReoptKnobs::off()));
+    assert!(!reopt_enabled());
+    let stress = ReoptKnobs::stress();
+    assert_eq!(
+        (stress.heat, stress.max_reopts, stress.site_limit),
+        (1, 1, 1)
+    );
+    let d = ReoptKnobs::defaults();
+    assert_eq!(
+        (d.max_reopts, d.site_limit),
+        (ReoptKnobs::MAX_REOPTS, ReoptKnobs::SITE_LIMIT)
+    );
+    force_reopt_for_test(None);
+}

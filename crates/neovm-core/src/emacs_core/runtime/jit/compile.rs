@@ -275,7 +275,7 @@ pub(crate) fn jit_profile_path() -> Option<&'static str> {
 /// site and must produce results identical to the interpreter — the JIT analogue
 /// of `NEOVM_GC_STRESS`/`gc_stress`. Catches deopt-frame-reconstruction bugs (the
 /// riskiest part of speculation) before the optimizing Tier-2 adds more guards.
-fn jit_force_deopt() -> bool {
+pub(crate) fn jit_force_deopt() -> bool {
     #[cfg(test)]
     if let Some(on) = FORCE_DEOPT_TEST_OVERRIDE.with(|c| c.get()) {
         return on;

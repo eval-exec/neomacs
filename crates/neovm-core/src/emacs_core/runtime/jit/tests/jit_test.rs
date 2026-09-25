@@ -374,3 +374,97 @@ fn numeric_feedback_of_operands_classifies() {
         NumericFeedback::Other
     );
 }
+
+/// The backoff ladder: each invalidation takes at least its cause's floor;
+/// past `max_reopts` each one climbs one level; the level never falls, and
+/// `Interpreter` is reached after at most `max_reopts + 4` invalidations.
+#[test]
+fn note_reopt_is_monotone_and_bounded() {
+    let rt = Runtime::new();
+    assert_eq!(rt.reopt_level(), ReoptLevel::Speculative);
+    assert_eq!(rt.reopt_count(), 0);
+    // Within the budget the level only follows the floor.
+    for i in 1..=4u8 {
+        assert_eq!(
+            rt.note_reopt(ReoptLevel::Speculative, 4),
+            ReoptLevel::Speculative
+        );
+        assert_eq!(rt.reopt_count(), i);
+    }
+    // A cause's floor applies at once, and never lowers the level.
+    let rt2 = Runtime::new();
+    assert_eq!(
+        rt2.note_reopt(ReoptLevel::BaselineOnly, 4),
+        ReoptLevel::BaselineOnly
+    );
+    assert_eq!(
+        rt2.note_reopt(ReoptLevel::Speculative, 4),
+        ReoptLevel::BaselineOnly
+    );
+    // Past the budget each invalidation climbs one level.
+    let want = [
+        ReoptLevel::NoInline,
+        ReoptLevel::BaselineOnly,
+        ReoptLevel::Generic,
+        ReoptLevel::Interpreter,
+        ReoptLevel::Interpreter,
+    ];
+    for level in want {
+        assert_eq!(rt.note_reopt(ReoptLevel::Speculative, 4), level);
+        assert_eq!(rt.reopt_level(), level);
+    }
+    assert_eq!(rt.reopt_count(), 9);
+    // A clone (a `make-closure` instance) shares the level.
+    assert_eq!(rt.clone().reopt_level(), ReoptLevel::Interpreter);
+    // The count saturates.
+    let rt3 = Runtime::new();
+    for _ in 0..300 {
+        rt3.note_reopt(ReoptLevel::Speculative, u8::MAX);
+    }
+    assert_eq!(rt3.reopt_count(), u8::MAX);
+    assert_eq!(ReoptLevel::Interpreter.next(), ReoptLevel::Interpreter);
+    assert_eq!(ReoptLevel::from_u8(200), ReoptLevel::Interpreter);
+}
+
+/// The per-pc no-inline bits: set per call site, allocated on first use,
+/// out-of-range pcs ignored.
+#[test]
+fn call_site_no_inline_bitset() {
+    let rt = Runtime::new();
+    assert!(!rt.call_site_no_inline(3), "nothing allocated yet");
+    rt.mark_call_site_no_inline(3, 130);
+    rt.mark_call_site_no_inline(64, 130);
+    rt.mark_call_site_no_inline(129, 130);
+    rt.mark_call_site_no_inline(500, 130); // out of range: ignored
+    for pc in 0..140 {
+        assert_eq!(
+            rt.call_site_no_inline(pc),
+            matches!(pc, 3 | 64 | 129),
+            "pc {pc}"
+        );
+    }
+    assert!(!rt.call_site_no_inline(500));
+}
+
+/// The small reopt setters: reopening numeric feedback, the leaf-slot
+/// disarm and the AOT-prewarm clear.
+#[test]
+fn reopt_setters_reopen_disarm_and_clear() {
+    let rt = Runtime::new();
+    rt.note_numeric_feedback_consumed();
+    assert!(!rt.wants_numeric_feedback());
+    rt.reopen_numeric_feedback();
+    assert!(rt.wants_numeric_feedback());
+    assert!(rt.widen_numeric(1, 4, NumericFeedback::Float));
+    assert!(!rt.widen_numeric(1, 4, NumericFeedback::Float));
+    assert_eq!(rt.numeric_feedback(1), NumericFeedback::Float);
+    rt.mark_aot_prewarmed();
+    rt.set_hot_for_test();
+    assert!(matches!(rt.dispatch(), Plan::Compiled));
+    rt.clear_aot_prewarmed();
+    rt.defer_tier_up(u32::MAX);
+    assert!(
+        matches!(rt.dispatch(), Plan::Interpret),
+        "no longer prewarmed: the deferral holds"
+    );
+}
