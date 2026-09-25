@@ -1131,7 +1131,17 @@ impl CompiledLeaf {
             // read; the caller seeds the values into the GC-traced bc_buf
             // before any elisp can run.
             let stack: Vec<Value> = (0..depth)
-                .map(|j| Value::from_bits(self.deopt_spill[j].get() as usize))
+                .map(|j| {
+                    let bits = self.deopt_spill[j].get();
+                    // The cold deopt block boxes every unboxed float before
+                    // it spills: its tag word is never a Value.
+                    debug_assert_ne!(
+                        bits,
+                        super::lowering::UNBOXED_FLOAT_TAG_WORD,
+                        "an unboxed-float tag word reached a deopt framestate"
+                    );
+                    Value::from_bits(bits as usize)
+                })
                 .collect();
             let binds: Vec<usize> = match bind_frame {
                 Some((_, stack_base)) => unsafe {

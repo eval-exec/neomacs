@@ -394,6 +394,7 @@ pub(super) fn record_compile(
         .unwrap_or("-");
     let (clif_insts, clif_blocks, deopt_sites, deopt_slots) =
         super::compile::LAST_IR_STATS.with(|c| c.get());
+    let flonums = super::compile::lowering::flonum_census();
     tracing::debug!(
         target: "neovm_jit",
         compile_us,
@@ -404,6 +405,9 @@ pub(super) fn record_compile(
         clif_blocks,
         deopt_sites,
         deopt_slots,
+        flonum_results = flonums.results,
+        flonum_escape_boxes = flonums.escape_boxes,
+        flonum_cold_boxes = flonums.cold_boxes,
         "compile"
     );
     let stats = STATS.with(|s| {

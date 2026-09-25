@@ -576,6 +576,63 @@ pub(crate) fn jit_inline_aref_on() -> bool {
     })
 }
 
+/// Where a `Float`-feedback arithmetic result may stay UNBOXED (a raw `f64`
+/// in the baseline model stack, `lowering::SlotRep::Flonum`) instead of being
+/// boxed by `neovm_jit_make_float` at the site. `NEOVM_JIT_FLONUM=off|local|
+/// resident`; one binary answers every mode, for a same-binary A/B.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FlonumMode {
+    /// Box every result at its site: the lowering before unboxed floats,
+    /// CLIF-identical to it.
+    Off,
+    /// A result stays unboxed while float arithmetic and compares, stack
+    /// shuffles and variable reads consume it; every other op boxes all of
+    /// them first.
+    OpLocal,
+    /// [`Self::OpLocal`], and an audited op (a call, `aref`, `aset`, ...;
+    /// `lowering::op_keeps_residual_flonums`) boxes only its own operands:
+    /// the results below them stay unboxed across it.
+    Resident,
+}
+
+impl FlonumMode {
+    /// The mode when `NEOVM_JIT_FLONUM` is unset (or not a known mode).
+    pub(crate) const DEFAULT: Self = Self::Off;
+
+    pub(crate) fn parse(value: Option<&str>) -> Self {
+        match value {
+            Some("off" | "0" | "false" | "no") => Self::Off,
+            Some("local") => Self::OpLocal,
+            Some("resident") => Self::Resident,
+            _ => Self::DEFAULT,
+        }
+    }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static FLONUM_MODE_TEST_OVERRIDE: std::cell::Cell<Option<FlonumMode>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Force the flonum mode for compiles on the current thread (tests only);
+/// `None` returns to the environment's.
+#[cfg(test)]
+pub(crate) fn force_flonum_mode_for_test(mode: Option<FlonumMode>) {
+    FLONUM_MODE_TEST_OVERRIDE.with(|c| c.set(mode));
+}
+
+/// The [`FlonumMode`] compiles use (`NEOVM_JIT_FLONUM`, read once).
+pub(crate) fn jit_flonum_mode() -> FlonumMode {
+    #[cfg(test)]
+    if let Some(mode) = FLONUM_MODE_TEST_OVERRIDE.with(|c| c.get()) {
+        return mode;
+    }
+    use std::sync::OnceLock;
+    static MODE: OnceLock<FlonumMode> = OnceLock::new();
+    *MODE.get_or_init(|| FlonumMode::parse(std::env::var("NEOVM_JIT_FLONUM").ok().as_deref()))
+}
+
 #[cfg(test)]
 std::thread_local! {
     static INLINE_ARITH_TEST_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
@@ -3075,16 +3132,20 @@ fn uniform_raw_osr_slots(
 }
 
 // Each raw destination has a must-analysis proof at every live successor.
-// Keep the caller's stack representation intact for signal/deopt snapshots.
+// Keep the caller's raw fixnums intact for signal/deopt snapshots. A flonum
+// never crosses an edge: it is boxed here first (alias-shared, on the model
+// stack, so a later snapshot in this block sees the box too).
 fn write_edge_stack_to_vars(
     fb: &mut FunctionBuilder,
+    rt: Option<&RtCtx>,
     vars: &[Variable],
-    stack: &[ClifValue],
-    reps: &[SlotRep],
+    stack: &mut [ClifValue],
+    reps: &mut [SlotRep],
     variable_raw: &[bool],
 ) {
     debug_assert_eq!(stack.len(), reps.len());
-    for (slot, (&value, &rep)) in stack.iter().zip(reps).enumerate() {
+    box_all_flonums(fb, rt, stack, reps);
+    for (slot, (&value, &rep)) in stack.iter().zip(reps.iter()).enumerate() {
         let value = match (rep == SlotRep::RawFixnum, variable_raw[slot]) {
             (true, false) => retag_fixnum(fb, value),
             (false, true) => lowering::sshr_imm_p(fb, value, FIXNUM_SHIFT as i64),
@@ -3772,6 +3833,7 @@ fn build_leaf_fn<M: Module>(
     let has_raw_slots = variable_raw.iter().any(|&raw| raw);
     lowering::imm_pool_reset();
     LAST_IR_STATS.with(|c| c.set((0, 0, 0, 0)));
+    lowering::flonum_census_reset();
     let frontend_config = module.target_config();
     let call_conv = frontend_config.default_call_conv;
     let ptr_ty = frontend_config.pointer_type();
@@ -4051,7 +4113,8 @@ fn build_leaf_fn<M: Module>(
                 fb.set_cold_block(site.block);
             }
         }
-        emit_pending_deopts(&mut fb, deopt_refs, &mut entry_deopts);
+        // An OSR entry snapshot is all tagged: no flonum crosses an edge.
+        emit_pending_deopts(&mut fb, deopt_refs, &mut entry_deopts, None);
 
         for (leader_index, &l) in cfg.leaders.iter().enumerate() {
             let blk = block_for[&l];
@@ -4116,6 +4179,12 @@ fn build_leaf_fn<M: Module>(
                     match fused.region_at(i) {
                         Some(region) if i == region.start => {
                             let region = region.clone();
+                            // Regions stay allocation-free (`inline.rs`: a
+                            // collection inside one would strand its
+                            // framestate), so box any flonum BEFORE the
+                            // snapshot: the region's deopt replays the call
+                            // with boxed arguments.
+                            box_all_flonums(&mut fb, rt.as_ref(), &mut stack, &mut reps);
                             lowering::set_active_region(Some(lowering::RegionDeopt {
                                 call_site_pc: region.call_site_pc,
                                 stack: stack.clone(),
@@ -4146,19 +4215,29 @@ fn build_leaf_fn<M: Module>(
                     }
                 }
                 // Terminators consume / snapshot / spill the operand stack as tagged
-                // Values; force-tag any raw slots first (the block's raw state is
-                // discarded after the terminator, so no per-pop lockstep is needed
-                // past this point).
+                // Values; force-tag any raw slots and box any flonums first (the
+                // block's slot state is discarded after the terminator, so no
+                // per-pop lockstep is needed past this point).
                 if matches!(
                     op,
-                    Op::Return
-                        | Op::Throw
+                    Op::Throw
                         | Op::Switch
                         | Op::PushConditionCase(_)
                         | Op::PushConditionCaseRaw(_)
                         | Op::PushCatch(_)
                 ) {
-                    retag_all_raw(&mut fb, &mut stack, &mut reps);
+                    materialize_model_stack(&mut fb, rt.as_ref(), &mut stack, &mut reps);
+                } else if matches!(op, Op::Return) {
+                    // Only the returned value escapes: box it if it is a
+                    // flonum. The slots below it die here, so a flonum among
+                    // them is never boxed.
+                    if let Some(top) = stack.len().checked_sub(1)
+                        && reps[top].is_flonum()
+                    {
+                        let rt = rt.as_ref().expect("a flonum implies the runtime refs");
+                        box_flonum_slot(&mut fb, rt.refs.make_float, &mut stack, &mut reps, top);
+                    }
+                    retag_raw_fixnums(&mut fb, &mut stack, &mut reps);
                 }
                 match op {
                     Op::Return => {
@@ -4192,7 +4271,14 @@ fn build_leaf_fn<M: Module>(
                         break;
                     }
                     Op::Goto(t) => {
-                        write_edge_stack_to_vars(&mut fb, &vars, &stack, &reps, &variable_raw);
+                        write_edge_stack_to_vars(
+                            &mut fb,
+                            rt.as_ref(),
+                            &vars,
+                            &mut stack,
+                            &mut reps,
+                            &variable_raw,
+                        );
                         let tu = *t as usize;
                         if tu <= i {
                             // Backward jump: bump the quit counter and poll on
@@ -4227,7 +4313,14 @@ fn build_leaf_fn<M: Module>(
                         } else {
                             cond
                         };
-                        write_edge_stack_to_vars(&mut fb, &vars, &stack, &reps, &variable_raw);
+                        write_edge_stack_to_vars(
+                            &mut fb,
+                            rt.as_ref(),
+                            &vars,
+                            &mut stack,
+                            &mut reps,
+                            &variable_raw,
+                        );
                         let is_nil =
                             fb.ins()
                                 .icmp_imm_u(IntCC::Equal, cond, Value::NIL.bits() as i64);
@@ -4280,7 +4373,14 @@ fn build_leaf_fn<M: Module>(
                         } else {
                             cond
                         };
-                        write_edge_stack_to_vars(&mut fb, &vars, &stack, &reps, &variable_raw);
+                        write_edge_stack_to_vars(
+                            &mut fb,
+                            rt.as_ref(),
+                            &vars,
+                            &mut stack,
+                            &mut reps,
+                            &variable_raw,
+                        );
                         let is_nil =
                             fb.ins()
                                 .icmp_imm_u(IntCC::Equal, cond, Value::NIL.bits() as i64);
@@ -4330,7 +4430,14 @@ fn build_leaf_fn<M: Module>(
                         let table = stack.pop().ok_or(CompileError::StackUnderflow)?;
                         let dispatch = stack.pop().ok_or(CompileError::StackUnderflow)?;
                         reps.truncate(stack.len());
-                        write_edge_stack_to_vars(&mut fb, &vars, &stack, &reps, &variable_raw);
+                        write_edge_stack_to_vars(
+                            &mut fb,
+                            rt.as_ref(),
+                            &vars,
+                            &mut stack,
+                            &mut reps,
+                            &variable_raw,
+                        );
                         let vmctx = fb.use_var(rt_ref.vmctx_var);
                         let call = fb
                             .ins()
@@ -4443,7 +4550,14 @@ fn build_leaf_fn<M: Module>(
                             _ => unreachable!("matched Push* above"),
                         }
                         reps.truncate(stack.len());
-                        write_edge_stack_to_vars(&mut fb, &vars, &stack, &reps, &variable_raw);
+                        write_edge_stack_to_vars(
+                            &mut fb,
+                            rt.as_ref(),
+                            &vars,
+                            &mut stack,
+                            &mut reps,
+                            &variable_raw,
+                        );
                         // Placeholder error-value slot for the never-taken
                         // anchor edge (real entries define it from the shim).
                         let nil = fb.ins().iconst(types::I64, Value::NIL.bits() as i64);
@@ -4515,19 +4629,32 @@ fn build_leaf_fn<M: Module>(
             }
             if !terminated {
                 // Fall through with the uniform variable representations.
-                write_edge_stack_to_vars(&mut fb, &vars, &stack, &reps, &variable_raw);
+                write_edge_stack_to_vars(
+                    &mut fb,
+                    rt.as_ref(),
+                    &vars,
+                    &mut stack,
+                    &mut reps,
+                    &variable_raw,
+                );
                 fb.ins().jump(block_for[&end], &[]);
             }
             // Keep failed-guard reconstruction out of the ordinary emitted
             // path. Cranelift sinks cold blocks during final code emission;
             // this is a layout hint, not a register-allocation weight.
-            if has_raw_slots {
-                for site in &pending_deopt {
+            // A snapshot holding a flonum boxes it there: cold too.
+            for site in &pending_deopt {
+                if has_raw_slots || site.holds_flonum() {
                     fb.set_cold_block(site.block);
                 }
             }
             // Fill the precise-deopt exit blocks queued by this block's guards.
-            emit_pending_deopts(&mut fb, deopt_refs, &mut pending_deopt);
+            emit_pending_deopts(
+                &mut fb,
+                deopt_refs,
+                &mut pending_deopt,
+                rt.as_ref().map(|rt| rt.refs.make_float),
+            );
             // Fill the handler-dispatch blocks queued by this block's signal
             // sites (the builder can switch blocks now that it's terminated).
             if !pending.is_empty() {

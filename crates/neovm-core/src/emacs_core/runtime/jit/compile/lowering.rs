@@ -46,6 +46,7 @@ pub(crate) fn guards_emitted_reset() {
     GUARD_COUNT.with(|c| c.set(0));
     UNTAG_COUNT.with(|c| c.set(0));
     RETAG_COUNT.with(|c| c.set(0));
+    flonum_census_reset();
 }
 
 /// Guards emitted since the last [`guards_emitted_reset`].
@@ -1383,6 +1384,12 @@ pub(crate) fn emit_root_window_stores(
     rt: &RtCtx,
     to_root: &[ClifValue],
 ) -> ClifValue {
+    debug_assert!(
+        to_root
+            .iter()
+            .all(|&v| iconst_bits(fb, v) != Some(UNBOXED_FLOAT_TAG_WORD)),
+        "an unboxed-float tag word must never be published as a root"
+    );
     let (off_ptr, off_top, off_cap) = ctx_rootwin_offsets();
     let vmctx = fb.use_var(rt.vmctx_var);
     if let Some(h) = rt.rootwin {
@@ -3484,7 +3491,8 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
         // Per-site precise-deopt blocks (call-bearing bodies): spill the captured
         // framestate (retagging raw slots in the cold block) + return STATUS_DEOPT_AT.
         // No-op for pure bodies (pending is empty).
-        emit_pending_deopts(&mut fb, deopt_refs, &mut pending);
+        // The MIR tier has no float sites (`gate:float-site`), so no flonums.
+        emit_pending_deopts(&mut fb, deopt_refs, &mut pending, None);
 
         // Signal propagation from a call: return STATUS_SIGNAL (the Flow is stashed
         // in the Context by the shim). No binds/handlers to unwind — build_mir bails
@@ -4292,6 +4300,14 @@ pub(crate) struct PendingDeopt {
     pub(crate) reps: Vec<SlotRep>,
 }
 
+impl PendingDeopt {
+    /// Whether the snapshot holds an unboxed float, which its cold block
+    /// will box.
+    pub(crate) fn holds_flonum(&self) -> bool {
+        self.reps.iter().any(|rep| rep.is_flonum())
+    }
+}
+
 /// What a deopt inside an inlined region resumes with: the caller's operand
 /// stack as it stood before the call (its residual, the callee object, and
 /// the arguments), and the caller pc of that call. Captured once at region
@@ -4444,10 +4460,21 @@ thread_local! {
 /// [`STATUS_DEOPT_AT`]. For `Baked` (JIT) the base addresses are iconst'd HERE in
 /// the cold block (off the hot path); for `Sidecar` (AOT) they are the
 /// entry-block loaded values.
+///
+/// A flonum in a snapshot is boxed HERE, in the cold block, with the
+/// representation known at compile time (`float_boxer` is the body's
+/// `make_float` ref, present whenever a float site exists), before the spill
+/// write — so the runtime framestate stays all-tagged, and nothing allocates
+/// between the spill write and its readback. Aliases of one result share one
+/// box. A snapshot at op `i` is entered only at op `i`: a box made at a later
+/// op has not run yet, and one made earlier already turned the aliases
+/// `Tagged` before the snapshot was taken, so a cold box never duplicates an
+/// identity that escaped.
 pub(crate) fn emit_pending_deopts(
     fb: &mut FunctionBuilder,
     refs: DeoptRefs,
     pending: &mut Vec<PendingDeopt>,
+    float_boxer: Option<FuncRef>,
 ) {
     LAST_IR_STATS.with(|c| {
         let (i, b, sites, slots) = c.get();
@@ -4510,14 +4537,16 @@ pub(crate) fn emit_pending_deopts(
                 stack.to_mut()[slot] = value;
             }
         }
+        debug_assert!(
+            pd.region.is_none() || !reps.iter().any(|rep| rep.is_flonum()),
+            "a region's framestate is materialized at its entry"
+        );
+        let mut boxed: SmallVec<[(ClifValue, ClifValue); 8]> = SmallVec::new();
         for (j, &v) in stack.iter().enumerate() {
-            // Retag raw fixnum slots in the COLD deopt block (zero hot-path cost):
-            // the framestate is read back as tagged Values by run_resumed_frame.
-            let tagged = if reps[j] == SlotRep::RawFixnum {
-                retag_fixnum(fb, v)
-            } else {
-                v
-            };
+            // Retag raw fixnum slots (and box flonums) in the COLD deopt
+            // block (zero hot-path cost): the framestate is read back as
+            // tagged Values by run_resumed_frame.
+            let tagged = snapshot_slot_tagged(fb, float_boxer, &mut boxed, v, reps[j], true);
             fb.ins()
                 .store(MemFlagsData::trusted(), tagged, spill_base, (j * 8) as i32);
         }
@@ -4645,6 +4674,10 @@ pub(crate) fn signal_target_for_site(
 /// targets: re-materialize the handler's entry stack (the current model values
 /// below its push depth + the error value the shim wrote through the result
 /// slot) and jump to its block.
+///
+/// A flonum in the snapshot is not rooted (it holds no reference) and is
+/// boxed in each hit block, AFTER the match shim — which may run Lisp and
+/// collect — so no box crosses a safe point; aliases share one box.
 pub(crate) fn emit_pending_dispatches(
     fb: &mut FunctionBuilder,
     rt: &RtCtx,
@@ -4662,11 +4695,10 @@ pub(crate) fn emit_pending_dispatches(
         // nothing, a later site that did). A join with a different store
         // history — rule 3 on `RootWinCarry`. Cold code; nothing to save.
         rootwin_carry_reset();
-        debug_assert!(pd.reps.iter().all(|&rep| rep == SlotRep::Tagged));
         let saved = if pd.stack.is_empty() {
             CondRoots::NONE
         } else {
-            emit_cond_residual_roots_pre(fb, rt, &pd.stack)
+            emit_model_roots_pre(fb, rt, &pd.stack, &pd.reps)
         };
         let vmctx = fb.use_var(rt.vmctx_var);
         let ours = fb.ins().iconst(types::I64, pd.handlers.len() as i64);
@@ -4693,7 +4725,16 @@ pub(crate) fn emit_pending_dispatches(
             fb.ins().brif(is_m, hit, &[], next, &[]);
             fb.switch_to_block(hit);
             fb.seal_block(hit);
+            let mut boxed: SmallVec<[(ClifValue, ClifValue); 8]> = SmallVec::new();
             for (j, &v) in pd.stack.iter().take(push_depth).enumerate() {
+                let v = snapshot_slot_tagged(
+                    fb,
+                    Some(rt.refs.make_float),
+                    &mut boxed,
+                    v,
+                    pd.reps[j],
+                    false,
+                );
                 fb.def_var(vars[j], v);
             }
             let err = fb
@@ -4719,12 +4760,288 @@ pub(crate) enum SlotRep {
     Tagged,
     /// `stack[k]` is an untagged, proven fixnum (cross-op fixnum unboxing).
     RawFixnum,
+    /// A float-site result that is not boxed yet (a "flonum"). `stack[k]` is
+    /// its TAG WORD: [`UNBOXED_FLOAT_TAG_WORD`] when the value is the float
+    /// `f64`, otherwise the tagged fixnum the site's both-fixnum arm
+    /// produced. `f64` is ALWAYS the value's double view (for a fixnum, GNU's
+    /// `(double) XFIXNUM`). The tag word is never a heap reference: it is
+    /// never rooted, stored, returned or passed as a `Value`, and boxing
+    /// ([`box_flonum_slot`]) is the only way out.
+    ///
+    /// `f64` is also the value's IDENTITY: every result is a fresh SSA value
+    /// (a new `fadd`, a new merge parameter) and every copy of one result
+    /// (`Dup`, `StackRef`, `StackSet`) copies this rep, so two slots with
+    /// equal reps are the same Lisp object and must share one box.
+    Flonum { f64: ClifValue, kind: FlonumKind },
 }
+
+/// What a [`SlotRep::Flonum`] can hold at run time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FlonumKind {
+    /// Statically a float (an operand was statically a float, so GNU's
+    /// contagion makes the result a float on every path): the tag word is
+    /// the sentinel on every path, so no run-time test is ever emitted.
+    Float,
+    /// A float or a fixnum, decided by the tag word at run time: a
+    /// `Float`-feedback site whose operands were both fixnums computes a
+    /// fixnum (`(+ 2 3)` is 5, not 5.0).
+    FloatOrFixnum,
+}
+
+/// `TAG_FLOAT` with a null pointer: the tag word of a [`SlotRep::Flonum`]
+/// that holds a float. Never a valid `Value` (arena float pointers are
+/// non-null). It passes the float tag test `(w & 7) == 7`, so the fused
+/// `both_tag_test` classifies a flonum exactly like a boxed float, and fails
+/// the fixnum test `(w & 3) == 2`. A word that must never be published:
+/// root-window stores, the GC's window seeding and the deopt readback
+/// assert it in debug builds.
+pub(crate) const UNBOXED_FLOAT_TAG_WORD: i64 = crate::tagged::value::TAG_FLOAT as i64;
 
 impl SlotRep {
     /// [`SlotRep::RawFixnum`] when `raw`, else [`SlotRep::Tagged`].
     pub(crate) fn raw_if(raw: bool) -> Self {
         if raw { Self::RawFixnum } else { Self::Tagged }
+    }
+
+    /// An unboxed float result (either kind).
+    pub(crate) fn is_flonum(self) -> bool {
+        matches!(self, Self::Flonum { .. })
+    }
+
+    /// A flonum that is a float on every path ([`FlonumKind::Float`]).
+    pub(crate) fn is_static_float(self) -> bool {
+        matches!(
+            self,
+            Self::Flonum {
+                kind: FlonumKind::Float,
+                ..
+            }
+        )
+    }
+}
+
+/// What the flonum lowering did in the function being lowered: the census
+/// its tests assert and its `compile` trace event reports.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct FlonumCensus {
+    /// Float-site results left unboxed.
+    pub(crate) results: u32,
+    /// Boxes made on the ordinary path, where a flonum escapes (one per
+    /// result, however many aliases it has).
+    pub(crate) escape_boxes: u32,
+    /// Boxes made in deopt exits and handler-dispatch blocks.
+    pub(crate) cold_boxes: u32,
+}
+
+thread_local! {
+    static FLONUM_CENSUS: std::cell::Cell<FlonumCensus> =
+        const { std::cell::Cell::new(FlonumCensus { results: 0, escape_boxes: 0, cold_boxes: 0 }) };
+}
+
+/// Start the flonum census for a new function.
+pub(crate) fn flonum_census_reset() {
+    FLONUM_CENSUS.with(|c| c.set(FlonumCensus::default()));
+}
+
+/// The flonum census since the last [`flonum_census_reset`].
+pub(crate) fn flonum_census() -> FlonumCensus {
+    FLONUM_CENSUS.with(|c| c.get())
+}
+
+fn flonum_census_note(update: impl FnOnce(&mut FlonumCensus)) {
+    FLONUM_CENSUS.with(|c| {
+        let mut census = c.get();
+        update(&mut census);
+        c.set(census);
+    });
+}
+
+/// Box one unboxed float result: [`FlonumKind::Float`] is a straight
+/// `neovm_jit_make_float` call; [`FlonumKind::FloatOrFixnum`] is the diamond
+/// `tag == SENTINEL ? make_float(f64) : tag` (a fixnum result is its own tag
+/// word). GNU made exactly one object for the result (`data.c`
+/// `float_arith_driver` ends in `make_float`), so this runs once per result.
+///
+/// `make_float` never reaches a GC safe point, so earlier boxes may wait in
+/// registers while this one is made, and it stores nothing in the root
+/// window: the `RootWinCarry` record holds on both sides of the diamond.
+/// `cold` marks the diamond's blocks cold (a deopt exit).
+pub(crate) fn box_flonum_value(
+    fb: &mut FunctionBuilder,
+    make_float: FuncRef,
+    tag: ClifValue,
+    f64: ClifValue,
+    kind: FlonumKind,
+    cold: bool,
+) -> ClifValue {
+    match kind {
+        FlonumKind::Float => {
+            let call = fb.ins().call(make_float, &[f64]);
+            fb.inst_results(call)[0]
+        }
+        FlonumKind::FloatOrFixnum => {
+            let out = fb.declare_var(types::I64);
+            let box_b = fb.create_block();
+            let merge = fb.create_block();
+            if cold {
+                fb.set_cold_block(box_b);
+                fb.set_cold_block(merge);
+            }
+            fb.def_var(out, tag);
+            let is_float = icmp_imm_p(fb, IntCC::Equal, tag, UNBOXED_FLOAT_TAG_WORD);
+            fb.ins().brif(is_float, box_b, &[], merge, &[]);
+            fb.switch_to_block(box_b);
+            fb.seal_block(box_b);
+            let call = fb.ins().call(make_float, &[f64]);
+            let boxed = fb.inst_results(call)[0];
+            fb.def_var(out, boxed);
+            fb.ins().jump(merge, &[]);
+            fb.switch_to_block(merge);
+            fb.seal_block(merge);
+            fb.use_var(out)
+        }
+    }
+}
+
+/// Box flonum slot `k` where it escapes, and rewrite EVERY model-stack alias
+/// of it (same rep, see [`SlotRep::Flonum`]) to the box: GNU made one object
+/// for this result, all its copies must stay `eq`, and a later escape of an
+/// alias must reuse the box. A no-op on a slot that is not a flonum.
+///
+/// Must run on the op's main line (it dominates the rest of the block),
+/// never inside one arm of an op's own branching.
+pub(crate) fn box_flonum_slot(
+    fb: &mut FunctionBuilder,
+    make_float: FuncRef,
+    stack: &mut [ClifValue],
+    reps: &mut [SlotRep],
+    k: usize,
+) -> ClifValue {
+    let key = reps[k];
+    let SlotRep::Flonum { f64, kind } = key else {
+        return stack[k];
+    };
+    let boxed = box_flonum_value(fb, make_float, stack[k], f64, kind, false);
+    for s in 0..stack.len() {
+        if reps[s] == key {
+            stack[s] = boxed;
+            reps[s] = SlotRep::Tagged;
+        }
+    }
+    flonum_census_note(|c| c.escape_boxes += 1);
+    boxed
+}
+
+/// Force every raw fixnum slot in the model stack back to a tagged `Value`
+/// (flonums stay unboxed).
+pub(crate) fn retag_raw_fixnums(
+    fb: &mut FunctionBuilder,
+    stack: &mut [ClifValue],
+    reps: &mut [SlotRep],
+) {
+    for k in 0..stack.len() {
+        stack_force_tagged(fb, stack, reps, k);
+    }
+}
+
+/// Box every flonum in the model stack (alias-shared), leaving raw fixnums
+/// raw: the flonum half of [`materialize_model_stack`], for the block edges,
+/// which keep a raw fixnum raw when its successor variable is raw.
+pub(crate) fn box_all_flonums(
+    fb: &mut FunctionBuilder,
+    rt: Option<&RtCtx>,
+    stack: &mut [ClifValue],
+    reps: &mut [SlotRep],
+) {
+    for k in 0..stack.len() {
+        if reps[k].is_flonum() {
+            let rt = rt.expect("a flonum implies the runtime refs (float sites declare them)");
+            box_flonum_slot(fb, rt.refs.make_float, stack, reps, k);
+        }
+    }
+}
+
+/// Force the whole model stack to tagged `Value`s: retag every raw fixnum
+/// and box every flonum (alias-shared). Before an op or terminator that
+/// roots, snapshots or passes the stack as `Value`s.
+pub(crate) fn materialize_model_stack(
+    fb: &mut FunctionBuilder,
+    rt: Option<&RtCtx>,
+    stack: &mut [ClifValue],
+    reps: &mut [SlotRep],
+) {
+    for k in 0..stack.len() {
+        match reps[k] {
+            SlotRep::Tagged => {}
+            SlotRep::RawFixnum => stack_force_tagged(fb, stack, reps, k),
+            SlotRep::Flonum { .. } => {
+                let rt = rt.expect("a flonum implies the runtime refs (float sites declare them)");
+                box_flonum_slot(fb, rt.refs.make_float, stack, reps, k);
+            }
+        }
+    }
+}
+
+/// Residual roots for a baseline site: its `Tagged` slots only. A flonum
+/// holds no reference (a raw f64 cannot go stale: Lisp floats are
+/// immutable), and its tag word must never reach the GC. An empty set
+/// resets the root-window record, as [`emit_cond_residual_roots_pre`] does.
+pub(crate) fn emit_model_roots_pre(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    stack: &[ClifValue],
+    reps: &[SlotRep],
+) -> CondRoots {
+    let reps = &reps[..stack.len()];
+    if !reps.iter().any(|rep| rep.is_flonum()) {
+        debug_assert!(
+            !reps.contains(&SlotRep::RawFixnum),
+            "rooting sites run after the raw retag"
+        );
+        return emit_cond_residual_roots_pre(fb, rt, stack);
+    }
+    let tagged: SmallVec<[ClifValue; 16]> = stack
+        .iter()
+        .zip(reps)
+        .filter_map(|(&v, &rep)| match rep {
+            SlotRep::Tagged => Some(v),
+            // Not a reference either; never reached (the retag runs first).
+            SlotRep::RawFixnum => {
+                debug_assert!(false, "rooting sites run after the raw retag");
+                None
+            }
+            SlotRep::Flonum { .. } => None,
+        })
+        .collect();
+    emit_cond_residual_roots_pre(fb, rt, &tagged)
+}
+
+/// The tagged value of snapshot slot `slot` in a cold exit (a deopt spill,
+/// a handler entry): a raw fixnum is retagged, and a flonum is boxed once
+/// per snapshot — `boxed` maps each flonum's `f64` to its box, so aliases
+/// share one object (the pattern of the MIR virtual-cons rebuild).
+fn snapshot_slot_tagged(
+    fb: &mut FunctionBuilder,
+    make_float: Option<FuncRef>,
+    boxed: &mut SmallVec<[(ClifValue, ClifValue); 8]>,
+    v: ClifValue,
+    rep: SlotRep,
+    cold: bool,
+) -> ClifValue {
+    match rep {
+        SlotRep::Tagged => v,
+        SlotRep::RawFixnum => retag_fixnum(fb, v),
+        SlotRep::Flonum { f64, kind } => {
+            if let Some(&(_, b)) = boxed.iter().find(|&&(key, _)| key == f64) {
+                return b;
+            }
+            let make_float =
+                make_float.expect("a flonum implies the runtime refs (float sites declare them)");
+            let b = box_flonum_value(fb, make_float, v, f64, kind, cold);
+            boxed.push((f64, b));
+            flonum_census_note(|c| c.cold_boxes += 1);
+            b
+        }
     }
 }
 
@@ -4732,6 +5049,11 @@ impl SlotRep {
 /// slot is already raw (a prior fixnum arithmetic result in this block), return it
 /// directly — the cross-op fast path: no re-guard, no re-untag. Otherwise guard it
 /// is a fixnum (deopt else, honoring the cross-block `known` elision) and untag once.
+///
+/// A flonum is guarded on its tag word, ALWAYS — never elided through `known`
+/// or [`is_known_fixnum`] (the 2026-09-14 known-fixnum miscompile): a fixnum
+/// tag word is the value, the float sentinel deopts, and the deopt exit boxes
+/// the float so the interpreter reruns the op on a real one.
 pub(crate) fn stack_as_raw(
     fb: &mut FunctionBuilder,
     deopt: Block,
@@ -4744,6 +5066,11 @@ pub(crate) fn stack_as_raw(
         SlotRep::RawFixnum => stack[k],
         SlotRep::Tagged => {
             guard_fixnum(fb, deopt, stack[k], known);
+            sshr_imm_p(fb, stack[k], FIXNUM_SHIFT as i64)
+        }
+        SlotRep::Flonum { .. } => {
+            let is_fix = fixnum_tag_test(fb, stack[k]);
+            emit_guard(fb, deopt, is_fix);
             sshr_imm_p(fb, stack[k], FIXNUM_SHIFT as i64)
         }
     }
@@ -4762,20 +5089,6 @@ pub(crate) fn stack_force_tagged(
     if reps[k] == SlotRep::RawFixnum {
         stack[k] = retag_fixnum(fb, stack[k]);
         reps[k] = SlotRep::Tagged;
-    }
-}
-
-/// Force every raw slot in the model stack back to a tagged `Value`. Called before
-/// any op/terminator that gc_pushes, calls a shim, snapshots the stack for signal
-/// dispatch, or writes the stack to `vars` (cross-block) — so nothing raw ever
-/// escapes the block or reaches the tracer.
-pub(crate) fn retag_all_raw(
-    fb: &mut FunctionBuilder,
-    stack: &mut [ClifValue],
-    reps: &mut [SlotRep],
-) {
-    for k in 0..stack.len() {
-        stack_force_tagged(fb, stack, reps, k);
     }
 }
 
@@ -4847,7 +5160,7 @@ fn lower_generic_arith_site(
     if stack.len() < nargs {
         return Err(CompileError::StackUnderflow);
     }
-    retag_all_raw(fb, stack, reps);
+    materialize_model_stack(fb, Some(rt), stack, reps);
     let at = stack.len() - nargs;
     let operands: Vec<ClifValue> = stack[at..].to_vec();
     stack.truncate(at);
@@ -5018,7 +5331,7 @@ pub(crate) fn lower_simple_op(
     // their gc_push / signal snapshot / shim args never observe a raw slot (closes
     // the GC-root + dispatch-snapshot soundness holes in one place).
     if !op_preserves_raw(op) {
-        retag_all_raw(fb, stack, reps);
+        materialize_model_stack(fb, rt, stack, reps);
     }
     if let Some(rt) = rt
         && !aot
@@ -5458,7 +5771,7 @@ pub(crate) fn lower_simple_op(
             stack.push(lower_predicate(fb, kind, a));
         }
         Op::Car | Op::Cdr => {
-            // Non-raw: the top-of-fn retag_all_raw already tagged the stack; the
+            // Non-raw: the top-of-fn materialization tagged the stack; the
             // deopt snapshot's mask is all-false (cold retag is a no-op here).
             let dsite = deopt_site(fb, pc, handlers.len(), stack, reps, deopt_sites);
             let a = stack.pop().ok_or(CompileError::StackUnderflow)?;

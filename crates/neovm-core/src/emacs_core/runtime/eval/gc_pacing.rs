@@ -47,6 +47,13 @@ impl Context {
             .iter()
             .copied()
         {
+            // A JIT unboxed float's tag word (TAG_FLOAT, null pointer) is
+            // never a Value; compiled code must box before publishing.
+            debug_assert_ne!(
+                root.bits(),
+                crate::tagged::value::TAG_FLOAT,
+                "an unboxed-float tag word reached the JIT root window"
+            );
             visit(root);
         }
         for frame in &self.bc_frames {
