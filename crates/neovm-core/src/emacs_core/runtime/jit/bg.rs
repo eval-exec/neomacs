@@ -80,14 +80,31 @@ pub(crate) const fn workers_supported() -> bool {
 }
 
 /// The mode a `NEOVM_JIT_BG` value selects; anything unrecognised (or
-/// unset) is [`BgMode::Legacy`].
+/// unset) is [`BgMode::Legacy`]. `auto` is `on` when this process may run
+/// on at least two CPUs (its affinity), else `sync`: on one CPU a worker
+/// only competes with the eval thread.
 pub(crate) fn parse_mode(value: Option<&str>) -> BgMode {
     match value.map(str::trim) {
         Some("sync") => BgMode::Sync,
         Some("on") if workers_supported() => BgMode::Threaded,
         Some("on") => BgMode::Sync,
+        Some("auto") if workers_supported() && available_cpus() >= 2 => BgMode::Threaded,
+        Some("auto") => BgMode::Sync,
         _ => BgMode::Legacy,
     }
+}
+
+/// CPUs this process may run on (its affinity mask, on Linux).
+fn available_cpus() -> usize {
+    std::thread::available_parallelism().map_or(1, usize::from)
+}
+
+/// A `NEOVM_JIT_BG_*` count, or `default` when unset or unreadable.
+fn knob_count(name: &str, default: usize) -> usize {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(default)
 }
 
 /// This process's (or, under a test override, this thread's) mode.
@@ -116,9 +133,72 @@ pub(crate) fn split_enabled() -> bool {
     }
 }
 
-/// Worker threads to start (one; B12 adds the knob).
+/// Worker threads to start: `NEOVM_JIT_BG_THREADS` (default 1), at least
+/// one and at most `min(4, CPUs - 1)`.
 pub(crate) fn worker_threads() -> usize {
-    1
+    static N: OnceLock<usize> = OnceLock::new();
+    *N.get_or_init(|| {
+        let most = available_cpus().saturating_sub(1).clamp(1, 4);
+        knob_count("NEOVM_JIT_BG_THREADS", 1).clamp(1, most)
+    })
+}
+
+/// Jobs the queue holds before it drops or refuses (`NEOVM_JIT_BG_QUEUE`,
+/// default 256).
+pub(crate) fn queue_cap() -> usize {
+    #[cfg(test)]
+    if let Some(cap) = QUEUE_CAP_TEST.with(Cell::get) {
+        return cap;
+    }
+    static CAP: OnceLock<usize> = OnceLock::new();
+    *CAP.get_or_init(|| knob_count("NEOVM_JIT_BG_QUEUE", 256).max(1))
+}
+
+/// CLIF instructions the queue holds before it drops or refuses
+/// (`NEOVM_JIT_BG_QUEUE_INSTS`, default 1,000,000).
+pub(crate) fn queue_insts_cap() -> u64 {
+    static CAP: OnceLock<u64> = OnceLock::new();
+    *CAP.get_or_init(|| knob_count("NEOVM_JIT_BG_QUEUE_INSTS", 1_000_000).max(1) as u64)
+}
+
+/// Pending compiles one eval thread may hold before it refuses more.
+pub(crate) const PENDING_CAP: usize = 512;
+
+/// `NEOVM_JIT_BG_NICE`: the workers' nice value (unset: the process's).
+pub(crate) fn worker_nice() -> Option<i32> {
+    std::env::var("NEOVM_JIT_BG_NICE")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+}
+
+/// `NEOVM_JIT_BG_AFFINITY=<cpu>[,<cpu>...]`: pin the workers (measurement).
+pub(crate) fn worker_affinity() -> Option<Vec<usize>> {
+    let value = std::env::var("NEOVM_JIT_BG_AFFINITY").ok()?;
+    let cpus: Vec<usize> = value
+        .split(',')
+        .filter_map(|c| c.trim().parse().ok())
+        .collect();
+    (!cpus.is_empty()).then_some(cpus)
+}
+
+/// `NEOVM_JIT_BG_CLASSES=<class>[,<class>...]` (`osr`, `first_sight`,
+/// `entry`; default all): the classes whose compiles may defer, the others
+/// running in line (measurement: `entry` alone is P2.4 B7).
+fn class_enabled(class: JobClass) -> bool {
+    static MASK: OnceLock<u32> = OnceLock::new();
+    let mask = *MASK.get_or_init(|| match std::env::var("NEOVM_JIT_BG_CLASSES") {
+        Ok(value) => {
+            use strum::IntoEnumIterator;
+            JobClass::iter()
+                .filter(|c| {
+                    let name: &'static str = (*c).into();
+                    value.split(',').any(|v| v.trim() == name)
+                })
+                .fold(0, |mask, c| mask | 1 << c as u32)
+        }
+        Err(_) => u32::MAX,
+    });
+    mask & 1 << class as u32 != 0
 }
 
 /// Why a compile was requested; the order is its priority (lower = sooner).
@@ -152,6 +232,10 @@ impl JobClass {
     /// only once B11's upgrade jobs exist; AOT drains and direct compiles
     /// want their leaf at once).
     pub(crate) fn for_origin(origin: CompileOrigin) -> Option<JobClass> {
+        JobClass::for_origin_any(origin).filter(|class| class_enabled(*class))
+    }
+
+    fn for_origin_any(origin: CompileOrigin) -> Option<JobClass> {
         match origin {
             CompileOrigin::Dispatch | CompileOrigin::DeferralExpired => Some(JobClass::Entry),
             CompileOrigin::FirstSight => Some(JobClass::FirstSight),
@@ -180,6 +264,9 @@ pub(crate) enum DiscardReason {
     /// Its backend failed (the body becomes `NotCompilable`, as a failed
     /// in-line compile would).
     Failed,
+    /// The full queue dropped it for a job of a higher class; its function
+    /// asks again once its heat doubles.
+    Dropped,
 }
 
 /// A backend job's progress, as its [`JobCell`] records it.
@@ -200,6 +287,8 @@ pub(crate) struct BackendOut {
     pub(crate) queue_wait_us: u64,
     /// The disassembly, under `NEOVM_JIT_DUMP_ASM`.
     pub(crate) asm: Option<PendingAsm>,
+    /// The queue dropped the job before a backend ran it.
+    pub(crate) dropped: bool,
 }
 
 /// The rendezvous of one backend job: the backend publishes its
@@ -234,6 +323,19 @@ impl JobCell {
     pub(crate) fn publish(&self, out: BackendOut) {
         *self.out.lock().unwrap_or_else(|p| p.into_inner()) = Some(out);
         self.state.store(JobState::Done as u8, Ordering::Release);
+    }
+
+    /// Publish that the full queue dropped the job unrun.
+    pub(crate) fn publish_dropped(&self) {
+        self.publish(BackendOut {
+            result: Err(CompileError::Backend(super::backend::BackendError::Define(
+                "dropped from the full background queue".into(),
+            ))),
+            backend_us: 0,
+            queue_wait_us: 0,
+            asm: None,
+            dropped: true,
+        });
     }
 
     /// Whether the result is published (acquire: a `true` makes the result
@@ -423,6 +525,16 @@ pub(crate) fn install(
     ctx: Option<&Context>,
 ) -> Result<CompiledLeaf, Discard> {
     let out = job.cell.take_out().expect("install only a ready job");
+    if out.dropped {
+        // Asked again only once the heat doubled: bounds the thrash of a
+        // backlog that keeps dropping it.
+        if let Some(rt) = rt {
+            let heat = rt.heat();
+            rt.defer_tier_up(heat.saturating_mul(2).max(heat.saturating_add(1)));
+        }
+        job.settle(Settled::Discarded(DiscardReason::Dropped));
+        return Err(Discard::Stale(DiscardReason::Dropped));
+    }
     if let Some(rt) = rt {
         rt.defer_tier_up(job.saved_hold);
         let calls = u64::from(rt.heat().saturating_sub(job.requested_heat));
@@ -540,6 +652,10 @@ pub(crate) struct BgStats {
     /// Spec slots an install re-armed at the live epoch (their binding held
     /// while a redefinition elsewhere moved it).
     pub(crate) spec_restamps: u64,
+    /// Compiles refused before their front (the queue or this thread's
+    /// pending entries full): their function asks again once its heat
+    /// doubles.
+    pub(crate) refused: u64,
 }
 
 /// The `[neovm-jit-final-bg]` line: the eval thread's counters, the
@@ -606,7 +722,7 @@ impl BgReport {
         format!(
             "mode={} workers={} enqueued={} installed={} discarded={discarded} backend_us={} \
              backend_max_us={} queue_wait_us={} latency_hist_us[<100,<250,<500,<1ms,<2.5ms,<5ms,<10ms,>=10ms]={latency} \
-             pending_probes={} osr_waits={} interp_calls_while_pending={} spec_restamps={} in_flight_at_exit={} worker_jobs={} \
+             pending_probes={} osr_waits={} refused={} interp_calls_while_pending={} spec_restamps={} in_flight_at_exit={} worker_jobs={} \
              worker_skipped={} worker_panics={} worker_code_bytes={} worker_backend_max_us={}",
             self.mode,
             self.workers,
@@ -617,6 +733,7 @@ impl BgReport {
             self.stats.queue_wait_us,
             self.stats.pending_probes,
             self.stats.osr_waits,
+            self.stats.refused,
             self.stats.interp_calls_while_pending,
             self.stats.spec_restamps,
             self.in_flight_at_exit,
@@ -643,6 +760,21 @@ thread_local! {
     /// Epoch-moved discards per `compiled_id` since its last install.
     static EPOCH_DISCARDS: RefCell<rustc_hash::FxHashMap<u64, u8>> =
         RefCell::new(rustc_hash::FxHashMap::default());
+}
+
+/// Whether a compile of `class` must be refused before its front runs:
+/// this thread already holds [`PENDING_CAP`] pending compiles, or the full
+/// queue would drop the job itself (it is the lowest class queued). Only
+/// with worker threads; a refusal is counted.
+pub(crate) fn refuses(class: JobClass) -> bool {
+    let refuse = match mode() {
+        BgMode::Legacy | BgMode::Sync => false,
+        BgMode::Threaded => pending_count() >= PENDING_CAP || !queue::pool().admits(class),
+    };
+    if refuse {
+        bump_stats(|s| s.refused += 1);
+    }
+    refuse
 }
 
 /// Whether a compile of `id` may defer: not after [`MAX_EPOCH_DISCARDS`]
@@ -757,12 +889,14 @@ static NEXT_SEQ: AtomicU64 = AtomicU64::new(1);
 pub(crate) fn enqueue(class: JobClass, payload: JobPayload) -> Result<(), JobPayload> {
     let cell = JobCell::new();
     let enqueued_at = Instant::now();
+    let insts = payload.func.dfg.num_insts() as u64;
     let job = queue::BackendJob {
         payload,
         class,
         seq: NEXT_SEQ.fetch_add(1, Ordering::Relaxed),
         enqueued_at,
         cell: Arc::clone(&cell),
+        insts,
     };
     match queue::pool().push(job) {
         Ok(()) => {
@@ -904,6 +1038,7 @@ pub(crate) fn defer_in_line(
         backend_us: enqueued_at.elapsed().as_micros() as u64,
         queue_wait_us: 0,
         asm,
+        dropped: false,
     };
     #[cfg(test)]
     if HOLD_PUBLISH_TEST.with(Cell::get) {
@@ -920,8 +1055,34 @@ thread_local! {
     static MODE_TEST_OVERRIDE: Cell<Option<BgMode>> = const { Cell::new(None) };
     static DEFERRED_INSTALL_TEST: Cell<bool> = const { Cell::new(false) };
     static FAIL_BACKEND_TEST: Cell<bool> = const { Cell::new(false) };
+    static QUEUE_CAP_TEST: Cell<Option<usize>> = const { Cell::new(None) };
     static HOLD_PUBLISH_TEST: Cell<bool> = const { Cell::new(false) };
     static HELD_TEST: RefCell<Vec<(Arc<JobCell>, BackendOut)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Jobs the workers took, in order: `(class, seq, cancelled)` (tests).
+#[cfg(test)]
+static SERVED_TEST: Mutex<Vec<(JobClass, u64, bool)>> = Mutex::new(Vec::new());
+
+#[cfg(test)]
+pub(crate) fn note_served_for_test(class: JobClass, seq: u64, cancelled: bool) {
+    SERVED_TEST
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .push((class, seq, cancelled));
+}
+
+/// Take the order the workers took jobs in (tests).
+#[cfg(test)]
+pub(crate) fn take_served_for_test() -> Vec<(JobClass, u64, bool)> {
+    std::mem::take(&mut *SERVED_TEST.lock().unwrap_or_else(|p| p.into_inner()))
+}
+
+/// Cap the queue at `cap` jobs for pushes and admissions from this thread
+/// (tests only); `None` returns to the knob.
+#[cfg(test)]
+pub(crate) fn force_queue_cap_for_test(cap: Option<usize>) {
+    QUEUE_CAP_TEST.with(|c| c.set(cap));
 }
 
 /// Make the next in-line deferred backend on this thread fail (tests only).
@@ -999,3 +1160,7 @@ mod first_sight_tests;
 #[cfg(test)]
 #[path = "bg/tests/osr_pending_test.rs"]
 mod osr_pending_tests;
+
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[path = "bg/tests/queue_test.rs"]
+mod queue_tests;

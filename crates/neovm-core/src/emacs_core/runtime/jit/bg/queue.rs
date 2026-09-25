@@ -3,6 +3,12 @@
 //! the worker threads pop from. The eval thread holds the lock only to push
 //! (never across Lisp, a safepoint or a compile), and the GC never takes
 //! it.
+//!
+//! Bounded (`NEOVM_JIT_BG_QUEUE` jobs, `NEOVM_JIT_BG_QUEUE_INSTS` CLIF
+//! instructions): when a job does not fit, the lowest-class, newest job
+//! goes -- a queued one is dropped (its cell reports it, and its function
+//! asks again once its heat doubles), or the new one is refused before its
+//! front runs ([`Pool::admits`]).
 
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::BinaryHeap;
@@ -20,6 +26,8 @@ pub(crate) struct BackendJob {
     pub(crate) seq: u64,
     pub(crate) enqueued_at: Instant,
     pub(crate) cell: Arc<JobCell>,
+    /// The payload's CLIF instruction count (the queue's size unit).
+    pub(crate) insts: u64,
 }
 
 const _: () = {
@@ -59,6 +67,8 @@ impl Ord for Queued {
 
 struct PoolState {
     jobs: BinaryHeap<Queued>,
+    /// CLIF instructions of the queued jobs.
+    insts: u64,
     /// Jobs a worker has taken and not yet finished.
     running: usize,
     /// Worker threads started.
@@ -84,6 +94,7 @@ pub(crate) fn pool() -> &'static Pool {
     POOL.get_or_init(|| Pool {
         state: Mutex::new(PoolState {
             jobs: BinaryHeap::new(),
+            insts: 0,
             running: 0,
             workers: 0,
             spawn_failed: false,
@@ -128,10 +139,42 @@ impl Pool {
                 }
             }
         }
+        // Make room: drop the lowest-class, newest queued job while that is
+        // not the new one.
+        let (cap, insts_cap) = (super::queue_cap(), super::queue_insts_cap());
+        while !state.jobs.is_empty()
+            && (state.jobs.len() >= cap || state.insts + job.insts > insts_cap)
+        {
+            let victim = state.jobs.iter().map(Queued::key).max().expect("not empty");
+            if victim < (job.class, job.seq) {
+                return Err(job);
+            }
+            let mut jobs = std::mem::take(&mut state.jobs).into_vec();
+            let at = jobs
+                .iter()
+                .position(|queued| queued.key() == victim)
+                .expect("the victim is queued");
+            let Queued(dropped) = jobs.swap_remove(at);
+            state.jobs = BinaryHeap::from(jobs);
+            state.insts -= dropped.insts;
+            dropped.cell.publish_dropped();
+        }
+        state.insts += job.insts;
         state.jobs.push(Queued(job));
         drop(state);
         self.work.notify_one();
         Ok(())
+    }
+
+    /// Whether a job of `class` would be queued now rather than refused
+    /// (checked before its front runs): there is room, or a queued job of a
+    /// lower class would make way.
+    pub(crate) fn admits(&self, class: JobClass) -> bool {
+        let state = self.lock();
+        if state.jobs.len() < super::queue_cap() && state.insts < super::queue_insts_cap() {
+            return true;
+        }
+        state.jobs.iter().any(|queued| queued.0.class > class)
     }
 
     /// The next job for a worker: blocks until there is one.
@@ -144,6 +187,7 @@ impl Pool {
             let held = false;
             if !held && let Some(Queued(job)) = state.jobs.pop() {
                 state.running += 1;
+                state.insts -= job.insts;
                 return job;
             }
             state = self.work.wait(state).unwrap_or_else(|p| p.into_inner());

@@ -51,6 +51,9 @@ enum DeferReason {
         profit_gate_bypassed: bool,
         call_heavy: bool,
     },
+    /// The background compile queue was full (`jit::bg`): the compile is
+    /// asked again, as it was, once the body's heat doubled.
+    Backlog,
 }
 
 /// One thread's knowledge of a function's compiled state.
@@ -733,9 +736,11 @@ fn osr_lookup(ctx: *mut Context, func: &ByteCodeFunction, osr_pc: usize, id: u64
     let name_hint = stats::naming_enabled()
         .then(|| callee_name_hint(ctx, id))
         .flatten();
+    // A refused OSR job (the queue full of OSR jobs, or too many pending)
+    // compiles in line: the loop is running now.
     let defer = super::bg::DeferScope::enter(
         super::bg::JobClass::for_origin(stats::CompileOrigin::Osr)
-            .filter(|_| super::bg::may_defer(id)),
+            .filter(|class| super::bg::may_defer(id) && !super::bg::refuses(*class)),
     );
     // The inline-variable environment (`NEOVM_JIT_INLINE_VARS`) is read by
     // the lowering, which runs here on the eval thread in every mode.
@@ -933,9 +938,18 @@ fn compile_cache_entry(
         .then(|| stats::perf_map::LeafLabelScope::enter(id, name_hint, func));
     // A tier-up may leave its backend to run elsewhere (`jit::bg`); the
     // front below is the stall either way.
-    let defer = super::bg::DeferScope::enter(
-        super::bg::JobClass::for_origin(request.origin).filter(|_| super::bg::may_defer(id)),
-    );
+    let class =
+        super::bg::JobClass::for_origin(request.origin).filter(|_| super::bg::may_defer(id));
+    if let Some(class) = class
+        && super::bg::refuses(class)
+    {
+        // No room for its backend: no front either. Asked again once the
+        // heat doubled, as the queue's own drops are.
+        let heat = rt.heat();
+        rt.defer_tier_up(heat.saturating_mul(2).max(heat.saturating_add(1)));
+        return CacheEntry::Deferred(DeferReason::Backlog);
+    }
+    let defer = super::bg::DeferScope::enter(class);
     let clock = stats::CompileClock::start(request.origin);
     let result = compile_bytecode_function_requested(func, obarray, request);
     drop(defer);
@@ -1383,6 +1397,7 @@ pub(crate) fn cache_entry_kind_for_test(id: u64) -> &'static str {
         Some(CacheEntry::NotCompilable) => "not-compilable",
         Some(CacheEntry::Deferred(DeferReason::NotProfitable)) => "deferred",
         Some(CacheEntry::Deferred(DeferReason::Reoptimize { .. })) => "deferred-reopt",
+        Some(CacheEntry::Deferred(DeferReason::Backlog)) => "deferred-backlog",
         Some(CacheEntry::Pending(_)) => "pending",
         None => "none",
     })
@@ -2011,7 +2026,8 @@ pub fn try_run_compiled(
                 };
                 (policy, profit_gate_bypassed || prev_bypassed)
             }
-            None => (policy, prev_bypassed),
+            // A refused background compile, asked again as it was.
+            Some(DeferReason::Backlog) | None => (policy, prev_bypassed),
         };
         let request = CompileRequest {
             regalloc: policy,

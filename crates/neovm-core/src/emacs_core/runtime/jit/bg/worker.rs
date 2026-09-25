@@ -59,8 +59,40 @@ fn block_async_signals() {
     }
 }
 
+/// `NEOVM_JIT_BG_NICE` and `NEOVM_JIT_BG_AFFINITY` for this worker.
+fn apply_scheduling_knobs() {
+    if let Some(nice) = super::worker_nice() {
+        // SAFETY: setpriority on this thread's own id.
+        let rc = unsafe {
+            libc::setpriority(
+                libc::PRIO_PROCESS,
+                libc::syscall(libc::SYS_gettid) as libc::id_t,
+                nice,
+            )
+        };
+        if rc != 0 {
+            tracing::warn!(target: "neovm_jit::bg", nice, "NEOVM_JIT_BG_NICE was refused");
+        }
+    }
+    if let Some(cpus) = super::worker_affinity() {
+        // SAFETY: a zeroed cpu_set_t filled with CPU_SET, applied to this
+        // thread (pid 0).
+        let rc = unsafe {
+            let mut set: libc::cpu_set_t = std::mem::zeroed();
+            for cpu in &cpus {
+                libc::CPU_SET(*cpu, &mut set);
+            }
+            libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &set)
+        };
+        if rc != 0 {
+            tracing::warn!(target: "neovm_jit::bg", ?cpus, "NEOVM_JIT_BG_AFFINITY was refused");
+        }
+    }
+}
+
 fn run(pool: &'static Pool) {
     block_async_signals();
+    apply_scheduling_knobs();
     let mut backend = WorkerBackend::new();
     loop {
         let job = pool.pop();
@@ -75,8 +107,14 @@ fn serve(backend: &mut WorkerBackend, job: BackendJob) {
         payload,
         enqueued_at,
         cell,
+        class,
+        seq,
         ..
     } = job;
+    #[cfg(test)]
+    super::note_served_for_test(class, seq, cell.is_cancelled());
+    #[cfg(not(test))]
+    let _ = (class, seq);
     if cell.is_cancelled() {
         WORKER_STATS.skipped.fetch_add(1, Ordering::Relaxed);
         return;
@@ -116,6 +154,7 @@ fn serve(backend: &mut WorkerBackend, job: BackendJob) {
         backend_us,
         queue_wait_us,
         asm,
+        dropped: false,
     });
 }
 
