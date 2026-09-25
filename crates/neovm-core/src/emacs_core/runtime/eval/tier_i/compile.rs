@@ -72,8 +72,12 @@ pub(super) struct FormNode {
     pub(super) head_id: SymId,
     /// Its cdr at compile time.
     pub(super) tail: Value,
-    /// The head's class, stamped with the function epoch it was read at.
-    pub(super) head_cache: Cell<(u64, FormHead)>,
+    /// The head's class, stamped with the function epoch it was read at,
+    /// and whether its cell is a builtin of the lazy-frame leaf set.
+    pub(super) head_cache: Cell<(u64, FormHead, bool)>,
+    /// A call whose every argument is a constant or a variable reference:
+    /// a candidate for the lazy frame (`exec.rs`, [`LAZY_LEAF_SUBRS`]).
+    pub(super) leaf_args: bool,
     /// For a head whose cell is an alias (`not` -> `null`): what the tree
     /// walker's full resolution reaches, stamped with the function epoch.
     pub(super) alias_cache: Cell<(u64, AliasTarget)>,
@@ -485,12 +489,20 @@ impl Compiler<'_> {
             }
         };
         self.root(tail);
+        let leaf_args = match &op {
+            Op::Call(args) => args
+                .0
+                .iter()
+                .all(|arg| matches!(arg, Node::Const(_) | Node::Var(_))),
+            _ => false,
+        };
         Node::Form(Box::new(FormNode {
             form,
             head,
             head_id,
             tail,
-            head_cache: Cell::new((EMPTY_HEAD_EPOCH, class)),
+            head_cache: Cell::new((EMPTY_HEAD_EPOCH, class, false)),
+            leaf_args,
             alias_cache: Cell::new((EMPTY_HEAD_EPOCH, AliasTarget::None)),
             op,
         }))
@@ -684,6 +696,78 @@ impl Compiler<'_> {
             body,
         })
     }
+}
+
+/// Builtins a call to which may skip its backtrace frame until it signals
+/// (`exec.rs`, `ti_try_leaf`).  Each one's native function was read to
+/// check that it runs no Lisp, reaches no GC safe point or quit poll, and
+/// neither reads nor changes the specpdl, the condition stack or the
+/// evaluation depth: it reads its arguments (and `symbols-with-pos-enabled`,
+/// a marker's buffer, the current buffer's point and restriction) and
+/// returns a value or a signal.  Allocation is allowed (it never collects).
+pub(super) const LAZY_LEAF_SUBRS: &[&str] = &[
+    "car",
+    "cdr",
+    "car-safe",
+    "cdr-safe",
+    "cons",
+    "eq",
+    "eql",
+    "equal",
+    "null",
+    "consp",
+    "atom",
+    "listp",
+    "nlistp",
+    "symbolp",
+    "stringp",
+    "integerp",
+    "numberp",
+    "keywordp",
+    "vectorp",
+    "1+",
+    "1-",
+    "+",
+    "-",
+    "*",
+    "<",
+    ">",
+    "<=",
+    ">=",
+    "=",
+    "/=",
+    "%",
+    "mod",
+    "max",
+    "min",
+    "length",
+    "nth",
+    "nthcdr",
+    "aref",
+    "memq",
+    "assq",
+    "rassq",
+    "member",
+    "get",
+    "symbol-name",
+    "char-after",
+    "point",
+    "point-min",
+    "point-max",
+    "bobp",
+    "eobp",
+    "bolp",
+    "eolp",
+];
+
+/// Whether the subr FUNC is in [`LAZY_LEAF_SUBRS`].
+pub(super) fn is_lazy_leaf_subr(func: Value) -> bool {
+    static SET: std::sync::OnceLock<rustc_hash::FxHashSet<SymId>> = std::sync::OnceLock::new();
+    let Some(id) = func.as_subr_id() else {
+        return false;
+    };
+    SET.get_or_init(|| LAZY_LEAF_SUBRS.iter().map(|name| intern(name)).collect())
+        .contains(&id)
 }
 
 /// No function epoch is this value: a fresh node always re-reads its head.

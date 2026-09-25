@@ -7,12 +7,18 @@ use crate::emacs_core::eval::{Context, TierIEvent, TierIMode};
 use crate::emacs_core::format_eval_result;
 use crate::emacs_core::value::Value;
 
-/// Evaluate every form of SRC in a fresh runtime context in MODE; the
-/// formatted results and the context (for its statistics).
+/// Evaluate every form of SRC in a fresh runtime context in MODE (lazy
+/// leaf frames on); the formatted results and the context (for its
+/// statistics).
 fn run(mode: TierIMode, src: &str) -> (Vec<String>, Context) {
+    run_with(mode, true, src)
+}
+
+fn run_with(mode: TierIMode, lazy_frames: bool, src: &str) -> (Vec<String>, Context) {
     let mut eval = crate::test_utils::runtime_startup_context();
     eval.tier_i.set_mode(mode);
     eval.tier_i.set_threshold(1);
+    eval.tier_i.set_lazy_frames(lazy_frames);
     eval.tier_i.clear_for_test();
     let forms =
         crate::emacs_core::value_reader::read_all(src, &eval.obarray).expect("parse the program");
@@ -43,6 +49,11 @@ fn assert_same(src: &str) -> Context {
     );
     let (on, _) = run(TierIMode::On, src);
     assert_eq!(off, on, "on differs from the tree walker for:\n{src}");
+    let (eager, _) = run_with(TierIMode::Verify, false, src);
+    assert_eq!(
+        off, eager,
+        "eager frames differ from the tree walker for:\n{src}"
+    );
     assert!(
         eval.tier_i.stats().count(TierIEvent::Run) > 0,
         "no compiled body ran: {}",
@@ -207,6 +218,53 @@ fn calls_through_function_aliases() {
         eval.tier_i.stats().count(TierIEvent::AliasCall) > 10,
         "{}",
         eval.tier_i.stats().report()
+    );
+}
+
+#[test]
+fn lazy_leaf_frames_appear_when_a_leaf_signals() {
+    let eval = assert_same(
+        r#"
+(defvar ti-lz-log nil)
+(defun ti-lz-frames ()
+  (mapcar (lambda (f) (list (car f) (if (symbolp (cadr f)) (cadr f) 'fn) (car (cddr f))))
+          (seq-take (nthcdr 5 (backtrace-frames)) 12)))
+(defun ti-lz (x k)
+  (condition-case e
+      (handler-bind ((error (lambda (_e) (push (ti-lz-frames) ti-lz-log))))
+        (cond ((= k 0) (car x))
+              ((= k 1) (+ x 1))
+              ((= k 2) (aref x 10))
+              ((= k 3) (car ti-lz-unbound))
+              ((= k 4) (length x))
+              ((= k 5) (memq 'a x))
+              (t (list (car-safe x) (nth 1 x) (1+ k) (eq x x)))))
+    (error (list 'err e))))
+(list (ti-lz 5 0) (ti-lz 'a 1) (ti-lz [1 2] 2) (ti-lz nil 3) (ti-lz 7 4) (ti-lz 8 5) (ti-lz '(1 2) 6))
+(reverse ti-lz-log)
+(let ((debugger (lambda (&rest args) (push (list 'dbg (car args) (ti-lz-frames)) ti-lz-log) nil))
+      (debug-on-error t) (debug-ignored-errors nil) (ti-lz-log nil))
+  (list (ti-lz 5 0) (ti-lz nil 3) (reverse ti-lz-log)))
+(let ((debugger (lambda (&rest args) (push (list 'next (car args)) ti-lz-log) nil)) (ti-lz-log nil))
+  (list (progn (setq debug-on-next-call t) (ti-lz '(1 2) 6)) (reverse ti-lz-log)))
+(defvar ti-res-var nil)
+(defun ti-res-make (tbl) (let ((o (list 1 2))) (puthash o t tbl) o))
+(defun ti-res (tbl leaf)
+  (setq ti-res-var (ti-res-make tbl))
+  (if leaf (car ti-res-var) (ignore ti-res-var))
+  (setq ti-res-var nil)
+  (garbage-collect)
+  (hash-table-count tbl))
+(list (ti-res (make-hash-table :weakness 'key) t) (ti-res (make-hash-table :weakness 'key) nil)
+      (ti-res (make-hash-table :weakness 'key) t))
+"#,
+    );
+    let stats = eval.tier_i.stats();
+    assert!(stats.count(TierIEvent::LazyLeaf) > 10, "{}", stats.report());
+    assert!(
+        stats.count(TierIEvent::LazyLeafSignal) >= 6,
+        "{}",
+        stats.report()
     );
 }
 

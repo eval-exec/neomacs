@@ -83,7 +83,11 @@
 //!   environment are balanced as the tree walker leaves them.
 //!
 //! `NEOVM_TIER_I_THRESHOLD` (default 2): the call count at which a body is
-//! compiled.  `NEOVM_TIER_I_REPORT=<path>`: also write the report there.
+//! compiled.  `NEOVM_TIER_I_LAZY_FRAMES` (default on while Tier-I runs;
+//! `off` for a same-binary A/B): a call of a leaf builtin whose arguments
+//! are constants and variables pushes its backtrace frame only when it
+//! signals (see `exec.rs`).  `NEOVM_TIER_I_REPORT=<path>`: also write the
+//! report there.
 //! The report is logged at `info` under the `neovm::tier_i` target.
 
 use super::*;
@@ -179,6 +183,7 @@ impl TierIMode {
 
 const MODE_UNREAD: u8 = 0xff;
 static TIER_I_MODE: AtomicU8 = AtomicU8::new(MODE_UNREAD);
+static TIER_I_LAZY_FRAMES: AtomicU8 = AtomicU8::new(MODE_UNREAD);
 const THRESHOLD_UNREAD: u32 = u32::MAX;
 static TIER_I_THRESHOLD: AtomicU32 = AtomicU32::new(THRESHOLD_UNREAD);
 
@@ -230,6 +235,28 @@ fn tier_i_mode_from_env() -> TierIMode {
     }
 }
 
+/// Whether a value of `NEOVM_TIER_I_LAZY_FRAMES` keeps lazy leaf frames on
+/// (the default while Tier-I runs; `off`, `0`, `no` or `false` turn them off
+/// for a same-binary A/B).
+pub(crate) fn parse_tier_i_lazy_frames(value: Option<&str>) -> bool {
+    !matches!(
+        value.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
+        Some("0" | "off" | "no" | "false")
+    )
+}
+
+fn tier_i_lazy_frames_from_env() -> bool {
+    match TIER_I_LAZY_FRAMES.load(Ordering::Relaxed) {
+        MODE_UNREAD => {
+            let on =
+                parse_tier_i_lazy_frames(std::env::var("NEOVM_TIER_I_LAZY_FRAMES").ok().as_deref());
+            TIER_I_LAZY_FRAMES.store(u8::from(on), Ordering::Relaxed);
+            on
+        }
+        byte => byte == 1,
+    }
+}
+
 fn tier_i_threshold_from_env() -> u32 {
     match TIER_I_THRESHOLD.load(Ordering::Relaxed) {
         THRESHOLD_UNREAD => {
@@ -277,6 +304,11 @@ pub(crate) enum TierIEvent {
     /// A call through a function alias ran the full resolution's tail
     /// natively.
     AliasCall,
+    /// A leaf builtin call ran without pushing its frame
+    /// (`NEOVM_TIER_I_LAZY_FRAMES`).
+    LazyLeaf,
+    /// A lazy leaf call signalled and pushed its frame first.
+    LazyLeafSignal,
     /// The heat-only entries were forgotten at their cap.
     HeatCleared,
 }
@@ -333,6 +365,8 @@ pub(super) struct TierEntry {
 pub(crate) struct TierI {
     mode: TierIMode,
     threshold: u32,
+    /// `NEOVM_TIER_I_LAZY_FRAMES`.
+    lazy_frames: bool,
     stats: TierIStats,
     /// Body address -> entry.
     entries: FxHashMap<usize, TierEntry>,
@@ -345,10 +379,11 @@ pub(crate) struct TierI {
 }
 
 impl TierI {
-    pub(crate) fn new(mode: TierIMode, threshold: u32) -> Self {
+    pub(crate) fn new(mode: TierIMode, threshold: u32, lazy_frames: bool) -> Self {
         Self {
             mode,
             threshold: threshold.max(1),
+            lazy_frames,
             stats: TierIStats::default(),
             entries: FxHashMap::default(),
             compiled: 0,
@@ -358,7 +393,21 @@ impl TierI {
 
     /// The process-wide knobs.
     pub(crate) fn from_env() -> Self {
-        Self::new(tier_i_mode_from_env(), tier_i_threshold_from_env())
+        Self::new(
+            tier_i_mode_from_env(),
+            tier_i_threshold_from_env(),
+            tier_i_lazy_frames_from_env(),
+        )
+    }
+
+    /// Whether leaf builtin calls push their frame only when they signal.
+    pub(crate) fn lazy_frames(&self) -> bool {
+        self.lazy_frames
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_lazy_frames(&mut self, on: bool) {
+        self.lazy_frames = on;
     }
 
     #[inline(always)]

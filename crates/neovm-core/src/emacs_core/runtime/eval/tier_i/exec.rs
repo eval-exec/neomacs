@@ -37,6 +37,7 @@
 
 use super::compile::{
     AliasTarget, CondClause, FormNode, LetOp, Node, Op, Seq, SetqPair, Slot, VarNode,
+    is_lazy_leaf_subr,
 };
 use super::*;
 
@@ -70,6 +71,9 @@ pub(super) struct Act {
     /// this activation's level and may have pushed one.  While false no
     /// binder's symbol is declared special by the environment.
     pub(super) markers: Cell<bool>,
+    /// `NEOVM_TIER_I_LAZY_FRAMES`: leaf builtin calls push their frame only
+    /// when they signal.
+    pub(super) lazy_frames: bool,
 }
 
 /// What the captured environment ENV can answer for [`Act::env_bindings`]
@@ -146,6 +150,7 @@ impl Context {
             verify: self.tier_i.mode() == TierIMode::Verify,
             env_bindings,
             markers: Cell::new(markers),
+            lazy_frames: self.tier_i.lazy_frames(),
         };
         let result = self.ti_body(&act, body, &code.seq);
         self.tier_i.slots.truncate(base);
@@ -277,10 +282,17 @@ impl Context {
     /// can hold one; otherwise the tree walker's lookup.
     #[inline]
     fn ti_var(&mut self, act: &Act, var: &VarNode) -> EvalResult {
-        let result = match self.ti_lexical_cell(act, &var.slots) {
-            LexicalCell::Cell(cell) => return Ok(cell.cons_cdr()),
+        let result = self.ti_var_value(act, var);
+        self.dispatch_signal_result_if_needed(result)
+    }
+
+    /// [`Self::ti_var`] before its signal gate: `eval_symbol_by_id`'s answer.
+    #[inline(always)]
+    fn ti_var_value(&self, act: &Act, var: &VarNode) -> EvalResult {
+        match self.ti_lexical_cell(act, &var.slots) {
+            LexicalCell::Cell(cell) => Ok(cell.cons_cdr()),
             LexicalCell::None => match self.find_symbol_value_by_id(var.sym) {
-                Ok(SymbolValueLookup::Bound(value)) => return Ok(value),
+                Ok(SymbolValueLookup::Bound(value)) => Ok(value),
                 Ok(SymbolValueLookup::Unbound) => Err(signal(
                     LispCondition::VoidVariable,
                     vec![value_from_symbol_id(var.sym)],
@@ -288,8 +300,7 @@ impl Context {
                 Err(flow) => Err(flow),
             },
             LexicalCell::Unknown => self.eval_symbol_by_id(var.sym),
-        };
-        self.dispatch_signal_result_if_needed(result)
+        }
     }
 
     /// The binding cell `assq` would find on the activation's environment for
@@ -341,10 +352,148 @@ impl Context {
             if ctx.gc_safe_point_exact_should_collect() {
                 ctx.collect_at_eval_safe_point(f.form);
             }
+            if f.leaf_args
+                && act.lazy_frames
+                && let Some(result) = ctx.ti_try_leaf(act, f)
+            {
+                return result;
+            }
             ctx.ti_form_cons(act, f)
         });
         self.depth -= 1;
         result
+    }
+
+    /// A call of a lazy-frame leaf builtin ([`is_lazy_leaf_subr`]) whose
+    /// arguments are constants and variable references, run without pushing
+    /// its backtrace frame: nothing can observe the frame while it would be
+    /// on the specpdl -- the argument forms and the builtin run no Lisp, poll
+    /// nothing and read no backtrace -- until a signal, and the frame is
+    /// pushed, in the state the tree walker's would be in, before that signal
+    /// is dispatched.  The GC residue is recorded as `retire_cons_frame`
+    /// records it.  `None`, before anything observable happened, when the
+    /// form is not such a call at this moment: a live cons, the head's class,
+    /// the argument count, an argument, compiler overrides or an armed
+    /// `debug-on-next-call` differ.  The caller then runs
+    /// [`Self::ti_form_cons`], the eager protocol, from its start.
+    #[inline]
+    fn ti_try_leaf(&mut self, act: &Act, f: &FormNode) -> Option<EvalResult> {
+        let original_args = f.form.cons_cdr();
+        if f.form.cons_car().bits() != f.head.bits()
+            || original_args.bits() != f.tail.bits()
+            || self.compiler_function_overrides_active()
+            || self.obarray.debug_on_next_call_armed_fast()
+        {
+            return None;
+        }
+        let (head, leaf) = self.ti_head_leaf(f);
+        let (
+            true,
+            Some(func),
+            HeadClass::Subr {
+                function,
+                min_args,
+                max_args,
+            },
+            Op::Call(args),
+        ) = (leaf, head.func, head.class, &f.op)
+        else {
+            return None;
+        };
+        let mut nargs = 0;
+        let mut cursor = original_args;
+        while cursor.is_cons() {
+            match args.get(nargs) {
+                Some(node) if node.form().bits() == cursor.cons_car().bits() => {}
+                _ => return None,
+            }
+            nargs += 1;
+            cursor = cursor.cons_cdr();
+        }
+        let stack_base = self.bc_buf.len();
+        let first_arg = stack_base + 1;
+        if !cursor.is_nil()
+            || nargs < min_args as usize
+            || max_args.is_some_and(|m| nargs > m as usize)
+            || BytecodeBacktraceSpan::try_new(first_arg, nargs).is_none()
+        {
+            return None;
+        }
+        let count = self.specpdl.len();
+        self.tier_i.stats.note(TierIEvent::LazyLeaf);
+        #[cfg(feature = "vm-profile")]
+        if let Some(id) = func.as_subr_id() {
+            crate::emacs_core::bytecode::vm::vm_profile::bump_subr(id);
+        }
+        self.bc_buf.push(func);
+        for index in 0..nargs {
+            let value = match args.get(index) {
+                Some(Node::Const(value)) => *value,
+                Some(Node::Var(var)) => match self.ti_var_value(act, var) {
+                    Ok(value) => value,
+                    Err(flow) => return Some(self.ti_leaf_arg_signal(f, count, stack_base, flow)),
+                },
+                _ => unreachable!("a leaf call's arguments are constants and variables"),
+            };
+            self.bc_buf.push(value);
+        }
+        match self.dispatch_subr_fn_from_bc_stack(function, first_arg, nargs) {
+            Ok(value) => {
+                // `retire_cons_frame`'s trivial arm for an EVALD
+                // operand-stack span.
+                if let Some(&frame) = self.sequence_temp_root_frames.last() {
+                    let end = first_arg + nargs;
+                    self.eval_call_roots.truncate(frame.call_base);
+                    if end <= self.bc_buf.len() {
+                        let (bc_buf, roots) = (&self.bc_buf, &mut self.eval_call_roots);
+                        roots.extend_from_slice(&bc_buf[first_arg..end]);
+                    }
+                }
+                self.bc_buf.truncate(stack_base);
+                Some(Ok(value))
+            }
+            Err(flow) => Some(self.ti_leaf_signal(f, count, stack_base, first_arg, nargs, flow)),
+        }
+    }
+
+    /// A lazy leaf call's builtin signalled: its frame, EVALD over the
+    /// operand-stack arguments, goes on the specpdl, then `eval_sub_cons`'s
+    /// signal gate and retirement run as in the eager protocol.
+    #[cold]
+    #[inline(never)]
+    fn ti_leaf_signal(
+        &mut self,
+        f: &FormNode,
+        count: usize,
+        stack_base: usize,
+        first_arg: usize,
+        nargs: usize,
+        flow: Flow,
+    ) -> EvalResult {
+        self.tier_i.stats.note(TierIEvent::LazyLeafSignal);
+        self.push_unevalled_form_frame(f.head, f.tail);
+        self.set_backtrace_args_evalled_bc_span(count, first_arg, nargs);
+        let result = self.dispatch_signal_result_if_needed(Err(flow));
+        self.retire_cons_frame(count, stack_base, result)
+    }
+
+    /// A lazy leaf call's variable argument signalled (void): its frame,
+    /// still UNEVALLED, goes on the specpdl, the argument's own `eval_sub`
+    /// dispatches the signal, then `eval_sub_cons`'s gate and retirement.
+    #[cold]
+    #[inline(never)]
+    fn ti_leaf_arg_signal(
+        &mut self,
+        f: &FormNode,
+        count: usize,
+        stack_base: usize,
+        flow: Flow,
+    ) -> EvalResult {
+        self.tier_i.stats.note(TierIEvent::LazyLeafSignal);
+        self.push_unevalled_form_frame(f.head, f.tail);
+        let result = self.dispatch_signal_result_if_needed(Err(flow));
+        let result = self.dispatch_signal_result_if_needed(result);
+        self.retire_cons_frame(count, stack_base, result)
     }
 
     /// [`Self::ti_form`] with the `verify` balance check: a cons form leaves
@@ -401,14 +550,22 @@ impl Context {
     /// The node's head class, re-read when the function epoch moved.
     #[inline(always)]
     fn ti_head(&self, f: &FormNode) -> FormHead {
+        self.ti_head_leaf(f).0
+    }
+
+    /// [`Self::ti_head`], and whether the cell is a lazy-frame leaf builtin.
+    #[inline(always)]
+    fn ti_head_leaf(&self, f: &FormNode) -> (FormHead, bool) {
         let epoch = self.obarray.function_epoch();
-        let (stamp, head) = f.head_cache.get();
+        let (stamp, head, leaf) = f.head_cache.get();
         if stamp == epoch {
-            return head;
+            return (head, leaf);
         }
         let head = FormHead::classify(f.head_id, self.obarray.symbol_function_id(f.head_id));
-        f.head_cache.set((epoch, head));
-        head
+        let leaf = matches!(head.class, HeadClass::Subr { .. })
+            && head.func.is_some_and(is_lazy_leaf_subr);
+        f.head_cache.set((epoch, head, leaf));
+        (head, leaf)
     }
 
     /// The tree walker's dispatch of a form this node cannot run.

@@ -1,6 +1,8 @@
 //! The `NEOVM_TIER_I` and `NEOVM_TIER_I_THRESHOLD` knobs.
 
-use crate::emacs_core::eval::{TierIMode, parse_tier_i_knob, parse_tier_i_threshold};
+use crate::emacs_core::eval::{
+    TierIMode, parse_tier_i_knob, parse_tier_i_lazy_frames, parse_tier_i_threshold,
+};
 
 #[test]
 fn mode_values() {
@@ -25,4 +27,15 @@ fn threshold_values() {
     assert_eq!(parse_tier_i_threshold(Some("0")), 1);
     assert_eq!(parse_tier_i_threshold(Some(" 64 ")), 64);
     assert_eq!(parse_tier_i_threshold(Some("many")), 2);
+}
+
+#[test]
+fn lazy_frames_values() {
+    crate::test_utils::init_test_tracing();
+    assert!(parse_tier_i_lazy_frames(None));
+    assert!(parse_tier_i_lazy_frames(Some("on")));
+    assert!(parse_tier_i_lazy_frames(Some("1")));
+    for off in ["0", "off", "OFF", "no", "false"] {
+        assert!(!parse_tier_i_lazy_frames(Some(off)), "{off}");
+    }
 }

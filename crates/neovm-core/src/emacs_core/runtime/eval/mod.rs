@@ -7473,7 +7473,9 @@ pub(crate) use cconv_trust::{
     EXCLUDED_CALLEES, TRUSTED_LISP, TRUSTED_VARIABLES, TrustRefusal, TrustedVariableRole,
 };
 #[cfg(test)]
-pub(crate) use tier_i::{TierIEvent, TierIMode, parse_tier_i_knob, parse_tier_i_threshold};
+pub(crate) use tier_i::{
+    TierIEvent, TierIMode, parse_tier_i_knob, parse_tier_i_lazy_frames, parse_tier_i_threshold,
+};
 #[cfg(test)]
 pub(crate) use var_fast::{
     VarCacheEvent, VarCacheTier, parse_var_cache_knob, reset_var_cache_events,
