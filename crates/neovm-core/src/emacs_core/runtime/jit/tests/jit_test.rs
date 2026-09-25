@@ -312,3 +312,65 @@ fn clone_shares_feedback() {
         "recorded through the instance"
     );
 }
+
+/// `record_numeric` joins up the `FixnumOnly -> Float -> Other` lattice and
+/// reports whether the slot moved; `FixnumOnly` never downgrades a slot.
+#[test]
+fn record_numeric_reports_change() {
+    let rt = Runtime::new();
+    assert!(!rt.record_numeric(2, 8, NumericFeedback::FixnumOnly));
+    assert_eq!(rt.numeric_feedback(2), NumericFeedback::FixnumOnly);
+    assert!(rt.record_numeric(2, 8, NumericFeedback::Float));
+    assert!(
+        !rt.record_numeric(2, 8, NumericFeedback::Float),
+        "already Float"
+    );
+    assert!(
+        !rt.record_numeric(2, 8, NumericFeedback::FixnumOnly),
+        "FixnumOnly never downgrades"
+    );
+    assert_eq!(rt.numeric_feedback(2), NumericFeedback::Float);
+    assert!(rt.record_numeric(2, 8, NumericFeedback::Other));
+    assert!(
+        !rt.record_numeric(2, 8, NumericFeedback::Float),
+        "Other is sticky"
+    );
+    assert_eq!(rt.numeric_feedback(2), NumericFeedback::Other);
+    assert!(
+        !rt.record_numeric(99, 8, NumericFeedback::Other),
+        "out of range"
+    );
+}
+
+/// The operand classification the interpreter's slow arm and the deopt
+/// classifier share.
+#[test]
+fn numeric_feedback_of_operands_classifies() {
+    use crate::emacs_core::value::Value;
+    let fix = Value::make_int(3);
+    let flo = Value::make_float(1.5);
+    assert_eq!(
+        NumericFeedback::of_operands(&[fix, fix]),
+        NumericFeedback::FixnumOnly
+    );
+    assert_eq!(
+        NumericFeedback::of_operands(&[]),
+        NumericFeedback::FixnumOnly
+    );
+    assert_eq!(
+        NumericFeedback::of_operands(&[fix, flo]),
+        NumericFeedback::Float
+    );
+    assert_eq!(
+        NumericFeedback::of_operands(&[flo, flo]),
+        NumericFeedback::Float
+    );
+    assert_eq!(
+        NumericFeedback::of_operands(&[flo, Value::NIL]),
+        NumericFeedback::Other
+    );
+    assert_eq!(
+        NumericFeedback::of_operands(&[Value::string("x")]),
+        NumericFeedback::Other
+    );
+}

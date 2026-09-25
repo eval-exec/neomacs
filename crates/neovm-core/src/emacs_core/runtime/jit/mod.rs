@@ -231,6 +231,35 @@ pub enum NumericFeedback {
 }
 
 impl NumericFeedback {
+    /// Classify the operands an arithmetic site took, for the lowering's
+    /// benefit. The interpreter's slow arithmetic arm and the deopt
+    /// classifier (`jit::reopt`) share this one classification.
+    ///
+    /// `Float` means every operand is a float or a fixnum and at least one is
+    /// a float: exactly what an `f64` lowering can take, promoting the
+    /// fixnums. A bignum, marker or non-number is `Other`. All fixnums — an
+    /// overflow, a zero divisor, `1+` at the boundary — is `FixnumOnly`, the
+    /// operand types the fixnum lowering assumes, and the interpreter records
+    /// nothing: one overflow during warm-up must not turn a fixnum-hot site
+    /// into a generic-fallback site for good (`Other` is sticky, and it takes
+    /// the body out of the MIR tier).
+    #[inline]
+    pub fn of_operands(args: &[crate::emacs_core::value::Value]) -> Self {
+        let mut saw_float = false;
+        for arg in args {
+            if arg.is_float() {
+                saw_float = true;
+            } else if !arg.is_fixnum() {
+                return NumericFeedback::Other;
+            }
+        }
+        if saw_float {
+            NumericFeedback::Float
+        } else {
+            NumericFeedback::FixnumOnly
+        }
+    }
+
     /// Packed into the tag `CallFeedback` leaves reserved. A bytecode
     /// instruction is either a call or an arithmetic op, never both, so the
     /// two lattices never share a slot — and the encodings are chosen so that
@@ -302,17 +331,22 @@ impl FeedbackVec {
 
     /// Record the operand types observed at arithmetic site `pc`. Called only
     /// from the opcodes' non-fixnum arm, so the fixnum fast path pays nothing.
-    /// Drives `FixnumOnly -> Float -> Other`, with `Other` sticky.
+    /// Drives `FixnumOnly -> Float -> Other`, with `Other` sticky. Returns
+    /// whether the slot moved (the deopt reoptimizer's "learned something").
     #[inline]
-    pub fn record_numeric(&self, pc: usize, ops_len: usize, seen: NumericFeedback) {
+    pub fn record_numeric(&self, pc: usize, ops_len: usize, seen: NumericFeedback) -> bool {
         let slots = self.slots(ops_len);
-        let Some(slot) = slots.get(pc) else { return };
+        let Some(slot) = slots.get(pc) else {
+            return false;
+        };
         let next = match (NumericFeedback::unpack(slot.load(Ordering::Relaxed)), seen) {
-            (NumericFeedback::Other, _) => return,
-            (NumericFeedback::Float, NumericFeedback::Float) => return,
+            (NumericFeedback::Other, _) => return false,
+            (NumericFeedback::Float, NumericFeedback::Float) => return false,
+            (_, NumericFeedback::FixnumOnly) => return false,
             (_, seen) => seen,
         };
         slot.store(next.pack(), Ordering::Relaxed);
+        true
     }
 
     /// Operand-type feedback at arithmetic site `pc`.
@@ -1126,10 +1160,10 @@ impl RuntimeState {
     }
 
     /// Record the operand types seen at the arithmetic site at instruction
-    /// `pc` — see [`NumericFeedback`].
+    /// `pc` — see [`NumericFeedback`]. Returns whether the site's slot moved.
     #[inline]
-    pub fn record_numeric(&self, pc: usize, ops_len: usize, seen: NumericFeedback) {
-        self.feedback.record_numeric(pc, ops_len, seen);
+    pub fn record_numeric(&self, pc: usize, ops_len: usize, seen: NumericFeedback) -> bool {
+        self.feedback.record_numeric(pc, ops_len, seen)
     }
 
     /// Operand-type feedback observed at arithmetic site `pc`.
