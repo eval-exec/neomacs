@@ -362,6 +362,7 @@ impl TaggedHeap {
         walk_one(&mut self.record_arena);
         walk_one(&mut self.symbol_with_pos_arena);
         walk_one(&mut self.marker_arena);
+        walk_one(&mut self.bignum_arena);
     }
 
     /// Scan every permanent object (mapped dump + tenured old gen) for edges to
@@ -1121,6 +1122,9 @@ impl TaggedHeap {
         for slot in self.marker_arena.collect_allocated_slots() {
             push(slot as *mut GcHeader);
         }
+        for slot in self.bignum_arena.collect_allocated_slots() {
+            push(slot as *mut GcHeader);
+        }
         out
     }
 
@@ -1159,6 +1163,9 @@ impl TaggedHeap {
             push(slot as *mut GcHeader);
         }
         for slot in self.marker_arena.collect_allocated_slots() {
+            push(slot as *mut GcHeader);
+        }
+        for slot in self.bignum_arena.collect_allocated_slots() {
             push(slot as *mut GcHeader);
         }
         out
@@ -1691,6 +1698,7 @@ impl TaggedHeap {
             record: PageRange::all(self.record_arena.pages.len()),
             symbol_with_pos: PageRange::all(self.symbol_with_pos_arena.pages.len()),
             marker: PageRange::all(self.marker_arena.pages.len()),
+            bignum: PageRange::all(self.bignum_arena.pages.len()),
         });
         // `sweep_cons` above already released the blocks with no survivors,
         // in its own pass, the way GNU's `sweep_conses` does.

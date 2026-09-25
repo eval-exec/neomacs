@@ -110,6 +110,7 @@ impl TaggedHeap {
         self.sweep_record_page_cursor = 0;
         self.sweep_symbol_with_pos_page_cursor = 0;
         self.sweep_marker_page_cursor = 0;
+        self.sweep_bignum_page_cursor = 0;
         self.sweep_float_page_end = self.float_arena.pages.len();
         self.sweep_string_page_end = self.string_arena.pages.len();
         self.sweep_vector_page_end = self.vector_arena.pages.len();
@@ -119,6 +120,7 @@ impl TaggedHeap {
         self.sweep_record_page_end = self.record_arena.pages.len();
         self.sweep_symbol_with_pos_page_end = self.symbol_with_pos_arena.pages.len();
         self.sweep_marker_page_end = self.marker_arena.pages.len();
+        self.sweep_bignum_page_end = self.bignum_arena.pages.len();
         self.sweep_noncons_live_bytes = 0;
         self.sweep_mark_us = self.incremental_mark_us;
         self.sweep_bytes_before = bytes_before;
@@ -263,6 +265,7 @@ impl TaggedHeap {
             sweep_symbol_with_pos_page_end
         );
         sweep_class_pages!(marker, sweep_marker_page_cursor, sweep_marker_page_end);
+        sweep_class_pages!(bignum, sweep_bignum_page_cursor, sweep_bignum_page_end);
         // -- non-cons: reclaim more objects per slice than cons blocks, since a
         //    cons block holds thousands of cells while a non-cons node is one
         //    object (with a heavier per-object free). --
@@ -310,7 +313,8 @@ impl TaggedHeap {
             && self.sweep_macro_page_cursor >= self.sweep_macro_page_end
             && self.sweep_record_page_cursor >= self.sweep_record_page_end
             && self.sweep_symbol_with_pos_page_cursor >= self.sweep_symbol_with_pos_page_end
-            && self.sweep_marker_page_cursor >= self.sweep_marker_page_end;
+            && self.sweep_marker_page_cursor >= self.sweep_marker_page_end
+            && self.sweep_bignum_page_cursor >= self.sweep_bignum_page_end;
         let slice_us = t0.elapsed().as_micros() as u64;
         self.sweep_slice_us_total += slice_us;
         self.sweep_slice_count += 1;
@@ -1080,6 +1084,7 @@ impl TaggedHeap {
             + self.record_arena.release_empty_pages()
             + self.symbol_with_pos_arena.release_empty_pages()
             + self.marker_arena.release_empty_pages()
+            + self.bignum_arena.release_empty_pages()
     }
 
     /// Sweep non-cons objects: walk intrusive list, free unmarked, rebuild list.
@@ -1146,6 +1151,7 @@ impl TaggedHeap {
             record,
             symbol_with_pos,
             marker,
+            bignum,
         } = ranges;
         let (fl, ff) = self
             .float_arena
@@ -1178,6 +1184,12 @@ impl TaggedHeap {
         let (mkl, mkf) = self
             .marker_arena
             .sweep_range(marker.start, marker.end, parity, |_| {});
+        // Bignums: childless and in no side registry; the in-place drop of a
+        // dead slot's `Integer` frees its limb vector (GNU `cleanup_vector`
+        // → `mpz_clear`).
+        let (bgl, bgf) = self
+            .bignum_arena
+            .sweep_range(bignum.start, bignum.end, parity, |_| {});
         let TaggedHeap {
             vector_arena,
             vector_object_addrs,
@@ -1187,9 +1199,9 @@ impl TaggedHeap {
             let removed = vector_object_addrs.remove(&addr);
             debug_assert!(removed, "freed page vector was not in the registry");
         });
-        let freed = ff + sf + vf + bf + laf + maf + ref_ + swf + mkf;
+        let freed = ff + sf + vf + bf + laf + maf + ref_ + swf + mkf + bgf;
         self.allocated_count = self.allocated_count.saturating_sub(freed);
-        (fl + sl + vl + bl + lal + mal + rel + swl + mkl, freed)
+        (fl + sl + vl + bl + lal + mal + rel + swl + mkl + bgl, freed)
     }
 
     /// `(total mapped objects, mapped objects currently marked)`.
@@ -1379,9 +1391,9 @@ impl TaggedHeap {
     pub(super) fn owns_veclike_object(&self, ptr: *const u8) -> bool {
         // `VecLikeType::Vector`, `ByteCode`, `Lambda`, `Macro`, `Record`
         // (incl. the `WindowConfiguration` tag — same `RecordObj`),
-        // `SymbolWithPos` and `Marker` are paged (each in its own class arena —
-        // distinct registries, so a hit is never a cross-class collision);
-        // every other veclike is a residual `Box` in the addr-set.
+        // `SymbolWithPos`, `Marker` and `Bignum` are paged (each in its own
+        // class arena — distinct registries, so a hit is never a cross-class
+        // collision); every other veclike is a residual `Box` in the addr-set.
         !ptr.is_null()
             && (self.vector_arena.owns(ptr)
                 || self.bytecode_arena.owns(ptr)
@@ -1390,6 +1402,7 @@ impl TaggedHeap {
                 || self.record_arena.owns(ptr)
                 || self.symbol_with_pos_arena.owns(ptr)
                 || self.marker_arena.owns(ptr)
+                || self.bignum_arena.owns(ptr)
                 || self.non_cons_object_addrs.contains(&(ptr as usize)))
     }
 
@@ -1424,6 +1437,7 @@ impl TaggedHeap {
                 || self.record_arena.owns(ptr)
                 || self.symbol_with_pos_arena.owns(ptr)
                 || self.marker_arena.owns(ptr)
+                || self.bignum_arena.owns(ptr)
                 || self.float_arena.owns(ptr)
                 || self.non_cons_object_addrs.contains(&(ptr as usize)))
     }
@@ -1591,6 +1605,13 @@ impl TaggedHeap {
             &mut total_marked,
             &mut problems,
         );
+        verify_arena_slots(
+            &self.bignum_arena,
+            &self.non_cons_object_addrs,
+            parity,
+            &mut total_marked,
+            &mut problems,
+        );
         tracing::trace!(
             "GC verify: {} marked non-cons objects, {} problem(s)",
             total_marked,
@@ -1652,6 +1673,7 @@ impl TaggedHeap {
         self.assert_one_arena_coherent(&self.record_arena);
         self.assert_one_arena_coherent(&self.symbol_with_pos_arena);
         self.assert_one_arena_coherent(&self.marker_arena);
+        self.assert_one_arena_coherent(&self.bignum_arena);
         // Vector registry ⊇ page vector slots (page alloc inserts; page sweep
         // removes). The registry may also hold residual Box vectors.
         for slot in self.vector_arena.collect_allocated_slots() {
@@ -1717,6 +1739,17 @@ impl TaggedHeap {
             assert!(
                 matches!(tag, VecLikeType::Marker),
                 "marker arena slot {slot:p} carries an unrelated tag ({tag:?})",
+            );
+        }
+        for slot in self.bignum_arena.collect_allocated_slots() {
+            assert_eq!(
+                unsafe { (*(slot as *const VecLikeHeader)).type_tag },
+                VecLikeType::Bignum,
+                "bignum arena slot {slot:p} carries a non-Bignum type tag",
+            );
+            assert!(
+                !self.vector_object_addrs.contains(&(slot as usize)),
+                "bignum arena slot {slot:p} must NOT be in the vector registry",
             );
         }
         for slot in self.symbol_with_pos_arena.collect_allocated_slots() {

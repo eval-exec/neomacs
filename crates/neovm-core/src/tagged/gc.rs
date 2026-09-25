@@ -519,6 +519,11 @@ pub struct TaggedHeap {
     /// `marker_block` equivalent. POD payload; the buffer-chain link is
     /// detached by `unchain_dead_markers` before the sweep frees a slot.
     marker_arena: ObjectArena<MarkerObj>,
+    /// Bignums: 64B class, own arena — GNU's `make_bignum_bits` takes a
+    /// vector-block slot, never a malloc of its own. Childless; the slot's
+    /// malachite `Integer` owns the limb vector, freed by the page sweep's
+    /// `drop_in_place`.
+    bignum_arena: ObjectArena<BignumObj>,
     /// Cons cells loaded directly from a mapped pdump image.  GNU's pdumper
     /// uses external mark bits for dumped objects rather than writing mark
     /// state into malloc/GC allocation headers; mirror that for mapped conses.
@@ -794,6 +799,7 @@ pub struct TaggedHeap {
     sweep_record_page_cursor: usize,
     sweep_symbol_with_pos_page_cursor: usize,
     sweep_marker_page_cursor: usize,
+    sweep_bignum_page_cursor: usize,
     /// Where the deferred sweep stops: the cons blocks and arena pages that
     /// existed at mark termination. Blocks and pages created during the sweep
     /// hold only objects born marked, which it would count and not free, so
@@ -810,6 +816,7 @@ pub struct TaggedHeap {
     sweep_record_page_end: usize,
     sweep_symbol_with_pos_page_end: usize,
     sweep_marker_page_end: usize,
+    sweep_bignum_page_end: usize,
     /// Cons cells the deferred sweep found marked in the blocks it visited.
     sweep_cons_live_cells: usize,
     /// Non-cons objects detached from `all_objects` at sweep start, reclaimed
@@ -940,6 +947,7 @@ impl TaggedHeap {
             record_arena: ObjectArena::new(),
             symbol_with_pos_arena: ObjectArena::new(),
             marker_arena: ObjectArena::new(),
+            bignum_arena: ObjectArena::new(),
             mapped_cons_ranges: Vec::new(),
             mapped_float_ranges: Vec::new(),
             mapped_veclike_objects: Vec::new(),
@@ -1014,6 +1022,7 @@ impl TaggedHeap {
             sweep_record_page_cursor: 0,
             sweep_symbol_with_pos_page_cursor: 0,
             sweep_marker_page_cursor: 0,
+            sweep_bignum_page_cursor: 0,
             sweep_cons_end: 0,
             sweep_float_page_end: 0,
             sweep_string_page_end: 0,
@@ -1024,6 +1033,7 @@ impl TaggedHeap {
             sweep_record_page_end: 0,
             sweep_symbol_with_pos_page_end: 0,
             sweep_marker_page_end: 0,
+            sweep_bignum_page_end: 0,
             sweep_cons_live_cells: 0,
             sweep_noncons_pending: std::ptr::null_mut(),
             sweep_noncons_live_bytes: 0,
@@ -1719,6 +1729,24 @@ impl TaggedHeap {
         }
     }
 
+    /// A bignum's limb vector (GNU: the `mpz_t` limbs GMP mallocs). A value
+    /// below 2^64 is malachite `Small` and owns no heap limbs. malachite does
+    /// not expose the `Vec` capacity, so the capacity reported is the limb
+    /// count: a lower bound (kernel results reserve one carry limb).
+    fn bignum_payload_layout(value: &Integer) -> PayloadLayout {
+        let limbs = value.unsigned_abs_ref().as_limbs_asc().len();
+        if limbs <= 1 {
+            return PayloadLayout::default();
+        }
+        let bytes = limbs.saturating_mul(size_of::<u64>());
+        PayloadLayout {
+            logical_bytes: bytes,
+            capacity_bytes: bytes,
+            owned: true,
+            mapped: false,
+        }
+    }
+
     fn value_vec_payload_layout(values: &LispValueVec) -> PayloadLayout {
         PayloadLayout {
             logical_bytes: values
@@ -1986,6 +2014,8 @@ impl TaggedHeap {
             self.symbol_with_pos_arena
                 .layout_stats(|_| PayloadLayout::default()),
             self.marker_arena.layout_stats(|_| PayloadLayout::default()),
+            self.bignum_arena
+                .layout_stats(|object| Self::bignum_payload_layout(&object.value)),
         ];
 
         let mapped_conses = self.mapped_cons_ranges.iter().map(|range| range.len).sum();
@@ -2356,6 +2386,17 @@ pub(crate) use arena_pages::*;
 
 mod gc_thread;
 pub use gc_thread::*;
+/// BIGNUM ARENA test suite (lever P0.11): the 64B payload-bearing class
+/// (1024 slots/page, own arena). Covers the slot fit, page-span oracle
+/// exactness, the registry-untouched claim, two-cycle parity survival and
+/// reclaim, deferred-at-termination resolution (bignums park in the `other`
+/// drain bucket), SATB survival, adversarial freed-slot staleness,
+/// cooperative-window reuse, tenure + full-page retirement, teardown page
+/// counters and exact values after slot reuse. Scenarios run plain and
+/// (where the partition matters) VERIFY_PARTITION-armed.
+#[cfg(test)]
+#[path = "gc/tests/bignum_arena_tests.rs"]
+mod bignum_arena_tests;
 #[cfg(test)]
 mod cons_alloc_tests;
 #[cfg(test)]

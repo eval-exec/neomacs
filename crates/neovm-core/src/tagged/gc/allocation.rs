@@ -839,6 +839,37 @@ impl TaggedHeap {
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
     }
 
+    /// TEST-ONLY: allocate a bignum from the BIGNUM ARENA PAGES, the
+    /// allocator `alloc_bignum` switches to next (GNU `make_bignum_bits`:
+    /// a vector-block slot, never a malloc of its own). One FULL-header
+    /// `ptr::write` with the born-at-parity mark in the same store sequence
+    /// (the `alloc_float_inline` pattern); no intrusive list, no addr-set.
+    #[cfg(test)]
+    pub(crate) fn alloc_bignum_paged(&mut self, value: Integer) -> TaggedValue {
+        let ptr = self.bignum_arena.alloc_slot();
+        unsafe {
+            // FULL-HEADER WRITE: never partially reuse prior slot bytes.
+            // BORN-AT-PARITY, unconditionally, before the pointer escapes.
+            std::ptr::write(
+                ptr,
+                BignumObj {
+                    header: VecLikeHeader {
+                        gc: GcHeader {
+                            marked: std::sync::atomic::AtomicBool::new(self.mark_parity),
+                            ..GcHeader::new(HeapObjectKind::VecLike)
+                        },
+                        type_tag: VecLikeType::Bignum,
+                    },
+                    value,
+                },
+            );
+        }
+        alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
+        self.allocated_count += 1;
+        self.note_allocation_bytes(size_of::<BignumObj>());
+        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+    }
+
     /// Allocate a symbol-with-pos object from the SYMBOL-WITH-POS ARENA PAGES
     /// (task 03/3b). `sym` must be a bare symbol, `pos` must be a fixnum.
     ///

@@ -181,6 +181,35 @@ const _: () = assert!(
      (bytes 120..128); bump the marker stride if the struct grew",
 );
 
+// Bignum: `BignumObj` is VecLikeHeader 24 + malachite `Integer` 32 (sign +
+// niche-packed `Natural { Small(u64) | Large(Vec<u64>) }`) = 56B → the 64B
+// class (1024 slots/page, link in bytes 56..64) — ZERO slack, like
+// StringObj. NOT POD: the Integer owns its limb `Vec`, which the page
+// sweep's `drop_in_place` frees (GNU `cleanup_vector` → `mpz_clear`). GNU
+// allocates the object itself from a vector block (`make_bignum_bits` →
+// `allocate_vectorlike`), never with a malloc of its own; this class is that
+// block. If this assert fails malachite grew: bump the stride, never squeeze
+// the link into live bytes.
+const _: () = assert!(
+    size_of::<BignumObj>() <= 56,
+    "BignumObj must fit a 64-byte slot with its trailing free-list link \
+     (bytes 56..64 — zero slack); bump the bignum stride if malachite grew",
+);
+#[cfg(test)]
+pub(crate) static LIVE_BIGNUM_PAGES: AtomicUsize = AtomicUsize::new(0);
+
+impl PagedObject for BignumObj {
+    // 64B class, own arena. Childless (no Values), but payload-bearing: the
+    // limb `Vec` is dropped in place when the slot is freed.
+    const SLOT_BYTES: usize = 64;
+    const KIND: HeapObjectKind = HeapObjectKind::VecLike;
+    const CLASS: &'static str = "bignum";
+    #[cfg(test)]
+    fn live_page_counter() -> &'static AtomicUsize {
+        &LIVE_BIGNUM_PAGES
+    }
+}
+
 impl PagedObject for MarkerObj {
     // 128B class, own arena: POD-like (no Values; the intrusive buffer-chain
     // link is a raw pointer that `unchain_dead_markers` detaches before any
@@ -307,6 +336,10 @@ pub(super) const SYMBOL_WITH_POS_PAGE_SLOTS: usize =
 #[cfg(test)]
 pub(super) const MARKER_PAGE_SLOTS: usize =
     OBJECT_PAGE_BYTES / <MarkerObj as PagedObject>::SLOT_BYTES;
+/// Slot count of a bignum page (1024: 64B stride).
+#[cfg(test)]
+pub(super) const BIGNUM_PAGE_SLOTS: usize =
+    OBJECT_PAGE_BYTES / <BignumObj as PagedObject>::SLOT_BYTES;
 
 /// One 64KB-aligned arena page of fixed-stride `T` slots.
 ///
@@ -990,6 +1023,7 @@ pub(super) struct ArenaSweepRanges {
     pub(super) record: PageRange,
     pub(super) symbol_with_pos: PageRange,
     pub(super) marker: PageRange,
+    pub(super) bignum: PageRange,
 }
 
 pub(super) struct MappedConsRange {
