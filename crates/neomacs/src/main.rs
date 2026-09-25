@@ -3836,9 +3836,11 @@ fn run_gui_evaluator_worker(
         buf.set_undo_list(ul);
     }
 
-    neovm_core::emacs_core::load::maybe_run_after_pdump_load_hook(&mut evaluator);
-    // R2-C3: native-from-call-1 — prepopulate the AOT preload before first dispatch.
+    // R2-C3: native-from-call-1 — mark the AOT preload members before first
+    // dispatch, and before `after-pdump-load-hook`: the marks trust the
+    // manifest's per-name hashes, which describe the image as dumped.
     maybe_prepopulate_aot(mode, &evaluator);
+    neovm_core::emacs_core::load::maybe_run_after_pdump_load_hook(&mut evaluator);
     tracing::info!("Entering GNU command loop on GUI evaluator worker...");
     mark_jit_command_loop_entry();
     let exit_status = evaluator.recursive_edit();
@@ -4502,9 +4504,10 @@ pub fn run(mode: RuntimeMode) {
     // 9. Enter GNU's outer command loop. This mirrors src/emacs.c, which
     //     enters recursive-edit and lets the outer command loop evaluate the
     //     `top-level` startup form before reading interactive input.
-    neovm_core::emacs_core::load::maybe_run_after_pdump_load_hook(&mut evaluator);
-    // R2-C3: native-from-call-1 — prepopulate the AOT preload before first dispatch.
+    // R2-C3: native-from-call-1 — mark the AOT preload members before first
+    // dispatch, and before `after-pdump-load-hook` (see above).
     maybe_prepopulate_aot(mode, &evaluator);
+    neovm_core::emacs_core::load::maybe_run_after_pdump_load_hook(&mut evaluator);
     tracing::info!("Entering GNU command loop (recursive-edit)...");
     mark_jit_command_loop_entry();
     let exit_status = evaluator.recursive_edit();

@@ -3942,12 +3942,43 @@ pub(crate) fn try_load_leaf(
     if !aot_enabled() {
         return None;
     }
+    // A prewarm-marked preload member: `mark_preload_members_prewarmed`
+    // stashed its manifest hash, and its entry lives in the PRELOAD unit,
+    // which the per-hash `NEOVM_AOT_DIR` index below never lists (P4.2 A1;
+    // before this the lazy prewarm JIT-compiled every marked member). The
+    // entry dlsym inside `load_leaf_from_unit` stays the membership ground
+    // truth; a miss falls through to the index, then to the JIT.
+    if let Some(hash) = precomputed_hash
+        && let Some(leaf) = try_load_preload_member(ops, constants, arity, hash, obarray)
+    {
+        return Some(leaf);
+    }
     let content_hash = match precomputed_hash {
         Some(h) => h,
         None => leaf_content_hash(ops, constants, arity)?,
     };
     let unit = load_unit(content_hash)?;
     load_leaf_from_unit(&unit, content_hash, arity, constants, obarray)
+}
+
+/// [`try_load_leaf`]'s preload leg for a marked member whose manifest hash is
+/// `hash`. The hash is exact by construction: marking runs on the image as it
+/// was dumped, before `after-pdump-load-hook` or any other Lisp can rebind a
+/// name (see [`mark_preload_members_prewarmed`]); debug builds re-derive it.
+fn try_load_preload_member(
+    ops: &[Op],
+    constants: &[Value],
+    arity: usize,
+    hash: u128,
+    obarray: Option<&crate::emacs_core::symbol::Obarray>,
+) -> Option<super::compile::CompiledLeaf> {
+    debug_assert_eq!(
+        leaf_content_hash(ops, constants, arity),
+        Some(hash),
+        "a prewarm-marked function's body is not the one its manifest hash names"
+    );
+    let unit = load_preload()?;
+    load_leaf_from_unit(&unit, hash, arity, constants, obarray)
 }
 
 /// The dlsym + descriptor-decode + verify + construct core, factored out of
@@ -4126,14 +4157,17 @@ pub(crate) fn prewarm_hash_for(compiled_id: u64) -> Option<u128> {
 /// manifest lists as a MEMBER (name + ops_len + arity prekey match) so
 /// `dispatch` serves it via `Plan::Compiled` from call 1 — the leaf itself is
 /// built on the first call by the cache-miss path's `try_load_leaf` AOT
-/// consult (~13µs, paid only for functions actually called). The EAGER
-/// `prepopulate_aot_from_preload` builds all ~1.2k leaves up front
+/// consult from the preload unit (paid only for functions actually called).
+/// The EAGER `prepopulate_aot_from_preload` builds all ~1.2k leaves up front
 /// (~16.5ms measured) and is kept for tests/benchmarks.
 ///
-/// A marked function whose body hash no longer matches the preload (redefined
-/// between dump and run beyond what the ops_len/arity prekey catches) falls
-/// back to a one-time JIT compile at first call — the same path any hot
-/// function takes.
+/// EXACTNESS: the stashed manifest hash is what the consult serves by, with
+/// no re-hash of the body. It names the body the dump-time producer hashed
+/// under this NAME, so this must run on the image as dumped: before
+/// `after-pdump-load-hook` or any other Lisp could rebind a name to another
+/// function with the same ops count and arity (the startup call sites in
+/// `neomacs` honour this; debug builds verify the hash at the consult). A
+/// function redefined later is a new object, never marked.
 pub fn mark_preload_members_prewarmed(ctx: &crate::emacs_core::eval::Context) -> (usize, usize) {
     if !aot_enabled() {
         return (0, 0);

@@ -63,7 +63,12 @@ fn install_lazy_preload(ev: &mut Context, members: &[Member]) -> tempfile::TempD
             arity: 1,
         });
     }
-    let (obj, _) = build_preload_object(&leaves, None).expect("build preload");
+    let (obj, built) = build_preload_object(&leaves, None).expect("build preload");
+    assert_eq!(
+        built.prepared,
+        members.len(),
+        "every battery member must be in the AOT subset: {built:?}"
+    );
     let dir = tempfile::tempdir().expect("tempdir");
     let so_path = dir.path().join(PRELOAD_SO_NAME);
     link_object_to_so(&obj, &so_path).expect("link");
@@ -106,19 +111,21 @@ fn lazy_prewarm_serves_a_marked_member_from_the_preload() {
     assert_eq!(prewarm_hash_for(id), Some(add5.hash()));
 
     super::super::stats::reset_compile_stats();
-    assert_eq!(
-        ev.apply1(f, Value::make_int(37)).unwrap(),
-        Value::make_int(42)
-    );
+    for (arg, want) in [(37, 42), (-5, 0), (1 << 40, (1 << 40) + 5)] {
+        assert_eq!(
+            ev.apply1(f, Value::make_int(arg)).unwrap(),
+            Value::make_int(want)
+        );
+    }
     let stats = super::super::stats::compile_stats_snapshot();
-    // EXPECTED FAILURE (P4.2 A0, fixed by A1): the first-call consult looks
-    // only in the per-hash NEOVM_AOT_DIR index, never at the preload unit,
-    // so the marked member is JIT-compiled from call 1 instead.
-    assert_eq!(stats.aot_loads, 0, "{stats:?}");
+    // P4.2 A1: the first call's consult builds the leaf from the preload
+    // unit (one AOT load, no JIT compile), and later calls reuse it.
+    assert_eq!(stats.aot_loads, 1, "{stats:?}");
+    assert_eq!(stats.total_compiles, 0, "{stats:?}");
     assert_eq!(
         super::super::cache::cached_leaf_is_aot_for_test(id),
-        Some(false),
-        "the marked member was compiled by the JIT, not served from the preload"
+        Some(true),
+        "the marked member must be served from the preload"
     );
 
     super::super::cache::clear();
