@@ -1054,6 +1054,11 @@ thread_local! {
     /// Test hook: calls that reached `neovm_jit_varref` instead of the inline
     /// plain-cell read.
     pub(crate) static VARREF_SHIM_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Test hooks: calls that reached `neovm_jit_varset`, `_varbind` and
+    /// `_unbind` instead of an inline variable op (`inline_vars`).
+    pub(crate) static VARSET_SHIM_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static VARBIND_SHIM_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static UNBIND_SHIM_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Read a variable from JIT code (`Op::VarRef` semantics via
@@ -1115,6 +1120,8 @@ pub extern "C" fn neovm_jit_varref(ctx: *mut u8, sym: i64, out: *mut i64) -> i64
 #[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
 #[unsafe(no_mangle)]
 pub extern "C" fn neovm_jit_varset(ctx: *mut u8, sym: i64, val: i64) -> i64 {
+    #[cfg(test)]
+    VARSET_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
         use crate::emacs_core::intern::SymId;
         let value = Value::from_bits(val as usize);
@@ -1154,6 +1161,8 @@ pub extern "C" fn neovm_jit_varset(ctx: *mut u8, sym: i64, val: i64) -> i64 {
 #[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
 #[unsafe(no_mangle)]
 pub extern "C" fn neovm_jit_varbind(ctx: *mut u8, sym: i64, val: i64) -> i64 {
+    #[cfg(test)]
+    VARBIND_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     jit_shim_contain!(ctx, STATUS_SIGNAL, {
         use crate::emacs_core::intern::SymId;
         let value = Value::from_bits(val as usize);
@@ -1198,6 +1207,8 @@ pub extern "C" fn neovm_jit_varbind(ctx: *mut u8, sym: i64, val: i64) -> i64 {
 #[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
 #[unsafe(no_mangle)]
 pub extern "C" fn neovm_jit_unbind(ctx: *mut u8, n: i64) -> i64 {
+    #[cfg(test)]
+    UNBIND_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     // SAFETY: see neovm_jit_call's function-level contract.
     let ctx = unsafe { &mut *(ctx as *mut Context) };
     let target = {

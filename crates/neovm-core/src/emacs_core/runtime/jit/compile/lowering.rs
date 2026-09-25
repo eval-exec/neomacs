@@ -6747,7 +6747,11 @@ fn lower_simple_op_arms(
             let res = fb.declare_var(types::I64);
             let slow = fb.create_block();
             let cont = fb.create_block();
-            {
+            // `NEOVM_JIT_INLINE_VARS=read`: the class-specific read from a
+            // baked cell (`inline_vars`); otherwise the plain value-cell read.
+            if let Some(site) = (!aot).then(|| super::inline_vars::read_site(sym)).flatten() {
+                super::inline_vars::emit_varref_fast(fb, rt, &site, res, slow, cont);
+            } else {
                 let refuse_nil = crate::buffer::buffer::DedicatedBufferLocal::from_sym_id(
                     crate::emacs_core::intern::SymId(sym),
                 )

@@ -4717,6 +4717,7 @@ mod inline_heap_ops_tests;
 #[cfg(test)]
 #[path = "tests/inline.rs"]
 mod inline_tests;
+pub(crate) mod inline_vars;
 #[cfg(test)]
 #[path = "tests/leaf_calls.rs"]
 mod leaf_call_tests;
@@ -4768,6 +4769,9 @@ mod osr_entry_guard_tests;
 #[path = "tests/osr_raw.rs"]
 mod osr_raw_tests;
 
+#[cfg(test)]
+#[path = "tests/inline_vars.rs"]
+mod inline_vars_tests;
 #[cfg(test)]
 #[path = "tests/native_frame_detach.rs"]
 mod native_frame_detach_tests;

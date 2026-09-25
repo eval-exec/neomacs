@@ -514,6 +514,16 @@ pub(crate) fn blv_alist_epoch() -> u64 {
     BLV_ALIST_EPOCH.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// The address of [`BLV_ALIST_EPOCH`], a process static: what JIT code
+/// (never AOT) reads the current epoch from when it tests a buffer-local
+/// variable's cache inline (P1.4 Stage B).
+#[inline]
+pub(crate) fn blv_alist_epoch_addr() -> usize {
+    std::ptr::from_ref(&BLV_ALIST_EPOCH) as usize
+}
+
+const _: () = assert!(std::mem::size_of::<std::sync::atomic::AtomicU64>() == 8);
+
 /// Record a structural `local_var_alist` mutation (see [`BLV_ALIST_EPOCH`]).
 #[inline]
 pub(crate) fn note_blv_alist_structural_mutation() {
@@ -1729,6 +1739,21 @@ impl Obarray {
     #[inline(always)]
     fn slot_index(id: SymId) -> usize {
         id.0 as usize
+    }
+
+    /// The address of ID's slot, for JIT code that reads and writes the
+    /// symbol's cell in place from a baked address (P1.4 Stage B): chunks
+    /// are only ever appended and live as long as the obarray (see
+    /// [`SymbolChunks`]), so the address is stable for the obarray's life,
+    /// whose [`Self::generation`] the JIT cache pins. `None` for an id past
+    /// the last chunk. The slot may be empty (it reads as an unbound
+    /// `Plainval` cell).
+    pub(crate) fn jit_symbol_cell_addr(&self, id: SymId) -> Option<usize> {
+        let idx = Self::slot_index(id);
+        (idx < self.symbols.len).then(|| {
+            self.symbols.chunks[idx >> OBARRAY_CHUNK_BITS].as_ptr() as usize
+                + (idx & (OBARRAY_CHUNK - 1)) * LISP_SYMBOL_SIZE
+        })
     }
 
     #[inline(always)]

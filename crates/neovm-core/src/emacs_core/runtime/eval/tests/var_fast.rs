@@ -19,6 +19,8 @@ use crate::emacs_core::eval::{
     set_var_cache_tiers_for_test, var_cache_census_report, var_cache_event_count,
 };
 use crate::emacs_core::intern::intern;
+#[cfg(feature = "jit")]
+use crate::emacs_core::jit::compile::InlineVarsKnob;
 use crate::emacs_core::print::print_value;
 use crate::emacs_core::value::{LambdaParams, Value};
 
@@ -27,6 +29,10 @@ enum Engine {
     Interpreter,
     #[cfg(feature = "jit")]
     Jit,
+    /// The JIT with `NEOVM_JIT_INLINE_VARS` forced to the knob, compiled
+    /// against the fixture's context (P1.4 Stage B, `inline_vars`).
+    #[cfg(feature = "jit")]
+    JitInline(InlineVarsKnob),
 }
 
 const ENGINES: &[Engine] = &[
@@ -34,6 +40,17 @@ const ENGINES: &[Engine] = &[
     #[cfg(feature = "jit")]
     Engine::Jit,
 ];
+
+/// Every `NEOVM_JIT_INLINE_VARS` value that inlines something: each must
+/// leave every transcript exactly as the interpreter's.
+#[cfg(feature = "jit")]
+const INLINE_ENGINES: &[Engine] = &[Engine::JitInline(InlineVarsKnob {
+    read: true,
+    set: false,
+    bind: false,
+})];
+#[cfg(not(feature = "jit"))]
+const INLINE_ENGINES: &[Engine] = &[];
 
 /// A bytecode body over the fixture variable (constant 0) and the body
 /// function `vft-body` (constant 1).
@@ -159,9 +176,23 @@ fn run(ev: &mut Context, engine: Engine, prog: &Prog, var: &str, args: &[Value])
             }
         }
         #[cfg(feature = "jit")]
-        Engine::Jit => {
-            use crate::emacs_core::jit::compile::{NativeRun, lower_leaf, take_pending_flow};
-            let leaf = lower_leaf(&prog.ops, &constants, prog.arity).expect("program lowers");
+        Engine::Jit | Engine::JitInline(_) => {
+            use crate::emacs_core::jit::compile::{
+                NativeRun, force_inline_vars_for_test, inline_vars::with_compile_env_for_test,
+                lower_leaf, take_pending_flow,
+            };
+            let leaf = match engine {
+                Engine::JitInline(knob) => {
+                    force_inline_vars_for_test(Some(knob));
+                    let leaf = with_compile_env_for_test(ev, || {
+                        lower_leaf(&prog.ops, &constants, prog.arity)
+                    });
+                    force_inline_vars_for_test(None);
+                    leaf
+                }
+                _ => lower_leaf(&prog.ops, &constants, prog.arity),
+            }
+            .expect("program lowers");
             let ctx = ev as *mut Context as *mut u8;
             match leaf.call(ctx, args) {
                 NativeRun::Ok(bits) => print_value(&Value::from_bits(bits)),
@@ -487,7 +518,7 @@ fn line<'a>(lines: &'a [String], var: &str) -> &'a str {
 /// engines.
 fn assert_engines_agree(scenario: Scenario) -> Vec<String> {
     let base = transcript(Engine::Interpreter, scenario);
-    for &engine in &ENGINES[1..] {
+    for &engine in ENGINES[1..].iter().chain(INLINE_ENGINES) {
         let other = transcript(engine, scenario);
         for (a, b) in base.iter().zip(&other) {
             assert_eq!(a, b, "{scenario:?}: interpreter vs {engine:?}");
@@ -766,7 +797,7 @@ fn transcript_with(engine: Engine, scenario: Scenario, tiers: &[VarCacheTier]) -
 /// transcript with every tier on is the transcript with every tier off (the
 /// general paths alone).
 fn assert_tiers_change_nothing(scenario: Scenario) {
-    for &engine in ENGINES {
+    for &engine in ENGINES.iter().chain(INLINE_ENGINES) {
         let off = transcript_with(engine, scenario, &[]);
         let on = transcript_with(engine, scenario, &VarCacheTier::ALL);
         for (a, b) in off.iter().zip(&on) {

@@ -268,6 +268,10 @@ fn osr_raw_overflow_retags_the_snapshot_and_resumes_without_replaying_effects() 
 #[test]
 fn osr_raw_varref_preserves_loop_slots_on_inline_and_fallback_reads() {
     use super::shims::VARREF_SHIM_CALLS;
+    // The default lowering: only a plain cell is read inline
+    // (`NEOVM_JIT_INLINE_VARS=read` would read the buffer-local one inline
+    // too).
+    force_inline_vars_for_test(Some(InlineVarsKnob::OFF));
     let mut ctx = Context::new();
     ctx.eval_str(
         "(progn (defvar raw-osr-read 7)
@@ -337,6 +341,7 @@ fn osr_raw_varref_preserves_loop_slots_on_inline_and_fallback_reads() {
         assert_eq!(&ctx.bc_buf[..], &snapshot);
         assert_eq!(ctx.jit_root_stack_top, 0);
     }
+    force_inline_vars_for_test(None);
 }
 
 #[test]

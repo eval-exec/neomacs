@@ -101,7 +101,10 @@ pub(crate) const ABI_TAG: u32 = compute_abi_tag();
 /// the bump re-tags once for the layout change.
 /// v14: `SpecSlot` v2 is four words (a `direct_entry` word), so an AOT spec
 /// site indexes the sidecar's slot array with a 32-byte stride.
-const ABI_TAG_VERSION: u32 = 14;
+/// v15: `BufferManager` gains its `current_raw` word (P1.4 Stage B), which
+/// moves every `Context` field laid out after `buffers` -- among them the
+/// root-window words AOT code stores through.
+const ABI_TAG_VERSION: u32 = 15;
 
 /// Format version of the AOT descriptor spec-section + the runtime spec ABI
 /// (`SpecSlot`/`spec_expected` sidecar bases, the loader re-classify+arm protocol).

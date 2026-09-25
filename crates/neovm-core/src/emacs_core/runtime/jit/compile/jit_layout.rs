@@ -181,6 +181,42 @@ const _: () = {
 };
 
 // ---------------------------------------------------------------------------
+// Variable cells beyond the symbol: the buffer-local cache record, the
+// forwarder slots, the current buffer (P1.4 Stage B, `inline_vars`).
+// ---------------------------------------------------------------------------
+
+pub(crate) use crate::emacs_core::forward::{
+    LISP_BOOL_FWD_VALUE_OFFSET, LISP_INT_FWD_VALUE_OFFSET, LISP_KBOARD_OBJ_FWD_VALUE_OFFSET,
+    LISP_OBJ_FWD_VALUE_OFFSET,
+};
+pub(crate) use crate::emacs_core::symbol::blv_alist_epoch_addr;
+
+/// `LispBufferLocalValue` (`#[repr(C)]`): the raw id of the buffer the
+/// cache is loaded for (`NO_WHERE_BUF` when none, never 0).
+pub(crate) const BLV_WHERE_BUF_ID_OFFSET: usize = offset_of!(
+    crate::emacs_core::symbol::LispBufferLocalValue,
+    where_buf_id
+);
+/// `(SYMBOL . CURRENT-VALUE)`, the loaded cell.
+pub(crate) const BLV_VALCELL_OFFSET: usize =
+    offset_of!(crate::emacs_core::symbol::LispBufferLocalValue, valcell);
+/// The structural epoch the cache was loaded at (a `u64`).
+pub(crate) const BLV_ALIST_EPOCH_OFFSET: usize =
+    offset_of!(crate::emacs_core::symbol::LispBufferLocalValue, alist_epoch);
+
+/// From a `*mut Context`, the current buffer's raw id (0 for none).
+pub(crate) const CONTEXT_CURRENT_BUFFER_RAW_OFFSET: usize =
+    CONTEXT_BUFFERS_OFFSET + buffer_walk::BUFFER_MANAGER_CURRENT_RAW_OFFSET;
+
+/// From the untagged address of a cons, its cdr.
+pub(crate) const CONS_CDR_OFFSET: usize = offset_of!(crate::tagged::header::ConsCell, cdr_or_next);
+
+const _: () = {
+    assert!(BLV_WHERE_BUF_ID_OFFSET % WORD == 0 && BLV_ALIST_EPOCH_OFFSET % WORD == 0);
+    assert!(BLV_VALCELL_OFFSET % WORD == 0 && CONS_CDR_OFFSET % WORD == 0);
+};
+
+// ---------------------------------------------------------------------------
 // Byte-code function words (p2-0-integration S0.7).
 // ---------------------------------------------------------------------------
 

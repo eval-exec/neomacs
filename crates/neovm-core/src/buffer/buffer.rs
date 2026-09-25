@@ -5179,6 +5179,11 @@ pub(crate) mod jit_layout {
         std::mem::offset_of!(BufferManager, buffers);
     pub(crate) const BUFFER_MANAGER_CURRENT_OFFSET: usize =
         std::mem::offset_of!(BufferManager, current);
+    /// `BufferManager::current_raw`: the current buffer's id as one `u64`,
+    /// 0 for none.
+    pub(crate) const BUFFER_MANAGER_CURRENT_RAW_OFFSET: usize =
+        std::mem::offset_of!(BufferManager, current_raw);
+    const _: () = assert!(std::mem::size_of::<BufferId>() == std::mem::size_of::<u64>());
     pub(crate) const LIVE_BUFFERS_SLOTS_OFFSET: usize = std::mem::offset_of!(LiveBuffers, slots);
 
     fn find_unique(words: &[usize], want: usize) -> Option<usize> {
@@ -5380,7 +5385,15 @@ pub struct BufferManager {
     /// `last_name` and `filename` queryable.
     dead_buffers: FxHashMap<BufferId, Buffer>,
     buffer_order: Vec<BufferId>,
+    /// Written only by [`BufferManager::set_current_id`], which keeps
+    /// [`Self::current_raw`] in step.
     current: Option<BufferId>,
+    /// `current`'s raw id, or 0 when there is no current buffer (ids start at
+    /// 1): the one word compiled code compares a buffer-local variable's
+    /// cache owner with (`where_buf_id`, never 0), at a fixed offset
+    /// (`jit_layout::BUFFER_MANAGER_CURRENT_RAW_OFFSET`). `Option<BufferId>`
+    /// is two words whose order std does not fix.
+    current_raw: u64,
     next_id: u64,
     next_marker_id: u64,
     labeled_restrictions: FxHashMap<BufferId, Vec<LabeledRestriction>>,
@@ -5588,6 +5601,7 @@ impl BufferManager {
             dead_buffers: FxHashMap::default(),
             buffer_order: Vec::new(),
             current: None,
+            current_raw: 0,
             next_id: 1,
             next_marker_id: 1,
             labeled_restrictions: FxHashMap::default(),
@@ -5599,7 +5613,7 @@ impl BufferManager {
         if let Some(buf) = mgr.buffers.get_mut(&scratch) {
             buf.set_last_name_value(crate::emacs_core::value::Value::NIL);
         }
-        mgr.current = Some(scratch);
+        mgr.set_current_id(Some(scratch));
         mgr.note_buffer_order_head(scratch);
         mgr
     }
@@ -5976,7 +5990,21 @@ impl BufferManager {
 
     /// Return the current buffer id.
     pub fn current_buffer_id(&self) -> Option<BufferId> {
+        debug_assert_eq!(
+            self.current_raw,
+            self.current.map_or(0, |id| id.0),
+            "a writer of `current` bypassed set_current_id"
+        );
         self.current
+    }
+
+    /// Make ID (or nothing) the current buffer: the one writer of `current`
+    /// and its raw mirror `current_raw`.
+    #[inline]
+    fn set_current_id(&mut self, id: Option<BufferId>) {
+        debug_assert!(id.is_none_or(|id| id.0 != 0), "buffer ids start at 1");
+        self.current = id;
+        self.current_raw = id.map_or(0, |id| id.0);
     }
 
     pub fn buffer_hooks_inhibited(&self, id: BufferId) -> bool {
@@ -6087,7 +6115,7 @@ impl BufferManager {
         }
 
         let old_id = self.current;
-        self.current = Some(id);
+        self.set_current_id(Some(id));
         if record_order {
             self.note_buffer_order_head(id);
         }
@@ -6183,7 +6211,7 @@ impl BufferManager {
             .current
             .is_some_and(|current| killed_set.contains(&current))
         {
-            self.current = None;
+            self.set_current_id(None);
         }
 
         Some(killed_ids)
@@ -7555,6 +7583,7 @@ impl BufferManager {
             buffers: LiveBuffers::from_map(buffers),
             buffer_order: Vec::new(),
             current,
+            current_raw: current.map_or(0, |id| id.0),
             next_id,
             next_marker_id,
             labeled_restrictions: FxHashMap::default(),

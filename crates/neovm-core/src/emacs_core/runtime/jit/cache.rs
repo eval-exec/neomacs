@@ -562,6 +562,7 @@ pub(crate) fn try_run_osr(
                 let name_hint = stats::naming_enabled()
                     .then(|| callee_name_hint(ctx, id))
                     .flatten();
+                let _vars = super::compile::inline_vars::CompileEnvScope::enter(ctx);
                 compile_osr_leaf(obarray, func, osr_pc, id, name_hint)
             })
             .clone()
@@ -1697,6 +1698,8 @@ pub fn try_run_compiled(
             } else {
                 stats::CompileOrigin::Dispatch
             };
+            // Inline variable ops classify against this context (P1.4 B).
+            let _vars = super::compile::inline_vars::CompileEnvScope::enter(ctx);
             compile_cache_entry(
                 id,
                 func,
@@ -1871,6 +1874,7 @@ pub(crate) fn resolve_compiled_leaf_ptr(
             let name_hint = stats::naming_enabled()
                 .then(|| callee_name_hint(ctx, id))
                 .flatten();
+            let _vars = super::compile::inline_vars::CompileEnvScope::enter(ctx);
             compile_cache_entry(
                 id,
                 func,

@@ -843,3 +843,91 @@ pub(crate) fn jit_direct_call_on() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| knob_on("NEOVM_JIT_DIRECT_CALL"))
 }
+
+/// Which variable ops `NEOVM_JIT_INLINE_VARS` inlines in JIT code (design
+/// `p1-4-inline-binding-blv` Stage B, `inline_vars`; default OFF until its
+/// gate passes). Read at compile time only, so both sides of an A/B run in
+/// one binary and the off side emits exactly the former code.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub(crate) struct InlineVarsKnob {
+    /// `varref`: a plain cell read from its baked address, a buffer-local
+    /// variable's loaded cache, a forwarder's own slot.
+    pub(crate) read: bool,
+    /// `varset`: a plain cell, a buffer-local variable's loaded binding or
+    /// default, a forwarder's own slot.
+    pub(crate) set: bool,
+    /// `varbind` and `unbind`: the specpdl entry and the store, in place.
+    pub(crate) bind: bool,
+}
+
+impl InlineVarsKnob {
+    pub(crate) const OFF: Self = Self {
+        read: false,
+        set: false,
+        bind: false,
+    };
+    pub(crate) const ALL: Self = Self {
+        read: true,
+        set: true,
+        bind: true,
+    };
+
+    /// Whether any op is inlined.
+    pub(crate) fn any(self) -> bool {
+        self.read || self.set || self.bind
+    }
+
+    /// Unset/`off`/`0`/`none`: nothing (the default); `all`/`on`/`1`:
+    /// everything; otherwise a comma list of `read`, `set`, `bind`.
+    pub(crate) fn parse(value: Option<&str>) -> Self {
+        let Some(value) = value.map(str::trim) else {
+            return Self::OFF;
+        };
+        match value.to_ascii_lowercase().as_str() {
+            "" | "0" | "off" | "false" | "no" | "none" => return Self::OFF,
+            "1" | "on" | "all" | "true" | "yes" => return Self::ALL,
+            _ => {}
+        }
+        let mut knob = Self::OFF;
+        for part in value.split(',').map(str::trim) {
+            match part {
+                "read" => knob.read = true,
+                "set" => knob.set = true,
+                "bind" => knob.bind = true,
+                "" => {}
+                other => tracing::warn!(
+                    target: "neovm_jit",
+                    part = other,
+                    "NEOVM_JIT_INLINE_VARS: unknown part ignored (expected read, set, bind)"
+                ),
+            }
+        }
+        knob
+    }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static INLINE_VARS_TEST_OVERRIDE: std::cell::Cell<Option<InlineVarsKnob>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Force the inline-variables knob for compiles on the current thread (tests
+/// only); `None` returns to the environment's.
+#[cfg(test)]
+pub(crate) fn force_inline_vars_for_test(knob: Option<InlineVarsKnob>) {
+    INLINE_VARS_TEST_OVERRIDE.with(|c| c.set(knob));
+}
+
+/// The `NEOVM_JIT_INLINE_VARS` setting compiles use (read once).
+pub(crate) fn jit_inline_vars() -> InlineVarsKnob {
+    #[cfg(test)]
+    if let Some(knob) = INLINE_VARS_TEST_OVERRIDE.with(|c| c.get()) {
+        return knob;
+    }
+    use std::sync::OnceLock;
+    static KNOB: OnceLock<InlineVarsKnob> = OnceLock::new();
+    *KNOB.get_or_init(|| {
+        InlineVarsKnob::parse(std::env::var("NEOVM_JIT_INLINE_VARS").ok().as_deref())
+    })
+}

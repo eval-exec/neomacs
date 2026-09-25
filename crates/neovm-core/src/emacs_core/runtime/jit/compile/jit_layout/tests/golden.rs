@@ -296,3 +296,103 @@ fn heap_words_are_where_compiled_code_reads_them() {
     assert_eq!(kind, crate::tagged::header::HeapObjectKind::Float as u8);
     assert!(value_vec_slice_offsets().is_some());
 }
+
+/// P1.4 Stage B: a symbol's baked cell, a buffer-local variable's cache
+/// record, a forwarder's slot and the current buffer's raw id read, through
+/// the offsets compiled code bakes, exactly what the Rust accessors read.
+#[test]
+fn variable_words_are_where_compiled_code_reads_them() {
+    use crate::emacs_core::intern::intern;
+    let mut ev = Context::new();
+    ev.eval_str(
+        "(progn (defvar neovm--jl-plain 42)
+                (defvar neovm--jl-loc 1)
+                (make-local-variable 'neovm--jl-loc)
+                (setq neovm--jl-loc 2)
+                neovm--jl-loc)",
+    )
+    .expect("fixture");
+    // The cell.
+    let plain = intern("neovm--jl-plain");
+    let cell = ev.obarray.jit_symbol_cell_addr(plain).expect("in range") as *const u8;
+    assert_eq!(
+        words_at(cell, LISP_SYMBOL_VAL_OFFSET),
+        Value::fixnum(42).bits()
+    );
+    assert!(
+        ev.obarray
+            .jit_symbol_cell_addr(crate::emacs_core::intern::SymId(u32::MAX))
+            .is_none()
+    );
+    // The loaded BLV cache (read above, so loaded for this buffer).
+    let loc = intern("neovm--jl-loc");
+    let blv = ev.obarray.blv(loc).expect("buffer-local");
+    let base = std::ptr::from_ref(blv).cast::<u8>();
+    let buffer = ev.buffers.current_buffer_id().expect("a current buffer");
+    assert_eq!(words_at(base, BLV_WHERE_BUF_ID_OFFSET), buffer.0 as usize);
+    assert_eq!(words_at(base, BLV_VALCELL_OFFSET), blv.valcell.bits());
+    assert_eq!(
+        words_at(base, BLV_ALIST_EPOCH_OFFSET) as u64,
+        blv.alist_epoch
+    );
+    // SAFETY: a process static.
+    let epoch = unsafe { (blv_alist_epoch_addr() as *const u64).read() };
+    assert_eq!(epoch, blv.alist_epoch, "the cache is current");
+    // The valcell's cdr, from the tagged cons word.
+    let cdr = words_at(
+        blv.valcell.bits() as *const u8,
+        CONS_CDR_OFFSET - crate::tagged::value::TAG_CONS,
+    );
+    assert_eq!(cdr, Value::fixnum(2).bits());
+    // The current buffer's raw id follows every switch, and a kill of the
+    // current buffer leaves none.
+    let ctx = std::ptr::from_ref(&ev).cast::<u8>();
+    assert_eq!(
+        words_at(ctx, CONTEXT_CURRENT_BUFFER_RAW_OFFSET),
+        buffer.0 as usize
+    );
+    let other = ev.buffers.create_buffer("neovm--jl-other");
+    ev.buffers.switch_current(other);
+    let ctx = std::ptr::from_ref(&ev).cast::<u8>();
+    assert_eq!(
+        words_at(ctx, CONTEXT_CURRENT_BUFFER_RAW_OFFSET),
+        other.0 as usize
+    );
+    ev.buffers.kill_buffer(other);
+    assert_eq!(ev.buffers.current_buffer_id(), None);
+    let ctx = std::ptr::from_ref(&ev).cast::<u8>();
+    assert_eq!(words_at(ctx, CONTEXT_CURRENT_BUFFER_RAW_OFFSET), 0);
+    // Forwarders' own slots.
+    use crate::emacs_core::defvar_bool::ByteBooleanVars;
+    ev.obarray
+        .define_bool_variable("neovm--jl-bool", true, ByteBooleanVars::ErasedByLreadInit);
+    ev.obarray.define_int_variable("neovm--jl-int", 7);
+    let bool_fwd = ev.obarray.forwarder(intern("neovm--jl-bool")).expect("fwd");
+    let int_fwd = ev.obarray.forwarder(intern("neovm--jl-int")).expect("fwd");
+    let bool_base = std::ptr::from_ref(bool_fwd).cast::<u8>();
+    // SAFETY: a live Boolean descriptor's flag byte.
+    assert_eq!(
+        unsafe { bool_base.add(LISP_BOOL_FWD_VALUE_OFFSET).read() },
+        1
+    );
+    assert_eq!(
+        words_at(
+            std::ptr::from_ref(int_fwd).cast(),
+            LISP_INT_FWD_VALUE_OFFSET
+        ),
+        Value::fixnum(7).bits()
+    );
+    let obj = crate::emacs_core::forward::alloc_objfwd(Value::fixnum(9));
+    assert_eq!(
+        words_at(std::ptr::from_ref(obj).cast(), LISP_OBJ_FWD_VALUE_OFFSET),
+        Value::fixnum(9).bits()
+    );
+    let kbd = crate::emacs_core::forward::alloc_kboard_objfwd(Value::fixnum(11));
+    assert_eq!(
+        words_at(
+            std::ptr::from_ref(kbd).cast(),
+            LISP_KBOARD_OBJ_FWD_VALUE_OFFSET
+        ),
+        Value::fixnum(11).bits()
+    );
+}

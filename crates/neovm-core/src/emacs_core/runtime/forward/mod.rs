@@ -441,6 +441,10 @@ pub struct LispIntFwd {
     value: UnsafeCell<Value>,
 }
 
+/// Byte offset of a [`LispIntFwd`]'s slot (a Lisp integer), for JIT code's
+/// inline read and fixnum store (P1.4 Stage B).
+pub(crate) const LISP_INT_FWD_VALUE_OFFSET: usize = std::mem::offset_of!(LispIntFwd, value);
+
 // Safety: a `LispIntFwd` is only ever mutated from the Lisp thread that owns
 // its `Obarray`, exactly like the symbol value cells beside it; the `Sync`
 // bound is needed solely so the descriptor can be a `&'static` shared with the
@@ -566,6 +570,10 @@ pub struct LispObjFwd {
     value: UnsafeCell<Value>,
 }
 
+/// Byte offset of a [`LispObjFwd`]'s slot, for JIT code's inline read and
+/// store (P1.4 Stage B).
+pub(crate) const LISP_OBJ_FWD_VALUE_OFFSET: usize = std::mem::offset_of!(LispObjFwd, value);
+
 // Safety: identical to `LispIntFwd` -- mutated only from the Lisp thread that
 // owns its `Obarray`; `Sync` is needed solely so the descriptor can be the
 // `&'static` the GC root scan reads with `load_value_atomic`.
@@ -687,6 +695,17 @@ pub struct LispKboardObjFwd {
     /// See [`LispObjFwd`] for why this is an `UnsafeCell`.
     value: UnsafeCell<Value>,
 }
+
+/// Byte offset of a [`LispKboardObjFwd`]'s slot, for JIT code's inline read
+/// and store (P1.4 Stage B).
+pub(crate) const LISP_KBOARD_OBJ_FWD_VALUE_OFFSET: usize =
+    std::mem::offset_of!(LispKboardObjFwd, value);
+
+// A slot is one `Value` word the JIT reads and writes whole.
+const _: () = {
+    assert!(std::mem::size_of::<UnsafeCell<Value>>() == std::mem::size_of::<usize>());
+    assert!(std::mem::size_of::<AtomicBool>() == 1);
+};
 
 // Safety: see `LispObjFwd`.
 unsafe impl Sync for LispKboardObjFwd {}
