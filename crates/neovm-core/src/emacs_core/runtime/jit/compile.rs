@@ -597,7 +597,10 @@ pub(crate) enum FlonumMode {
 
 impl FlonumMode {
     /// The mode when `NEOVM_JIT_FLONUM` is unset (or not a known mode).
-    pub(crate) const DEFAULT: Self = Self::OpLocal;
+    /// `resident`: on nbody it cuts cycles 42% against `off` and 25% against
+    /// `local` (same binary, knob A/B), and leaves every other
+    /// elisp-benchmarks row unchanged within noise.
+    pub(crate) const DEFAULT: Self = Self::Resident;
 
     pub(crate) fn parse(value: Option<&str>) -> Self {
         match value {
