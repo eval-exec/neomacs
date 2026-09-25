@@ -1406,6 +1406,8 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     // P3.5 redisplay knobs (same-binary A/B; each defaults to the old path).
     // Buffer-text snapshots: `copy` (default) or `share` (copy-on-write).
     "NEOMACS_TEXT_SNAPSHOT",
+    // TTY silent frames: `off` (default) or `on`.
+    "NEOMACS_TTY_SILENT",
 ];
 
 pub(crate) fn configure_benchmark_environment(command: &mut Command, sandbox: &MelpaSandbox) {

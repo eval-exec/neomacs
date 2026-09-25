@@ -278,9 +278,16 @@ pub(crate) fn render_to(
 ) -> io::Result<()> {
     if caps.ansi && !caps.needs_padding {
         rif.diff_and_render();
+        let body = rif.take_output();
+        if body.is_empty() {
+            // A silent frame (NEOMACS_TTY_SILENT): nothing changed, so
+            // nothing is written -- not even the mode resets, as GNU writes
+            // 0 bytes on an idle redisplay.
+            return Ok(());
+        }
         let mut bytes = Output::default();
         caps.reset_modes(&mut bytes);
-        bytes.extend_from_slice(&rif.take_output());
+        bytes.extend_from_slice(&body);
         if let Err(error) = bytes.write_to(output, caps) {
             rif.force_redraw();
             return Err(error);

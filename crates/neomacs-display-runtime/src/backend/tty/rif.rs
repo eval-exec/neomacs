@@ -22,6 +22,9 @@ use neomacs_display_protocol::types::{DisplayWindowId, FaceId, Rect, ResolvedBid
 #[path = "painter.rs"]
 pub mod painter;
 
+#[path = "damage.rs"]
+pub mod damage;
+
 // ---------------------------------------------------------------------------
 // Cell attributes
 // ---------------------------------------------------------------------------
@@ -502,6 +505,8 @@ pub struct TtyRif {
     scroll_seed: Option<isize>,
     /// Force the next render to repaint every terminal cell.
     force_full_render: bool,
+    /// P3.5 stage-B knobs and what they remember between frames.
+    damage: damage::DamageState,
 }
 
 fn terminal_cursor_cell(x: f32, y: f32, char_width: f32, char_height: f32) -> (u16, u16) {
@@ -851,6 +856,7 @@ impl TtyRif {
             frame_stats: TtyFrameStats::default(),
             scroll_seed: None,
             force_full_render: true,
+            damage: damage::DamageState::from_knobs(),
         }
     }
 
@@ -877,6 +883,7 @@ impl TtyRif {
         self.current = TtyGrid::new(width, height);
         self.desired = TtyGrid::new(width, height);
         self.force_full_render = true;
+        self.damage.forget_terminal();
     }
 
     /// Force the next [`diff_and_render`](Self::diff_and_render) call to emit
@@ -885,6 +892,7 @@ impl TtyRif {
     /// overwritten even when the logical desired grid did not change.
     pub fn force_redraw(&mut self) {
         self.force_full_render = true;
+        self.damage.forget_terminal();
     }
 
     /// Set the face table for resolving face_ids.
@@ -1390,6 +1398,12 @@ impl TtyRif {
         // so every planned op is encodable on the connected terminal.
         let ops = self.plan_frame();
 
+        if self.write_quiet_frame(&ops) {
+            self.frame_stats.bytes = self.output.len() as u32;
+            std::mem::swap(&mut self.current, &mut self.desired);
+            return;
+        }
+
         if self.caps.synchronized_output {
             // Synchronized output (DECSET 2026): the terminal buffers
             // everything between h/l and presents it atomically. Supported
@@ -1416,11 +1430,15 @@ impl TtyRif {
         // where GNU emits the entry's `me` and `op`, or nothing (ledger 188).
 
         // Position cursor and show it if visible.
+        let shape_written = self.cursor_visible && self.cursor_shape_due();
         if self.cursor_visible {
             write_cursor_goto(&mut self.output, self.cursor_row + 1, self.cursor_col + 1);
-            write_cursor_shape(&mut self.output, self.cursor_shape);
+            if shape_written {
+                write_cursor_shape(&mut self.output, self.cursor_shape);
+            }
             self.output.extend_from_slice(b"\x1b[?25h");
         }
+        self.note_framed_cursor(shape_written);
 
         if self.caps.synchronized_output {
             // End synchronized update: present the frame atomically.

@@ -51,6 +51,9 @@ impl TtyRif {
         } else {
             self.force_full_render = true;
         }
+        // The painter writes its own cursor; B1's record of the terminal
+        // cursor applies only to the ANSI encoder.
+        self.damage.forget_terminal();
         result
     }
 }

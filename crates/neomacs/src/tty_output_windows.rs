@@ -186,8 +186,13 @@ pub(crate) fn render(rif: &mut TtyRif) -> io::Result<()> {
     with_session(|session| {
         if session.vt {
             rif.diff_and_render();
+            let body = rif.take_output();
+            if body.is_empty() {
+                // A silent frame (NEOMACS_TTY_SILENT): nothing changed.
+                return Ok(());
+            }
             let mut bytes = b"\x1b[4l\x1b[0m".to_vec();
-            bytes.extend_from_slice(&rif.take_output());
+            bytes.extend_from_slice(&body);
             if let Err(error) = session.console().write_char_buffer(&bytes) {
                 rif.force_redraw();
                 return Err(error);
