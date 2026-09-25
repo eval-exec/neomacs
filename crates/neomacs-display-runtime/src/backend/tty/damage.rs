@@ -103,6 +103,45 @@ pub(super) fn knob_damage_mode() -> TtyDamageMode {
     *MODE.get_or_init(|| parse_tty_damage_knob(std::env::var("NEOMACS_TTY_DAMAGE").ok().as_deref()))
 }
 
+/// What names a window-matrix row in its painter key
+/// (`NEOMACS_TTY_ROW_IDENTITY`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TtyRowIdentity {
+    /// The `MatrixRow`'s `Arc` allocation: any copy of a row is a new row.
+    #[default]
+    Address,
+    /// The row's [`GlyphRow::appearance_id`]: a copy that only moved, shifted
+    /// its buffer positions or dropped its cursor decoration is the same row
+    /// (the rows below an edit, which layout copies to shift their
+    /// positions, then no longer make every keystroke a wide-damage frame).
+    Appearance,
+}
+
+/// The identity a value of `NEOMACS_TTY_ROW_IDENTITY` selects.
+pub fn parse_tty_row_identity_knob(value: Option<&str>) -> TtyRowIdentity {
+    match value
+        .map(|value| value.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("appearance" | "on" | "1") => TtyRowIdentity::Appearance,
+        None | Some("" | "address" | "off" | "0") => TtyRowIdentity::Address,
+        Some(other) => {
+            tracing::warn!(
+                value = other,
+                "NEOMACS_TTY_ROW_IDENTITY: unknown identity, using address"
+            );
+            TtyRowIdentity::Address
+        }
+    }
+}
+
+pub(super) fn knob_row_identity() -> TtyRowIdentity {
+    static IDENTITY: OnceLock<TtyRowIdentity> = OnceLock::new();
+    *IDENTITY.get_or_init(|| {
+        parse_tty_row_identity_knob(std::env::var("NEOMACS_TTY_ROW_IDENTITY").ok().as_deref())
+    })
+}
+
 /// Where the terminal's cursor is known to be after the last frame written.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum EmittedCursor {
@@ -134,10 +173,12 @@ pub(super) enum PainterKey {
     /// A window-matrix row written to this grid row.
     WindowRow {
         window: DisplayWindowId,
-        /// The `MatrixRow`'s `Arc` allocation: the row's content identity.
-        /// The renderer holds last frame's rows ([`DamageState::retained`]),
-        /// so an address cannot be reused while it is being compared.
-        row: usize,
+        /// The row's content identity ([`TtyRowIdentity`]): its `MatrixRow`'s
+        /// `Arc` allocation, or its appearance id. The renderer holds last
+        /// frame's rows ([`DamageState::retained`]), so an address cannot be
+        /// reused while it is being compared, and a painted row is shared, so
+        /// layout can only change it by copying it (a fresh appearance).
+        row: u64,
         col: i64,
         area: GlyphRowAreaLayout,
     },
@@ -346,6 +387,8 @@ pub(super) struct DamageState {
     pub(super) shape: Option<TerminalCursorShape>,
     /// B2 mode for this renderer.
     pub(super) mode: TtyDamageMode,
+    /// What names a window-matrix row in a painter key.
+    pub(super) row_identity: TtyRowIdentity,
     /// Why the last rasterized frame was full, under `on`/`verify`.
     pub(super) full_reason: Option<TtyFullFrameReason>,
     /// How the frame awaiting `diff_and_render`/`paint` was rasterized.
@@ -391,6 +434,7 @@ impl DamageState {
             cursor: EmittedCursor::Unknown,
             shape: None,
             mode: knob_damage_mode(),
+            row_identity: knob_row_identity(),
             full_reason: None,
             frame: FrameKind::Full,
             rows: None,
@@ -579,6 +623,14 @@ impl TtyRif {
         self.damage.forget_painters();
         self.damage.shadow = None;
         self.damage.legacy_carry = true;
+    }
+
+    /// Choose what names a window-matrix row in a painter key, overriding
+    /// `NEOMACS_TTY_ROW_IDENTITY` (tests and embedders).
+    pub fn set_row_identity(&mut self, identity: TtyRowIdentity) {
+        self.damage.row_identity = identity;
+        self.damage.forget_painters();
+        self.damage.shadow = None;
     }
 
     /// What `NEOMACS_TTY_DAMAGE=verify` counted so far.
@@ -864,9 +916,13 @@ impl TtyRif {
                 let Some(grid_row) = visible_cell(placement.grid_row, height) else {
                     continue;
                 };
+                let row = match self.damage.row_identity {
+                    TtyRowIdentity::Address => std::ptr::from_ref::<GlyphRow>(glyph_row) as u64,
+                    TtyRowIdentity::Appearance => glyph_row.appearance_id(),
+                };
                 rows[grid_row].push(PainterKey::WindowRow {
                     window: entry.window_id,
-                    row: std::ptr::from_ref::<GlyphRow>(glyph_row) as usize,
+                    row,
                     col: placement.row_col,
                     area: placement.area_layout,
                 });

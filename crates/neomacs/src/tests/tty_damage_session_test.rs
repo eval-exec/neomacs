@@ -8,7 +8,9 @@
 use super::super::frame_layout::{REDISPLAY_RUNTIME, run_tty_layout_tree};
 use super::super::{Interactivity, bootstrap_buffers, bootstrap_tty_display_config};
 use neomacs_display_runtime::backend::tty::rif::TtyRif;
-use neomacs_display_runtime::backend::tty::rif::damage::{ScreenMatch, TtyDamageMode};
+use neomacs_display_runtime::backend::tty::rif::damage::{
+    ScreenMatch, TtyDamageMode, TtyFullFrameReason, TtyRowIdentity,
+};
 use neomacs_display_runtime::redisplay::RedisplayRuntime;
 use neovm_core::emacs_core::Context;
 use neovm_core::emacs_core::load::create_bootstrap_evaluator_cached_with_features;
@@ -35,11 +37,12 @@ struct FrameRecord {
 }
 
 impl Renderers {
-    fn new(silent: bool) -> Self {
+    fn new(silent: bool, identity: TtyRowIdentity) -> Self {
         let make = |mode| {
             let mut rif = TtyRif::new(COLS, ROWS);
             rif.set_damage_mode(mode);
             rif.set_silent_frames(silent);
+            rif.set_row_identity(identity);
             rif
         };
         Self {
@@ -133,6 +136,10 @@ const SOURCE: &str = r#"(progn
   (end-of-line))"#;
 
 fn session(silent: bool) -> Renderers {
+    session_with(silent, TtyRowIdentity::Address)
+}
+
+fn session_with(silent: bool, identity: TtyRowIdentity) -> Renderers {
     let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"])
         .expect("cached bootstrap evaluator");
     let _bootstrap = bootstrap_buffers(
@@ -142,7 +149,7 @@ fn session(silent: bool) -> Renderers {
         bootstrap_tty_display_config(Interactivity::Interactive),
     );
     REDISPLAY_RUNTIME.with(RedisplayRuntime::disable_cosmic_metrics);
-    let mut r = Renderers::new(silent);
+    let mut r = Renderers::new(silent, identity);
     r.frame(&mut eval, "startup");
     r.step(&mut eval, "load source", SOURCE);
     r.frame(&mut eval, "idle");
@@ -157,6 +164,15 @@ fn session(silent: bool) -> Renderers {
         "type in a tab line",
         "(progn (back-to-indentation) (insert \"z\"))",
     );
+    // A comment line (no tab): the edit replay reuses every row below the
+    // edit, copied to shift their buffer positions.
+    r.step(
+        &mut eval,
+        "comment line",
+        "(progn (forward-line -1) (beginning-of-line) (re-search-backward \"^;;;\") (end-of-line))",
+    );
+    r.step(&mut eval, "type in a comment line", "(insert \"q\")");
+    r.step(&mut eval, "type in a comment line again", "(insert \"r\")");
     r.step(&mut eval, "message", "(message \"hello from verify\")");
     r.frame(&mut eval, "idle with message");
     r.step(&mut eval, "clear message", "(message nil)");
@@ -253,4 +269,33 @@ fn tty_damage_path_with_silent_frames_matches_over_a_real_session() {
     assert_eq!(totals.screen_diff_rows, 0);
     let idle = r.record("idle");
     assert_eq!(idle.damage_bytes, 0, "a silent idle frame writes nothing");
+}
+
+/// Keyed by appearance, the rows layout copies below an edit only to shift
+/// their buffer positions keep their painters: typing in a line repaints the
+/// edited row and the chrome instead of the whole window. Keyed by address
+/// the same keystroke is a wide-damage frame. Both match the full path.
+#[test]
+fn tty_damage_path_keeps_rows_below_an_edit_by_appearance() {
+    let address = session_with(false, TtyRowIdentity::Address);
+    let appearance = session_with(false, TtyRowIdentity::Appearance);
+    for r in [&address, &appearance] {
+        let totals = r.verify.damage_verify_totals();
+        assert_eq!(totals.false_negatives, 0);
+        assert_eq!(totals.screen_diff_rows, 0);
+    }
+    let label = "type in a comment line again";
+    let by_address = address.record(label);
+    let by_appearance = appearance.record(label);
+    assert_eq!(
+        by_address.full_reason,
+        Some(TtyFullFrameReason::WideDamage),
+        "{by_address:?}"
+    );
+    assert!(by_appearance.damage_frame, "{by_appearance:?}");
+    assert!(by_appearance.rows_repainted <= 4, "{by_appearance:?}");
+    assert!(
+        by_appearance.damage_bytes <= by_address.damage_bytes,
+        "{by_appearance:?} vs {by_address:?}"
+    );
 }

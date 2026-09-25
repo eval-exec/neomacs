@@ -289,6 +289,7 @@ impl EditSyncPlan {
                 // (the scroll replay pays the same; `RowPlacement` removes it).
                 let mut shifted = GlyphRow::clone(&row);
                 shifted.pixel_y = new_y;
+                shifted.keep_appearance_of(&row);
                 MatrixRow::new(shifted)
             } else {
                 row
@@ -355,14 +356,18 @@ pub(crate) fn shift_row_positions(row: &MatrixRow, dirty_start: i64, delta: i64)
             let mut stripped = GlyphRow::clone(row);
             stripped.cursor_col = None;
             stripped.cursor_type = None;
+            stripped.keep_appearance_of(row);
             MatrixRow::new(stripped)
         } else {
             MatrixRow::clone(row)
         };
     }
+    let source = row;
     let mut row = GlyphRow::clone(row);
     row.cursor_col = None;
     row.cursor_type = None;
+    // Positions and cursor decoration only: it draws what it drew.
+    row.keep_appearance_of(source);
     // Every enabled body row below the edit sits at a real buffer position
     // past the edit, so all of them move by the delta -- including empty
     // lines (which carry their line's charpos) and the trailing EOB

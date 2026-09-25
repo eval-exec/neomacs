@@ -220,6 +220,18 @@ impl SceneWindow {
             .for_each(|damage| *damage = RowDamage::Reused);
     }
 
+    /// Replace row IDX by a copy that only moved its buffer positions, as
+    /// layout does for the rows below an edit.
+    fn shift_positions(&mut self, idx: usize, delta: usize) {
+        let original = self.rows[idx].clone();
+        let mut shifted = GlyphRow::clone(&original);
+        shifted.start_charpos += delta;
+        shifted.end_charpos += delta;
+        shifted.cursor_col = None;
+        shifted.keep_appearance_of(&original);
+        self.rows[idx] = MatrixRow::new(shifted);
+    }
+
     fn set_line(&mut self, idx: usize, text: &str, face: u32) {
         let role = if self.mode_line && idx + 1 == self.rows.len() {
             GlyphRowRole::ModeLine
@@ -420,10 +432,15 @@ struct Differential {
 
 impl Differential {
     fn new(scene: &Scene, silent: bool) -> Self {
+        Self::with_identity(scene, silent, TtyRowIdentity::Address)
+    }
+
+    fn with_identity(scene: &Scene, silent: bool, identity: TtyRowIdentity) -> Self {
         let make = |mode| {
             let mut rif = TtyRif::new(scene.cols, scene.rows);
             rif.set_silent_frames(silent);
             rif.set_damage_mode(mode);
+            rif.set_row_identity(identity);
             rif
         };
         Self {
@@ -551,6 +568,10 @@ impl Differential {
 /// fill appearing and going, a theme change, a scroll, a split, a child
 /// frame, a forced redraw and a resize.
 fn editing_session(silent: bool) -> Differential {
+    editing_session_with(silent, TtyRowIdentity::Address)
+}
+
+fn editing_session_with(silent: bool, identity: TtyRowIdentity) -> Differential {
     let lines: Vec<String> = (0..9).map(|i| format!("(line {i} of text)")).collect();
     let line_refs: Vec<&str> = lines.iter().map(String::as_str).collect();
     let mut scene = Scene::new(40, 12);
@@ -562,7 +583,7 @@ fn editing_session(silent: bool) -> Differential {
         .push(SceneWindow::new(2, 0, 10, 40, &[""], false));
     scene.windows[1].selected = false;
     scene.fill(1, 0, 9, 0);
-    let mut diff = Differential::new(&scene, silent);
+    let mut diff = Differential::with_identity(&scene, silent, identity);
     diff.frame(&scene, "first frame");
 
     scene.next_frame();
@@ -1145,5 +1166,86 @@ fn verify_report_lines_from_concurrent_writers_never_interleave() {
             "{line:?}"
         );
         assert_eq!(fields[11], "test=concurrent", "{line:?}");
+    }
+}
+
+#[test]
+fn row_identity_knob_parses_and_defaults_to_address() {
+    assert_eq!(parse_tty_row_identity_knob(None), TtyRowIdentity::Address);
+    assert_eq!(
+        parse_tty_row_identity_knob(Some("address")),
+        TtyRowIdentity::Address
+    );
+    assert_eq!(
+        parse_tty_row_identity_knob(Some(" Appearance ")),
+        TtyRowIdentity::Appearance
+    );
+    assert_eq!(
+        parse_tty_row_identity_knob(Some("bogus")),
+        TtyRowIdentity::Address
+    );
+}
+
+/// The editing session, every frame checked against the full path and a
+/// fresh repaint, with rows keyed by appearance.
+#[test]
+fn damage_path_matches_the_full_path_with_appearance_identity() {
+    let diff = editing_session_with(false, TtyRowIdentity::Appearance);
+    assert!(diff.damage_frames >= 8, "{:?}", diff.repainted);
+    assert_eq!(diff.verify.damage_verify_totals().false_negatives, 0);
+}
+
+/// Typing into a line copies every row below it to shift its buffer
+/// positions. Keyed by address, each copy is a new row and the keystroke
+/// repaints the whole window as a wide-damage frame; keyed by appearance,
+/// only the edited row is repainted. Either way the screen is the full
+/// path's.
+#[test]
+fn rows_copied_to_shift_positions_keep_their_painters_by_appearance() {
+    let lines: Vec<String> = (0..10).map(|i| format!("(line {i} of text)")).collect();
+    let line_refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+    for identity in [TtyRowIdentity::Address, TtyRowIdentity::Appearance] {
+        let mut scene = Scene::new(40, 12);
+        scene
+            .windows
+            .push(SceneWindow::new(1, 0, 0, 40, &line_refs, true));
+        let mut diff = Differential::with_identity(&scene, false, identity);
+        diff.frame(&scene, "first");
+
+        scene.next_frame();
+        scene.window(1).set_line(1, "(line 1 of text!)", 0);
+        for idx in 2..lines.len() {
+            scene.window(1).shift_positions(idx, 1);
+        }
+        diff.frame(&scene, "type");
+        let stats = diff.damage.frame_stats();
+        match identity {
+            TtyRowIdentity::Address => {
+                assert_eq!(
+                    stats.full_reason,
+                    Some(TtyFullFrameReason::WideDamage),
+                    "{stats:?}"
+                );
+            }
+            TtyRowIdentity::Appearance => {
+                assert!(stats.damage_frame, "{stats:?}");
+                assert_eq!(stats.rows_repainted, 1, "{stats:?}");
+            }
+        }
+
+        // A copy that changed what it draws, without declaring anything,
+        // is repainted under either identity.
+        scene.next_frame();
+        let copy: GlyphRow = (*scene.window(1).rows[5]).clone();
+        let mut changed = copy;
+        changed.glyphs[GlyphArea::Text as usize][0] = Glyph::char('X', FaceId::new(0), 0);
+        scene.window(1).rows[5] = MatrixRow::new(changed);
+        scene.window(1).damage[5] = RowDamage::New;
+        diff.frame(&scene, "changed copy");
+        assert_eq!(
+            diff.damage.current.row(5)[0].ch,
+            'X',
+            "{identity:?}: the changed copy was repainted"
+        );
     }
 }

@@ -1412,6 +1412,9 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     // the per-frame verify report.
     "NEOMACS_TTY_DAMAGE",
     "NEOMACS_TTY_DAMAGE_REPORT_FILE",
+    // What names a window row in a TTY painter key: `address` (default) or
+    // `appearance` (position-only copies keep their row).
+    "NEOMACS_TTY_ROW_IDENTITY",
     // Chrome string positions from chrome rows: `frame` (default) or `rows`.
     "NEOMACS_PRESENT_CHROME_POS",
     // The mini-window stands still when what it shows is unchanged: `on`.

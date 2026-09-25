@@ -1308,6 +1308,7 @@ impl RetainedWindowMatrix {
             shifted.pixel_y += dvpos;
             shifted.cursor_col = None;
             shifted.cursor_type = None;
+            shifted.keep_appearance_of(body[p].1);
             remap.insert(body[p].0 as i64, body[p - s].0 as i64);
             reused_rows.push((body[p - s].0, MatrixRow::new(shifted)));
         }
@@ -1513,6 +1514,7 @@ impl RetainedWindowMatrix {
                 let mut stripped = GlyphRow::clone(row);
                 stripped.cursor_col = None;
                 stripped.cursor_type = None;
+                stripped.keep_appearance_of(row);
                 MatrixRow::new(stripped)
             } else {
                 MatrixRow::clone(row)
@@ -1698,6 +1700,7 @@ impl RetainedWindowMatrix {
                             let mut stripped = GlyphRow::clone(row);
                             stripped.cursor_col = None;
                             stripped.cursor_type = None;
+                            stripped.keep_appearance_of(row);
                             MatrixRow::new(stripped)
                         } else {
                             MatrixRow::clone(row)
@@ -1706,9 +1709,12 @@ impl RetainedWindowMatrix {
                         reused_rows.push((idx, row));
                         continue;
                     }
+                    let source = row;
                     let mut row = GlyphRow::clone(row);
                     row.cursor_col = None;
                     row.cursor_type = None;
+                    // Positions and cursor decoration only: it draws what it drew.
+                    row.keep_appearance_of(source);
                     // Every enabled body row below the edit sits at a real buffer
                     // position past the insert point, so all of them move by the
                     // inserted count — including empty lines (which carry their

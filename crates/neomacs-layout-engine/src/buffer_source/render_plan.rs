@@ -848,6 +848,7 @@ impl BufferSourceOutputSetup {
                     let mut stripped = neomacs_display_protocol::GlyphRow::clone(&row);
                     stripped.cursor_col = None;
                     stripped.cursor_type = None;
+                    stripped.keep_appearance_of(&row);
                     neomacs_display_protocol::glyph_matrix::MatrixRow::new(stripped)
                 } else {
                     row
