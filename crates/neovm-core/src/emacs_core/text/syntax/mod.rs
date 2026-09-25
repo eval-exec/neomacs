@@ -3261,6 +3261,13 @@ impl<'a> SyntaxPropByteRun<'a> {
         self.props
     }
 
+    /// Whether this scan honours `syntax-table` properties
+    /// (`parse-sexp-lookup-properties`), so a character's syntax can depend on
+    /// its position.
+    pub(crate) fn honors_properties(&self) -> bool {
+        matches!(self.props, SyntaxProperties::Honor(_))
+    }
+
     /// See [`SyntaxPropRange::ascii_entry`] — identical memo, byte-side.
     #[inline]
     fn ascii_entry(&self, table: &SyntaxTable, ch: char) -> Option<SyntaxEntry> {

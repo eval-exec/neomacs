@@ -4041,6 +4041,38 @@ pub(crate) trait SyntaxLookup {
     /// the front-end pattern caches to key `used_syntax` entries by
     /// syntax table, mirroring GNU `compile_pattern`.
     fn cache_key(&self) -> SyntaxCacheKey;
+
+    /// Identity of the tables behind [`Self::char_syntax`] and
+    /// [`Self::char_has_category`], for caches of per-character results (the
+    /// existence DFA's classes), which stay valid while this identity and the
+    /// char-table write tick hold.  `None`: no such identity; do not cache.
+    fn class_cache_key(&self) -> Option<LookupClassKey> {
+        None
+    }
+
+    /// Whether [`Self::char_syntax_at`] can answer differently from
+    /// [`Self::char_syntax`] somewhere (`syntax-table` text properties).
+    fn position_dependent(&self) -> bool {
+        true
+    }
+
+    /// The first input position at which a syntax read is recorded for lazy
+    /// `syntax-propertize` ([`PropertizeFrontier`](super::regex::PropertizeFrontier)),
+    /// or `usize::MAX` when reads are not recorded.
+    fn syntax_read_limit(&self) -> usize {
+        usize::MAX
+    }
+}
+
+/// The identity of a syntax lookup's tables (see
+/// [`SyntaxLookup::class_cache_key`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LookupClassKey {
+    /// GNU's standard classification and the default categories: constant.
+    Standard,
+    /// A syntax table and a category table (0: the default categories), by
+    /// object identity.
+    Tables { syntax: usize, category: usize },
 }
 
 /// Default syntax lookup — uses GNU's standard syntax-table definitions.
@@ -4072,6 +4104,14 @@ impl SyntaxLookup for DefaultSyntaxLookup {
         // valid forever (GNU `Qt` for the standard-classification case).
         SyntaxCacheKey::Standard
     }
+
+    fn class_cache_key(&self) -> Option<LookupClassKey> {
+        Some(LookupClassKey::Standard)
+    }
+
+    fn position_dependent(&self) -> bool {
+        false
+    }
 }
 
 impl SyntaxLookup for BufferSyntaxLookup {
@@ -4096,6 +4136,17 @@ impl SyntaxLookup for BufferSyntaxLookup {
             id: self.syntax_table.chartable().bits(),
             epoch: crate::emacs_core::syntax::syntax_table_mutation_epoch(),
         }
+    }
+
+    fn class_cache_key(&self) -> Option<LookupClassKey> {
+        Some(LookupClassKey::Tables {
+            syntax: self.syntax_table.chartable().bits(),
+            category: self.category_table.map_or(0, |table| table.bits()),
+        })
+    }
+
+    fn position_dependent(&self) -> bool {
+        false
     }
 }
 

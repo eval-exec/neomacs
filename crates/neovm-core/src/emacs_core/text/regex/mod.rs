@@ -191,6 +191,20 @@ impl SyntaxLookup for BufferRegexpSyntaxLookup<'_> {
     fn cache_key(&self) -> SyntaxCacheKey {
         self.base.cache_key()
     }
+
+    fn class_cache_key(&self) -> Option<regex_emacs::LookupClassKey> {
+        self.base.class_cache_key()
+    }
+
+    fn position_dependent(&self) -> bool {
+        self.property_lookup.honors_properties()
+    }
+
+    fn syntax_read_limit(&self) -> usize {
+        self.frontier.map_or(usize::MAX, |frontier| {
+            frontier.byte.get().saturating_sub(self.input_start.get())
+        })
+    }
 }
 
 /// Position-aware syntax lookup for a regexp over a searched STRING.
@@ -298,6 +312,10 @@ impl SyntaxLookup for StringRegexpSyntaxLookup<'_> {
 
     fn cache_key(&self) -> SyntaxCacheKey {
         self.base.cache_key()
+    }
+
+    fn class_cache_key(&self) -> Option<regex_emacs::LookupClassKey> {
+        self.base.class_cache_key()
     }
 }
 

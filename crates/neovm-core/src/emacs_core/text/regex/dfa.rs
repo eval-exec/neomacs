@@ -25,10 +25,13 @@
 #![cfg_attr(not(test), allow(dead_code))]
 
 use super::{
-    CompiledPattern, RegexOp, SyntaxAssertion, SyntaxLookup, evaluate_syntax_assertion,
-    extract_number, extract_number_u16, opcode_len,
+    CompiledPattern, LookupClassKey, RegexOp, SyntaxAssertion, SyntaxCacheKey, SyntaxLookup,
+    evaluate_syntax_assertion, extract_number, extract_number_u16, match_anychar_at,
+    match_categoryspec_at, match_charset_at, match_exactn_char_at, match_syntaxspec_at,
+    match_syntaxspecset_at, opcode_len, re_text_char, regex_syntax_char,
 };
 use crate::emacs_core::emacs_char;
+use crate::emacs_core::syntax::SyntaxClass;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
@@ -564,6 +567,420 @@ impl ClosureScratch {
         let first = *slot != self.generation;
         *slot = self.generation;
         first
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Character classes (C3)
+// ---------------------------------------------------------------------------
+
+/// Facts about one character that the zero-width assertions read, besides
+/// the predicates.  Only the facts a pattern's assertions read are kept
+/// ([`Nfa::fact_mask`]), so they split no class needlessly.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub(crate) struct Facts(u8);
+
+impl Facts {
+    /// No character: the position is the start of the text (only ever a
+    /// PREVIOUS-character fact).
+    pub(crate) const EDGE: Self = Self(1 << 0);
+    /// The character is a newline (`^` after it, `$` before it).
+    pub(crate) const NEWLINE: Self = Self(1 << 1);
+    /// Word syntax (`\b \B \< \>`).
+    pub(crate) const WORD: Self = Self(1 << 2);
+    /// Word or symbol syntax (`\_< \_>`).
+    pub(crate) const WORD_OR_SYMBOL: Self = Self(1 << 3);
+    /// A word constituent above U+00FF.  Between two word constituents GNU's
+    /// `WORD_BOUNDARY_P` consults scripts and categories unless both are at
+    /// or below U+00FF (`WordBoundaryLookup::boundary_between`), so such a
+    /// pair decides `\b` per character pair, never per class.
+    pub(crate) const WIDE_WORD: Self = Self(1 << 4);
+
+    pub(crate) const fn empty() -> Self {
+        Self(0)
+    }
+
+    #[inline]
+    pub(crate) const fn contains(self, other: Self) -> bool {
+        self.0 & other.0 == other.0
+    }
+
+    #[inline]
+    pub(crate) const fn bits(self) -> u8 {
+        self.0
+    }
+
+    #[inline]
+    const fn masked(self, mask: Self) -> Self {
+        Self(self.0 & mask.0)
+    }
+
+    /// The facts of the Emacs character `code` whose first byte in the text
+    /// is `first_byte`, under `syntax` (the base table).
+    fn of_char(code: u32, first_byte: u8, syntax: &dyn SyntaxLookup, mask: Self) -> Self {
+        let mut facts = 0u8;
+        if first_byte == b'\n' {
+            facts |= Self::NEWLINE.0;
+        }
+        if mask.0 & (Self::WORD.0 | Self::WORD_OR_SYMBOL.0 | Self::WIDE_WORD.0) != 0 {
+            // The matcher's `re_char_and_syntax`: raw bytes read the syntax
+            // of their eight-bit character.
+            let ch = regex_syntax_char(code);
+            let class = syntax.char_syntax(ch);
+            if class == SyntaxClass::Word {
+                facts |= Self::WORD.0 | Self::WORD_OR_SYMBOL.0;
+                if ch as u32 > 0xFF {
+                    facts |= Self::WIDE_WORD.0;
+                }
+            } else if class == SyntaxClass::Symbol {
+                facts |= Self::WORD_OR_SYMBOL.0;
+            }
+        }
+        Self(facts).masked(mask)
+    }
+}
+
+impl std::ops::BitOr for Facts {
+    type Output = Self;
+    fn bitor(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+}
+
+impl Nfa {
+    /// The character facts this pattern's assertions read.
+    pub(crate) fn fact_mask(&self) -> Facts {
+        let mut mask = Facts::empty();
+        if self
+            .assertions
+            .intersects(Assertions::BEG_LINE | Assertions::END_LINE)
+        {
+            mask = mask | Facts::NEWLINE;
+        }
+        if self.assertions.intersects(Assertions::WORD) {
+            mask = mask | Facts::WORD | Facts::WIDE_WORD;
+        }
+        if self.assertions.intersects(Assertions::SYMBOL) {
+            mask = mask | Facts::WORD_OR_SYMBOL;
+        }
+        mask
+    }
+}
+
+/// The class of a character: the set of predicates that accept it, and its
+/// facts.  Two characters with the same key are indistinguishable to the
+/// pattern, so the DFA steps them with one transition.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct ClassKey {
+    accepts: SmallVec<[u64; 2]>,
+    pub(crate) facts: Facts,
+}
+
+impl ClassKey {
+    #[inline]
+    pub(crate) fn accepts(&self, predicate: u16) -> bool {
+        let predicate = predicate as usize;
+        self.accepts[predicate / 64] & (1 << (predicate % 64)) != 0
+    }
+}
+
+/// A syntax lookup that answers every position from the base table.  Classes
+/// are computed through it, so they are functions of the character alone; the
+/// DFA runs only where no `syntax-table` property applies (see
+/// [`SyntaxLookup::position_dependent`]), where the base table is the answer.
+pub(crate) struct BaseTableView<'a>(pub(crate) &'a dyn SyntaxLookup);
+
+impl SyntaxLookup for BaseTableView<'_> {
+    fn char_syntax(&self, c: char) -> SyntaxClass {
+        self.0.char_syntax(c)
+    }
+
+    fn char_syntax_at(&self, c: char, _input_pos: usize) -> SyntaxClass {
+        self.0.char_syntax(c)
+    }
+
+    fn char_has_category(&self, c: char, cat: u8) -> bool {
+        self.0.char_has_category(c, cat)
+    }
+
+    fn word_boundary_between(&self, c1: char, c2: char) -> bool {
+        self.0.word_boundary_between(c1, c2)
+    }
+
+    fn cache_key(&self) -> SyntaxCacheKey {
+        self.0.cache_key()
+    }
+
+    fn class_cache_key(&self) -> Option<LookupClassKey> {
+        self.0.class_cache_key()
+    }
+
+    fn position_dependent(&self) -> bool {
+        false
+    }
+}
+
+impl Nfa {
+    /// Whether `predicate` accepts the character at `d` (`len` bytes): the
+    /// matcher's own per-character test.
+    fn predicate_accepts(
+        &self,
+        predicate: Predicate,
+        pattern: &CompiledPattern,
+        text: &[u8],
+        d: usize,
+        len: usize,
+        syntax: &dyn SyntaxLookup,
+    ) -> bool {
+        let stop = d + len;
+        let target_multibyte = pattern.target_multibyte;
+        let accepted = match predicate {
+            Predicate::Literal { pc, lit_off } => {
+                let pc = pc as usize;
+                let count = self.bytecode[pc + 1] as usize;
+                let literal = &self.bytecode[pc + 2..pc + 2 + count];
+                match_exactn_char_at(
+                    literal,
+                    lit_off as usize,
+                    pattern.multibyte,
+                    target_multibyte,
+                    &pattern.translate,
+                    text,
+                    d,
+                    stop,
+                )
+                .map(|(_, text_advance)| text_advance)
+            }
+            Predicate::AnyChar => {
+                match_anychar_at(text, d, stop, target_multibyte, &pattern.translate)
+            }
+            Predicate::Charset { pc } => match_charset_at(
+                pattern,
+                pc as usize,
+                text,
+                d,
+                stop,
+                target_multibyte,
+                &pattern.translate,
+                syntax,
+            ),
+            Predicate::Syntax { class, negate } => {
+                match_syntaxspec_at(class, negate, text, d, stop, target_multibyte, syntax)
+            }
+            Predicate::SyntaxSet { mask } => {
+                match_syntaxspecset_at(mask, text, d, stop, target_multibyte, syntax)
+            }
+            Predicate::Category { category, negate } => {
+                match_categoryspec_at(category, negate, text, d, stop, target_multibyte, syntax)
+            }
+        };
+        debug_assert!(accepted.is_none_or(|advance| advance == len));
+        accepted.is_some()
+    }
+
+    /// The class of the character at `d` of `text`, `len` bytes long.
+    pub(crate) fn class_key_at(
+        &self,
+        pattern: &CompiledPattern,
+        text: &[u8],
+        d: usize,
+        code: u32,
+        len: usize,
+        base: &BaseTableView<'_>,
+        mask: Facts,
+    ) -> ClassKey {
+        let mut accepts: SmallVec<[u64; 2]> =
+            SmallVec::from_elem(0, self.predicates.len().div_ceil(64).max(1));
+        for (i, &predicate) in self.predicates.iter().enumerate() {
+            if self.predicate_accepts(predicate, pattern, text, d, len, base) {
+                accepts[i / 64] |= 1 << (i % 64);
+            }
+        }
+        ClassKey {
+            accepts,
+            facts: Facts::of_char(code, text[d], base, mask),
+        }
+    }
+}
+
+/// `byte_class` value of a byte whose class is not known yet (or, for the
+/// bytes of a non-ASCII character of multibyte text, is never kept there).
+pub(crate) const UNKNOWN_CLASS: u8 = 0xFF;
+/// Class ids are `u8` below [`UNKNOWN_CLASS`].
+pub(crate) const MAX_CLASSES: usize = UNKNOWN_CLASS as usize;
+const WIDE_SLOTS: usize = 512;
+const WIDE_EMPTY: u32 = u32::MAX;
+
+/// What the character-to-class maps of one pattern are valid for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ClassContext {
+    /// The tables behind the syntax lookup, when the classes read it.
+    lookup: Option<LookupClassKey>,
+    /// `char_table_write_tick` when the classes read a char-table (the
+    /// syntax or category table, or a case table's non-ASCII translations),
+    /// else 0.  The tick moves with every char-table write and allocation.
+    tick: u64,
+    target_multibyte: bool,
+}
+
+impl ClassContext {
+    /// The context of a search with `syntax`, or `None` when the lookup's
+    /// tables have no identity to key a cache by.
+    pub(crate) fn of_search(
+        pattern: &CompiledPattern,
+        nfa: &Nfa,
+        syntax: &dyn SyntaxLookup,
+    ) -> Option<Self> {
+        let reads_lookup = pattern.uses_syntax || nfa.uses_categories;
+        let lookup = if reads_lookup {
+            Some(syntax.class_cache_key()?)
+        } else {
+            None
+        };
+        let reads_char_table = reads_lookup
+            || pattern
+                .translate
+                .as_ref()
+                .is_some_and(|translate| translate.table.is_some());
+        Some(Self {
+            lookup,
+            tick: if reads_char_table {
+                crate::emacs_core::chartable::char_table_write_tick()
+            } else {
+                0
+            },
+            target_multibyte: pattern.target_multibyte,
+        })
+    }
+}
+
+/// Too many distinct classes for `u8` ids.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct TooManyClasses;
+
+/// The classes of one pattern and the character-to-class maps.
+///
+/// Class ids name [`ClassKey`]s, which do not depend on the search context,
+/// so a context change (another syntax table, a char-table write) only
+/// empties the maps from characters to ids; the DFA's transitions, keyed by
+/// class id, stay valid.
+pub(crate) struct CharClasses {
+    /// Class of each byte: every byte of unibyte text, ASCII of multibyte.
+    pub(crate) byte_class: [u8; 256],
+    /// Direct-mapped `(character code, class)` memo for the other characters.
+    wide: Box<[(u32, u8)]>,
+    keys: Vec<ClassKey>,
+    ids: FxHashMap<ClassKey, u8>,
+    context: Option<ClassContext>,
+    mask: Facts,
+    /// Context changes that emptied the maps.
+    pub(crate) resets: u64,
+}
+
+impl CharClasses {
+    pub(crate) fn new(mask: Facts) -> Self {
+        Self {
+            byte_class: [UNKNOWN_CLASS; 256],
+            wide: vec![(WIDE_EMPTY, 0); WIDE_SLOTS].into_boxed_slice(),
+            keys: Vec::new(),
+            ids: FxHashMap::default(),
+            context: None,
+            mask,
+            resets: 0,
+        }
+    }
+
+    /// Make the maps valid for a search in `context`.
+    pub(crate) fn sync(&mut self, context: ClassContext) {
+        if self.context == Some(context) {
+            return;
+        }
+        if self.context.is_some() {
+            self.resets += 1;
+        }
+        self.byte_class = [UNKNOWN_CLASS; 256];
+        self.wide.fill((WIDE_EMPTY, 0));
+        self.context = Some(context);
+    }
+
+    #[inline]
+    pub(crate) fn key(&self, class: u8) -> &ClassKey {
+        &self.keys[class as usize]
+    }
+
+    #[inline]
+    pub(crate) fn facts(&self, class: u8) -> Facts {
+        self.keys[class as usize].facts
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.keys.len()
+    }
+
+    fn intern(&mut self, key: ClassKey) -> Result<u8, TooManyClasses> {
+        if let Some(&id) = self.ids.get(&key) {
+            return Ok(id);
+        }
+        if self.keys.len() >= MAX_CLASSES {
+            return Err(TooManyClasses);
+        }
+        let id = self.keys.len() as u8;
+        self.keys.push(key.clone());
+        self.ids.insert(key, id);
+        Ok(id)
+    }
+
+    /// The class and byte length of the character at `d` (`d < text.len()`),
+    /// from the maps or computed now.
+    pub(crate) fn class_at(
+        &mut self,
+        nfa: &Nfa,
+        pattern: &CompiledPattern,
+        text: &[u8],
+        d: usize,
+        base: &BaseTableView<'_>,
+    ) -> Result<(u8, usize), TooManyClasses> {
+        let byte = text[d];
+        let tabled = !pattern.target_multibyte || byte < 0x80;
+        if tabled {
+            let class = self.byte_class[byte as usize];
+            if class != UNKNOWN_CLASS {
+                return Ok((class, 1));
+            }
+        }
+        let (code, len) = re_text_char(text, d, pattern.target_multibyte)
+            .expect("a class is asked for a character inside the text");
+        if !tabled {
+            let slot = self.wide[code as usize % WIDE_SLOTS];
+            if slot.0 == code {
+                return Ok((slot.1, len));
+            }
+        }
+        let key = nfa.class_key_at(pattern, text, d, code, len, base, self.mask);
+        let class = self.intern(key)?;
+        if tabled {
+            self.byte_class[byte as usize] = class;
+        } else {
+            self.wide[code as usize % WIDE_SLOTS] = (code, class);
+        }
+        Ok((class, len))
+    }
+
+    /// The facts of the character before `d`, or [`Facts::EDGE`] at 0 (the
+    /// matcher's `re_prev_char_start` view of the previous character).
+    pub(crate) fn previous_facts(
+        &self,
+        text: &[u8],
+        d: usize,
+        target_multibyte: bool,
+        base: &BaseTableView<'_>,
+    ) -> Facts {
+        let Some(start) = super::re_prev_char_start(text, d, target_multibyte) else {
+            return Facts::EDGE;
+        };
+        let (code, _) =
+            re_text_char(text, start, target_multibyte).expect("the previous character exists");
+        Facts::of_char(code, text[start], base, self.mask)
     }
 }
 
