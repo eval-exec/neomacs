@@ -507,12 +507,21 @@ pub struct LispBoolFwd {
 /// Byte offset of a [`LispBoolFwd`]'s flag, for compiled code's inline read.
 pub(crate) const LISP_BOOL_FWD_VALUE_OFFSET: usize = std::mem::offset_of!(LispBoolFwd, value);
 
-/// A Boolean cell that always reads true: what compiled code reads in place
-/// of a `debug-on-next-call` cell the obarray has not resolved yet, so that
-/// case reads as armed without a branch.
-pub(crate) static JIT_ALWAYS_TRUE_BOOL_FWD: LispBoolFwd = LispBoolFwd {
+/// What an obarray's `debug-on-next-call` cell pointer names before the
+/// obarray has resolved the `DEFVAR_BOOL` (`Obarray::debug_on_next_call_fwd`):
+/// it reads ARMED, so every reader takes its reference path, which resolves
+/// the real descriptor. Read-only.
+pub(crate) static DEBUG_ON_NEXT_CALL_UNRESOLVED: LispBoolFwd = LispBoolFwd {
     ty: LispFwdType::Bool,
     value: AtomicBool::new(true),
+};
+
+/// What the pointer names once the obarray found no `DEFVAR_BOOL` for
+/// `debug-on-next-call` (a bare `Obarray::new()` harness): it reads
+/// DISARMED, exactly what the missing cell has always meant. Read-only.
+pub(crate) static DEBUG_ON_NEXT_CALL_ABSENT: LispBoolFwd = LispBoolFwd {
+    ty: LispFwdType::Bool,
+    value: AtomicBool::new(false),
 };
 
 impl LispBoolFwd {
@@ -523,7 +532,20 @@ impl LispBoolFwd {
 
     #[inline]
     pub fn set(&self, value: bool) {
+        debug_assert!(
+            !self.is_debug_on_next_call_stand_in(),
+            "a debug-on-next-call stand-in is read-only"
+        );
         self.value.store(value, Ordering::Relaxed);
+    }
+
+    /// Whether this is one of the two `'static` stand-ins an obarray's
+    /// `debug-on-next-call` pointer names before (or instead of) a real
+    /// descriptor.
+    #[inline]
+    pub(crate) fn is_debug_on_next_call_stand_in(&self) -> bool {
+        std::ptr::eq(self, &DEBUG_ON_NEXT_CALL_UNRESOLVED)
+            || std::ptr::eq(self, &DEBUG_ON_NEXT_CALL_ABSENT)
     }
 }
 

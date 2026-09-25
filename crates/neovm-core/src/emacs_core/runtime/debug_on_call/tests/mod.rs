@@ -699,3 +699,48 @@ fn a_debug_on_exit_set_while_the_arguments_evaluate_survives_the_evald_store() {
         .expect("the case should evaluate");
     assert_eq!(print_value(&value), "(99 ((exit 7)))");
 }
+
+/// The call gates read `debug-on-next-call` through the obarray's never-null
+/// cell pointer. Activation resolves it, on both constructors, so no call of
+/// a live Context reads through the unresolved stand-in.
+#[test]
+fn debug_cell_resolved_after_activation() {
+    let fresh = Context::new();
+    let cell = fresh
+        .obarray
+        .debug_on_next_call_bool_fwd_cached()
+        .expect("Context::new resolves the cell");
+    assert!(!cell.is_debug_on_next_call_stand_in());
+    assert!(!fresh.debug_on_next_call_is_armed());
+
+    let restored = crate::test_utils::runtime_startup_context();
+    let cell = restored
+        .obarray
+        .debug_on_next_call_bool_fwd_cached()
+        .expect("the dump-restored Context resolves the cell");
+    assert!(!cell.is_debug_on_next_call_stand_in());
+    assert!(!restored.debug_on_next_call_is_armed());
+}
+
+/// The fast read and the resolved cell are one: arming through Lisp is seen
+/// by the gate, and taking the arm (the debugger) disarms what the gate reads.
+#[test]
+fn the_fast_read_follows_lisp_writes_of_the_cell() {
+    let mut eval = recorder_context();
+    eval.eval_str("(setq debug-on-next-call t)")
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    // `setq` itself is a special form, not a call: still armed.
+    assert!(eval.debug_on_next_call_is_armed());
+    eval.eval_str("(setq debug-on-next-call nil)")
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    assert!(!eval.debug_on_next_call_is_armed());
+}
+
+/// The two stand-ins are read-only: writing one would arm or disarm every
+/// obarray that has not resolved its own cell.
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "stand-in is read-only")]
+fn stand_ins_are_never_written() {
+    crate::emacs_core::forward::DEBUG_ON_NEXT_CALL_ABSENT.set(true);
+}

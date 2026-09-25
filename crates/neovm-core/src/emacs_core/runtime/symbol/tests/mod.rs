@@ -1206,6 +1206,70 @@ fn seqlock_negative_control_tears_without_protocol() {
     assert_eq!(value.bits(), b.bits(), "broken reader must accept HEAP_B");
 }
 
+/// A bare obarray has no `DEFVAR_BOOL` for `debug-on-next-call`: before the
+/// first probe its cell reads armed (the unresolved stand-in, which sends a
+/// reader to the resolving path), after it disarmed (the absent stand-in,
+/// what a missing cell has always meant). A `DEFVAR_BOOL` declared later is
+/// what the fast read follows from then on -- the install hook stores it,
+/// because the fast read no longer re-resolves on every call.
+#[test]
+fn bare_obarray_reads_absent_then_follows_a_late_defvar_bool() {
+    use crate::emacs_core::defvar_bool::ByteBooleanVars;
+
+    let mut ob = Obarray::new();
+    let id = intern("debug-on-next-call");
+    assert!(
+        ob.debug_on_next_call_armed_fast(),
+        "unresolved: reads armed, so the reader resolves"
+    );
+    assert!(
+        ob.debug_on_next_call_bool_fwd(id).is_none(),
+        "no DEFVAR_BOOL"
+    );
+    assert!(
+        !ob.debug_on_next_call_armed_fast(),
+        "absent: reads disarmed"
+    );
+    assert!(ob.debug_on_next_call_bool_fwd_cached().is_none());
+
+    ob.define_bool_variable("debug-on-next-call", false, ByteBooleanVars::Listed);
+    let cell = ob
+        .debug_on_next_call_bool_fwd_cached()
+        .expect("the install hook stored the new descriptor");
+    assert!(std::ptr::eq(cell, ob.bool_forwarder(id).unwrap()));
+    assert!(!ob.debug_on_next_call_armed_fast());
+    cell.set(true);
+    assert!(
+        ob.debug_on_next_call_armed_fast(),
+        "the fast read follows the late declaration"
+    );
+}
+
+/// A dump restores a localized `debug-on-next-call` without its descriptor
+/// (the pointer cannot be dumped) and `reattach_localized_forwarder` builds
+/// one in the BLV: the fast read follows that one too.
+#[test]
+fn a_reattached_localized_debug_cell_is_what_the_fast_read_follows() {
+    let mut ob = Obarray::new();
+    let id = intern("debug-on-next-call");
+    ob.make_symbol_localized(id, Value::T);
+    assert!(
+        ob.debug_on_next_call_bool_fwd(id).is_none(),
+        "no descriptor yet"
+    );
+    assert!(!ob.debug_on_next_call_armed_fast());
+    ob.reattach_localized_forwarder(
+        id,
+        crate::emacs_core::pdump::types::DumpLocalizedForwarder::Bool,
+    );
+    let cell = ob
+        .debug_on_next_call_bool_fwd_cached()
+        .expect("the reattach hook stored the BLV's descriptor");
+    assert!(std::ptr::eq(cell, ob.bool_forwarder(id).unwrap()));
+    assert!(cell.get(), "seeded from the restored default");
+    assert!(ob.debug_on_next_call_armed_fast());
+}
+
 /// The memoized `debug-on-next-call` cell (ledger 172's per-`Op::Call` read,
 /// cached because GNU's is one load of `globals.f_debug_on_next_call`) must
 /// not leak across `Obarray::clone`: clone duplicates every stateful

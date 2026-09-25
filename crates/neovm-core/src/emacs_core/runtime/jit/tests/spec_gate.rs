@@ -358,3 +358,68 @@ fn a_subr_spec_site_under_compiler_overrides_takes_the_generic_call() {
         "overrides gone: the site re-arms and is fast again"
     );
 }
+
+/// (c) `debug-on-next-call` set by compiled code enters the debugger at the
+/// next speculated call, with the callee's frame flagged for the exit
+/// debugger, and the site's fast path is not taken for it.
+///
+/// GNU 31.1, `emacs -Q --batch`, both functions byte-compiled:
+/// `(list (neo-c nil 3) (neo-c t 3) (reverse log) debug-on-next-call)`
+/// => `(3 nil ((lambda) (exit 3)) nil)`.
+#[test]
+fn debug_on_next_call_set_by_compiled_code_enters_the_debugger_at_the_next_spec_call() {
+    crate::test_utils::init_test_tracing();
+    force_profit_gate_for_test(false);
+    force_slow_spec_for_test(Some(false));
+    let mut ev = Context::new();
+    ev.eval_str(
+        "(progn (defvar neo-debug-log nil)
+                (setq debugger (lambda (&rest args) (setq neo-debug-log (cons args neo-debug-log)) nil)))",
+    )
+    .unwrap();
+    ev.obarray
+        .set_symbol_function_id(intern("neo-spec-gate-dbg"), callee(1));
+    // (lambda (d x) (setq debug-on-next-call d) (neo-spec-gate-dbg x))
+    let caller = lambda(
+        2,
+        true,
+        vec![
+            Op::StackRef(1),
+            Op::VarSet(0),
+            Op::Constant(1),
+            Op::StackRef(1),
+            Op::Call(1),
+            Op::Return,
+        ],
+        vec![
+            Value::symbol("debug-on-next-call"),
+            Value::symbol("neo-spec-gate-dbg"),
+        ],
+    );
+    let x = Value::make_int(3);
+    for _ in 0..3 {
+        assert_eq!(
+            ev.funcall_general_untraced(caller, vec![Value::NIL, x])
+                .unwrap(),
+            x
+        );
+    }
+    let fast = shim_fast();
+    let debugged = ev
+        .funcall_general_untraced(caller, vec![Value::T, x])
+        .unwrap();
+    assert_eq!(
+        debugged,
+        Value::NIL,
+        "the exit debugger's value replaces the call's"
+    );
+    assert_eq!(shim_fast(), fast, "the armed call left the fast path");
+    assert_eq!(
+        crate::emacs_core::print::print_value(
+            &ev.eval_str("(list (reverse neo-debug-log) debug-on-next-call)")
+                .unwrap()
+        ),
+        "(((lambda) (exit 3)) nil)"
+    );
+    assert!(!ev.debug_on_next_call_is_armed());
+}

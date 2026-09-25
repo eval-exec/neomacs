@@ -426,6 +426,10 @@ impl Context {
 
     pub(super) fn finish_runtime_activation(&mut self, sync_keyboard: bool) {
         self.setup_thread_locals();
+        // The call gates read `debug-on-next-call` through a never-null cell
+        // pointer that names an always-armed stand-in until resolved; resolve
+        // it before any Lisp runs so no call takes the reference path for it.
+        self.resolve_debug_on_next_call_cell();
         self.refresh_gc_runtime_settings_cache();
         self.sync_gc_threshold_from_runtime_settings();
         if sync_keyboard {

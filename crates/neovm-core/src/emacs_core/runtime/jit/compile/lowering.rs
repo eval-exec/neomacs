@@ -1186,20 +1186,14 @@ fn emit_inline_record_type_of(
         crate::emacs_core::eval::ASYNC_ATTENTION.addr() as i64,
     );
     let async_word = fb.ins().uload32(flags, async_addr, 0);
-    // An unresolved `debug-on-next-call` cell reads through a stand-in that
-    // is always armed.
-    let fwd = fb.ins().load(
+    // The `debug-on-next-call` cell: never null (an unresolved cell names a
+    // stand-in that reads armed).
+    let cell = fb.ins().load(
         rt.ptr_ty,
         flags,
         vmctx,
         (ob + OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET) as i32,
     );
-    let always_armed = fb.ins().iconst(
-        rt.ptr_ty,
-        std::ptr::from_ref(&crate::emacs_core::forward::JIT_ALWAYS_TRUE_BOOL_FWD) as i64,
-    );
-    let fwd_resolved = icmp_imm_p(fb, IntCC::NotEqual, fwd, 0);
-    let cell = fb.ins().select(fwd_resolved, fwd, always_armed);
     let debug = fb
         .ins()
         .uload8(types::I64, flags, cell, LISP_BOOL_FWD_VALUE_OFFSET as i32);
@@ -1837,18 +1831,13 @@ fn emit_mir_inline_entry_guard(
         crate::emacs_core::eval::ASYNC_ATTENTION.addr() as i64,
     );
     let async_word = fb.ins().uload32(flags, async_addr, 0);
-    let fwd = fb.ins().load(
+    // Never null; an unresolved cell names a stand-in that reads armed.
+    let cell = fb.ins().load(
         rt.ptr_ty,
         flags,
         vmctx,
         (ob + OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET) as i32,
     );
-    let armed = fb.ins().iconst(
-        rt.ptr_ty,
-        std::ptr::from_ref(&crate::emacs_core::forward::JIT_ALWAYS_TRUE_BOOL_FWD) as i64,
-    );
-    let resolved = icmp_imm_p(fb, IntCC::NotEqual, fwd, 0);
-    let cell = fb.ins().select(resolved, fwd, armed);
     let debug = fb
         .ins()
         .uload8(types::I64, flags, cell, LISP_BOOL_FWD_VALUE_OFFSET as i32);

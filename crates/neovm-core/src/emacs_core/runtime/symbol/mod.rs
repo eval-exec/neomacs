@@ -1069,12 +1069,19 @@ pub struct Obarray {
     /// armed dispatch sites read `globals.f_debug_on_next_call` as ONE load
     /// (`src/bytecode.c:798`, `src/eval.c:2601`, `src/eval.c:3189`);
     /// re-resolving the descriptor through the symbol slot on every bytecode
-    /// `Op::Call` cost ~48 Ir/call on the Tier-0 differential.  Null until
-    /// first resolved.  The address is stable for THIS obarray once resolved:
-    /// `define_bool_variable` reuses an existing descriptor rather than
-    /// replacing it, `make_blv` moves the SAME cell into the BLV, and
-    /// `reattach_localized_forwarder` refuses a BLV that already has one.
-    /// `clone()` resets it because clone duplicates stateful forwarders.
+    /// `Op::Call` cost ~48 Ir/call on the Tier-0 differential.
+    ///
+    /// Never null, so the hot read is a pointer load and a byte test
+    /// ([`Self::debug_on_next_call_armed_fast`]): it names the resolved
+    /// descriptor, or `DEBUG_ON_NEXT_CALL_UNRESOLVED` (reads armed, so the
+    /// reader's reference path resolves) until first resolved, or
+    /// `DEBUG_ON_NEXT_CALL_ABSENT` (reads disarmed) when the obarray has no
+    /// `DEFVAR_BOOL` for it.  The address is stable for THIS obarray once
+    /// resolved: `define_bool_variable` reuses an existing descriptor rather
+    /// than replacing it, `make_blv` moves the SAME cell into the BLV, and
+    /// the two places that install a descriptor (`install_boolfwd`,
+    /// `reattach_localized_forwarder`) store it here themselves.  `clone()`
+    /// resets it because clone duplicates stateful forwarders.
     debug_on_next_call_fwd: std::sync::atomic::AtomicPtr<crate::emacs_core::forward::LispBoolFwd>,
     /// Whether `max-lisp-eval-depth` has EVER been made buffer-local in this
     /// obarray. The eval-depth guard on every function call has to know
@@ -1190,7 +1197,8 @@ pub(crate) const OBARRAY_JIT_SPINE_OFFSET: usize =
 pub(crate) const OBARRAY_FUNCTION_EPOCH_OFFSET: usize =
     std::mem::offset_of!(Obarray, function_epoch);
 /// Where compiled code reads the memoized `debug-on-next-call` descriptor
-/// pointer (null until resolved; see `Obarray::debug_on_next_call_bool_fwd`).
+/// pointer (never null: a stand-in until resolved; see
+/// `Obarray::debug_on_next_call_fwd`).
 pub(crate) const OBARRAY_DEBUG_ON_NEXT_CALL_FWD_OFFSET: usize =
     std::mem::offset_of!(Obarray, debug_on_next_call_fwd);
 /// See [`OBARRAY_JIT_SPINE_OFFSET`].
@@ -1691,7 +1699,7 @@ impl Clone for Obarray {
             // The clone re-leaked every stateful forwarder above; the cached
             // descriptor belongs to the source obarray, so the clone starts
             // unresolved.
-            debug_on_next_call_fwd: std::sync::atomic::AtomicPtr::new(std::ptr::null_mut()),
+            debug_on_next_call_fwd: Self::debug_on_next_call_unresolved(),
             max_lisp_eval_depth_localized: self.max_lisp_eval_depth_localized,
             // A deep copy is new storage: every address it holds is new.
             generation: next_obarray_generation(),
@@ -1962,7 +1970,7 @@ impl Obarray {
             completion_order_cache: std::sync::Mutex::new(None),
             blvs: Vec::new(),
             value_fwds: Vec::new(),
-            debug_on_next_call_fwd: std::sync::atomic::AtomicPtr::new(std::ptr::null_mut()),
+            debug_on_next_call_fwd: Self::debug_on_next_call_unresolved(),
             max_lisp_eval_depth_localized: false,
             generation: next_obarray_generation(),
         };
@@ -2775,18 +2783,54 @@ impl Obarray {
 
     /// The memoized descriptor of [`Self::debug_on_next_call_bool_fwd`], when
     /// resolved: for a caller that names the symbol only on the miss (its
-    /// `OnceLock` read was most of the per-call check).
+    /// `OnceLock` read was most of the per-call check).  `None` while the
+    /// pointer names a stand-in.
     #[inline(always)]
     pub(crate) fn debug_on_next_call_bool_fwd_cached(
         &self,
     ) -> Option<&'static crate::emacs_core::forward::LispBoolFwd> {
-        let cached = self
+        let cell = self.debug_on_next_call_cell_ref();
+        (!cell.is_debug_on_next_call_stand_in()).then_some(cell)
+    }
+
+    /// GNU's bare `if (debug_on_next_call)` (`src/bytecode.c:798`): one
+    /// pointer load and one byte test, no null check. True also while the
+    /// cell is unresolved (the stand-in reads armed), which only sends the
+    /// caller to the reference path that resolves it; see the field.
+    #[inline(always)]
+    pub(crate) fn debug_on_next_call_armed_fast(&self) -> bool {
+        self.debug_on_next_call_cell_ref().get()
+    }
+
+    /// The cell the pointer names: a leaked descriptor or a stand-in.
+    #[inline(always)]
+    fn debug_on_next_call_cell_ref(&self) -> &'static crate::emacs_core::forward::LispBoolFwd {
+        let cell = self
             .debug_on_next_call_fwd
             .load(std::sync::atomic::Ordering::Relaxed);
-        // Safety: the only store is the slow path below, which puts a
-        // `Box::leak`ed descriptor here, and no path replaces a resolved
-        // descriptor for a live obarray (see the field's invariant note).
-        (!cached.is_null()).then(|| unsafe { &*cached })
+        // Safety: never null. Every store puts a `Box::leak`ed descriptor or
+        // one of the two `'static` stand-ins here (the initializers, the slow
+        // path below, and the install hooks).
+        unsafe { &*cell }
+    }
+
+    /// A pointer word naming the unresolved stand-in: every constructor's
+    /// initial value.
+    fn debug_on_next_call_unresolved()
+    -> std::sync::atomic::AtomicPtr<crate::emacs_core::forward::LispBoolFwd> {
+        std::sync::atomic::AtomicPtr::new(
+            std::ptr::from_ref(&crate::emacs_core::forward::DEBUG_ON_NEXT_CALL_UNRESOLVED)
+                .cast_mut(),
+        )
+    }
+
+    /// Point the memoized cell at FWD, the descriptor now canonical for
+    /// `debug-on-next-call` in this obarray.
+    fn set_debug_on_next_call_cell(&self, fwd: &'static crate::emacs_core::forward::LispBoolFwd) {
+        self.debug_on_next_call_fwd.store(
+            std::ptr::from_ref(fwd).cast_mut(),
+            std::sync::atomic::Ordering::Relaxed,
+        );
     }
 
     #[cold]
@@ -2795,12 +2839,23 @@ impl Obarray {
         &self,
         id: SymId,
     ) -> Option<&'static crate::emacs_core::forward::LispBoolFwd> {
-        let fwd = self.bool_forwarder(id)?;
-        self.debug_on_next_call_fwd.store(
-            fwd as *const crate::emacs_core::forward::LispBoolFwd as *mut _,
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        let Some(fwd) = self.bool_forwarder(id) else {
+            // No `DEFVAR_BOOL`: the missing cell reads disarmed, as `None`
+            // always meant. A descriptor installed later replaces this
+            // through the install hooks.
+            self.set_debug_on_next_call_cell(
+                &crate::emacs_core::forward::DEBUG_ON_NEXT_CALL_ABSENT,
+            );
+            return None;
+        };
+        self.set_debug_on_next_call_cell(fwd);
         Some(fwd)
+    }
+
+    /// The install hooks' test: is ID `debug-on-next-call`?
+    fn is_debug_on_next_call_symbol(id: SymId) -> bool {
+        static SYMBOL: std::sync::OnceLock<SymId> = std::sync::OnceLock::new();
+        id == *SYMBOL.get_or_init(|| intern("debug-on-next-call"))
     }
 
     /// The `Lisp_Intfwd` cell behind a `DEFVAR_INT` symbol -- GNU's
@@ -3088,6 +3143,12 @@ impl Obarray {
             fwd: fwd as *const crate::emacs_core::forward::LispBoolFwd
                 as *const crate::emacs_core::forward::LispFwd,
         };
+        // This descriptor is now the variable's cell: the memoized pointer
+        // follows it (an earlier probe may have found none, or a different
+        // descriptor).
+        if Self::is_debug_on_next_call_symbol(id) {
+            self.set_debug_on_next_call_cell(fwd);
+        }
     }
 
     /// Define a global Lisp variable with GNU `DEFVAR_BOOL` storage.
@@ -3232,6 +3293,13 @@ impl Obarray {
         blv.defcell.set_cdr(canonical);
         if super::value::eq_value(&blv.valcell, &blv.defcell) {
             blv.valcell.set_cdr(canonical);
+        }
+        // The BLV's new descriptor is the variable's cell now; the memoized
+        // pointer follows it (see `install_boolfwd`).
+        if Self::is_debug_on_next_call_symbol(id)
+            && let Some(bool_fwd) = fwd.as_bool_fwd()
+        {
+            self.set_debug_on_next_call_cell(bool_fwd);
         }
         // The descriptor just allocated owns the value it was seeded with, so
         // it is a root like every other value-owning forwarder.  `blv` is
@@ -4783,7 +4851,7 @@ impl Obarray {
             completion_order_cache: std::sync::Mutex::new(None),
             blvs: Vec::new(),
             value_fwds: Vec::new(),
-            debug_on_next_call_fwd: std::sync::atomic::AtomicPtr::new(std::ptr::null_mut()),
+            debug_on_next_call_fwd: Self::debug_on_next_call_unresolved(),
             // Set by `load_obarray`'s second pass, which re-localizes every
             // dumped Localized symbol through `make_symbol_localized`.
             max_lisp_eval_depth_localized: false,

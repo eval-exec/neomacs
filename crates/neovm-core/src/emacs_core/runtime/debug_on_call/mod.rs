@@ -169,9 +169,22 @@ impl Context {
     /// flag set.  The bytecode `Op::Call` arm uses it to steer off its
     /// zero-copy fast path onto the frame-recording path GNU's `Bcall` always
     /// takes, and then takes the arm properly there.
-    #[inline]
+    ///
+    /// One pointer load and one byte test: the obarray's cell pointer is
+    /// never null (`Obarray::debug_on_next_call_armed_fast`). Before the
+    /// cell is resolved it reads armed, which only routes the call onto the
+    /// path that takes the arm properly -- and resolves the cell there.
+    #[inline(always)]
     pub(crate) fn debug_on_next_call_is_armed(&self) -> bool {
-        self.debug_on_next_call_cell().is_some_and(LispBoolFwd::get)
+        self.obarray.debug_on_next_call_armed_fast()
+    }
+
+    /// Resolve the memoized cell now, so the unresolved window closes before
+    /// any Lisp runs (`finish_runtime_activation`).
+    pub(crate) fn resolve_debug_on_next_call_cell(&self) {
+        let _ = self
+            .obarray
+            .debug_on_next_call_bool_fwd(debug_on_next_call_symbol());
     }
 
     /// GNU `if (debug_on_next_call) do_debug_on_call (CODE, count)`'s test plus
