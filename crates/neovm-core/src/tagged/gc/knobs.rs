@@ -46,6 +46,13 @@ fn env_is_on(name: &str) -> bool {
     )
 }
 
+/// Log, once per process, that a knob is away from its default: the
+/// engagement check for a same-binary A/B run
+/// (`RUST_LOG=neovm::gc::knobs=info`).
+fn note_knob(name: &str, value: &str) {
+    tracing::info!(target: "neovm::gc::knobs", "{name}={value} is on in this process");
+}
+
 #[cfg(test)]
 thread_local! {
     static CENSUS_OVERRIDE: std::cell::Cell<Option<CensusMode>> = const { std::cell::Cell::new(None) };
@@ -62,8 +69,10 @@ pub(crate) fn census_mode() -> CensusMode {
     static MODE: OnceLock<CensusMode> = OnceLock::new();
     *MODE.get_or_init(|| {
         if env_is_on("NEOVM_GC_CENSUS_REMSET") {
+            note_knob("NEOVM_GC_CENSUS_REMSET", "1");
             CensusMode::SurvivorsAndRemset
         } else if env_is_on("NEOVM_GC_CENSUS") {
+            note_knob("NEOVM_GC_CENSUS", "1");
             CensusMode::Survivors
         } else {
             CensusMode::Off
@@ -78,7 +87,13 @@ pub(crate) fn chunk_map_on() -> bool {
         return on;
     }
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| env_is_on("NEOVM_GC_CHUNK_MAP"))
+    *ON.get_or_init(|| {
+        let on = env_is_on("NEOVM_GC_CHUNK_MAP");
+        if on {
+            note_knob("NEOVM_GC_CHUNK_MAP", "1");
+        }
+        on
+    })
 }
 
 /// `NEOVM_GC_VEC_SCAN`.
@@ -90,7 +105,10 @@ pub(crate) fn vec_scan_mode() -> VecScanMode {
     static MODE: OnceLock<VecScanMode> = OnceLock::new();
     *MODE.get_or_init(
         || match std::env::var("NEOVM_GC_VEC_SCAN").ok().as_deref() {
-            Some("defer") => VecScanMode::Defer,
+            Some("defer") => {
+                note_knob("NEOVM_GC_VEC_SCAN", "defer");
+                VecScanMode::Defer
+            }
             _ => VecScanMode::Snapshot,
         },
     )

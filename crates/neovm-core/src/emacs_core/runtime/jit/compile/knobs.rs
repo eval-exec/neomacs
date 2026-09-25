@@ -133,10 +133,17 @@ pub(crate) fn jit_aref_skip_slot0_on() -> bool {
     use std::sync::OnceLock;
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| {
-        matches!(
+        let on = matches!(
             std::env::var("NEOVM_JIT_AREF_SKIP_SLOT0").ok().as_deref(),
             Some("1" | "on" | "true" | "yes")
-        )
+        );
+        if on {
+            tracing::info!(
+                target: "neovm::jit::knobs",
+                "NEOVM_JIT_AREF_SKIP_SLOT0=1 is on in this process (measurement only)"
+            );
+        }
+        on
     })
 }
 
