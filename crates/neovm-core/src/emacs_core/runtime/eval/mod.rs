@@ -2997,6 +2997,11 @@ pub struct Context {
     /// poll's guard is true in any session that owns an input channel -- 8 M
     /// lookups in a 20-keystroke rust-lsp run.
     throw_on_input: Value,
+    /// The attention word (`attention.rs`): one bit per input above that a
+    /// safe point must look at.  Derived from `quit_flag` and
+    /// `throw_on_input`, and written ONLY by `refresh_attention` and the
+    /// constructors; compiled code reads it at `CONTEXT_ATTENTION_OFFSET`.
+    attention: u32,
     /// Nonzero while `unbind_to` is running unwind cleanup forms.
     ///
     /// GNU `unbind_to` clears `Vquit_flag` and then runs cleanup forms without
@@ -4255,10 +4260,12 @@ impl Context {
     pub(crate) fn sync_cached_runtime_binding_by_id(&mut self, sym_id: SymId, value: Value) {
         if sym_id == self.quit_flag_symbol {
             self.quit_flag = value;
+            self.refresh_attention();
         } else if sym_id == self.inhibit_quit_symbol {
             self.inhibit_quit = value;
         } else if sym_id == self.throw_on_input_symbol {
             self.throw_on_input = value;
+            self.refresh_attention();
         } else if sym_id == self.compiler_function_overrides_symbol {
             let active = value.is_cons();
             if active != self.compiler_function_overrides_active {
@@ -7288,7 +7295,7 @@ mod gc_pacing;
 
 mod attention;
 pub use attention::QuitRequest;
-pub(crate) use attention::{ASYNC_ATTENTION, AsyncSource};
+pub(crate) use attention::{ASYNC_ATTENTION, AsyncSource, AttentionMask};
 
 pub(crate) mod runtime_projection;
 
@@ -7368,6 +7375,11 @@ mod gc_sweep_cap_tests;
 #[cfg(test)]
 #[path = "tests/gc_forced_first_cycle.rs"]
 mod gc_forced_first_cycle_tests;
+
+// The attention word: every writer of its inputs keeps it derived.
+#[cfg(test)]
+#[path = "tests/attention.rs"]
+mod attention_word_tests;
 
 /// Allocator for [`Context::context_instance_id`].
 fn next_context_instance_id() -> u64 {

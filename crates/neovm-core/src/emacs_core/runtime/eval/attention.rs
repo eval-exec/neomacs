@@ -9,12 +9,114 @@
 //!   from another thread or from signal context: the Lisp profiler's tick, a
 //!   handled OS signal, and raised [`QuitRequest`]s.  It is GNU's
 //!   `pending_signals` (src/keyboard.c:105), a hint the slow path re-derives.
+//! * `Context::attention`, one per-Context word derived from the evaluator's
+//!   own state that a safe point must look at ([`AttentionBit`]).  GNU's
+//!   `Vquit_flag` half of the test.
+//!
+//! A safe point is clear exactly when both words are clear under its
+//! [`AttentionMask`]: two loads, as in GNU.
 //!
 //! A child module of `eval`, like its siblings, so it keeps the same view of
 //! `Context` and the parent's private items (`use super::*`).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
+use super::Context;
+use crate::emacs_core::value::Value;
+
+/// A Context condition that sends a safe point off its loads-only fast path.
+/// A SET bit means "may need attention" (a superset); the slow path always
+/// re-derives the exact answer from the canonical fields.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u32)]
+pub(crate) enum AttentionBit {
+    /// `quit-flag` is non-nil: GNU's `!NILP (Vquit_flag)` (src/lisp.h:3899).
+    QuitFlag = 1 << 0,
+    /// `throw-on-input` is non-nil: the safe point may have to poll the host
+    /// input channel for it (neomacs-only; GNU's input layer sets
+    /// `Vquit_flag` itself, src/keyboard.c:3869-3871).  Conservative: set
+    /// even where there is no channel to poll (a batch session), which costs
+    /// that session one cold trip per poll and nothing else -- the slow path
+    /// re-checks `has_throw_on_input_poll_source`.
+    ThrowOnInput = 1 << 1,
+}
+
+/// Which [`AttentionBit`]s a particular safe point or call gate must see
+/// clear, besides [`ASYNC_ATTENTION`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct AttentionMask(u32);
+
+impl AttentionMask {
+    /// `maybe_quit`'s fast test: GNU's `Vquit_flag`, plus the host-input
+    /// poll `throw-on-input` needs here.
+    pub(crate) const QUIT: Self =
+        Self(AttentionBit::QuitFlag as u32 | AttentionBit::ThrowOnInput as u32);
+
+    /// The mask as the word compiled code ANDs with the attention word.
+    #[inline(always)]
+    pub(crate) const fn bits(self) -> u32 {
+        self.0
+    }
+}
+
+/// The attention word the canonical fields imply.  `Context::attention` must
+/// equal this at every read ([`Context::attention_clear`] asserts it in debug
+/// builds); [`Context::refresh_attention`] is the only way to move it.
+pub(super) fn attention_of(quit_flag: Value, throw_on_input: Value) -> u32 {
+    let mut word = 0;
+    if !quit_flag.is_nil() {
+        word |= AttentionBit::QuitFlag as u32;
+    }
+    if !throw_on_input.is_nil() {
+        word |= AttentionBit::ThrowOnInput as u32;
+    }
+    word
+}
+
+impl Context {
+    /// Re-derive the attention word after a write to one of its inputs.
+    /// Every writer of `quit_flag` and `throw_on_input` calls this
+    /// (`sync_cached_runtime_binding_by_id`, `set_quit_flag_value`); the
+    /// constructors initialize the word from the same inputs.
+    #[inline]
+    pub(super) fn refresh_attention(&mut self) {
+        self.attention = attention_of(self.quit_flag, self.throw_on_input);
+    }
+
+    /// True when neither this Context's attention word under MASK nor the
+    /// process's asynchronous word asks for attention: two loads, GNU's
+    /// `!NILP (Vquit_flag) || pending_signals` shape.
+    #[inline(always)]
+    pub(crate) fn attention_clear(&self, mask: AttentionMask) -> bool {
+        #[cfg(debug_assertions)]
+        self.assert_attention_is_derived();
+        (self.attention & mask.0) | ASYNC_ATTENTION.load() == 0
+    }
+
+    /// The invariant [`Self::attention_clear`] relies on, checked at every
+    /// read in debug builds: a writer of an input that skipped
+    /// [`Self::refresh_attention`] would lose a C-g or a `throw-on-input`.
+    #[cfg(debug_assertions)]
+    #[inline(never)]
+    fn assert_attention_is_derived(&self) {
+        assert_eq!(
+            self.attention,
+            attention_of(self.quit_flag, self.throw_on_input),
+            "stale attention word: a writer of quit-flag/throw-on-input skipped \
+             refresh_attention"
+        );
+    }
+
+    /// The attention word as stored, and as its inputs imply it.
+    #[cfg(test)]
+    pub(crate) fn attention_words_for_test(&self) -> (u32, u32) {
+        (
+            self.attention,
+            attention_of(self.quit_flag, self.throw_on_input),
+        )
+    }
+}
 
 /// A process-wide asynchronous poll source: GNU's `pending_signals`
 /// (src/keyboard.c:105) generalized to the things that arrive from other

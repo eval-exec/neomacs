@@ -80,6 +80,7 @@ impl Context {
             quit_flag,
             inhibit_quit,
             throw_on_input,
+            attention: attention::attention_of(quit_flag, throw_on_input),
             unwind_cleanup_depth: 0,
             noninteractive_symbol: core_eval_symbols.noninteractive_symbol,
             noninteractive,

@@ -2578,14 +2578,14 @@ impl Context {
     /// cursor still live and only publish for the cold slow path.
     ///
     /// GNU's test is `!NILP (Vquit_flag) || pending_signals`
-    /// (src/lisp.h:3897-3901).  [`ASYNC_ATTENTION`] is the second word: the
-    /// profiler tick, a handled OS signal and every raised cross-thread quit
-    /// request share it, so the asynchronous half is one load.
+    /// (src/lisp.h:3897-3901), and so is this one: the Context's attention
+    /// word (`quit-flag`, and a bound `throw-on-input`, whose host-input poll
+    /// the slow path runs) and [`ASYNC_ATTENTION`] (the profiler tick, a
+    /// handled OS signal and every raised cross-thread quit request).
+    /// `inhibit-quit` is not in the fast test, as in GNU.
     #[inline(always)]
     pub(crate) fn maybe_quit_hot_ok(&self) -> bool {
-        ASYNC_ATTENTION.load() == 0
-            && self.quit_flag.is_nil()
-            && (self.throw_on_input.is_nil() || !self.has_throw_on_input_poll_source())
+        self.attention_clear(AttentionMask::QUIT)
     }
 
     /// GNU `maybe_quit`: promote frontend input for `throw-on-input`, then do
@@ -2701,6 +2701,7 @@ impl Context {
     #[inline(always)]
     pub(crate) fn set_quit_flag_value(&mut self, value: Value) {
         self.quit_flag = value;
+        self.refresh_attention();
         self.obarray
             .set_symbol_value_id(self.quit_flag_symbol, value);
     }

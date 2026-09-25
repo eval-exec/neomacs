@@ -1125,8 +1125,7 @@ fn emit_inline_record_type_of(
     arg: ClifValue,
 ) -> Option<(Block, Variable)> {
     use crate::emacs_core::eval::runtime_projection::{
-        CONTEXT_COMPILER_OVERRIDES_ACTIVE_OFFSET, CONTEXT_QUIT_FLAG_OFFSET,
-        CONTEXT_THROW_ON_INPUT_OFFSET,
+        CONTEXT_ATTENTION_OFFSET, CONTEXT_COMPILER_OVERRIDES_ACTIVE_OFFSET,
     };
     use crate::emacs_core::forward::LISP_BOOL_FWD_VALUE_OFFSET;
     use crate::emacs_core::symbol::{
@@ -1177,14 +1176,15 @@ fn emit_inline_record_type_of(
         vmctx,
         CONTEXT_COMPILER_OVERRIDES_ACTIVE_OFFSET as i32,
     );
-    let quit_flag = fb
+    // `quit-flag` and a bound `throw-on-input`: the Context's attention word
+    // under the quit poll's mask.
+    let attention = fb
         .ins()
-        .load(types::I64, flags, vmctx, CONTEXT_QUIT_FLAG_OFFSET as i32);
-    let throw_on_input = fb.ins().load(
-        types::I64,
-        flags,
-        vmctx,
-        CONTEXT_THROW_ON_INPUT_OFFSET as i32,
+        .uload32(flags, vmctx, CONTEXT_ATTENTION_OFFSET as i32);
+    let attention = band_imm_p(
+        fb,
+        attention,
+        i64::from(crate::emacs_core::eval::AttentionMask::QUIT.bits()),
     );
     // The profiler tick, a pending OS signal and every raised cross-thread
     // quit request: one word. A JIT-only bake of a process address (this
@@ -1214,8 +1214,7 @@ fn emit_inline_record_type_of(
     let object = band_imm_p(fb, arg, !(TAG_MASK as i64));
     let type_tag = fb.ins().uload8(types::I64, flags, object, type_off as i32);
     let not_record = fb.ins().bxor_imm_u(type_tag, record_tag);
-    let set = fb.ins().bor(overrides, quit_flag);
-    let set = fb.ins().bor(set, throw_on_input);
+    let set = fb.ins().bor(overrides, attention);
     let set = fb.ins().bor(set, async_word);
     let set = fb.ins().bor(set, debug);
     let set = fb.ins().bor(set, not_record);
@@ -1817,8 +1816,7 @@ fn emit_mir_inline_entry_guard(
     deopt: Block,
 ) -> Result<(), CompileError> {
     use crate::emacs_core::eval::runtime_projection::{
-        CONTEXT_COMPILER_OVERRIDES_ACTIVE_OFFSET, CONTEXT_QUIT_FLAG_OFFSET,
-        CONTEXT_THROW_ON_INPUT_OFFSET,
+        CONTEXT_ATTENTION_OFFSET, CONTEXT_COMPILER_OVERRIDES_ACTIVE_OFFSET,
     };
     use crate::emacs_core::forward::LISP_BOOL_FWD_VALUE_OFFSET;
     use crate::emacs_core::symbol::{
@@ -1840,14 +1838,13 @@ fn emit_mir_inline_entry_guard(
         vmctx,
         CONTEXT_COMPILER_OVERRIDES_ACTIVE_OFFSET as i32,
     );
-    let quit = fb
+    let attention = fb
         .ins()
-        .load(types::I64, flags, vmctx, CONTEXT_QUIT_FLAG_OFFSET as i32);
-    let throw = fb.ins().load(
-        types::I64,
-        flags,
-        vmctx,
-        CONTEXT_THROW_ON_INPUT_OFFSET as i32,
+        .uload32(flags, vmctx, CONTEXT_ATTENTION_OFFSET as i32);
+    let attention = band_imm_p(
+        fb,
+        attention,
+        i64::from(crate::emacs_core::eval::AttentionMask::QUIT.bits()),
     );
     // The asynchronous sources, one word; a JIT-only bake (this guard refuses
     // AOT, see its caller's `aot-inline-epoch`).
@@ -1885,8 +1882,7 @@ fn emit_mir_inline_entry_guard(
     );
     let depth_ok = fb.ins().icmp(IntCC::UnsignedLessThan, depth, max_depth);
     debug_assert_eq!(Value::NIL.bits(), 0);
-    let set = fb.ins().bor(overrides, quit);
-    let set = fb.ins().bor(set, throw);
+    let set = fb.ins().bor(overrides, attention);
     let set = fb.ins().bor(set, async_word);
     let set = fb.ins().bor(set, debug);
     let clear = icmp_imm_p(fb, IntCC::Equal, set, 0);

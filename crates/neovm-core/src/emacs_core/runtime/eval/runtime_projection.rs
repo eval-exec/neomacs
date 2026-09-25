@@ -13,12 +13,11 @@ use super::*;
 pub(crate) const CONTEXT_COMPILER_OVERRIDES_ACTIVE_OFFSET: usize =
     std::mem::offset_of!(Context, compiler_function_overrides_active);
 const _: () = assert!(std::mem::size_of::<bool>() == 1);
-/// Where compiled code reads `Context::quit_flag` and `throw_on_input` (each a
-/// `Value` word), the two Lisp-visible halves of `maybe_quit_hot_ok`.
-pub(crate) const CONTEXT_QUIT_FLAG_OFFSET: usize = std::mem::offset_of!(Context, quit_flag);
-/// See [`CONTEXT_QUIT_FLAG_OFFSET`].
-pub(crate) const CONTEXT_THROW_ON_INPUT_OFFSET: usize =
-    std::mem::offset_of!(Context, throw_on_input);
+/// Where compiled code reads `Context::attention` (a `u32`), the Context half
+/// of `maybe_quit_hot_ok`'s two-word test. Baked only by JIT code (the inline
+/// guards refuse AOT), so it is not salted into the AOT ABI tag.
+pub(crate) const CONTEXT_ATTENTION_OFFSET: usize = std::mem::offset_of!(Context, attention);
+const _: () = assert!(std::mem::size_of::<u32>() == 4);
 /// Where compiled code finds the buffer manager, the first hop of the walk to
 /// the current buffer's `point` / `BEGV` / `ZV`. See
 /// [`crate::buffer::buffer::jit_layout`] for the rest of the chain and for why

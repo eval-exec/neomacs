@@ -8803,6 +8803,54 @@ fn a_record_type_of_site_answers_inline() {
             "{name}: a pending quit signals at the call: {quit:?}"
         );
         let _ = take_pending_flow();
+        // Every other attention source takes the shim too, which polls, finds
+        // nothing to signal and answers: a bound `throw-on-input` (a batch
+        // Context has no channel to poll), the profiler tick, a pending OS
+        // signal, and a raised quit request of another Context.
+        #[cfg(debug_assertions)]
+        {
+            use crate::emacs_core::eval::{ASYNC_ATTENTION, AsyncSource, QuitRequest};
+            let other = QuitRequest::new();
+            for source in [
+                "throw-on-input",
+                "profiler-tick",
+                "os-signal",
+                "quit-request",
+            ] {
+                match source {
+                    "throw-on-input" => {
+                        ev.eval_str("(setq throw-on-input 'neo-tag)").expect("bind");
+                    }
+                    "profiler-tick" => ASYNC_ATTENTION.raise(AsyncSource::ProfilerTick),
+                    "os-signal" => ASYNC_ATTENTION.raise(AsyncSource::OsSignal),
+                    _ => other.request(),
+                }
+                let shim0 = SUBR_SPEC_COUNT.load(Ordering::Relaxed);
+                let answer = lone.call(ctx, &[record]);
+                match source {
+                    "throw-on-input" => {
+                        ev.eval_str("(setq throw-on-input nil)").expect("unbind");
+                    }
+                    "profiler-tick" => {
+                        ASYNC_ATTENTION.take(AsyncSource::ProfilerTick);
+                    }
+                    "os-signal" => {
+                        ASYNC_ATTENTION.take(AsyncSource::OsSignal);
+                    }
+                    _ => other.clear(),
+                }
+                assert_eq!(
+                    answer,
+                    NativeRun::Ok(Value::symbol("foo").bits()),
+                    "{name} under {source}"
+                );
+                assert_eq!(
+                    SUBR_SPEC_COUNT.load(Ordering::Relaxed) - shim0,
+                    1,
+                    "{name}: {source} takes the shim"
+                );
+            }
+        }
         let cell = ev
             .obarray
             .debug_on_next_call_bool_fwd(intern("debug-on-next-call"))

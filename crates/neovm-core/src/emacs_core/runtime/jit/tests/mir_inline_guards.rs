@@ -93,6 +93,7 @@ fn mir_inline_identity_honors_debug_override_quit_and_depth() {
         "debug-on-next-call",
         "internal--compiler-function-overrides",
         "quit-flag",
+        "throw-on-input",
         "max-lisp-eval-depth",
     ] {
         let mut ev = Context::new();
@@ -142,6 +143,72 @@ fn mir_inline_identity_honors_debug_override_quit_and_depth() {
                 "state changes without redefinition"
             );
         }
+        assert_eq!(ev.jit_root_stack_top, 0);
+    }
+}
+
+/// The asynchronous sources share one word with the quit request of every
+/// Context, and the inline entry guard reads it: each one deopts the inlined
+/// call before it runs, and the resumed call completes once it is lowered.
+#[test]
+fn mir_inline_identity_deopts_on_each_asynchronous_source() {
+    use crate::emacs_core::eval::{ASYNC_ATTENTION, AsyncSource, QuitRequest};
+    for source in ["profiler-tick", "os-signal", "quit-request"] {
+        let mut ev = Context::new();
+        let id = Value::symbol("mir-inline-async-id");
+        let callee = function(vec![Op::StackRef(0), Op::Return], vec![], 1);
+        ev.obarray
+            .set_symbol_function_id(id.as_symbol_id().unwrap(), Value::make_bytecode(callee));
+        // The shape of the flag test above (a variable write, then the
+        // inlined call), with a variable no guard looks at.
+        let f = function(
+            vec![
+                Op::Constant(0),
+                Op::VarSet(1),
+                Op::Constant(2),
+                Op::StackRef(1),
+                Op::Call(1),
+                Op::Return,
+            ],
+            vec![
+                Value::make_int(1),
+                Value::symbol("mir-inline-async-dummy"),
+                id,
+            ],
+            1,
+        );
+        let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).unwrap();
+        assert_eq!(leaf.tier, leaf::LeafTier::Mir);
+        let _ = ev.debug_on_next_call_is_armed();
+        let ctx = &mut ev as *mut Context as *mut u8;
+        assert_eq!(
+            leaf.call(ctx, &[Value::make_int(5)]),
+            NativeRun::Ok(Value::make_int(5).bits()),
+            "{source}: the inlined call runs while nothing is pending"
+        );
+        // Another Context's request: this Context's own would signal `quit`
+        // at the resumed call's poll.
+        let other = QuitRequest::new();
+        match source {
+            "profiler-tick" => ASYNC_ATTENTION.raise(AsyncSource::ProfilerTick),
+            "os-signal" => ASYNC_ATTENTION.raise(AsyncSource::OsSignal),
+            _ => other.request(),
+        }
+        let result = leaf.call(ctx, &[Value::make_int(5)]);
+        match source {
+            "profiler-tick" => {
+                ASYNC_ATTENTION.take(AsyncSource::ProfilerTick);
+            }
+            "os-signal" => {
+                ASYNC_ATTENTION.take(AsyncSource::OsSignal);
+            }
+            _ => other.clear(),
+        }
+        let NativeRun::DeoptAt(frame) = &result else {
+            panic!("{source}: {result:?}")
+        };
+        assert_eq!(frame.pc, 4, "{source}");
+        assert_eq!(resume(&mut ev, &f, result), Value::make_int(5), "{source}");
         assert_eq!(ev.jit_root_stack_top, 0);
     }
 }
