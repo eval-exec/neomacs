@@ -247,6 +247,12 @@ impl ThreadManager {
         id
     }
 
+    /// Whether any thread besides the main one was ever created.
+    #[inline]
+    pub fn any_thread_created(&self) -> bool {
+        self.next_id > 1
+    }
+
     /// Mark a thread as Running.
     pub fn start_thread(&mut self, id: u64) {
         if let Some(t) = self.threads.get_mut(&id) {

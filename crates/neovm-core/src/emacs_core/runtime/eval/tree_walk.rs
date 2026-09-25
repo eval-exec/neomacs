@@ -105,7 +105,7 @@ impl Context {
     /// per-form path carries only the predicate.
     #[cold]
     #[inline(never)]
-    fn collect_at_eval_safe_point(&mut self, form: Value) {
+    pub(super) fn collect_at_eval_safe_point(&mut self, form: Value) {
         let specpdl_root_scope = self.save_specpdl_roots();
         self.push_specpdl_root(form);
         self.gc_collect_from_current_roots();
@@ -228,7 +228,7 @@ impl Context {
     /// exactly those three steps' trivial arms; every other shape takes them
     /// as they are.
     #[inline(always)]
-    fn retire_cons_frame(
+    pub(super) fn retire_cons_frame(
         &mut self,
         count: usize,
         stack_base: usize,
@@ -306,7 +306,7 @@ impl Context {
         Ok((first_arg, self.bc_buf.len() - first_arg))
     }
 
-    fn eval_sub_cons_dispatch(
+    pub(super) fn eval_sub_cons_dispatch(
         &mut self,
         original_fun: Value,
         original_args: Value,

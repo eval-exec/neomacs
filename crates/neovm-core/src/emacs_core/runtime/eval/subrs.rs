@@ -16,7 +16,7 @@ pub(super) enum EvaluatorHandler {
     Callable(CallableHandler),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum SpecialFormHandler {
     Quote,
     Function,

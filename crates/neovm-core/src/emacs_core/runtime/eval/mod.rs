@@ -7067,7 +7067,13 @@ impl Context {
         if self.try_assign_lexical_binding_by_id(sym_id, value) {
             return Ok(value);
         }
+        self.assign_setq_dynamic_by_id(sym_id, value)
+    }
 
+    /// Stage 2 of [`Self::assign_setq_by_id`]: SYM_ID has no lexical binding
+    /// cell, so the runtime variable model takes the write.
+    #[inline(always)]
+    pub(crate) fn assign_setq_dynamic_by_id(&mut self, sym_id: SymId, value: Value) -> EvalResult {
         let resolved_id = super::builtins::resolve_variable_alias_id(self, sym_id)?;
         if self.obarray.is_constant_id(resolved_id)
             && !self.has_local_binding_by_id(sym_id)

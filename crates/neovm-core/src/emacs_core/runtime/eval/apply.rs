@@ -3607,7 +3607,7 @@ impl Context {
     /// A lambda body that blocked a thread mid-way resumes as a closure over
     /// the forms it had left, in the current lexical environment.
     #[inline]
-    fn rewrap_thread_blocked_in_lexenv(&mut self, result: EvalResult) -> EvalResult {
+    pub(super) fn rewrap_thread_blocked_in_lexenv(&mut self, result: EvalResult) -> EvalResult {
         match result {
             Err(Flow::ThreadBlocked(blocked))
                 if !blocked.remaining_forms.is_nil()
