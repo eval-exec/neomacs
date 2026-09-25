@@ -1015,6 +1015,7 @@ fn verify_report_line_renders_one_tagged_line() {
         },
         full_bytes: 39,
         damage_bytes: 54,
+        first_diff: None,
     };
     assert_eq!(
         line.render(42, Some("tui windows::split below")),
@@ -1024,6 +1025,57 @@ fn verify_report_line_renders_one_tagged_line() {
     );
     assert!(line.render(42, None).ends_with(" pid=42\n"));
     assert!(line.render(42, Some("")).ends_with(" pid=42\n"));
+    let differing = VerifyReportLine {
+        first_diff: Some((
+            5,
+            Some(CellDifference {
+                col: 12,
+                field: CellField::BlankErase,
+            }),
+        )),
+        ..line
+    };
+    assert!(
+        differing
+            .render(42, None)
+            .ends_with(" damage_bytes=54 pid=42 diff=5:12:blank_erase\n")
+    );
+}
+
+/// The report names the first cell field that differs.
+#[test]
+fn first_content_difference_names_the_field() {
+    let blank = TtyCell::default();
+    let mut other = blank.clone();
+    assert_eq!(
+        first_content_difference(&[blank.clone()], &[other.clone()]),
+        None
+    );
+    other.materialization = CellMaterialization::Written;
+    assert_eq!(
+        first_content_difference(&[blank.clone()], &[other.clone()]),
+        None,
+        "materialization is not content"
+    );
+    other.blank_erase = BlankErase::Explicit;
+    assert_eq!(
+        first_content_difference(
+            &[blank.clone(), blank.clone()],
+            &[blank.clone(), other.clone()]
+        ),
+        Some(CellDifference {
+            col: 1,
+            field: CellField::BlankErase
+        })
+    );
+    other.ch = 'x';
+    assert_eq!(
+        first_content_difference(&[blank.clone()], &[other]),
+        Some(CellDifference {
+            col: 0,
+            field: CellField::Char
+        })
+    );
 }
 
 /// Editors of a parallel suite append to one report: every line must arrive
@@ -1052,6 +1104,7 @@ fn verify_report_lines_from_concurrent_writers_never_interleave() {
                         verify: TtyDamageVerifyTotals::default(),
                         full_bytes: 1450,
                         damage_bytes: 1450,
+                        first_diff: None,
                     }
                     .render(writer, Some("concurrent"));
                     append_report_line(path, &line);

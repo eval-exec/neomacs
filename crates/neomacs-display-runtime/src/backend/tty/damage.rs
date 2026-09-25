@@ -475,6 +475,66 @@ fn cells_same_content(left: &[TtyCell], right: &[TtyCell]) -> bool {
         })
 }
 
+/// The cell field that first makes two rows show different things.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CellField {
+    Char,
+    Attrs,
+    BlankErase,
+    Padding,
+    Extenders,
+    Advance,
+}
+
+impl CellField {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Char => "ch",
+            Self::Attrs => "attrs",
+            Self::BlankErase => "blank_erase",
+            Self::Padding => "padding",
+            Self::Extenders => "extenders",
+            Self::Advance => "advance",
+        }
+    }
+}
+
+/// Where two rows first differ in content (see [`cells_same_content`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct CellDifference {
+    pub(super) col: usize,
+    pub(super) field: CellField,
+}
+
+/// The first cell (and field) at which LEFT and RIGHT show different
+/// things; `None` when they agree cell for cell or differ only in length.
+pub(super) fn first_content_difference(
+    left: &[TtyCell],
+    right: &[TtyCell],
+) -> Option<CellDifference> {
+    left.iter()
+        .zip(right)
+        .enumerate()
+        .find_map(|(col, (left, right))| {
+            let field = if left.ch != right.ch {
+                CellField::Char
+            } else if left.attrs != right.attrs {
+                CellField::Attrs
+            } else if left.blank_erase != right.blank_erase {
+                CellField::BlankErase
+            } else if left.padding != right.padding {
+                CellField::Padding
+            } else if left.extenders != right.extenders {
+                CellField::Extenders
+            } else if left.terminal_advance != right.terminal_advance {
+                CellField::Advance
+            } else {
+                return None;
+            };
+            Some(CellDifference { col, field })
+        })
+}
+
 impl TtyGrid {
     /// [`Self::clear`] for one row.
     fn clear_row(&mut self, row: usize, bg: Option<TerminalColor>) {
@@ -1040,6 +1100,7 @@ impl TtyRif {
         };
         let comparable = self.current.width == shadow.current.width
             && self.current.height == shadow.current.height;
+        let mut first_diff = None;
         for row in 0..self.current.height.min(shadow.current.height) {
             let skipped = damage_frame && !touched.get(row).copied().unwrap_or(false);
             let (full, damage) = (self.current.row(row), shadow.current.row(row));
@@ -1047,6 +1108,20 @@ impl TtyRif {
             if !same_content {
                 frame.screen_diff_rows += 1;
                 frame.false_negatives += u64::from(skipped);
+                let difference = first_content_difference(full, damage);
+                first_diff = first_diff.or(Some((row, difference)));
+                tracing::debug!(
+                    target: "neomacs::tty_damage",
+                    frame = self.damage.verify.frames + 1,
+                    row,
+                    skipped,
+                    ?difference,
+                    full_cell = ?difference.and_then(|d| full.get(d.col)),
+                    damage_cell = ?difference.and_then(|d| damage.get(d.col)),
+                    full_text = %full.iter().map(|cell| cell.ch).collect::<String>(),
+                    damage_text = %damage.iter().map(|cell| cell.ch).collect::<String>(),
+                    "NEOMACS_TTY_DAMAGE=verify: row differs"
+                );
             } else if full != damage {
                 frame.materialization_diff_rows += 1;
             }
@@ -1094,6 +1169,7 @@ impl TtyRif {
                 verify: frame,
                 full_bytes: self.output.len(),
                 damage_bytes: shadow.output.len(),
+                first_diff,
             }
             .render(
                 std::process::id(),
@@ -1146,6 +1222,8 @@ pub(super) struct VerifyReportLine {
     pub(super) verify: TtyDamageVerifyTotals,
     pub(super) full_bytes: usize,
     pub(super) damage_bytes: usize,
+    /// The first row whose content differs, and where in it.
+    pub(super) first_diff: Option<(usize, Option<CellDifference>)>,
 }
 
 impl VerifyReportLine {
@@ -1167,6 +1245,16 @@ impl VerifyReportLine {
             self.damage_bytes,
             pid,
         );
+        if let Some((row, difference)) = self.first_diff {
+            // `diff=ROW:COL:FIELD`, or `diff=ROW:width` when the rows differ
+            // in length.
+            match difference {
+                Some(CellDifference { col, field }) => {
+                    line.push_str(&format!(" diff={row}:{col}:{}", field.as_str()));
+                }
+                None => line.push_str(&format!(" diff={row}:width")),
+            }
+        }
         if let Some(tag) = tag.filter(|tag| !tag.is_empty()) {
             // One token: the line stays whitespace-separated `key=value`s.
             line.push_str(" test=");
