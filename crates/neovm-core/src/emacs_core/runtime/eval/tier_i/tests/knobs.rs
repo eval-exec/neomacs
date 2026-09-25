@@ -1,6 +1,6 @@
-//! The `NEOVM_TIER_I` knob.
+//! The `NEOVM_TIER_I` and `NEOVM_TIER_I_THRESHOLD` knobs.
 
-use crate::emacs_core::eval::{TierIMode, parse_tier_i_knob};
+use crate::emacs_core::eval::{TierIMode, parse_tier_i_knob, parse_tier_i_threshold};
 
 #[test]
 fn mode_values() {
@@ -10,5 +10,15 @@ fn mode_values() {
         assert_eq!(parse_tier_i_knob(Some(off)), TierIMode::Off, "{off}");
     }
     assert_eq!(parse_tier_i_knob(Some("census")), TierIMode::Census);
-    assert_eq!(parse_tier_i_knob(Some(" Census ")), TierIMode::Census);
+    assert_eq!(parse_tier_i_knob(Some(" Analyze ")), TierIMode::Analyze);
+}
+
+#[test]
+fn threshold_values() {
+    crate::test_utils::init_test_tracing();
+    assert_eq!(parse_tier_i_threshold(None), 2);
+    assert_eq!(parse_tier_i_threshold(Some("")), 2);
+    assert_eq!(parse_tier_i_threshold(Some("0")), 1);
+    assert_eq!(parse_tier_i_threshold(Some(" 64 ")), 64);
+    assert_eq!(parse_tier_i_threshold(Some("many")), 2);
 }

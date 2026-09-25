@@ -222,6 +222,7 @@ impl Context {
             visit(filter_fn);
         }
         self.cconv_memo.trace_roots(visit);
+        self.tier_i.trace_roots(visit);
         for entry in self.named_call_cache.values() {
             if let NamedCallTarget::Obarray(val) = &entry.target {
                 visit(*val);
