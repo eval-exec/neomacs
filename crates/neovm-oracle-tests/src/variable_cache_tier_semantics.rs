@@ -7,10 +7,11 @@
 //! path (GNU `find_symbol_value`, `set_internal`, `specbind`, `do_one_unbind`)
 //! otherwise.  Every form below is checked against GNU once and against
 //! Neomacs under a knob matrix -- the default JIT, every function compiled
-//! (`NEOVM_JIT_THRESHOLD=1`), and each of those with the fast tiers switched
-//! off (`NEOVM_VAR_CACHE=0`) -- so a tier that answers differently from the
-//! path it shortcuts cannot hide behind the configuration a run happens to
-//! use.
+//! (`NEOVM_JIT_THRESHOLD=1`), each of those with the fast tiers switched
+//! off (`NEOVM_VAR_CACHE=0`), and each with the JIT's inline variable ops
+//! on (`NEOVM_JIT_INLINE_VARS=all`, P1.4 Stage B) -- so a tier that answers
+//! differently from the path it shortcuts cannot hide behind the
+//! configuration a run happens to use.
 //!
 //! Regenerate the expectations from GNU only:
 //! `NEOVM_ORACLE_MODE=refresh UPDATE_EXPECT=1 cargo nextest run -p neovm-oracle-tests -E 'test(variable_cache_tier)'`.
@@ -23,6 +24,16 @@ const KNOB_MATRIX: &[&[(&str, &str)]] = &[
     &[("NEOVM_JIT_THRESHOLD", "1")],
     &[("NEOVM_VAR_CACHE", "0")],
     &[("NEOVM_VAR_CACHE", "0"), ("NEOVM_JIT_THRESHOLD", "1")],
+    &[("NEOVM_JIT_INLINE_VARS", "all")],
+    &[
+        ("NEOVM_JIT_INLINE_VARS", "all"),
+        ("NEOVM_JIT_THRESHOLD", "1"),
+    ],
+    &[
+        ("NEOVM_JIT_INLINE_VARS", "all"),
+        ("NEOVM_JIT_THRESHOLD", "1"),
+        ("NEOVM_VAR_CACHE", "0"),
+    ],
 ];
 
 /// Reads and `setq`s of buffer-local variables from byte code, in the buffer
