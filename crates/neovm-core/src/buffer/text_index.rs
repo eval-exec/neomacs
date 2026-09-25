@@ -67,13 +67,14 @@ impl TextLineIndexMode {
 pub(crate) struct TextLineIndexConfig {
     pub(crate) mode: TextLineIndexMode,
     /// A buffer with fewer bytes never builds an index: scanning it is
-    /// already cheap (`NEOVM_TEXT_LINE_INDEX_MIN_BYTES`).
+    /// already cheap. A line count builds one only over a range at least
+    /// this long (`NEOVM_TEXT_LINE_INDEX_MIN_BYTES`).
     pub(crate) min_buffer_bytes: usize,
     /// The chunk size the index aims for. A chunk splits above twice this
     /// and merges into a neighbour below a quarter of it
     /// (`NEOVM_TEXT_LINE_INDEX_CHUNK`).
     pub(crate) chunk_bytes: usize,
-    /// A line count over a shorter range scans
+    /// A line count over a shorter range scans, even with an index
     /// (`NEOVM_TEXT_LINE_INDEX_QUERY_BYTES`).
     pub(crate) min_query_bytes: usize,
     /// A `forward-line` of at most this many lines scans

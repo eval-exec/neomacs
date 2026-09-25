@@ -36,6 +36,29 @@ pub(super) enum LineIndexRole {
     Snapshot,
 }
 
+/// Whether a query that finds no index may build one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IndexBuild {
+    /// Use an index only if one exists: the query is too short to pay for
+    /// a build (a count over less than `min_buffer_bytes`).
+    Never,
+    /// Build one if the text is large enough.
+    IfLarge,
+}
+
+impl IndexBuild {
+    /// A count over RANGE_BYTES builds only when the range alone is as long
+    /// as the smallest text worth indexing: the build then costs a small
+    /// multiple of the scan it replaces (P3.4 §6.4).
+    fn for_count(range_bytes: usize, config: TextLineIndexConfig) -> Self {
+        if range_bytes >= config.min_buffer_bytes {
+            Self::IfLarge
+        } else {
+            Self::Never
+        }
+    }
+}
+
 /// An edit of more bytes than this, and than a quarter of the text, drops
 /// the index instead of updating it (an `erase-buffer`, a restore).
 const DROP_EDIT_BYTES: usize = 256 * 1024;
@@ -56,13 +79,19 @@ fn index_for_edit(
 }
 
 impl BufferTextStorage {
-    /// The index, built now if this is live text large enough for one.
-    /// `None`: the caller scans.
-    fn line_index(&self, config: TextLineIndexConfig) -> Option<Rc<TextLineIndex>> {
+    /// The index, built now if this is live text large enough for one and
+    /// the query is worth a build (BUILD). `None`: the caller scans.
+    fn line_index(
+        &self,
+        config: TextLineIndexConfig,
+        build: IndexBuild,
+    ) -> Option<Rc<TextLineIndex>> {
         if let Some(index) = self.text_index.try_borrow().ok()?.as_ref() {
             return Some(Rc::clone(index));
         }
-        if self.metrics.emacs_byte_len().get() < config.min_buffer_bytes {
+        if build == IndexBuild::Never
+            || self.metrics.emacs_byte_len().get() < config.min_buffer_bytes
+        {
             return None;
         }
         match self.line_index_role {
@@ -107,7 +136,7 @@ impl BufferTextStorage {
         );
         if demand.get() && self.line_index_role == LineIndexRole::Live {
             demand.set(false);
-            let _ = self.line_index(config);
+            let _ = self.line_index(config, IndexBuild::IfLarge);
         }
         let index = self
             .text_index
@@ -246,7 +275,8 @@ impl BufferText {
     ) -> Option<usize> {
         let count = {
             let storage = self.storage.borrow();
-            let index = storage.line_index(config)?;
+            let build = IndexBuild::for_count(limit.get() - from.get(), config);
+            let index = storage.line_index(config, build)?;
             let text = &*storage.backend;
             (index.line_ends_before(text, limit.get(), line_end)
                 - index.line_ends_before(text, from.get(), line_end)) as usize
@@ -309,7 +339,7 @@ impl BufferText {
     ) -> Option<(EmacsBytePos, usize)> {
         let found = {
             let storage = self.storage.borrow();
-            let index = storage.line_index(config)?;
+            let index = storage.line_index(config, IndexBuild::IfLarge)?;
             let text = &*storage.backend;
             let base = index.line_ends_before(text, from.get(), LineEnd::Newline);
             match index.newline_position(text, base + n as u64) {
@@ -372,7 +402,7 @@ impl BufferText {
         let floor = floor.min(from);
         let found = {
             let storage = self.storage.borrow();
-            let index = storage.line_index(config)?;
+            let index = storage.line_index(config, IndexBuild::IfLarge)?;
             let text = &*storage.backend;
             let base = index.line_ends_before(text, floor.get(), LineEnd::Newline);
             // The newlines in [floor, from): the lines above FROM's line.

@@ -247,11 +247,28 @@ fn small_texts_short_ranges_and_short_moves_scan() {
         text.nth_newline_emacs_byte(EmacsBytePos::ZERO, text.emacs_byte_end_pos(), 10);
         text.lines_backward_emacs_byte(text.emacs_byte_end_pos(), EmacsBytePos::ZERO, 10);
         assert!(!text.has_line_index_for_test(), "short queries scan");
+        // A count over 100..1000 bytes uses an index but does not build one.
+        assert_eq!(
+            text.count_newlines_emacs_byte(EmacsBytePos::ZERO, emacs_byte_pos(999)),
+            333
+        );
+        assert!(!text.has_line_index_for_test(), "a 999-byte count scans");
         assert_eq!(
             text.nth_newline_emacs_byte(EmacsBytePos::ZERO, text.emacs_byte_end_pos(), 11),
             (emacs_byte_pos(33), 11)
         );
         assert!(text.has_line_index_for_test(), "an 11-line move builds it");
+        assert_eq!(
+            text.indexed_newline_count(EmacsBytePos::ZERO, emacs_byte_pos(999)),
+            Some(333),
+            "and a 999-byte count then uses it"
+        );
+    });
+    // A count over the whole of a large enough text builds one.
+    with_text_line_index_config(config, || {
+        let text = BufferText::from_str(&"ab\n".repeat(1000));
+        text.count_newlines_emacs_byte(EmacsBytePos::ZERO, emacs_byte_pos(1000));
+        assert!(text.has_line_index_for_test());
     });
 }
 
