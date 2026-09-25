@@ -246,6 +246,9 @@ pub(crate) fn unbox_float(fb: &mut FunctionBuilder, v: ClifValue) -> ClifValue {
 /// diamond defining ONLY the f64 view: the compare helper below also
 /// converts the float to an integer for GNU's tie-break, and that
 /// `fcvt_to_sint_sat` would be dead here (~6 x86 instructions per site).
+///
+/// A flonum is its `f64`, which is always the value's double view (a
+/// fixnum tag word's promotion included): no test, no load.
 pub(crate) fn stack_as_f64_or_promote(
     fb: &mut FunctionBuilder,
     deopt: Block,
@@ -253,8 +256,10 @@ pub(crate) fn stack_as_f64_or_promote(
     reps: &[SlotRep],
     k: usize,
 ) -> ClifValue {
-    if reps[k] == SlotRep::RawFixnum {
-        return fb.ins().fcvt_from_sint(types::F64, stack[k]);
+    match reps[k] {
+        SlotRep::RawFixnum => return fb.ins().fcvt_from_sint(types::F64, stack[k]),
+        SlotRep::Flonum { f64, .. } => return f64,
+        SlotRep::Tagged => {}
     }
     let v = stack[k];
     let out = fb.declare_var(types::F64);
@@ -290,6 +295,10 @@ pub(crate) fn stack_as_f64_or_promote(
 /// tie as doubles it re-decides on integers, because promoting a fixnum
 /// above 2^53 rounds — `(> 9007199254740993 9007199254740992.0)` is t and
 /// `(= most-positive-fixnum (float most-positive-fixnum))` is nil.
+///
+/// A flonum's double view is its `f64`; its integer view is the float's
+/// conversion when the tag word is the float sentinel, else the fixnum the
+/// tag word holds (exact, where the `f64` may have rounded).
 pub(crate) fn stack_as_f64_and_int(
     fb: &mut FunctionBuilder,
     deopt: Block,
@@ -297,9 +306,30 @@ pub(crate) fn stack_as_f64_and_int(
     reps: &[SlotRep],
     k: usize,
 ) -> (ClifValue, ClifValue) {
-    if reps[k] == SlotRep::RawFixnum {
-        let f = fb.ins().fcvt_from_sint(types::F64, stack[k]);
-        return (f, stack[k]);
+    match reps[k] {
+        SlotRep::RawFixnum => {
+            let f = fb.ins().fcvt_from_sint(types::F64, stack[k]);
+            return (f, stack[k]);
+        }
+        SlotRep::Flonum {
+            f64,
+            kind: FlonumKind::Float,
+        } => {
+            let i = fb.ins().fcvt_to_sint_sat(types::I64, f64);
+            return (f64, i);
+        }
+        SlotRep::Flonum {
+            f64,
+            kind: FlonumKind::FloatOrFixnum,
+        } => {
+            let tag = stack[k];
+            let as_int = fb.ins().fcvt_to_sint_sat(types::I64, f64);
+            let fixnum = sshr_imm_p(fb, tag, FIXNUM_SHIFT as i64);
+            let is_float = icmp_imm_p(fb, IntCC::Equal, tag, UNBOXED_FLOAT_TAG_WORD);
+            let i = fb.ins().select(is_float, as_int, fixnum);
+            return (f64, i);
+        }
+        SlotRep::Tagged => {}
     }
     let v = stack[k];
     let out_f = fb.declare_var(types::F64);
@@ -382,7 +412,9 @@ pub(crate) fn emit_float_arith(
 
 /// Run-time "both operands are floats" for model-stack slots `i` and `j`; a
 /// raw slot is a proven fixnum, so the test is constant false. Fused like
-/// [`both_fixnum_test`].
+/// [`both_fixnum_test`]. A flonum is tested on its tag word (the float
+/// sentinel passes the float tag test), and a statically-float flonum
+/// contributes no test at all.
 fn both_float_test(
     fb: &mut FunctionBuilder,
     stack: &[ClifValue],
@@ -392,6 +424,12 @@ fn both_float_test(
 ) -> ClifValue {
     if reps[i] == SlotRep::RawFixnum || reps[j] == SlotRep::RawFixnum {
         return fb.ins().iconst(types::I8, 0);
+    }
+    match (reps[i].is_static_float(), reps[j].is_static_float()) {
+        (true, true) => return fb.ins().iconst(types::I8, 1),
+        (true, false) => return float_tag_test(fb, stack[j]),
+        (false, true) => return float_tag_test(fb, stack[i]),
+        (false, false) => {}
     }
     both_tag_test(
         fb,
@@ -407,6 +445,9 @@ fn both_float_test(
 /// use ONE fused test, `((a ^ 2) | (b ^ 2)) & 3 == 0`, which lowers to
 /// xor/xor/or/test/jz — a `band` of two `icmp` results materialises both
 /// through `setcc` first (11 instructions instead of 5).
+///
+/// A `FloatOrFixnum` flonum is tested on its tag word; a statically-float
+/// one never reaches here (its site has no fixnum arm).
 fn both_fixnum_test(
     fb: &mut FunctionBuilder,
     stack: &[ClifValue],
@@ -414,6 +455,7 @@ fn both_fixnum_test(
     i: usize,
     j: usize,
 ) -> ClifValue {
+    debug_assert!(!reps[i].is_static_float() && !reps[j].is_static_float());
     match (reps[i] == SlotRep::RawFixnum, reps[j] == SlotRep::RawFixnum) {
         (true, true) => fb.ins().iconst(types::I8, 1),
         (true, false) => fixnum_tag_test(fb, stack[j]),
@@ -425,6 +467,49 @@ fn both_fixnum_test(
             FIXNUM_CHECK_MASK as i64,
             FIXNUM_CHECK_VALUE as i64,
         ),
+    }
+}
+
+/// `(v & 7) == TAG_FLOAT` as an i8 condition.
+fn float_tag_test(fb: &mut FunctionBuilder, v: ClifValue) -> ClifValue {
+    let tag = band_imm_p(fb, v, TAG_MASK as i64);
+    icmp_imm_p(
+        fb,
+        IntCC::Equal,
+        tag,
+        crate::tagged::value::TAG_FLOAT as i64,
+    )
+}
+
+/// Model-stack slot `k` as an `f64` in a float site's both-floats arm: a
+/// flonum's `f64`, else the boxed float's payload. (A raw slot makes the
+/// arm dead — its test is constant false — and unboxes it anyway, as the
+/// arm always has.)
+fn float_payload(
+    fb: &mut FunctionBuilder,
+    stack: &[ClifValue],
+    reps: &[SlotRep],
+    k: usize,
+) -> ClifValue {
+    match reps[k] {
+        SlotRep::Flonum { f64, .. } => f64,
+        SlotRep::Tagged | SlotRep::RawFixnum => unbox_float(fb, stack[k]),
+    }
+}
+
+/// Model-stack slot `k` as an untagged i64 in a float site's both-fixnums
+/// arm: a raw slot as is, else the tag word (a `FloatOrFixnum` flonum's
+/// included) untagged.
+fn fixnum_payload(
+    fb: &mut FunctionBuilder,
+    stack: &[ClifValue],
+    reps: &[SlotRep],
+    k: usize,
+) -> ClifValue {
+    if reps[k] == SlotRep::RawFixnum {
+        stack[k]
+    } else {
+        sshr_imm_p(fb, stack[k], FIXNUM_SHIFT as i64)
     }
 }
 
@@ -1631,6 +1716,12 @@ pub(crate) fn lower_mir_inst_via_baseline(
     let (needs, delta) = super::simple_effect(op)?;
     let produces = needs as i64 + delta;
     debug_assert!((0..=1).contains(&produces), "one result at most: {op:?}");
+    // The MIR tier rejects Float-site bodies (`gate:float-site`), and the
+    // adapter never lowers arithmetic, so no flonum is ever produced here.
+    debug_assert!(
+        !matches!(op, Op::Add | Op::Sub | Op::Mul | Op::Div),
+        "the adapter is never handed an arithmetic op: {op:?}"
+    );
     let args: Vec<mir::MirValue> = match &inst.op {
         MirOp::Opaque { args, .. } => args.clone(),
         MirOp::Eq(a, b) => vec![*a, *b],
@@ -5284,6 +5375,193 @@ fn lower_generic_arith_site(
     Ok(())
 }
 
+/// A `Float`-feedback `+ - * /` site under [`FlonumMode::Off`]: the result
+/// is boxed at the site (`neovm_jit_make_float`), as before unboxed floats.
+fn lower_float_site_arith_boxed(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    op: &Op,
+    dsite: Block,
+    stack: &mut Vec<ClifValue>,
+    reps: &mut Vec<SlotRep>,
+) {
+    let n = stack.len();
+    let res_var = fb.declare_var(types::I64);
+    let ff_b = fb.create_block();
+    let slow_b = fb.create_block();
+    let fix_b = fb.create_block();
+    let mix_b = fb.create_block();
+    let merge = fb.create_block();
+    let both_float = both_float_test(fb, stack, reps, n - 2, n - 1);
+    fb.ins().brif(both_float, ff_b, &[], slow_b, &[]);
+
+    // Both floats (the predicted case): unbox and compute.
+    fb.switch_to_block(ff_b);
+    fb.seal_block(ff_b);
+    let fa_val = unbox_float(fb, stack[n - 2]);
+    let fb_val = unbox_float(fb, stack[n - 1]);
+    let res = emit_float_arith(fb, op, fa_val, fb_val);
+    let boxed = box_float(fb, rt, res);
+    fb.def_var(res_var, boxed);
+    fb.ins().jump(merge, &[]);
+
+    // Not both floats: both fixnums, or a mix, or a non-number.
+    fb.switch_to_block(slow_b);
+    fb.seal_block(slow_b);
+    let both_fix = both_fixnum_test(fb, stack, reps, n - 2, n - 1);
+    fb.ins().brif(both_fix, fix_b, &[], mix_b, &[]);
+
+    fb.switch_to_block(fix_b);
+    fb.seal_block(fix_b);
+    let a = if reps[n - 2] == SlotRep::RawFixnum {
+        stack[n - 2]
+    } else {
+        sshr_imm_p(fb, stack[n - 2], FIXNUM_SHIFT as i64)
+    };
+    let b = if reps[n - 1] == SlotRep::RawFixnum {
+        stack[n - 1]
+    } else {
+        sshr_imm_p(fb, stack[n - 1], FIXNUM_SHIFT as i64)
+    };
+    let raw = match op {
+        Op::Add | Op::Sub => raw_fixnum_addsub(fb, dsite, matches!(op, Op::Sub), a, b),
+        Op::Mul => raw_fixnum_mul(fb, dsite, a, b),
+        _ => raw_fixnum_divrem(fb, dsite, false, a, b),
+    };
+    let tagged = retag_fixnum(fb, raw);
+    fb.def_var(res_var, tagged);
+    fb.ins().jump(merge, &[]);
+
+    fb.switch_to_block(mix_b);
+    fb.seal_block(mix_b);
+    let fb_val = stack_as_f64_or_promote(fb, dsite, stack, reps, n - 1);
+    let fa_val = stack_as_f64_or_promote(fb, dsite, stack, reps, n - 2);
+    let res = emit_float_arith(fb, op, fa_val, fb_val);
+    let boxed = box_float(fb, rt, res);
+    fb.def_var(res_var, boxed);
+    fb.ins().jump(merge, &[]);
+
+    fb.switch_to_block(merge);
+    fb.seal_block(merge);
+    let out = fb.use_var(res_var);
+    stack.truncate(n - 2);
+    reps.truncate(n - 2);
+    stack.push(out);
+    reps.push(SlotRep::Tagged);
+}
+
+/// A `Float`-feedback `+ - * /` site whose result stays UNBOXED: a
+/// [`SlotRep::Flonum`] the next float op or compare reads directly, boxed
+/// only where it escapes ([`box_flonum_slot`] and the snapshot helpers).
+///
+/// The dispatch is the boxed lowering's — both floats (the predicted case),
+/// both fixnums, or a mix, with a non-number deopting — but no arm allocates:
+///
+/// - both floats and the mix compute an `f64`, and the tag word is the
+///   float sentinel;
+/// - both fixnums keep GNU's fixnum result (`(+ 2 3)` is 5): the tag word is
+///   the tagged fixnum and the `f64` its promotion, so a later float op
+///   reads the right double and a later escape boxes nothing;
+/// - an operand that is statically a float (GNU contagion) makes the result
+///   one on every path: the fixnum arm is not emitted and the result is a
+///   [`FlonumKind::Float`], whose tag word no consumer needs to test.
+///
+/// A flonum operand is read without boxing (its `f64`, or its tag word for
+/// the tag tests and the fixnum arm); the deopt snapshot `dsite` boxes it in
+/// the cold exit.
+fn lower_float_site_arith(
+    fb: &mut FunctionBuilder,
+    op: &Op,
+    dsite: Block,
+    stack: &mut Vec<ClifValue>,
+    reps: &mut Vec<SlotRep>,
+) {
+    let n = stack.len();
+    let (ia, ib) = (n - 2, n - 1);
+    let statically_float = reps[ia].is_static_float() || reps[ib].is_static_float();
+    let tag_v = fb.declare_var(types::I64);
+    let f_v = fb.declare_var(types::F64);
+    let ff_b = fb.create_block();
+    let slow_b = fb.create_block();
+    let mix_b = fb.create_block();
+    let merge = fb.create_block();
+    // The float result of the ff and mix arms. The sentinel is a LOCAL
+    // `iconst`, never the pooled 7: it feeds the merge's block parameter.
+    let def_float = |fb: &mut FunctionBuilder, r: ClifValue| {
+        if !statically_float {
+            let sentinel = fb.ins().iconst(types::I64, UNBOXED_FLOAT_TAG_WORD);
+            fb.def_var(tag_v, sentinel);
+        }
+        fb.def_var(f_v, r);
+        fb.ins().jump(merge, &[]);
+    };
+    let both_float = both_float_test(fb, stack, reps, ia, ib);
+    fb.ins().brif(both_float, ff_b, &[], slow_b, &[]);
+
+    // Both floats (the predicted case): compute.
+    fb.switch_to_block(ff_b);
+    fb.seal_block(ff_b);
+    let fa_val = float_payload(fb, stack, reps, ia);
+    let fb_val = float_payload(fb, stack, reps, ib);
+    let res = emit_float_arith(fb, op, fa_val, fb_val);
+    def_float(fb, res);
+
+    // Not both floats: both fixnums (unless an operand is statically a
+    // float), or a mix, or a non-number.
+    fb.switch_to_block(slow_b);
+    fb.seal_block(slow_b);
+    if statically_float {
+        fb.ins().jump(mix_b, &[]);
+    } else {
+        let fix_b = fb.create_block();
+        let both_fix = both_fixnum_test(fb, stack, reps, ia, ib);
+        fb.ins().brif(both_fix, fix_b, &[], mix_b, &[]);
+        fb.switch_to_block(fix_b);
+        fb.seal_block(fix_b);
+        let a = fixnum_payload(fb, stack, reps, ia);
+        let b = fixnum_payload(fb, stack, reps, ib);
+        let raw = match op {
+            Op::Add | Op::Sub => raw_fixnum_addsub(fb, dsite, matches!(op, Op::Sub), a, b),
+            Op::Mul => raw_fixnum_mul(fb, dsite, a, b),
+            _ => raw_fixnum_divrem(fb, dsite, false, a, b),
+        };
+        let tagged = retag_fixnum(fb, raw);
+        let promoted = fb.ins().fcvt_from_sint(types::F64, raw);
+        fb.def_var(tag_v, tagged);
+        fb.def_var(f_v, promoted);
+        fb.ins().jump(merge, &[]);
+    }
+
+    fb.switch_to_block(mix_b);
+    fb.seal_block(mix_b);
+    let fb_val = stack_as_f64_or_promote(fb, dsite, stack, reps, ib);
+    let fa_val = stack_as_f64_or_promote(fb, dsite, stack, reps, ia);
+    let res = emit_float_arith(fb, op, fa_val, fb_val);
+    def_float(fb, res);
+
+    fb.switch_to_block(merge);
+    fb.seal_block(merge);
+    stack.truncate(n - 2);
+    reps.truncate(n - 2);
+    let f64 = fb.use_var(f_v);
+    if statically_float {
+        // Never tested (see `FlonumKind::Float`); dead unless a fixnum-only
+        // consumer guards it, and then it deopts, as a float must.
+        stack.push(fb.ins().iconst(types::I64, UNBOXED_FLOAT_TAG_WORD));
+        reps.push(SlotRep::Flonum {
+            f64,
+            kind: FlonumKind::Float,
+        });
+    } else {
+        stack.push(fb.use_var(tag_v));
+        reps.push(SlotRep::Flonum {
+            f64,
+            kind: FlonumKind::FloatOrFixnum,
+        });
+    }
+    flonum_census_note(|c| c.results += 1);
+}
+
 /// Lower one non-control-flow opcode, updating the compile-time operand `stack`
 /// (the live CLIF SSA values within the current basic block). Terminators
 /// (`Return`/`Goto`/`GotoIf*`) are handled by the block lowerer before this.
@@ -5462,68 +5740,11 @@ pub(crate) fn lower_simple_op(
                 )
                 && !(reps[n - 1] == SlotRep::RawFixnum && reps[n - 2] == SlotRep::RawFixnum)
             {
-                let res_var = fb.declare_var(types::I64);
-                let ff_b = fb.create_block();
-                let slow_b = fb.create_block();
-                let fix_b = fb.create_block();
-                let mix_b = fb.create_block();
-                let merge = fb.create_block();
-                let both_float = both_float_test(fb, stack, reps, n - 2, n - 1);
-                fb.ins().brif(both_float, ff_b, &[], slow_b, &[]);
-
-                // Both floats (the predicted case): unbox and compute.
-                fb.switch_to_block(ff_b);
-                fb.seal_block(ff_b);
-                let fa_val = unbox_float(fb, stack[n - 2]);
-                let fb_val = unbox_float(fb, stack[n - 1]);
-                let res = emit_float_arith(fb, op, fa_val, fb_val);
-                let boxed = box_float(fb, rt, res);
-                fb.def_var(res_var, boxed);
-                fb.ins().jump(merge, &[]);
-
-                // Not both floats: both fixnums, or a mix, or a non-number.
-                fb.switch_to_block(slow_b);
-                fb.seal_block(slow_b);
-                let both_fix = both_fixnum_test(fb, stack, reps, n - 2, n - 1);
-                fb.ins().brif(both_fix, fix_b, &[], mix_b, &[]);
-
-                fb.switch_to_block(fix_b);
-                fb.seal_block(fix_b);
-                let a = if reps[n - 2] == SlotRep::RawFixnum {
-                    stack[n - 2]
+                if !aot && super::jit_flonum_mode() != super::FlonumMode::Off {
+                    lower_float_site_arith(fb, op, dsite, stack, reps);
                 } else {
-                    sshr_imm_p(fb, stack[n - 2], FIXNUM_SHIFT as i64)
-                };
-                let b = if reps[n - 1] == SlotRep::RawFixnum {
-                    stack[n - 1]
-                } else {
-                    sshr_imm_p(fb, stack[n - 1], FIXNUM_SHIFT as i64)
-                };
-                let raw = match op {
-                    Op::Add | Op::Sub => raw_fixnum_addsub(fb, dsite, matches!(op, Op::Sub), a, b),
-                    Op::Mul => raw_fixnum_mul(fb, dsite, a, b),
-                    _ => raw_fixnum_divrem(fb, dsite, false, a, b),
-                };
-                let tagged = retag_fixnum(fb, raw);
-                fb.def_var(res_var, tagged);
-                fb.ins().jump(merge, &[]);
-
-                fb.switch_to_block(mix_b);
-                fb.seal_block(mix_b);
-                let fb_val = stack_as_f64_or_promote(fb, dsite, stack, reps, n - 1);
-                let fa_val = stack_as_f64_or_promote(fb, dsite, stack, reps, n - 2);
-                let res = emit_float_arith(fb, op, fa_val, fb_val);
-                let boxed = box_float(fb, rt, res);
-                fb.def_var(res_var, boxed);
-                fb.ins().jump(merge, &[]);
-
-                fb.switch_to_block(merge);
-                fb.seal_block(merge);
-                let out = fb.use_var(res_var);
-                stack.truncate(n - 2);
-                reps.truncate(n - 2);
-                stack.push(out);
-                reps.push(SlotRep::Tagged);
+                    lower_float_site_arith_boxed(fb, rt, op, dsite, stack, reps);
+                }
                 return Ok(());
             }
             let b = stack_as_raw(fb, dsite, stack, reps, n - 1, known);
@@ -5643,15 +5864,20 @@ pub(crate) fn lower_simple_op(
             // compare. One of each: GNU `arithcompare` — promote, and if the
             // doubles TIE re-decide on the exact integers, because a fixnum
             // above 2^53 rounds when promoted. Result is t/nil either way.
+            // Flonum operands are read unboxed (their `f64`, and their tag
+            // word for the tag tests and the fixnum arm); a statically-float
+            // one leaves no fixnum arm.
             if matches!(
                 super::active_numeric_feedback(pc),
                 crate::emacs_core::jit::NumericFeedback::Float
             ) && !(reps[n - 1] == SlotRep::RawFixnum && reps[n - 2] == SlotRep::RawFixnum)
             {
+                let statically_float =
+                    reps[n - 2].is_static_float() || reps[n - 1].is_static_float();
                 let res_var = fb.declare_var(types::I64);
                 let ff_b = fb.create_block();
                 let slow_b = fb.create_block();
-                let fix_b = fb.create_block();
+                let fix_b = (!statically_float).then(|| fb.create_block());
                 let mix_b = fb.create_block();
                 let merge = fb.create_block();
                 let t = fb.ins().iconst(types::I64, Value::T.bits() as i64);
@@ -5675,8 +5901,8 @@ pub(crate) fn lower_simple_op(
 
                 fb.switch_to_block(ff_b);
                 fb.seal_block(ff_b);
-                let fa_val = unbox_float(fb, stack[n - 2]);
-                let fb_val = unbox_float(fb, stack[n - 1]);
+                let fa_val = float_payload(fb, stack, reps, n - 2);
+                let fb_val = float_payload(fb, stack, reps, n - 1);
                 let cond = fb.ins().fcmp(fcc, fa_val, fb_val);
                 let r = fb.ins().select(cond, t, nil);
                 fb.def_var(res_var, r);
@@ -5684,25 +5910,21 @@ pub(crate) fn lower_simple_op(
 
                 fb.switch_to_block(slow_b);
                 fb.seal_block(slow_b);
-                let both_fix = both_fixnum_test(fb, stack, reps, n - 2, n - 1);
-                fb.ins().brif(both_fix, fix_b, &[], mix_b, &[]);
+                if let Some(fix_b) = fix_b {
+                    let both_fix = both_fixnum_test(fb, stack, reps, n - 2, n - 1);
+                    fb.ins().brif(both_fix, fix_b, &[], mix_b, &[]);
 
-                fb.switch_to_block(fix_b);
-                fb.seal_block(fix_b);
-                let a = if reps[n - 2] == SlotRep::RawFixnum {
-                    stack[n - 2]
+                    fb.switch_to_block(fix_b);
+                    fb.seal_block(fix_b);
+                    let a = fixnum_payload(fb, stack, reps, n - 2);
+                    let b = fixnum_payload(fb, stack, reps, n - 1);
+                    let cond = fb.ins().icmp(cc, a, b);
+                    let r = fb.ins().select(cond, t, nil);
+                    fb.def_var(res_var, r);
+                    fb.ins().jump(merge, &[]);
                 } else {
-                    sshr_imm_p(fb, stack[n - 2], FIXNUM_SHIFT as i64)
-                };
-                let b = if reps[n - 1] == SlotRep::RawFixnum {
-                    stack[n - 1]
-                } else {
-                    sshr_imm_p(fb, stack[n - 1], FIXNUM_SHIFT as i64)
-                };
-                let cond = fb.ins().icmp(cc, a, b);
-                let r = fb.ins().select(cond, t, nil);
-                fb.def_var(res_var, r);
-                fb.ins().jump(merge, &[]);
+                    fb.ins().jump(mix_b, &[]);
+                }
 
                 fb.switch_to_block(mix_b);
                 fb.seal_block(mix_b);
@@ -5841,6 +6063,9 @@ pub(crate) fn lower_simple_op(
             // redirects); can signal void-variable. Reads are idempotent, so
             // this neither poisons nor guards.
             let rt = rt.ok_or(CompileError::UnsupportedOp("variable"))?;
+            // The slow path below roots the stack and snapshots it for a
+            // handler as tagged values: box the flonums first.
+            box_all_flonums(fb, Some(rt), stack, reps);
             let sym = const_sym_id(constants, *idx)?;
             let sym_v = materialize_op_sym_id(fb, reloc_base, reloc_index, sym);
             // GNU's `Bvarref` reads a plain symbol's value cell inline; so does

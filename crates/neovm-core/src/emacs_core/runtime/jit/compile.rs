@@ -597,7 +597,7 @@ pub(crate) enum FlonumMode {
 
 impl FlonumMode {
     /// The mode when `NEOVM_JIT_FLONUM` is unset (or not a known mode).
-    pub(crate) const DEFAULT: Self = Self::Off;
+    pub(crate) const DEFAULT: Self = Self::OpLocal;
 
     pub(crate) fn parse(value: Option<&str>) -> Self {
         match value {
@@ -4765,6 +4765,9 @@ mod fixnum_comparison_tests;
 #[cfg(test)]
 #[path = "tests/fixnum_ranges.rs"]
 mod fixnum_range_tests;
+#[cfg(test)]
+#[path = "tests/flonum_slots.rs"]
+mod flonum_slot_tests;
 #[cfg(test)]
 #[path = "tests/osr_entry_guards.rs"]
 mod osr_entry_guard_tests;

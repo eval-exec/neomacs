@@ -7329,6 +7329,10 @@ mod jit_known_fixnum_float_tests;
 #[cfg(test)]
 #[path = "tests/jit_mir_known_fixnum_float.rs"]
 mod jit_mir_known_fixnum_float_tests;
+// Unboxed float slots on GNU's own nbody `elb-applyforces` bytecode.
+#[cfg(test)]
+#[path = "tests/jit_flonum_nbody.rs"]
+mod jit_flonum_nbody_tests;
 // `setq` of a special variable: the plain-cell fast path and every shape it must refuse.
 #[cfg(test)]
 #[path = "tests/apply1_bytecode.rs"]
