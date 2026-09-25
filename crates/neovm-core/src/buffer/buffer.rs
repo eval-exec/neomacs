@@ -3281,6 +3281,18 @@ impl Buffer {
         self.text.syntax_content_key()
     }
 
+    /// See [`crate::buffer::buffer_text::BufferText::with_syntax_parse_cache`].
+    #[cfg_attr(not(test), allow(dead_code))] // read by the memo (S4)
+    pub(crate) fn with_syntax_parse_cache<R>(
+        &self,
+        f: impl FnOnce(
+            &mut crate::emacs_core::syntax::parse_cache::SyntaxParseCache,
+            crate::emacs_core::syntax::parse_cache::Invalidation,
+        ) -> R,
+    ) -> R {
+        self.text.with_syntax_parse_cache(f)
+    }
+
     /// See [`crate::buffer::buffer_text::SyntaxSafePositions`].
     pub(crate) fn take_syntax_safe_positions(
         &self,

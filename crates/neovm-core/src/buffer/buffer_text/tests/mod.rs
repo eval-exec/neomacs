@@ -1337,3 +1337,27 @@ fn anchor_table_stays_sorted_bounded_and_exact_across_a_front_insert() {
 
 mod cow_snapshot_test;
 mod line_index_test;
+
+/// A layout snapshot starts without the syntax parse cache (P3.4 S3, P3.0
+/// §3.9): the clone's cache has seen nothing and reports everything changed,
+/// while the live text's cache keeps its own account.
+#[test]
+fn a_text_clone_starts_without_the_syntax_parse_cache() {
+    use crate::emacs_core::syntax::parse_cache::Invalidation;
+    crate::test_utils::init_test_tracing();
+    let text = BufferText::from_str("(a b) ; c");
+    let _ = text.with_syntax_parse_cache(|_, i| i);
+    assert_eq!(
+        text.with_syntax_parse_cache(|_, i| i),
+        Invalidation::Nothing
+    );
+    let snapshot = text.clone();
+    assert_eq!(
+        snapshot.with_syntax_parse_cache(|_, i| i),
+        Invalidation::All
+    );
+    assert_eq!(
+        text.with_syntax_parse_cache(|_, i| i),
+        Invalidation::Nothing
+    );
+}

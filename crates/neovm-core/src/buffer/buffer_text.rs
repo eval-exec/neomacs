@@ -43,6 +43,7 @@ use super::text::{
 use super::text::{GapDebugLayout, TextBackendDebugLayout};
 use super::text_index::TextLineIndex;
 use super::text_props::{ObjectIntervalRun, PropertyInterval, TextPropertyTable};
+use crate::emacs_core::syntax::parse_cache::{Invalidation, SyntaxParseCache};
 
 mod line_index;
 use line_index::LineIndexRole;
@@ -313,6 +314,9 @@ struct BufferTextStorage {
     /// live text and its snapshots; created only while the knob is on.
     text_index_demand: OnceCell<Rc<Cell<bool>>>,
     line_index_role: LineIndexRole,
+    /// `parse-partial-sexp` loop states of earlier scans (P3.4). Outside the
+    /// copy-on-write backend: a snapshot starts without it (P3.0 §3.9).
+    syntax_parse_cache: RefCell<SyntaxParseCache>,
 }
 
 /// Validity key of a [`SyntaxSafePositions`] index: everything a forward
@@ -481,6 +485,7 @@ impl Clone for BufferTextStorage {
             text_index,
             text_index_demand,
             line_index_role: LineIndexRole::Snapshot,
+            syntax_parse_cache: RefCell::new(SyntaxParseCache::default()),
         }
     }
 }
@@ -555,6 +560,7 @@ impl BufferText {
                 text_index: RefCell::new(None),
                 text_index_demand: OnceCell::new(),
                 line_index_role: LineIndexRole::Live,
+                syntax_parse_cache: RefCell::new(SyntaxParseCache::default()),
             })),
         }
     }
@@ -573,6 +579,7 @@ impl BufferText {
         Self::refresh_backend_metrics(storage);
         storage.content_epoch = storage.content_epoch.wrapping_add(1).max(1);
         Self::invalidate_position_caches(storage);
+        storage.syntax_parse_cache.get_mut().clear();
     }
 
     /// Like [`Self::finish_backend_content_mutation`], but for a mutation whose
@@ -593,6 +600,10 @@ impl BufferText {
         Self::refresh_backend_metrics(storage);
         storage.content_epoch = storage.content_epoch.wrapping_add(1).max(1);
         let epoch = storage.content_epoch;
+        storage
+            .syntax_parse_cache
+            .get_mut()
+            .note_edit(edit.at_byte.get());
         storage
             .single_byte_span
             .set(SingleBytePositionSpan::default());
@@ -634,6 +645,7 @@ impl BufferText {
     fn finish_backend_shape_change(storage: &mut BufferTextStorage) {
         Self::refresh_backend_metrics(storage);
         Self::invalidate_position_caches(storage);
+        storage.syntax_parse_cache.get_mut().clear();
     }
 
     fn virtual_gap_consume_bytes(storage: &mut BufferTextStorage, bytes: EmacsByteLen) {
@@ -1539,6 +1551,43 @@ impl BufferText {
         *storage.syntax_char_run_memo.borrow_mut() = [SyntaxCharRunMemoEntry::default(); 4];
         // Same reason: the new table's syntax tick is not comparable.
         *storage.syntax_safe_positions.borrow_mut() = SyntaxSafePositions::default();
+        storage.syntax_parse_cache.get_mut().clear();
+    }
+
+    /// Mutate the text-property table. When the mutation moves the table's
+    /// syntax tick, the syntax parse cache notes that syntax-relevant
+    /// properties may have changed at or after `syntax_from` (the first
+    /// character the mutation can touch).
+    #[inline]
+    fn mutate_text_props<R>(
+        &self,
+        syntax_from: CharPos0,
+        f: impl FnOnce(&mut TextPropertyTable) -> R,
+    ) -> R {
+        let mut storage = self.storage.borrow_mut();
+        let tick = storage.text_props.syntax_prop_tick();
+        let out = f(Rc::make_mut(&mut storage.text_props));
+        let moved = storage.text_props.syntax_prop_tick().wrapping_sub(tick);
+        if moved != 0 {
+            storage
+                .syntax_parse_cache
+                .get_mut()
+                .note_prop_change(syntax_from.get(), moved);
+        }
+        out
+    }
+
+    /// The syntax parse cache, with what changed since its last use (P3.4).
+    #[cfg_attr(not(test), allow(dead_code))] // read by the memo (S4)
+    pub(crate) fn with_syntax_parse_cache<R>(
+        &self,
+        f: impl FnOnce(&mut SyntaxParseCache, Invalidation) -> R,
+    ) -> R {
+        let storage = self.storage.borrow();
+        let mut cache = storage.syntax_parse_cache.borrow_mut();
+        let invalidation =
+            cache.drain(storage.content_epoch, storage.text_props.syntax_prop_tick());
+        f(&mut cache, invalidation)
     }
 
     /// The content epoch and the text-property table's syntax tick: the
@@ -1630,8 +1679,9 @@ impl BufferText {
                 storage.metrics.char_len(),
             )
         };
-        Rc::make_mut(&mut self.storage.borrow_mut().text_props)
-            .put_property_for_object_char_len(range, object_len, name, value)
+        self.mutate_text_props(range.start(), |props| {
+            props.put_property_for_object_char_len(range, object_len, name, value)
+        })
     }
 
     pub fn text_props_get_property_at_char_pos(&self, pos: CharPos0, name: Value) -> Option<Value> {
@@ -1931,8 +1981,9 @@ impl BufferText {
         name: Value,
     ) -> bool {
         let range = self.byte_range_to_char_range(byte_range);
-        Rc::make_mut(&mut self.storage.borrow_mut().text_props)
-            .remove_property_in_char_range(range, name)
+        self.mutate_text_props(range.start(), |props| {
+            props.remove_property_in_char_range(range, name)
+        })
     }
 
     pub fn text_props_remove_properties_in_emacs_byte_range(
@@ -1941,14 +1992,16 @@ impl BufferText {
         names: &[Value],
     ) -> bool {
         let range = self.byte_range_to_char_range(byte_range);
-        Rc::make_mut(&mut self.storage.borrow_mut().text_props)
-            .remove_properties_in_char_range(range, names)
+        self.mutate_text_props(range.start(), |props| {
+            props.remove_properties_in_char_range(range, names)
+        })
     }
 
     pub fn text_props_remove_all_in_emacs_byte_range(&self, byte_range: EmacsByteRange) {
         let range = self.byte_range_to_char_range(byte_range);
-        Rc::make_mut(&mut self.storage.borrow_mut().text_props)
-            .remove_all_properties_in_char_range(range);
+        self.mutate_text_props(range.start(), |props| {
+            props.remove_all_properties_in_char_range(range)
+        });
     }
 
     pub fn text_props_set_properties_in_emacs_byte_range(
@@ -1963,8 +2016,9 @@ impl BufferText {
                 storage.metrics.char_len(),
             )
         };
-        Rc::make_mut(&mut self.storage.borrow_mut().text_props)
-            .set_properties_for_object_char_len(range, object_len, plist);
+        self.mutate_text_props(range.start(), |props| {
+            props.set_properties_for_object_char_len(range, object_len, plist)
+        });
     }
 
     /// Like `text_props_set_properties_in_emacs_byte_range` but takes the char
@@ -1978,8 +2032,9 @@ impl BufferText {
         plist: Vec<(Value, Value)>,
     ) {
         let object_len = self.storage.borrow().metrics.char_len();
-        Rc::make_mut(&mut self.storage.borrow_mut().text_props)
-            .set_properties_for_object_char_len(range, object_len, plist);
+        self.mutate_text_props(range.start(), |props| {
+            props.set_properties_for_object_char_len(range, object_len, plist)
+        });
     }
 
     /// [`TextPropertyTable::first_char_pos_where`] over `range`.
@@ -2192,8 +2247,9 @@ impl BufferText {
         let char_pos = self
             .byte_range_to_char_range(EmacsByteRange::new(byte_pos, byte_pos))
             .start();
-        Rc::make_mut(&mut self.storage.borrow_mut().text_props)
-            .append_shifted_at_char_pos(other, char_pos);
+        self.mutate_text_props(char_pos, |props| {
+            props.append_shifted_at_char_pos(other, char_pos)
+        });
     }
 
     pub fn text_props_merge_missing_shifted_at_emacs_byte_pos(
@@ -2205,8 +2261,9 @@ impl BufferText {
             .byte_range_to_char_range(EmacsByteRange::new(byte_pos, byte_pos))
             .start()
             .get();
-        Rc::make_mut(&mut self.storage.borrow_mut().text_props)
-            .merge_missing_shifted_at_char_offset(other, CharLen::new(char_offset));
+        self.mutate_text_props(CharPos0::new(char_offset), |props| {
+            props.merge_missing_shifted_at_char_offset(other, CharLen::new(char_offset))
+        });
     }
 
     pub fn text_props_merge_adjacent_equal_around_emacs_byte_range(
@@ -2214,8 +2271,11 @@ impl BufferText {
         byte_range: EmacsByteRange,
     ) {
         let range = self.byte_range_to_char_range(byte_range);
-        Rc::make_mut(&mut self.storage.borrow_mut().text_props)
-            .merge_adjacent_equal_properties_around_char_range(range);
+        // Merging `eq`-equal neighbours changes no value; were it ever to move
+        // the syntax tick, "around" can reach before the range.
+        self.mutate_text_props(CharPos0::ZERO, |props| {
+            props.merge_adjacent_equal_properties_around_char_range(range)
+        });
     }
 
     pub fn text_props_slice_emacs_byte_range(

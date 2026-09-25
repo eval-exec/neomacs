@@ -21,6 +21,7 @@ use crate::buffer::{
 };
 use crate::heap_types::LispString;
 
+pub(crate) mod parse_cache;
 mod parse_loop;
 mod pps_propertize;
 use parse_loop::{Entry, Plain, SafePositionRecorder, ScanEnd, ScanFinish, run_parse_loop};
