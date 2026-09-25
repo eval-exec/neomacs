@@ -1947,12 +1947,20 @@ pub extern "C" fn neovm_jit_arith_generic(
             return STATUS_SIGNAL;
         };
         let nargs = kind.arity();
-        let args_start = ctx.bc_buf.len();
-        ctx.bc_buf.push(Value::from_bits(a as usize));
-        if nargs == 2 {
-            ctx.bc_buf.push(Value::from_bits(b as usize));
+        // The all-integer answer first, straight from the registers: it
+        // cannot reach a safe point, so `a` and `b` need no staging.
+        let operands = [Value::from_bits(a as usize), Value::from_bits(b as usize)];
+        if let Some(value) = Vm::arith_integer_fast(kind, &operands[..nargs]) {
+            // SAFETY: `out` is the generated code's result stack slot.
+            unsafe { *out = value.bits() as i64 };
+            return STATUS_OK;
         }
-        let res = Vm::call_arith_builtin_on_context(ctx, kind, args_start, nargs);
+        let args_start = ctx.bc_buf.len();
+        ctx.bc_buf.push(operands[0]);
+        if nargs == 2 {
+            ctx.bc_buf.push(operands[1]);
+        }
+        let res = Vm::call_arith_builtin_slow_on_context(ctx, kind, args_start, nargs);
         ctx.bc_buf.truncate(args_start);
         // Value first: an `unwrap_or_else` on the `Option<EvalResult>` copied
         // it 16 bytes wide over the callee's narrow stores.

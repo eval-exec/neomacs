@@ -4728,6 +4728,9 @@ pub use shims::*;
 mod dispatch;
 pub use dispatch::*;
 #[cfg(test)]
+#[path = "tests/arith_generic_integer.rs"]
+mod arith_generic_integer_tests;
+#[cfg(test)]
 #[path = "tests/array_shims.rs"]
 mod array_shim_tests;
 #[cfg(test)]

@@ -14,6 +14,7 @@
 //! every value.
 
 use super::opcode::Op;
+use crate::emacs_core::builtins::{IntegerBinaryOp, IntegerOp, IntegerUnaryOp, NumCmp};
 
 /// One arithmetic opcode's generic slow arm (see the module doc).
 #[repr(i64)]
@@ -107,6 +108,26 @@ impl ArithGenericKind {
             Self::Add1 | Self::Sub1 | Self::Negate => 1,
             _ => 2,
         }
+    }
+
+    /// The direct all-integer answer this kind has, if any
+    /// (`Vm::arith_integer_fast`): `+ - *`, the comparisons, `1+` and `1-`.
+    /// `/`, `%`, `max`, `min` and one-operand `-` always take the builtin.
+    #[inline(always)]
+    pub(crate) fn integer_op(self) -> Option<IntegerOp> {
+        Some(match self {
+            Self::Add => IntegerOp::Binary(IntegerBinaryOp::Add),
+            Self::Sub => IntegerOp::Binary(IntegerBinaryOp::Sub),
+            Self::Mul => IntegerOp::Binary(IntegerBinaryOp::Mul),
+            Self::NumEq => IntegerOp::Binary(IntegerBinaryOp::Compare(NumCmp::Eq)),
+            Self::Lt => IntegerOp::Binary(IntegerBinaryOp::Compare(NumCmp::Lt)),
+            Self::Gt => IntegerOp::Binary(IntegerBinaryOp::Compare(NumCmp::Gt)),
+            Self::Le => IntegerOp::Binary(IntegerBinaryOp::Compare(NumCmp::Le)),
+            Self::Ge => IntegerOp::Binary(IntegerBinaryOp::Compare(NumCmp::Ge)),
+            Self::Add1 => IntegerOp::Unary(IntegerUnaryOp::Add1),
+            Self::Sub1 => IntegerOp::Unary(IntegerUnaryOp::Sub1),
+            Self::Div | Self::Rem | Self::Max | Self::Min | Self::Negate => return None,
+        })
     }
 }
 

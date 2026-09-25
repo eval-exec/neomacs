@@ -499,6 +499,76 @@ pub(crate) fn int_mul_value(x: IntOperand<'_>, y: IntOperand<'_>) -> Value {
     }
 }
 
+/// `x <=> y` for two integer operands, exactly (GNU `arithcompare`,
+/// data.c:2718, on two integers).
+#[inline]
+fn int_cmp(x: IntOperand<'_>, y: IntOperand<'_>) -> std::cmp::Ordering {
+    match (x, y) {
+        (IntOperand::Fixnum(a), IntOperand::Fixnum(b)) => a.cmp(&b),
+        (IntOperand::Bignum(p), IntOperand::Fixnum(n)) => {
+            p.partial_cmp(&n).expect("integers are totally ordered")
+        }
+        (IntOperand::Fixnum(n), IntOperand::Bignum(q)) => q
+            .partial_cmp(&n)
+            .expect("integers are totally ordered")
+            .reverse(),
+        (IntOperand::Bignum(p), IntOperand::Bignum(q)) => p.cmp(q),
+    }
+}
+
+/// An arithmetic opcode whose all-integer case has a direct answer (see
+/// [`integer_binary_fast`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum IntegerOp {
+    Binary(IntegerBinaryOp),
+    Unary(IntegerUnaryOp),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum IntegerBinaryOp {
+    Add,
+    Sub,
+    Mul,
+    Compare(NumCmp),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum IntegerUnaryOp {
+    Add1,
+    Sub1,
+}
+
+/// Both operands integers (fixnum or bignum): GNU `arith_driver` /
+/// `bignum_arith_driver` (data.c:3251/3200) and `arithcompare`
+/// (data.c:2718) answered directly, the way GNU's arithmetic opcodes call
+/// `Fplus (2, &TOP)` without a funcall. `None` for a marker, a float or a
+/// non-number: the caller takes the full builtin, which coerces or signals
+/// exactly as GNU. Never signals, never runs Lisp, never reaches a safe
+/// point (allocation does not collect), and never returns an operand
+/// object (results are fresh, as in GNU).
+#[inline]
+pub(crate) fn integer_binary_fast(op: IntegerBinaryOp, a: Value, b: Value) -> Option<Value> {
+    let (x, y) = (IntOperand::of(&a)?, IntOperand::of(&b)?);
+    Some(match op {
+        IntegerBinaryOp::Compare(c) => Value::bool_val(cmp_passes(Some(int_cmp(x, y)), c)),
+        IntegerBinaryOp::Add => int_add_value(x, y, false),
+        IntegerBinaryOp::Sub => int_add_value(x, y, true),
+        IntegerBinaryOp::Mul => int_mul_value(x, y),
+    })
+}
+
+/// [`integer_binary_fast`] for `1+` and `1-` (GNU `Fadd1`/`Fsub1` on an
+/// integer).
+#[inline]
+pub(crate) fn integer_unary_fast(op: IntegerUnaryOp, a: Value) -> Option<Value> {
+    let x = IntOperand::of(&a)?;
+    Some(int_add_value(
+        x,
+        IntOperand::Fixnum(1),
+        op == IntegerUnaryOp::Sub1,
+    ))
+}
+
 /// `-x` for a bignum: GNU `mpz_neg` into a fresh result, which demotes when
 /// `x` is `-most-negative-fixnum`.
 #[inline(never)]
@@ -1646,8 +1716,8 @@ pub(crate) fn builtin_ash_slice(args: &[Value]) -> EvalResult {
 // bignum). The previous f64-only path lost precision for any bignum
 // outside ±2^53 (audit §1.1 — comparisons part).
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum NumCmp {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NumCmp {
     Lt,
     Le,
     Eq,

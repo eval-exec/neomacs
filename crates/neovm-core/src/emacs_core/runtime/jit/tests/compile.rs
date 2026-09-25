@@ -6233,7 +6233,12 @@ fn fuzz_straightline_bodies_match_interpreter() {
 
     // Constant pool: small fixnums, the fixnum boundaries, nil and t —
     // enough to hit fast paths, deopt boundaries, and type guards. No heap
-    // values, so Ok-results compare exactly by bits.
+    // values in the pool; the one heap result a body can make is a bignum
+    // from an overflow, a fresh object in each engine, so results compare
+    // by `eql` (exactly by bits for everything else).
+    let same = |got: Value, want: Value| {
+        got.bits() == want.bits() || crate::emacs_core::value::eql_value(&got, &want)
+    };
     let constants: Vec<Value> = vec![
         Value::make_int(0),
         Value::make_int(1),
@@ -6322,6 +6327,13 @@ fn fuzz_straightline_bodies_match_interpreter() {
         f.ops = ops.clone();
         f.constants = constants.clone().into();
         f.max_stack = 64;
+        // `execute` seals a hand-assembled chunk on its own; the precise-deopt
+        // resume below (`run_resumed_frame`) does not, and rejects the chunk
+        // as invalid bytecode. That rejection went unnoticed while every
+        // resumed body also failed in the interpreter (this bare harness has
+        // no registered arithmetic subrs); now that the arithmetic opcodes
+        // answer integers directly, as GNU's `Bsub1` does, it would not.
+        f.seal_hand_assembled_ops_for_test();
         let interp = {
             let mut vm = Vm::from_context(&mut ev);
             vm.execute(&f, vec![])
@@ -6335,9 +6347,8 @@ fn fuzz_straightline_bodies_match_interpreter() {
                 let want = interp.as_ref().unwrap_or_else(|e| {
                     panic!("seed {seed}: JIT Ok but interpreter erred ({e:?}): {ops:?}")
                 });
-                assert_eq!(
-                    bits,
-                    want.bits(),
+                assert!(
+                    same(Value::from_bits(bits), *want),
                     "seed {seed}: JIT/interpreter mismatch on {ops:?}"
                 );
             }
@@ -6367,10 +6378,11 @@ fn fuzz_straightline_bodies_match_interpreter() {
                     cond_base,
                 );
                 match (&resumed, &interp) {
-                    (Ok(got), Ok(want)) => assert_eq!(
-                        got.bits(),
-                        want.bits(),
-                        "seed {seed}: resume/interpreter mismatch on {ops:?}"
+                    (Ok(got), Ok(want)) => assert!(
+                        same(*got, *want),
+                        "seed {seed}: resume/interpreter mismatch on {ops:?}: {} vs {}",
+                        crate::emacs_core::print::print_value(got),
+                        crate::emacs_core::print::print_value(want),
                     ),
                     (Err(_), Err(_)) => {}
                     other => panic!(
@@ -6396,9 +6408,8 @@ fn fuzz_straightline_bodies_match_interpreter() {
             match mleaf.call(ctx_ptr, &[]) {
                 NativeRun::Ok(bits) => {
                     if let Ok(want) = &interp {
-                        assert_eq!(
-                            bits,
-                            want.bits(),
+                        assert!(
+                            same(Value::from_bits(bits), *want),
                             "seed {seed}: MIR/interpreter mismatch on {ops:?}"
                         );
                     }
@@ -6556,6 +6567,8 @@ fn fuzz_varset_bodies_match_interpreter_state() {
         f.ops = ops.clone();
         f.constants = constants.clone().into();
         f.max_stack = 64;
+        // Sealed for the precise-deopt resume, as in the fuzzer above.
+        f.seal_hand_assembled_ops_for_test();
 
         // Tier 0 (oracle): result + final variable state.
         reset(&mut ev, &var_ids, &init);

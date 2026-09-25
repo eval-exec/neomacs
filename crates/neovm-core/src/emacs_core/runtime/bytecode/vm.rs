@@ -9,6 +9,7 @@ use super::arith_kind::ArithGenericKind;
 use super::chunk::ByteCodeFunction;
 use super::opcode::Op;
 use crate::emacs_core::builtins;
+use crate::emacs_core::builtins::IntegerOp;
 use crate::emacs_core::error::*;
 use crate::emacs_core::eval::{
     BytecodeBacktraceFrame, BytecodeStackCallDispatch, ConditionFrame, LispArgVec, ResumeTarget,
@@ -468,6 +469,14 @@ thread_local! {
     static MUTATING_WRITEBACK_CLASSIFICATION_COUNT: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
     static INLINE_BUILTIN_DIRECT_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static ARITH_INTEGER_FAST_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// TEST-ONLY: direct all-integer answers `Vm::arith_integer_fast` has given
+/// on this thread (engagement evidence for the interpreter and JIT tests).
+#[cfg(test)]
+pub(crate) fn arith_integer_fast_count() -> usize {
+    ARITH_INTEGER_FAST_COUNT.with(std::cell::Cell::get)
 }
 
 #[cfg(test)]
@@ -7946,14 +7955,59 @@ impl<'a> Vm<'a> {
         }
     }
 
-    /// The arithmetic opcodes' slow arm after feedback recording: the static
-    /// subr for `kind`, called on the `nargs` operands at
-    /// `ctx.bc_buf[args_start..]` with no backtrace frame, then the debugger
-    /// check on a signal. Shared with the JIT's generic arithmetic fallback
-    /// (`neovm_jit_arith_generic`), so compiled code reaches exactly what the
-    /// interpreter does. `None` only if the subr does not resolve.
+    /// The all-integer answer of an arithmetic opcode's slow arm, if it has
+    /// one: two fixnum-or-bignum operands of `+ - *` or a comparison, or one
+    /// of `1+`/`1-` (GNU's `Bplus` calls `Fplus (2, &TOP)` directly, and
+    /// `arith_driver` goes straight to `bignum_arith_driver`). The value
+    /// comes back in a register: no `bc_buf` staging, no subr resolution, no
+    /// dispatch layers, no `EvalResult` in memory. `None` for everything else
+    /// (a marker, a float, a non-number, any other opcode), which takes the
+    /// full builtin. Never signals, never runs Lisp, never reaches a safe
+    /// point, so the operands need no rooting.
+    #[inline(always)]
+    pub(crate) fn arith_integer_fast(kind: ArithGenericKind, args: &[Value]) -> Option<Value> {
+        let value = match (kind.integer_op()?, args) {
+            (IntegerOp::Binary(op), &[a, b]) => {
+                crate::emacs_core::builtins::integer_binary_fast(op, a, b)
+            }
+            (IntegerOp::Unary(op), &[a]) => crate::emacs_core::builtins::integer_unary_fast(op, a),
+            _ => None,
+        };
+        #[cfg(test)]
+        if value.is_some() {
+            ARITH_INTEGER_FAST_COUNT.with(|count| count.set(count.get() + 1));
+        }
+        value
+    }
+
+    /// The arithmetic opcodes' slow arm after feedback recording: the direct
+    /// all-integer answer ([`Self::arith_integer_fast`]), else the static
+    /// subr for `kind` ([`Self::call_arith_builtin_slow_on_context`]). Shared
+    /// with the JIT's generic arithmetic fallback (`neovm_jit_arith_generic`,
+    /// which tries the integer answer before staging its operands), so
+    /// compiled code reaches exactly what the interpreter does. `None` only
+    /// if the subr does not resolve.
     #[inline]
     pub(crate) fn call_arith_builtin_on_context(
+        ctx: &mut crate::emacs_core::eval::Context,
+        kind: ArithGenericKind,
+        args_start: usize,
+        nargs: usize,
+    ) -> Option<EvalResult> {
+        if let Some(value) =
+            Self::arith_integer_fast(kind, &ctx.bc_buf[args_start..args_start + nargs])
+        {
+            return Some(Ok(value));
+        }
+        Self::call_arith_builtin_slow_on_context(ctx, kind, args_start, nargs)
+    }
+
+    /// The full builtin for `kind` on the `nargs` operands at
+    /// `ctx.bc_buf[args_start..]`: the static subr, no backtrace frame, then
+    /// the debugger check on a signal. `None` only if the subr does not
+    /// resolve.
+    #[inline(never)]
+    pub(crate) fn call_arith_builtin_slow_on_context(
         ctx: &mut crate::emacs_core::eval::Context,
         kind: ArithGenericKind,
         args_start: usize,
@@ -9302,6 +9356,10 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/builtin_result_return.rs"]
 mod builtin_result_return_tests;
+
+#[cfg(test)]
+#[path = "tests/arith_integer_fast_path.rs"]
+mod arith_integer_fast_path_tests;
 
 impl ArithGenericKind {
     /// The builtin this kind's slow arm calls: the SAME cached symbol ids the
