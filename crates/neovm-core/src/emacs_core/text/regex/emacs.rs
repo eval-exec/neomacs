@@ -8894,6 +8894,14 @@ fn sparse_ascii_fastmap(fastmap: &[bool; 256]) -> Option<SparseAsciiFastmap> {
 // ---------------------------------------------------------------------------
 
 /// Whether a regexp knob's value turns it on: `1`, `on`, `true` or `yes`.
+/// An opt-out knob is off only when explicitly set to `0`/`off`/`false`/`no`.
+fn regex_knob_off(value: Option<&str>) -> bool {
+    matches!(
+        value.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
+        Some("0" | "off" | "false" | "no")
+    )
+}
+
 fn regex_knob_on(value: Option<&str>) -> bool {
     matches!(
         value.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
@@ -8920,10 +8928,12 @@ pub(crate) fn with_anchor_alt<R>(on: bool, f: impl FnOnce() -> R) -> R {
     f()
 }
 
-/// `NEOVM_REGEX_ANCHOR_ALT` (default off; `on` enables): a pattern whose every
+/// `NEOVM_REGEX_ANCHOR_ALT` (default on; `off` disables): a pattern whose every
 /// alternative begins with `^` (or `\``) searches line starts only, as a
 /// pattern whose FIRST opcode is `^` already does (P3.3 Stage 0).  Read once
-/// per process, when the first pattern compiles.
+/// per process, when the first pattern compiles.  On by default since the
+/// board A/B (org-editing -1.4% instructions, org-editing-heavy -0.45%, the
+/// census pattern pat-026 1.81M -> 0.20M instructions per search).
 pub(crate) fn anchor_alt_enabled() -> bool {
     #[cfg(any(test, feature = "fuzzing"))]
     if let Some(on) = ANCHOR_ALT_OVERRIDE.with(|slot| slot.get()) {
@@ -8931,7 +8941,7 @@ pub(crate) fn anchor_alt_enabled() -> bool {
     }
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| {
-        let on = regex_knob_on(std::env::var("NEOVM_REGEX_ANCHOR_ALT").ok().as_deref());
+        let on = !regex_knob_off(std::env::var("NEOVM_REGEX_ANCHOR_ALT").ok().as_deref());
         tracing::debug!(target: "neovm::regex", on, "NEOVM_REGEX_ANCHOR_ALT");
         on
     })
