@@ -85,10 +85,11 @@ fn slot_stores_race_free_against_an_atomic_reader() {
         })
         .collect();
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let passes = std::sync::Arc::new(AtomicUsize::new(0));
     let reader = {
         let stop = stop.clone();
+        let passes = passes.clone();
         std::thread::spawn(move || {
-            let mut seen = 0usize;
             while !stop.load(Ordering::Acquire) {
                 for &(base, len) in &bases {
                     for i in 0..len {
@@ -97,15 +98,17 @@ fn slot_stores_race_free_against_an_atomic_reader() {
                         // single-slot stores do not grow them.
                         let v = load_value_atomic(unsafe { &*(base as *const TaggedValue).add(i) });
                         let n = v.as_fixnum().expect("a whole fixnum");
-                        assert!((0..1000).contains(&n));
-                        seen += 1;
+                        assert!(n >= 0);
                     }
                 }
+                passes.fetch_add(1, Ordering::Release);
             }
-            seen
         })
     };
-    for round in 0..1000i64 {
+    // At least 1000 rounds, and on until the reader has overlapped some of
+    // them (under load it may start late).
+    let mut round = 0i64;
+    while round < 1000 || passes.load(Ordering::Acquire) < 3 {
         for (k, &owner) in owners.iter().enumerate() {
             let index = (round as usize + k) % 8;
             let stored = if k == 0 {
@@ -115,9 +118,13 @@ fn slot_stores_race_free_against_an_atomic_reader() {
             };
             assert!(stored);
         }
+        round += 1;
+        if round >= 1000 {
+            std::thread::yield_now();
+        }
     }
     stop.store(true, Ordering::Release);
-    assert!(reader.join().expect("reader") > 0);
+    reader.join().expect("reader");
 }
 
 /// Through a concurrent mark: a child stored into a record or closure slot
