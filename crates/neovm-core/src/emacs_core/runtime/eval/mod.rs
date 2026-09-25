@@ -7340,6 +7340,10 @@ mod apply1_bytecode_tests;
 #[cfg(test)]
 #[path = "tests/varset_plain_fast_path.rs"]
 mod varset_plain_fast_path_tests;
+// Every variable shape through bytecode read/setq/let/unbind, both engines.
+#[cfg(test)]
+#[path = "tests/var_fast.rs"]
+mod var_fast_tests;
 
 #[cfg(test)]
 #[path = "tests/gc_sweep_cap.rs"]

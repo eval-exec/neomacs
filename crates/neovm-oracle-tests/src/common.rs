@@ -1043,6 +1043,44 @@ pub(crate) fn assert_oracle_parity_with_case_workdir_expect(
     assert_oracle_parity_expect_with_sandbox(form, expected, &sandbox, EvalProgram::Normalized);
 }
 
+/// Like [`assert_oracle_parity_expect`], with the Neomacs side run once per
+/// entry of `neomacs_envs` against the one GNU expectation: a knob matrix (a
+/// JIT threshold, a fast tier switched off) must not move any answer.  GNU
+/// runs once; the environments are Neomacs knobs it does not read.
+pub(crate) fn assert_oracle_parity_under_envs_expect(
+    form: &str,
+    neomacs_envs: &[&[(&str, &str)]],
+    expected: expect_test::Expect,
+) {
+    ensure_nonempty_form(form).expect("form should not be empty");
+    let eval_program = EvalProgram::Normalized;
+    let sandbox_with = |extra_env: &[(&str, &str)]| {
+        oracle_sandbox(form, &[], &project_lisp_dir()).with_extra_env(extra_env)
+    };
+    let mode = OracleMode::from_env();
+    let oracle = match mode {
+        OracleMode::Snapshot => None,
+        OracleMode::Verify | OracleMode::Refresh | OracleMode::Live => Some(
+            run_oracle_eval_with_sandbox(&sandbox_with(&[]), eval_program)
+                .expect("oracle eval should run"),
+        ),
+    };
+    if let (OracleMode::Verify | OracleMode::Refresh, Some(oracle)) = (mode, &oracle) {
+        expected.assert_eq(&inline_expect_payload(oracle));
+    }
+    if mode == OracleMode::Refresh {
+        return;
+    }
+    for extra_env in neomacs_envs {
+        let neovm = run_neomacs_binary_eval_with_sandbox(&sandbox_with(extra_env), eval_program)
+            .unwrap_or_else(|e| panic!("neomacs binary eval should run under {extra_env:?}: {e}"));
+        match &oracle {
+            None => expected.assert_eq(&inline_expect_payload(&neovm)),
+            Some(oracle) => assert_neovm_oracle_parity(&neovm, oracle, form),
+        }
+    }
+}
+
 pub(crate) fn assert_oracle_parity_with_env_expect(
     form: &str,
     extra_env: &[(&str, &str)],

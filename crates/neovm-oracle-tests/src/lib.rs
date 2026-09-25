@@ -372,6 +372,7 @@ mod use_map_buffer_swap_strict_edge_semantics;
 mod value_order_semantics;
 mod values_store_semantics;
 mod variable_alias_semantics;
+mod variable_cache_tier_semantics;
 mod variable_watcher_semantics;
 mod vconcat_advanced;
 mod vconcat_operations;
