@@ -257,6 +257,7 @@ impl Context {
         // The static subr entry above was rewritten IN PLACE even when the
         // cell write was skipped — keep function_epoch a complete change
         // signal (JIT call-speculation validity depends on it).
-        self.obarray.bump_function_epoch();
+        self.obarray
+            .bump_function_epoch(crate::emacs_core::symbol::FunctionEpochBump::SubrRewrite);
     }
 }

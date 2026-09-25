@@ -746,7 +746,11 @@ pub(crate) fn builtin_fset_2(
         ));
     }
     eval.note_macro_expansion_mutation();
-    eval.obarray_mut().set_symbol_function_id(symbol, def);
+    eval.obarray_mut().set_symbol_function_id_for(
+        symbol,
+        def,
+        crate::emacs_core::symbol::FunctionEpochBump::Fset,
+    );
     crate::emacs_core::interactive::sync_interactive_registry_for_symbol_definition(
         &mut eval.interactive,
         symbol,

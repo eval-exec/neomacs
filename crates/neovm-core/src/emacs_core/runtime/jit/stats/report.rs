@@ -5,6 +5,7 @@
 //! so the report format is unit-testable without a `Context`. The periodic
 //! lines stay the record for a process that dies by a signal.
 
+use super::epoch::EpochCounters;
 use super::{CompileStats, ReportTag, format_summary};
 
 /// Everything the exit report prints. Filled by [`super::report_at_exit`];
@@ -29,6 +30,15 @@ pub(crate) struct FinalReport {
     /// Process-wide dispatch-seam interpreter fallbacks
     /// (`cache::SEAM_INTERP_FALLBACK_COUNT`).
     pub(crate) seam_fallbacks: u64,
+    /// The obarray's `function_epoch` at exit (a cross-check on the bump
+    /// total: they differ only by bumps on other threads or obarrays).
+    pub(crate) function_epoch: u64,
+    /// This thread's `function_epoch` bumps by reason.
+    pub(crate) epoch: EpochCounters,
+    /// The same, counted from the command-loop mark on.
+    pub(crate) epoch_since_loop: Option<EpochCounters>,
+    /// The most-redefined symbols, rendered (`name=count,...`).
+    pub(crate) redefined_top: String,
 }
 
 impl FinalReport {
@@ -67,6 +77,15 @@ impl FinalReport {
                 self.compile.native_entries, self.osr_transfers, self.seam_fallbacks,
             ),
         ));
+        let mut fn_epoch = format!("epoch={} {}", self.function_epoch, self.epoch.render());
+        if let Some(delta) = &self.epoch_since_loop {
+            fn_epoch.push_str(&format!(
+                " | since_command_loop: {}",
+                delta.render_nonzero()
+            ));
+        }
+        lines.push((ReportTag::FinalFnEpoch, fn_epoch));
+        lines.push((ReportTag::FinalFnEpochTop, or_dash(&self.redefined_top)));
         lines
     }
 }

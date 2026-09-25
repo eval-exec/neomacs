@@ -600,8 +600,11 @@ pub(crate) fn builtin_defalias(eval: &mut super::eval::Context, args: Vec<Value>
     eval.record_defalias_function_history(result);
     match action {
         DefaliasAction::SetFunction { symbol, definition } => {
-            eval.obarray_mut()
-                .set_symbol_function_id(symbol, definition);
+            eval.obarray_mut().set_symbol_function_id_for(
+                symbol,
+                definition,
+                crate::emacs_core::symbol::FunctionEpochBump::Defalias,
+            );
         }
         DefaliasAction::CallHook {
             hook,

@@ -885,6 +885,45 @@ impl Clone for LispSymbol {
     }
 }
 
+/// Why [`Obarray::function_epoch`] moved. Observability only: the JIT's
+/// report counts bumps per reason (`jit::stats`). No behaviour depends on
+/// it — every writer bumps exactly when and how it did before.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, strum::EnumCount, strum::EnumIter, strum::IntoStaticStr,
+)]
+#[strum(serialize_all = "kebab-case")]
+pub(crate) enum FunctionEpochBump {
+    /// `fset` (`builtin_fset_2`; GNU `Ffset`, data.c).
+    Fset,
+    /// `defalias` (`builtin_defalias`, `Context::defalias_value`; GNU
+    /// `Fdefalias`, data.c).
+    Defalias,
+    /// Every other function-cell write through `set_symbol_function(_id)`:
+    /// runtime installers, kmacro, abbrev, the AOT self-tests.
+    InternalCellWrite,
+    /// The pdump image restore writing a dumped function cell.
+    PdumpRestore,
+    /// `fmakunbound` (`fmakunbound_id`; also the pdump restore of an unbound cell).
+    Fmakunbound,
+    /// `clear_function_silent_id` (init-time masking; also the pdump restore).
+    SilentClear,
+    /// `unintern_id`.
+    Unintern,
+    /// A static subr entry rewritten in place (`install_subr`), no cell write.
+    SubrRewrite,
+    /// The `compiler_function_overrides` toggle
+    /// (`sync_cached_runtime_binding_by_id`), no cell write.
+    CompilerOverrides,
+}
+
+/// A function-cell write that stored the value already there: no epoch
+/// move (the JIT report counts these next to the bumps).
+#[inline]
+fn note_function_cell_unchanged() {
+    #[cfg(feature = "jit")]
+    crate::emacs_core::jit::stats::note_function_cell_unchanged();
+}
+
 /// The obarray — a table of interned symbols.
 ///
 /// This is the central symbol registry. `intern` looks up or creates symbols,
@@ -3691,7 +3730,9 @@ impl Obarray {
         store_value_atomic(&mut sym.function, function);
         sym.function_unbound = false;
         if !unchanged {
-            self.note_function_redefined(id);
+            self.note_function_redefined(id, FunctionEpochBump::InternalCellWrite);
+        } else {
+            note_function_cell_unchanged();
         }
     }
 
@@ -3699,8 +3740,18 @@ impl Obarray {
     /// static subr table (`register_global_subr_entry`) rewrites a subr's fn
     /// pointer/arity in place, invisibly to the cells. Bumping here keeps
     /// `function_epoch` a complete "any function binding may have changed"
-    /// signal, which JIT call speculation relies on for validity.
-    pub(crate) fn bump_function_epoch(&mut self) {
+    /// signal, which JIT call speculation relies on for validity. `why` is
+    /// observability only (the JIT's epoch report counts per reason).
+    pub(crate) fn bump_function_epoch(&mut self, why: FunctionEpochBump) {
+        self.advance_function_epoch();
+        #[cfg(feature = "jit")]
+        crate::emacs_core::jit::stats::note_function_epoch_bump(why, None);
+        #[cfg(not(feature = "jit"))]
+        let _ = why;
+    }
+
+    /// Move `function_epoch` by one, skipping the reserved `u64::MAX`.
+    fn advance_function_epoch(&mut self) {
         self.function_epoch = self.function_epoch.wrapping_add(1);
         // u64::MAX is RESERVED as the JIT/AOT spec DISARMED sentinel
         // (jit::compile::SPEC_EPOCH_DISARMED); a live epoch must never equal it or
@@ -3716,22 +3767,32 @@ impl Obarray {
     /// speculation re-arms on). When JIT is enabled, also evict the JIT cache
     /// entries of callers that INLINED `id` -- the only invalidation inlined
     /// callees get, so every function-cell write must come through here (see
-    /// jit::cache::evict_inline_dependents).
-    fn note_function_redefined(&mut self, _id: SymId) {
-        self.function_epoch = self.function_epoch.wrapping_add(1);
-        // u64::MAX is RESERVED as the JIT/AOT spec DISARMED sentinel
-        // (jit::compile::SPEC_EPOCH_DISARMED); a live epoch must never equal it or
-        // a legitimately-armed spec slot would read as disarmed. Skip it on the
-        // (astronomically unreachable) wrap.
-        if self.function_epoch == u64::MAX {
-            self.function_epoch = 0;
-        }
+    /// jit::cache::evict_inline_dependents). `why` only feeds the JIT's
+    /// per-reason bump counters; it changes nothing else.
+    fn note_function_redefined(&mut self, id: SymId, why: FunctionEpochBump) {
+        self.advance_function_epoch();
         #[cfg(feature = "jit")]
-        crate::emacs_core::jit::cache::evict_inline_dependents(_id);
+        {
+            crate::emacs_core::jit::stats::note_function_epoch_bump(why, Some(id));
+            crate::emacs_core::jit::cache::evict_inline_dependents(id);
+        }
+        #[cfg(not(feature = "jit"))]
+        let _ = (id, why);
     }
 
     /// Set the function cell of a symbol by identity.
     pub fn set_symbol_function_id(&mut self, id: SymId, function: Value) {
+        self.set_symbol_function_id_for(id, function, FunctionEpochBump::InternalCellWrite);
+    }
+
+    /// [`Self::set_symbol_function_id`] attributing the epoch bump to `why`
+    /// (the Lisp-level writers: `fset`, `defalias`, the pdump restore).
+    pub(crate) fn set_symbol_function_id_for(
+        &mut self,
+        id: SymId,
+        function: Value,
+        why: FunctionEpochBump,
+    ) {
         self.ensure_global_member_if_canonical(id);
         let sym = self.ensure_symbol_id(id);
         // Storing the value the cell already holds changes no call's
@@ -3743,7 +3804,9 @@ impl Obarray {
         store_value_atomic(&mut sym.function, function);
         sym.function_unbound = false;
         if !unchanged {
-            self.note_function_redefined(id);
+            self.note_function_redefined(id, why);
+        } else {
+            note_function_cell_unchanged();
         }
     }
 
@@ -3763,7 +3826,7 @@ impl Obarray {
         crate::tagged::gc::note_root_overwrite(sym.function);
         store_value_atomic(&mut sym.function, Value::NIL);
         if !was_unbound || was_bound_function {
-            self.note_function_redefined(id);
+            self.note_function_redefined(id, FunctionEpochBump::Fmakunbound);
         }
     }
 
@@ -3785,7 +3848,7 @@ impl Obarray {
             redefined = true;
         }
         if redefined {
-            self.note_function_redefined(id);
+            self.note_function_redefined(id, FunctionEpochBump::SilentClear);
         }
     }
 
@@ -4461,7 +4524,7 @@ impl Obarray {
         let removed_symbol = self.clear_global_member(id);
         if removed_symbol {
             crate::emacs_core::intern::unintern_canonical_id(id);
-            self.note_function_redefined(id);
+            self.note_function_redefined(id, FunctionEpochBump::Unintern);
         }
         removed_symbol
     }
@@ -4473,6 +4536,12 @@ impl Obarray {
     /// away — physically unreachable; widen to u128 if that ever stops holding.
     pub fn function_epoch(&self) -> u64 {
         self.function_epoch
+    }
+
+    /// Test-only: set `function_epoch` (the wrap-skip tests).
+    #[cfg(test)]
+    pub(crate) fn set_function_epoch_for_test(&mut self, epoch: u64) {
+        self.function_epoch = epoch;
     }
 
     /// True when `fmakunbound` explicitly masked this symbol's fallback function definition.

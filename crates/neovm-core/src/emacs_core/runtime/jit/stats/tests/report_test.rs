@@ -32,6 +32,20 @@ fn jit_final_report_renders_every_section() {
         inline: String::new(),
         osr_transfers: 2,
         seam_fallbacks: 17,
+        function_epoch: 91234,
+        epoch: {
+            let mut e = super::epoch::EpochCounters::default();
+            e.bumps[crate::emacs_core::symbol::FunctionEpochBump::Defalias as usize] = 9877;
+            e.bumps[crate::emacs_core::symbol::FunctionEpochBump::Fset as usize] = 41;
+            e.unchanged_writes = 233;
+            e
+        },
+        epoch_since_loop: Some({
+            let mut e = super::epoch::EpochCounters::default();
+            e.bumps[crate::emacs_core::symbol::FunctionEpochBump::Defalias as usize] = 500;
+            e
+        }),
+        redefined_top: "cl--generic-dispatcher=41".to_string(),
     };
     let lines = report.render();
     let tags: Vec<&'static str> = lines.iter().map(|(t, _)| (*t).into()).collect();
@@ -42,6 +56,8 @@ fn jit_final_report_renders_every_section() {
             "neovm-jit-final-mir-bails",
             "neovm-jit-final-inline",
             "neovm-jit-final-runs",
+            "neovm-jit-final-fn-epoch",
+            "neovm-jit-final-fn-epoch-top",
         ]
     );
     let head = body_of(&lines, ReportTag::Final);
@@ -61,10 +77,22 @@ fn jit_final_report_renders_every_section() {
         "entries_seam=4975 osr_transfers=2 seam_fallbacks=17"
     );
 
+    assert_eq!(
+        body_of(&lines, ReportTag::FinalFnEpoch),
+        "epoch=91234 total=9918 fset=41 defalias=9877 internal-cell-write=0 pdump-restore=0 \
+         fmakunbound=0 silent-clear=0 unintern=0 subr-rewrite=0 compiler-overrides=0 \
+         unchanged-writes=233 | since_command_loop: total=500 defalias=500"
+    );
+    assert_eq!(
+        body_of(&lines, ReportTag::FinalFnEpochTop),
+        "cl--generic-dispatcher=41"
+    );
+
     // Without a command-loop mark there is no delta section.
     let unmarked = FinalReport {
         since_command_loop_ms: None,
         compile_since_loop: None,
+        epoch_since_loop: None,
         ..report
     };
     let head = unmarked.render().remove(0).1;

@@ -4261,7 +4261,9 @@ impl Context {
             if active != self.compiler_function_overrides_active {
                 // The stack-call cache keys on the function epoch; a change
                 // here changes what every symbol resolves to.
-                self.obarray.bump_function_epoch();
+                self.obarray.bump_function_epoch(
+                    crate::emacs_core::symbol::FunctionEpochBump::CompilerOverrides,
+                );
             }
             self.compiler_function_overrides_active = active;
         } else if sym_id == self.noninteractive_symbol {

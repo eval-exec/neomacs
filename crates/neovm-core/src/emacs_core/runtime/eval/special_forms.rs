@@ -1375,7 +1375,11 @@ impl Context {
         match action {
             builtins::DefaliasAction::SetFunction { symbol, definition } => {
                 self.note_macro_expansion_mutation();
-                self.obarray.set_symbol_function_id(symbol, definition);
+                self.obarray.set_symbol_function_id_for(
+                    symbol,
+                    definition,
+                    crate::emacs_core::symbol::FunctionEpochBump::Defalias,
+                );
             }
             builtins::DefaliasAction::CallHook {
                 hook,

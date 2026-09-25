@@ -1110,7 +1110,8 @@ fn inlined_callee_redefinition_rejits() {
     // Redefine C and bump the epoch (fset/defalias bump function_epoch).
     ev.obarray
         .set_symbol_function_id(c_id, mk(vec![Op::Add1, Op::Return]));
-    ev.obarray.bump_function_epoch();
+    ev.obarray
+        .bump_function_epoch(crate::emacs_core::symbol::FunctionEpochBump::SubrRewrite);
     let r2 = crate::emacs_core::jit::try_run_compiled(ctx, &f, f_val, &[Value::make_int(5)]);
     assert!(
         matches!(r2, Ok(Some(b)) if b == Value::make_int(6).bits()),
@@ -6786,7 +6787,8 @@ fn function_epoch_never_equals_disarmed_sentinel() {
     assert_eq!(SPEC_EPOCH_DISARMED, u64::MAX);
     let mut ev = crate::emacs_core::eval::Context::new();
     for _ in 0..8 {
-        ev.obarray.bump_function_epoch();
+        ev.obarray
+            .bump_function_epoch(crate::emacs_core::symbol::FunctionEpochBump::SubrRewrite);
         assert_ne!(
             ev.obarray.function_epoch(),
             SPEC_EPOCH_DISARMED,

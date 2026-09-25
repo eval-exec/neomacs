@@ -217,7 +217,11 @@ impl Context {
         builtins::init_builtins(&mut ev);
         for (sym_id, symbol) in dumped_function_surface.iter_symbols() {
             if !symbol.function.is_nil() {
-                ev.obarray.set_symbol_function_id(sym_id, symbol.function);
+                ev.obarray.set_symbol_function_id_for(
+                    sym_id,
+                    symbol.function,
+                    crate::emacs_core::symbol::FunctionEpochBump::PdumpRestore,
+                );
             } else if dumped_function_surface.is_function_unbound_id(sym_id) {
                 ev.obarray.fmakunbound_id(sym_id);
             } else {

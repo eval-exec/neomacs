@@ -308,6 +308,16 @@ pub(crate) enum ReportTag {
     /// Exit report: native-run totals.
     #[strum(serialize = "neovm-jit-final-runs")]
     FinalRuns,
+    /// Periodic `function_epoch` bump counts by reason.
+    #[strum(serialize = "neovm-jit-fn-epoch")]
+    FnEpoch,
+    /// Exit report: `function_epoch` bumps by reason (whole process, then
+    /// since the command loop was entered).
+    #[strum(serialize = "neovm-jit-final-fn-epoch")]
+    FinalFnEpoch,
+    /// Exit report: the most-redefined symbols.
+    #[strum(serialize = "neovm-jit-final-fn-epoch-top")]
+    FinalFnEpochTop,
 }
 
 /// The process-wide report sink, chosen once from `NEOVM_JIT_STATS_FILE`.
@@ -326,6 +336,10 @@ pub(crate) fn report_line(tag: ReportTag, body: &str) {
 /// implies it): print a one-line running summary every 64 compiles (and on
 /// the dispatch cadence) through [`report_line`].
 pub(crate) fn summary_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(o) = OBSERVE_OVERRIDE.with(Cell::get) {
+        return o.stats;
+    }
     // Cached in a plain relaxed `u8` rather than a `OnceLock<bool>`: the
     // per-call recorders below sit on the JIT's native->native call seam, and
     // there a `OnceLock` read costs its initialized-flag branch plus an
@@ -481,6 +495,10 @@ fn record_dispatch_enabled(said_compiled: bool) {
         if stats.dispatch_consulted.is_multiple_of(50_000) {
             report_line(ReportTag::Dispatch, &format_summary(&stats));
             report_line(ReportTag::MirBails, &mir_bail_summary(16));
+            report_line(
+                ReportTag::FnEpoch,
+                &epoch::EpochCounters::snapshot().render(),
+            );
             let inline = inline_census_summary(16);
             if !inline.is_empty() {
                 report_line(ReportTag::Inline, &inline);
@@ -526,6 +544,7 @@ fn record_native_entry_enabled() {
 struct LoopMark {
     at: std::time::Instant,
     compile: CompileStats,
+    epoch: epoch::EpochCounters,
 }
 
 thread_local! {
@@ -541,10 +560,12 @@ pub fn mark_command_loop_entry() {
         return;
     }
     let compile = STATS.with(Cell::get);
+    let epoch = epoch::EpochCounters::snapshot();
     LOOP_MARK.with(|m| {
         *m.borrow_mut() = Some(LoopMark {
             at: std::time::Instant::now(),
             compile,
+            epoch,
         })
     });
 }
@@ -560,11 +581,11 @@ fn report_requested() -> bool {
 /// unless a report knob is set. MUST run on the eval thread: it reads the
 /// thread-local compile aggregates and caches. Read-only on `ctx`: no
 /// interning, no Lisp allocation, no safepoint.
-pub fn report_at_exit(_ctx: &crate::emacs_core::eval::Context) {
+pub fn report_at_exit(ctx: &crate::emacs_core::eval::Context) {
     if !report_requested() {
         return;
     }
-    let report = collect_final_report();
+    let report = collect_final_report(ctx);
     if summary_enabled() {
         for (tag, line) in report.render() {
             report_line(tag, &line);
@@ -580,16 +601,19 @@ pub fn report_at_exit(_ctx: &crate::emacs_core::eval::Context) {
 }
 
 /// Gather this thread's aggregates and the process-wide JIT counters.
-fn collect_final_report() -> report::FinalReport {
+fn collect_final_report(ctx: &crate::emacs_core::eval::Context) -> report::FinalReport {
     use std::sync::atomic::Ordering;
     let compile = STATS.with(Cell::get);
-    let (since_command_loop_ms, compile_since_loop) = LOOP_MARK.with(|m| match &*m.borrow() {
-        Some(mark) => (
-            Some(mark.at.elapsed().as_millis() as u64),
-            Some(compile.since(&mark.compile)),
-        ),
-        None => (None, None),
-    });
+    let epoch = epoch::EpochCounters::snapshot();
+    let (since_command_loop_ms, compile_since_loop, epoch_since_loop) =
+        LOOP_MARK.with(|m| match &*m.borrow() {
+            Some(mark) => (
+                Some(mark.at.elapsed().as_millis() as u64),
+                Some(compile.since(&mark.compile)),
+                Some(epoch.since(&mark.epoch)),
+            ),
+            None => (None, None, None),
+        });
     report::FinalReport {
         pid: std::process::id(),
         since_command_loop_ms,
@@ -599,7 +623,32 @@ fn collect_final_report() -> report::FinalReport {
         inline: inline_census_summary(32),
         osr_transfers: super::cache::OSR_TRANSFER_COUNT.load(Ordering::Relaxed),
         seam_fallbacks: super::cache::SEAM_INTERP_FALLBACK_COUNT.load(Ordering::Relaxed),
+        function_epoch: ctx.obarray.function_epoch(),
+        epoch,
+        epoch_since_loop,
+        redefined_top: epoch::top_redefined(16),
     }
+}
+
+/// Test-only override of the observability knobs for compiles and reports on
+/// the current thread, without the process-global environment variables
+/// (the `force_deopt_for_test` pattern). Consulted first by the predicates.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ObserveOverride {
+    /// [`summary_enabled`] (`NEOVM_JIT_COMPILE_STATS=1`).
+    pub(crate) stats: bool,
+}
+
+#[cfg(test)]
+thread_local! {
+    static OBSERVE_OVERRIDE: Cell<Option<ObserveOverride>> = const { Cell::new(None) };
+}
+
+/// Force the observability knobs for the current thread (tests only).
+#[cfg(test)]
+pub(crate) fn force_observe_for_test(o: ObserveOverride) {
+    OBSERVE_OVERRIDE.with(|c| c.set(Some(o)));
 }
 
 /// Test-only: this thread's current compile-stall aggregate.
@@ -614,7 +663,10 @@ pub(crate) fn reset_compile_stats() {
     STATS.with(|s| s.set(CompileStats::default()));
 }
 
+pub(crate) mod epoch;
 mod report;
+
+pub(crate) use epoch::{note_function_cell_unchanged, note_function_epoch_bump};
 
 #[cfg(test)]
 #[path = "stats/tests/stats_test.rs"]
@@ -623,3 +675,7 @@ mod tests;
 #[cfg(test)]
 #[path = "stats/tests/report_test.rs"]
 mod report_tests;
+
+#[cfg(test)]
+#[path = "stats/tests/epoch_test.rs"]
+mod epoch_tests;
