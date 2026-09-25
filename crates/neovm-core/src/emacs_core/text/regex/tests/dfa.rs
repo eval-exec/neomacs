@@ -1259,3 +1259,77 @@ fn a_pending_quit_leaves_the_candidate_undecided() {
     crate::emacs_core::eval::clear_quit_requested_for_test();
     assert_eq!(verdict, Exists::Unknown);
 }
+
+// ---------------------------------------------------------------------------
+// Differential fuzz smoke (C6)
+// ---------------------------------------------------------------------------
+
+use crate::fuzz_support::{
+    RegexCase, RegexCheck, RegexDifferential, SearchTarget, check_regex_differential,
+};
+
+/// The `ExistenceDfa` differential on every `cargo nextest` run: random
+/// patterns and texts, both representations, case-folded or not; every
+/// forward and backward search equal with the filter on, and `verify`
+/// finding nothing.
+#[test]
+fn dfa_fuzz_smoke() {
+    crate::test_utils::init_test_tracing();
+    let mut rng = DfaRng(0xF022_DFA0);
+    let mut compared = 0usize;
+    for _ in 0..2_000 {
+        let source = gen_pattern(&mut rng, 2);
+        let case_fold = rng.below(3) == 0;
+        let target = if rng.below(4) == 0 {
+            SearchTarget::Unibyte
+        } else {
+            SearchTarget::Multibyte
+        };
+        let text = gen_text(&mut rng, 16);
+        let start = rng.below(text.len() + 1);
+        let point = rng.below(text.len() + 1);
+        let case = RegexCase::new(&source, &text, case_fold, start, point).with_target(target);
+        match check_regex_differential(case, RegexDifferential::ExistenceDfa) {
+            Ok(RegexCheck::Equivalent { comparisons }) => compared += comparisons,
+            Ok(RegexCheck::NotApplicable(_)) => {}
+            Err(divergence) => panic!(
+                "{divergence}\npattern={source:?} case_fold={case_fold} target={target} \
+                 text={:?} start={start} point={point}",
+                String::from_utf8_lossy(&text)
+            ),
+        }
+    }
+    assert!(compared > 1_000, "{compared}");
+}
+
+/// The fixed regression cases of the fuzz target: shapes where a rejection
+/// is easy to get wrong.
+#[test]
+fn dfa_differential_regressions() {
+    for (pattern, text, start) in [
+        // A candidate whose only match is empty, at the stop.
+        ("x*$", &b"ab\ncd"[..], 0),
+        // `\=` at point in the middle of the text.
+        ("a\\=b\\|c", b"xxab", 2),
+        // `\b` against the text edges.
+        ("\\bq\\|z\\b", b"q z", 3),
+        // A multibyte character across the bound.
+        ("é+", "aéé".as_bytes(), 0),
+        // A keep-string loop (rewind view) followed by its exit.
+        ("[a-z]*:x", b"abc:y abc:x", 0),
+        // POSIX-style alternation where only the longer arm continues.
+        ("\\(a\\|ab\\)c", b"abd abc", 0),
+    ] {
+        for target in [SearchTarget::Multibyte, SearchTarget::Unibyte] {
+            for case_fold in [false, true] {
+                let case =
+                    RegexCase::new(pattern, text, case_fold, start, start).with_target(target);
+                let check = check_regex_differential(case, RegexDifferential::ExistenceDfa);
+                assert!(
+                    matches!(check, Ok(RegexCheck::Equivalent { comparisons: 2 })),
+                    "{pattern:?}: {check:?}"
+                );
+            }
+        }
+    }
+}

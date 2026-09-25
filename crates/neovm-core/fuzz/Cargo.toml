@@ -26,6 +26,13 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "regex_existence_dfa"
+path = "fuzz_targets/regex_existence_dfa.rs"
+test = false
+doc = false
+bench = false
+
 # Keep libFuzzer/nightly-only dependencies outside the production workspace
 # dependency graph and Cargo.lock.
 [workspace]

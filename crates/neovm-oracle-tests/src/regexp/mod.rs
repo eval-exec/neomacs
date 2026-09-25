@@ -5,6 +5,7 @@ mod casefold_candidate_scan;
 mod comprehensive_advanced;
 mod comprehensive_patterns;
 mod context_semantics;
+mod dfa_candidate_filter;
 mod dumb_jump_corpus;
 mod engine_divergence_pins;
 mod gnu_divergence;

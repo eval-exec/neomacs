@@ -1810,6 +1810,8 @@ impl<'p> DfaLease<'p> {
                             stop,
                             "existence DFA rejected a candidate the matcher matched"
                         );
+                        #[cfg(test)]
+                        panic!("NEOVM_REGEX_DFA=verify: a rejected candidate matched at {pos}");
                     }
                     Exists::Yes if found.is_none() && !overflow => {
                         stat(|s| s.verify_bad_yes += 1);
@@ -1819,6 +1821,8 @@ impl<'p> DfaLease<'p> {
                             stop,
                             "existence DFA accepted a candidate the matcher failed"
                         );
+                        #[cfg(test)]
+                        panic!("NEOVM_REGEX_DFA=verify: an accepted candidate failed at {pos}");
                     }
                     _ => {}
                 }
@@ -1863,6 +1867,27 @@ impl<'p> DfaLease<'p> {
             }
         }
     }
+}
+
+/// Build `pattern`'s DFA now, skipping the cold phase, so a short
+/// differential case exercises the filter.
+#[cfg(any(test, feature = "fuzzing"))]
+pub(crate) fn prime(
+    pattern: &CompiledPattern,
+    syntax: &dyn SyntaxLookup,
+) -> Result<(), DfaIneligible> {
+    let nfa = Nfa::build(pattern)?;
+    let mut dfa = ExistenceDfa::new(nfa);
+    if let Some(context) = ClassContext::of_search(pattern, dfa.nfa(), syntax) {
+        dfa.classes.sync(context);
+    }
+    *pattern.dfa.0.borrow_mut() = DfaSlot::Live(Box::new(LiveDfa {
+        dfa,
+        decisions: 0,
+        yes: 0,
+        holiday: 0,
+    }));
+    Ok(())
 }
 
 impl LiveDfa {

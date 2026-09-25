@@ -1,14 +1,16 @@
 # NeoVM core fuzzing
 
 This independent Cargo workspace keeps nightly-only libFuzzer dependencies out
-of NeoVM's production workspace. Both targets call the same typed differential
-checker as the deterministic `neovm-core` smoke and regression tests.
+of NeoVM's production workspace. All three targets call the same typed
+differential checker as the deterministic `neovm-core` smoke and regression
+tests.
 
 Run either target from the repository root:
 
 ```sh
 cargo +nightly fuzz run regex_pike_vm --fuzz-dir crates/neovm-core/fuzz
 cargo +nightly fuzz run regex_search_optimizations --fuzz-dir crates/neovm-core/fuzz
+cargo +nightly fuzz run regex_existence_dfa --fuzz-dir crates/neovm-core/fuzz
 ```
 
 Bound a local or CI run with libFuzzer options after `--`:
@@ -26,6 +28,10 @@ forced even on short texts. Each case searches a multibyte or a unibyte text
 (`unibyte_target`); a multibyte text is first made valid internal text, as
 every Lisp string and buffer is. Adding `unibyte_target` changed the wire
 format, so corpora saved before it replay as different cases.
+`regex_existence_dfa` compares forward and backward searches with the
+existence DFA filtering candidates (`NEOVM_REGEX_DFA=on`, the DFA built at
+once) against the matcher alone, including the fail-stack overflow flag, and
+requires `verify` mode to find no contradicted verdict.
 
 The weekly and manually dispatched `regex-fuzz` CI job runs both targets for
 five minutes, restores the evolving corpora from the preceding run, and uploads

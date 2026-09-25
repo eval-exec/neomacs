@@ -85,6 +85,11 @@ pub enum RegexDifferential {
     PikeVm,
     /// Exhaustive candidate scanning versus production fastmap/prefilter skips.
     SearchOptimizations,
+    /// Searches with the existence DFA filtering candidates
+    /// (`NEOVM_REGEX_DFA=on`, and `verify` finding no contradicted verdict)
+    /// versus the matcher alone: position, registers and the fail-stack
+    /// overflow flag.
+    ExistenceDfa,
 }
 
 /// Observable regexp operations compared by the differential checker.
@@ -110,6 +115,7 @@ pub enum RegexNotApplicable {
     CompileRejected,
     PikeIneligible,
     OracleOverflow,
+    DfaIneligible,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -184,7 +190,10 @@ pub fn check_regex_differential(
     // bytes: both engines decode the text the same way.
     let valid_text;
     let case = match (differential, case.target) {
-        (RegexDifferential::SearchOptimizations, SearchTarget::Multibyte) => {
+        (
+            RegexDifferential::SearchOptimizations | RegexDifferential::ExistenceDfa,
+            SearchTarget::Multibyte,
+        ) => {
             valid_text = emacs_char::str_as_multibyte(case.text);
             RegexCase {
                 text: &valid_text,
@@ -200,13 +209,20 @@ pub fn check_regex_differential(
                 RegexNotApplicable::PikeIneligible,
             ));
         }
-        RegexDifferential::PikeVm | RegexDifferential::SearchOptimizations => {}
+        RegexDifferential::ExistenceDfa if regex_emacs::dfa::Nfa::build(&compiled).is_err() => {
+            return Ok(RegexCheck::NotApplicable(RegexNotApplicable::DfaIneligible));
+        }
+        RegexDifferential::PikeVm
+        | RegexDifferential::SearchOptimizations
+        | RegexDifferential::ExistenceDfa => {}
     }
 
     let mut comparisons = 0;
     for operation in RegexOperation::iter() {
-        if differential == RegexDifferential::SearchOptimizations
-            && operation == RegexOperation::Match
+        if matches!(
+            differential,
+            RegexDifferential::SearchOptimizations | RegexDifferential::ExistenceDfa
+        ) && operation == RegexOperation::Match
         {
             // An anchored match has no candidate scan to optimize.
             continue;
@@ -217,6 +233,7 @@ pub fn check_regex_differential(
             RegexDifferential::SearchOptimizations => {
                 compare_search_optimizations(&compiled, case, operation)
             }
+            RegexDifferential::ExistenceDfa => compare_existence_dfa(&compiled, case, operation),
         };
         let Some((oracle, candidate)) = comparison else {
             return Ok(RegexCheck::NotApplicable(
@@ -281,6 +298,51 @@ fn compare_search_optimizations(
         return None;
     }
     Some((oracle, candidate))
+}
+
+/// The matcher alone against the DFA-filtered search.  The overflow flag is
+/// part of the result: a rejection must never hide GNU's fail-stack overflow.
+fn compare_existence_dfa(
+    compiled: &regex_emacs::CompiledPattern,
+    case: RegexCase<'_>,
+    operation: RegexOperation,
+) -> Option<(MatchResult, MatchResult)> {
+    use regex_emacs::dfa::{DfaMode, with_dfa_mode};
+    let observe = |mode: DfaMode| {
+        let _ = regex_emacs::take_matcher_overflow();
+        let found = normalize(with_dfa_mode(mode, || {
+            run_operation(compiled, case, operation)
+        }));
+        (found, regex_emacs::take_matcher_overflow())
+    };
+    let (oracle, oracle_overflow) = observe(DfaMode::Off);
+    let _ = regex_emacs::dfa::prime(compiled, &DefaultSyntaxLookup);
+    let before = regex_emacs::dfa::dfa_stats();
+    let (verified, verified_overflow) = observe(DfaMode::Verify);
+    let after = regex_emacs::dfa::dfa_stats();
+    let (filtered, filtered_overflow) = observe(DfaMode::On);
+    let contradicted =
+        after.verify_bad_no + after.verify_bad_yes > before.verify_bad_no + before.verify_bad_yes;
+    // Fold the overflow flag and the verify verdicts into the compared
+    // value: any difference is a divergence.
+    let mark = |found: MatchResult, overflow: bool, contradicted: bool| {
+        if overflow || contradicted {
+            Some(NormalizedMatch {
+                match_start: usize::MAX,
+                group_starts: vec![i64::from(overflow), i64::from(contradicted)],
+                group_ends: Vec::new(),
+            })
+        } else {
+            found
+        }
+    };
+    let oracle = mark(oracle, oracle_overflow, false);
+    let verified = mark(verified, verified_overflow, contradicted);
+    let filtered = mark(filtered, filtered_overflow, false);
+    if verified != oracle {
+        return Some((oracle, verified));
+    }
+    Some((oracle, filtered))
 }
 
 fn run_operation(

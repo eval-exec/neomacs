@@ -58,6 +58,12 @@ jobs:
             --fuzz-dir crates/neovm-core/fuzz -- \
             -max_total_time=300 -max_len=512 -timeout=10
 
+      - name: Fuzz the existence DFA filter against the matcher alone
+        run: |
+          cargo +nightly fuzz run regex_existence_dfa \
+            --fuzz-dir crates/neovm-core/fuzz -- \
+            -max_total_time=300 -max_len=512 -timeout=10
+
       - name: Upload crash artifacts
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
