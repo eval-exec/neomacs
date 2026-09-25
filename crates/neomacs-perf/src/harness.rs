@@ -1418,6 +1418,9 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     "NEOMACS_LAYOUT_MINI_STILL",
     // The visible automatic-composition scan's ASCII fast path and memo: `on`.
     "NEOMACS_COMPOSITION_FASTPATH",
+    // U2.8 builtin front-end diets: `=off` restores the general search,
+    // syntax and text-property paths for a same-binary board A/B.
+    "NEOVM_BUILTIN_FRONTEND",
 ];
 
 pub(crate) fn configure_benchmark_environment(command: &mut Command, sandbox: &MelpaSandbox) {
