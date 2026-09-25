@@ -283,9 +283,14 @@ fn jit_bg_moved_epoch_discards_a_guarded_inline_leaf_twice_then_compiles_in_line
         stats_snapshot().discarded[DiscardReason::EpochMoved as usize],
         moved + 2
     );
+    let entries = stats_snapshot().enqueued[JobClass::Entry as usize];
     assert_eq!(call(ctx, &f, 3), Some(10), "compiled in line: g(9) = 10");
     assert_eq!(kind(&f), "compiled");
-    assert_eq!(publish_held_for_test(), 0, "nothing was deferred");
+    assert_eq!(
+        stats_snapshot().enqueued[JobClass::Entry as usize],
+        entries,
+        "the caller's compile was not deferred"
+    );
     assert_eq!(interpreted(&mut ev, &f, 3), 10);
     done();
 }

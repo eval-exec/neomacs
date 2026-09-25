@@ -58,7 +58,7 @@ fn jit_bg_pending_leaf_installs_at_the_next_probe() {
     assert_eq!(pending_count(), 1);
     assert_eq!(
         stats_snapshot().enqueued[JobClass::Entry as usize],
-        before.enqueued[0] + 1
+        before.enqueued[JobClass::Entry as usize] + 1
     );
     let entries = crate::emacs_core::jit::stats::compile_stats_snapshot().native_entries;
     assert_eq!(run(ctx, &f, 41), Some(Value::make_int(42).bits()));
@@ -67,7 +67,7 @@ fn jit_bg_pending_leaf_installs_at_the_next_probe() {
     assert!(crate::emacs_core::jit::stats::compile_stats_snapshot().native_entries > entries);
     assert_eq!(
         stats_snapshot().installed[JobClass::Entry as usize],
-        before.installed[0] + 1
+        before.installed[JobClass::Entry as usize] + 1
     );
     // Installed means installed: the hold is back where it was.
     assert_eq!(f.jit_runtime().deferred_heat(), 0);

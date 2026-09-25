@@ -13,7 +13,7 @@
 //! |---|---|---|
 //! | `legacy` (default) | `Legacy` | the persistent per-thread module defines each leaf in place (the B4 path, unchanged) |
 //! | `sync` | `Sync` | the split, run in line: the eval thread's backend compiles each packaged function at once. Deterministic |
-//! | `on` | `Threaded` | entry tier-ups hand their package to a worker thread (`bg::worker`) and the function stays interpreted until its leaf is installed; every other compile runs as under `sync`. x86-64 Linux; elsewhere `on` is `sync` |
+//! | `on` | `Threaded` | entry tier-ups and first-sight compiles hand their package to a worker thread (`bg::worker`); the function stays interpreted (a native caller takes the strict call path) until its leaf is installed; every other compile runs as under `sync`. x86-64 Linux; elsewhere `on` is `sync` |
 //!
 //! Whatever the mode, the CLIF and the machine code are the same, and so is
 //! everything Lisp can observe: the mode moves where code is produced, never
@@ -137,8 +137,11 @@ pub(crate) fn worker_threads() -> usize {
 #[strum(serialize_all = "snake_case")]
 #[repr(u8)]
 pub(crate) enum JobClass {
+    /// A speculated call site's first call into an uncompiled callee: native
+    /// callers take the strict path until it lands.
+    FirstSight = 0,
     /// A `dispatch_sized` tier-up, or the re-attempt after a deferral.
-    Entry = 0,
+    Entry = 1,
 }
 
 impl JobClass {
@@ -149,8 +152,8 @@ impl JobClass {
     pub(crate) fn for_origin(origin: CompileOrigin) -> Option<JobClass> {
         match origin {
             CompileOrigin::Dispatch | CompileOrigin::DeferralExpired => Some(JobClass::Entry),
+            CompileOrigin::FirstSight => Some(JobClass::FirstSight),
             CompileOrigin::Retier
-            | CompileOrigin::FirstSight
             | CompileOrigin::Osr
             | CompileOrigin::AotDrain
             | CompileOrigin::Direct => None,
@@ -959,3 +962,7 @@ mod invalidation_tests;
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 #[path = "bg/tests/worker_test.rs"]
 mod worker_tests;
+
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[path = "bg/tests/first_sight_test.rs"]
+mod first_sight_tests;
