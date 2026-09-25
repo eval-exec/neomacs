@@ -49,6 +49,7 @@
 //! | `NEOVM_JIT_DEBUG_ID` | Dump the bytecode body of the one compiled function with this id. |
 //! | `NEOVM_JIT_PROFILE` | Append per-function workload-characterization records to this file path. |
 //! | `NEOVM_JIT_COMPILE_STATS` | `=1`: print a running compile-stall summary line every 64 compiles. |
+//! | `NEOVM_JIT_STATS_FILE` | `=<path>`: append every `[neovm-jit-*]` report line to this file instead of stderr (an unopenable path falls back to stderr). Setting it implies `NEOVM_JIT_COMPILE_STATS=1`. |
 //! | `NEOVM_JIT_SIZE_UNIT` | Override [`RuntimeState::SIZE_UNIT`] (512): the ops-per-unit divisor scaling the tier-up threshold by body size. |
 //! | `NEOVM_JIT_MAX_OPS` | Override [`RuntimeState::MAX_TIER_OPS`] (4096): largest body that tiers at all; `0` = uncapped (the mid-end campaign's acceptance configuration). |
 //! | `NEOVM_JIT_REGALLOC` | Force one Cranelift register allocator for every JIT compile: `backtracking` (regalloc2 ion) or `single_pass` (fastalloc). Unset = the policy in `lowering::choose_regalloc` (fast for straight-line bodies, full for loops/OSR, re-tier when hot). |

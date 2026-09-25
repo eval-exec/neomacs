@@ -6,8 +6,21 @@
 //! sizing (or rejecting) background compilation. A compile happens once per
 //! function per thread per session (cold path), so the two `Instant` reads per
 //! compile are negligible and the metering is unconditionally on.
+//!
+//! # The report channel
+//!
+//! Every `[neovm-jit-*]` line goes through [`report_line`]: stderr by
+//! default, or the file named by `NEOVM_JIT_STATS_FILE=<path>` (appended).
+//! These lines are a measurement REPORT a knob explicitly asked for, not a
+//! diagnostic log, so they bypass `tracing` on purpose: under the neomacs
+//! subscriber the default filter is `warn`, `LogTarget::Stdout` writes to
+//! stdout (which would corrupt batch benchmark output) and `LogTarget::File`
+//! is silent — a tracing-only report would vanish or pollute. Nothing is
+//! printed unless a knob asks for it, and stdout is never written.
 
 use std::cell::Cell;
+use std::io::Write;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use super::compile::{CompileError, CompiledLeaf};
@@ -181,10 +194,89 @@ thread_local! {
     static STATS: Cell<CompileStats> = Cell::new(CompileStats::default());
 }
 
-/// `NEOVM_JIT_COMPILE_STATS=1`: eprintln a one-line running summary every 64
-/// compiles. There is no end-of-process dump — thread_locals have no clean
-/// exit hook — so the periodic line is the record.
-fn summary_enabled() -> bool {
+/// Where every `[neovm-jit-*]` report line goes (see the module docs).
+pub(crate) enum ReportSink {
+    Stderr,
+    /// `NEOVM_JIT_STATS_FILE=<path>`, opened for append once.
+    File(std::sync::Mutex<std::fs::File>),
+}
+
+impl ReportSink {
+    /// The sink for `NEOVM_JIT_STATS_FILE`'s value: a file opened for append,
+    /// or stderr when the knob is unset or the path cannot be opened (one
+    /// `tracing::warn!`, never a panic — a report must not kill a run).
+    pub(crate) fn choose(path: Option<&std::ffi::OsStr>) -> ReportSink {
+        let Some(path) = path else {
+            return ReportSink::Stderr;
+        };
+        match std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            Ok(file) => ReportSink::File(std::sync::Mutex::new(file)),
+            Err(err) => {
+                tracing::warn!(
+                    target: "neovm_jit",
+                    path = %std::path::Path::new(path).display(),
+                    %err,
+                    "NEOVM_JIT_STATS_FILE cannot be opened; reporting to stderr"
+                );
+                ReportSink::Stderr
+            }
+        }
+    }
+
+    /// Write one `[tag] body` line with a single `write_all`, so concurrent
+    /// writers never interleave within a line. Write errors are dropped.
+    pub(crate) fn write_line(&self, tag: ReportTag, body: &str) {
+        let tag: &'static str = tag.into();
+        let line = format!("[{tag}] {body}\n");
+        match self {
+            ReportSink::Stderr => {
+                let _ = std::io::stderr().lock().write_all(line.as_bytes());
+            }
+            ReportSink::File(file) => {
+                let mut file = file.lock().unwrap_or_else(|poison| poison.into_inner());
+                let _ = file.write_all(line.as_bytes());
+            }
+        }
+    }
+}
+
+/// The tag of a report line: the `[...]` prefix tooling greps for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::IntoStaticStr)]
+pub(crate) enum ReportTag {
+    /// Periodic compile summary (every 64 compiles).
+    #[strum(serialize = "neovm-jit-compile")]
+    Compile,
+    /// Periodic fuser census.
+    #[strum(serialize = "neovm-jit-inline")]
+    Inline,
+    /// Periodic dispatch-cadence summary (every 50,000 consultations).
+    #[strum(serialize = "neovm-jit-dispatch")]
+    Dispatch,
+    /// Periodic MIR-bail census.
+    #[strum(serialize = "neovm-jit-mir-bails")]
+    MirBails,
+}
+
+/// The process-wide report sink, chosen once from `NEOVM_JIT_STATS_FILE`.
+fn report_sink() -> &'static ReportSink {
+    static SINK: OnceLock<ReportSink> = OnceLock::new();
+    SINK.get_or_init(|| ReportSink::choose(std::env::var_os("NEOVM_JIT_STATS_FILE").as_deref()))
+}
+
+/// Emit one report line to the configured sink. Callers gate on a knob
+/// (normally [`summary_enabled`]); this never checks one itself.
+pub(crate) fn report_line(tag: ReportTag, body: &str) {
+    report_sink().write_line(tag, body);
+}
+
+/// `NEOVM_JIT_COMPILE_STATS=1` (or `NEOVM_JIT_STATS_FILE=<path>`, which
+/// implies it): print a one-line running summary every 64 compiles (and on
+/// the dispatch cadence) through [`report_line`].
+pub(crate) fn summary_enabled() -> bool {
     // Cached in a plain relaxed `u8` rather than a `OnceLock<bool>`: the
     // per-call recorders below sit on the JIT's native->native call seam, and
     // there a `OnceLock` read costs its initialized-flag branch plus an
@@ -197,7 +289,8 @@ fn summary_enabled() -> bool {
         1 => false,
         2 => true,
         _ => {
-            let on = std::env::var("NEOVM_JIT_COMPILE_STATS").as_deref() == Ok("1");
+            let on = std::env::var("NEOVM_JIT_COMPILE_STATS").as_deref() == Ok("1")
+                || std::env::var_os("NEOVM_JIT_STATS_FILE").is_some();
             ENABLED.store(1 + u8::from(on), Ordering::Relaxed);
             on
         }
@@ -254,13 +347,13 @@ pub(super) fn record_compile(
         stats
     });
     if summary_enabled() && stats.total_compiles.is_multiple_of(64) {
-        eprintln!("[neovm-jit-compile] {}", format_summary(&stats));
+        report_line(ReportTag::Compile, &format_summary(&stats));
         // The fuser records at compile time, so its census belongs with the
         // compile summary: the dispatch-cadence print below can miss a body
         // whose calls the fuser removed, since it then stops dispatching.
         let inline = inline_census_summary(16);
         if !inline.is_empty() {
-            eprintln!("[neovm-jit-inline] {inline}");
+            report_line(ReportTag::Inline, &inline);
         }
     }
 }
@@ -337,11 +430,11 @@ fn record_dispatch_enabled(said_compiled: bool) {
         // precisely the case worth seeing, since it means the surface is a
         // coverage question rather than a codegen one.
         if stats.dispatch_consulted.is_multiple_of(50_000) {
-            eprintln!("[neovm-jit-dispatch] {}", format_summary(&stats));
-            eprintln!("[neovm-jit-mir-bails] {}", mir_bail_summary(16));
+            report_line(ReportTag::Dispatch, &format_summary(&stats));
+            report_line(ReportTag::MirBails, &mir_bail_summary(16));
             let inline = inline_census_summary(16);
             if !inline.is_empty() {
-                eprintln!("[neovm-jit-inline] {inline}");
+                report_line(ReportTag::Inline, &inline);
             }
         }
     });
