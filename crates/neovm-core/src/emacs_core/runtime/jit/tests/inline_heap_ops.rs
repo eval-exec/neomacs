@@ -356,9 +356,9 @@ fn the_owned_storage_probe_answers_on_this_toolchain() {
 }
 
 /// The shapes `aset` stores inline never reach the shim; everything the
-/// shim must decide — strings, bool-vectors, tagged char-table vectors,
-/// out-of-range or non-fixnum indices, non-arrays — still does, with the
-/// interpreter's answer (the full shape matrix is `array_shims`'
+/// shim must decide — strings, bool-vectors, char-tables, out-of-range or
+/// non-fixnum indices, non-arrays — still does, with the interpreter's
+/// answer (the full shape matrix is `array_shims`'
 /// `array_sites_match_the_interpreter_natively`, run with this inline path).
 #[test]
 fn plain_vector_and_record_stores_stay_inline() {
@@ -368,7 +368,10 @@ fn plain_vector_and_record_stores_stay_inline() {
     // Without the string intrinsic (`NEOVM_JIT_LEAF=string`), whatever the
     // environment says: a string store here must reach the shim.
     force_leaf_knob_for_test(Some(LeafKnob::OFF));
+    // And without the retired slot-0 test (`NEOVM_JIT_AREF_SLOT0`).
+    super::force_aref_slot0_for_test(Some(false));
     let leaf = compile_bytecode_function(&f).expect("aset compiles");
+    super::force_aref_slot0_for_test(None);
     force_leaf_knob_for_test(None);
     assert!(leaf.needs_vmctx);
     let cases: &[(&str, &str, &str, bool)] = &[
@@ -387,7 +390,7 @@ fn plain_vector_and_record_stores_stay_inline() {
             "(let ((v (make-vector 80 nil))) (aset v 0 '--char-table--) v)",
             "3",
             "'d",
-            false,
+            true,
         ),
         ("(make-string 3 ?a)", "1", "98", false),
         ("(cons 1 2)", "0", "'z", false),
@@ -887,7 +890,7 @@ fn the_inline_alloc_knob_turns_inline_allocation_off() {
     assert_eq!(conses_counted() - before, 300);
 }
 
-// ---- falsifier F-G (b): `NEOVM_JIT_AREF_SKIP_SLOT0` ----
+// ---- P3.2 L0.9 / U2.10: no slot-0 test; `NEOVM_JIT_AREF_SLOT0` ----
 
 /// `(lambda (a i) (aref a i))`
 fn aref_fn() -> ByteCodeFunction {
@@ -902,20 +905,21 @@ fn aref_shim_calls() -> usize {
     super::dispatch::AREF_SHIM_CALLS.with(|c| c.get())
 }
 
-/// Under the measurement knob the inline `aref` and `aset` sites omit the
-/// slot-0 tagged-vector test: plain vectors and records are read and stored
-/// inline and right. Since P3.2 L0.8 a vector whose slot 0 is
-/// `--bool-vector--` is a plain vector, so the inline read (knob on) and the
-/// shim the retired test routes it to (knob off) both answer its raw slot 0,
-/// as GNU does.
+/// The inline `aref` and `aset` sites have no slot-0 tagged-vector test
+/// (P3.2 L0.9): plain vectors and records are read and stored inline and
+/// right, including a vector whose slot 0 is `--bool-vector--`, which is a
+/// plain vector since P3.2 L0.8. The measurement knob re-emits the retired
+/// test, which routes that vector to the shim; the shim answers the same raw
+/// slot 0, as GNU does.
 #[test]
-fn skip_slot0_drops_the_tagged_vector_test_from_inline_aref_and_aset() {
+fn inline_aref_and_aset_have_no_slot0_test() {
     let mut eval = Context::new();
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let f = aref_fn();
     let g = aset_fn();
 
-    super::force_aref_skip_slot0_for_test(Some(true));
+    // The default, whatever the environment says.
+    super::force_aref_slot0_for_test(Some(false));
     let aref = compile_bytecode_function(&f).expect("aref compiles");
     let aset = compile_bytecode_function(&g).expect("aset compiles");
     let args = keep(
@@ -967,7 +971,7 @@ fn skip_slot0_drops_the_tagged_vector_test_from_inline_aref_and_aset() {
     assert_eq!(aset_shim_calls(), stores, "the store stayed inline");
     assert_eq!(print_value(&record), "#s(r 9 8)");
 
-    super::force_aref_skip_slot0_for_test(Some(false));
+    super::force_aref_slot0_for_test(Some(true));
     let checked = compile_bytecode_function(&f).expect("aref compiles");
     assert_eq!(
         native(
@@ -980,5 +984,5 @@ fn skip_slot0_drops_the_tagged_vector_test_from_inline_aref_and_aset() {
         "with the retired slot-0 test the shim answers the same slot"
     );
     assert_eq!(aref_shim_calls(), reads + 1);
-    super::force_aref_skip_slot0_for_test(None);
+    super::force_aref_slot0_for_test(None);
 }

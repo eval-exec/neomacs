@@ -99,7 +99,8 @@ const ARRAYS: &[&str] = &[
     "(make-bool-vector 5 t)",
     "(make-bool-vector 0 nil)",
     "(make-char-table 'foo 7)",
-    // The legacy tagged-vector char-table (a vector whose slot 0 is the tag).
+    // A vector whose slot 0 is the retired char-table tag: a plain vector
+    // since P3.2 L0.8.
     "(let ((v (make-vector 80 nil))) (aset v 0 '--char-table--) (aset v 3 'dflt) v)",
     "(make-string 3 ?a)",
     "(string-to-multibyte (make-string 3 ?a))",
@@ -823,9 +824,10 @@ fn byte_code_elt_reports_the_tail_it_stops_at() {
 }
 
 /// Compiled `aref` reads a plain vector's or record's slot inline, calling
-/// `neovm_jit_aref` for every other shape: a tagged char-table or
-/// bool-vector vector, a string, a bool-vector, an out-of-range or
-/// non-fixnum index. Answers match the interpreter either way.
+/// `neovm_jit_aref` for every other shape: a string, a bool-vector, an
+/// out-of-range or non-fixnum index. A vector whose slot 0 is a retired
+/// in-band tag is a plain vector (P3.2 L0.8), read inline too. Answers match
+/// the interpreter either way.
 #[test]
 fn compiled_aref_reads_plain_vectors_and_records_inline() {
     assert!(
@@ -838,7 +840,10 @@ fn compiled_aref_reads_plain_vectors_and_records_inline() {
     // The vector path alone: `NEOVM_JIT_LEAF=string` would inline the
     // string case too (`string_intrinsics_stay_off_the_shims`).
     force_leaf_knob_for_test(Some(LeafKnob::OFF));
+    // And without the retired slot-0 test (`NEOVM_JIT_AREF_SLOT0`).
+    super::force_aref_slot0_for_test(Some(false));
     let leaf = compile_bytecode_function(&f).expect("aref compiles");
+    super::force_aref_slot0_for_test(None);
     force_leaf_knob_for_test(None);
     let cases: &[(&str, &str, bool)] = &[
         ("(vector 10 20 30)", "1", true),
@@ -856,12 +861,12 @@ fn compiled_aref_reads_plain_vectors_and_records_inline() {
         (
             "(let ((v (make-vector 80 nil))) (aset v 0 '--char-table--) (aset v 3 'dflt) v)",
             "3",
-            false,
+            true,
         ),
         (
             "(let ((v (make-vector 3 nil))) (aset v 0 '--bool-vector--) v)",
             "1",
-            false,
+            true,
         ),
         (
             "(let ((v (make-vector 1 nil))) (aset v 0 '--bool-vector--) v)",

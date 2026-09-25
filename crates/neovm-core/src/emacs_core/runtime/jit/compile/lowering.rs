@@ -838,8 +838,9 @@ pub(crate) struct PlainSlot {
 }
 
 /// The checks `aref` and `aset` share, emitted inline — the fast path of
-/// `neovm_jit_aref`/`_aset`: a vector or record, a fixnum index in range,
-/// not a tagged char-table or bool-vector vector. With `owned_probe` (the
+/// `neovm_jit_aref`/`_aset`: a vector or record and a fixnum index in range,
+/// as GNU `Baref`/`Baset` (no slot-0 test: P3.2 L0.9; the measurement knob
+/// `NEOVM_JIT_AREF_SLOT0` re-emits the retired one). With `owned_probe` (the
 /// `LispValueVec::jit_owned_probe` answer) it also refuses mapped storage,
 /// which a store must copy first. Branches to `slow` when any check fails
 /// and leaves the builder in a fresh sealed block with every check passed.
@@ -860,8 +861,6 @@ pub(crate) fn emit_plain_slot_address(
     const_assert_vector_record_share_layout();
     let data_off = core::mem::offset_of!(VectorObj, data);
     let type_off = core::mem::offset_of!(VecLikeHeader, type_tag);
-    let (char_table_tag, bool_vector_tag, char_table_min_len) =
-        crate::emacs_core::chartable::inline_vector_tag_shape();
 
     let tag = band_imm_p(fb, array, TAG_MASK as i64);
     let is_veclike = icmp_imm_p(
@@ -926,18 +925,19 @@ pub(crate) fn emit_plain_slot_address(
     fb.ins().brif(in_range, plain, &[], slow, &[]);
     fb.switch_to_block(plain);
     fb.seal_block(plain);
-    if jit_aref_skip_slot0_on() {
-        // Falsifier F-G (b) only: no slot-0 test, as if no tagged vector
-        // could exist (P3.2 L0). Wrong on a bool-vector or a legacy
-        // char-table; the knob's doc says when a run is valid.
+    if !jit_aref_slot0_on() {
+        // No in-band tagged vectors exist (P3.2 L0.8): a vector or record
+        // slot is the slot, as in GNU `Baref`.
         let byte_off = ishl_imm_p(fb, i, 3);
         let slot = fb.ins().iadd(slots, byte_off);
         return Some(PlainSlot { object, slot });
     }
-    // `classify_vector_slots`: a vector of two or more slots whose slot 0 is
-    // the bool-vector tag, or of `char_table_min_len` or more whose slot 0 is
-    // the char-table tag (vectors only), is not plain. `i < len` put slot 0
-    // in bounds.
+    // `NEOVM_JIT_AREF_SLOT0` (measurement only): the retired slot-0 test. A
+    // vector of two or more slots whose slot 0 is the old bool-vector tag, or
+    // of `char_table_min_len` or more whose slot 0 is the old char-table tag
+    // (vectors only), goes to the shim. `i < len` put slot 0 in bounds.
+    let (char_table_tag, bool_vector_tag, char_table_min_len) =
+        crate::emacs_core::chartable::inline_vector_tag_shape();
     let first = fb.ins().load(types::I64, MemFlagsData::trusted(), slots, 0);
     let is_bool_vector = icmp_imm_p(fb, IntCC::Equal, first, bool_vector_tag as i64);
     let is_char_table_tag = icmp_imm_p(fb, IntCC::Equal, first, char_table_tag as i64);

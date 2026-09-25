@@ -103,42 +103,39 @@ pub(crate) fn jit_inline_aref_on() -> bool {
 
 #[cfg(test)]
 std::thread_local! {
-    static AREF_SKIP_SLOT0_TEST_OVERRIDE: std::cell::Cell<Option<bool>> =
+    static AREF_SLOT0_TEST_OVERRIDE: std::cell::Cell<Option<bool>> =
         const { std::cell::Cell::new(None) };
 }
 
-/// Force `NEOVM_JIT_AREF_SKIP_SLOT0` on/off on the current thread (tests
-/// only).
+/// Force `NEOVM_JIT_AREF_SLOT0` on/off on the current thread (tests only).
 #[cfg(test)]
-pub(crate) fn force_aref_skip_slot0_for_test(on: Option<bool>) {
-    AREF_SKIP_SLOT0_TEST_OVERRIDE.with(|c| c.set(on));
+pub(crate) fn force_aref_slot0_for_test(on: Option<bool>) {
+    AREF_SLOT0_TEST_OVERRIDE.with(|c| c.set(on));
 }
 
-/// MEASUREMENT ONLY (falsifier F-G (b), design P3.2 F1a): inline
-/// `aref`/`aset` of a vector or record without the slot-0 test that tells a
-/// tagged bool-vector or legacy char-table from a plain vector
-/// (`lowering::emit_plain_slot_address`), and the `aset` shim's fast path
-/// without `classify_vector_slots` (`dispatch::aset_fast`). This is what
-/// the inline sequences cost once P3.2 L0 retires every tagged vector.
-/// Default off; `NEOVM_JIT_AREF_SKIP_SLOT0=1` turns it on. Since P3.2 L0.8
-/// there are no tagged vectors: a vector whose slot 0 is a tag symbol is a
-/// plain vector, which the shim the test routes it to answers the same.
-pub(crate) fn jit_aref_skip_slot0_on() -> bool {
+/// MEASUREMENT ONLY (P3.2 L0.9 / U2.10, a same-binary A/B): re-emit the
+/// retired slot-0 test in inline `aref`/`aset` of a vector or record
+/// (`lowering::emit_plain_slot_address`). The test told a tagged
+/// bool-vector or legacy char-table from a plain vector; those in-band tags
+/// are gone (P3.2 L0.8), so it only routes a vector whose slot 0 happens to
+/// be a tag symbol through the shim, which answers the same slot. Default
+/// off; `NEOVM_JIT_AREF_SLOT0=on` measures what the test cost.
+pub(crate) fn jit_aref_slot0_on() -> bool {
     #[cfg(test)]
-    if let Some(o) = AREF_SKIP_SLOT0_TEST_OVERRIDE.with(|c| c.get()) {
+    if let Some(o) = AREF_SLOT0_TEST_OVERRIDE.with(|c| c.get()) {
         return o;
     }
     use std::sync::OnceLock;
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| {
         let on = matches!(
-            std::env::var("NEOVM_JIT_AREF_SKIP_SLOT0").ok().as_deref(),
+            std::env::var("NEOVM_JIT_AREF_SLOT0").ok().as_deref(),
             Some("1" | "on" | "true" | "yes")
         );
         if on {
             tracing::info!(
                 target: "neovm::jit::knobs",
-                "NEOVM_JIT_AREF_SKIP_SLOT0=1 is on in this process (measurement only)"
+                "NEOVM_JIT_AREF_SLOT0=on is on in this process (measurement only)"
             );
         }
         on

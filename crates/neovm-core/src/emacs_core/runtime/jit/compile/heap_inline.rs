@@ -162,9 +162,9 @@ pub(crate) fn emit_inline_cons_store(
 }
 
 /// `aset` of a plain vector or record, inline — GNU `Baset`'s in-bytecode
-/// `ASET`: owned storage, an in-range fixnum index, not a tagged char-table
-/// or bool-vector, an owner outside the barrier window that is not a
-/// tenured owner the remembered set still lacks. On success stores `value`,
+/// `ASET`: owned storage, an in-range fixnum index, an owner outside the
+/// barrier window that is not a tenured owner the remembered set still
+/// lacks. On success stores `value`,
 /// defines `res` as it and jumps to `cont`; anything else branches to
 /// `slow`, where the caller emits the unchanged shim call (strings, signals,
 /// mapped storage, the barrier's slow path).
