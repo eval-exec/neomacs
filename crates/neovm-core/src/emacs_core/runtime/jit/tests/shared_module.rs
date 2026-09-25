@@ -230,6 +230,12 @@ fn jit_shared_many_compiles_keep_bookkeeping_and_mappings_bounded() {
         "{N} compiles grew the mapping count {maps_before} -> {maps_after}"
     );
     assert!(s.arena_regions <= 4, "{s:?}");
+    // SAFETY: sysconf has no preconditions.
+    let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
+    assert!(
+        s.arena_page_bytes <= (N as u64 + 1) * page,
+        "code memory is one page per tiny leaf, as with a module per leaf: {s:?}"
+    );
     assert_eq!(
         call1(first, 1),
         Some(0),
