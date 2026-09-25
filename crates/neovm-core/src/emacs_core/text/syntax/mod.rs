@@ -3338,6 +3338,19 @@ impl<'a> SyntaxPropByteRun<'a> {
         matches!(self.props, SyntaxProperties::Honor(_))
     }
 
+    /// The end (Emacs byte) of the stretch from `byte_pos` that carries no
+    /// `syntax-table` property, or `byte_pos` itself when one applies there:
+    /// the run a regexp syntax read at `byte_pos` would load, so a caller can
+    /// classify the stretch by the table alone (the existence DFA).
+    /// `usize::MAX` for a scan that ignores properties.
+    pub(crate) fn property_free_until(&self, buf: &Buffer, byte_pos: EmacsBytePos) -> usize {
+        match self.syntax_table_prop_at_emacs_byte(buf, byte_pos) {
+            Some(_) => byte_pos.get(),
+            // The lookup leaves the run containing `byte_pos` cached.
+            None => self.run.end.get(),
+        }
+    }
+
     /// See [`SyntaxPropRange::ascii_entry`] — identical memo, byte-side.
     #[inline]
     fn ascii_entry(&self, table: &SyntaxTable, ch: char) -> Option<SyntaxEntry> {
@@ -3482,6 +3495,18 @@ impl<'a> StringSyntaxPropByteRun<'a> {
             PropRunCells::covering_everything()
         };
         Self { run, source }
+    }
+
+    /// The end (byte offset) of the stretch from `byte_pos` that carries no
+    /// `syntax-table` property, or `byte_pos` itself when one applies there
+    /// (see [`SyntaxPropByteRun::property_free_until`]).  `usize::MAX` for a
+    /// string with no properties to read.
+    pub(crate) fn property_free_until(&self, byte_pos: usize) -> usize {
+        match self.syntax_table_prop_at_string_byte(byte_pos) {
+            Some(_) => byte_pos,
+            // The lookup leaves the run containing `byte_pos` cached.
+            None => self.run.end.get(),
+        }
     }
 
     /// The resolved `syntax-table` property at a byte offset into the string,

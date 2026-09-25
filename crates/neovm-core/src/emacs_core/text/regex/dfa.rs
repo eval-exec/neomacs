@@ -21,7 +21,15 @@
 //!
 //! * the candidate filter ([`DfaLease`]): `re_search` asks the DFA at each
 //!   candidate; a rejection skips the matcher unless the fail-stack bound
-//!   says the backtracker could have overflowed there.
+//!   says the backtracker could have overflowed there;
+//! * `syntax-table` property runs and the lazy `syntax-propertize` frontier
+//!   ([`ExistenceDfa::begin_search`]): where properties may apply, the DFA
+//!   reads every syntax through the matcher's own lookup at the real
+//!   position, steps its cached loop only through property-free stretches
+//!   ([`SyntaxLookup::plain_syntax_until`]), classifies a character inside a
+//!   run at its position ([`CharClasses::class_at_position`]), and leaves a
+//!   candidate that reaches the frontier to the matcher, which records the
+//!   read.
 //!
 //! No Lisp `Value` is stored here: only ids, byte tables and identity bits.
 //!
@@ -36,7 +44,8 @@ use super::{
     SyntaxCacheKey, SyntaxLookup, evaluate_syntax_assertion, extract_number, extract_number_u16,
     fail_stack_may_overflow_with, match_anychar_at, match_categoryspec_at, match_charset_at,
     match_exactn_char_at, match_syntaxspec_at, match_syntaxspecset_at, matcher_overflow_pending,
-    opcode_len, re_match_candidate_in, re_text_char, regex_syntax_char,
+    opcode_len, posix_class_bits_read_syntax, re_match_candidate_in, re_text_char,
+    regex_syntax_char,
 };
 use crate::emacs_core::emacs_char;
 use crate::emacs_core::syntax::SyntaxClass;
@@ -191,6 +200,10 @@ pub(crate) struct Nfa {
     /// Whether the pattern tests categories (`\cC`), which the class tables
     /// then depend on.
     pub(crate) uses_categories: bool,
+    /// Whether some predicate or assertion reads the syntax table: then a
+    /// `syntax-table` property can change a character's class or an
+    /// assertion's answer, and the DFA reads syntax where the matcher does.
+    pub(crate) reads_syntax: bool,
 }
 
 /// Decide whether `pattern` can have an existence DFA.
@@ -235,6 +248,7 @@ impl Nfa {
             assertions: Assertions::empty(),
             push_sites: super::fail_stack_push_sites(&pattern.buffer),
             uses_categories: false,
+            reads_syntax: false,
             bytecode,
         };
         let mut predicate_of: FxHashMap<Predicate, u16> = FxHashMap::default();
@@ -294,21 +308,34 @@ impl Nfa {
                 }
                 RegexOp::AnyChar => single(&mut nfa, Predicate::AnyChar)?,
                 RegexOp::Charset | RegexOp::CharsetNot => {
+                    if pattern
+                        .charset_class_bits
+                        .get(&pc)
+                        .is_some_and(|&bits| posix_class_bits_read_syntax(bits))
+                    {
+                        nfa.reads_syntax = true;
+                    }
                     single(&mut nfa, Predicate::Charset { pc: pc as u32 })?
                 }
-                RegexOp::SyntaxSpec | RegexOp::NotSyntaxSpec => single(
-                    &mut nfa,
-                    Predicate::Syntax {
-                        class: code[pc + 1],
-                        negate: op == RegexOp::NotSyntaxSpec,
-                    },
-                )?,
-                RegexOp::SyntaxSpecSet => single(
-                    &mut nfa,
-                    Predicate::SyntaxSet {
-                        mask: extract_number_u16(code, pc + 1),
-                    },
-                )?,
+                RegexOp::SyntaxSpec | RegexOp::NotSyntaxSpec => {
+                    nfa.reads_syntax = true;
+                    single(
+                        &mut nfa,
+                        Predicate::Syntax {
+                            class: code[pc + 1],
+                            negate: op == RegexOp::NotSyntaxSpec,
+                        },
+                    )?
+                }
+                RegexOp::SyntaxSpecSet => {
+                    nfa.reads_syntax = true;
+                    single(
+                        &mut nfa,
+                        Predicate::SyntaxSet {
+                            mask: extract_number_u16(code, pc + 1),
+                        },
+                    )?
+                }
                 RegexOp::CategorySpec | RegexOp::NotCategorySpec => {
                     nfa.uses_categories = true;
                     single(
@@ -327,8 +354,14 @@ impl Nfa {
                 RegexOp::WordBound
                 | RegexOp::NotWordBound
                 | RegexOp::WordBeg
-                | RegexOp::WordEnd => nfa.assertions |= Assertions::WORD,
-                RegexOp::SymBeg | RegexOp::SymEnd => nfa.assertions |= Assertions::SYMBOL,
+                | RegexOp::WordEnd => {
+                    nfa.reads_syntax = true;
+                    nfa.assertions |= Assertions::WORD;
+                }
+                RegexOp::SymBeg | RegexOp::SymEnd => {
+                    nfa.reads_syntax = true;
+                    nfa.assertions |= Assertions::SYMBOL;
+                }
                 _ => {}
             }
             pc += len;
@@ -624,18 +657,25 @@ impl Facts {
         Self(self.0 & mask.0)
     }
 
-    /// The facts of the Emacs character `code` whose first byte in the text
-    /// is `first_byte`, under `syntax` (the base table).
-    fn of_char(code: u32, first_byte: u8, syntax: &dyn SyntaxLookup, mask: Self) -> Self {
+    /// The facts of the Emacs character `code` at input position `at`, whose
+    /// first byte is `first_byte`, under `syntax` (the base table, or the
+    /// real lookup inside a `syntax-table` property run).
+    fn of_char(
+        code: u32,
+        first_byte: u8,
+        syntax: &dyn SyntaxLookup,
+        at: usize,
+        mask: Self,
+    ) -> Self {
         let mut facts = 0u8;
         if first_byte == b'\n' {
             facts |= Self::NEWLINE.0;
         }
         if mask.0 & (Self::WORD.0 | Self::WORD_OR_SYMBOL.0 | Self::WIDE_WORD.0) != 0 {
             // The matcher's `re_char_and_syntax`: raw bytes read the syntax
-            // of their eight-bit character.
+            // of their eight-bit character, at their position.
             let ch = regex_syntax_char(code);
-            let class = syntax.char_syntax(ch);
+            let class = syntax.char_syntax_at(ch, at);
             if class == SyntaxClass::Word {
                 facts |= Self::WORD.0 | Self::WORD_OR_SYMBOL.0;
                 if ch as u32 > 0xFF {
@@ -693,10 +733,13 @@ impl ClassKey {
     }
 }
 
-/// A syntax lookup that answers every position from the base table.  Classes
-/// are computed through it, so they are functions of the character alone; the
-/// DFA runs only where no `syntax-table` property applies (see
-/// [`SyntaxLookup::position_dependent`]), where the base table is the answer.
+/// A syntax lookup that answers every position from the base table.  The
+/// memoized classes are computed through it, so they are functions of the
+/// character alone; they serve only positions where no `syntax-table`
+/// property applies ([`SyntaxLookup::plain_syntax_until`]), where the base
+/// table is the answer.  A character inside a property run is classified
+/// through the real lookup at its position
+/// ([`CharClasses::class_at_position`]).
 pub(crate) struct BaseTableView<'a>(pub(crate) &'a dyn SyntaxLookup);
 
 impl SyntaxLookup for BaseTableView<'_> {
@@ -787,7 +830,9 @@ impl Nfa {
         accepted.is_some()
     }
 
-    /// The class of the character at `d` of `text`, `len` bytes long.
+    /// The class of the character at `d` of `text`, `len` bytes long, under
+    /// `syntax` (the base table, or the real lookup at `d`).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn class_key_at(
         &self,
         pattern: &CompiledPattern,
@@ -795,19 +840,19 @@ impl Nfa {
         d: usize,
         code: u32,
         len: usize,
-        base: &BaseTableView<'_>,
+        syntax: &dyn SyntaxLookup,
         mask: Facts,
     ) -> ClassKey {
         let mut accepts: SmallVec<[u64; 2]> =
             SmallVec::from_elem(0, self.predicates.len().div_ceil(64).max(1));
         for (i, &predicate) in self.predicates.iter().enumerate() {
-            if self.predicate_accepts(predicate, pattern, text, d, len, base) {
+            if self.predicate_accepts(predicate, pattern, text, d, len, syntax) {
                 accepts[i / 64] |= 1 << (i % 64);
             }
         }
         ClassKey {
             accepts,
-            facts: Facts::of_char(code, text[d], base, mask),
+            facts: Facts::of_char(code, text[d], syntax, d, mask),
         }
     }
 }
@@ -819,6 +864,7 @@ pub(crate) const UNKNOWN_CLASS: u8 = 0xFF;
 pub(crate) const MAX_CLASSES: usize = UNKNOWN_CLASS as usize;
 const WIDE_SLOTS: usize = 512;
 const WIDE_EMPTY: u32 = u32::MAX;
+const POSITIONAL_SLOTS: usize = 64;
 
 /// What the character-to-class maps of one pattern are valid for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -878,6 +924,9 @@ pub(crate) struct CharClasses {
     pub(crate) byte_class: [u8; 256],
     /// Direct-mapped `(character code, class)` memo for the other characters.
     wide: Box<[(u32, u8)]>,
+    /// Direct-mapped `(character code, syntax class there, class)` memo for
+    /// characters inside `syntax-table` property runs.
+    positional: Box<[(u32, u8, u8)]>,
     keys: Vec<ClassKey>,
     ids: FxHashMap<ClassKey, u8>,
     context: Option<ClassContext>,
@@ -891,6 +940,7 @@ impl CharClasses {
         Self {
             byte_class: [UNKNOWN_CLASS; 256],
             wide: vec![(WIDE_EMPTY, 0); WIDE_SLOTS].into_boxed_slice(),
+            positional: vec![(WIDE_EMPTY, 0, 0); POSITIONAL_SLOTS].into_boxed_slice(),
             keys: Vec::new(),
             ids: FxHashMap::default(),
             context: None,
@@ -909,6 +959,7 @@ impl CharClasses {
         }
         self.byte_class = [UNKNOWN_CLASS; 256];
         self.wide.fill((WIDE_EMPTY, 0));
+        self.positional.fill((WIDE_EMPTY, 0, 0));
         self.context = Some(context);
     }
 
@@ -975,21 +1026,59 @@ impl CharClasses {
         Ok((class, len))
     }
 
+    /// The class and byte length of the character at `d` (`d < text.len()`)
+    /// where a `syntax-table` property may apply: what the matcher's tests
+    /// answer there through `syntax` at `d`.
+    ///
+    /// Every syntax read a class makes is the syntax of this one character
+    /// at `d` (`match_syntaxspec_at`, `posix_class_matches`, the facts), so
+    /// the class is a function of the character and its syntax class there:
+    /// that pair keys the memo, and the base-table memo serves the pair
+    /// whenever the property leaves the table's answer unchanged.
+    pub(crate) fn class_at_position(
+        &mut self,
+        nfa: &Nfa,
+        pattern: &CompiledPattern,
+        text: &[u8],
+        d: usize,
+        base: &BaseTableView<'_>,
+        syntax: &dyn SyntaxLookup,
+    ) -> Result<(u8, usize), TooManyClasses> {
+        let (code, len) = re_text_char(text, d, pattern.target_multibyte)
+            .expect("a class is asked for a character inside the text");
+        let ch = regex_syntax_char(code);
+        let here = syntax.char_syntax_at(ch, d);
+        let slot_index = (code as usize ^ ((here as usize) << 4)) % POSITIONAL_SLOTS;
+        let slot = self.positional[slot_index];
+        if slot.0 == code && slot.1 == here as u8 {
+            return Ok((slot.2, len));
+        }
+        let class = if here == base.char_syntax(ch) {
+            self.class_at(nfa, pattern, text, d, base)?.0
+        } else {
+            let key = nfa.class_key_at(pattern, text, d, code, len, syntax, self.mask);
+            self.intern(key)?
+        };
+        self.positional[slot_index] = (code, here as u8, class);
+        Ok((class, len))
+    }
+
     /// The facts of the character before `d`, or [`Facts::EDGE`] at 0 (the
-    /// matcher's `re_prev_char_start` view of the previous character).
+    /// matcher's `re_prev_char_start` view of the previous character), read
+    /// through `syntax` at that character's position.
     pub(crate) fn previous_facts(
         &self,
         text: &[u8],
         d: usize,
         target_multibyte: bool,
-        base: &BaseTableView<'_>,
+        syntax: &dyn SyntaxLookup,
     ) -> Facts {
         let Some(start) = super::re_prev_char_start(text, d, target_multibyte) else {
             return Facts::EDGE;
         };
         let (code, _) =
             re_text_char(text, start, target_multibyte).expect("the previous character exists");
-        Facts::of_char(code, text[start], base, self.mask)
+        Facts::of_char(code, text[start], syntax, start, self.mask)
     }
 }
 
@@ -1045,6 +1134,34 @@ pub(crate) struct DfaCounters {
     pub(crate) clears: u64,
     pub(crate) slow_transitions: u64,
     pub(crate) bytes: u64,
+    /// Characters classified at their position, inside a `syntax-table`
+    /// property run.
+    pub(crate) positional_chars: u64,
+    /// Property-free stretches looked up (`plain_syntax_until`).
+    pub(crate) plain_runs: u64,
+    /// Candidates left to the matcher because the DFA would have read syntax
+    /// at or past the lazy `syntax-propertize` frontier.
+    pub(crate) frontier_unknown: u64,
+}
+
+/// What a search's syntax lookup means for the DFA, fixed for the search.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SearchSyntax {
+    /// The pattern reads syntax and `syntax-table` properties may apply: the
+    /// cached loop stops at property runs, and syntax is read through the
+    /// real lookup at the real position.
+    positional: bool,
+    /// The first input position whose syntax the matcher records for lazy
+    /// `syntax-propertize` (`usize::MAX`: none).  A candidate the DFA cannot
+    /// decide below it is left to the matcher.
+    read_limit: usize,
+}
+
+impl SearchSyntax {
+    const PLAIN: Self = Self {
+        positional: false,
+        read_limit: usize::MAX,
+    };
 }
 
 /// Why a DFA gave up on its pattern for good.
@@ -1073,6 +1190,7 @@ pub(crate) struct ExistenceDfa {
     kernel: Vec<KernelItem>,
     memory: usize,
     clears_this_search: u32,
+    search: SearchSyntax,
     pub(crate) counters: DfaCounters,
     gave_up: Option<DfaGaveUp>,
 }
@@ -1098,6 +1216,7 @@ impl ExistenceDfa {
             kernel: Vec::new(),
             memory: 0,
             clears_this_search: 0,
+            search: SearchSyntax::PLAIN,
             counters: DfaCounters::default(),
             gave_up: None,
         };
@@ -1119,9 +1238,22 @@ impl ExistenceDfa {
         self.gave_up
     }
 
-    /// Start a search: per-search limits reset.
-    pub(crate) fn begin_search(&mut self) {
+    /// Start a search of `pattern` under `syntax`: per-search limits reset,
+    /// and what the lookup means for the DFA is read once.  Every
+    /// [`Self::anchored_exists`] until the next call must pass the same
+    /// lookup.
+    pub(crate) fn begin_search(&mut self, pattern: &CompiledPattern, syntax: &dyn SyntaxLookup) {
         self.clears_this_search = 0;
+        self.search = SearchSyntax {
+            positional: self.nfa.reads_syntax && syntax.position_dependent(),
+            // The matcher records syntax reads past the frontier only for a
+            // pattern that reads syntax (`uses_syntax`, the builtin's test).
+            read_limit: if pattern.uses_syntax {
+                syntax.syntax_read_limit()
+            } else {
+                usize::MAX
+            },
+        };
     }
 
     #[inline]
@@ -1339,13 +1471,34 @@ impl ExistenceDfa {
         if p > stop {
             return Exists::No { consumed: 0 };
         }
+        let search = self.search;
+        // Every syntax read of a candidate is at or below the furthest
+        // position its threads reach, and the matcher's threads are among
+        // the DFA's (the rewind view only adds paths).  So a candidate the
+        // DFA decides without reaching the lazy-propertize frontier is one
+        // the matcher would have failed without recording a read there; one
+        // that reaches it is left to the matcher, which records its reads.
+        if p >= search.read_limit {
+            self.counters.frontier_unknown += 1;
+            return Exists::Unknown;
+        }
+        // Where `syntax-table` properties may apply, every syntax the DFA
+        // reads -- assertions in the closure, the previous character, a
+        // character inside a property run -- is read through the matcher's
+        // own lookup at the real position.  The cached loop steps only
+        // through property-free stretches, whose memoized base-table classes
+        // are what that lookup answers there.  A cached transition stays a
+        // function of (state, class): the assertions it evaluated read only
+        // the facts both carry, and a class read at a position is interned
+        // like any other.
+        let lookup: &dyn SyntaxLookup = if search.positional { syntax } else { &base };
         let place = |d: usize| Place {
             text,
             d,
             stop,
             point,
             target_multibyte,
-            syntax: &base,
+            syntax: lookup,
         };
         // `\=` holds at point only: that position's closure is never cached.
         let mut special = if self.nfa.assertions.contains(Assertions::AT_DOT) && point >= p {
@@ -1355,17 +1508,24 @@ impl ExistenceDfa {
         };
         let prev = Facts(
             self.classes
-                .previous_facts(text, p, target_multibyte, &base)
+                .previous_facts(text, p, target_multibyte, lookup)
                 .bits()
                 & self.prev_mask.bits(),
         );
         let mut row = self.start_row(prev);
         let mut d = p;
         let mut polled = 0usize;
+        // The end of the property-free stretch the cached loop is in.
+        let mut plain_end = if search.positional {
+            self.counters.plain_runs += 1;
+            syntax.plain_syntax_until(p)
+        } else {
+            usize::MAX
+        };
         loop {
             // The cached loop: single-byte characters with a known class and
             // a cached live transition, in chunks between quit polls.
-            let limit = stop.min(special);
+            let limit = stop.min(special).min(plain_end).min(search.read_limit);
             let chunk = limit.min(d.saturating_add(QUIT_POLL_BYTES));
             let start = d;
             {
@@ -1399,6 +1559,11 @@ impl ExistenceDfa {
                     return Exists::Unknown;
                 }
             }
+            if d >= search.read_limit {
+                self.counters.bytes += (d - p) as u64;
+                self.counters.frontier_unknown += 1;
+                return Exists::Unknown;
+            }
             if d >= stop {
                 self.counters.bytes += (d - p) as u64;
                 return if self.accepts_at(row, &place(d)) {
@@ -1410,9 +1575,27 @@ impl ExistenceDfa {
             if d == chunk && d < limit {
                 continue;
             }
+            // Past the property-free stretch: the next one, or a character
+            // inside a property run.
+            let mut at_position = false;
+            if d >= plain_end {
+                self.counters.plain_runs += 1;
+                plain_end = syntax.plain_syntax_until(d);
+                if plain_end > d {
+                    continue;
+                }
+                at_position = true;
+            }
             // One character the cached loop could not take.
             let row_index = self.index_of(row);
-            let (class, len) = match self.classes.class_at(&self.nfa, pattern, text, d, &base) {
+            let classified = if at_position {
+                self.counters.positional_chars += 1;
+                self.classes
+                    .class_at_position(&self.nfa, pattern, text, d, &base, syntax)
+            } else {
+                self.classes.class_at(&self.nfa, pattern, text, d, &base)
+            };
+            let (class, len) = match classified {
                 Ok(found) => found,
                 Err(TooManyClasses) => {
                     self.gave_up = Some(DfaGaveUp::TooManyClasses);
@@ -1539,11 +1722,13 @@ fn read_dfa_mode() -> DfaMode {
 pub(crate) struct DfaStats {
     /// Searches that used a lease.
     pub(crate) searches: u64,
-    /// Searches left without one because the pattern reads syntax where a
-    /// `syntax-table` property may apply, or past the syntax-propertize
-    /// frontier.
-    pub(crate) positional_off: u64,
-    pub(crate) frontier_off: u64,
+    /// Searches of a pattern that reads syntax under a lookup where
+    /// `syntax-table` properties may apply (the DFA splits its scan at
+    /// property runs).
+    pub(crate) positional: u64,
+    /// Searches whose lazy `syntax-propertize` frontier lies within the
+    /// positions they can read (candidates reaching it go to the matcher).
+    pub(crate) frontier: u64,
     /// Searches in an adaptive-bypass holiday.
     pub(crate) holiday_off: u64,
     pub(crate) builds: u64,
@@ -1561,6 +1746,9 @@ pub(crate) struct DfaStats {
     pub(crate) clears: u64,
     pub(crate) slow_transitions: u64,
     pub(crate) bytes: u64,
+    pub(crate) positional_chars: u64,
+    pub(crate) plain_runs: u64,
+    pub(crate) frontier_unknown: u64,
     /// Verify mode: a rejection the matcher contradicted (a missed match).
     pub(crate) verify_bad_no: u64,
     /// Verify mode: an acceptance the matcher contradicted.
@@ -1571,8 +1759,8 @@ thread_local! {
     static STATS: RefCell<DfaStats> = const {
         RefCell::new(DfaStats {
             searches: 0,
-            positional_off: 0,
-            frontier_off: 0,
+            positional: 0,
+            frontier: 0,
             holiday_off: 0,
             builds: 0,
             ineligible: 0,
@@ -1587,6 +1775,9 @@ thread_local! {
             clears: 0,
             slow_transitions: 0,
             bytes: 0,
+            positional_chars: 0,
+            plain_runs: 0,
+            frontier_unknown: 0,
             verify_bad_no: 0,
             verify_bad_yes: 0,
         })
@@ -1707,6 +1898,9 @@ impl Drop for DfaLease<'_> {
                     clears: now.clears - before.clears,
                     slow_transitions: now.slow_transitions - before.slow_transitions,
                     bytes: now.bytes - before.bytes,
+                    positional_chars: now.positional_chars - before.positional_chars,
+                    plain_runs: now.plain_runs - before.plain_runs,
+                    frontier_unknown: now.frontier_unknown - before.frontier_unknown,
                 }
             }
             _ => DfaCounters::default(),
@@ -1720,6 +1914,9 @@ impl Drop for DfaLease<'_> {
             s.clears += delta.clears;
             s.slow_transitions += delta.slow_transitions;
             s.bytes += delta.bytes;
+            s.positional_chars += delta.positional_chars;
+            s.plain_runs += delta.plain_runs;
+            s.frontier_unknown += delta.frontier_unknown;
             s.skipped += skipped;
             s.overflow_guarded += overflow_guarded;
         });
@@ -1730,14 +1927,14 @@ impl<'p> DfaLease<'p> {
     /// The lease for a search of `pattern` whose candidates all stop by
     /// `max_stop`, or `None` when the DFA cannot serve it:
     ///
-    /// * the pattern reads syntax and the lookup is position-dependent
-    ///   (classes are computed from the base table), or the lazy
-    ///   `syntax-propertize` frontier lies within the positions the search
-    ///   can read (the matcher must record its reads there, so the builtin
-    ///   propertizes as GNU would);
     /// * the lookup has no table identity to key the classes by;
     /// * the pattern is ineligible, gave up, or is on holiday;
     /// * a re-entrant search holds the slot.
+    ///
+    /// `syntax-table` properties and the lazy `syntax-propertize` frontier
+    /// are the DFA's own business ([`ExistenceDfa::begin_search`]): it reads
+    /// syntax where the matcher does, and leaves a candidate that reaches the
+    /// frontier to the matcher, which records the read.
     #[inline(never)]
     pub(crate) fn acquire(
         pattern: &'p CompiledPattern,
@@ -1747,12 +1944,10 @@ impl<'p> DfaLease<'p> {
         let mode = dfa_mode();
         if pattern.uses_syntax {
             if syntax.position_dependent() {
-                stat(|s| s.positional_off += 1);
-                return None;
+                stat(|s| s.positional += 1);
             }
             if syntax.syntax_read_limit() <= max_stop {
-                stat(|s| s.frontier_off += 1);
-                return None;
+                stat(|s| s.frontier += 1);
             }
         }
         let mut slot = pattern.dfa.0.try_borrow_mut().ok()?;
@@ -1775,7 +1970,7 @@ impl<'p> DfaLease<'p> {
                 if live.dfa.classes.resets != resets {
                     stat(|s| s.context_resets += 1);
                 }
-                live.dfa.begin_search();
+                live.dfa.begin_search(pattern, syntax);
                 counters_before = Some(live.dfa.counters);
             }
             DfaSlot::Ineligible(_) | DfaSlot::Disabled(_) => return None,
@@ -1894,7 +2089,7 @@ impl<'p> DfaLease<'p> {
                     return;
                 };
                 dfa.classes.sync(context);
-                dfa.begin_search();
+                dfa.begin_search(pattern, syntax);
                 stat(|s| s.builds += 1);
                 self.counters_before = Some(DfaCounters::default());
                 *self.slot = DfaSlot::Live(Box::new(LiveDfa {

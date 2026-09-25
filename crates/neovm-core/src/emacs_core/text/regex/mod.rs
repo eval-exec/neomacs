@@ -200,6 +200,17 @@ impl SyntaxLookup for BufferRegexpSyntaxLookup<'_> {
         self.property_lookup.honors_properties()
     }
 
+    fn plain_syntax_until(&self, pos: usize) -> usize {
+        if !self.property_lookup.honors_properties() {
+            return usize::MAX;
+        }
+        let origin = self.input_start.get();
+        let abs = EmacsBytePos::new(origin.saturating_add(pos));
+        self.property_lookup
+            .property_free_until(self.buffer, abs)
+            .saturating_sub(origin)
+    }
+
     fn syntax_read_limit(&self) -> usize {
         self.frontier.map_or(usize::MAX, |frontier| {
             frontier.byte.get().saturating_sub(self.input_start.get())
@@ -316,6 +327,10 @@ impl SyntaxLookup for StringRegexpSyntaxLookup<'_> {
 
     fn class_cache_key(&self) -> Option<regex_emacs::LookupClassKey> {
         self.base.class_cache_key()
+    }
+
+    fn plain_syntax_until(&self, pos: usize) -> usize {
+        self.property_lookup.property_free_until(pos)
     }
 }
 

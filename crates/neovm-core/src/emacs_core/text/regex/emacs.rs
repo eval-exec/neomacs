@@ -4061,6 +4061,22 @@ pub(crate) trait SyntaxLookup {
         true
     }
 
+    /// The end of the stretch of input positions from `pos` over which
+    /// [`Self::char_syntax_at`] answers [`Self::char_syntax`] for every
+    /// character (no `syntax-table` property applies there), or `pos` itself
+    /// when one may apply at `pos`.  `usize::MAX` means nowhere past `pos`.
+    ///
+    /// The default is exact for any lookup: a position-independent one is
+    /// plain everywhere, and a position-dependent one that cannot say where
+    /// its properties lie is treated as propertized at every position.
+    fn plain_syntax_until(&self, pos: usize) -> usize {
+        if self.position_dependent() {
+            pos
+        } else {
+            usize::MAX
+        }
+    }
+
     /// The first input position at which a syntax read is recorded for lazy
     /// `syntax-propertize` ([`PropertizeFrontier`](super::regex::PropertizeFrontier)),
     /// or `usize::MAX` when reads are not recorded.
@@ -4396,6 +4412,12 @@ impl PosixClassCaseMode {
             Self::Folded => ch.is_uppercase() || ch.is_lowercase(),
         }
     }
+}
+
+/// Whether [`posix_class_matches`] can read the syntax table for class bits
+/// `bits`: `[:space:]` and `[:word:]` always, `[:punct:]` for non-ASCII.
+fn posix_class_bits_read_syntax(bits: u32) -> bool {
+    bits & (CHARSET_CLASS_BIT_SPACE | CHARSET_CLASS_BIT_WORD | CHARSET_CLASS_BIT_PUNCT) != 0
 }
 
 fn posix_class_matches(

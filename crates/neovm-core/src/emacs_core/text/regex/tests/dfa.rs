@@ -662,14 +662,14 @@ fn check_dfa_against_matcher(
     let context = ClassContext::of_search(compiled, dfa.nfa(), syntax)
         .expect("test lookups have a class identity");
     dfa.classes_mut().sync(context);
-    dfa.begin_search();
+    dfa.begin_search(compiled, syntax);
     let boundaries = char_boundaries(text, compiled.target_multibyte);
     let mut tally = (0, 0, 0);
     let stops = [text.len(), boundaries[boundaries.len() / 2]];
     for &stop in &stops {
         for &point in &[0, boundaries[boundaries.len() / 3], text.len()] {
             // One pass over the candidates is one search.
-            dfa.begin_search();
+            dfa.begin_search(compiled, syntax);
             for &p in boundaries.iter().filter(|&&p| p <= stop) {
                 let verdict = dfa.anchored_exists(compiled, text, p, stop, point, syntax);
                 let _ = take_matcher_overflow();
@@ -1085,62 +1085,379 @@ fn verify_mode_finds_no_mismatch_on_random_searches() {
     );
 }
 
-/// A lookup where `syntax-table` properties may apply leaves a
-/// syntax-reading pattern to the matcher; so does a frontier inside the
-/// positions the search can read.
+// ---------------------------------------------------------------------------
+// `syntax-table` property runs and the propertize frontier (C7)
+// ---------------------------------------------------------------------------
+
+/// The syntax a `syntax-table` property run gives its characters.
+#[derive(Clone, Copy)]
+enum RunSyntax {
+    /// A descriptor cons: every character has this class.
+    Descriptor(SyntaxClass),
+    /// A syntax table as the property: each character's class in it.
+    Table(&'static dyn SyntaxLookup),
+}
+
+/// A base table plus `syntax-table` property runs (sorted, disjoint
+/// `[start, end)` input ranges), and a lazy-propertize frontier that
+/// records the lowest syntax read at or past it, as the buffer lookup does.
+struct PropertyRunLookup {
+    base: &'static dyn SyntaxLookup,
+    runs: Vec<(usize, usize, RunSyntax)>,
+    /// Whether `plain_syntax_until` reports the runs; otherwise the trait's
+    /// default treats every position as propertized.
+    reports_runs: bool,
+    frontier: usize,
+    crossed: std::cell::Cell<Option<usize>>,
+}
+
+impl PropertyRunLookup {
+    fn new(base: &'static dyn SyntaxLookup, runs: Vec<(usize, usize, RunSyntax)>) -> Self {
+        Self {
+            base,
+            runs,
+            reports_runs: true,
+            frontier: usize::MAX,
+            crossed: std::cell::Cell::new(None),
+        }
+    }
+
+    fn run_at(&self, pos: usize) -> Option<RunSyntax> {
+        self.runs
+            .iter()
+            .find(|&&(start, end, _)| start <= pos && pos < end)
+            .map(|&(_, _, syntax)| syntax)
+    }
+}
+
+impl SyntaxLookup for PropertyRunLookup {
+    fn char_syntax(&self, c: char) -> SyntaxClass {
+        self.base.char_syntax(c)
+    }
+
+    fn char_syntax_at(&self, c: char, pos: usize) -> SyntaxClass {
+        if pos >= self.frontier && self.crossed.get().is_none_or(|seen| pos < seen) {
+            self.crossed.set(Some(pos));
+        }
+        match self.run_at(pos) {
+            Some(RunSyntax::Descriptor(class)) => class,
+            Some(RunSyntax::Table(table)) => table.char_syntax(c),
+            None => self.base.char_syntax(c),
+        }
+    }
+
+    fn char_has_category(&self, c: char, cat: u8) -> bool {
+        self.base.char_has_category(c, cat)
+    }
+
+    fn word_boundary_between(&self, c1: char, c2: char) -> bool {
+        self.base.word_boundary_between(c1, c2)
+    }
+
+    fn cache_key(&self) -> SyntaxCacheKey {
+        self.base.cache_key()
+    }
+
+    fn class_cache_key(&self) -> Option<LookupClassKey> {
+        self.base.class_cache_key()
+    }
+
+    fn position_dependent(&self) -> bool {
+        true
+    }
+
+    fn plain_syntax_until(&self, pos: usize) -> usize {
+        if !self.reports_runs || self.run_at(pos).is_some() {
+            return pos;
+        }
+        self.runs
+            .iter()
+            .map(|&(start, _, _)| start)
+            .filter(|&start| start > pos)
+            .min()
+            .unwrap_or(usize::MAX)
+    }
+
+    fn syntax_read_limit(&self) -> usize {
+        self.frontier
+    }
+}
+
+const RUN_CLASSES: &[SyntaxClass] = &[
+    SyntaxClass::Word,
+    SyntaxClass::Symbol,
+    SyntaxClass::Whitespace,
+    SyntaxClass::Punctuation,
+    SyntaxClass::Open,
+    SyntaxClass::EndComment,
+];
+
+/// Up to three random property runs over `text`'s character boundaries.
+fn gen_runs(rng: &mut DfaRng, text: &[u8], multibyte: bool) -> Vec<(usize, usize, RunSyntax)> {
+    let boundaries = char_boundaries(text, multibyte);
+    let mut cuts: Vec<usize> = (0..2 * rng.below(4))
+        .map(|_| boundaries[rng.below(boundaries.len())])
+        .collect();
+    cuts.sort_unstable();
+    cuts.dedup();
+    cuts.chunks_exact(2)
+        .map(|pair| {
+            let syntax = if rng.below(4) == 0 {
+                RunSyntax::Table(&CustomTableLookup)
+            } else {
+                RunSyntax::Descriptor(RUN_CLASSES[rng.below(RUN_CLASSES.len())])
+            };
+            (pair[0], pair[1], syntax)
+        })
+        .collect()
+}
+
+fn random_base(rng: &mut DfaRng) -> &'static dyn SyntaxLookup {
+    if rng.below(2) == 0 {
+        &DefaultSyntaxLookup
+    } else {
+        &CustomTableLookup
+    }
+}
+
+/// Existence against the backtracker where `syntax-table` properties change
+/// characters' syntax: every verdict at every candidate agrees, and a
+/// character inside a run is classified at its position.
 #[test]
-fn positional_syntax_and_the_propertize_frontier_turn_the_filter_off() {
-    struct Positional;
-    impl SyntaxLookup for Positional {
-        fn char_syntax(&self, c: char) -> SyntaxClass {
-            DefaultSyntaxLookup.char_syntax(c)
+fn dfa_verdicts_agree_with_the_matcher_inside_property_runs() {
+    crate::test_utils::init_test_tracing();
+    let mut rng = DfaRng(0x0C7_5EED);
+    let mut totals = (0usize, 0usize, 0usize);
+    let mut positional_chars = 0u64;
+    let mut eligible = 0usize;
+    for case in 0..1_500 {
+        let source = gen_pattern(&mut rng, 2);
+        let case_fold = rng.below(3) == 0;
+        let Ok(mut compiled) = regex_compile(&source, rng.below(5) == 0, case_fold) else {
+            continue;
+        };
+        let multibyte = rng.below(4) != 0;
+        compiled.target_multibyte = multibyte;
+        let Ok(nfa) = Nfa::build(&compiled) else {
+            continue;
+        };
+        eligible += 1;
+        let mut dfa = ExistenceDfa::new(nfa);
+        for _ in 0..3 {
+            let text = if multibyte {
+                gen_text(&mut rng, 14)
+            } else {
+                (0..rng.below(14))
+                    .map(|_| b"ab \n-_:x\xe9\xa9"[rng.below(10)])
+                    .collect()
+            };
+            let mut lookup =
+                PropertyRunLookup::new(random_base(&mut rng), gen_runs(&mut rng, &text, multibyte));
+            lookup.reports_runs = rng.below(5) != 0;
+            let tally = check_dfa_against_matcher(
+                &compiled,
+                &mut dfa,
+                &text,
+                &lookup,
+                &format!(
+                    "case {case} {source:?} fold={case_fold} mb={multibyte} reports={}",
+                    lookup.reports_runs
+                ),
+            );
+            totals.0 += tally.0;
+            totals.1 += tally.1;
+            totals.2 += tally.2;
         }
-        fn char_has_category(&self, c: char, cat: u8) -> bool {
-            DefaultSyntaxLookup.char_has_category(c, cat)
-        }
-        fn cache_key(&self) -> SyntaxCacheKey {
-            SyntaxCacheKey::Standard
-        }
-        fn class_cache_key(&self) -> Option<LookupClassKey> {
-            Some(LookupClassKey::Standard)
-        }
+        positional_chars += dfa.counters.positional_chars;
     }
-    struct Frontier(usize);
-    impl SyntaxLookup for Frontier {
-        fn char_syntax(&self, c: char) -> SyntaxClass {
-            DefaultSyntaxLookup.char_syntax(c)
-        }
-        fn char_has_category(&self, c: char, cat: u8) -> bool {
-            DefaultSyntaxLookup.char_has_category(c, cat)
-        }
-        fn cache_key(&self) -> SyntaxCacheKey {
-            SyntaxCacheKey::Standard
-        }
-        fn class_cache_key(&self) -> Option<LookupClassKey> {
-            Some(LookupClassKey::Standard)
-        }
-        fn position_dependent(&self) -> bool {
-            false
-        }
-        fn syntax_read_limit(&self) -> usize {
-            self.0
-        }
+    tracing::info!(
+        eligible,
+        ?totals,
+        positional_chars,
+        "existence DFA in property runs"
+    );
+    assert!(eligible > 500, "{eligible}");
+    assert!(totals.0 > 1_000 && totals.1 > 10_000, "{totals:?}");
+    assert_eq!(totals.2, 0, "no verdict is left undecided");
+    assert!(positional_chars > 10_000, "{positional_chars}");
+}
+
+/// A pattern that reads no syntax ignores the property runs: its search is
+/// not positional, and no character is classified at its position.
+#[test]
+fn a_pattern_that_reads_no_syntax_steps_over_property_runs() {
+    for (source, reads) in [
+        ("[[:alnum:]_@#%:]+x", false),
+        ("[[:alpha:]]+[0-9]", false),
+        ("[[:space:]]+x", true),
+        ("[[:word:]]x", true),
+        ("[[:punct:]]x", true),
+        ("\\sw+x", true),
+        ("\\_<x", true),
+        ("\\bx", true),
+        ("ab*x", false),
+    ] {
+        let compiled = regex_compile(source, false, false).unwrap();
+        let nfa = Nfa::build(&compiled).unwrap();
+        assert_eq!(nfa.reads_syntax, reads, "{source:?}");
+        let text = b"ab ab: _a  bx a-b @x ab9 x";
+        let lookup = PropertyRunLookup::new(
+            &DefaultSyntaxLookup,
+            vec![(0, 8, RunSyntax::Descriptor(SyntaxClass::Word))],
+        );
+        let mut dfa = ExistenceDfa::new(nfa);
+        let tally = check_dfa_against_matcher(&compiled, &mut dfa, text, &lookup, source);
+        assert_eq!(tally.2, 0, "{source:?}");
+        assert_eq!(
+            dfa.counters.positional_chars > 0,
+            reads,
+            "{source:?}: {:?}",
+            dfa.counters
+        );
     }
-    let text = b"one two three four five";
-    let reads_syntax = regex_compile("\\_<zz", false, false).unwrap();
-    let plain = regex_compile("zz", false, false).unwrap();
+}
+
+/// Searches under property runs with the filter on and in verify mode equal
+/// the matcher alone (forward, backward, bounded, POSIX), and the filter
+/// skips candidates there: the lease is granted.
+#[test]
+fn searches_inside_property_runs_equal_the_matcher_alone() {
+    crate::test_utils::init_test_tracing();
+    let mut rng = DfaRng(0x5EA7_0C7E);
     reset_dfa_stats();
-    with_dfa_mode(DfaMode::On, || {
-        let _ = search(&reads_syntax, text, 0, text.len() as isize, &Positional, 0);
-        let _ = search(&plain, text, 0, text.len() as isize, &Positional, 0);
-        let _ = search(&reads_syntax, text, 0, 10, &Frontier(10), 0);
-        let _ = search(&reads_syntax, text, 0, 10, &Frontier(11), 0);
-    });
+    for _ in 0..300 {
+        let source = gen_pattern(&mut rng, 2);
+        let posix = rng.below(5) == 0;
+        let Ok(mut compiled) = regex_compile(&source, posix, rng.below(3) == 0) else {
+            continue;
+        };
+        compiled.target_multibyte = true;
+        let _ = prime(&compiled, &DefaultSyntaxLookup);
+        for _ in 0..4 {
+            let text = gen_text(&mut rng, 12);
+            let lookup =
+                PropertyRunLookup::new(random_base(&mut rng), gen_runs(&mut rng, &text, true));
+            let boundaries = char_boundaries(&text, true);
+            let start = boundaries[rng.below(boundaries.len())];
+            let point = boundaries[rng.below(boundaries.len())];
+            for range in [
+                (text.len() - start) as isize,
+                -(start as isize),
+                ((text.len() - start) / 2) as isize,
+            ] {
+                let want = with_dfa_mode(DfaMode::Off, || {
+                    search(&compiled, &text, start, range, &lookup, point)
+                });
+                let verified = with_dfa_mode(DfaMode::Verify, || {
+                    search(&compiled, &text, start, range, &lookup, point)
+                });
+                let on = with_dfa_mode(DfaMode::On, || {
+                    search(&compiled, &text, start, range, &lookup, point)
+                });
+                assert_eq!(verified, want, "{source:?} from {start} range {range}");
+                assert_eq!(on, want, "{source:?} from {start} range {range}");
+            }
+        }
+    }
     let stats = dfa_stats();
-    assert_eq!(stats.positional_off, 1, "{stats:?}");
-    assert_eq!(stats.frontier_off, 1, "{stats:?}");
-    // The plain pattern and the search short of the frontier took leases.
-    assert_eq!(stats.searches, 2, "{stats:?}");
+    tracing::info!(?stats, "property-run soak");
+    assert_eq!(stats.verify_bad_no, 0, "{stats:?}");
+    assert_eq!(stats.verify_bad_yes, 0, "{stats:?}");
+    assert!(
+        stats.positional > 1_000 && stats.skipped > 1_000 && stats.positional_chars > 1_000,
+        "{stats:?}"
+    );
+}
+
+/// With a lazy-propertize frontier inside the searched span, the filter
+/// grants the lease and leaves exactly the candidates that would read syntax
+/// at or past the frontier to the matcher: the lowest read it records is the
+/// one the matcher alone records, and every result is the matcher's.
+#[test]
+fn the_frontier_records_what_the_matcher_alone_records() {
+    crate::test_utils::init_test_tracing();
+    let mut rng = DfaRng(0xF207_71E2);
+    reset_dfa_stats();
+    let mut crossed_cases = 0usize;
+    for _ in 0..600 {
+        let source = gen_pattern(&mut rng, 2);
+        // The longest random patterns can make the reference matcher
+        // exponential on these texts (one took minutes).
+        if source.len() > 160 {
+            continue;
+        }
+        let Ok(mut compiled) = regex_compile(&source, false, rng.below(3) == 0) else {
+            continue;
+        };
+        compiled.target_multibyte = true;
+        let _ = prime(&compiled, &DefaultSyntaxLookup);
+        for _ in 0..4 {
+            let text = gen_text(&mut rng, 12);
+            let boundaries = char_boundaries(&text, true);
+            let runs = gen_runs(&mut rng, &text, true);
+            let base = random_base(&mut rng);
+            let frontier = boundaries[rng.below(boundaries.len())];
+            let start = boundaries[rng.below(boundaries.len())];
+            for range in [(text.len() - start) as isize, -(start as isize)] {
+                let run = |mode| {
+                    let mut lookup = PropertyRunLookup::new(base, runs.clone());
+                    lookup.frontier = frontier;
+                    let found =
+                        with_dfa_mode(mode, || search(&compiled, &text, start, range, &lookup, 0));
+                    (found, lookup.crossed.get())
+                };
+                let off = run(DfaMode::Off);
+                crossed_cases += usize::from(off.1.is_some());
+                assert_eq!(
+                    run(DfaMode::On),
+                    off,
+                    "{source:?} in {:?} from {start} range {range} frontier {frontier}",
+                    String::from_utf8_lossy(&text)
+                );
+                assert_eq!(run(DfaMode::Verify), off, "{source:?}");
+            }
+        }
+    }
+    let stats = dfa_stats();
+    tracing::info!(?stats, crossed_cases, "frontier soak");
+    assert!(crossed_cases > 100, "{crossed_cases}");
+    assert!(
+        stats.frontier > 100 && stats.frontier_unknown > 100 && stats.skipped > 1_000,
+        "{stats:?}"
+    );
+    assert_eq!(stats.verify_bad_no + stats.verify_bad_yes, 0, "{stats:?}");
+}
+
+/// A candidate at or past the frontier is left undecided before any syntax
+/// is read; one decided below it reads nothing at or past it.
+#[test]
+fn a_candidate_reaching_the_frontier_is_left_to_the_matcher() {
+    let compiled = regex_compile("\\_<ab+c", false, false).unwrap();
+    let mut dfa = ExistenceDfa::new(Nfa::build(&compiled).unwrap());
+    let text = b"xx abbbbbbc ab abbbbd";
+    let mut lookup = PropertyRunLookup::new(&DefaultSyntaxLookup, Vec::new());
+    lookup.frontier = 8;
+    let context = ClassContext::of_search(&compiled, dfa.nfa(), &lookup).unwrap();
+    dfa.classes_mut().sync(context);
+    dfa.begin_search(&compiled, &lookup);
+    let stop = text.len();
+    // A candidate at or past the frontier: nothing is read.
+    assert_eq!(
+        dfa.anchored_exists(&compiled, text, 12, stop, 0, &lookup),
+        Exists::Unknown
+    );
+    // At 3 the thread runs `abbbbb` up to the frontier at 8: undecided.
+    assert_eq!(
+        dfa.anchored_exists(&compiled, text, 3, stop, 0, &lookup),
+        Exists::Unknown
+    );
+    // At 0 the `a` fails on `x` at once: decided, reading below the frontier.
+    assert!(matches!(
+        dfa.anchored_exists(&compiled, text, 0, stop, 0, &lookup),
+        Exists::No { .. }
+    ));
+    assert_eq!(lookup.crossed.get(), None);
+    assert_eq!(dfa.counters.frontier_unknown, 2);
 }
 
 /// A rejection whose consumed span could have filled GNU's fail stack runs
@@ -1326,7 +1643,9 @@ fn dfa_differential_regressions() {
                     RegexCase::new(pattern, text, case_fold, start, start).with_target(target);
                 let check = check_regex_differential(case, RegexDifferential::ExistenceDfa);
                 assert!(
-                    matches!(check, Ok(RegexCheck::Equivalent { comparisons: 2 })),
+                    // Forward and backward, each under the standard syntax
+                    // and under property runs.
+                    matches!(check, Ok(RegexCheck::Equivalent { comparisons: 4 })),
                     "{pattern:?}: {check:?}"
                 );
             }
@@ -1382,4 +1701,77 @@ fn lisp_searches_follow_syntax_table_changes_with_the_filter_on() {
     let stats = dfa_stats();
     assert!(stats.builds > 0 && stats.skipped > 0, "{stats:?}");
     assert!(stats.context_resets > 0, "{stats:?}");
+}
+
+/// Lisp-level searches in a buffer and over a string whose `syntax-table`
+/// properties change characters' syntax, with `parse-sexp-lookup-properties`
+/// on: the filter takes the lease, classifies characters inside the property
+/// runs at their positions, and answers exactly as with it off.
+#[test]
+fn lisp_searches_over_syntax_table_properties_with_the_filter_on() {
+    // Primitives only: `Context::new()` loads no Lisp.
+    let program = r#"
+(let ((out nil) (parse-sexp-lookup-properties t) (pos 1) (res nil))
+  (set-buffer (get-buffer-create "dfa-props"))
+  (insert (apply 'concat (make-list 40 "foo-bar (baz) qux_x foo.x é-x ")))
+  (while (< pos (point-max))
+    (let ((c (char-after pos)))
+      (cond ((and (= c ?-) (= 0 (% pos 3)))
+             (put-text-property pos (1+ pos) 'syntax-table '(2)))
+            ((and (= c ?\() (= 0 (% pos 2)))
+             (put-text-property pos (1+ pos) 'syntax-table '(1)))
+            ((= c ?.)
+             (put-text-property pos (1+ pos) 'syntax-table '(3)))
+            ((and (= c ?q) (= 0 (% pos 5)))
+             (put-text-property pos (+ pos 3) 'syntax-table '(0)))))
+    (setq pos (1+ pos)))
+  (setq res '("\\_<foo\\_>" "\\bbar" "\\w+-bar" "\\s(baz" "\\_<foo[.]x\\_>"
+              "[[:space:]]ux" "\\sw+x\\b" "\\<x" "é\\w" "[[:word:]]-x"))
+  (while res
+    (let ((re (car res)) (round 0))
+      (while (< round 3)
+        (goto-char (point-min))
+        (let ((hits nil))
+          (while (re-search-forward re nil t)
+            (setq hits (cons (match-beginning 0) hits)))
+          (setq out (cons (list re round (length hits) hits) out)))
+        (setq round (1+ round)))
+      (goto-char (point-max))
+      (let ((hits nil))
+        (while (re-search-backward re nil t) (setq hits (cons (point) hits)))
+        (setq out (cons (list re 'back (length hits) hits) out))))
+    (setq res (cdr res)))
+  (let ((s (apply 'concat (make-list 30 "ab-cd ef.gh "))) (round 0))
+    (put-text-property 0 40 'syntax-table '(2) s)
+    (put-text-property 100 130 'syntax-table '(3) s)
+    (while (< round 3)
+      (let ((i 0) (hits nil))
+        (while (string-match "\\_<\\w+-cd\\_>\\|\\bef\\.\\w" s i)
+          (setq hits (cons (match-beginning 0) hits) i (match-end 0)))
+        (setq out (cons (list 'string round hits) out)))
+      (setq round (1+ round))))
+  (nreverse out))
+"#;
+    let run = |mode| {
+        with_dfa_mode(mode, || {
+            let mut ev = crate::emacs_core::eval::Context::new();
+            let value = ev.eval_str(program).expect("program evaluates");
+            crate::emacs_core::print::print_value(&value)
+        })
+    };
+    let off = run(DfaMode::Off);
+    reset_dfa_stats();
+    let on = run(DfaMode::On);
+    let stats = dfa_stats();
+    let verify = run(DfaMode::Verify);
+    assert_eq!(on, off);
+    assert_eq!(verify, off);
+    assert!(
+        stats.positional > 0
+            && stats.skipped > 0
+            && stats.positional_chars > 0
+            && stats.plain_runs > 0,
+        "{stats:?}"
+    );
+    assert_eq!(stats.verify_bad_no + stats.verify_bad_yes, 0, "{stats:?}");
 }
