@@ -1333,3 +1333,53 @@ fn dfa_differential_regressions() {
         }
     }
 }
+
+/// Lisp-level searches with the filter on across syntax-table edits,
+/// `with-syntax-table`, a new char-table and a buffer switch answer exactly
+/// as with it off.
+#[test]
+fn lisp_searches_follow_syntax_table_changes_with_the_filter_on() {
+    // Primitives only: `Context::new()` loads no Lisp.
+    let program = r#"
+(let ((out nil) (round 0) (st (copy-syntax-table)))
+  (set-buffer (get-buffer-create "dfa-a"))
+  (insert (apply 'concat (make-list 30 "ab-x cd_x ef x-y gh-x ")))
+  (set-syntax-table st)
+  (while (< round 4)
+    (goto-char (point-min))
+    (let ((hits nil))
+      (while (re-search-forward "\\w+-x\\|\\_<\\w+_x\\_>" nil t)
+        (setq hits (cons (match-beginning 0) hits)))
+      (setq out (cons (list round (length hits) (car hits)) out)))
+    (cond ((= round 0) (modify-syntax-entry ?- "w" st))
+          ((= round 1) (modify-syntax-entry ?_ "." st))
+          ((= round 2) (make-char-table 'syntax-table)))
+    (setq round (1+ round)))
+  (set-syntax-table (standard-syntax-table))
+  (goto-char (point-min))
+  (setq out (cons (list 'standard (re-search-forward "\\w+-x" nil t)) out))
+  (set-buffer (get-buffer-create "dfa-b"))
+  (insert "zz-x " (make-string 50 ?q) " qq-x")
+  (goto-char (point-min))
+  (let ((hits nil))
+    (while (re-search-forward "\\w+-x" nil t) (setq hits (cons (point) hits)))
+    (setq out (cons (list 'other-buffer hits) out)))
+  (nreverse out))
+"#;
+    let run = |mode| {
+        with_dfa_mode(mode, || {
+            let mut ev = crate::emacs_core::eval::Context::new();
+            let value = ev.eval_str(program).expect("program evaluates");
+            crate::emacs_core::print::print_value(&value)
+        })
+    };
+    reset_dfa_stats();
+    let off = run(DfaMode::Off);
+    let on = run(DfaMode::On);
+    let verify = run(DfaMode::Verify);
+    assert_eq!(on, off);
+    assert_eq!(verify, off);
+    let stats = dfa_stats();
+    assert!(stats.builds > 0 && stats.skipped > 0, "{stats:?}");
+    assert!(stats.context_resets > 0, "{stats:?}");
+}

@@ -42,7 +42,7 @@ use crate::emacs_core::emacs_char;
 use crate::emacs_core::syntax::SyntaxClass;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
-use std::cell::{Cell, RefCell, RefMut};
+use std::cell::{RefCell, RefMut};
 
 // ---------------------------------------------------------------------------
 // The NFA over the rewind view (C2)
@@ -1370,14 +1370,21 @@ impl ExistenceDfa {
             let start = d;
             {
                 let byte_class = &self.classes.byte_class;
-                let trans = &self.trans;
+                let trans = &self.trans[..];
                 let stride = 1u32 << self.stride_shift;
-                while d < chunk {
-                    let class = byte_class[text[d] as usize];
+                let window = &text[..chunk];
+                while d < window.len() {
+                    let class = byte_class[window[d] as usize];
                     if class == UNKNOWN_CLASS {
                         break;
                     }
-                    let next = trans[row as usize + class as usize];
+                    let at = row as usize + class as usize;
+                    debug_assert!(at < trans.len());
+                    // SAFETY: `row` is the row of a live state (every row is
+                    // `stride` entries of `trans`) and a class in the byte
+                    // table is below `classes.len() <= stride` (`fit_classes`
+                    // runs after every new class).
+                    let next = unsafe { *trans.get_unchecked(at) };
                     if next < stride {
                         break;
                     }
@@ -1486,7 +1493,8 @@ impl DfaMode {
 
 #[cfg(any(test, feature = "fuzzing"))]
 thread_local! {
-    static DFA_MODE_OVERRIDE: Cell<Option<DfaMode>> = const { Cell::new(None) };
+    static DFA_MODE_OVERRIDE: std::cell::Cell<Option<DfaMode>> =
+        const { std::cell::Cell::new(None) };
 }
 
 /// Run `f` with `NEOVM_REGEX_DFA` forced to `mode` on this thread.
@@ -1560,8 +1568,8 @@ pub(crate) struct DfaStats {
 }
 
 thread_local! {
-    static STATS: Cell<DfaStats> = const {
-        Cell::new(DfaStats {
+    static STATS: RefCell<DfaStats> = const {
+        RefCell::new(DfaStats {
             searches: 0,
             positional_off: 0,
             frontier_off: 0,
@@ -1588,27 +1596,29 @@ thread_local! {
 #[inline]
 fn stat(update: impl FnOnce(&mut DfaStats)) {
     STATS.with(|cell| {
-        let mut stats = cell.get();
-        update(&mut stats);
-        cell.set(stats);
+        if let Ok(mut stats) = cell.try_borrow_mut() {
+            update(&mut stats);
+        }
     });
 }
 
 /// This thread's filter counters.
 #[cfg(any(test, feature = "fuzzing"))]
 pub(crate) fn dfa_stats() -> DfaStats {
-    STATS.with(Cell::get)
+    STATS.with(|cell| *cell.borrow())
 }
 
 /// Reset this thread's filter counters (tests).
 #[cfg(test)]
 pub(crate) fn reset_dfa_stats() {
-    STATS.with(|cell| cell.set(DfaStats::default()));
+    STATS.with(|cell| *cell.borrow_mut() = DfaStats::default());
 }
 
 fn register_stats_report() {
     extern "C" fn report() {
-        let stats = STATS.try_with(Cell::get).unwrap_or_default();
+        let stats = STATS
+            .try_with(|cell| cell.try_borrow().map(|stats| *stats).unwrap_or_default())
+            .unwrap_or_default();
         let line = format!("[neovm-regex-dfa] {stats:?}\n");
         let _ = std::io::Write::write_all(&mut std::io::stderr().lock(), line.as_bytes());
     }
@@ -1677,6 +1687,43 @@ impl DfaCell {
 pub(crate) struct DfaLease<'p> {
     slot: RefMut<'p, DfaSlot>,
     mode: DfaMode,
+    /// The live DFA's counters when this search began using it; the delta is
+    /// added to [`DfaStats`] when the lease is dropped.
+    counters_before: Option<DfaCounters>,
+    skipped: u64,
+    overflow_guarded: u64,
+}
+
+impl Drop for DfaLease<'_> {
+    fn drop(&mut self) {
+        let delta = match (&*self.slot, self.counters_before) {
+            (DfaSlot::Live(live), Some(before)) => {
+                let now = live.dfa.counters;
+                DfaCounters {
+                    yes: now.yes - before.yes,
+                    no: now.no - before.no,
+                    unknown: now.unknown - before.unknown,
+                    states: now.states - before.states,
+                    clears: now.clears - before.clears,
+                    slow_transitions: now.slow_transitions - before.slow_transitions,
+                    bytes: now.bytes - before.bytes,
+                }
+            }
+            _ => DfaCounters::default(),
+        };
+        let (skipped, overflow_guarded) = (self.skipped, self.overflow_guarded);
+        stat(|s| {
+            s.yes += delta.yes;
+            s.no += delta.no;
+            s.unknown += delta.unknown;
+            s.states += delta.states;
+            s.clears += delta.clears;
+            s.slow_transitions += delta.slow_transitions;
+            s.bytes += delta.bytes;
+            s.skipped += skipped;
+            s.overflow_guarded += overflow_guarded;
+        });
+    }
 }
 
 impl<'p> DfaLease<'p> {
@@ -1709,6 +1756,7 @@ impl<'p> DfaLease<'p> {
             }
         }
         let mut slot = pattern.dfa.0.try_borrow_mut().ok()?;
+        let mut counters_before = None;
         match &mut *slot {
             // A lookup with no table identity could not key the classes the
             // build would need (see `ClassContext::of_search`).
@@ -1728,11 +1776,18 @@ impl<'p> DfaLease<'p> {
                     stat(|s| s.context_resets += 1);
                 }
                 live.dfa.begin_search();
+                counters_before = Some(live.dfa.counters);
             }
             DfaSlot::Ineligible(_) | DfaSlot::Disabled(_) => return None,
         }
         stat(|s| s.searches += 1);
-        Some(Self { slot, mode })
+        Some(Self {
+            slot,
+            mode,
+            counters_before,
+            skipped: 0,
+            overflow_guarded: 0,
+        })
     }
 
     /// Decide one candidate: the DFA's verdict, then the matcher unless the
@@ -1770,25 +1825,13 @@ impl<'p> DfaLease<'p> {
             }
             DfaSlot::Ineligible(_) | DfaSlot::Disabled(_) => return classic(scratch, regs),
         };
-        let before = live.dfa.counters;
         let verdict = live
             .dfa
             .anchored_exists(pattern, text, pos, stop, point, syntax);
-        let after = live.dfa.counters;
-        stat(|s| {
-            s.states += after.states - before.states;
-            s.clears += after.clears - before.clears;
-            s.slow_transitions += after.slow_transitions - before.slow_transitions;
-            s.bytes += after.bytes - before.bytes;
-            match verdict {
-                Exists::Yes => s.yes += 1,
-                Exists::No { .. } => s.no += 1,
-                Exists::Unknown => s.unknown += 1,
-            }
-        });
         live.note(verdict);
         if let Some(why) = live.dfa.gave_up() {
             stat(|s| s.gave_up += 1);
+            self.counters_before = None;
             *self.slot = DfaSlot::Disabled(why);
             tracing::debug!(target: "neovm::regex", ?why, "existence DFA gave up");
             return classic(scratch, regs);
@@ -1830,10 +1873,10 @@ impl<'p> DfaLease<'p> {
             }
             (_, Exists::No { consumed }) => {
                 if fail_stack_may_overflow_with(push_sites, consumed) {
-                    stat(|s| s.overflow_guarded += 1);
+                    self.overflow_guarded += 1;
                     classic(scratch, regs)
                 } else {
-                    stat(|s| s.skipped += 1);
+                    self.skipped += 1;
                     None
                 }
             }
@@ -1853,6 +1896,7 @@ impl<'p> DfaLease<'p> {
                 dfa.classes.sync(context);
                 dfa.begin_search();
                 stat(|s| s.builds += 1);
+                self.counters_before = Some(DfaCounters::default());
                 *self.slot = DfaSlot::Live(Box::new(LiveDfa {
                     dfa,
                     decisions: 0,
