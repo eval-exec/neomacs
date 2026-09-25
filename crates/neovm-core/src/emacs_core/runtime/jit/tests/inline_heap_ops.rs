@@ -641,3 +641,248 @@ fn tenured_owners_store_inline_once_remembered() {
     );
     assert_eq!(print_value(&image_vector), "[t 9 9]");
 }
+
+// ---- inline allocation: conses and float boxes ----
+
+fn allocs_emitted() -> usize {
+    #[cfg(debug_assertions)]
+    {
+        super::heap_inline::INLINE_ALLOCS_EMITTED.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        0
+    }
+}
+
+fn conses_counted() -> i64 {
+    Value::memory_use_counts_snapshot()[0]
+}
+
+fn floats_counted() -> i64 {
+    Value::memory_use_counts_snapshot()[1]
+}
+
+/// `(lambda (n) (let ((acc nil)) (while (> n 0) (setq acc (cons n acc))
+/// (when (= n HALF) (inline-alloc-probe)) (setq n (1- n))) acc))`: a cons
+/// loop whose call (only when `n` is `half`) is a safe point.
+fn cons_loop_fn(half: i64) -> ByteCodeFunction {
+    lexical_fn(
+        1,
+        vec![
+            Op::Nil,           // 0: acc              [n acc]
+            Op::StackRef(1),   // 1: n                [n acc n]
+            Op::Constant(0),   // 2: 0                [n acc n 0]
+            Op::Gtr,           // 3                   [n acc b]
+            Op::GotoIfNil(20), // 4                   [n acc]
+            Op::StackRef(1),   // 5: n                [n acc n]
+            Op::StackRef(1),   // 6: acc              [n acc n acc]
+            Op::Cons,          // 7                   [n acc c]
+            Op::StackSet(1),   // 8: acc = c          [n c]
+            Op::StackRef(1),   // 9: n                [n acc n]
+            Op::Constant(1),   // 10: half            [n acc n half]
+            Op::Eqlsign,       // 11                  [n acc b]
+            Op::GotoIfNil(16), // 12                  [n acc]
+            Op::Constant(2),   // 13: probe           [n acc f]
+            Op::Call(0),       // 14                  [n acc r]
+            Op::Pop,           // 15                  [n acc]
+            Op::StackRef(1),   // 16: n               [n acc n]
+            Op::Sub1,          // 17                  [n acc n-1]
+            Op::StackSet(2),   // 18: n = n-1         [n-1 acc]
+            Op::Goto(1),       // 19
+            Op::Return,        // 20: acc
+        ],
+        vec![
+            Value::make_int(0),
+            Value::make_int(half),
+            Value::symbol("inline-alloc-probe"),
+        ],
+    )
+}
+
+/// A compiled cons loop allocates inline and counts exactly: 10 000 conses
+/// are 10 000 in `memory-use-counts`, as in the interpreter; with a forced
+/// collection in the middle (through a call — the safe point closes and
+/// reopens the region) the list comes out whole, and the delta is the
+/// interpreter's.
+#[test]
+fn a_cons_loop_allocates_inline_and_counts_exactly() {
+    let mut eval = Context::new();
+    eval.eval_str("(fset 'inline-alloc-probe (lambda () (garbage-collect) nil))")
+        .expect("probe");
+    let ctx_ptr = &mut eval as *mut Context as *mut u8;
+    const N: i64 = 10_000;
+    for (half, what) in [(-1, "no collection"), (N / 2, "a collection mid-loop")] {
+        let f = cons_loop_fn(half);
+        let emitted = allocs_emitted();
+        let leaf = compile_bytecode_function_with(&f, Some(&eval.obarray)).expect("compiles");
+        #[cfg(debug_assertions)]
+        assert!(allocs_emitted() > emitted, "{what}: the cons is inline");
+        assert!(leaf.needs_vmctx);
+
+        let before = conses_counted();
+        let want = interpret(&mut eval, &f, vec![Value::make_int(N)]);
+        let interpreted = conses_counted() - before;
+
+        let before = conses_counted();
+        let got = match leaf.call(ctx_ptr, &[Value::make_int(N)]) {
+            NativeRun::Ok(bits) => Value::from_bits(bits),
+            other => panic!("{what}: the loop must run natively: {other:?}"),
+        };
+        let native_delta = conses_counted() - before;
+        check_counted_list(got, N, what);
+        assert_eq!(print_value(&got), want, "{what}");
+        assert_eq!(
+            native_delta, interpreted,
+            "{what}: native and interpreted count alike"
+        );
+        if half < 0 {
+            assert_eq!(native_delta, N, "{what}: exactly one count per cons");
+        }
+    }
+    assert_eq!(eval.jit_root_stack_top, 0);
+}
+
+/// An on-stack replacement into a cons loop enters through the function
+/// entry, which hoists the heap pointer the loop's inline cons reads.
+#[test]
+fn osr_into_a_cons_loop_allocates_inline() {
+    let mut ctx = Context::new();
+    let mut f = cons_loop_fn(-1);
+    f.seal_hand_assembled_ops();
+    let snapshot = [Value::make_int(500), Value::NIL];
+    ctx.bc_buf.extend_from_slice(&snapshot);
+    let before = conses_counted();
+    let run = crate::emacs_core::jit::cache::try_run_osr(&mut ctx, &f, 1, &snapshot, &[]);
+    let Some(NativeRun::Ok(bits)) = run else {
+        panic!("the OSR transfer must run the loop natively: {run:?}");
+    };
+    check_counted_list(Value::from_bits(bits), 500, "osr");
+    assert_eq!(conses_counted() - before, 500);
+    assert_eq!(ctx.jit_root_stack_top, 0);
+}
+
+/// The MIR tier's escaping cons allocates inline; a scalar-replaced one
+/// allocates nothing at all.
+#[test]
+fn mir_conses_allocate_inline_or_not_at_all() {
+    let mut eval = Context::new();
+    let ctx_ptr = &mut eval as *mut Context as *mut u8;
+    // (lambda (a b) (cons a (cons b nil))): both escape.
+    let escaping = lexical_fn(
+        2,
+        vec![
+            Op::StackRef(1),
+            Op::StackRef(1),
+            Op::Nil,
+            Op::Cons,
+            Op::Cons,
+            Op::Return,
+        ],
+        vec![],
+    );
+    let emitted = allocs_emitted();
+    let leaf = compile_bytecode_function(&escaping).expect("compiles");
+    assert_eq!(leaf.tier(), leaf::LeafTier::Mir);
+    #[cfg(debug_assertions)]
+    assert_eq!(allocs_emitted() - emitted, 2, "two inline conses");
+    let before = conses_counted();
+    assert_eq!(
+        native(ctx_ptr, &leaf, &[Value::make_int(1), Value::T], "escaping"),
+        "(1 t)"
+    );
+    assert_eq!(conses_counted() - before, 2);
+
+    // (lambda (a b) (car (cons a b))): the cons never escapes.
+    let virtual_cons = lexical_fn(
+        2,
+        vec![
+            Op::StackRef(1),
+            Op::StackRef(1),
+            Op::Cons,
+            Op::Car,
+            Op::Return,
+        ],
+        vec![],
+    );
+    let leaf = compile_bytecode_function(&virtual_cons).expect("compiles");
+    assert_eq!(leaf.tier(), leaf::LeafTier::Mir);
+    let before = conses_counted();
+    assert_eq!(
+        native(ctx_ptr, &leaf, &[Value::make_int(4), Value::T], "virtual"),
+        "4"
+    );
+    assert_eq!(
+        conses_counted() - before,
+        0,
+        "a scalar-replaced cons is never made"
+    );
+}
+
+/// `(lambda (a b) (* a b))` with `Float` feedback: the product is boxed
+/// inline — at the site (`NEOVM_JIT_FLONUM=off`) or where it escapes, at the
+/// return (`resident`) — and counted once.
+#[test]
+fn float_boxes_are_inline_and_counted_once() {
+    use crate::emacs_core::jit::NumericFeedback as NF;
+    let mut eval = Context::new();
+    let ctx_ptr = &mut eval as *mut Context as *mut u8;
+    for mode in [FlonumMode::Off, FlonumMode::Resident] {
+        let mut f = lexical_fn(
+            2,
+            vec![Op::StackRef(1), Op::StackRef(1), Op::Mul, Op::Return],
+            vec![],
+        );
+        f.seal_hand_assembled_ops();
+        f.jit_runtime().record_numeric(2, f.ops.len(), NF::Float);
+        force_flonum_mode_for_test(Some(mode));
+        let emitted = allocs_emitted();
+        let leaf = compile_bytecode_function(&f).expect("compiles");
+        force_flonum_mode_for_test(None);
+        #[cfg(debug_assertions)]
+        assert!(allocs_emitted() > emitted, "{mode:?}: the box is inline");
+        assert!(leaf.needs_vmctx);
+        let a = Value::make_float(1.5);
+        let b = Value::make_float(2.0);
+        let before = floats_counted();
+        let product = match leaf.call(ctx_ptr, &[a, b]) {
+            NativeRun::Ok(bits) => Value::from_bits(bits),
+            other => panic!("{mode:?}: must run natively: {other:?}"),
+        };
+        assert_eq!(product.xfloat(), 3.0, "{mode:?}");
+        assert_eq!(
+            floats_counted() - before,
+            1,
+            "{mode:?}: one float, counted once"
+        );
+    }
+}
+
+/// `NEOVM_JIT_INLINE_ALLOC=off`: no inline allocation is emitted; conses
+/// and floats come from the shims, counted exactly the same.
+#[test]
+fn the_inline_alloc_knob_turns_inline_allocation_off() {
+    unsafe { std::env::set_var("NEOVM_JIT_INLINE_ALLOC", "off") };
+    assert!(!super::jit_inline_alloc_on());
+    let mut eval = Context::new();
+    eval.eval_str("(fset 'inline-alloc-probe (lambda () nil))")
+        .expect("probe");
+    let ctx_ptr = &mut eval as *mut Context as *mut u8;
+    let f = cons_loop_fn(-1);
+    let emitted = allocs_emitted();
+    let leaf = compile_bytecode_function_with(&f, Some(&eval.obarray)).expect("compiles");
+    assert_eq!(
+        allocs_emitted(),
+        emitted,
+        "no inline allocation under the knob"
+    );
+    let before = conses_counted();
+    let Some(bits) = (match leaf.call(ctx_ptr, &[Value::make_int(300)]) {
+        NativeRun::Ok(bits) => Some(bits),
+        _ => None,
+    }) else {
+        panic!("the loop must run natively");
+    };
+    check_counted_list(Value::from_bits(bits), 300, "knob off");
+    assert_eq!(conses_counted() - before, 300);
+}

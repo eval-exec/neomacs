@@ -118,6 +118,22 @@ pub(crate) fn jit_inline_heap_write_on() -> bool {
     })
 }
 
+/// Allocate conses and box floats inline at JIT sites, bumping the heap's
+/// open allocation region (`heap_inline::emit_inline_cons` /
+/// `emit_inline_box_float`). Default on; `NEOVM_JIT_INLINE_ALLOC=off` calls
+/// `neovm_jit_cons`/`neovm_jit_make_float` at every site — the single-build
+/// A/B.
+pub(crate) fn jit_inline_alloc_on() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("NEOVM_JIT_INLINE_ALLOC").ok().as_deref(),
+            Some("0" | "off" | "false" | "no")
+        )
+    })
+}
+
 #[cfg(test)]
 std::thread_local! {
     static INLINE_SWITCH_TEST_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };

@@ -530,11 +530,11 @@ fn both_tag_test(
     fb.ins().icmp_imm_u(IntCC::Equal, masked, 0)
 }
 
-/// Box an `f64` result back into a tagged Lisp float.
+/// Box an `f64` result back into a tagged Lisp float: inline out of the
+/// float allocation region when the function allows it
+/// (`heap_inline::box_f64`), else `neovm_jit_make_float`.
 pub(crate) fn box_float(fb: &mut FunctionBuilder, rt: &RtCtx, v: ClifValue) -> ClifValue {
-    let make_float = rt.refs.get(fb.func, Shim::MakeFloat);
-    let call = fb.ins().call(make_float, &[v]);
-    fb.inst_results(call)[0]
+    super::heap_inline::box_f64(fb, rt, v)
 }
 
 pub(crate) fn guard_fixnum(
@@ -2336,8 +2336,9 @@ pub(crate) struct MirLeafPlan {
     pub(crate) max_depth: usize,
     /// `Opaque` ops whose emitter roots a residual in the Context root window
     /// (the baseline's `is_rooting_site_op`): calls, variable ops, builtins,
-    /// list ops. A `Cons` is not one (its shim is context-free), so a
-    /// cons-only body may still run with a null vmctx.
+    /// list ops. A `Cons` is not one (its shim is context-free), though its
+    /// inline allocation reads the heap through the vmctx
+    /// (`heap_inline::emit_inline_cons`; `CompiledLeaf::needs_vmctx`).
     pub(crate) rooting_sites: usize,
 }
 
@@ -3096,6 +3097,7 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
                 call_result_slot,
                 rootwin: None,
                 heap: None,
+                inline_alloc: !aot && super::jit_inline_alloc_on(),
             })
         } else {
             None
@@ -3645,11 +3647,16 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
                         // No residual rooting: the cons shim is pure
                         // allocation and never reaches a GC safe point (see
                         // `neovm_jit_cons`), so nothing live across it can be
-                        // collected. Infallible + context-free (no status, no
-                        // vmctx) — no STATUS branch / signal exit.
-                        let cons = rt.refs.get(fb.func, Shim::Cons);
-                        let call = fb.ins().call(cons, &[car_v, cdr_v]);
-                        let result = fb.inst_results(call)[0];
+                        // collected. Infallible — no STATUS branch / signal
+                        // exit. Inline, it bumps the cons region through the
+                        // vmctx (`heap_inline`); the shim is the refill.
+                        let result = if rt.inline_alloc {
+                            super::heap_inline::emit_inline_cons(&mut fb, rt, car_v, cdr_v)
+                        } else {
+                            let cons = rt.refs.get(fb.func, Shim::Cons);
+                            let call = fb.ins().call(cons, &[car_v, cdr_v]);
+                            fb.inst_results(call)[0]
+                        };
                         cval[r] = Some(result);
                         cval_raw[r] = false;
                     }
@@ -3900,6 +3907,9 @@ pub(crate) struct RtCtx {
     /// block for a body whose inline heap sites justify it
     /// (`heap_inline::hoist_heap_ptr`); `None` makes each site load it.
     pub(crate) heap: Option<ClifValue>,
+    /// Allocate conses and box floats inline (`heap_inline`): JIT code with
+    /// `NEOVM_JIT_INLINE_ALLOC` on; never AOT, whose leaves keep the shims.
+    pub(crate) inline_alloc: bool,
 }
 
 /// The residual root window's frame base, loaded once at entry, with its
@@ -5085,17 +5095,24 @@ fn flonum_census_note(update: impl FnOnce(&mut FlonumCensus)) {
 pub(crate) fn box_flonum_value(
     fb: &mut FunctionBuilder,
     refs: &RtRefs,
+    inline: Option<&RtCtx>,
     tag: ClifValue,
     f64: ClifValue,
     kind: FlonumKind,
     cold: bool,
 ) -> ClifValue {
-    match kind {
-        FlonumKind::Float => {
+    // An escape box on the ordinary path bumps the float region inline
+    // (`heap_inline::box_f64`); cold exits keep the call.
+    let make = |fb: &mut FunctionBuilder| match inline {
+        Some(rt) if !cold => super::heap_inline::box_f64(fb, rt, f64),
+        _ => {
             let make_float = refs.get(fb.func, Shim::MakeFloat);
             let call = fb.ins().call(make_float, &[f64]);
             fb.inst_results(call)[0]
         }
+    };
+    match kind {
+        FlonumKind::Float => make(fb),
         FlonumKind::FloatOrFixnum => {
             let out = fb.declare_var(types::I64);
             let box_b = fb.create_block();
@@ -5109,9 +5126,7 @@ pub(crate) fn box_flonum_value(
             fb.ins().brif(is_float, box_b, &[], merge, &[]);
             fb.switch_to_block(box_b);
             fb.seal_block(box_b);
-            let make_float = refs.get(fb.func, Shim::MakeFloat);
-            let call = fb.ins().call(make_float, &[f64]);
-            let boxed = fb.inst_results(call)[0];
+            let boxed = make(fb);
             fb.def_var(out, boxed);
             fb.ins().jump(merge, &[]);
             fb.switch_to_block(merge);
@@ -5130,7 +5145,7 @@ pub(crate) fn box_flonum_value(
 /// never inside one arm of an op's own branching.
 pub(crate) fn box_flonum_slot(
     fb: &mut FunctionBuilder,
-    refs: &RtRefs,
+    rt: &RtCtx,
     stack: &mut [ClifValue],
     reps: &mut [SlotRep],
     k: usize,
@@ -5139,7 +5154,7 @@ pub(crate) fn box_flonum_slot(
     let SlotRep::Flonum { f64, kind } = key else {
         return stack[k];
     };
-    let boxed = box_flonum_value(fb, refs, stack[k], f64, kind, false);
+    let boxed = box_flonum_value(fb, &rt.refs, Some(rt), stack[k], f64, kind, false);
     for s in 0..stack.len() {
         if reps[s] == key {
             stack[s] = boxed;
@@ -5174,7 +5189,7 @@ pub(crate) fn box_all_flonums(
     for k in 0..stack.len() {
         if reps[k].is_flonum() {
             let rt = rt.expect("a flonum implies the runtime refs (float sites declare them)");
-            box_flonum_slot(fb, &rt.refs, stack, reps, k);
+            box_flonum_slot(fb, rt, stack, reps, k);
         }
     }
 }
@@ -5194,7 +5209,7 @@ pub(crate) fn materialize_model_stack(
             SlotRep::RawFixnum => stack_force_tagged(fb, stack, reps, k),
             SlotRep::Flonum { .. } => {
                 let rt = rt.expect("a flonum implies the runtime refs (float sites declare them)");
-                box_flonum_slot(fb, &rt.refs, stack, reps, k);
+                box_flonum_slot(fb, rt, stack, reps, k);
             }
         }
     }
@@ -5254,7 +5269,7 @@ fn snapshot_slot_tagged(
                 return b;
             }
             let refs = refs.expect("a flonum implies the runtime refs (float sites declare them)");
-            let b = box_flonum_value(fb, refs, v, f64, kind, cold);
+            let b = box_flonum_value(fb, refs, None, v, f64, kind, cold);
             boxed.push((f64, b));
             flonum_census_note(|c| c.cold_boxes += 1);
             b
@@ -5842,7 +5857,7 @@ fn prepare_op_operands(
         for k in at..stack.len() {
             if reps[k].is_flonum() {
                 let rt = rt.expect("a flonum implies the runtime refs (float sites declare them)");
-                box_flonum_slot(fb, &rt.refs, stack, reps, k);
+                box_flonum_slot(fb, rt, stack, reps, k);
             }
         }
         return Ok(at);
@@ -6983,9 +6998,15 @@ fn lower_simple_op_arms(
             // No rooting at all: the cons shim is pure allocation and never
             // reaches a GC safe point (see `neovm_jit_cons`), so neither
             // car/cdr nor the residual operand stack can be collected under it.
-            let cons = rt.refs.get(fb.func, Shim::Cons);
-            let call = fb.ins().call(cons, &[car, cdr]);
-            let result = fb.inst_results(call)[0];
+            // JIT code bumps the cons region inline (`heap_inline`), the shim
+            // being its cold refill path.
+            let result = if rt.inline_alloc {
+                super::heap_inline::emit_inline_cons(fb, rt, car, cdr)
+            } else {
+                let cons = rt.refs.get(fb.func, Shim::Cons);
+                let call = fb.ins().call(cons, &[car, cdr]);
+                fb.inst_results(call)[0]
+            };
             stack.push(result);
         }
         Op::VarBind(idx) => {

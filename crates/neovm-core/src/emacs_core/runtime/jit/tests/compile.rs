@@ -3671,9 +3671,12 @@ fn mir_inline_call_revalidates_after_fset_and_allows_state_reads() {
 }
 
 /// A cons-only body has no rooting site (the cons shim is context-free), so
-/// nothing is hoisted and it still runs with a null vmctx.
+/// no root window is hoisted. Its inline cons reads the heap through the
+/// vmctx (`heap_inline::emit_inline_cons`), so it runs on a real Context.
 #[test]
 fn mir_cons_only_body_does_not_hoist() {
+    let mut ev = crate::emacs_core::eval::Context::new();
+    let ctx = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     let ops = vec![Op::StackRef(1), Op::StackRef(1), Op::Cons, Op::Return];
     let mir = mir::build_mir(&ops, &[], 2).expect("MIR builds");
     let plan = super::lowering::plan_mir_leaf(&mir);
@@ -3684,9 +3687,10 @@ fn mir_cons_only_body_does_not_hoist() {
         (0, 0),
         "no window, no stores"
     );
-    let bits = leaf
-        .call_for_test(&[Value::make_int(1), Value::make_int(2)])
-        .expect("runs with a null vmctx");
+    assert_eq!(leaf.needs_vmctx, super::jit_inline_alloc_on());
+    let NativeRun::Ok(bits) = leaf.call(ctx, &[Value::make_int(1), Value::make_int(2)]) else {
+        panic!("a cons-only body runs natively");
+    };
     let c = Value::from_bits(bits);
     assert_eq!(c.cons_car().bits(), Value::make_int(1).bits());
     assert_eq!(c.cons_cdr().bits(), Value::make_int(2).bits());
@@ -5317,13 +5321,19 @@ fn compiles_car_cdr() {
 #[test]
 fn compiles_cons() {
     // (cons 1 2): allocates a cons cell. No GC between the call and the deref
-    // (nothing allocates), so the fresh cons stays valid.
+    // (nothing allocates), so the fresh cons stays valid. The inline cons
+    // reads the heap through the vmctx, so the body runs on a real Context.
+    let mut ev = crate::emacs_core::eval::Context::new();
+    let ctx = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     let leaf = lower_nullary_leaf(
         &[Op::Constant(0), Op::Constant(1), Op::Cons, Op::Return],
         &[Value::make_int(1), Value::make_int(2)],
     )
     .unwrap();
-    let cell = Value::from_bits(leaf.call_for_test(&[]).expect("cons runs"));
+    let NativeRun::Ok(bits) = leaf.call(ctx, &[]) else {
+        panic!("cons runs");
+    };
+    let cell = Value::from_bits(bits);
     assert!(cell.is_cons());
     assert_eq!(cell.cons_car(), Value::make_int(1));
     assert_eq!(cell.cons_cdr(), Value::make_int(2));
@@ -5332,7 +5342,10 @@ fn compiles_cons() {
 #[test]
 fn compiles_nested_cons_list() {
     // (cons 7 (cons 8 nil)) = (7 8). The inner cons leaves 7 live below it on
-    // the operand stack, exercising the gc_push rooting path.
+    // the operand stack, exercising the gc_push rooting path. A real Context:
+    // the inline cons reads the heap through the vmctx.
+    let mut ev = crate::emacs_core::eval::Context::new();
+    let ctx = &mut ev as *mut crate::emacs_core::eval::Context as *mut u8;
     let leaf = lower_nullary_leaf(
         &[
             Op::Constant(0),
@@ -5345,7 +5358,10 @@ fn compiles_nested_cons_list() {
         &[Value::make_int(7), Value::make_int(8)],
     )
     .unwrap();
-    let result = Value::from_bits(leaf.call_for_test(&[]).expect("nested cons runs"));
+    let NativeRun::Ok(bits) = leaf.call(ctx, &[]) else {
+        panic!("nested cons runs");
+    };
+    let result = Value::from_bits(bits);
     assert_eq!(result.cons_car(), Value::make_int(7));
     let tail = result.cons_cdr();
     assert!(tail.is_cons());

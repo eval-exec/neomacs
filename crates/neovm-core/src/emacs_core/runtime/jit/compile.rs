@@ -3293,7 +3293,9 @@ pub(crate) fn baseline_has_backedge(ops: &[Op], cfg: &Cfg) -> bool {
 /// entered with a real Context — which is what lets the root-window base and
 /// capacity check be hoisted to the entry (`lowering::HoistedRootWin`). A
 /// body without one (a pure loop, run with a null vmctx in tests) keeps the
-/// per-site sequence it never executes.
+/// per-site sequence it never executes. (Inline heap sites — stores and
+/// allocation, `heap_inline` — also read the vmctx, but root nothing; a
+/// body with one is flagged `CompiledLeaf::needs_vmctx`.)
 ///
 /// The hoisted root-window prologue costs about what one site's inline
 /// sequence does, so it pays from two sites up, or from one site inside a
@@ -3922,6 +3924,7 @@ fn build_leaf_fn<S: LeafSink>(
                 call_result_slot,
                 rootwin: None,
                 heap: None,
+                inline_alloc: !aot && jit_inline_alloc_on(),
             })
         } else {
             None
@@ -4053,7 +4056,14 @@ fn build_leaf_fn<S: LeafSink>(
             // when the body has two such sites or one in a loop; else each
             // site loads its own. Only a body with inline sites loads it, and
             // such a body dereferences its vmctx anyway.
-            if !aot && heap_inline::hoist_heap_ptr(ops, has_back_edge(ops)) {
+            if !aot
+                && heap_inline::hoist_heap_ptr(ops, has_back_edge(ops), rt.inline_alloc, |pc| {
+                    matches!(
+                        active_numeric_feedback(pc),
+                        crate::emacs_core::jit::NumericFeedback::Float
+                    )
+                })
+            {
                 rt.heap = Some(heap_inline::load_heap_ptr(&mut fb, vmctx_param));
             }
             // Root-window base + capacity check once per activation instead
@@ -4254,7 +4264,7 @@ fn build_leaf_fn<S: LeafSink>(
                         && reps[top].is_flonum()
                     {
                         let rt = rt.as_ref().expect("a flonum implies the runtime refs");
-                        box_flonum_slot(&mut fb, &rt.refs, &mut stack, &mut reps, top);
+                        box_flonum_slot(&mut fb, rt, &mut stack, &mut reps, top);
                     }
                     retag_raw_fixnums(&mut fb, &mut stack, &mut reps);
                 }

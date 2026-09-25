@@ -1,6 +1,8 @@
-//! Heap writes inline in JIT code (lever P0.7): the stores `setcar`,
-//! `setcdr` and `aset` (of a plain vector or record) make, done in place
-//! instead of in `neovm_jit_setcar`/`_setcdr`/`_aset`.
+//! Heap writes and allocation inline in JIT code (levers P0.7 and P0.8):
+//! the stores `setcar`, `setcdr` and `aset` (of a plain vector or record)
+//! make, done in place instead of in `neovm_jit_setcar`/`_setcdr`/`_aset`;
+//! and conses and float boxes bumped out of the heap's open allocation
+//! regions instead of `neovm_jit_cons`/`neovm_jit_make_float`.
 //!
 //! The write barrier's whole inline decision is one owner-address window
 //! (`tagged::gc::BarrierWindow`), which the heap publishes into its
@@ -19,12 +21,26 @@
 //! it before any. A cons is never tenured, so outside the window it has
 //! nothing to remember.
 //!
+//! Allocation: `JitHeapState` also holds each class's region cursor and
+//! limit (`tagged::gc::alloc_region`), which the Rust allocator bumps too.
+//! A site loads both, bumps the cursor when the region has room and writes
+//! the new object's fields; an exhausted (or closed: both 0) region takes
+//! the unchanged shim, which refills through the Rust allocator. The region
+//! was charged to the consing counters and, for conses allocated while the
+//! heap allocates black, pre-marked when it was granted, so the site
+//! neither counts nor marks. The cursor is reloaded at every site, never
+//! cached across a call: a shim or safe point in between may have closed
+//! the region. No site reaches a safe point (the shim contract).
+//!
 //! A body containing an inline site dereferences its vmctx: see
 //! [`inline_heap_sites`] and `CompiledLeaf::needs_vmctx`.
 
 use super::*;
 use crate::emacs_core::eval::runtime_projection::CONTEXT_TAGGED_HEAP_OFFSET;
-use crate::tagged::gc::{HEAP_JIT_BARRIER_LEN, HEAP_JIT_BARRIER_LO};
+use crate::tagged::gc::{
+    FLOAT_SLOT_BYTES, HEAP_JIT_BARRIER_LEN, HEAP_JIT_BARRIER_LO, HEAP_JIT_CONS_CUR,
+    HEAP_JIT_CONS_LIM, HEAP_JIT_FLOAT_CUR, HEAP_JIT_FLOAT_LIM,
+};
 
 thread_local! {
     /// Inline heap sites emitted in the function being lowered.
@@ -233,15 +249,182 @@ pub(crate) fn emit_inline_aset(
     true
 }
 
+/// Inline allocations emitted, process-wide (see
+/// [`INLINE_HEAP_STORES_EMITTED`]).
+#[cfg(debug_assertions)]
+pub(crate) static INLINE_ALLOCS_EMITTED: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Bump one object of `stride` bytes out of the region whose cursor and
+/// limit sit at heap offsets `cur_off`/`lim_off`: on room, advances the
+/// cursor and leaves the builder in the fast block, returning the object's
+/// address; otherwise branches to `slow`.
+fn emit_region_bump(
+    fb: &mut FunctionBuilder,
+    heap: ClifValue,
+    cur_off: usize,
+    lim_off: usize,
+    stride: usize,
+    slow: Block,
+) -> ClifValue {
+    let cur = fb
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), heap, cur_off as i32);
+    let lim = fb
+        .ins()
+        .load(types::I64, MemFlagsData::trusted(), heap, lim_off as i32);
+    // Regions are whole objects, so `cur < lim` iff one is left; a closed
+    // region is (0, 0).
+    let room = fb.ins().icmp(IntCC::UnsignedLessThan, cur, lim);
+    let fast = fb.create_block();
+    fb.ins().brif(room, fast, &[], slow, &[]);
+    fb.switch_to_block(fast);
+    fb.seal_block(fast);
+    let next = iadd_imm_p(fb, cur, stride as i64);
+    fb.ins()
+        .store(MemFlagsData::trusted(), next, heap, cur_off as i32);
+    cur
+}
+
+/// `(cons car cdr)` inline — GNU `Fcons`: bump a cell out of the open cons
+/// region and write car and cdr; an exhausted region calls
+/// `neovm_jit_cons` (cold), which refills. Returns the tagged cons. Like
+/// the shim, nothing here reaches a safe point, so the operands and the
+/// residual stack need no roots.
+pub(crate) fn emit_inline_cons(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    car: ClifValue,
+    cdr: ClifValue,
+) -> ClifValue {
+    let res = fb.declare_var(types::I64);
+    let slow = fb.create_block();
+    let merge = fb.create_block();
+    let heap = heap_ptr(fb, rt);
+    let cell = emit_region_bump(
+        fb,
+        heap,
+        HEAP_JIT_CONS_CUR,
+        HEAP_JIT_CONS_LIM,
+        core::mem::size_of::<ConsCell>(),
+        slow,
+    );
+    fb.ins().store(
+        MemFlagsData::trusted(),
+        car,
+        cell,
+        core::mem::offset_of!(ConsCell, car) as i32,
+    );
+    fb.ins().store(
+        MemFlagsData::trusted(),
+        cdr,
+        cell,
+        core::mem::offset_of!(ConsCell, cdr_or_next) as i32,
+    );
+    let tagged = bor_imm_p(fb, cell, TAG_CONS as i64);
+    fb.def_var(res, tagged);
+    fb.ins().jump(merge, &[]);
+    fb.switch_to_block(slow);
+    fb.seal_block(slow);
+    fb.set_cold_block(slow);
+    let cons = rt.refs.get(fb.func, Shim::Cons);
+    let call = fb.ins().call(cons, &[car, cdr]);
+    let boxed = fb.inst_results(call)[0];
+    fb.def_var(res, boxed);
+    fb.ins().jump(merge, &[]);
+    fb.switch_to_block(merge);
+    fb.seal_block(merge);
+    note_inline_site();
+    #[cfg(debug_assertions)]
+    INLINE_ALLOCS_EMITTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    fb.use_var(res)
+}
+
+/// Box the `f64` `value` inline — GNU `make_float`: bump a slot out of the
+/// open float region (its header was written at the region's grant, born
+/// at the current parity) and store the value; an exhausted region calls
+/// `neovm_jit_make_float` (cold). Returns the tagged float.
+pub(crate) fn emit_inline_box_float(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    value: ClifValue,
+) -> ClifValue {
+    use crate::tagged::header::FLOAT_VALUE_OFFSET;
+    let res = fb.declare_var(types::I64);
+    let slow = fb.create_block();
+    let merge = fb.create_block();
+    let heap = heap_ptr(fb, rt);
+    let slot = emit_region_bump(
+        fb,
+        heap,
+        HEAP_JIT_FLOAT_CUR,
+        HEAP_JIT_FLOAT_LIM,
+        FLOAT_SLOT_BYTES,
+        slow,
+    );
+    fb.ins()
+        .store(MemFlagsData::trusted(), value, slot, FLOAT_VALUE_OFFSET);
+    let tagged = bor_imm_p(fb, slot, crate::tagged::value::TAG_FLOAT as i64);
+    fb.def_var(res, tagged);
+    fb.ins().jump(merge, &[]);
+    fb.switch_to_block(slow);
+    fb.seal_block(slow);
+    fb.set_cold_block(slow);
+    let make_float = rt.refs.get(fb.func, Shim::MakeFloat);
+    let call = fb.ins().call(make_float, &[value]);
+    let boxed = fb.inst_results(call)[0];
+    fb.def_var(res, boxed);
+    fb.ins().jump(merge, &[]);
+    fb.switch_to_block(merge);
+    fb.seal_block(merge);
+    note_inline_site();
+    #[cfg(debug_assertions)]
+    INLINE_ALLOCS_EMITTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    fb.use_var(res)
+}
+
+/// Box `value` at a hot site: inline when the function allows it
+/// (`RtCtx::inline_alloc`), else the `neovm_jit_make_float` call.
+pub(crate) fn box_f64(fb: &mut FunctionBuilder, rt: &RtCtx, value: ClifValue) -> ClifValue {
+    if rt.inline_alloc {
+        emit_inline_box_float(fb, rt, value)
+    } else {
+        let make_float = rt.refs.get(fb.func, Shim::MakeFloat);
+        let call = fb.ins().call(make_float, &[value]);
+        fb.inst_results(call)[0]
+    }
+}
+
 /// Whether a baseline body's inline heap sites justify loading the heap
 /// pointer once at entry: two sites, or one inside a loop (the root-window
-/// hoisting rule).
-pub(crate) fn hoist_heap_ptr(ops: &[Op], has_back_edge: bool) -> bool {
-    let sites = ops.iter().filter(|op| op_is_inline_heap_site(op)).count();
+/// hoisting rule). `float_site` says whether the op at a pc is a
+/// `Float`-feedback arithmetic site (which boxes its result).
+pub(crate) fn hoist_heap_ptr(
+    ops: &[Op],
+    has_back_edge: bool,
+    inline_alloc: bool,
+    float_site: impl Fn(usize) -> bool,
+) -> bool {
+    let sites = ops
+        .iter()
+        .enumerate()
+        .filter(|&(pc, op)| op_is_inline_heap_site(op, inline_alloc, &float_site, pc))
+        .count();
     sites >= 2 || (sites == 1 && has_back_edge)
 }
 
-/// Whether the baseline lowers `op` with an inline heap site (JIT only).
-fn op_is_inline_heap_site(op: &Op) -> bool {
-    matches!(op, Op::Setcar | Op::Setcdr | Op::Aset) && jit_inline_heap_write_on()
+/// Whether the baseline lowers the `op` at `pc` with an inline heap site
+/// (JIT only).
+fn op_is_inline_heap_site(
+    op: &Op,
+    inline_alloc: bool,
+    float_site: &impl Fn(usize) -> bool,
+    pc: usize,
+) -> bool {
+    match op {
+        Op::Setcar | Op::Setcdr | Op::Aset => jit_inline_heap_write_on(),
+        Op::Cons => inline_alloc,
+        Op::Add | Op::Sub | Op::Mul | Op::Div => inline_alloc && float_site(pc),
+        _ => false,
+    }
 }
