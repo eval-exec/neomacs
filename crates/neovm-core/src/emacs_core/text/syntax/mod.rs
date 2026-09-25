@@ -3891,6 +3891,29 @@ pub(crate) fn maybe_syntax_propertize_for_scan(
     Ok(Value::NIL)
 }
 
+/// Whether [`maybe_syntax_propertize_for_scan`] to `target_char_pos` would
+/// call Lisp, given that `parse-sexp-lookup-properties` is non-nil: when
+/// `internal--syntax-propertize` is defined and `syntax-propertize--done`
+/// does not already cover the target. A builtin that sees `false` may skip
+/// the call (and everything it would re-read after Lisp ran) with nothing
+/// observable changed.
+pub(crate) fn syntax_propertize_would_run(
+    eval: &super::eval::Context,
+    target_char_pos: usize,
+) -> bool {
+    if eval
+        .obarray
+        .symbol_function_id(internal_syntax_propertize_sym())
+        .is_none()
+    {
+        return false;
+    }
+    !matches!(
+        eval.builtin_var_value(syntax_propertize_done_sym()).map(|done| done.kind()),
+        Some(ValueKind::Fixnum(done)) if done >= target_char_pos as i64
+    )
+}
+
 /// The (exclusive, 0-based) character position up to which syntax-table
 /// properties are known to be set -- GNU `gl_state.e_property` after
 /// `parse_sexp_propertize`, read back from `syntax-propertize--done` (a

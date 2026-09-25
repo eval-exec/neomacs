@@ -1194,6 +1194,13 @@ pub(crate) fn builtin_re_search_forward_4(
     let case_fold = dynamic_or_global_symbol_value(eval, SearchStateVariable::CaseFoldSearch)
         .map(|v| !v.is_nil())
         .unwrap_or(true);
+    if let Some(result) =
+        buffer_regexp_search_fast(eval, &args, SearchKind::ForwardRegexp, case_fold, false)
+    {
+        // As below: a quit detected during the match wins over its result.
+        eval.maybe_quit()?;
+        return result;
+    }
     let prep =
         prepare_buffer_regexp_search(eval, &args, SearchKind::ForwardRegexp, case_fold, false)?;
     let ready = resolve_regexp_search_prep(eval, &args, case_fold, false, prep)?;
@@ -1264,7 +1271,7 @@ fn re_search_forward_with_state_posix_and_syntax_properties(
     posix: bool,
     match_context: BufferRegexpMatchContext<'_>,
     buffers: &mut crate::buffer::BufferManager,
-    mut match_data: Option<&mut Option<super::regex::MatchData>>,
+    match_data: Option<&mut Option<super::regex::MatchData>>,
     args: &[Value],
     compiled: Option<&crate::emacs_core::regex_emacs::CompiledPattern>,
 ) -> EvalResult {
@@ -1275,8 +1282,71 @@ fn re_search_forward_with_state_posix_and_syntax_properties(
     };
     expect_args_range(name, args, 1, 4)?;
     let pattern = expect_lisp_string(&args[0])?;
-    let (current_id, opts, start_pt, start_char) =
-        current_search_context_in_manager(buffers, args, SearchKind::ForwardRegexp)?;
+    let context = BufferSearchContext::current(buffers, args, SearchKind::ForwardRegexp)?;
+    run_buffer_regexp_search(
+        case_fold,
+        posix,
+        match_context,
+        buffers,
+        match_data,
+        args,
+        pattern,
+        compiled,
+        context,
+    )
+}
+
+/// One buffer search's parsed arguments and starting state: GNU
+/// `search_command`'s locals, computed once per call.
+#[derive(Clone, Copy)]
+struct BufferSearchContext {
+    buffer: crate::buffer::BufferId,
+    opts: SearchOptions,
+    start_pt: EmacsBytePos,
+    start_char: i64,
+}
+
+impl BufferSearchContext {
+    /// Parse COUNT, NOERROR and BOUND against the current buffer, in GNU's
+    /// order, signalling as `search_command` does.
+    fn current(
+        buffers: &crate::buffer::BufferManager,
+        args: &[Value],
+        kind: SearchKind,
+    ) -> Result<Self, Flow> {
+        let (buffer, opts, start_pt, start_char) =
+            current_search_context_in_manager(buffers, args, kind)?;
+        Ok(Self {
+            buffer,
+            opts,
+            start_pt,
+            start_char,
+        })
+    }
+}
+
+/// The search loop shared by the four buffer regexp builtins: COUNT
+/// matches in the parsed direction, point and match data committed after
+/// each, GNU's failure handling after the last. COMPILED is the pattern the
+/// caller already looked up, or `None` to look PATTERN up in the matcher.
+#[allow(clippy::too_many_arguments)] // matching state stays explicit at the GNU-regexp boundary
+fn run_buffer_regexp_search(
+    case_fold: bool,
+    posix: bool,
+    match_context: BufferRegexpMatchContext<'_>,
+    buffers: &mut crate::buffer::BufferManager,
+    mut match_data: Option<&mut Option<super::regex::MatchData>>,
+    args: &[Value],
+    pattern: &crate::heap_types::LispString,
+    compiled: Option<&crate::emacs_core::regex_emacs::CompiledPattern>,
+    context: BufferSearchContext,
+) -> EvalResult {
+    let BufferSearchContext {
+        buffer: current_id,
+        opts,
+        start_pt,
+        start_char,
+    } = context;
     if opts.steps == 0 {
         commit_zero_count_search(buffers, current_id, start_pt, match_data);
         return Ok(Value::fixnum(start_char));
@@ -1367,6 +1437,109 @@ fn re_search_forward_with_state_posix_and_syntax_properties(
     buffer_byte_to_char_result_in_manager(buffers, current_id, end)
 }
 
+/// U2.8 front end of a buffer regexp search: GNU `search_command` parses its
+/// arguments and compiles the pattern once, then matches. The general path
+/// below does that twice or three times -- a preparation pass
+/// (`prepare_buffer_regexp_search`) and the search itself each parse the
+/// arguments and probe the pattern cache, and both read the syntax switches
+/// -- because preparation may run `syntax-propertize` (Lisp), after which
+/// everything must be re-read.
+///
+/// When no Lisp can run -- the pattern reads no buffer syntax, or
+/// `parse-sexp-lookup-properties` is nil, or `syntax-propertize--done`
+/// already covers the search's reach, or nothing defines
+/// `internal--syntax-propertize` -- this parses once, probes once, and
+/// matches with that. A pattern that reads no syntax also skips the
+/// `syntax-table` property resolver and the word-boundary tables, which the
+/// matcher would never consult.
+///
+/// `None`, having changed nothing observable, sends the call to the general
+/// path: the knob is off, REGEXP is not a string, COUNT is 0, or
+/// `syntax-propertize` may have to run. Errors come out in GNU's order and
+/// are the general path's own: argument checks, then the compile.
+fn buffer_regexp_search_fast(
+    eval: &mut super::eval::Context,
+    args: &[Value],
+    kind: SearchKind,
+    case_fold: bool,
+    posix: bool,
+) -> Option<EvalResult> {
+    if !crate::emacs_core::eval::builtin_frontend_on() || !args[0].is_string() {
+        return None;
+    }
+    let context = match BufferSearchContext::current(&eval.buffers, args, kind) {
+        Ok(context) => context,
+        Err(flow) => return Some(Err(flow)),
+    };
+    if context.opts.steps == 0 {
+        return None;
+    }
+    let compiled = {
+        let pattern = expect_lisp_string(&args[0]).ok()?;
+        let buf = eval.buffers.get(context.buffer)?;
+        match super::regex::buffer_regexp_syntax_dependency_compiled(buf, pattern, case_fold, posix)
+        {
+            Ok((_, compiled)) => compiled,
+            Err(msg) => return Some(Err(regex_error_signal(msg))),
+        }
+    };
+    let honor = compiled.uses_syntax
+        && crate::emacs_core::syntax::parse_sexp_lookup_properties_enabled(eval);
+    if honor {
+        let buf = eval.buffers.get(context.buffer)?;
+        // 1-based point-max, the conservative target; a BOUND caps a
+        // forward search's reach at BOUND + 1, a backward search reaches
+        // point: exactly the targets the general path propertizes to.
+        let accessible_target = buf.accessible_char_region().end().get() + 1;
+        let target = match context.opts.direction {
+            SearchDirection::Forward => context
+                .opts
+                .bound
+                .map(|bound| buf.emacs_byte_pos_to_char_pos_clamped(bound).get() + 2)
+                .map_or(accessible_target, |target| {
+                    target.clamp(1, accessible_target)
+                }),
+            SearchDirection::Backward => {
+                (context.start_char.max(0) as usize + 1).clamp(1, accessible_target)
+            }
+        };
+        if crate::emacs_core::syntax::syntax_propertize_would_run(eval, target) {
+            return None;
+        }
+    }
+    let word_boundary = if compiled.uses_syntax {
+        current_word_boundary_lookup(eval)
+    } else {
+        crate::emacs_core::regex_emacs::WordBoundaryLookup::default()
+    };
+    let syntax_properties = if honor {
+        BufferRegexpSyntaxProperties::Honor
+    } else {
+        BufferRegexpSyntaxProperties::Ignore
+    };
+    let match_context = current_buffer_regexp_match_context(
+        &eval.obarray,
+        &eval.buffers,
+        word_boundary,
+        syntax_properties,
+    );
+    let inhibit_changing = read_inhibit_changing_match_data(eval);
+    let match_data = (!inhibit_changing).then_some(&mut eval.match_data);
+    let pattern = expect_lisp_string(&args[0]).ok()?;
+    note_frontend_fast_call();
+    Some(run_buffer_regexp_search(
+        case_fold,
+        posix,
+        match_context,
+        &mut eval.buffers,
+        match_data,
+        args,
+        pattern,
+        Some(&compiled),
+        context,
+    ))
+}
+
 pub(crate) fn builtin_re_search_backward(
     eval: &mut super::eval::Context,
     args: Vec<Value>,
@@ -1375,6 +1548,12 @@ pub(crate) fn builtin_re_search_backward(
     let case_fold = dynamic_or_global_symbol_value(eval, SearchStateVariable::CaseFoldSearch)
         .map(|v| !v.is_nil())
         .unwrap_or(true);
+    if let Some(result) =
+        buffer_regexp_search_fast(eval, &args, SearchKind::BackwardRegexp, case_fold, false)
+    {
+        eval.maybe_quit()?;
+        return result;
+    }
     let prep =
         prepare_buffer_regexp_search(eval, &args, SearchKind::BackwardRegexp, case_fold, false)?;
     let ready = resolve_regexp_search_prep(eval, &args, case_fold, false, prep)?;
@@ -1419,7 +1598,7 @@ fn re_search_backward_with_state_posix_and_syntax_properties(
     posix: bool,
     match_context: BufferRegexpMatchContext<'_>,
     buffers: &mut crate::buffer::BufferManager,
-    mut match_data: Option<&mut Option<super::regex::MatchData>>,
+    match_data: Option<&mut Option<super::regex::MatchData>>,
     args: &[Value],
     compiled: Option<&crate::emacs_core::regex_emacs::CompiledPattern>,
 ) -> EvalResult {
@@ -1430,96 +1609,18 @@ fn re_search_backward_with_state_posix_and_syntax_properties(
     };
     expect_args_range(name, args, 1, 4)?;
     let pattern = expect_lisp_string(&args[0])?;
-    let (current_id, opts, start_pt, start_char) =
-        current_search_context_in_manager(buffers, args, SearchKind::BackwardRegexp)?;
-    if opts.steps == 0 {
-        commit_zero_count_search(buffers, current_id, start_pt, match_data);
-        return Ok(Value::fixnum(start_char));
-    }
-
-    let mut regs = super::regex::SearchRegisters::default();
-    let mut last_pos = None;
-    for _ in 0..opts.steps {
-        let result = {
-            let buf = buffers
-                .get_mut(current_id)
-                .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
-            match opts.direction {
-                SearchDirection::Forward => match compiled {
-                    Some(compiled) => super::regex::re_search_forward_compiled_into(
-                        buf,
-                        compiled,
-                        opts.bound.map(|bound| bound.get()),
-                        false,
-                        match_context,
-                        &mut regs,
-                    ),
-                    None => super::regex::re_search_forward_lisp_with_posix_into(
-                        buf,
-                        pattern,
-                        opts.bound.map(|bound| bound.get()),
-                        false,
-                        case_fold,
-                        posix,
-                        match_context,
-                        &mut regs,
-                    ),
-                },
-                SearchDirection::Backward => match compiled {
-                    Some(compiled) => super::regex::re_search_backward_compiled_into(
-                        buf,
-                        compiled,
-                        opts.bound.map(|bound| bound.get()),
-                        false,
-                        match_context,
-                        &mut regs,
-                    ),
-                    None => super::regex::re_search_backward_lisp_with_posix_into(
-                        buf,
-                        pattern,
-                        opts.bound.map(|bound| bound.get()),
-                        false,
-                        case_fold,
-                        posix,
-                        match_context,
-                        &mut regs,
-                    ),
-                },
-            }
-        };
-
-        match result {
-            Ok(Some(point)) => {
-                last_pos = Some(commit_buffer_search_success(
-                    buffers,
-                    current_id,
-                    point,
-                    &regs,
-                    match_data.as_deref_mut(),
-                )?)
-            }
-            Ok(None) => {
-                return Err(signal(LispCondition::SearchFailed, vec![args[0]]));
-            }
-            Err(msg) if msg != "Search failed" => {
-                let _ = buffers.goto_buffer_emacs_byte_pos(current_id, start_pt);
-                return Err(regex_error_signal(msg));
-            }
-            Err(_) => {
-                return handle_search_failure_in_manager(
-                    buffers,
-                    current_id,
-                    args[0],
-                    opts,
-                    start_pt,
-                    SearchErrorKind::NotFound,
-                );
-            }
-        }
-    }
-
-    let end = last_pos.expect("search loop should produce at least one match");
-    buffer_byte_to_char_result_in_manager(buffers, current_id, end)
+    let context = BufferSearchContext::current(buffers, args, SearchKind::BackwardRegexp)?;
+    run_buffer_regexp_search(
+        case_fold,
+        posix,
+        match_context,
+        buffers,
+        match_data,
+        args,
+        pattern,
+        compiled,
+        context,
+    )
 }
 
 pub(crate) fn builtin_posix_search_forward(
@@ -1530,6 +1631,11 @@ pub(crate) fn builtin_posix_search_forward(
     let case_fold = dynamic_or_global_symbol_value(eval, SearchStateVariable::CaseFoldSearch)
         .map(|v| !v.is_nil())
         .unwrap_or(true);
+    if let Some(result) =
+        buffer_regexp_search_fast(eval, &args, SearchKind::ForwardRegexp, case_fold, true)
+    {
+        return result;
+    }
     let prep =
         prepare_buffer_regexp_search(eval, &args, SearchKind::ForwardRegexp, case_fold, true)?;
     let ready = resolve_regexp_search_prep(eval, &args, case_fold, true, prep)?;
@@ -1571,6 +1677,11 @@ pub(crate) fn builtin_posix_search_backward(
     let case_fold = dynamic_or_global_symbol_value(eval, SearchStateVariable::CaseFoldSearch)
         .map(|v| !v.is_nil())
         .unwrap_or(true);
+    if let Some(result) =
+        buffer_regexp_search_fast(eval, &args, SearchKind::BackwardRegexp, case_fold, true)
+    {
+        return result;
+    }
     let prep =
         prepare_buffer_regexp_search(eval, &args, SearchKind::BackwardRegexp, case_fold, true)?;
     let ready = resolve_regexp_search_prep(eval, &args, case_fold, true, prep)?;
@@ -3198,3 +3309,19 @@ pub(crate) fn builtin_replace_match(
 #[cfg(test)]
 #[path = "tests/search.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "tests/search_frontend.rs"]
+mod search_frontend_tests;
+
+#[cfg(test)]
+thread_local! {
+    /// Test hook: calls a U2.8 front-end fast path answered.
+    pub(crate) static FRONTEND_FAST_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[inline(always)]
+fn note_frontend_fast_call() {
+    #[cfg(test)]
+    FRONTEND_FAST_CALLS.with(|calls| calls.set(calls.get() + 1));
+}
