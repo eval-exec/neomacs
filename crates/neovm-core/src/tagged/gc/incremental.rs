@@ -226,188 +226,43 @@ impl TaggedHeap {
         //    incremental half of the live-bytes recompute
         //    (`finish_incremental_sweep`). --
         let mut float_freed = 0usize;
-        {
-            let mut swept_pages = 0usize;
-            while swept_pages < budget && self.sweep_float_page_cursor < self.sweep_float_page_end {
-                let idx = self.sweep_float_page_cursor;
-                let (live, freed) = self.sweep_arena_pages_ranges(
-                    (idx, idx + 1),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                );
-                self.sweep_noncons_live_bytes = self.sweep_noncons_live_bytes.saturating_add(live);
-                float_freed += freed;
-                self.sweep_float_page_cursor += 1;
-                swept_pages += 1;
-            }
-            let mut swept_pages = 0usize;
-            while swept_pages < budget && self.sweep_string_page_cursor < self.sweep_string_page_end
-            {
-                let idx = self.sweep_string_page_cursor;
-                let (live, freed) = self.sweep_arena_pages_ranges(
-                    (0, 0),
-                    (idx, idx + 1),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                );
-                self.sweep_noncons_live_bytes = self.sweep_noncons_live_bytes.saturating_add(live);
-                float_freed += freed;
-                self.sweep_string_page_cursor += 1;
-                swept_pages += 1;
-            }
-            let mut swept_pages = 0usize;
-            while swept_pages < budget && self.sweep_vector_page_cursor < self.sweep_vector_page_end
-            {
-                let idx = self.sweep_vector_page_cursor;
-                let (live, freed) = self.sweep_arena_pages_ranges(
-                    (0, 0),
-                    (0, 0),
-                    (idx, idx + 1),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                );
-                self.sweep_noncons_live_bytes = self.sweep_noncons_live_bytes.saturating_add(live);
-                float_freed += freed;
-                self.sweep_vector_page_cursor += 1;
-                swept_pages += 1;
-            }
-            let mut swept_pages = 0usize;
-            while swept_pages < budget
-                && self.sweep_bytecode_page_cursor < self.sweep_bytecode_page_end
-            {
-                let idx = self.sweep_bytecode_page_cursor;
-                let (live, freed) = self.sweep_arena_pages_ranges(
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (idx, idx + 1),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                );
-                self.sweep_noncons_live_bytes = self.sweep_noncons_live_bytes.saturating_add(live);
-                float_freed += freed;
-                self.sweep_bytecode_page_cursor += 1;
-                swept_pages += 1;
-            }
-            let mut swept_pages = 0usize;
-            while swept_pages < budget && self.sweep_lambda_page_cursor < self.sweep_lambda_page_end
-            {
-                let idx = self.sweep_lambda_page_cursor;
-                let (live, freed) = self.sweep_arena_pages_ranges(
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (idx, idx + 1),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                );
-                self.sweep_noncons_live_bytes = self.sweep_noncons_live_bytes.saturating_add(live);
-                float_freed += freed;
-                self.sweep_lambda_page_cursor += 1;
-                swept_pages += 1;
-            }
-            let mut swept_pages = 0usize;
-            while swept_pages < budget && self.sweep_macro_page_cursor < self.sweep_macro_page_end {
-                let idx = self.sweep_macro_page_cursor;
-                let (live, freed) = self.sweep_arena_pages_ranges(
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (idx, idx + 1),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                );
-                self.sweep_noncons_live_bytes = self.sweep_noncons_live_bytes.saturating_add(live);
-                float_freed += freed;
-                self.sweep_macro_page_cursor += 1;
-                swept_pages += 1;
-            }
-            let mut swept_pages = 0usize;
-            while swept_pages < budget && self.sweep_record_page_cursor < self.sweep_record_page_end
-            {
-                let idx = self.sweep_record_page_cursor;
-                let (live, freed) = self.sweep_arena_pages_ranges(
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (idx, idx + 1),
-                    (0, 0),
-                    (0, 0),
-                );
-                self.sweep_noncons_live_bytes = self.sweep_noncons_live_bytes.saturating_add(live);
-                float_freed += freed;
-                self.sweep_record_page_cursor += 1;
-                swept_pages += 1;
-            }
-            let mut swept_pages = 0usize;
-            while swept_pages < budget
-                && self.sweep_symbol_with_pos_page_cursor < self.sweep_symbol_with_pos_page_end
-            {
-                let idx = self.sweep_symbol_with_pos_page_cursor;
-                let (live, freed) = self.sweep_arena_pages_ranges(
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (idx, idx + 1),
-                    (0, 0),
-                );
-                self.sweep_noncons_live_bytes = self.sweep_noncons_live_bytes.saturating_add(live);
-                float_freed += freed;
-                self.sweep_symbol_with_pos_page_cursor += 1;
-                swept_pages += 1;
-            }
-            let mut swept_pages = 0usize;
-            while swept_pages < budget && self.sweep_marker_page_cursor < self.sweep_marker_page_end
-            {
-                let idx = self.sweep_marker_page_cursor;
-                let (live, freed) = self.sweep_arena_pages_ranges(
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (0, 0),
-                    (idx, idx + 1),
-                );
-                self.sweep_noncons_live_bytes = self.sweep_noncons_live_bytes.saturating_add(live);
-                float_freed += freed;
-                self.sweep_marker_page_cursor += 1;
-                swept_pages += 1;
-            }
+        // One class at a time, up to `budget` pages each, behind its own
+        // cursor. `$field` names both the `ArenaSweepRanges` field and the
+        // cursor/end pair, so a class can never sweep another's pages.
+        macro_rules! sweep_class_pages {
+            ($field:ident, $cursor:ident, $end:ident) => {{
+                let mut swept_pages = 0usize;
+                while swept_pages < budget && self.$cursor < self.$end {
+                    let idx = self.$cursor;
+                    let (live, freed) = self.sweep_arena_pages_ranges(ArenaSweepRanges {
+                        $field: PageRange::one(idx),
+                        ..ArenaSweepRanges::default()
+                    });
+                    self.sweep_noncons_live_bytes =
+                        self.sweep_noncons_live_bytes.saturating_add(live);
+                    float_freed += freed;
+                    self.$cursor += 1;
+                    swept_pages += 1;
+                }
+            }};
         }
+        sweep_class_pages!(float, sweep_float_page_cursor, sweep_float_page_end);
+        sweep_class_pages!(string, sweep_string_page_cursor, sweep_string_page_end);
+        sweep_class_pages!(vector, sweep_vector_page_cursor, sweep_vector_page_end);
+        sweep_class_pages!(
+            bytecode,
+            sweep_bytecode_page_cursor,
+            sweep_bytecode_page_end
+        );
+        sweep_class_pages!(lambda, sweep_lambda_page_cursor, sweep_lambda_page_end);
+        sweep_class_pages!(macro_, sweep_macro_page_cursor, sweep_macro_page_end);
+        sweep_class_pages!(record, sweep_record_page_cursor, sweep_record_page_end);
+        sweep_class_pages!(
+            symbol_with_pos,
+            sweep_symbol_with_pos_page_cursor,
+            sweep_symbol_with_pos_page_end
+        );
+        sweep_class_pages!(marker, sweep_marker_page_cursor, sweep_marker_page_end);
         // -- non-cons: reclaim more objects per slice than cons blocks, since a
         //    cons block holds thousands of cells while a non-cons node is one
         //    object (with a heavier per-object free). --
@@ -1279,45 +1134,40 @@ impl TaggedHeap {
     /// registry.
     ///
     /// Returns `(survivor bytes, slots freed)` summed over the classes.
-    // One `(start, end)` per size class — a mechanical fan-out over the
-    // per-class arenas, not distinct conceptual parameters. The eager path
-    // passes every class's full range; the incremental path passes one real
-    // range and `(0, 0)` for the rest.
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn sweep_arena_pages_ranges(
-        &mut self,
-        float_range: (usize, usize),
-        string_range: (usize, usize),
-        vector_range: (usize, usize),
-        bytecode_range: (usize, usize),
-        lambda_range: (usize, usize),
-        macro_range: (usize, usize),
-        record_range: (usize, usize),
-        symbol_with_pos_range: (usize, usize),
-        marker_range: (usize, usize),
-    ) -> (usize, usize) {
+    pub(super) fn sweep_arena_pages_ranges(&mut self, ranges: ArenaSweepRanges) -> (usize, usize) {
         let parity = self.mark_parity;
+        let ArenaSweepRanges {
+            float,
+            string,
+            vector,
+            bytecode,
+            lambda,
+            macro_,
+            record,
+            symbol_with_pos,
+            marker,
+        } = ranges;
         let (fl, ff) = self
             .float_arena
-            .sweep_range(float_range.0, float_range.1, parity, |_| {});
-        let (sl, sf) =
-            self.string_arena
-                .sweep_range(string_range.0, string_range.1, parity, |_| {});
+            .sweep_range(float.start, float.end, parity, |_| {});
+        let (sl, sf) = self
+            .string_arena
+            .sweep_range(string.start, string.end, parity, |_| {});
         let (bl, bf) =
             self.bytecode_arena
-                .sweep_range(bytecode_range.0, bytecode_range.1, parity, |_| {});
-        let (lal, laf) =
-            self.lambda_arena
-                .sweep_range(lambda_range.0, lambda_range.1, parity, |_| {});
+                .sweep_range(bytecode.start, bytecode.end, parity, |_| {});
+        let (lal, laf) = self
+            .lambda_arena
+            .sweep_range(lambda.start, lambda.end, parity, |_| {});
         let (mal, maf) = self
             .macro_arena
-            .sweep_range(macro_range.0, macro_range.1, parity, |_| {});
-        let (rel, ref_) =
-            self.record_arena
-                .sweep_range(record_range.0, record_range.1, parity, |_| {});
+            .sweep_range(macro_.start, macro_.end, parity, |_| {});
+        let (rel, ref_) = self
+            .record_arena
+            .sweep_range(record.start, record.end, parity, |_| {});
         let (swl, swf) = self.symbol_with_pos_arena.sweep_range(
-            symbol_with_pos_range.0,
-            symbol_with_pos_range.1,
+            symbol_with_pos.start,
+            symbol_with_pos.end,
             parity,
             |_| {},
         );
@@ -1325,15 +1175,15 @@ impl TaggedHeap {
         // marker from its buffer chain (it runs before the first sweep slice
         // and before the eager sweep), so freeing the slot here cannot leave
         // a dangling chain link.
-        let (mkl, mkf) =
-            self.marker_arena
-                .sweep_range(marker_range.0, marker_range.1, parity, |_| {});
+        let (mkl, mkf) = self
+            .marker_arena
+            .sweep_range(marker.start, marker.end, parity, |_| {});
         let TaggedHeap {
             vector_arena,
             vector_object_addrs,
             ..
         } = self;
-        let (vl, vf) = vector_arena.sweep_range(vector_range.0, vector_range.1, parity, |addr| {
+        let (vl, vf) = vector_arena.sweep_range(vector.start, vector.end, parity, |addr| {
             let removed = vector_object_addrs.remove(&addr);
             debug_assert!(removed, "freed page vector was not in the registry");
         });

@@ -948,6 +948,50 @@ impl<T: PagedObject> Drop for ObjectArena<T> {
     }
 }
 
+/// Pages `[start, end)` of one class arena. The default is the empty range:
+/// a class the sweep call does not visit.
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub(super) struct PageRange {
+    pub(super) start: usize,
+    pub(super) end: usize,
+}
+
+impl PageRange {
+    /// The single page `idx`: one cooperative sweep-slice step.
+    #[inline]
+    pub(super) fn one(idx: usize) -> Self {
+        Self {
+            start: idx,
+            end: idx + 1,
+        }
+    }
+
+    /// Every page of an arena that currently has `len` pages.
+    #[inline]
+    pub(super) fn all(len: usize) -> Self {
+        Self { start: 0, end: len }
+    }
+}
+
+/// The per-class page ranges one `sweep_arena_pages_ranges` call visits,
+/// named per class so a caller cannot swap two classes by position (the
+/// positional-tuple form took nine `(usize, usize)` pairs in a row). The
+/// eager sweep sets every field to its class's full range; a cooperative
+/// slice step sets one field to [`PageRange::one`] and leaves the rest
+/// empty (`..Default::default()`).
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub(super) struct ArenaSweepRanges {
+    pub(super) float: PageRange,
+    pub(super) string: PageRange,
+    pub(super) vector: PageRange,
+    pub(super) bytecode: PageRange,
+    pub(super) lambda: PageRange,
+    pub(super) macro_: PageRange,
+    pub(super) record: PageRange,
+    pub(super) symbol_with_pos: PageRange,
+    pub(super) marker: PageRange,
+}
+
 pub(super) struct MappedConsRange {
     pub(super) start: *mut ConsCell,
     pub(super) len: usize,

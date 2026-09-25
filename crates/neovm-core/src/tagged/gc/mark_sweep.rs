@@ -1681,17 +1681,17 @@ impl TaggedHeap {
         // like the list survivors' — `live_bytes` drives the adaptive pacer
         // (`effective_gc_threshold_bytes`), so an undercount here means
         // overtriggering.
-        let (page_live_bytes, _page_freed) = self.sweep_arena_pages_ranges(
-            (0, self.float_arena.pages.len()),
-            (0, self.string_arena.pages.len()),
-            (0, self.vector_arena.pages.len()),
-            (0, self.bytecode_arena.pages.len()),
-            (0, self.lambda_arena.pages.len()),
-            (0, self.macro_arena.pages.len()),
-            (0, self.record_arena.pages.len()),
-            (0, self.symbol_with_pos_arena.pages.len()),
-            (0, self.marker_arena.pages.len()),
-        );
+        let (page_live_bytes, _page_freed) = self.sweep_arena_pages_ranges(ArenaSweepRanges {
+            float: PageRange::all(self.float_arena.pages.len()),
+            string: PageRange::all(self.string_arena.pages.len()),
+            vector: PageRange::all(self.vector_arena.pages.len()),
+            bytecode: PageRange::all(self.bytecode_arena.pages.len()),
+            lambda: PageRange::all(self.lambda_arena.pages.len()),
+            macro_: PageRange::all(self.macro_arena.pages.len()),
+            record: PageRange::all(self.record_arena.pages.len()),
+            symbol_with_pos: PageRange::all(self.symbol_with_pos_arena.pages.len()),
+            marker: PageRange::all(self.marker_arena.pages.len()),
+        });
         // `sweep_cons` above already released the blocks with no survivors,
         // in its own pass, the way GNU's `sweep_conses` does.
         let _released_object_pages = self.release_empty_object_pages();

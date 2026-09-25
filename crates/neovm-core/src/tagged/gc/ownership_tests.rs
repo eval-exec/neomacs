@@ -62,17 +62,10 @@ fn dirty_owner_tracking_is_cleared_at_begin_so_freed_slot_reuse_is_not_deduped()
     // --- Sweep the vector arena: O and Q are unmarked ⇒ freed, their slots
     //     returned to the class free list. ---
     let vpages = heap.vector_arena.pages.len();
-    let (_live, freed) = heap.sweep_arena_pages_ranges(
-        (0, 0),
-        (0, 0),
-        (0, vpages),
-        (0, 0),
-        (0, 0),
-        (0, 0),
-        (0, 0),
-        (0, 0),
-        (0, 0),
-    );
+    let (_live, freed) = heap.sweep_arena_pages_ranges(ArenaSweepRanges {
+        vector: PageRange::all(vpages),
+        ..ArenaSweepRanges::default()
+    });
     assert!(
         freed >= 2,
         "the sweep must reclaim the two unrooted garbage vectors (freed={freed})",
