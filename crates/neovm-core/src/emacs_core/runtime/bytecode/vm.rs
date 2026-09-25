@@ -3617,7 +3617,16 @@ impl<'a> Vm<'a> {
         target: usize,
         aux_stack: &mut InterpreterFrameAuxStack,
     ) -> OsrOutcome {
+        use crate::emacs_core::jit::cache::OsrProbe;
         use crate::emacs_core::jit::compile::{DeoptResume, NativeRun, stash_pending_flow};
+        // The OSR leaf is compiling in the background (`jit::bg`): interpret
+        // on, and look again at the next hot wrap; no snapshot, no latch.
+        if crate::emacs_core::jit::cache::osr_compile_in_flight(func, target) {
+            return OsrOutcome::Interpret {
+                pc: target,
+                retry: OsrRetry::Allowed,
+            };
+        }
         // Publishing the active cursor makes the buffer's end authoritative.
         // Derive its depth and borrow the bindings here, keeping both out of
         // the branch macro's hot register allocation.
@@ -3625,16 +3634,25 @@ impl<'a> Vm<'a> {
         let bind_stack = &mut aux_stack.current_mut().bind_stack;
         let entry_spec_depth = self.ctx.specpdl.len();
         let ctx_ptr: *mut crate::emacs_core::eval::Context = &mut *self.ctx;
-        let resume = match crate::emacs_core::jit::cache::try_run_osr(
+        let resume = match crate::emacs_core::jit::cache::try_run_osr_probe(
             ctx_ptr, func, target, &snapshot, bind_stack,
         ) {
-            Some(NativeRun::Ok(bits)) => return OsrOutcome::Returned(Value::from_bits(bits)),
-            Some(NativeRun::Signal) => return OsrOutcome::Exited,
-            Some(NativeRun::DeoptAt(resume)) => resume,
-            Some(NativeRun::Deopt) | None => {
+            OsrProbe::Ran(NativeRun::Ok(bits)) => {
+                return OsrOutcome::Returned(Value::from_bits(bits));
+            }
+            OsrProbe::Ran(NativeRun::Signal) => return OsrOutcome::Exited,
+            OsrProbe::Ran(NativeRun::DeoptAt(resume)) => resume,
+            OsrProbe::Ran(NativeRun::Deopt) | OsrProbe::NoTransfer => {
                 return OsrOutcome::Interpret {
                     pc: target,
                     retry: OsrRetry::Latch,
+                };
+            }
+            // The compile just went to the background: as above.
+            OsrProbe::Pending => {
+                return OsrOutcome::Interpret {
+                    pc: target,
+                    retry: OsrRetry::Allowed,
                 };
             }
         };

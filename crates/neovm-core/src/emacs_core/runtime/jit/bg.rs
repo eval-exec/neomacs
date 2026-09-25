@@ -13,7 +13,7 @@
 //! |---|---|---|
 //! | `legacy` (default) | `Legacy` | the persistent per-thread module defines each leaf in place (the B4 path, unchanged) |
 //! | `sync` | `Sync` | the split, run in line: the eval thread's backend compiles each packaged function at once. Deterministic |
-//! | `on` | `Threaded` | entry tier-ups and first-sight compiles hand their package to a worker thread (`bg::worker`); the function stays interpreted (a native caller takes the strict call path) until its leaf is installed; every other compile runs as under `sync`. x86-64 Linux; elsewhere `on` is `sync` |
+//! | `on` | `Threaded` | entry tier-ups, first-sight and OSR compiles hand their package to a worker thread (`bg::worker`); the function stays interpreted (a native caller takes the strict call path; a hot loop interprets on without latching) until its leaf is installed; re-tiers and the AOT drain run as under `sync`. x86-64 Linux; elsewhere `on` is `sync` |
 //!
 //! Whatever the mode, the CLIF and the machine code are the same, and so is
 //! everything Lisp can observe: the mode moves where code is produced, never
@@ -137,11 +137,13 @@ pub(crate) fn worker_threads() -> usize {
 #[strum(serialize_all = "snake_case")]
 #[repr(u8)]
 pub(crate) enum JobClass {
+    /// An on-stack-replacement leaf: a hot loop interprets until it lands.
+    Osr = 0,
     /// A speculated call site's first call into an uncompiled callee: native
     /// callers take the strict path until it lands.
-    FirstSight = 0,
+    FirstSight = 1,
     /// A `dispatch_sized` tier-up, or the re-attempt after a deferral.
-    Entry = 1,
+    Entry = 2,
 }
 
 impl JobClass {
@@ -153,10 +155,8 @@ impl JobClass {
         match origin {
             CompileOrigin::Dispatch | CompileOrigin::DeferralExpired => Some(JobClass::Entry),
             CompileOrigin::FirstSight => Some(JobClass::FirstSight),
-            CompileOrigin::Retier
-            | CompileOrigin::Osr
-            | CompileOrigin::AotDrain
-            | CompileOrigin::Direct => None,
+            CompileOrigin::Osr => Some(JobClass::Osr),
+            CompileOrigin::Retier | CompileOrigin::AotDrain | CompileOrigin::Direct => None,
         }
     }
 }
@@ -318,6 +318,26 @@ impl PendingJob {
             saved_hold,
             backoff: Cell::new(FIRST_BACKOFF.saturating_mul(2)),
             requested_heat: heat,
+            enqueued_at: code.enqueued_at,
+            settled: Cell::new(false),
+        })
+    }
+
+    /// The pending entry for an OSR leaf: no tier-up hold (the loop's own
+    /// back-edge wraps pace the probes) and no drain list (the OSR cache
+    /// drains its own).
+    pub(crate) fn new_osr(id: u64, leaf: CompiledLeaf, code: DeferredCode) -> Box<PendingJob> {
+        PENDING_COUNT.with(|c| c.set(c.get() + 1));
+        Box::new(PendingJob {
+            id,
+            leaf: Some(leaf),
+            spec_bindings: code.spec_bindings,
+            cell: code.cell,
+            class: code.class,
+            heap: crate::tagged::gc::current_tagged_heap_identity(),
+            saved_hold: 0,
+            backoff: Cell::new(0),
+            requested_heat: 0,
             enqueued_at: code.enqueued_at,
             settled: Cell::new(false),
         })
@@ -511,6 +531,9 @@ pub(crate) struct BgStats {
     pub(crate) latency_us: [u64; 8],
     /// Probes that found a job still running.
     pub(crate) pending_probes: u64,
+    /// Hot back-edge wraps that found their OSR leaf still compiling (and
+    /// interpreted on without latching).
+    pub(crate) osr_waits: u64,
     /// Heat a function gained between its request and its install (the
     /// calls it interpreted meanwhile), over the installs that know it.
     pub(crate) interp_calls_while_pending: u64,
@@ -583,7 +606,7 @@ impl BgReport {
         format!(
             "mode={} workers={} enqueued={} installed={} discarded={discarded} backend_us={} \
              backend_max_us={} queue_wait_us={} latency_hist_us[<100,<250,<500,<1ms,<2.5ms,<5ms,<10ms,>=10ms]={latency} \
-             pending_probes={} interp_calls_while_pending={} spec_restamps={} in_flight_at_exit={} worker_jobs={} \
+             pending_probes={} osr_waits={} interp_calls_while_pending={} spec_restamps={} in_flight_at_exit={} worker_jobs={} \
              worker_skipped={} worker_panics={} worker_code_bytes={} worker_backend_max_us={}",
             self.mode,
             self.workers,
@@ -593,6 +616,7 @@ impl BgReport {
             self.stats.backend_max_us,
             self.stats.queue_wait_us,
             self.stats.pending_probes,
+            self.stats.osr_waits,
             self.stats.interp_calls_while_pending,
             self.stats.spec_restamps,
             self.in_flight_at_exit,
@@ -643,6 +667,11 @@ fn bump_stats(f: impl FnOnce(&mut BgStats)) {
         f(&mut stats);
         s.set(stats);
     });
+}
+
+/// A hot back-edge found its OSR leaf still compiling.
+pub(crate) fn note_osr_wait() {
+    bump_stats(|s| s.osr_waits += 1);
 }
 
 /// This thread's counters.
@@ -966,3 +995,7 @@ mod worker_tests;
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 #[path = "bg/tests/first_sight_test.rs"]
 mod first_sight_tests;
+
+#[cfg(test)]
+#[path = "bg/tests/osr_pending_test.rs"]
+mod osr_pending_tests;

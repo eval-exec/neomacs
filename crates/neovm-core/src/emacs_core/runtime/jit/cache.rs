@@ -353,6 +353,41 @@ thread_local! {
     #[allow(clippy::type_complexity)]
     static OSR_CACHE: RefCell<HashMap<(u64, usize), Option<OsrEntry>>> =
         RefCell::new(HashMap::default());
+
+    /// OSR compiles whose backend runs elsewhere (`jit::bg`), keyed like
+    /// `OSR_CACHE`: the loop keeps interpreting (its frame does not latch)
+    /// and the next hot back-edge wrap probes again. Moved into `OSR_CACHE`
+    /// when installed. Same thread/scope; cleared alongside it.
+    static OSR_PENDING: RefCell<HashMap<(u64, usize), PendingOsr>> =
+        RefCell::new(HashMap::default());
+}
+
+/// A pending OSR compile: the job and the header's entry depths the front
+/// computed.
+struct PendingOsr {
+    job: Box<super::bg::PendingJob>,
+    stack_depth: usize,
+    bind_depth: usize,
+}
+
+/// What an OSR attempt at a hot back-edge did ([`try_run_osr_probe`]).
+pub(crate) enum OsrProbe {
+    /// The loop ran in native code, with this outcome.
+    Ran(NativeRun),
+    /// No transfer: the function is not OSR-eligible here, its body did not
+    /// compile, or the live state does not match the header's (latch).
+    NoTransfer,
+    /// The OSR leaf is compiling in the background: interpret on and probe
+    /// again at the next hot wrap (no latch).
+    Pending,
+}
+
+/// Where an OSR probe found its leaf.
+enum OsrLookup {
+    /// Compiled (`Some`) or refused (`None`), as `OSR_CACHE` records it.
+    Entry(Option<OsrEntry>),
+    /// Still compiling in the background.
+    Pending,
 }
 
 #[cfg(debug_assertions)]
@@ -563,31 +598,39 @@ pub(crate) fn try_run_osr(
     stack: &[Value],
     binds: &[usize],
 ) -> Option<NativeRun> {
+    match try_run_osr_probe(ctx, func, osr_pc, stack, binds) {
+        OsrProbe::Ran(run) => Some(run),
+        OsrProbe::NoTransfer | OsrProbe::Pending => None,
+    }
+}
+
+/// [`try_run_osr`], telling a background compile still in flight
+/// ([`OsrProbe::Pending`]: the caller must not latch) from no transfer.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub(crate) fn try_run_osr_probe(
+    ctx: *mut Context,
+    func: &ByteCodeFunction,
+    osr_pc: usize,
+    stack: &[Value],
+    binds: &[usize],
+) -> OsrProbe {
     if ctx.is_null() {
-        return None;
+        return OsrProbe::NoTransfer;
     }
     sync_cache_to_current_heap();
     let id = func.jit_runtime().compiled_id_or_assign();
-    // SAFETY: dormant seam-provided Context (as try_run_compiled); shared obarray read.
-    let obarray = unsafe { &(*ctx).obarray };
-    let cached = OSR_CACHE.with(|c| {
-        c.borrow_mut()
-            .entry((id, osr_pc))
-            .or_insert_with(|| {
-                // The running function's own frame is the innermost one.
-                let name_hint = stats::naming_enabled()
-                    .then(|| callee_name_hint(ctx, id))
-                    .flatten();
-                let _vars = super::compile::inline_vars::CompileEnvScope::enter(ctx);
-                compile_osr_leaf(obarray, func, osr_pc, id, name_hint)
-            })
-            .clone()
-    });
-    let OsrEntry {
+    let cached = match osr_lookup(ctx, func, osr_pc, id) {
+        OsrLookup::Entry(entry) => entry,
+        OsrLookup::Pending => return OsrProbe::Pending,
+    };
+    let Some(OsrEntry {
         leaf,
         stack_depth: entry_depth,
         bind_depth,
-    } = cached?;
+    }) = cached
+    else {
+        return OsrProbe::NoTransfer;
+    };
     // Only transfer when the live snapshot is exactly the header's entry stack.
     if stack.len() != entry_depth || binds.len() != bind_depth {
         if std::env::var_os("NEOMACS_OSR_DEBUG").is_some() {
@@ -597,7 +640,7 @@ pub(crate) fn try_run_osr(
                 binds.len()
             );
         }
-        return None;
+        return OsrProbe::NoTransfer;
     }
     let arg_bits: Vec<i64> = stack.iter().map(|v| v.bits() as i64).collect();
     // Lend a COPY of the live interpreter binding stack. Its outer JIT prefix
@@ -610,7 +653,7 @@ pub(crate) fn try_run_osr(
         if binds.last().is_some_and(|&base| base >= spec_base)
             || binds.windows(2).any(|pair| pair[0] >= pair[1])
         {
-            return None;
+            return OsrProbe::NoTransfer;
         }
         let stack_base = ctx.jit_bind_stack.len();
         ctx.jit_bind_stack.extend_from_slice(binds);
@@ -668,7 +711,126 @@ pub(crate) fn try_run_osr(
         };
         eprintln!("OSR_DEBUG transfer outcome: pc={osr_pc} {tag}");
     }
-    Some(run)
+    OsrProbe::Ran(run)
+}
+
+/// The OSR leaf of `(id, osr_pc)`: installed if its background compile
+/// finished, still pending, cached (compiled or refused), or compiled now --
+/// deferring its backend when the mode allows (class `Osr`).
+fn osr_lookup(ctx: *mut Context, func: &ByteCodeFunction, osr_pc: usize, id: u64) -> OsrLookup {
+    let key = (id, osr_pc);
+    // SAFETY: dormant seam-provided Context (as try_run_compiled); shared reads.
+    let live = unsafe { &*ctx };
+    if super::bg::pending_count() != 0
+        && let Some(lookup) = probe_osr_pending(key, Some(live))
+    {
+        return lookup;
+    }
+    if let Some(entry) = OSR_CACHE.with(|c| c.borrow().get(&key).cloned()) {
+        return OsrLookup::Entry(entry);
+    }
+    // The running function's own frame is the innermost one.
+    let name_hint = stats::naming_enabled()
+        .then(|| callee_name_hint(ctx, id))
+        .flatten();
+    let defer = super::bg::DeferScope::enter(
+        super::bg::JobClass::for_origin(stats::CompileOrigin::Osr)
+            .filter(|_| super::bg::may_defer(id)),
+    );
+    // The inline-variable environment (`NEOVM_JIT_INLINE_VARS`) is read by
+    // the lowering, which runs here on the eval thread in every mode.
+    let _vars = super::compile::inline_vars::CompileEnvScope::enter(ctx);
+    let compiled = compile_osr_leaf(&live.obarray, func, osr_pc, id, name_hint);
+    drop(defer);
+    match (compiled, super::bg::take_deferred()) {
+        (Some(entry), Some(code)) => {
+            let OsrEntry {
+                leaf,
+                stack_depth,
+                bind_depth,
+            } = entry;
+            let leaf = Rc::try_unwrap(leaf)
+                .unwrap_or_else(|_| unreachable!("a fresh OSR leaf has one owner"));
+            let job = super::bg::PendingJob::new_osr(id, leaf, code);
+            OSR_PENDING.with(|p| {
+                p.borrow_mut().insert(
+                    key,
+                    PendingOsr {
+                        job,
+                        stack_depth,
+                        bind_depth,
+                    },
+                )
+            });
+            OsrLookup::Pending
+        }
+        (compiled, deferred) => {
+            if let Some(code) = deferred {
+                code.cancel();
+            }
+            OSR_CACHE.with(|c| c.borrow_mut().insert(key, compiled.clone()));
+            OsrLookup::Entry(compiled)
+        }
+    }
+}
+
+/// `key`'s pending OSR compile: its lookup once installed (a refused
+/// backend caches the refusal), `Pending` while running, `None` when there
+/// is none (or the finished leaf was stale: compile again).
+#[cold]
+#[inline(never)]
+fn probe_osr_pending(key: (u64, usize), ctx: Option<&Context>) -> Option<OsrLookup> {
+    let ready = OSR_PENDING.with(|p| p.borrow().get(&key).map(|osr| osr.job.is_ready()))?;
+    if !ready {
+        super::bg::note_osr_wait();
+        return Some(OsrLookup::Pending);
+    }
+    let PendingOsr {
+        job,
+        stack_depth,
+        bind_depth,
+    } = OSR_PENDING.with(|p| p.borrow_mut().remove(&key))?;
+    let entry = match super::bg::install(job, None, ctx) {
+        Ok(leaf) => Some(OsrEntry {
+            leaf: Rc::new(leaf),
+            stack_depth,
+            bind_depth,
+        }),
+        Err(super::bg::Discard::Rejected) => None,
+        Err(super::bg::Discard::Stale(_)) => return None,
+    };
+    OSR_CACHE.with(|c| c.borrow_mut().insert(key, entry.clone()));
+    Some(OsrLookup::Entry(entry))
+}
+
+/// Whether `(func, osr_pc)`'s OSR compile is still running in the
+/// background: the back-edge skips its snapshot and interprets on without
+/// latching. A finished one reads `false` (the probe installs it).
+pub(crate) fn osr_compile_in_flight(func: &ByteCodeFunction, osr_pc: usize) -> bool {
+    if super::bg::pending_count() == 0 {
+        return false;
+    }
+    let Some(id) = func.jit_runtime().compiled_id() else {
+        return false;
+    };
+    let running = OSR_PENDING.with(|p| {
+        p.borrow()
+            .get(&(id, osr_pc))
+            .is_some_and(|osr| !osr.job.is_ready())
+    });
+    if running {
+        super::bg::note_osr_wait();
+    }
+    running
+}
+
+/// Drop `id`'s pending OSR compiles (cancelling their jobs).
+fn drop_osr_pending(id: u64) {
+    let _ = OSR_PENDING.try_with(|p| {
+        if let Ok(mut p) = p.try_borrow_mut() {
+            p.retain(|(fid, _), _| *fid != id);
+        }
+    });
 }
 
 /// Count of OSR transfers actually taken (a native OSR entry was invoked). Lets
@@ -869,6 +1031,7 @@ fn callee_name_hint(ctx: *const Context, id: u64) -> Option<SymId> {
 
 pub(crate) fn evict_compiled(id: u64) {
     COMPILED.with(|c| c.borrow_mut().remove(id));
+    drop_osr_pending(id);
     OSR_CACHE.with(|c| {
         c.borrow_mut().retain(|(fid, _), entry| {
             let keep = *fid != id;
@@ -1112,6 +1275,8 @@ pub(crate) fn invalidate_for_reopt(
             Reprofile::Window | Reprofile::Immediate => rt.defer_tier_up(hold),
         }
     }
+    // Pending OSR compiles read the same feedback: drop them too.
+    drop_osr_pending(id);
     let osr: Vec<Rc<CompiledLeaf>> = OSR_CACHE.with(|c| {
         let Ok(mut c) = c.try_borrow_mut() else {
             return Vec::new();
@@ -1441,6 +1606,12 @@ pub(crate) fn collect_jit_reloc_gc_roots(roots: &mut Vec<Value>) {
             roots.extend_from_slice(entry.leaf.reloc_values());
         }
     });
+    // And those of OSR leaves still compiling in the background.
+    OSR_PENDING.with(|p| {
+        for osr in p.borrow().values() {
+            roots.extend_from_slice(osr.job.leaf().reloc_values());
+        }
+    });
 }
 
 /// GC handshake size probe: `(total COMPILED cache entries, total reloc slots
@@ -1460,7 +1631,13 @@ pub(crate) fn compiled_cache_probe() -> (usize, usize) {
             })
             .sum();
         let retired: usize = cache.retired.iter().map(|l| l.reloc_values().len()).sum();
-        (cache.len(), live + retired)
+        let osr_pending: usize = OSR_PENDING.with(|p| {
+            p.borrow()
+                .values()
+                .map(|osr| osr.job.leaf().reloc_values().len())
+                .sum()
+        });
+        (cache.len(), live + retired + osr_pending)
     })
 }
 
@@ -1555,6 +1732,7 @@ pub(crate) fn clear() {
         }
         osr.clear();
     });
+    OSR_PENDING.with(|p| p.borrow_mut().clear());
     // Every remembered NotCompilable verdict is now as stale as the cache.
     REJECTION_EPOCH.fetch_add(1, Ordering::Relaxed);
     // No leaf is left to be bound to an obarray.
@@ -1651,6 +1829,19 @@ pub(crate) fn drain_ready_pending(ctx: Option<&Context>) {
             drain_ready_in(&mut cache, ctx);
         }
     });
+    let ready: Vec<(u64, usize)> = OSR_PENDING.with(|p| {
+        p.try_borrow()
+            .map(|p| {
+                p.iter()
+                    .filter(|(_, osr)| osr.job.is_ready())
+                    .map(|(key, _)| *key)
+                    .collect()
+            })
+            .unwrap_or_default()
+    });
+    for key in ready {
+        probe_osr_pending(key, ctx);
+    }
 }
 
 /// Tier-up entry point: run `func`'s body as native code if possible.

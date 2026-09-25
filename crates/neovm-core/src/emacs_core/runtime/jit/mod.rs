@@ -165,14 +165,14 @@ pub mod reopt;
 /// built: `RuntimeState` holds the table.
 pub(crate) mod retreat;
 
-/// Per-source feedback (`SourceFeedback`). Always built: `RuntimeState`
-/// holds it.
-pub(crate) mod feedback;
 /// Background compilation: the front/backend split of a JIT compile and
 /// where its backend runs (`NEOVM_JIT_BG`). Only built with the `jit`
 /// feature. See `jit/bg.rs`.
 #[cfg(feature = "jit")]
 pub(crate) mod bg;
+/// Per-source feedback (`SourceFeedback`). Always built: `RuntimeState`
+/// holds it.
+pub(crate) mod feedback;
 
 /// Always-on metering of the synchronous compile stalls the cache-miss path
 /// pays on the eval thread — the evidence base for background compilation.
