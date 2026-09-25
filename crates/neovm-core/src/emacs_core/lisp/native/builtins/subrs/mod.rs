@@ -1560,11 +1560,16 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         crate::emacs_core::textprop::builtin_get_text_property_3,
         FixedMin3::Two,
     ));
-    ctx.register_subr(SubrSpec::fixed3(
-        "get-char-property",
-        crate::emacs_core::textprop::builtin_get_char_property_3,
-        FixedMin3::Two,
-    ));
+    ctx.register_subr(
+        const {
+            SubrSpec::fixed3(
+                "get-char-property",
+                crate::emacs_core::textprop::builtin_get_char_property_3,
+                FixedMin3::Two,
+            )
+            .leaf(&leaves::GET_CHAR_PROPERTY)
+        },
+    );
     ctx.register_subr(SubrSpec::fixed3(
         "get-pos-property",
         builtin_get_pos_property_3,
@@ -6825,11 +6830,12 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         builtin_copy_sequence_1,
         FixedMin1::One,
     ));
-    ctx.register_subr(SubrSpec::fixed3(
-        "plist-get",
-        builtin_plist_get_3,
-        FixedMin3::Two,
-    ));
+    ctx.register_subr(
+        const {
+            SubrSpec::fixed3("plist-get", builtin_plist_get_3, FixedMin3::Two)
+                .leaf(&leaves::PLIST_GET)
+        },
+    );
     ctx.register_subr(SubrSpec::new(
         "plist-put",
         NativeFn::ContextVec(builtin_plist_put_with_ctx),
@@ -7037,11 +7043,9 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextSlice(|_ctx, args| builtin_make_hash_table_slice(args)),
         SubrArity::new(0, None),
     ));
-    ctx.register_subr(SubrSpec::fixed3(
-        "gethash",
-        builtin_gethash_3,
-        FixedMin3::Two,
-    ));
+    ctx.register_subr(const {
+        SubrSpec::fixed3("gethash", builtin_gethash_3, FixedMin3::Two).leaf(&leaves::GETHASH)
+    });
     ctx.register_subr(SubrSpec::fixed3(
         "puthash",
         builtin_puthash_3,

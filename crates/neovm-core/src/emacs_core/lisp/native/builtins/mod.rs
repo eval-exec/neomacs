@@ -428,6 +428,7 @@ mod buffer_text_backend;
 pub(crate) mod collections;
 mod cons_list;
 pub(crate) mod from_value;
+pub(crate) mod leaves;
 pub(crate) mod misc_pure;
 pub(crate) mod strings;
 pub(crate) mod types;

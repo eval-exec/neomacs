@@ -7,44 +7,9 @@
 
 use super::*;
 
-/// Independent effects, rather than a strongest-effect ordering. Allocating
-/// does not imply collecting, and signaling does not subsume state mutation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Effects(u16);
-
-impl Effects {
-    pub const PURE: Self = Self(0);
-    pub const READ_HEAP: Self = Self(1 << 0);
-    pub const WRITE_HEAP: Self = Self(1 << 1);
-    pub const READ_BUFFER: Self = Self(1 << 2);
-    pub const WRITE_BUFFER: Self = Self(1 << 3);
-    pub const READ_MATCH: Self = Self(1 << 4);
-    pub const WRITE_MATCH: Self = Self(1 << 5);
-    pub const READ_BINDINGS: Self = Self(1 << 6);
-    pub const WRITE_BINDINGS: Self = Self(1 << 7);
-    pub const ALLOCATES: Self = Self(1 << 8);
-    pub const MAY_GC: Self = Self(1 << 9);
-    pub const MAY_REENTER: Self = Self(1 << 10);
-    pub const MAY_SIGNAL: Self = Self(1 << 11);
-    pub const MAY_DEOPT: Self = Self(1 << 12);
-    pub const UNKNOWN: Self = Self((1 << 13) - 1);
-
-    pub const fn with(self, other: Self) -> Self {
-        Self(self.0 | other.0)
-    }
-
-    pub const fn contains(self, other: Self) -> bool {
-        self.0 & other.0 == other.0
-    }
-
-    /// A read-only fast path still observes mutable runtime state. This is an
-    /// admission fact, never permission to hoist it or elide fallback roots.
-    pub const fn is_read_only(self) -> bool {
-        let reads =
-            Self::READ_HEAP.0 | Self::READ_BUFFER.0 | Self::READ_MATCH.0 | Self::READ_BINDINGS.0;
-        self.0 & !reads == 0
-    }
-}
+/// Independent effects, rather than a strongest-effect ordering: declared
+/// beside the leaf builtins that carry them (`subr::leaf`).
+pub use crate::emacs_core::subr::leaf::Effects;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct NamedBuiltinCall {

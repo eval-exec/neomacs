@@ -207,9 +207,24 @@ impl StringDesignator {
     // Symbols remain a supported, ordinary input. Keep their name lookup and
     // the error path out of the already-string check, without marking them cold.
     #[inline(never)]
-    fn from_non_string_value(eval: &mut eval::Context, value: Value) -> Result<Self, Flow> {
+    fn from_non_string_value(eval: &eval::Context, value: Value) -> Result<Self, Flow> {
         let value = eval.unwrap_symbol(value);
         expect_string_comparison_operand(&value)
+    }
+
+    /// [`FromValue::from_value`] on a shared borrow: the conversion only
+    /// reads `symbols-with-pos-enabled`, so leaf builtins (`&Context`) use
+    /// the same coercion.
+    #[inline(always)]
+    pub(crate) fn designate(eval: &eval::Context, value: Value) -> Result<Self, Flow> {
+        // Inlining this tag check lets typed string comparisons carry their
+        // original operands directly instead of calling the general converter
+        // twice and copying its aggregate results through temporary slots.
+        if value.is_string() {
+            Ok(Self::String(value))
+        } else {
+            Self::from_non_string_value(eval, value)
+        }
     }
 
     /// Borrow the designated string, for no longer than the designator lives.
@@ -226,14 +241,7 @@ impl StringDesignator {
 impl FromValue for StringDesignator {
     #[inline(always)]
     fn from_value(eval: &mut eval::Context, value: Value) -> Result<Self, Flow> {
-        // Inlining this tag check lets typed string comparisons carry their
-        // original operands directly instead of calling the general converter
-        // twice and copying its aggregate results through temporary slots.
-        if value.is_string() {
-            Ok(Self::String(value))
-        } else {
-            Self::from_non_string_value(eval, value)
-        }
+        Self::designate(eval, value)
     }
 }
 

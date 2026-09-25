@@ -602,6 +602,15 @@ fn table_user_defined_test(table: &LispHashTable) -> Option<(Value, Value)> {
     Some((table.user_cmp_function?, table.user_hash_function?))
 }
 
+/// Whether `table` is a hash table whose test runs Lisp (made with
+/// `define-hash-table-test`): exactly the tables `gethash`/`puthash` send
+/// through their user-defined path before the plain lookup.
+pub(crate) fn hash_table_has_user_test(table: Value) -> bool {
+    table
+        .as_hash_table()
+        .is_some_and(|ht| table_user_defined_test(ht).is_some())
+}
+
 fn check_mutable_hash_table(table: Value) -> Result<(), Flow> {
     if table.as_hash_table().is_some_and(|ht| !ht.mutable) {
         return Err(signal(
@@ -811,7 +820,7 @@ fn hash_snapshot_root_holder(ht: &LispHashTable) -> Value {
     holder
 }
 
-fn builtin_gethash_values(
+pub(crate) fn builtin_gethash_values(
     key_value: Value,
     table: Value,
     default: Value,

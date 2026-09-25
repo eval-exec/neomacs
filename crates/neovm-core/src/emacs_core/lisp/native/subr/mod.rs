@@ -14,6 +14,8 @@ use crate::tagged::header::{
 };
 use std::sync::{Mutex, OnceLock};
 
+pub(crate) mod leaf;
+
 #[cfg(test)]
 thread_local! {
     static INSTALLED_SUBR_BATCHES: std::cell::RefCell<Vec<&'static str>> = const {
@@ -184,6 +186,8 @@ pub struct SubrSpec {
     interactive_spec: Option<BuiltinInteractiveSpec>,
     no_eval_policy: NoEvalPolicy,
     command_default: CommandDefault,
+    /// The builtin's leaf entry for `Op::Call` sites (`leaf::LeafShape::Bcall`).
+    leaf: Option<&'static leaf::LeafSpec>,
 }
 
 impl SubrSpec {
@@ -257,6 +261,7 @@ impl SubrSpec {
             interactive_spec: None,
             no_eval_policy: NoEvalPolicy::Native,
             command_default: CommandDefault::Enabled,
+            leaf: None,
         }
     }
 
@@ -280,6 +285,38 @@ impl SubrSpec {
         self
     }
 
+    /// Attach the builtin's leaf entry (`subr::leaf`), which `Op::Call`
+    /// sites on this builtin may call instead of the protocol call. Checked
+    /// at compile time: a Bcall-shaped leaf of this builtin's name, taking
+    /// every fixed argument slot the builtin has (missing optionals arrive
+    /// as nil in both).
+    pub(crate) const fn leaf(mut self, leaf: &'static leaf::LeafSpec) -> Self {
+        assert!(
+            matches!(leaf.shape, leaf::LeafShape::Bcall),
+            "only a Bcall-shaped leaf answers as the registered builtin"
+        );
+        assert!(
+            const_str_eq(leaf.name, self.name),
+            "a leaf is attached to the builtin it names"
+        );
+        assert!(
+            matches!(self.dispatch_kind, SubrDispatchKind::Builtin),
+            "only a plain builtin has a leaf"
+        );
+        let slots = match self.function {
+            Some(SubrFn::A1(_)) => 1,
+            Some(SubrFn::A2(_)) => 2,
+            Some(SubrFn::A3(_)) => 3,
+            _ => panic!("a leaf needs a fixed-arity builtin of one to three slots"),
+        };
+        assert!(
+            leaf.entry.slots() == slots,
+            "the leaf takes exactly the builtin's argument slots"
+        );
+        self.leaf = Some(leaf);
+        self
+    }
+
     pub(crate) const fn evaluator(
         name: &'static str,
         arity: SubrArity,
@@ -300,6 +337,7 @@ impl SubrSpec {
             interactive_spec: None,
             no_eval_policy: NoEvalPolicy::RequiresEvalState,
             command_default: CommandDefault::Enabled,
+            leaf: None,
         }
     }
 
@@ -330,6 +368,25 @@ impl SubrSpec {
     pub(crate) const fn command_default(self) -> CommandDefault {
         self.command_default
     }
+
+    pub(crate) const fn leaf_spec(self) -> Option<&'static leaf::LeafSpec> {
+        self.leaf
+    }
+}
+
+const fn const_str_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut i = 0;
+    while i < a.len() {
+        if a[i] != b[i] {
+            return false;
+        }
+        i += 1;
+    }
+    true
 }
 
 /// One subsystem's compiled, executable native-subr catalog.

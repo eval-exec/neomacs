@@ -198,6 +198,17 @@ impl Context {
             spec.dispatch_kind(),
             spec.interactive_spec(),
         );
+        // The leaf comes from the same declaration as the subr object, so the
+        // two cannot disagree. Registration runs before any JIT compile on
+        // both the fresh and the pdump path; a leaf that CHANGES under an
+        // already-registered builtin (only a test re-registers one) must not
+        // stay baked into compiled code.
+        let change =
+            crate::emacs_core::subr::leaf::record_subr_leaf(intern(spec.name()), spec.leaf_spec());
+        if change == crate::emacs_core::subr::leaf::LeafChange::Replaced {
+            #[cfg(feature = "jit")]
+            crate::emacs_core::jit::cache::clear();
+        }
 
         if spec.command_default() == crate::emacs_core::subr::CommandDefault::Disabled {
             self.obarray

@@ -156,7 +156,7 @@ fn multibyte_ordering(a: &[u8], b: &[u8]) -> std::cmp::Ordering {
     left.cmp(&right)
 }
 
-fn string_equal_designators(
+pub(crate) fn string_equal_designators(
     a: &crate::heap_types::LispString,
     b: &crate::heap_types::LispString,
 ) -> EvalResult {
