@@ -25818,6 +25818,42 @@ fn native_two_argument_frame_copies_both_argument_words() {
     assert!(ev.pop_native_backtrace_frame(0));
 }
 
+/// `finish_traced_call` pops a traced call's frame through its own copy of
+/// `unbind_to_with_result`'s fast half; both must leave the same specpdl,
+/// owned-argument side stack and result for every frame shape, including a
+/// suffix the fast half declines.
+#[test]
+fn finish_traced_call_agrees_with_unbind() {
+    crate::test_utils::init_test_tracing();
+    let func = Value::from_sym_id(intern("neo-finish-traced"));
+    let args = [Value::fixnum(1), Value::fixnum(2), Value::fixnum(3)];
+    for nargs in 0..=3 {
+        for extra_root in [false, true] {
+            let mut via_finish = Context::new();
+            let mut via_unbind = Context::new();
+            for ev in [&mut via_finish, &mut via_unbind] {
+                ev.push_backtrace_frame(func, &args[..nargs]);
+                if extra_root {
+                    ev.push_specpdl_root(Value::T);
+                }
+            }
+            let finished = via_finish.finish_traced_call(0, Ok(Value::fixnum(7)));
+            let unbound = via_unbind.unbind_to_with_result(0, Ok(Value::fixnum(7)));
+            assert_eq!(
+                finished.map(|v| v.bits()).ok(),
+                unbound.map(|v| v.bits()).ok(),
+                "nargs={nargs} extra_root={extra_root}"
+            );
+            assert!(via_finish.specpdl.is_empty());
+            assert!(via_unbind.specpdl.is_empty());
+            assert_eq!(
+                via_finish.backtrace_args_stack.len(),
+                via_unbind.backtrace_args_stack.len()
+            );
+        }
+    }
+}
+
 #[test]
 fn specpdl_entry_stays_compact_for_hot_backtrace_pushes() {
     let entry_size = std::mem::size_of::<SpecBinding>();

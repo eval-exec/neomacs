@@ -1172,6 +1172,58 @@ impl Context {
         self.unbind_to_with_result(count, result)
     }
 
+    /// GNU's post-call order for a frame [`Self::push_backtrace_frame`]
+    /// recorded (eval.c:3206-3215): the signal hook on a signal, the exit
+    /// debugger if the frame is flagged, then `specpdl_ptr--`.
+    ///
+    /// The balanced successful return moves only the `Value`. Passing the
+    /// 16-byte `EvalResult` whole through the pop made LLVM copy it with a
+    /// wide load over the callee's narrow tag and value stores, which cannot
+    /// store-forward (one stall per `mapc` callback in `apply1`).
+    #[inline(always)]
+    pub(crate) fn finish_traced_call(&mut self, count: usize, result: EvalResult) -> EvalResult {
+        match result {
+            Ok(value) if self.try_unbind_trivial_to(count) => Ok(value),
+            result => self.finish_traced_call_slow(count, result),
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn finish_traced_call_slow(&mut self, count: usize, result: EvalResult) -> EvalResult {
+        let result = self.dispatch_signal_result_if_needed(result);
+        self.unbind_to_with_result(count, result)
+    }
+
+    /// The inline half of [`Self::unbind_to_with_result`]: nothing above
+    /// COUNT, or one trivially discardable entry (released and popped).
+    /// Returns false, having changed nothing, for every other shape. A copy
+    /// rather than a shared helper on purpose: `unbind_to_with_result` is
+    /// inlined at hundreds of sites and its size is load-bearing (see the
+    /// measured dead end there). `finish_traced_call_agrees_with_unbind`
+    /// pins the two against each other.
+    #[inline(always)]
+    fn try_unbind_trivial_to(&mut self, count: usize) -> bool {
+        let specpdl_len = self.specpdl.len();
+        if specpdl_len == count {
+            return true;
+        }
+        if specpdl_len != count + 1 {
+            return false;
+        }
+        let Some(trivial_pop) = self.specpdl.last().and_then(trivial_spec_binding_pop) else {
+            return false;
+        };
+        if let TrivialSpecBindingPop::BacktraceArgs(args) = trivial_pop {
+            self.release_backtrace_args(&args);
+        }
+        // SAFETY: as in `unbind_to_with_result` -- `trivial_spec_binding_pop`
+        // proves the top entry owns no Rust payload beyond the released
+        // `BacktraceArgs`.
+        unsafe { self.specpdl.set_len(count) };
+        true
+    }
+
     /// GNU `unbind_to` (`src/eval.c:3907`) carrying RESULT.
     ///
     /// The two shapes every Lisp call pops -- nothing above COUNT, or one
@@ -1630,8 +1682,7 @@ impl Context {
             }
         };
         self.depth -= 1;
-        let result = self.dispatch_signal_result_if_needed(result);
-        self.unbind_to_with_result(bt_count, result)
+        self.finish_traced_call(bt_count, result)
     }
 
     /// Apply a function value to evaluated arguments.
@@ -1732,8 +1783,7 @@ impl Context {
         let result = self.maybe_gc_and_quit().and_then(|_| {
             self.maybe_grow_eval_stack(|ctx| ctx.funcall_general_untraced(func, args))
         });
-        let result = self.dispatch_signal_result_if_needed(result);
-        self.unbind_to_with_result(bt_count, result)
+        self.finish_traced_call(bt_count, result)
     }
 
     /// Unified function dispatch — matches GNU Emacs's funcall_general.
@@ -1755,8 +1805,7 @@ impl Context {
                 .and_then(|()| self.funcall_general_untraced(function, args)),
             None => self.funcall_general_untraced(function, args),
         };
-        let result = self.dispatch_signal_result_if_needed(result);
-        self.unbind_to_with_result(bt_count, result)
+        self.finish_traced_call(bt_count, result)
     }
 
     /// Execute a bytecode function through the JIT tier-up seam. This is THE
@@ -2012,8 +2061,7 @@ impl Context {
             }
         };
         self.depth -= 1;
-        let result = self.dispatch_signal_result_if_needed(result);
-        self.unbind_to_with_result(bt_count, result)
+        self.finish_traced_call(bt_count, result)
     }
 
     /// [`Self::apply1_resolved_subr`] for a two-argument call: `sort`'s
@@ -2059,8 +2107,7 @@ impl Context {
             }
         };
         self.depth -= 1;
-        let result = self.dispatch_signal_result_if_needed(result);
-        self.unbind_to_with_result(bt_count, result)
+        self.finish_traced_call(bt_count, result)
     }
 
     #[cfg(feature = "jit")]
@@ -2096,11 +2143,7 @@ impl Context {
             }
         };
         self.depth -= 1;
-        let result = match result {
-            Ok(value) => Ok(value),
-            result => self.dispatch_signal_result_if_needed(result),
-        };
-        self.unbind_to_with_result(bt_count, result)
+        self.finish_traced_call(bt_count, result)
     }
 
     /// [`Self::apply1_bytecode`]'s call at a depth that probes the native
