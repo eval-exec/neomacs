@@ -383,6 +383,8 @@ fn deopts(obs: &LeafObsSnapshot) -> u64 {
 /// `retired` row; the new leaf starts from zero.
 #[test]
 fn jit_obs_retired_leaf_counts_survive_retier() {
+    // Exact native outcomes: immune to a NEOVM_JIT_FORCE_DEOPT=1 suite run.
+    crate::emacs_core::jit::compile::force_deopt_for_test(false);
     if forced_regalloc().is_some() {
         return;
     }

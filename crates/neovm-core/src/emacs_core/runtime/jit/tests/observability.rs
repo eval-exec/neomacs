@@ -38,6 +38,8 @@ fn row_for(id: u64, state: cache::LeafState) -> cache::LeafRow {
 /// A precise deopt is counted once per failing run, keyed by its resume pc.
 #[test]
 fn jit_obs_precise_deopt_counts_per_leaf_and_pc() {
+    // Exact native outcomes: immune to a NEOVM_JIT_FORCE_DEOPT=1 suite run.
+    crate::emacs_core::jit::compile::force_deopt_for_test(false);
     // (+ 5 nil): the Add at pc 2 fails its fixnum guard every run.
     let leaf = lower_nullary_leaf(
         &[Op::Constant(0), Op::Nil, Op::Add, Op::Return],
@@ -60,6 +62,8 @@ fn jit_obs_precise_deopt_counts_per_leaf_and_pc() {
 /// caller interprets; a precise one resumes mid-function.)
 #[test]
 fn jit_obs_tier_up_seam_deopt_is_counted_on_the_cached_leaf() {
+    // Exact native outcomes: immune to a NEOVM_JIT_FORCE_DEOPT=1 suite run.
+    crate::emacs_core::jit::compile::force_deopt_for_test(false);
     let mut ev = Context::new();
     let ctx = &mut ev as *mut Context;
     // (lambda (x) (+ x 1))
@@ -117,6 +121,8 @@ fn jit_obs_force_deopt_counts_every_call() {
 /// rerun, not as a precise deopt.
 #[test]
 fn jit_obs_mir_rerun_deopt_counted() {
+    // Exact native outcomes: immune to a NEOVM_JIT_FORCE_DEOPT=1 suite run.
+    crate::emacs_core::jit::compile::force_deopt_for_test(false);
     let ops = vec![Op::StackRef(1), Op::StackRef(1), Op::Add, Op::Return];
     let m = mir::build_mir(&ops, &[], 2).expect("builds");
     let leaf = lower_mir_pure(&m).expect("lowers");
@@ -132,6 +138,8 @@ fn jit_obs_mir_rerun_deopt_counted() {
 /// exactly once on the CALLEE, whichever tier compiled it.
 #[test]
 fn jit_obs_direct_path_deopt_counted_once() {
+    // Exact native outcomes: immune to a NEOVM_JIT_FORCE_DEOPT=1 suite run.
+    crate::emacs_core::jit::compile::force_deopt_for_test(false);
     force_profit_gate_for_test(false);
     let mut ev = Context::new();
     // A multi-block callee, so the MIR inliner leaves the call in place:
@@ -195,6 +203,8 @@ fn jit_obs_direct_path_deopt_counted_once() {
 /// (`direct_call_cold`).
 #[test]
 fn jit_obs_signal_exit_counted() {
+    // Exact native outcomes: immune to a NEOVM_JIT_FORCE_DEOPT=1 suite run.
+    crate::emacs_core::jit::compile::force_deopt_for_test(false);
     force_profit_gate_for_test(false);
     let mut ev = Context::new();
     let ctx = &mut ev as *mut Context as *mut u8;
@@ -243,6 +253,8 @@ fn jit_obs_signal_exit_counted() {
 /// and re-arm (`spec-rearm`); rebinding its own callee is `spec-rebind`.
 #[test]
 fn jit_obs_spec_revalidation_counts_rearm_and_rebind() {
+    // Exact native outcomes: immune to a NEOVM_JIT_FORCE_DEOPT=1 suite run.
+    crate::emacs_core::jit::compile::force_deopt_for_test(false);
     use crate::emacs_core::jit::stats::epoch::{EpochCounters, SpecRevalidation};
     force_profit_gate_for_test(false);
     let mut ev = Context::new();
@@ -314,6 +326,8 @@ fn jit_obs_spec_revalidation_counts_rearm_and_rebind() {
 /// eviction is counted.
 #[test]
 fn jit_obs_inline_eviction_counted() {
+    // Exact native outcomes: immune to a NEOVM_JIT_FORCE_DEOPT=1 suite run.
+    crate::emacs_core::jit::compile::force_deopt_for_test(false);
     use crate::emacs_core::jit::stats::epoch::EpochCounters;
     let mut ev = Context::new();
     let ctx = &mut ev as *mut Context;
@@ -360,6 +374,8 @@ fn force_naming(on: bool) {
 /// declared as `lisp:<symbol>#<id>:<tier>`, and the leaf remembers it.
 #[test]
 fn jit_obs_label_names_symbol_callee() {
+    // Exact native outcomes: immune to a NEOVM_JIT_FORCE_DEOPT=1 suite run.
+    crate::emacs_core::jit::compile::force_deopt_for_test(false);
     use crate::emacs_core::jit::stats::perf_map::last_entry_name_for_test;
     force_naming(true);
     let mut ev = Context::new();
@@ -403,6 +419,8 @@ fn jit_obs_label_names_symbol_callee() {
 /// is labelled by its first symbol constants.
 #[test]
 fn jit_obs_label_falls_back_to_anon() {
+    // Exact native outcomes: immune to a NEOVM_JIT_FORCE_DEOPT=1 suite run.
+    crate::emacs_core::jit::compile::force_deopt_for_test(false);
     force_naming(true);
     let f = function(
         vec![Op::Constant(0), Op::Return],
@@ -422,6 +440,8 @@ fn jit_obs_label_falls_back_to_anon() {
 /// declared under the legacy static name.
 #[test]
 fn jit_obs_label_absent_without_naming() {
+    // Exact native outcomes: immune to a NEOVM_JIT_FORCE_DEOPT=1 suite run.
+    crate::emacs_core::jit::compile::force_deopt_for_test(false);
     use crate::emacs_core::jit::stats::perf_map::last_entry_name_for_test;
     force_naming(false);
     let f = function(
@@ -456,6 +476,8 @@ fn force_entry_count(on: bool) {
 /// address), and none by default.
 #[test]
 fn jit_obs_entry_counter_absent_by_default() {
+    // Exact native outcomes: immune to a NEOVM_JIT_FORCE_DEOPT=1 suite run.
+    crate::emacs_core::jit::compile::force_deopt_for_test(false);
     let ops = [Op::Constant(0), Op::Constant(1), Op::Add, Op::Return];
     let consts = [Value::make_int(40), Value::make_int(2)];
     force_entry_count(false);
@@ -488,6 +510,8 @@ fn jit_obs_entry_counter_absent_by_default() {
 /// seam, the speculated native-to-native call, and runs that deopt.
 #[test]
 fn jit_obs_entry_counter_counts_every_path() {
+    // Exact native outcomes: immune to a NEOVM_JIT_FORCE_DEOPT=1 suite run.
+    crate::emacs_core::jit::compile::force_deopt_for_test(false);
     force_profit_gate_for_test(false);
     force_entry_count(true);
     let mut ev = Context::new();
