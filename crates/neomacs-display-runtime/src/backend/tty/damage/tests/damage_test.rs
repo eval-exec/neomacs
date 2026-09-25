@@ -262,7 +262,9 @@ struct Scene {
     fills: Vec<FaceFillItem>,
     faces: FrameFaceMap,
     cursor: Option<(usize, usize)>,
-    child: Option<(f32, f32, String)>,
+    /// A child frame at (x, y) showing one window, whose rows keep their
+    /// identity from frame to frame like the root's.
+    child: Option<(f32, f32, SceneWindow)>,
 }
 
 fn face(id: u32, bg: Option<u16>, fg: Option<u16>) -> Face {
@@ -301,6 +303,17 @@ impl Scene {
 
     fn next_frame(&mut self) {
         self.windows.iter_mut().for_each(SceneWindow::reuse_all);
+        if let Some((_, _, window)) = &mut self.child {
+            window.reuse_all();
+        }
+    }
+
+    /// Show a child frame of one row with TEXT at (X, Y).
+    fn show_child(&mut self, x: f32, y: f32, text: &str) {
+        let width = text.chars().count().max(1);
+        let mut window = SceneWindow::new(20, 0, 0, width, &[text], false);
+        window.selected = true;
+        self.child = Some((x, y, window));
     }
 
     /// Relay every row: equal content, new identities.
@@ -380,14 +393,11 @@ impl Scene {
             });
         }
         let mut children = Vec::new();
-        if let Some((x, y, text)) = &self.child {
-            let width = text.chars().count().max(1);
-            let mut child = FrameDisplayState::new(width, 1, 1.0, 1.0);
+        if let Some((x, y, window)) = &self.child {
+            let mut child = FrameDisplayState::new(window.width, 1, 1.0, 1.0);
             Self::placed(&mut child, 2, Some(1), *x, *y);
             child.background = Color::BLACK;
             child.faces = self.faces.clone();
-            let mut window = SceneWindow::new(20, 0, 0, width, &[text], false);
-            window.selected = true;
             child.window_matrices.push(window.entry());
             children.push(child);
         }
@@ -433,8 +443,8 @@ impl Differential {
         f(&mut self.verify);
     }
 
-    /// [`Self::frame`] for a frame the full path renders stale (a closed
-    /// child frame over reused rows, see `damage.rs`): the damage path must
+    /// [`Self::frame`] for a frame the full path renders stale (a face that
+    /// left the map while a reused row uses it, see `damage.rs`): the damage path must
     /// match a fresh repaint, and `verify` reports the full path's rows as
     /// screen differences, never as false negatives.
     fn frame_accepting_stale_full_path(&mut self, scene: &Scene, label: &str) {
@@ -649,13 +659,24 @@ fn editing_session(silent: bool) -> Differential {
     diff.frame(&scene, "type in the other window");
 
     scene.next_frame();
-    scene.child = Some((10.0, 2.0, "M-x child".to_string()));
+    scene.show_child(10.0, 2.0, "M-x child");
     diff.frame(&scene, "child frame appears");
     scene.next_frame();
     diff.frame(&scene, "child frame stays");
+    // Moving a child frame lays nothing out again: its rows and the root's
+    // are all reused. The full path used to copy the child's row from what
+    // the screen held at the new place, and to keep the child on the rows
+    // it left.
+    scene.next_frame();
+    if let Some((x, y, _)) = &mut scene.child {
+        (*x, *y) = (4.0, 6.0);
+    }
+    diff.frame(&scene, "child frame moves");
+    scene.next_frame();
+    diff.frame(&scene, "child frame stays moved");
     scene.next_frame();
     scene.child = None;
-    diff.frame_accepting_stale_full_path(&scene, "child frame goes");
+    diff.frame(&scene, "child frame goes");
 
     scene.next_frame();
     diff.each(TtyRif::force_redraw);

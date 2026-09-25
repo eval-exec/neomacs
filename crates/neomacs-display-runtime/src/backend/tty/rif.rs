@@ -983,19 +983,18 @@ impl TtyRif {
         root: &FrameDisplayState,
         children_bottom_to_top: impl IntoIterator<Item = &'a FrameDisplayState>,
     ) {
+        let children: Vec<&FrameDisplayState> = children_bottom_to_top
+            .into_iter()
+            .filter(|child| child.frame_placement.parent() == Some(root.frame_placement.frame()))
+            .collect();
         if self.damage.mode != damage::TtyDamageMode::Off {
-            let children: Vec<&FrameDisplayState> = children_bottom_to_top
-                .into_iter()
-                .filter(|child| {
-                    child.frame_placement.parent() == Some(root.frame_placement.frame())
-                })
-                .collect();
             self.rasterize_frame_tree_damaged(root, &children);
             if std::env::var_os("NEOMACS_DUMP_TTY_GLYPHS").is_some() {
                 self.dump_tty_glyphs_to_log();
             }
             return;
         }
+        self.note_frame_children(!children.is_empty());
         self.install_state_faces(root);
         self.desired.clear(self.default_bg);
         self.cursor_visible = false;
@@ -1003,10 +1002,7 @@ impl TtyRif {
 
         self.rasterize_state_at(root, 0, 0, false);
 
-        for child in children_bottom_to_top {
-            if child.frame_placement.parent() != Some(root.frame_placement.frame()) {
-                continue;
-            }
+        for child in children {
             let outer = child.frame_placement.outer_in_parent();
             let origin_col = outer.x().round() as i64;
             let origin_row = outer.y().round() as i64;

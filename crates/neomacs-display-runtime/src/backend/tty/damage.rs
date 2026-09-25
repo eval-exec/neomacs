@@ -22,9 +22,9 @@
 //!   of the rows take the full path, which also runs scroll detection; there
 //!   the old path's carry of `RowDamage::Reused` rows is limited to rows
 //!   whose painters are unchanged. (The old path carries every reused row,
-//!   which leaves a closed child frame on screen when the rows under it were
-//!   reused; `verify`'s full side keeps that behaviour, so such a frame shows
-//!   up as a screen difference, not a false negative.)
+//!   except while child frames are drawn or were drawn last frame: a moved
+//!   child's reused rows would be copied from what the screen held at the
+//!   new place, and a closed child would stay on the parent's reused rows.)
 //!
 //!   Under `on` and `verify`, a full frame's scroll detection also reuses
 //!   the screen model's row signatures (**B3**, [`RowSignatures`]): a row's
@@ -368,6 +368,10 @@ pub(super) struct DamageState {
     /// The full path carries every `RowDamage::Reused` row, as under `off`
     /// (and on `verify`'s full side); otherwise only untouched rows.
     pub(super) legacy_carry: bool,
+    /// The frame being rasterized draws child frames.
+    pub(super) children_in_frame: bool,
+    /// The screen model (`current`) shows child frames.
+    pub(super) children_on_screen: bool,
     /// Bumped whenever the installed face map changes content.
     pub(super) faces_generation: u64,
     /// The damage path's renderer beside this one, under `verify`.
@@ -397,6 +401,8 @@ impl DamageState {
             next_retained: Vec::new(),
             touched: Vec::new(),
             legacy_carry: true,
+            children_in_frame: false,
+            children_on_screen: false,
             faces_generation: 0,
             shadow: None,
             op_rows: Vec::new(),
@@ -718,6 +724,7 @@ impl TtyRif {
         children: &[&FrameDisplayState],
         allow_damage: bool,
     ) {
+        self.note_frame_children(!children.is_empty());
         self.install_state_faces(root);
         let has_shift = self.build_painter_keys(root, children);
         let small = self.mark_touched_rows();
@@ -909,9 +916,29 @@ impl TtyRif {
 
     /// Whether the full path may carry GRID_ROW from the screen model instead
     /// of rasterizing it (see [`DamageState::legacy_carry`]).
+    ///
+    /// The legacy carry trusts `RowDamage::Reused`: a row layout reused
+    /// verbatim shows what the screen already holds at its place. Child
+    /// frames break that trust. A child frame that only moved is not laid
+    /// out again, so its reused rows would be copied from what the screen
+    /// held at the NEW place (the parent's text); and the parent's reused
+    /// rows under a child's OLD place would keep the child. So no row is
+    /// carried while child frames are drawn, or were drawn on the screen the
+    /// carry would copy from. (The painter keys make the damage path's own
+    /// carry exact: rows under a child are never untouched.)
     #[inline]
     pub(super) fn carry_permitted(&self, grid_row: usize) -> bool {
-        self.damage.legacy_carry || !self.damage.touched.get(grid_row).copied().unwrap_or(true)
+        if self.damage.legacy_carry {
+            !(self.damage.children_in_frame || self.damage.children_on_screen)
+        } else {
+            !self.damage.touched.get(grid_row).copied().unwrap_or(true)
+        }
+    }
+
+    /// Note whether the frame about to be rasterized draws child frames.
+    #[inline]
+    pub(super) fn note_frame_children(&mut self, has_children: bool) {
+        self.damage.children_in_frame = has_children;
     }
 
     /// Paint the touched rows of the root frame: clear them, then run every
@@ -987,6 +1014,9 @@ impl TtyRif {
     /// painter keys become those of the screen model.
     pub(super) fn commit_frame(&mut self) {
         self.promote_row_signatures();
+        // A damage frame never draws child frames (they force a full frame),
+        // and repaints every row a child left.
+        self.damage.children_on_screen = self.damage.children_in_frame;
         match self.damage.frame {
             FrameKind::Full => std::mem::swap(&mut self.current, &mut self.desired),
             FrameKind::Damage => {

@@ -656,3 +656,86 @@ fn child_frame_position_consistency() {
     delete_all_child_frames(&mut gnu, &mut neo);
     assert_pair_exact_display("child_frame_position_consistency", &gnu, &neo);
 }
+
+/// Assert that GNU and Neomacs show the same characters on every row.
+///
+/// Child-frame chrome still differs in colour (the child's mode-line row), so
+/// the moved-child test below compares the text grid, which is where a stale
+/// row shows.
+fn assert_same_text(label: &str, gnu: &TuiSession, neo: &TuiSession) {
+    let (gnu_grid, neo_grid) = (gnu.text_grid(), neo.text_grid());
+    let differing: Vec<String> = gnu_grid
+        .iter()
+        .zip(&neo_grid)
+        .enumerate()
+        .filter(|(_, (gnu_row, neo_row))| gnu_row != neo_row)
+        .map(|(row, (gnu_row, neo_row))| {
+            format!(
+                "  {row:2} GNU |{}|\n     NEO |{}|",
+                gnu_row.trim_end(),
+                neo_row.trim_end()
+            )
+        })
+        .collect();
+    assert!(
+        differing.is_empty() && gnu_grid.len() == neo_grid.len(),
+        "{label}: rows differ\n{}",
+        differing.join("\n")
+    );
+}
+
+/// A child frame that moves or changes size is drawn at its new place, as
+/// GNU draws it, while it is still shown.
+///
+/// The TTY renderer copies a row that layout reused verbatim from the screen
+/// it wrote last frame instead of drawing it again. A child frame that only
+/// moves is not laid out again, so each of its rows was copied from what the
+/// screen held at the NEW position -- the parent's text -- and the child's
+/// own text never appeared there (`NEOMACS_TTY_DAMAGE=verify` counted these
+/// rows as screen differences on every frame of the move tests above, whose
+/// only paired comparison comes after the child frames are deleted).
+#[test]
+fn moved_and_resized_child_frame_matches_gnu_while_shown() {
+    let (mut gnu, mut neo) = boot_child_frame_pair();
+
+    let make_expr = r#"(let* ((cf (cf--make-child '(width . 20) '(height . 4) '(left . 5) '(top . 3)))
+             (buf (get-buffer-create "*cf-shown*")))
+        (select-frame cf)
+        (switch-to-buffer buf)
+        (insert "SHOWN-CHILD-TEXT")
+        (sit-for 0)
+        (select-frame (frame-parent cf))
+        nil)"#;
+    eval_expression(&mut gnu, &mut neo, make_expr);
+    read_both(&mut gnu, &mut neo, Duration::from_secs(3));
+    assert_region_contains(&gnu, 3, 7, "SHOWN-CHILD-TEXT");
+    assert_same_text("child frame before the move", &gnu, &neo);
+
+    eval_expression(
+        &mut gnu,
+        &mut neo,
+        &format!("(set-frame-position {CF_FIND_EXPR} 5 13)"),
+    );
+    read_both(&mut gnu, &mut neo, Duration::from_secs(3));
+    assert_region_contains(&gnu, 13, 17, "SHOWN-CHILD-TEXT");
+    assert_same_text("child frame moved down", &gnu, &neo);
+
+    eval_expression(
+        &mut gnu,
+        &mut neo,
+        &format!("(set-frame-position {CF_FIND_EXPR} 35 13)"),
+    );
+    read_both(&mut gnu, &mut neo, Duration::from_secs(3));
+    assert_same_text("child frame moved right", &gnu, &neo);
+
+    eval_expression(
+        &mut gnu,
+        &mut neo,
+        &format!("(set-frame-size {CF_FIND_EXPR} 30 6)"),
+    );
+    read_both(&mut gnu, &mut neo, Duration::from_secs(3));
+    assert_same_text("child frame resized", &gnu, &neo);
+
+    delete_all_child_frames(&mut gnu, &mut neo);
+    assert_pair_exact_display("child frame deleted", &gnu, &neo);
+}
