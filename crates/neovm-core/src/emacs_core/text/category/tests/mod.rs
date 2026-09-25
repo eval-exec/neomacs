@@ -266,10 +266,7 @@ fn define_category_preserves_raw_unibyte_docstring() {
 // -----------------------------------------------------------------------
 
 fn category_set_bit(set: &Value, idx: usize) -> bool {
-    set.as_vector_data()
-        .and_then(|v| v.get(2 + idx).copied())
-        .map(|v| v.as_fixnum() == Some(1))
-        .unwrap_or(false)
+    crate::emacs_core::boolvec::bool_vector_ref_value(set, idx).is_some_and(|bit| bit.is_truthy())
 }
 
 #[test]

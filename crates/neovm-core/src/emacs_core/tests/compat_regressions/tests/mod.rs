@@ -126,18 +126,21 @@ fn reverse_bool_vector_preserves_layout_and_reverses_bits() {
         crate::emacs_core::chartable::builtin_bool_vector_p(vec![out]).unwrap(),
         Value::T
     );
-    let values = out.as_vector_data().unwrap().clone();
-    assert_eq!(values[0], Value::symbol("--bool-vector--"));
-    assert_eq!(values[1], Value::fixnum(4));
-    assert_eq!(
-        &values[2..6],
-        &[
-            Value::fixnum(0),
-            Value::fixnum(1),
-            Value::fixnum(0),
-            Value::fixnum(1)
-        ]
-    );
+    assert_ne!(out.bits(), bv.bits(), "reverse returns a fresh bool-vector");
+    assert_eq!(bool_vector_bits(out), [false, true, false, true]);
+    assert_eq!(bool_vector_bits(bv), [true, false, true, false]);
+}
+
+/// The bits of a bool-vector, in order.
+fn bool_vector_bits(value: Value) -> Vec<bool> {
+    let len = crate::emacs_core::chartable::bool_vector_length(&value).unwrap() as usize;
+    (0..len)
+        .map(|i| {
+            crate::emacs_core::chartable::bool_vector_ref_value(&value, i)
+                .unwrap()
+                .is_truthy()
+        })
+        .collect()
 }
 
 #[test]
@@ -169,19 +172,8 @@ fn nreverse_bool_vector_preserves_layout_and_reverses_bits_in_place() {
     ])
     .unwrap();
     let out = crate::emacs_core::builtins::builtin_nreverse(vec![bv]).unwrap();
-    assert_eq!(out, bv);
-    let values = out.as_vector_data().unwrap().clone();
-    assert_eq!(values[0], Value::symbol("--bool-vector--"));
-    assert_eq!(values[1], Value::fixnum(4));
-    assert_eq!(
-        &values[2..6],
-        &[
-            Value::fixnum(0),
-            Value::fixnum(1),
-            Value::fixnum(0),
-            Value::fixnum(1)
-        ]
-    );
+    assert_eq!(out.bits(), bv.bits(), "nreverse reverses in place");
+    assert_eq!(bool_vector_bits(out), [false, true, false, true]);
 }
 
 #[test]

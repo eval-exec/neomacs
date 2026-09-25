@@ -8,8 +8,9 @@
 //! bits are fixnums 0/1 (the *legacy* representation).
 //!
 //! `NEOVM_BOOL_VECTOR_REPR=legacy|packed` picks the representation NEW
-//! bool-vectors get (read once per process; a same-binary A/B). Every reader
-//! here accepts both, so the two kinds may meet in one operation.
+//! bool-vectors get (read once per process; a same-binary A/B; default
+//! `packed`). Every reader here accepts both, so the two kinds may meet in
+//! one operation.
 //!
 //! Operations follow GNU exactly: `wrong-length-argument` data, the
 //! destination argument of the set operations ("the destination if it
@@ -50,7 +51,7 @@ pub(crate) fn set_bool_vector_repr_for_test(repr: Option<BoolVectorRepr>) {
 }
 
 /// The representation new bool-vectors get: `NEOVM_BOOL_VECTOR_REPR`, read
-/// once per process. Default: legacy.
+/// once per process. Default: packed; `legacy` restores the tagged vector.
 pub(crate) fn bool_vector_repr() -> BoolVectorRepr {
     #[cfg(test)]
     if let Some(repr) = REPR_OVERRIDE.with(|cell| cell.get()) {
@@ -59,14 +60,14 @@ pub(crate) fn bool_vector_repr() -> BoolVectorRepr {
     static REPR: std::sync::OnceLock<BoolVectorRepr> = std::sync::OnceLock::new();
     *REPR.get_or_init(
         || match std::env::var("NEOVM_BOOL_VECTOR_REPR").ok().as_deref() {
-            Some("packed") => {
+            Some("legacy") => {
                 tracing::info!(
                     target: "neovm::boolvec::knobs",
-                    "NEOVM_BOOL_VECTOR_REPR=packed is on in this process"
+                    "NEOVM_BOOL_VECTOR_REPR=legacy is on in this process"
                 );
-                BoolVectorRepr::Packed
+                BoolVectorRepr::Legacy
             }
-            _ => BoolVectorRepr::Legacy,
+            _ => BoolVectorRepr::Packed,
         },
     )
 }

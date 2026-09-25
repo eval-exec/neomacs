@@ -920,6 +920,11 @@ fn skip_slot0_drops_the_tagged_vector_test_from_inline_aref_and_aset() {
     let aref = compile_bytecode_function(&f).expect("aref compiles");
     let aset = compile_bytecode_function(&g).expect("aset compiles");
     let created = super::TAGGED_VECTORS_UNDER_SKIP_SLOT0.load(std::sync::atomic::Ordering::Relaxed);
+    // A tagged vector: the legacy bool-vector representation (packed
+    // bool-vectors are not vectors and never reach the inline path).
+    crate::emacs_core::boolvec::set_bool_vector_repr_for_test(Some(
+        crate::emacs_core::boolvec::BoolVectorRepr::Legacy,
+    ));
     let args = keep(
         &mut eval,
         &[
@@ -928,6 +933,7 @@ fn skip_slot0_drops_the_tagged_vector_test_from_inline_aref_and_aset() {
             "(make-bool-vector 5 t)",
         ],
     );
+    crate::emacs_core::boolvec::set_bool_vector_repr_for_test(None);
     assert!(
         super::TAGGED_VECTORS_UNDER_SKIP_SLOT0.load(std::sync::atomic::Ordering::Relaxed) > created,
         "a bool-vector created under the knob is counted"
