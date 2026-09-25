@@ -852,12 +852,12 @@ pub(crate) fn rebuild_reloc_consts(desc: &AotDescriptor) -> Option<Box<[Value]>>
 ///   eq-UPGRADED to the function's own constant when an `equal` match exists
 ///   in `constants` — restoring shared identity with interp/JIT.
 ///
-/// VERIFICATION (replaces the old live-recipe byte-compare): every resolved
-/// non-immediate value MUST be eq/`equal`-matched by the live constant pool.
-/// A stale or foreign `.so` whose recipe references anything outside this
-/// function's pool is rejected (`None` → the caller stays on the JIT). The
-/// recipe order IS the emitted reloc-index order, so the produced vector is
-/// definitionally index-aligned with the generated code's loads.
+/// Since descriptor v3 a slot the emitter found in the pool carries its pool
+/// index and resolves to that element directly (kind-checked against its
+/// recipe tag, fully compared in debug builds); only the other slots take
+/// the rebuild above. The recipe order IS the emitted reloc-index order, so
+/// the produced vector is definitionally index-aligned with the generated
+/// code's loads.
 fn resolve_reloc_from_descriptor(
     desc: &AotDescriptor,
     constants: &[Value],
