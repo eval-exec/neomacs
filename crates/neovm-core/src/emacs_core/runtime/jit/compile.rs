@@ -3360,6 +3360,19 @@ pub fn lower_leaf_full_osr(
         )
     })?;
     let entry = defined.entry;
+    if entry.is_null() {
+        // A deferred backend (`jit::bg`): its install may re-stamp a slot
+        // whose binding held while the epoch moved.
+        super::bg::note_spec_bindings(spec_sites.values().filter(|s| !s.kind.is_cbsym()).map(
+            |s| {
+                (
+                    s.slot,
+                    crate::emacs_core::intern::SymId(s.sym),
+                    s.expected_bits,
+                )
+            },
+        ));
+    }
     super::stats::asm_dump::flush(&super::stats::asm_dump::AsmLeafInfo {
         tier: match osr_pc {
             Some(pc) => super::stats::perf_map::LabelTier::Osr(pc),

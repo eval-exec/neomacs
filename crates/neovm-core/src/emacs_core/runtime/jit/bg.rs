@@ -52,6 +52,8 @@ use super::compile::shared::split::JobPayload;
 use super::compile::{CompileError, CompiledLeaf};
 use super::stats::CompileOrigin;
 use super::stats::asm_dump::{self, PendingAsm};
+use crate::emacs_core::eval::Context;
+use crate::emacs_core::intern::SymId;
 
 mod queue;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -168,6 +170,10 @@ pub(crate) enum DiscardReason {
     Superseded,
     /// The tagged heap it was compiled against is gone.
     HeapChanged,
+    /// A guarded MIR inline armed at a function epoch that has moved: its
+    /// inline-entry guards would deopt on every call. Requested again (at
+    /// most [`MAX_EPOCH_DISCARDS`] times per function, then in line).
+    EpochMoved,
     /// Its backend failed (the body becomes `NotCompilable`, as a failed
     /// in-line compile would).
     Failed,
@@ -247,7 +253,14 @@ pub(crate) struct DeferredCode {
     cell: Arc<JobCell>,
     class: JobClass,
     enqueued_at: Instant,
+    /// `(slot, symbol, expected function bits)` of the leaf's
+    /// epoch-validated spec sites ([`note_spec_bindings`]).
+    spec_bindings: Box<[(usize, SymId, u64)]>,
 }
+
+/// Epoch-moved discards of one function after which its compile runs in
+/// line (the front then sees the live epoch).
+pub(crate) const MAX_EPOCH_DISCARDS: u8 = 2;
 
 /// Probes that find a job unfinished hold its function in the interpreter
 /// for this many calls at first, doubling up to [`MAX_BACKOFF`].
@@ -259,8 +272,12 @@ pub(crate) const MAX_BACKOFF: u32 = 1024;
 /// (see the module docs). Lives on the eval thread; only its
 /// [`JobCell`] is shared.
 pub(crate) struct PendingJob {
+    /// The function's `compiled_id`.
+    id: u64,
     /// The front's leaf, entry still null. `None` once installed.
     leaf: Option<CompiledLeaf>,
+    /// See [`DeferredCode::spec_bindings`].
+    spec_bindings: Box<[(usize, SymId, u64)]>,
     cell: Arc<JobCell>,
     class: JobClass,
     /// The tagged heap the front compiled against.
@@ -289,7 +306,9 @@ impl PendingJob {
         PENDING_COUNT.with(|c| c.set(c.get() + 1));
         PENDING_IDS.with(|ids| ids.borrow_mut().push(id));
         Box::new(PendingJob {
+            id,
             leaf: Some(leaf),
+            spec_bindings: code.spec_bindings,
             cell: code.cell,
             class: code.class,
             heap: crate::tagged::gc::current_tagged_heap_identity(),
@@ -368,13 +387,17 @@ pub(crate) enum Discard {
 /// Install a ready job: its leaf with the backend's entry, or why not.
 /// `rt` (the function's runtime, when the caller has it) gets its tier-up
 /// deferral back, so the dispatcher enters the leaf from the next call; a
-/// drain without it lets the hold run out instead. Eval thread only; no
-/// Lisp allocation, no safepoint.
+/// drain without it lets the hold run out instead. `ctx` (the running
+/// Context, when there is one) validates against the live obarray: a
+/// guarded inline armed at a moved epoch is discarded, and a spec slot
+/// whose binding held is re-stamped at the live epoch. Eval thread only;
+/// no Lisp allocation, no safepoint.
 #[cold]
 #[inline(never)]
 pub(crate) fn install(
     mut job: Box<PendingJob>,
     rt: Option<&RuntimeState>,
+    ctx: Option<&Context>,
 ) -> Result<CompiledLeaf, Discard> {
     let out = job.cell.take_out().expect("install only a ready job");
     if let Some(rt) = rt {
@@ -399,6 +422,42 @@ pub(crate) fn install(
         job.settle(Settled::Discarded(DiscardReason::HeapChanged));
         return Err(Discard::Stale(DiscardReason::HeapChanged));
     }
+    if let Some(ctx) = ctx {
+        let epoch = ctx.obarray.function_epoch();
+        let front = job.leaf();
+        // A precise MIR leaf that inlined a callee guards every inline
+        // entry against the epoch its front armed (`emit_mir_inline_entry_
+        // guard`); once the epoch moved, every call would deopt there.
+        if front.tier() == super::compile::LeafTier::Mir
+            && front.has_side_effects
+            && front.inline_epoch().is_some_and(|armed| armed != epoch)
+        {
+            let id = job.id;
+            EPOCH_DISCARDS.with(|m| *m.borrow_mut().entry(id).or_default() += 1);
+            job.settle(Settled::Discarded(DiscardReason::EpochMoved));
+            return Err(Discard::Stale(DiscardReason::EpochMoved));
+        }
+        // The proven-fresh re-arm: a slot the front armed at an older epoch
+        // whose binding still is the one it speculated on is current. The
+        // same test `call_spec_slow` makes on the first call; a compiler
+        // override (`cl-letf' of a subr) makes the subr shims refuse, so
+        // nothing is re-stamped under one.
+        if !job.spec_bindings.is_empty() && !ctx.compiler_function_overrides_active() {
+            let mut restamped = 0u64;
+            for &(slot, sym, expected) in job.spec_bindings.iter() {
+                if ctx
+                    .obarray
+                    .symbol_function_id(sym)
+                    .is_some_and(|binding| binding.bits() as u64 == expected)
+                    && front.spec_slots[slot].restamp(epoch)
+                {
+                    restamped += 1;
+                }
+            }
+            bump_stats(|s| s.spec_restamps += restamped);
+        }
+    }
+    let _ = EPOCH_DISCARDS.try_with(|m| m.borrow_mut().remove(&job.id));
     let mut leaf = job.leaf.take().expect("a pending job holds its leaf");
     serialize_instruction_stream();
     leaf.entry = entry as *const u8;
@@ -452,6 +511,9 @@ pub(crate) struct BgStats {
     /// Heat a function gained between its request and its install (the
     /// calls it interpreted meanwhile), over the installs that know it.
     pub(crate) interp_calls_while_pending: u64,
+    /// Spec slots an install re-armed at the live epoch (their binding held
+    /// while a redefinition elsewhere moved it).
+    pub(crate) spec_restamps: u64,
 }
 
 /// The `[neovm-jit-final-bg]` line: the eval thread's counters, the
@@ -518,7 +580,7 @@ impl BgReport {
         format!(
             "mode={} workers={} enqueued={} installed={} discarded={discarded} backend_us={} \
              backend_max_us={} queue_wait_us={} latency_hist_us[<100,<250,<500,<1ms,<2.5ms,<5ms,<10ms,>=10ms]={latency} \
-             pending_probes={} interp_calls_while_pending={} in_flight_at_exit={} worker_jobs={} \
+             pending_probes={} interp_calls_while_pending={} spec_restamps={} in_flight_at_exit={} worker_jobs={} \
              worker_skipped={} worker_panics={} worker_code_bytes={} worker_backend_max_us={}",
             self.mode,
             self.workers,
@@ -529,6 +591,7 @@ impl BgReport {
             self.stats.queue_wait_us,
             self.stats.pending_probes,
             self.stats.interp_calls_while_pending,
+            self.stats.spec_restamps,
             self.in_flight_at_exit,
             self.worker_jobs,
             self.worker_skipped,
@@ -550,6 +613,25 @@ thread_local! {
     /// The `compiled_id`s given a pending entry, for the drain (an id whose
     /// entry has moved on is dropped when the drain next looks).
     static PENDING_IDS: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
+    /// Epoch-moved discards per `compiled_id` since its last install.
+    static EPOCH_DISCARDS: RefCell<rustc_hash::FxHashMap<u64, u8>> =
+        RefCell::new(rustc_hash::FxHashMap::default());
+}
+
+/// Whether a compile of `id` may defer: not after [`MAX_EPOCH_DISCARDS`]
+/// epoch-moved discards, which a compile in line cannot repeat.
+pub(crate) fn may_defer(id: u64) -> bool {
+    EPOCH_DISCARDS.with(|m| m.borrow().get(&id).copied().unwrap_or(0) < MAX_EPOCH_DISCARDS)
+}
+
+/// Attach the leaf's epoch-validated spec bindings to the job its compile
+/// just deferred (the leaf builders, when their define was deferred).
+pub(crate) fn note_spec_bindings(bindings: impl Iterator<Item = (usize, SymId, u64)>) {
+    DEFERRED.with(|d| {
+        if let Some(code) = d.borrow_mut().as_mut() {
+            code.spec_bindings = bindings.collect();
+        }
+    });
 }
 
 fn bump_stats(f: impl FnOnce(&mut BgStats)) {
@@ -740,6 +822,7 @@ pub(crate) fn stash_deferred(cell: Arc<JobCell>, class: JobClass, enqueued_at: I
         cell,
         class,
         enqueued_at,
+        spec_bindings: Box::default(),
     };
     bump_stats(|s| s.enqueued[class as usize] += 1);
     let previous = DEFERRED.with(|d| d.borrow_mut().replace(code));
@@ -868,6 +951,10 @@ mod split_tests;
 #[cfg(test)]
 #[path = "bg/tests/pending_test.rs"]
 mod pending_tests;
+
+#[cfg(test)]
+#[path = "bg/tests/invalidation_test.rs"]
+mod invalidation_tests;
 
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 #[path = "bg/tests/worker_test.rs"]

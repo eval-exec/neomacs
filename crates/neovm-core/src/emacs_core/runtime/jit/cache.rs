@@ -771,7 +771,9 @@ fn compile_cache_entry(
         .then(|| stats::perf_map::LeafLabelScope::enter(id, name_hint, func));
     // A tier-up may leave its backend to run elsewhere (`jit::bg`); the
     // front below is the stall either way.
-    let defer = super::bg::DeferScope::enter(super::bg::JobClass::for_origin(request.origin));
+    let defer = super::bg::DeferScope::enter(
+        super::bg::JobClass::for_origin(request.origin).filter(|_| super::bg::may_defer(id)),
+    );
     let clock = stats::CompileClock::start(request.origin);
     let result = compile_bytecode_function_requested(func, obarray, request);
     drop(defer);
@@ -1570,10 +1572,13 @@ fn probe_pending(
     cache: &mut DenseCache,
     id: u64,
     func: &ByteCodeFunction,
+    ctx: Option<&Context>,
 ) -> Option<Rc<CompiledLeaf>> {
     let rt = func.jit_runtime();
     match cache.get(id) {
-        Some(CacheEntry::Pending(job)) if job.is_ready() => install_pending(cache, id, Some(rt)),
+        Some(CacheEntry::Pending(job)) if job.is_ready() => {
+            install_pending(cache, id, Some(rt), ctx)
+        }
         Some(CacheEntry::Pending(job)) => {
             job.wait(rt);
             None
@@ -1585,17 +1590,18 @@ fn probe_pending(
 /// Install `id`'s ready pending job: its leaf becomes the `Compiled` entry,
 /// a failed backend makes the body `NotCompilable` (as a failed in-line
 /// compile does), and a stale leaf leaves the entry empty for the next hot
-/// call to compile again. `rt`: the function's runtime, when the caller has
-/// it (see `bg::install`).
+/// call to compile again. `rt`: the function's runtime, and `ctx` the
+/// running Context, when the caller has them (see `bg::install`).
 fn install_pending(
     cache: &mut DenseCache,
     id: u64,
     rt: Option<&super::RuntimeState>,
+    ctx: Option<&Context>,
 ) -> Option<Rc<CompiledLeaf>> {
     let Some(CacheEntry::Pending(job)) = cache.take(id) else {
         unreachable!("install only a pending entry")
     };
-    match super::bg::install(job, rt) {
+    match super::bg::install(job, rt, ctx) {
         Ok(leaf) => {
             let leaf = Rc::new(leaf);
             cache.insert(id, CacheEntry::Compiled(Rc::clone(&leaf)));
@@ -1619,10 +1625,10 @@ fn install_pending(
 /// Install every ready pending job of `cache` (see [`drain_ready_pending`]).
 #[cold]
 #[inline(never)]
-fn drain_ready_in(cache: &mut DenseCache) {
+fn drain_ready_in(cache: &mut DenseCache, ctx: Option<&Context>) {
     super::bg::drain_pending_ids(|id| match cache.get(id) {
         Some(CacheEntry::Pending(job)) if job.is_ready() => {
-            install_pending(cache, id, None);
+            install_pending(cache, id, None, ctx);
             false
         }
         Some(CacheEntry::Pending(_)) => true,
@@ -1634,14 +1640,15 @@ fn drain_ready_in(cache: &mut DenseCache) {
 /// the leaf of a function that is not called again is not left pending
 /// (and its job's result is not held forever). Runs at command-loop idle
 /// and before each cache-miss compile; a no-op with nothing pending, and
-/// when the cache is borrowed.
-pub(crate) fn drain_ready_pending() {
+/// when the cache is borrowed. `ctx`: the running Context, if any (see
+/// `bg::install`).
+pub(crate) fn drain_ready_pending(ctx: Option<&Context>) {
     if super::bg::pending_count() == 0 {
         return;
     }
     COMPILED.with(|c| {
         if let Ok(mut cache) = c.try_borrow_mut() {
-            drain_ready_in(&mut cache);
+            drain_ready_in(&mut cache, ctx);
         }
     });
 }
@@ -1743,13 +1750,17 @@ pub fn try_run_compiled(
                 (Some(l.regalloc), l.profit_gate_bypassed, l.call_heavy)
             }
             Some(CacheEntry::Pending(_)) => {
-                return probe_pending(&mut cache, id, func).filter(|leaf| leaf.accepts(args.len()));
+                // SAFETY: the dormant seam-provided Context (shared reads).
+                let live = (!ctx.is_null()).then(|| unsafe { &*ctx });
+                return probe_pending(&mut cache, id, func, live)
+                    .filter(|leaf| leaf.accepts(args.len()));
             }
             Some(CacheEntry::NotCompilable | CacheEntry::Deferred(_)) => (None, false, false),
             None => {
                 // A miss compiles below: install what finished meanwhile.
                 if super::bg::pending_count() != 0 {
-                    drain_ready_in(&mut cache);
+                    // SAFETY: as above.
+                    drain_ready_in(&mut cache, (!ctx.is_null()).then(|| unsafe { &*ctx }));
                 }
                 (None, false, false)
             }
@@ -2026,7 +2037,9 @@ pub(crate) fn resolve_compiled_leaf_ptr(
         // A pending compile: install it if its backend finished, else take
         // the strict path meanwhile (the entry answers `None` below).
         if matches!(cache.get(id), Some(CacheEntry::Pending(job)) if job.is_ready()) {
-            install_pending(&mut cache, id, Some(func.jit_runtime()));
+            // SAFETY: same dormant-Context contract as try_run_compiled.
+            let live = (!ctx.is_null()).then(|| unsafe { &*ctx });
+            install_pending(&mut cache, id, Some(func.jit_runtime()), live);
         }
         match cache.get_or_insert_with(id, || {
             // SAFETY: same dormant-Context contract as try_run_compiled.

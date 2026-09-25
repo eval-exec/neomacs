@@ -152,7 +152,7 @@ fn jit_bg_drain_installs_a_job_whose_function_is_not_called_again() {
     assert_eq!(kind(&g), "pending");
     assert_eq!(pending_count(), 1);
     // And the idle drain installs `g`'s.
-    cache::drain_ready_pending();
+    cache::drain_ready_pending(None);
     assert_eq!(pending_count(), 0);
     assert_eq!(kind(&f), "compiled");
     assert_eq!(kind(&g), "compiled");

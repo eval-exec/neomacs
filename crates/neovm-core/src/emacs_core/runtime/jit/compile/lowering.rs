@@ -2704,6 +2704,21 @@ pub(super) fn lower_mir_with_plan(
     })?;
 
     let entry = defined.entry;
+    if entry.is_null() {
+        // A deferred backend (`jit::bg`): see `lower_leaf_full_osr`.
+        super::super::bg::note_spec_bindings(
+            plan.spec_sites
+                .values()
+                .filter(|s| !s.kind.is_cbsym())
+                .map(|s| {
+                    (
+                        s.slot,
+                        crate::emacs_core::intern::SymId(s.sym),
+                        s.expected_bits,
+                    )
+                }),
+        );
+    }
     super::super::stats::asm_dump::flush(&super::super::stats::asm_dump::AsmLeafInfo {
         tier: super::super::stats::perf_map::LabelTier::Mir,
         entry_name,

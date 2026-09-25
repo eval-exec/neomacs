@@ -140,6 +140,19 @@ impl SpecSlot {
         slot
     }
 
+    /// Arm a slot built at an older epoch for `epoch`, when the caller has
+    /// proved the site's binding unchanged at `epoch` (a background compile's
+    /// install, `jit::bg`: the only epoch write after a leaf's front). A
+    /// loader-disarmed slot never re-arms. Whether the slot moved.
+    pub(crate) fn restamp(&self, epoch: u64) -> bool {
+        let armed = self.epoch.load(Ordering::Relaxed);
+        if armed == epoch || armed == super::SPEC_EPOCH_DISARMED {
+            return false;
+        }
+        self.epoch.store(epoch, Ordering::Relaxed);
+        true
+    }
+
     /// The cached callee leaf, null when none.
     #[inline(always)]
     pub(crate) fn leaf_ptr(&self) -> *const CompiledLeaf {

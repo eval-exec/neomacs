@@ -130,7 +130,7 @@ fn corpus_by_dispatch(mode: BgMode) -> (Vec<String>, Vec<String>) {
                 let _ = try_run_compiled(ctx, &f, Value::NIL, &wrong);
             }
             assert!(quiesce_for_test(QUIET));
-            cache::drain_ready_pending();
+            cache::drain_ready_pending(None);
             assert_eq!(pending_count(), 0);
         })
     });
