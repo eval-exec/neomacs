@@ -43,7 +43,7 @@ FILTER="${1:-}"
 # The concurrent-GC + seqlock surface. Module-scoped (auto-picks up new
 # concurrent_* / parity_* / finalizer_* tests) plus the eval/symbol concurrent
 # tests. Single-threaded unit tests in these modules also run (they just pass).
-SURFACE_RE='^tagged::gc::(ownership|float_arena|bytecode_arena|arena_promotion|alloc_region|barrier_window|chunk_map|census)_tests::'
+SURFACE_RE='^tagged::gc::(ownership|float_arena|bytecode_arena|arena_promotion|alloc_region|barrier_window|chunk_map|census|slot_store|generation|vec_scan)_tests::'
 SURFACE_RE+='|^emacs_core::symbol::tests::seqlock'
 SURFACE_RE+='|^emacs_core::eval::tests::gc_concurrent'
 SURFACE_RE+='|^emacs_core::eval::tests::gc_safe_point_runs_concurrent'
