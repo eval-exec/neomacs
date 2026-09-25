@@ -469,6 +469,7 @@ impl TtyGrid {
 /// 1. `rasterize(&state)` -- convert FrameDisplayState into the desired grid
 /// 2. `diff_and_render()` -- diff desired vs current, emit ANSI sequences
 /// 3. `take_output()` -- get the buffered bytes to write to stdout
+#[derive(Clone)]
 pub struct TtyRif {
     /// What is currently displayed on the terminal.
     current: TtyGrid,
@@ -829,6 +830,16 @@ pub struct TtyFrameStats {
     /// The hint was present but failed cell verification (stale or
     /// conflicting); the voting fallback ran instead.
     pub scroll_seed_rejected: u32,
+    /// The frame was a damage frame (`NEOMACS_TTY_DAMAGE`): only the rows
+    /// whose painters changed were rasterized and planned.
+    pub damage_frame: bool,
+    /// Rows rasterized and planned: every row for a full frame.
+    pub rows_repainted: u32,
+    /// Why the frame was full under `NEOMACS_TTY_DAMAGE=on`/`verify`.
+    pub full_reason: Option<damage::TtyFullFrameReason>,
+    /// `NEOMACS_TTY_DAMAGE=verify`: this frame's comparison (`frames` is 1
+    /// when the frame was verified).
+    pub verify: damage::TtyDamageVerifyTotals,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -898,6 +909,7 @@ impl TtyRif {
     /// Set the face table for resolving face_ids.
     pub fn set_faces(&mut self, faces: FrameFaceMap) {
         self.faces = faces;
+        self.damage.faces_generation = self.damage.faces_generation.wrapping_add(1);
     }
 
     /// Width of the terminal grid.
@@ -911,7 +923,7 @@ impl TtyRif {
     }
 
     fn install_state_faces(&mut self, state: &FrameDisplayState) {
-        self.faces = state.faces.clone();
+        self.install_face_map(state);
         let default_face = self.faces.get(&FaceId::new(0));
         // Both come from the DEFAULT FACE's realized terminal colours, not from
         // the frame's pixels: the number the writer emits has to be the one
@@ -968,6 +980,19 @@ impl TtyRif {
         root: &FrameDisplayState,
         children_bottom_to_top: impl IntoIterator<Item = &'a FrameDisplayState>,
     ) {
+        if self.damage.mode != damage::TtyDamageMode::Off {
+            let children: Vec<&FrameDisplayState> = children_bottom_to_top
+                .into_iter()
+                .filter(|child| {
+                    child.frame_placement.parent() == Some(root.frame_placement.frame())
+                })
+                .collect();
+            self.rasterize_frame_tree_damaged(root, &children);
+            if std::env::var_os("NEOMACS_DUMP_TTY_GLYPHS").is_some() {
+                self.dump_tty_glyphs_to_log();
+            }
+            return;
+        }
         self.install_state_faces(root);
         self.desired.clear(self.default_bg);
         self.cursor_visible = false;
@@ -1019,56 +1044,13 @@ impl TtyRif {
             }
         }
 
-        if let Some(cursor) = state.phys_cursor.as_ref() {
-            let (cursor_col, cursor_row) =
-                terminal_cursor_cell(cursor.x, cursor.y, state.char_width, state.char_height);
-            let cursor_row = origin_row.saturating_add(i64::from(cursor_row));
-            let cursor_col = origin_col.saturating_add(i64::from(cursor_col));
-            self.cursor_visible = visible_cell(cursor_row, self.desired.height).is_some()
-                && visible_cell(cursor_col, self.desired.width).is_some();
-            if self.cursor_visible {
-                self.cursor_row = u16::try_from(cursor_row).unwrap_or(u16::MAX);
-                self.cursor_col = u16::try_from(cursor_col).unwrap_or(u16::MAX);
-            }
-            self.cursor_shape = match cursor.style {
-                CursorStyle::FilledBox | CursorStyle::Hollow => TerminalCursorShape::Block,
-                CursorStyle::Bar(_) => TerminalCursorShape::Bar,
-                CursorStyle::Hbar(_) => TerminalCursorShape::Underline,
-            };
-        }
+        self.install_state_cursor(state, origin_col, origin_row);
 
         for fill in &state.face_fills {
-            self.rasterize_face_fill(origin_col, origin_row, state, fill);
+            self.rasterize_face_fill(origin_col, origin_row, state, fill, None);
         }
 
-        let char_w = state.char_width.max(1.0);
-        let char_h = state.char_height.max(1.0);
-        for band in state.frame_chrome.bands() {
-            let bounds = band.bounds().raw();
-            let band_col = origin_col + (bounds.x / char_w).round() as i64;
-            let band_row = origin_row + (bounds.y / char_h).round() as i64;
-            match band.content() {
-                FrameChromeContent::DisplayRow(content) => {
-                    self.rasterize_glyph_row(
-                        state,
-                        TtyGlyphRowOwner::FrameChrome,
-                        origin_col,
-                        origin_row,
-                        band_col,
-                        band_row,
-                        content.row(),
-                        GlyphRowAreaLayout::unpartitioned(bounds, bounds),
-                        char_w,
-                    );
-                }
-                FrameChromeContent::MenuBar(content) => {
-                    let cols = (band.bounds().width() / char_w).round().max(0.0) as usize;
-                    let rows = (band.bounds().height() / char_h).round().max(1.0) as usize;
-                    self.rasterize_frame_menu_content(content, band_col, band_row, cols, rows);
-                }
-                FrameChromeContent::ToolBar(_) | FrameChromeContent::CompactBar(_) => {}
-            }
-        }
+        self.rasterize_frame_chrome_bands(state, origin_col, origin_row);
 
         for entry in &state.window_matrices {
             let char_w = state.char_width.max(1.0);
@@ -1085,22 +1067,19 @@ impl TtyRif {
                         self.scroll_seed = Some(delta);
                     }
                 }
-                // Mirror FrameDisplayState::materialize(): buffer text rows are
-                // laid out relative to the GNU TEXT_AREA, while mode-line,
-                // header-line, tab-line, and minibuffer chrome remain
-                // window-wide.  This is the TTY side of GNU's glyph matrix
-                // margin reservation in dispnew.c: text-area glyph pointers are
-                // offset past left margin columns, chrome rows are not.
-                let row_bounds = entry.row_pixel_bounds(glyph_row.role);
-                let area_layout = state.glyph_row_area_layout(entry, glyph_row.role);
-                let row_col = origin_col + (row_bounds.x / char_w).round().max(0.0) as i64;
-                let row_base = origin_row + (row_bounds.y / char_h).round().max(0.0) as i64;
-                // GNU keeps two coordinate domains in each glyph row:
-                // VPOS/HPOS are grid coordinates, while Y/X are pixel
-                // coordinates for GUI redisplay.  TTY output is written by
-                // matrix row index, so pixel_y/height_px must not stretch or
-                // skip terminal rows.
-                let grid_row = row_base.saturating_add(usize_to_i64_saturating(row_idx));
+                let WindowRowPlacement {
+                    row_bounds,
+                    area_layout,
+                    row_col,
+                    grid_row,
+                } = WindowRowPlacement::new(
+                    state,
+                    entry,
+                    glyph_row.role,
+                    row_idx,
+                    origin_col,
+                    origin_row,
+                );
                 // Damage-aware carry (GNU dispnew: update_window never touches
                 // rows the desired matrix left disabled). A row the layout
                 // engine reused VERBATIM rasterizes to exactly what the
@@ -1118,6 +1097,7 @@ impl TtyRif {
                     && !self.force_full_render
                     && glyph_row.enabled
                     && grid_row >= 0
+                    && self.carry_permitted(grid_row as usize)
                 {
                     let coverage = area_layout.structural_coverage().unwrap_or(row_bounds);
                     let carry_col = origin_col + (coverage.x / char_w).round() as i64;
@@ -1153,6 +1133,69 @@ impl TtyRif {
         // `tty_update_end` shows it.  Keep cursor state separate from
         // cell attributes so blank cells retain the terminal-default
         // background.
+    }
+
+    /// The hardware cursor a state asks for, relative to its frame origin.
+    fn install_state_cursor(
+        &mut self,
+        state: &FrameDisplayState,
+        origin_col: i64,
+        origin_row: i64,
+    ) {
+        if let Some(cursor) = state.phys_cursor.as_ref() {
+            let (cursor_col, cursor_row) =
+                terminal_cursor_cell(cursor.x, cursor.y, state.char_width, state.char_height);
+            let cursor_row = origin_row.saturating_add(i64::from(cursor_row));
+            let cursor_col = origin_col.saturating_add(i64::from(cursor_col));
+            self.cursor_visible = visible_cell(cursor_row, self.desired.height).is_some()
+                && visible_cell(cursor_col, self.desired.width).is_some();
+            if self.cursor_visible {
+                self.cursor_row = u16::try_from(cursor_row).unwrap_or(u16::MAX);
+                self.cursor_col = u16::try_from(cursor_col).unwrap_or(u16::MAX);
+            }
+            self.cursor_shape = match cursor.style {
+                CursorStyle::FilledBox | CursorStyle::Hollow => TerminalCursorShape::Block,
+                CursorStyle::Bar(_) => TerminalCursorShape::Bar,
+                CursorStyle::Hbar(_) => TerminalCursorShape::Underline,
+            };
+        }
+    }
+
+    /// Paint the frame-level chrome bands (tab bar, menu bar).
+    fn rasterize_frame_chrome_bands(
+        &mut self,
+        state: &FrameDisplayState,
+        origin_col: i64,
+        origin_row: i64,
+    ) {
+        let char_w = state.char_width.max(1.0);
+        let char_h = state.char_height.max(1.0);
+        for band in state.frame_chrome.bands() {
+            let bounds = band.bounds().raw();
+            let band_col = origin_col + (bounds.x / char_w).round() as i64;
+            let band_row = origin_row + (bounds.y / char_h).round() as i64;
+            match band.content() {
+                FrameChromeContent::DisplayRow(content) => {
+                    self.rasterize_glyph_row(
+                        state,
+                        TtyGlyphRowOwner::FrameChrome,
+                        origin_col,
+                        origin_row,
+                        band_col,
+                        band_row,
+                        content.row(),
+                        GlyphRowAreaLayout::unpartitioned(bounds, bounds),
+                        char_w,
+                    );
+                }
+                FrameChromeContent::MenuBar(content) => {
+                    let cols = (band.bounds().width() / char_w).round().max(0.0) as usize;
+                    let rows = (band.bounds().height() / char_h).round().max(1.0) as usize;
+                    self.rasterize_frame_menu_content(content, band_col, band_row, cols, rows);
+                }
+                FrameChromeContent::ToolBar(_) | FrameChromeContent::CompactBar(_) => {}
+            }
+        }
     }
 
     fn draw_child_border(&mut self, child: &FrameDisplayState, origin_col: i64, origin_row: i64) {
@@ -1396,11 +1439,19 @@ impl TtyRif {
         // Plan first (pure decision + screen-model replay), then encode (the
         // only place bytes are produced). The planner consults `self.caps`,
         // so every planned op is encodable on the connected terminal.
-        let ops = self.plan_frame();
+        let ops = if self.damage.frame == damage::FrameKind::Damage {
+            self.plan_damage_frame()
+        } else {
+            self.plan_frame()
+        };
+        if self.verifying() {
+            self.note_op_rows(&ops);
+        }
 
         if self.write_quiet_frame(&ops) {
             self.frame_stats.bytes = self.output.len() as u32;
-            std::mem::swap(&mut self.current, &mut self.desired);
+            self.commit_frame();
+            self.finish_verified_frame();
             return;
         }
 
@@ -1447,9 +1498,11 @@ impl TtyRif {
 
         self.frame_stats.bytes = self.output.len() as u32;
 
-        // Swap: current now reflects what is on screen.
-        std::mem::swap(&mut self.current, &mut self.desired);
+        // Swap: current now reflects what is on screen (a damage frame
+        // copies only its repainted rows).
+        self.commit_frame();
         self.force_full_render = false;
+        self.finish_verified_frame();
     }
 
     /// Plan a frame without encoding, for structural tests: what would be
@@ -1458,7 +1511,11 @@ impl TtyRif {
     #[cfg(test)]
     fn plan_for_test(&mut self) -> Vec<TermOp> {
         self.frame_stats = TtyFrameStats::default();
-        self.plan_frame()
+        if self.damage.frame == damage::FrameKind::Damage {
+            self.plan_damage_frame()
+        } else {
+            self.plan_frame()
+        }
     }
 
     #[cfg(test)]
@@ -1563,260 +1620,273 @@ impl TtyRif {
             .collect::<Vec<_>>();
 
         for row in 0..self.desired.height {
-            // Damage-aware skip: a carried, unwritten row is byte-identical
-            // to the screen model by construction — no cell compare needed.
-            if !self.force_full_render
-                && self.desired.row_provably_unchanged(row)
-                && !model_touched.iter().any(|range| range.contains(&row))
+            self.plan_row(row, &model_touched, &mut ops);
+        }
+
+        ops
+    }
+
+    /// Plan one row: the per-row half of [`Self::plan_frame`], shared with
+    /// the damage path (`damage.rs`), which plans only the rows whose
+    /// painters changed. `model_touched` names the rows a scroll replay
+    /// already rewrote in the screen model this frame.
+    #[inline]
+    fn plan_row(
+        &mut self,
+        row: usize,
+        model_touched: &[std::ops::RangeInclusive<usize>],
+        ops: &mut Vec<TermOp>,
+    ) {
+        // Damage-aware skip: a carried, unwritten row is byte-identical
+        // to the screen model by construction — no cell compare needed.
+        if !self.force_full_render
+            && self.desired.row_provably_unchanged(row)
+            && !model_touched.iter().any(|range| range.contains(&row))
+        {
+            return;
+        }
+        let row_start = row * self.desired.width;
+        let desired_row = &self.desired.cells[row_start..row_start + self.desired.width];
+        let current_row = &self.current.cells[row_start..row_start + self.desired.width];
+        let current_logical_length =
+            LogicalRowLength::from_cells(current_row, self.caps.blank_tail);
+        let desired_logical_length =
+            LogicalRowLength::from_cells(desired_row, self.caps.blank_tail);
+        let logical_tail_update = current_logical_length.tail_update_to(desired_logical_length);
+
+        let Some(first_changed) = (if self.force_full_render {
+            Some(0)
+        } else {
+            desired_row
+                .iter()
+                .zip(current_row.iter())
+                .position(|(desired, current)| !desired.padding && desired != current)
+        }) else {
+            return;
+        };
+
+        let mut last_changed = if self.force_full_render {
+            desired_row.len().saturating_sub(1)
+        } else {
+            desired_row
+                .iter()
+                .zip(current_row.iter())
+                .rposition(|(desired, current)| !desired.padding && desired != current)
+                .expect("row with first changed cell must also have a last changed cell")
+        };
+
+        if self.force_full_render {
+            // GNU dispnew.c:5991-6013 trims trailing default-face spaces
+            // when termcap `in` is absent, writes the meaningful prefix,
+            // then clears the rest with `ce`.  The erased-vs-written
+            // distinction is observable in a raw terminal snapshot.
+            if let Some((split, bg)) = uniform_erasable_tail(desired_row, 0)
+                && self.caps.blank_tail.can_erase(bg)
             {
-                continue;
-            }
-            let row_start = row * self.desired.width;
-            let desired_row = &self.desired.cells[row_start..row_start + self.desired.width];
-            let current_row = &self.current.cells[row_start..row_start + self.desired.width];
-            let current_logical_length =
-                LogicalRowLength::from_cells(current_row, self.caps.blank_tail);
-            let desired_logical_length =
-                LogicalRowLength::from_cells(desired_row, self.caps.blank_tail);
-            let logical_tail_update = current_logical_length.tail_update_to(desired_logical_length);
-
-            let Some(first_changed) = (if self.force_full_render {
-                Some(0)
-            } else {
-                desired_row
-                    .iter()
-                    .zip(current_row.iter())
-                    .position(|(desired, current)| !desired.padding && desired != current)
-            }) else {
-                continue;
-            };
-
-            let mut last_changed = if self.force_full_render {
-                desired_row.len().saturating_sub(1)
-            } else {
-                desired_row
-                    .iter()
-                    .zip(current_row.iter())
-                    .rposition(|(desired, current)| !desired.padding && desired != current)
-                    .expect("row with first changed cell must also have a last changed cell")
-            };
-
-            if self.force_full_render {
-                // GNU dispnew.c:5991-6013 trims trailing default-face spaces
-                // when termcap `in` is absent, writes the meaningful prefix,
-                // then clears the rest with `ce`.  The erased-vs-written
-                // distinction is observable in a raw terminal snapshot.
-                if let Some((split, bg)) = uniform_erasable_tail(desired_row, 0)
-                    && self.caps.blank_tail.can_erase(bg)
-                {
-                    if split > 0 {
-                        ops.push(TermOp::WriteRun {
-                            row: row as u16,
-                            start: 0,
-                            end: split as u16,
-                        });
-                    }
-                    ops.push(TermOp::EraseToEol {
-                        row: row as u16,
-                        from: split as u16,
-                        bg,
-                    });
-                } else {
+                if split > 0 {
                     ops.push(TermOp::WriteRun {
                         row: row as u16,
                         start: 0,
-                        end: desired_row.len() as u16,
+                        end: split as u16,
                     });
                 }
-                continue;
-            }
-
-            // GNU dispnew.c:6062-6079 treats an enabled row whose effective
-            // old length is zero uniformly: skip implicit leading blanks and
-            // write everything from there to `nlen` in ONE run, then return.
-            // Content provenance is irrelevant, and so is whether the interior
-            // happens to match the blank row already on screen: the run is not
-            // a cell-by-cell diff.  Only the trailing blanks trimmed off
-            // `nlen` stay erased.
-            let current_row_is_erased = current_row
-                .iter()
-                .all(|cell| cell.materialization == CellMaterialization::Erased);
-            if current_row_is_erased {
-                let write_end = self.desired_row_content_end(desired_row, first_changed);
-                if first_changed < write_end {
-                    ops.push(TermOp::WriteRun {
-                        row: row as u16,
-                        start: first_changed as u16,
-                        end: write_end as u16,
-                    });
-                }
-                continue;
-            }
-
-            // GNU's row updater emits one cursor-contiguous logical glyph run.
-            // Splitting that run is visually equivalent only when every cell
-            // has a known one-column advance. Once Unicode width or cluster
-            // layout is terminal-resolved, an absolute move between sub-runs
-            // changes the physical result. Preserve GNU's single span for
-            // those rows and apply any logical shrink erase afterwards.
-            let terminal_resolves_advance = row_has_terminal_resolved_advance(desired_row)
-                || row_has_terminal_resolved_advance(current_row);
-            if terminal_resolves_advance {
-                let erase_tail =
-                    logical_tail_erase(desired_row, logical_tail_update, self.caps.blank_tail);
-                let write_limit = erase_tail
-                    .map(|(from, _)| from)
-                    .unwrap_or_else(|| desired_logical_length.as_usize());
-                let write_end = (last_changed + 1).min(write_limit);
-                if first_changed < write_end {
-                    ops.push(TermOp::WriteRun {
-                        row: row as u16,
-                        start: first_changed as u16,
-                        end: write_end as u16,
-                    });
-                }
-                if let Some((from, bg)) = erase_tail {
-                    ops.push(TermOp::EraseToEol {
-                        row: row as u16,
-                        from: from as u16,
-                        bg,
-                    });
-                }
-                continue;
-            }
-
-            // In-line horizontal shift (ICH/DCH): one char typed or deleted
-            // mid-line shifts the whole tail; detecting it turns a
-            // tail-rewrite into one escape plus the changed cells. The
-            // shift must match to the PHYSICAL end of the row (a split
-            // window's divider breaks the suffix equality and correctly
-            // refuses), and any wide-char padding in the row refuses
-            // outright: a wide base landing on the right edge with its
-            // padding pushed off is blanked by the terminal while the model
-            // keeps it — a divergence no later diff can see. The model
-            // replays the shift and poisons the opened/revealed cells, so
-            // the ordinary span diff below emits exactly the fresh content.
-            let phys_width = self.desired.width;
-            if self.caps.insert_delete_char
-                && let Some((op, shifted_row)) = detect_row_shift(
-                    row as u16,
-                    &self.desired.cells[row_start..row_start + phys_width],
-                    &self.current.cells[row_start..row_start + phys_width],
-                    first_changed,
-                )
-            {
-                ops.push(op);
-                self.current.cells[row_start..row_start + phys_width]
-                    .clone_from_slice(&shifted_row);
-                let desired_row = &self.desired.cells[row_start..row_start + phys_width];
-                let current_row = &self.current.cells[row_start..row_start + phys_width];
-                let Some(fresh_first) = desired_row
-                    .iter()
-                    .zip(current_row.iter())
-                    .position(|(desired, current)| !desired.padding && desired != current)
-                else {
-                    continue;
-                };
-                let fresh_last = desired_row
-                    .iter()
-                    .zip(current_row.iter())
-                    .rposition(|(desired, current)| !desired.padding && desired != current)
-                    .expect("shift left at least the poisoned cells changed");
+                ops.push(TermOp::EraseToEol {
+                    row: row as u16,
+                    from: split as u16,
+                    bg,
+                });
+            } else {
                 ops.push(TermOp::WriteRun {
                     row: row as u16,
-                    start: fresh_first as u16,
-                    end: fresh_last as u16 + 1,
+                    start: 0,
+                    end: desired_row.len() as u16,
                 });
-                continue;
             }
+            return;
+        }
 
-            // GNU bases tail erasure on logical glyph-grid lengths, not on the
-            // terminal emulator's Unicode width table: `write_row` calls
-            // `clear_end_of_line` only when trimmed `olen > nlen`
-            // (`src/dispnew.c:6234-6238`). Equal-length and growing rows must
-            // preserve their physical tail. A shrinking row may use EL only
-            // when the desired tail is uniformly erasable with this
-            // terminal's BCE behavior.
-            let mut erase_from: Option<usize> = None;
-            {
-                if let Some((split, bg)) =
-                    logical_tail_erase(desired_row, logical_tail_update, self.caps.blank_tail)
-                    && split <= last_changed + 1
-                {
-                    erase_from = Some(split);
-                    last_changed = split.saturating_sub(1).max(first_changed);
-                    if split <= first_changed {
-                        // The whole changed range is the erase.
-                        ops.push(TermOp::EraseToEol {
-                            row: row as u16,
-                            from: split as u16,
-                            bg,
-                        });
-                        continue;
-                    }
-                }
+        // GNU dispnew.c:6062-6079 treats an enabled row whose effective
+        // old length is zero uniformly: skip implicit leading blanks and
+        // write everything from there to `nlen` in ONE run, then return.
+        // Content provenance is irrelevant, and so is whether the interior
+        // happens to match the blank row already on screen: the run is not
+        // a cell-by-cell diff.  Only the trailing blanks trimmed off
+        // `nlen` stay erased.
+        let current_row_is_erased = current_row
+            .iter()
+            .all(|cell| cell.materialization == CellMaterialization::Erased);
+        if current_row_is_erased {
+            let write_end = self.desired_row_content_end(desired_row, first_changed);
+            if first_changed < write_end {
+                ops.push(TermOp::WriteRun {
+                    row: row as u16,
+                    start: first_changed as u16,
+                    end: write_end as u16,
+                });
             }
+            return;
+        }
 
-            // Multi-span emission (issue 206): a row with two separate
-            // change regions used to be rewritten from the first to the
-            // last changed cell in one span, retransmitting the untouched
-            // middle. Split the [first, last] range into changed runs and
-            // coalesce runs whose gap is cheaper to retransmit than a
-            // cursor motion (a goto costs ~8 bytes; an unchanged text cell
-            // usually 1).
-            //
-            // GNU emits ONE span here: `write_glyphs (f, nbody + nsp +
-            // begmatch, nlen - tem)` (`src/dispnew.c:6180-6186`), which
-            // physically writes every cell of the span whether or not it
-            // changed. Skipping an unchanged interior cell is invisible only
-            // when the terminal already has a glyph there; a cell the
-            // terminal ERASED stays unwritten, which a raw cell capture sees
-            // as empty where GNU has a space. So physical materialization,
-            // not just logical equality, decides what the run must cover —
-            // the byte-cost rule may only skip already-written cells.
-            const GOTO_COST_CELLS: usize = 8;
-            let changed = |col: usize| {
-                !desired_row[col].padding
-                    && (desired_row[col] != current_row[col]
-                        || current_row[col].materialization == CellMaterialization::Erased)
-            };
-            let mut col = first_changed;
-            let row_op_floor = ops.len();
-            while col <= last_changed {
-                if changed(col) {
-                    let start = col;
-                    while col <= last_changed && changed(col) {
-                        col += 1;
-                    }
-                    let coalesced = ops.len() > row_op_floor
-                        && matches!(ops.last(), Some(TermOp::WriteRun { end, .. })
-                            if start - *end as usize <= GOTO_COST_CELLS);
-                    if coalesced {
-                        if let Some(TermOp::WriteRun { end, .. }) = ops.last_mut() {
-                            *end = col as u16;
-                        }
-                    } else {
-                        ops.push(TermOp::WriteRun {
-                            row: row as u16,
-                            start: start as u16,
-                            end: col as u16,
-                        });
-                    }
-                } else {
-                    col += 1;
-                }
+        // GNU's row updater emits one cursor-contiguous logical glyph run.
+        // Splitting that run is visually equivalent only when every cell
+        // has a known one-column advance. Once Unicode width or cluster
+        // layout is terminal-resolved, an absolute move between sub-runs
+        // changes the physical result. Preserve GNU's single span for
+        // those rows and apply any logical shrink erase afterwards.
+        let terminal_resolves_advance = row_has_terminal_resolved_advance(desired_row)
+            || row_has_terminal_resolved_advance(current_row);
+        if terminal_resolves_advance {
+            let erase_tail =
+                logical_tail_erase(desired_row, logical_tail_update, self.caps.blank_tail);
+            let write_limit = erase_tail
+                .map(|(from, _)| from)
+                .unwrap_or_else(|| desired_logical_length.as_usize());
+            let write_end = (last_changed + 1).min(write_limit);
+            if first_changed < write_end {
+                ops.push(TermOp::WriteRun {
+                    row: row as u16,
+                    start: first_changed as u16,
+                    end: write_end as u16,
+                });
             }
-            if let Some(from) = erase_from {
-                let bg = desired_row[from].attrs.bg;
+            if let Some((from, bg)) = erase_tail {
                 ops.push(TermOp::EraseToEol {
                     row: row as u16,
                     from: from as u16,
                     bg,
                 });
             }
+            return;
         }
 
-        ops
+        // In-line horizontal shift (ICH/DCH): one char typed or deleted
+        // mid-line shifts the whole tail; detecting it turns a
+        // tail-rewrite into one escape plus the changed cells. The
+        // shift must match to the PHYSICAL end of the row (a split
+        // window's divider breaks the suffix equality and correctly
+        // refuses), and any wide-char padding in the row refuses
+        // outright: a wide base landing on the right edge with its
+        // padding pushed off is blanked by the terminal while the model
+        // keeps it — a divergence no later diff can see. The model
+        // replays the shift and poisons the opened/revealed cells, so
+        // the ordinary span diff below emits exactly the fresh content.
+        let phys_width = self.desired.width;
+        if self.caps.insert_delete_char
+            && let Some((op, shifted_row)) = detect_row_shift(
+                row as u16,
+                &self.desired.cells[row_start..row_start + phys_width],
+                &self.current.cells[row_start..row_start + phys_width],
+                first_changed,
+            )
+        {
+            ops.push(op);
+            self.current.cells[row_start..row_start + phys_width].clone_from_slice(&shifted_row);
+            let desired_row = &self.desired.cells[row_start..row_start + phys_width];
+            let current_row = &self.current.cells[row_start..row_start + phys_width];
+            let Some(fresh_first) = desired_row
+                .iter()
+                .zip(current_row.iter())
+                .position(|(desired, current)| !desired.padding && desired != current)
+            else {
+                return;
+            };
+            let fresh_last = desired_row
+                .iter()
+                .zip(current_row.iter())
+                .rposition(|(desired, current)| !desired.padding && desired != current)
+                .expect("shift left at least the poisoned cells changed");
+            ops.push(TermOp::WriteRun {
+                row: row as u16,
+                start: fresh_first as u16,
+                end: fresh_last as u16 + 1,
+            });
+            return;
+        }
+
+        // GNU bases tail erasure on logical glyph-grid lengths, not on the
+        // terminal emulator's Unicode width table: `write_row` calls
+        // `clear_end_of_line` only when trimmed `olen > nlen`
+        // (`src/dispnew.c:6234-6238`). Equal-length and growing rows must
+        // preserve their physical tail. A shrinking row may use EL only
+        // when the desired tail is uniformly erasable with this
+        // terminal's BCE behavior.
+        let mut erase_from: Option<usize> = None;
+        {
+            if let Some((split, bg)) =
+                logical_tail_erase(desired_row, logical_tail_update, self.caps.blank_tail)
+                && split <= last_changed + 1
+            {
+                erase_from = Some(split);
+                last_changed = split.saturating_sub(1).max(first_changed);
+                if split <= first_changed {
+                    // The whole changed range is the erase.
+                    ops.push(TermOp::EraseToEol {
+                        row: row as u16,
+                        from: split as u16,
+                        bg,
+                    });
+                    return;
+                }
+            }
+        }
+
+        // Multi-span emission (issue 206): a row with two separate
+        // change regions used to be rewritten from the first to the
+        // last changed cell in one span, retransmitting the untouched
+        // middle. Split the [first, last] range into changed runs and
+        // coalesce runs whose gap is cheaper to retransmit than a
+        // cursor motion (a goto costs ~8 bytes; an unchanged text cell
+        // usually 1).
+        //
+        // GNU emits ONE span here: `write_glyphs (f, nbody + nsp +
+        // begmatch, nlen - tem)` (`src/dispnew.c:6180-6186`), which
+        // physically writes every cell of the span whether or not it
+        // changed. Skipping an unchanged interior cell is invisible only
+        // when the terminal already has a glyph there; a cell the
+        // terminal ERASED stays unwritten, which a raw cell capture sees
+        // as empty where GNU has a space. So physical materialization,
+        // not just logical equality, decides what the run must cover —
+        // the byte-cost rule may only skip already-written cells.
+        const GOTO_COST_CELLS: usize = 8;
+        let changed = |col: usize| {
+            !desired_row[col].padding
+                && (desired_row[col] != current_row[col]
+                    || current_row[col].materialization == CellMaterialization::Erased)
+        };
+        let mut col = first_changed;
+        let row_op_floor = ops.len();
+        while col <= last_changed {
+            if changed(col) {
+                let start = col;
+                while col <= last_changed && changed(col) {
+                    col += 1;
+                }
+                let coalesced = ops.len() > row_op_floor
+                    && matches!(ops.last(), Some(TermOp::WriteRun { end, .. })
+                        if start - *end as usize <= GOTO_COST_CELLS);
+                if coalesced {
+                    if let Some(TermOp::WriteRun { end, .. }) = ops.last_mut() {
+                        *end = col as u16;
+                    }
+                } else {
+                    ops.push(TermOp::WriteRun {
+                        row: row as u16,
+                        start: start as u16,
+                        end: col as u16,
+                    });
+                }
+            } else {
+                col += 1;
+            }
+        }
+        if let Some(from) = erase_from {
+            let bg = desired_row[from].attrs.bg;
+            ops.push(TermOp::EraseToEol {
+                row: row as u16,
+                from: from as u16,
+                bg,
+            });
+        }
     }
 
     /// Apply GNU's logical-row trimming to the physical desired model.
@@ -1829,15 +1899,7 @@ impl TtyRif {
             return;
         }
         for row in self.desired.cells.chunks_mut(self.desired.width) {
-            let Some((split, bg)) = uniform_erasable_tail(row, 0) else {
-                continue;
-            };
-            if !self.caps.blank_tail.can_erase(bg) {
-                continue;
-            }
-            for cell in &mut row[split..] {
-                cell.materialization = CellMaterialization::Erased;
-            }
+            normalize_row_blank_tail(row, self.caps.blank_tail);
         }
     }
 
@@ -1999,12 +2061,15 @@ impl TtyRif {
         std::mem::take(&mut self.output)
     }
 
+    /// Paint one face fill; with `rows`, only the rows it marks (the damage
+    /// path's touched rows).
     fn rasterize_face_fill(
         &mut self,
         origin_col: i64,
         origin_row: i64,
         state: &FrameDisplayState,
         fill: &FaceFillItem,
+        rows: Option<&[bool]>,
     ) {
         let char_w = state.char_width.max(1.0);
         let char_h = state.char_height.max(1.0);
@@ -2020,6 +2085,9 @@ impl TtyRif {
         let visible_cols =
             visible_cell_range(cell_rect.left, cell_rect.width(), self.desired.width);
         for row in visible_rows {
+            if rows.is_some_and(|rows| !rows.get(row).copied().unwrap_or(false)) {
+                continue;
+            }
             for col in visible_cols.clone() {
                 self.desired.set(row, col, ' ', attrs, false);
             }
@@ -2446,6 +2514,58 @@ impl TtyRif {
     }
 }
 
+/// Where one window-matrix row lands on the terminal grid.
+///
+/// One computation shared by the rasterizer and by the painter keys of
+/// `damage.rs`: a key built from a different placement than the one painted
+/// would let the damage path skip a row it should have repainted.
+#[derive(Clone, Copy, Debug)]
+struct WindowRowPlacement {
+    row_bounds: Rect,
+    area_layout: GlyphRowAreaLayout,
+    /// The screen column the row's glyphs start from.
+    row_col: i64,
+    /// The terminal row the row is written to.
+    grid_row: i64,
+}
+
+impl WindowRowPlacement {
+    #[inline]
+    fn new(
+        state: &FrameDisplayState,
+        entry: &WindowMatrixEntry,
+        role: GlyphRowRole,
+        row_idx: usize,
+        origin_col: i64,
+        origin_row: i64,
+    ) -> Self {
+        let char_w = state.char_width.max(1.0);
+        let char_h = state.char_height.max(1.0);
+        // Mirror FrameDisplayState::materialize(): buffer text rows are
+        // laid out relative to the GNU TEXT_AREA, while mode-line,
+        // header-line, tab-line, and minibuffer chrome remain
+        // window-wide.  This is the TTY side of GNU's glyph matrix
+        // margin reservation in dispnew.c: text-area glyph pointers are
+        // offset past left margin columns, chrome rows are not.
+        let row_bounds = entry.row_pixel_bounds(role);
+        let area_layout = state.glyph_row_area_layout(entry, role);
+        let row_col = origin_col + (row_bounds.x / char_w).round().max(0.0) as i64;
+        let row_base = origin_row + (row_bounds.y / char_h).round().max(0.0) as i64;
+        // GNU keeps two coordinate domains in each glyph row:
+        // VPOS/HPOS are grid coordinates, while Y/X are pixel
+        // coordinates for GUI redisplay.  TTY output is written by
+        // matrix row index, so pixel_y/height_px must not stretch or
+        // skip terminal rows.
+        let grid_row = row_base.saturating_add(usize_to_i64_saturating(row_idx));
+        Self {
+            row_bounds,
+            area_layout,
+            row_col,
+            grid_row,
+        }
+    }
+}
+
 fn usize_to_i64_saturating(value: usize) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
@@ -2794,6 +2914,20 @@ fn uniform_erasable_tail(
         split = search_start + offset;
     }
     Some((split, background))
+}
+
+/// Mark one desired row's uniform erasable blank tail erased (see
+/// [`TtyRif::normalize_desired_blank_tails`]).
+fn normalize_row_blank_tail(row: &mut [TtyCell], blank_tail: BlankTailMethod) {
+    let Some((split, bg)) = uniform_erasable_tail(row, 0) else {
+        return;
+    };
+    if !blank_tail.can_erase(bg) {
+        return;
+    }
+    for cell in &mut row[split..] {
+        cell.materialization = CellMaterialization::Erased;
+    }
 }
 
 /// Resolve GNU's typed logical shrink into a capability-safe terminal erase.

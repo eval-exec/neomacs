@@ -1408,6 +1408,10 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     "NEOMACS_TEXT_SNAPSHOT",
     // TTY silent frames: `off` (default) or `on`.
     "NEOMACS_TTY_SILENT",
+    // TTY damage-proportional repaint: `off` (default), `verify` or `on`, and
+    // the per-frame verify report.
+    "NEOMACS_TTY_DAMAGE",
+    "NEOMACS_TTY_DAMAGE_REPORT_FILE",
 ];
 
 pub(crate) fn configure_benchmark_environment(command: &mut Command, sandbox: &MelpaSandbox) {

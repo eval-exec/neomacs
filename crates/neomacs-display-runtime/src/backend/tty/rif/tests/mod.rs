@@ -373,6 +373,9 @@ fn rasterize_places_each_right_margin_at_the_reserved_columns() {
     });
 
     let mut rif = TtyRif::new(12, 2);
+    // This pins the full path's carry of reused rows through the desired
+    // grid, which a damage frame (NEOMACS_TTY_DAMAGE) does not rasterize.
+    rif.set_damage_mode(damage::TtyDamageMode::Off);
     rif.rasterize(&state);
 
     assert_eq!(desired_char(&rif, 0, 10), 'R');

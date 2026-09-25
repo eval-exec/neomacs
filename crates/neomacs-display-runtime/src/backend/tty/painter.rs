@@ -1,5 +1,5 @@
 //! Structured output for terminals that cannot consume the ANSI encoder.
-use super::{CellAttrs, CellMaterialization, TerminalCursorShape, TtyCell, TtyRif};
+use super::{CellAttrs, TerminalCursorShape, TtyCell, TtyRif};
 use neomacs_display_protocol::tty_capabilities::TtyAttributeCapabilities;
 use std::io;
 
@@ -14,10 +14,16 @@ impl TtyRif {
     /// the desired frame and forces a full retry; only a successful flush commits
     /// the screen model. No ANSI scroll/insert/erase assumptions cross this seam.
     pub fn paint(&mut self, painter: &mut impl TtyPainter) -> io::Result<()> {
+        self.drop_verify_shadow();
         self.frame_stats = super::TtyFrameStats::default();
         let result = (|| {
             painter.begin(self.desired.width, self.desired.height)?;
             for row in 0..self.desired.height {
+                // A damage frame (NEOMACS_TTY_DAMAGE) rasterized only the rows
+                // whose painters changed; the others are on screen already.
+                if !self.row_planned(row) {
+                    continue;
+                }
                 let start = row * self.desired.width;
                 let range = start..start + self.desired.width;
                 let next = &self.desired.cells[range.clone()];
@@ -42,14 +48,13 @@ impl TtyRif {
             )))
         })();
         if result.is_ok() {
-            for cell in &mut self.desired.cells {
-                cell.materialization = CellMaterialization::Written;
-            }
-            std::mem::swap(&mut self.current, &mut self.desired);
+            self.mark_planned_rows_written();
+            self.commit_frame();
             self.force_full_render = false;
             self.scroll_seed = None;
         } else {
             self.force_full_render = true;
+            self.forget_painted_state();
         }
         // The painter writes its own cursor; B1's record of the terminal
         // cursor applies only to the ANSI encoder.
