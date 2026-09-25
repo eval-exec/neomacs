@@ -352,6 +352,24 @@ fn census_renders_in_the_summary() {
         line.contains("deopts[total=5 osr=1 overflow=3 rerun=2]"),
         "{line}"
     );
+    assert!(line.contains("reopt[invalidated=0 stale=0 "), "{line}");
+    s.reopt_levels[ReoptLevel::Speculative as usize] = 4;
+    s.reopt_levels[ReoptLevel::Interpreter as usize] = 1;
+    s.reopt_stale = 2;
+    s.mir_gate_reopt = 3;
+    let line = stats::format_summary(&s);
+    assert!(
+        line.contains(
+            "reopt[invalidated=5 stale=2 speculative=4 no_inline=0 baseline_only=0 \
+             generic=0 interpreter=1]"
+        ),
+        "{line}"
+    );
+    assert!(line.contains("gate_reopt=3"), "{line}");
+    // The since-command-loop delta subtracts the new fields too.
+    let d = s.since(&stats::CompileStats::default());
+    assert_eq!(d.reopt_levels, s.reopt_levels);
+    assert_eq!(d.deopt_causes, s.deopt_causes);
 }
 
 /// `NEOVM_JIT_FORCE_DEOPT=1` alone makes reoptimization inert; the stress

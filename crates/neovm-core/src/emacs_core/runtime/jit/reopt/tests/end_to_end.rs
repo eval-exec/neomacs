@@ -961,3 +961,66 @@ fn backoff_climbs_to_generic_then_interpreter() {
 fn bignum_value() -> Value {
     Value::make_integer_from_str_or_zero("100000000000000000000000")
 }
+
+// --- The verification harness: NEOVM_JIT_REOPT_STRESS=1 with
+// NEOVM_JIT_FORCE_DEOPT=1 drives every source up the whole ladder. ---
+
+/// Under the every-guard-fails harness with the stress knobs, every native
+/// run deopts at its first guard and every deopt invalidates, so each source
+/// climbs the ladder until nothing in it can deopt. Every result must still
+/// be the interpreter's, and the climb must stay bounded.
+#[test]
+fn stress_with_force_deopt_climbs_and_matches_the_interpreter() {
+    force_deopt_for_test(true);
+    force_reopt_for_test(Some(ReoptKnobs::stress()));
+    let mut ev = Context::new();
+    // An entry leaf through the interpreter's call seam.
+    let sym = install(&mut ev, "reopt-stress-add", j4_add());
+    let callee = bytecode_of(&ev, sym);
+    callee.jit_runtime().set_hot_for_test();
+    let caller = caller_of(sym);
+    let inputs = [
+        Value::make_int(3),
+        Value::make_float(3.0),
+        Value::make_int(3_037_000_500),
+        Value::make_int(-7),
+        Value::make_float(-2.5),
+    ];
+    for _ in 0..40 {
+        for &x in &inputs {
+            let got = TestVm::from_context(&mut ev)
+                .execute(&caller, vec![x])
+                .expect("runs");
+            let want = interp_j4(&mut ev, x);
+            assert!(eql_value(&got, &want), "{got:?} != {want:?} for {x:?}");
+        }
+    }
+    let rt = callee.jit_runtime();
+    assert!(rt.reopt_level() > ReoptLevel::Speculative, "climbed");
+    assert!(
+        rt.reopt_count() <= ReoptKnobs::stress().max_reopts + 4,
+        "bounded: {} invalidations",
+        rt.reopt_count()
+    );
+    // An OSR loop: entry guards and body guards all fail, every failure
+    // retires the OSR leaf and allows a retry; the loop still finishes with
+    // the interpreter's answer.
+    crate::emacs_core::jit::force_osr_for_test(true);
+    let (n, k) = (Value::make_int(5_000), Value::make_int(1_000));
+    let f = osr_switch();
+    f.jit_runtime().set_hot_for_test();
+    let got = TestVm::from_context(&mut ev)
+        .execute(&f, vec![n, k])
+        .expect("OSR run");
+    crate::emacs_core::jit::force_osr_for_test(false);
+    let want = TestVm::from_context(&mut ev)
+        .execute(&osr_switch(), vec![n, k])
+        .expect("interp");
+    assert!(eql_value(&got, &want), "OSR {got:?} != interp {want:?}");
+    assert!(
+        f.jit_runtime().reopt_count() <= ReoptKnobs::stress().max_reopts + 4,
+        "bounded"
+    );
+    force_deopt_for_test(false);
+    force_reopt_for_test(None);
+}

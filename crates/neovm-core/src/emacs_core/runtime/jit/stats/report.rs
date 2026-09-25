@@ -158,7 +158,7 @@ impl FinalReport {
         if let Some(delta) = &self.compile_since_loop {
             head.push_str(&format!(
                 " | since_command_loop: compiles={} ok={} native_entries={} dispatch={}/{} \
-                 total_us={} retiers={} mir_taken={}",
+                 total_us={} retiers={} mir_taken={} deopts={} reopts={}",
                 delta.total_compiles,
                 delta.compiled_ok,
                 delta.native_entries,
@@ -167,6 +167,8 @@ impl FinalReport {
                 delta.total_us,
                 delta.retiers,
                 delta.mir_taken,
+                delta.deopts(),
+                delta.reopt_levels.iter().sum::<u64>(),
             ));
         }
         lines.push((ReportTag::Final, head));
