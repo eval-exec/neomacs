@@ -594,3 +594,58 @@ pub(crate) fn jit_args_first_on() -> bool {
         )
     })
 }
+
+#[cfg(test)]
+std::thread_local! {
+    static COLD_EXITS_TEST_OVERRIDE: std::cell::Cell<Option<ColdExitsMode>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// What `NEOVM_JIT_COLD_EXITS` does to the exit blocks of both tiers
+/// (`compile::cold_exits`, P2.2 O0.2). One binary answers every mode, for a
+/// same-binary A/B.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ColdExitsMode {
+    /// Mark nothing new: CLIF-identical to the lowering before the knob.
+    Off,
+    /// Mark every exit block cold (precise-deopt and rerun blocks, the
+    /// signal exit and handler dispatches, the back-edge poll's slow path,
+    /// the root-window grow calls), so Cranelift emits them after the
+    /// function's hot code. The CLIF differs from `Off` only in the marks.
+    On,
+}
+
+impl ColdExitsMode {
+    pub(crate) fn parse(value: Option<&str>) -> Self {
+        match value {
+            Some("1" | "on" | "true" | "yes") => Self::On,
+            _ => Self::Off,
+        }
+    }
+}
+
+/// Force the cold-exit mode for compiles on the current thread (tests
+/// only); `None` returns to the environment's.
+#[cfg(test)]
+pub(crate) fn force_cold_exits_for_test(mode: Option<ColdExitsMode>) {
+    COLD_EXITS_TEST_OVERRIDE.with(|c| c.set(mode));
+}
+
+/// `NEOVM_JIT_COLD_EXITS=off|on` (default off; see [`ColdExitsMode`]).
+/// Read at compile time only.
+pub(crate) fn jit_cold_exits() -> ColdExitsMode {
+    #[cfg(test)]
+    if let Some(mode) = COLD_EXITS_TEST_OVERRIDE.with(|c| c.get()) {
+        return mode;
+    }
+    use std::sync::OnceLock;
+    static MODE: OnceLock<ColdExitsMode> = OnceLock::new();
+    *MODE
+        .get_or_init(|| ColdExitsMode::parse(std::env::var("NEOVM_JIT_COLD_EXITS").ok().as_deref()))
+}
+
+/// Whether exit blocks are marked cold.
+#[inline]
+pub(crate) fn jit_cold_exits_on() -> bool {
+    jit_cold_exits() != ColdExitsMode::Off
+}

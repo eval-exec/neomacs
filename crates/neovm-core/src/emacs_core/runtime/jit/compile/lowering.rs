@@ -1763,6 +1763,7 @@ pub(crate) fn emit_root_window_stores(
     fb.ins().brif(fits, store_blk, &[], grow_blk, &[]);
     fb.switch_to_block(grow_blk);
     fb.seal_block(grow_blk);
+    super::cold_exits::mark_exit_cold(fb, grow_blk, super::cold_exits::ColdExit::Grow);
     let rootwin_grow = rt.refs.get(fb.func, Shim::RootwinGrow);
     fb.ins().call(rootwin_grow, &[vmctx, need]);
     fb.ins().jump(store_blk, &[]);
@@ -3879,6 +3880,7 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
 
         if let Some(db) = deopt {
             fb.switch_to_block(db);
+            super::cold_exits::mark_exit_cold(&mut fb, db, super::cold_exits::ColdExit::Rerun);
             let code = fb.ins().iconst(types::I64, STATUS_DEOPT);
             fb.ins().return_(&[code]);
         }
@@ -3895,6 +3897,7 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
         if let Some(se) = signal_exit {
             fb.switch_to_block(se);
             fb.seal_block(se);
+            super::cold_exits::mark_exit_cold(&mut fb, se, super::cold_exits::ColdExit::Signal);
             let code = fb.ins().iconst(types::I64, STATUS_SIGNAL);
             fb.ins().return_(&[code]);
         }
@@ -4286,6 +4289,7 @@ pub(crate) fn emit_hoisted_root_window_prologue(
     fb.ins().brif(fits, cont_blk, &[], grow_blk, &[]);
     fb.switch_to_block(grow_blk);
     fb.seal_block(grow_blk);
+    super::cold_exits::mark_exit_cold(fb, grow_blk, super::cold_exits::ColdExit::Grow);
     let rootwin_grow = rt.refs.get(fb.func, Shim::RootwinGrow);
     fb.ins().call(rootwin_grow, &[vmctx, need_max]);
     fb.ins().jump(cont_blk, &[]);
@@ -4837,9 +4841,11 @@ pub(crate) fn emit_pending_deopts(
             slots.saturating_add(add_slots as u32),
         ));
     });
+    let cold = super::cold_exits::ColdSpan::begin(fb);
     for pd in pending.drain(..) {
         fb.switch_to_block(pd.block);
         fb.seal_block(pd.block);
+        super::cold_exits::mark_exit_cold(fb, pd.block, super::cold_exits::ColdExit::Deopt);
         // Materialize the four bases. For Baked, the iconsts live in THIS cold
         // block (the original JIT placement); for Sidecar they are entry values.
         let (spill_base, meta_pc, meta_depth, meta_handlers) = match refs {
@@ -4912,6 +4918,7 @@ pub(crate) fn emit_pending_deopts(
         let code = fb.ins().iconst(types::I64, STATUS_DEOPT_AT);
         fb.ins().return_(&[code]);
     }
+    cold.end(fb, None);
 }
 
 /// Build the [`DeoptRefs`] for this leaf.
@@ -5037,9 +5044,11 @@ pub(crate) fn emit_pending_dispatches(
     block_for: &HashMap<usize, Block>,
     pending: &mut Vec<PendingDispatch>,
 ) -> Result<(), CompileError> {
+    let cold = super::cold_exits::ColdSpan::begin(fb);
     for pd in pending.drain(..) {
         fb.switch_to_block(pd.block);
         fb.seal_block(pd.block);
+        super::cold_exits::mark_exit_cold(fb, pd.block, super::cold_exits::ColdExit::Dispatch);
         // Emitted after the whole bytecode block, but ENTERED from the signal
         // edge of one earlier site: the store record as it stands now belongs
         // to the block's end, not to that site (a fast path that stored
@@ -5091,6 +5100,7 @@ pub(crate) fn emit_pending_dispatches(
         let se = *signal_exit.get_or_insert_with(|| fb.create_block());
         fb.ins().jump(se, &[]);
     }
+    cold.end(fb, None);
     Ok(())
 }
 

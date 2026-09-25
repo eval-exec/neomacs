@@ -3278,6 +3278,7 @@ fn emit_backedge_jump_with_args(
     let c1m = lowering::band_imm_p(fb, c1, 0xFF);
     fb.ins().stack_store(rt.ptr_ty, c1m, counter_slot, 0);
     let wrapped = lowering::icmp_imm_p(fb, IntCC::Equal, c1m, 0);
+    let cold = cold_exits::ColdSpan::begin(fb);
     let poll = fb.create_block();
     fb.ins().brif(wrapped, poll, &[], target_block, target_args);
 
@@ -3325,6 +3326,7 @@ fn emit_backedge_jump_with_args(
     let se = signal_target_for_site(fb, signal_exit, handlers, pending, vals, &tagged_reps);
     let ok = lowering::icmp_imm_p(fb, IntCC::Equal, status, STATUS_OK);
     fb.ins().brif(ok, target_block, target_args, se, &[]);
+    cold.end(fb, Some(cold_exits::ColdExit::Poll));
 }
 
 /// Lower a leaf bytecode body taking `arity` fixed arguments to native code.
@@ -4760,6 +4762,7 @@ fn build_leaf_fn<S: LeafSink>(
         // Terminate the shared signal block (return STATUS_SIGNAL) iff used.
         if let Some(sb) = signal_exit {
             fb.switch_to_block(sb);
+            cold_exits::mark_exit_cold(&mut fb, sb, cold_exits::ColdExit::Signal);
             let code = fb.ins().iconst(types::I64, STATUS_SIGNAL);
             fb.ins().return_(&[code]);
         }
@@ -4829,6 +4832,8 @@ mod dispatch;
 pub use dispatch::*;
 
 pub(crate) mod stack_guard;
+
+pub(crate) mod cold_exits;
 
 #[cfg(test)]
 #[path = "tests/arith_generic_integer.rs"]

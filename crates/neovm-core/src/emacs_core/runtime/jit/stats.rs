@@ -115,6 +115,10 @@ pub(crate) struct CompileStats {
     /// Deopts of a leaf already stale (retired): its callers were unlinked,
     /// nothing invalidated.
     pub reopt_stale: u64,
+    /// Exits the lowering marked cold under `NEOVM_JIT_COLD_EXITS=on`, by
+    /// `compile::cold_exits::ColdExit` (zero with the knob off). Counted as
+    /// the lowering marks them, failed compiles included.
+    pub cold_exits: [u64; COLD_EXIT_KINDS],
     /// Per-[`CompileOrigin`] compile counts, successes and stall µs. Unlike
     /// `total_compiles` this includes OSR compiles (origin `osr`), so the
     /// rows sum to `total_compiles`/`total_us` plus the OSR row.
@@ -127,6 +131,10 @@ pub(crate) struct CompileStats {
 
 /// Number of deopt census buckets.
 pub(crate) const DEOPT_CAUSES: usize = super::reopt::DeoptCause::CENSUS_NAMES.len();
+
+/// Number of cold-exit census buckets.
+pub(crate) const COLD_EXIT_KINDS: usize =
+    <super::compile::cold_exits::ColdExit as strum::EnumCount>::COUNT;
 
 impl CompileStats {
     /// The counts accumulated since `base`, an earlier snapshot of the same
@@ -177,6 +185,7 @@ impl CompileStats {
             deopt_osr: d(self.deopt_osr, base.deopt_osr),
             reopt_levels: std::array::from_fn(|i| d(self.reopt_levels[i], base.reopt_levels[i])),
             reopt_stale: d(self.reopt_stale, base.reopt_stale),
+            cold_exits: std::array::from_fn(|i| d(self.cold_exits[i], base.cold_exits[i])),
             origins,
             phase_ns,
         }
@@ -554,6 +563,32 @@ pub(crate) fn record_deopt(cause: super::reopt::DeoptCause, osr: bool) {
     });
 }
 
+/// Record one exit the lowering marked cold (`compile::cold_exits`).
+/// Compile time only.
+pub(crate) fn record_cold_exit(kind: super::compile::cold_exits::ColdExit) {
+    STATS.with(|s| {
+        let mut stats = s.get();
+        stats.cold_exits[kind as usize] += 1;
+        s.set(stats);
+    });
+}
+
+/// The cold-exit census, rendered ` cold_exits[name=count ...]` over the
+/// nonzero kinds; empty when nothing was marked (the knob off).
+pub(crate) fn format_cold_exits(s: &CompileStats) -> String {
+    use strum::IntoEnumIterator;
+    let parts: Vec<String> = super::compile::cold_exits::ColdExit::iter()
+        .zip(s.cold_exits)
+        .filter(|&(_, n)| n > 0)
+        .map(|(kind, n)| format!("{}={n}", <&'static str>::from(kind)))
+        .collect();
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" cold_exits[{}]", parts.join(" "))
+    }
+}
+
 /// Record one deopt-driven invalidation that left its source at `level`.
 pub(crate) fn record_reopt(level: super::ReoptLevel) {
     STATS.with(|s| {
@@ -640,7 +675,7 @@ pub(crate) fn format_summary(s: &CompileStats) -> String {
          reach_dead={} dead_leaders={}] \
          hist[<100us,<250us,<500us,<1ms,<2.5ms,<5ms,<10ms,>=10ms]={:?} \
          deopts[total={} osr={}{}{}] \
-         reopt[invalidated={} stale={} speculative={} no_inline={} baseline_only={} generic={} interpreter={}]",
+         reopt[invalidated={} stale={} speculative={} no_inline={} baseline_only={} generic={} interpreter={}]{}",
         s.total_compiles,
         s.compiled_ok,
         s.native_entries,
@@ -676,6 +711,7 @@ pub(crate) fn format_summary(s: &CompileStats) -> String {
         s.reopt_levels[2],
         s.reopt_levels[3],
         s.reopt_levels[4],
+        format_cold_exits(s),
     )
 }
 
