@@ -21,17 +21,21 @@
 //! of the ~260 instructions per loop iteration.
 
 use super::lowering::{self, RtCtx};
-use super::{JIT_SWITCH_MISS, JIT_SWITCH_STALE};
+use super::{
+    HandlerStatic, JIT_SWITCH_MISS, JIT_SWITCH_STALE, PendingDispatch, emit_backedge_jump,
+};
 use crate::emacs_core::bytecode::Op;
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::value::Value;
 use crate::emacs_core::value::switch_plan::{InlineKeyNode, SWITCH_EPOCH_OFFSET};
 use crate::tagged::header::ConsCell;
 use crate::tagged::value::{TAG_CONS, TAG_MASK};
+use cranelift_codegen::ir::StackSlot;
 use cranelift_codegen::ir::Value as ClifValue;
 use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::{Block, InstBuilder, MemFlagsData, types};
-use cranelift_frontend::{FunctionBuilder, Switch};
+use cranelift_frontend::{FunctionBuilder, Switch, Variable};
+use std::collections::HashMap;
 
 /// Program nodes, over all its keys, a jump table may have to be answered
 /// inline. Bounds the code an inline dispatch adds (a compare or a load and
@@ -400,4 +404,63 @@ fn emit_cons_arm(
     pending.push(cell);
     emit_trie(fb, child, car, pending, no_key, landings);
     pending.pop();
+}
+
+/// The baseline's landings for [`switch_dispatch::emit_switch_dispatch`]: a
+/// forward target is its leader block; a backward one is a trampoline that
+/// polls through [`emit_backedge_jump`], exactly like a `Goto` back-edge, and
+/// is created once per target however many hits branch to it.
+pub(super) struct BaselineSwitchLandings<'a> {
+    /// The switch's instruction index: a target at or before it is backward.
+    pub(super) site: usize,
+    pub(super) targets: &'a [(i64, usize)],
+    pub(super) block_for: &'a HashMap<usize, Block>,
+    pub(super) entry_depth: &'a HashMap<usize, usize>,
+    pub(super) rt: &'a RtCtx,
+    pub(super) backedge_counter: Option<StackSlot>,
+    pub(super) signal_exit: &'a mut Option<Block>,
+    pub(super) vars: &'a [Variable],
+    pub(super) variable_raw: &'a [bool],
+    pub(super) handlers: &'a [HandlerStatic],
+    pub(super) pending: &'a mut Vec<PendingDispatch>,
+    /// The trampoline made for each backward target, by target index.
+    pub(super) trampolines: Vec<(usize, Block)>,
+    /// Trampolines made but not yet filled, in the order they were made.
+    pub(super) unfilled: Vec<(usize, Block)>,
+}
+
+impl SwitchLandings for BaselineSwitchLandings<'_> {
+    fn landing(&mut self, fb: &mut FunctionBuilder, k: usize) -> Block {
+        let target = self.targets[k].1;
+        if target > self.site {
+            return self.block_for[&target];
+        }
+        if let Some(&(_, tramp)) = self.trampolines.iter().find(|&&(made, _)| made == k) {
+            return tramp;
+        }
+        let tramp = fb.create_block();
+        self.trampolines.push((k, tramp));
+        self.unfilled.push((k, tramp));
+        tramp
+    }
+
+    fn fill_pending(&mut self, fb: &mut FunctionBuilder) {
+        for (k, tramp) in std::mem::take(&mut self.unfilled) {
+            let target = self.targets[k].1;
+            fb.switch_to_block(tramp);
+            fb.seal_block(tramp);
+            emit_backedge_jump(
+                fb,
+                self.rt,
+                self.backedge_counter.expect("backedge implies counter"),
+                self.signal_exit,
+                self.vars,
+                self.variable_raw,
+                self.entry_depth[&target],
+                self.block_for[&target],
+                self.handlers,
+                self.pending,
+            );
+        }
+    }
 }

@@ -3358,65 +3358,6 @@ fn write_edge_stack_to_vars(
     }
 }
 
-/// The baseline's landings for [`switch_dispatch::emit_switch_dispatch`]: a
-/// forward target is its leader block; a backward one is a trampoline that
-/// polls through [`emit_backedge_jump`], exactly like a `Goto` back-edge, and
-/// is created once per target however many hits branch to it.
-struct BaselineSwitchLandings<'a> {
-    /// The switch's instruction index: a target at or before it is backward.
-    site: usize,
-    targets: &'a [(i64, usize)],
-    block_for: &'a HashMap<usize, Block>,
-    entry_depth: &'a HashMap<usize, usize>,
-    rt: &'a RtCtx,
-    backedge_counter: Option<StackSlot>,
-    signal_exit: &'a mut Option<Block>,
-    vars: &'a [Variable],
-    variable_raw: &'a [bool],
-    handlers: &'a [HandlerStatic],
-    pending: &'a mut Vec<PendingDispatch>,
-    /// The trampoline made for each backward target, by target index.
-    trampolines: Vec<(usize, Block)>,
-    /// Trampolines made but not yet filled, in the order they were made.
-    unfilled: Vec<(usize, Block)>,
-}
-
-impl switch_dispatch::SwitchLandings for BaselineSwitchLandings<'_> {
-    fn landing(&mut self, fb: &mut FunctionBuilder, k: usize) -> Block {
-        let target = self.targets[k].1;
-        if target > self.site {
-            return self.block_for[&target];
-        }
-        if let Some(&(_, tramp)) = self.trampolines.iter().find(|&&(made, _)| made == k) {
-            return tramp;
-        }
-        let tramp = fb.create_block();
-        self.trampolines.push((k, tramp));
-        self.unfilled.push((k, tramp));
-        tramp
-    }
-
-    fn fill_pending(&mut self, fb: &mut FunctionBuilder) {
-        for (k, tramp) in std::mem::take(&mut self.unfilled) {
-            let target = self.targets[k].1;
-            fb.switch_to_block(tramp);
-            fb.seal_block(tramp);
-            emit_backedge_jump(
-                fb,
-                self.rt,
-                self.backedge_counter.expect("backedge implies counter"),
-                self.signal_exit,
-                self.vars,
-                self.variable_raw,
-                self.entry_depth[&target],
-                self.block_for[&target],
-                self.handlers,
-                self.pending,
-            );
-        }
-    }
-}
-
 /// Emit a backward jump with the interpreter's `branch_to!` parity: bump the
 /// u8 quit counter; on every wrap (each 255th backward jump — counter resets to
 /// 1, exactly like the interpreter) root the live operand stack and call the
@@ -4722,7 +4663,7 @@ fn build_leaf_fn<M: Module>(
                         } else {
                             None
                         };
-                        let mut landings = BaselineSwitchLandings {
+                        let mut landings = switch_dispatch::BaselineSwitchLandings {
                             site: i,
                             targets,
                             block_for: &block_for,
