@@ -441,3 +441,41 @@ fn jit_final_report_leaf_rows_then_by_compile_stall() {
         ranked[1].render()
     );
 }
+
+/// The background-compile line prints only off the legacy path, with the
+/// keys tooling greps for.
+#[test]
+fn jit_final_report_prints_the_bg_line_off_the_legacy_path() {
+    let with = FinalReport {
+        bg: Some(crate::emacs_core::jit::bg::BgReport {
+            mode: "on",
+            workers: 1,
+            in_flight_at_exit: 2,
+            ..Default::default()
+        }),
+        ..FinalReport::default()
+    };
+    let lines = with.render();
+    let body = body_of(&lines, ReportTag::FinalBg);
+    for key in [
+        "mode=on",
+        "workers=1",
+        "enqueued=osr:0,first_sight:0,entry:0",
+        "discarded=superseded:0,heap_changed:0,epoch_moved:0,failed:0,dropped:0",
+        "backend_us=0",
+        "pending_probes=0",
+        "osr_waits=0",
+        "refused=0",
+        "in_flight_at_exit=2",
+        "worker_panics=0",
+    ] {
+        assert!(body.contains(key), "{key} in {body}");
+    }
+    assert!(
+        FinalReport::default()
+            .render()
+            .iter()
+            .all(|(tag, _)| *tag != ReportTag::FinalBg),
+        "no line on the legacy path"
+    );
+}

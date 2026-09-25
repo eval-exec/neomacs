@@ -114,7 +114,13 @@ fn serve(backend: &mut WorkerBackend, job: BackendJob) {
     #[cfg(test)]
     super::note_served_for_test(class, seq, cell.is_cancelled());
     #[cfg(not(test))]
-    let _ = (class, seq);
+    let _ = class;
+    if super::stress_enabled() {
+        // The soak: start 0-2 ms late.
+        std::thread::sleep(std::time::Duration::from_micros(
+            super::stress_mix(seq) % 2_001,
+        ));
+    }
     if cell.is_cancelled() {
         WORKER_STATS.skipped.fetch_add(1, Ordering::Relaxed);
         return;

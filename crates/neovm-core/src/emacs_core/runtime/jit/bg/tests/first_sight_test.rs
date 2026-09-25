@@ -89,6 +89,10 @@ fn kind_of(ev: &Context, name: &str) -> &'static str {
 /// interpreter and the installed leaf give.
 #[test]
 fn jit_bg_first_sight_strict_calls_keep_the_frames() {
+    // The callee must stay cold while its caller warms up.
+    if crate::emacs_core::jit::hot_threshold() != crate::emacs_core::jit::Runtime::HOT_THRESHOLD {
+        return;
+    }
     crate::test_utils::init_test_tracing();
     let mut ev = crate::test_utils::runtime_startup_context();
     ev.eval_str(CHAIN).expect("chain defined");

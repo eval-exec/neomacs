@@ -358,6 +358,8 @@ pub(crate) struct DeferredCode {
     cell: Arc<JobCell>,
     class: JobClass,
     enqueued_at: Instant,
+    /// The job's sequence number (the stress soak's seed).
+    seq: u64,
     /// `(slot, symbol, expected function bits)` of the leaf's
     /// epoch-validated spec sites ([`note_spec_bindings`]).
     spec_bindings: Box<[(usize, SymId, u64)]>,
@@ -394,6 +396,8 @@ pub(crate) struct PendingJob {
     enqueued_at: Instant,
     /// Installed, or discarded with its reason counted.
     settled: Cell<bool>,
+    /// Probes that must still find it running (`NEOVM_JIT_BG_STRESS`).
+    stress_skips: Cell<u8>,
 }
 
 impl PendingJob {
@@ -422,6 +426,7 @@ impl PendingJob {
             requested_heat: heat,
             enqueued_at: code.enqueued_at,
             settled: Cell::new(false),
+            stress_skips: Cell::new(stress_probe_skips(code.seq)),
         })
     }
 
@@ -442,6 +447,7 @@ impl PendingJob {
             requested_heat: 0,
             enqueued_at: code.enqueued_at,
             settled: Cell::new(false),
+            stress_skips: Cell::new(stress_probe_skips(code.seq)),
         })
     }
 
@@ -452,7 +458,17 @@ impl PendingJob {
 
     /// Whether the backend has published (install it now).
     pub(crate) fn is_ready(&self) -> bool {
-        self.cell.is_done()
+        if !self.cell.is_done() {
+            return false;
+        }
+        // NEOVM_JIT_BG_STRESS: a finished job still reads as running for a
+        // few more probes.
+        let skips = self.stress_skips.get();
+        if skips > 0 {
+            self.stress_skips.set(skips - 1);
+            return false;
+        }
+        true
     }
 
     /// The function's tier-up deferral before this job held it.
@@ -890,17 +906,18 @@ pub(crate) fn enqueue(class: JobClass, payload: JobPayload) -> Result<(), JobPay
     let cell = JobCell::new();
     let enqueued_at = Instant::now();
     let insts = payload.func.dfg.num_insts() as u64;
+    let seq = NEXT_SEQ.fetch_add(1, Ordering::Relaxed);
     let job = queue::BackendJob {
         payload,
         class,
-        seq: NEXT_SEQ.fetch_add(1, Ordering::Relaxed),
+        seq,
         enqueued_at,
         cell: Arc::clone(&cell),
         insts,
     };
     match queue::pool().push(job) {
         Ok(()) => {
-            stash_deferred(cell, class, enqueued_at);
+            stash_deferred(cell, class, enqueued_at, seq);
             Ok(())
         }
         Err(job) => Err(job.payload),
@@ -983,11 +1000,12 @@ fn serialize_instruction_stream() {
 }
 
 /// Record the job the compile in progress deferred (the sink's side).
-pub(crate) fn stash_deferred(cell: Arc<JobCell>, class: JobClass, enqueued_at: Instant) {
+pub(crate) fn stash_deferred(cell: Arc<JobCell>, class: JobClass, enqueued_at: Instant, seq: u64) {
     let code = DeferredCode {
         cell,
         class,
         enqueued_at,
+        seq,
         spec_bindings: Box::default(),
     };
     bump_stats(|s| s.enqueued[class as usize] += 1);
@@ -1022,6 +1040,7 @@ pub(crate) fn defer_in_line(
 ) {
     let cell = JobCell::new();
     let enqueued_at = Instant::now();
+    let seq = NEXT_SEQ.fetch_add(1, Ordering::Relaxed);
     #[cfg(test)]
     let result = if FAIL_BACKEND_TEST.with(|c| c.replace(false)) {
         Err(CompileError::Backend(super::backend::BackendError::Define(
@@ -1043,11 +1062,67 @@ pub(crate) fn defer_in_line(
     #[cfg(test)]
     if HOLD_PUBLISH_TEST.with(Cell::get) {
         HELD_TEST.with(|h| h.borrow_mut().push((Arc::clone(&cell), out)));
-        stash_deferred(cell, class, enqueued_at);
+        stash_deferred(cell, class, enqueued_at, seq);
         return;
     }
     cell.publish(out);
-    stash_deferred(cell, class, enqueued_at);
+    stash_deferred(cell, class, enqueued_at, seq);
+}
+
+/// `NEOVM_JIT_BG_STRESS=1`: drive every interleaving of the soak -- each
+/// worker job starts 0-2 ms late, and each finished job is found running
+/// by 1-4 more probes, from a seeded mix of its sequence number. Read once
+/// (tests override it process-wide).
+pub(crate) fn stress_enabled() -> bool {
+    match STRESS_TEST.load(Ordering::Relaxed) {
+        1 => return false,
+        2 => return true,
+        _ => {}
+    }
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        let on = matches!(
+            std::env::var("NEOVM_JIT_BG_STRESS").ok().as_deref(),
+            Some("1" | "on" | "true" | "yes")
+        );
+        if on {
+            tracing::info!(target: "neovm::jit::knobs", "NEOVM_JIT_BG_STRESS=1 is on in this process");
+        }
+        on
+    })
+}
+
+/// Test override of [`stress_enabled`]: 0 = the knob, 1 = off, 2 = on.
+static STRESS_TEST: AtomicU8 = AtomicU8::new(0);
+
+/// Force the stress soak on or off for the whole process (tests).
+#[cfg(test)]
+pub(crate) fn force_stress_for_test(on: Option<bool>) {
+    STRESS_TEST.store(
+        match on {
+            None => 0,
+            Some(false) => 1,
+            Some(true) => 2,
+        },
+        Ordering::Relaxed,
+    );
+}
+
+/// SplitMix64: a well-mixed word from a job's sequence number.
+pub(crate) fn stress_mix(seq: u64) -> u64 {
+    let mut z = seq.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
+/// Probes a finished job of `seq` still reads as running under stress.
+fn stress_probe_skips(seq: u64) -> u8 {
+    if stress_enabled() {
+        1 + (stress_mix(seq) % 4) as u8
+    } else {
+        0
+    }
 }
 
 #[cfg(test)]
@@ -1111,10 +1186,14 @@ pub(crate) fn publish_held_for_test() -> usize {
 }
 
 /// Force the mode for compiles on this thread (tests only); `None` returns
-/// to the environment's.
+/// to the environment's. A forced mode also pins `NEOVM_JIT_BG_STRESS` off
+/// (unless a test forced it itself), so a test's installs happen where it
+/// expects them whatever soak the environment runs.
 #[cfg(test)]
 pub(crate) fn force_mode_for_test(mode: Option<BgMode>) {
     MODE_TEST_OVERRIDE.with(|c| c.set(mode));
+    let (from, to) = if mode.is_some() { (0, 1) } else { (1, 0) };
+    let _ = STRESS_TEST.compare_exchange(from, to, Ordering::Relaxed, Ordering::Relaxed);
 }
 
 /// Deferred install without a worker (tests only): a deferrable split
@@ -1164,3 +1243,7 @@ mod osr_pending_tests;
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 #[path = "bg/tests/queue_test.rs"]
 mod queue_tests;
+
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[path = "bg/tests/soak_test.rs"]
+mod soak_tests;

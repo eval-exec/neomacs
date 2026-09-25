@@ -294,3 +294,39 @@ fn jit_bg_moved_epoch_discards_a_guarded_inline_leaf_twice_then_compiles_in_line
     assert_eq!(interpreted(&mut ev, &f, 3), 10);
     done();
 }
+
+/// T-I5: the tagged heap a pending compile's front read is replaced while
+/// its backend runs (another Context on this thread brings its own). The
+/// leaf must never install: the cache drops it when it notices the new
+/// heap, or the install's heap check discards it.
+#[test]
+fn jit_bg_a_replaced_heap_never_installs_a_pending_leaf() {
+    deferred_held();
+    let mut ev = Context::new();
+    let ctx = &mut ev as *mut Context;
+    let f = bytecode(
+        1,
+        vec![Op::StackRef(0), Op::Constant(0), Op::Add, Op::Return],
+        vec![Value::make_int(1)],
+    );
+    assert_eq!(call(ctx, &f, 1), None);
+    assert_eq!(kind(&f), "pending");
+    let gone = |s: &BgStats| {
+        s.discarded[DiscardReason::HeapChanged as usize]
+            + s.discarded[DiscardReason::Superseded as usize]
+    };
+    let before = gone(&stats_snapshot());
+    let replacement = Context::new();
+    assert_ne!(
+        crate::tagged::gc::current_tagged_heap_identity(),
+        None,
+        "the replacement's heap is current"
+    );
+    assert_eq!(publish_held_for_test(), 1);
+    cache::drain_ready_pending(None);
+    assert_eq!(kind(&f), "none", "nothing installed");
+    assert_eq!(pending_count(), 0);
+    assert_eq!(gone(&stats_snapshot()), before + 1);
+    drop(replacement);
+    done();
+}
