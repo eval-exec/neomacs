@@ -117,7 +117,17 @@ fn live_done(eval: &crate::emacs_core::eval::Context) -> i64 {
 /// `parse-sexp-lookup-properties` non-nil.
 #[inline]
 pub(super) fn may_propertize(eval: &crate::emacs_core::eval::Context, to: i64) -> bool {
-    pps_propertize_on() && live_done(eval) <= to
+    if !pps_propertize_on() {
+        return false;
+    }
+    // The common case first: `done' already covers TO (`syntax-ppss' and
+    // font-lock propertize before they parse), one variable read.
+    let covered = eval
+        .builtin_var_value(syntax_propertize_done_sym())
+        .unwrap_or(Value::fixnum(-1))
+        .as_fixnum()
+        .is_none_or(|done| done > to);
+    !covered && live_done(eval) <= to
 }
 
 /// Where the scan paused for a trigger.
