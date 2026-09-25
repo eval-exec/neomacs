@@ -3628,6 +3628,55 @@ struct SyntaxPropRange<'a> {
     /// above, which every scanned character reads, keep the front of the
     /// struct.
     props: SyntaxProperties<'a>,
+    /// The property values this scan read, for a scan the parse cache
+    /// records (its validation dictionary); `None` for every other scan.
+    /// Written once per property run, never per character.
+    descriptors: Option<RefCell<DescriptorLog>>,
+}
+
+/// The `syntax-table` property values a recording scan read: what a cached
+/// loop state depends on besides text, table and property positions.
+///
+/// A property value is a descriptor cons (or a syntax table) the scan decodes
+/// each time it reads it, so `(setcar DESCRIPTOR ...)` changes the scan
+/// without moving any tick. The parse cache keeps each cons's car and cdr as
+/// read and compares them before reusing a state that read it.
+#[derive(Debug, Default)]
+pub(super) struct DescriptorLog {
+    /// Distinct descriptor conses, each with the first position it was read
+    /// at.
+    pub(super) entries: Vec<(usize, Value)>,
+    /// The first position a value was read at that cannot be validated this
+    /// way: a syntax table (its entries are conses too), or a descriptor past
+    /// [`DESCRIPTOR_LOG_CAP`].
+    pub(super) unvalidatable_from: Option<usize>,
+}
+
+/// Distinct descriptors one run validates (elisp buffers have two to four:
+/// `string-to-syntax` results are constants of the propertize function).
+pub(super) const DESCRIPTOR_LOG_CAP: usize = 32;
+
+impl DescriptorLog {
+    fn note(&mut self, pos: usize, value: Value) {
+        if value.is_cons() {
+            if let Some(entry) = self
+                .entries
+                .iter_mut()
+                .find(|(_, seen)| seen.bits() == value.bits())
+            {
+                entry.0 = entry.0.min(pos);
+                return;
+            }
+            if self.entries.len() < DESCRIPTOR_LOG_CAP {
+                self.entries.push((pos, value));
+                return;
+            }
+        } else if !value.is_char_table() {
+            // Any other value decodes to nothing, or to an immutable code.
+            return;
+        }
+        self.unvalidatable_from = Some(self.unvalidatable_from.map_or(pos, |at| at.min(pos)));
+    }
 }
 
 impl<'a> SyntaxPropRange<'a> {
@@ -3641,6 +3690,32 @@ impl<'a> SyntaxPropRange<'a> {
             ascii: std::array::from_fn(|_| Cell::new(None)),
             ascii_table: Cell::new(0),
             props,
+            descriptors: None,
+        }
+    }
+
+    /// A property cache that logs the values it reads ([`DescriptorLog`]).
+    fn recording(props: SyntaxProperties<'a>) -> Self {
+        Self {
+            descriptors: Some(RefCell::new(DescriptorLog::default())),
+            ..Self::new(props)
+        }
+    }
+
+    /// The values read so far (empty for a cache that does not record).
+    fn take_descriptor_log(&self) -> DescriptorLog {
+        self.descriptors
+            .as_ref()
+            .map(|log| std::mem::take(&mut *log.borrow_mut()))
+            .unwrap_or_default()
+    }
+
+    #[inline]
+    fn note_descriptor(&self, pos: usize, value: Option<Value>) {
+        if let Some(log) = &self.descriptors
+            && let Some(value) = value
+        {
+            log.borrow_mut().note(pos, value);
         }
     }
 
@@ -3752,6 +3827,7 @@ impl<'a> SyntaxPropRange<'a> {
         let coalesce = resolver.supports_presence_coalescing();
         if coalesce && let Some((start, end, value)) = buf.syntax_char_run_memo_lookup(pos) {
             self.run.set(start as usize, end as usize, value);
+            self.note_descriptor(pos, value);
             return value;
         }
         let char_pos = offset_char_pos(CharPos0::ZERO, pos);
@@ -3762,6 +3838,7 @@ impl<'a> SyntaxPropRange<'a> {
         if coalesce {
             buf.syntax_char_run_memo_store(start.get() as u64, end.get() as u64, value);
         }
+        self.note_descriptor(pos, value);
         value
     }
 }
@@ -3883,7 +3960,39 @@ fn effective_syntax_entry_for_abs_char(
         return entry;
     }
 
+    if let Some(log) = &prop_cache.descriptors {
+        return syntax_entry_from_table_logged(table, ch, abs_char, log);
+    }
     syntax_entry_from_table(table, ch)
+}
+
+/// [`syntax_entry_from_table`] for a scan the parse cache records: the
+/// descriptor cons the table holds for `ch` goes into the scan's
+/// [`DescriptorLog`] (ASCII entries come from the flat classifiers, which
+/// trust the table's write tick instead).
+#[inline(never)]
+fn syntax_entry_from_table_logged(
+    table: &SyntaxTable,
+    ch: char,
+    abs_char: usize,
+    log: &RefCell<DescriptorLog>,
+) -> SyntaxEntry {
+    record_syntax_table_decode();
+    let effective = if table.chartable.is_nil() {
+        ensure_standard_syntax_table_object().unwrap_or(Value::NIL)
+    } else {
+        table.chartable
+    };
+    let raw = if effective.is_nil() {
+        Value::NIL
+    } else {
+        super::chartable::ct_lookup(&effective, ch as i64).unwrap_or(Value::NIL)
+    };
+    if raw.is_cons() {
+        log.borrow_mut().note(abs_char, raw);
+    }
+    syntax_entry_from_chartable_entry(&raw)
+        .unwrap_or_else(|| SyntaxEntry::simple(table.char_syntax(ch)))
 }
 
 pub(crate) fn parse_sexp_lookup_properties_enabled(ctx: &super::eval::Context) -> bool {
@@ -7015,18 +7124,36 @@ pub(crate) fn builtin_parse_partial_sexp_6(
     }
     let props = SyntaxProperties::for_scan(honor, &eval.obarray, &eval.buffers);
     let escape_policy = CommentEndEscapePolicy::for_context(eval);
-    let (state, stop_pos) = parse_state_from_range_with_options(
-        buf,
-        &table,
-        from,
-        to,
-        target_depth,
-        stop_before,
-        oldstate,
-        commentstop,
-        props,
-        escape_policy,
-    );
+    let cache_mode = parse_cache::parse_cache_mode();
+    let (state, stop_pos) = if cache_mode == parse_cache::ParseCacheMode::Off {
+        parse_state_from_range_with_options(
+            buf,
+            &table,
+            from,
+            to,
+            target_depth,
+            stop_before,
+            oldstate,
+            commentstop,
+            props,
+            escape_policy,
+        )
+    } else {
+        let (state, stop) = parse_cache::parse_partial_sexp_cached(
+            buf,
+            &table,
+            from,
+            to,
+            target_depth,
+            stop_before,
+            oldstate,
+            commentstop,
+            props,
+            escape_policy,
+            cache_mode,
+        );
+        (state.into_value(), stop)
+    };
     let current_id = buf.id;
     let stop_byte = lisp_pos_to_byte(buf, LispCharPos1::new(stop_pos));
     let _ = eval

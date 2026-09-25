@@ -3282,7 +3282,6 @@ impl Buffer {
     }
 
     /// See [`crate::buffer::buffer_text::BufferText::with_syntax_parse_cache`].
-    #[cfg_attr(not(test), allow(dead_code))] // read by the memo (S4)
     pub(crate) fn with_syntax_parse_cache<R>(
         &self,
         f: impl FnOnce(

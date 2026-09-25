@@ -1578,7 +1578,6 @@ impl BufferText {
     }
 
     /// The syntax parse cache, with what changed since its last use (P3.4).
-    #[cfg_attr(not(test), allow(dead_code))] // read by the memo (S4)
     pub(crate) fn with_syntax_parse_cache<R>(
         &self,
         f: impl FnOnce(&mut SyntaxParseCache, Invalidation) -> R,

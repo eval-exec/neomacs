@@ -87,6 +87,9 @@ pub(super) struct ScanFinish {
     pub(super) state: PartialParseState,
     /// The Lisp position the scan stopped at (point after `parse-partial-sexp`).
     pub(super) stop: i64,
+    /// Where the character cursor ended: one past the last character the
+    /// loop consumed. A peek reads only the character that starts here.
+    pub(super) cursor_byte: EmacsBytePos,
 }
 
 /// A loop top as a [`ScanMode`] sees it.
@@ -128,12 +131,17 @@ pub(super) trait ScanMode {
     /// Whether [`Entry::Resume::first_syntax`] can be `Some`. `false` removes
     /// the per-character override test.
     const OVERRIDE: bool = false;
+    /// Whether the scan logs the `syntax-table` property values it reads
+    /// ([`DescriptorLog`]), handed to [`Self::descriptors_read`] at the end.
+    const RECORD_DESCRIPTORS: bool = false;
     /// The first absolute position at which to call [`Self::at_loop_top`].
     fn first_target(&self) -> usize {
         usize::MAX
     }
     /// Called at each loop top at or after the current target.
     fn at_loop_top(&mut self, top: LoopTop<'_>) -> TopAction;
+    /// The property values the scan read, when [`Self::RECORD_DESCRIPTORS`].
+    fn descriptors_read(&mut self, _log: DescriptorLog) {}
 }
 
 /// No hook: every Lisp `parse-partial-sexp` that needs nothing else.
@@ -245,7 +253,11 @@ pub(super) fn run_parse_loop<M: ScanMode>(
     // `prop_cache` carries both the `syntax-table` property run cache and the
     // lazily-filled ASCII syntax memo consumed by
     // `effective_syntax_entry_for_abs_char`.
-    let prop_cache = SyntaxPropRange::new(props);
+    let prop_cache = if M::RECORD_DESCRIPTORS {
+        SyntaxPropRange::recording(props)
+    } else {
+        SyntaxPropRange::new(props)
+    };
 
     // Long parses classify ASCII chars through a flat local table while the
     // prop cache positively covers the position with no `syntax-table`
@@ -781,6 +793,9 @@ pub(super) fn run_parse_loop<M: ScanMode>(
         idx += 1;
     }
 
+    if M::RECORD_DESCRIPTORS {
+        mode.descriptors_read(prop_cache.take_descriptor_log());
+    }
     if paused {
         debug_assert!(first_syntax.is_none(), "a pause never strands an override");
         return ScanEnd::Paused(LoopState {
@@ -800,6 +815,7 @@ pub(super) fn run_parse_loop<M: ScanMode>(
     ScanEnd::Finished(ScanFinish {
         state,
         stop: char_pos_to_lisp_i64(from_char + idx),
+        cursor_byte: chars.byte_pos,
     })
 }
 

@@ -1444,6 +1444,12 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     // U0.7: `parse-partial-sexp` runs `syntax-propertize` like GNU (on);
     // `=0` never propertizes, to attribute the parity fix's cost.
     "NEOVM_PPS_PROPERTIZE",
+    // P3.4 L1 syntax parse cache (`0` default, `1`, `verify`), its geometry
+    // and its counters file.
+    "NEOVM_SYNTAX_PARSE_CACHE",
+    "NEOVM_SYNTAX_PARSE_CACHE_CHUNK",
+    "NEOVM_SYNTAX_PARSE_CACHE_MIN_SPAN",
+    "NEOVM_SYNTAX_PARSE_CACHE_STATS",
 ];
 
 pub(crate) fn configure_benchmark_environment(command: &mut Command, sandbox: &MelpaSandbox) {

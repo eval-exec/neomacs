@@ -47,6 +47,7 @@
 //! ## Opt-in features (default-OFF, pending a graduation decision)
 //! | Knob | Enable | Meaning / graduation blocker |
 //! |---|---|---|
+//! | `NEOVM_SYNTAX_PARSE_CACHE` | `=1`/`on`, `=verify` | P3.4 L1 syntax parse cache (`syntax/parse_cache.rs`): `parse-partial-sexp` resumes from recorded loop states of earlier scans with the same FROM, state, options and environment, or answers a repeated TO outright; `verify` recomputes every cached answer with a plain scan, counts and logs mismatches (and fails debug builds). Blocker: F1 (elb-smie, editing-simulation) and a verify soak. `NEOVM_SYNTAX_PARSE_CACHE_CHUNK` (2048) spaces the recorded states, `NEOVM_SYNTAX_PARSE_CACHE_MIN_SPAN` (128) is the shortest scan that starts a run, `NEOVM_SYNTAX_PARSE_CACHE_STATS=PATH` rewrites the counters to PATH every 256 queries. |
 //! | `NEOVM_JIT_INLINE_ARITH` | `=on` | Level-B native bit-ops (logand/logior/logxor/lognot) with fixnum-guard deopt. Blocker: skips the compiler-macro bounce; a mixed-type loop falls back to the interpreter ungracefully. |
 //! | `NEOVM_JIT_INLINE_TYPE_OF` | on | Answer a record's `type-of`/`cl-type-of` inline at an armed JIT site; `=off` calls `neovm_jit_pred_spec` everywhere (single-build A/B). |
 //! | `NEOVM_JIT_INLINE_AREF` | on | Inline slot reads at JIT `aref` sites on plain vectors and records; `=off` calls `neovm_jit_aref` everywhere (single-build A/B). |
