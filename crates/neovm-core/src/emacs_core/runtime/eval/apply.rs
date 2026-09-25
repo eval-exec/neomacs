@@ -132,29 +132,79 @@ impl Context {
     pub(crate) fn push_backtrace_frame(&mut self, function: Value, args: &[Value]) {
         match args {
             [arg] => {
-                self.specpdl.push(SpecBinding::Backtrace1 {
-                    function,
-                    arg: *arg,
-                    debug_on_exit: false,
-                });
-                return;
+                let arg = *arg;
+                // SAFETY: the returned slot is written before it is committed.
+                unsafe {
+                    let slot = self.reserve_specpdl_slot();
+                    slot.write(SpecBinding::Backtrace1 {
+                        function,
+                        arg,
+                        debug_on_exit: false,
+                    });
+                    self.commit_specpdl_slot();
+                }
             }
             [arg0, arg1] => {
-                self.specpdl.push(SpecBinding::Backtrace2 {
-                    function,
-                    arg0: *arg0,
-                    arg1: *arg1,
-                });
-                return;
+                let (arg0, arg1) = (*arg0, *arg1);
+                // SAFETY: the returned slot is written before it is committed.
+                unsafe {
+                    let slot = self.reserve_specpdl_slot();
+                    slot.write(SpecBinding::Backtrace2 {
+                        function,
+                        arg0,
+                        arg1,
+                    });
+                    self.commit_specpdl_slot();
+                }
             }
-            _ => {}
+            _ => {
+                let args = self.backtrace_args_from_slice(args);
+                // SAFETY: the returned slot is written before it is committed.
+                unsafe {
+                    let slot = self.reserve_specpdl_slot();
+                    slot.write(SpecBinding::Backtrace {
+                        function,
+                        args,
+                        debug_on_exit: false,
+                    });
+                    self.commit_specpdl_slot();
+                }
+            }
         }
-        let args = self.backtrace_args_from_slice(args);
-        self.specpdl.push(SpecBinding::Backtrace {
-            function,
-            args,
-            debug_on_exit: false,
-        });
+    }
+
+    /// The specpdl's next (uninitialised) slot, with capacity ensured.
+    ///
+    /// For hot frame pushes: build the entry directly in its final slot.
+    /// `Vec::push` takes the 32-byte `SpecBinding` by value, and LLVM
+    /// materialises it in a stack temporary with narrow stores, then copies
+    /// it with 16-byte loads -- a store-forwarding stall on every push
+    /// (`apply1_bytecode`'s callback frame: one per `mapc` callback).
+    ///
+    /// # Safety
+    /// The caller must `write` a complete entry to the returned pointer and
+    /// then call [`Self::commit_specpdl_slot`], with no other specpdl access
+    /// in between.
+    #[inline(always)]
+    unsafe fn reserve_specpdl_slot(&mut self) -> *mut SpecBinding {
+        let len = self.specpdl.len();
+        if len == self.specpdl.capacity() {
+            self.specpdl.reserve(1);
+        }
+        // SAFETY: capacity for one more entry was just ensured.
+        unsafe { self.specpdl.as_mut_ptr().add(len) }
+    }
+
+    /// Grow the specpdl over the slot [`Self::reserve_specpdl_slot`] handed
+    /// out.
+    ///
+    /// # Safety
+    /// That slot must have been fully written.
+    #[inline(always)]
+    unsafe fn commit_specpdl_slot(&mut self) {
+        let len = self.specpdl.len();
+        // SAFETY: caller contract -- the entry at `len` is initialised.
+        unsafe { self.specpdl.set_len(len + 1) }
     }
 
     /// Backtrace push for a native (JIT) caller: args live in the generated
@@ -198,6 +248,18 @@ impl Context {
                     arg: read(0),
                     debug_on_exit: false,
                 }),
+                // LLVM merges these two reads into one 16-byte load, which
+                // cannot forward from the caller's two 8-byte argument stores
+                // (one store-forwarding block per call; 102M on listlen-tc).
+                // Both known fixes were measured and REJECTED (2026-09-24):
+                // volatile reads (+0.85% instructions and no cycle win on
+                // listlen-tc, whose calls are bound by deep-stack cache
+                // misses) and recording arity 2 as `BacktraceNative` (LLVM
+                // tail-merged the arms: +1.7 instructions on every
+                // one-argument call). Either edit also shifted this shim's
+                // code layout enough to cost fibn's recursive calls ~12% in
+                // cycles at identical instruction counts, so leave the arm
+                // byte-for-byte alone unless a change is measured in cycles.
                 2 => slot.write(SpecBinding::Backtrace2 {
                     function,
                     arg0: read(0),

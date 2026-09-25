@@ -25799,6 +25799,25 @@ fn native_backtrace_pop_accepts_every_arity_it_pushes() {
     assert_eq!(ev.specpdl.len(), count);
 }
 
+/// A two-argument native call copies both words into the compact
+/// `Backtrace2` entry; the entry must carry exactly the caller's values.
+#[test]
+fn native_two_argument_frame_copies_both_argument_words() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new();
+    let func = Value::from_sym_id(intern("neo-native-two"));
+    let args = [Value::fixnum(21), Value::fixnum(22)];
+    let args_ptr = args.as_ptr() as *const i64;
+    // SAFETY: `args` outlives the frame and holds two tagged words.
+    unsafe { ev.push_backtrace_frame_from_native_args(func, args_ptr, 2) };
+    assert!(matches!(
+        ev.specpdl.last(),
+        Some(SpecBinding::Backtrace2 { function, arg0, arg1 })
+            if *function == func && *arg0 == args[0] && *arg1 == args[1]
+    ));
+    assert!(ev.pop_native_backtrace_frame(0));
+}
+
 #[test]
 fn specpdl_entry_stays_compact_for_hot_backtrace_pushes() {
     let entry_size = std::mem::size_of::<SpecBinding>();
