@@ -33,9 +33,11 @@ pub(crate) enum SpecSlotKind {
     /// words (a `SubrGeneral` site's symbol and expected subr; zero for the
     /// other subr kinds, whose shims read neither).
     Subr,
-    /// A closure source site (P2.1 C5, `compile::source_slots`): immutable
-    /// words, `leaf` the source's `RuntimeState` address and
-    /// `direct_consts` its identity word. Walkers skip it like a subr slot.
+    /// A closure source site (P2.1 C5, `compile::source_slots`):
+    /// `direct_consts` the source's identity word (immutable); `leaf`,
+    /// `direct_entry` and `epoch` a direct entry into the source's leaf
+    /// (`NEOVM_JIT_DIRECT_CALL`), cleared by the leaf walk
+    /// ([`CompiledLeaf::source_spec_slots`]).
     Source,
 }
 
@@ -328,6 +330,16 @@ pub(crate) fn spec_slot_kinds_of(
 }
 
 impl CompiledLeaf {
+    /// This leaf's [`SpecSlotKind::Source`] slots (closure source sites,
+    /// whose `leaf` word may hold a direct entry's leaf).
+    pub(crate) fn source_spec_slots(&self) -> impl Iterator<Item = &SpecSlot> {
+        self.spec_slots
+            .iter()
+            .zip(self.spec_slot_kinds.iter())
+            .filter(|(_, kind)| **kind == SpecSlotKind::Source)
+            .map(|(slot, _)| slot)
+    }
+
     /// This leaf's [`SpecSlotKind::Bytecode`] slots: the only ones whose
     /// words name a callee leaf, and so the only ones a walker (retiring a
     /// leaf, a redefinition firing) may clear.

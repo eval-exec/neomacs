@@ -65,6 +65,27 @@ pub(crate) struct DirectSite {
     frame: EntryTemplate,
     small: u32,
     specpdl: VecOffsets,
+    /// A closure source site's (`plan_source`): the offset of the callee
+    /// object's constant-base word, its leaf's `aux`.
+    consts_ptr: Option<usize>,
+}
+
+/// Whose call a direct site makes.
+#[derive(Clone, Copy)]
+pub(crate) enum DirectCallee {
+    /// A speculated symbol: the slot's epoch is the function epoch it was
+    /// validated at, the frame records the symbol `sym_v`, the slot's key
+    /// is `aux`, and the slow path is `neovm_jit_call_spec` on the symbol
+    /// and its expected object `exp_v`.
+    Symbol { sym_v: ClifValue, exp_v: ClifValue },
+    /// A closure source site (`source_slots`): the slot's epoch is the
+    /// `leaf_slot_epoch` its leaf was armed under, the frame records the
+    /// called object `callee`, `aux` is that object's own constant base,
+    /// and the slow path is `neovm_jit_call_source_spec`, whose
+    /// `STATUS_NEED_GENERIC` the caller handles. The hit path stores its
+    /// value in the call's result slot and joins the others with
+    /// `STATUS_OK`.
+    Source { callee: ClifValue },
 }
 
 impl DirectSite {
@@ -94,6 +115,34 @@ impl DirectSite {
             frame,
             small,
             specpdl,
+            consts_ptr: None,
+        })
+    }
+
+    /// The site of a closure source call (`source_slots`) of `nargs`
+    /// arguments, when a direct call is possible: the knob, the build, the
+    /// layouts and the budget as [`Self::plan`]; the callee's arity is
+    /// checked when its leaf is armed (`arm_source_direct_entry`), and the
+    /// constant base is read from the callee object.
+    pub(crate) fn plan_source(rt: &RtCtx, aot: bool, nargs: usize) -> Option<Self> {
+        if aot || !jit_direct_call_on() || jit_force_slow_spec() || nargs > MAX_REG_ARGS {
+            return None;
+        }
+        if rt.direct_sites.get() >= DIRECT_SITE_CAP {
+            return None;
+        }
+        let layout: BacktraceLayout = super::jit_layout::backtrace_layout()?;
+        let specpdl = super::jit_layout::specpdl_vec_offsets()?;
+        let (consts_ptr, _) = super::jit_layout::bytecode_constants_offsets()?;
+        let (frame, small) = layout.frame_for(nargs);
+        rt.direct_sites.set(rt.direct_sites.get() + 1);
+        Some(DirectSite {
+            expected: 0,
+            nargs,
+            frame,
+            small,
+            specpdl,
+            consts_ptr: Some(consts_ptr),
         })
     }
 }
@@ -101,24 +150,24 @@ impl DirectSite {
 /// What [`emit_direct_bytecode_call`] leaves the call lowering: the builder
 /// sits in the join of the slow and cold paths, whose status is `status`;
 /// `hot_done` is the hit path's end, still to be terminated (restore the
-/// root window, jump to the continuation); `result` holds the call's value
-/// on every path that reaches the continuation.
+/// root window, jump to the continuation) -- `None` for a source site,
+/// whose hit joins the others; `result` holds the call's value on every
+/// path that reaches the continuation.
 pub(crate) struct DirectCall {
     pub(crate) status: ClifValue,
     pub(crate) result: Variable,
-    pub(crate) hot_done: Block,
+    pub(crate) hot_done: Option<Block>,
 }
 
-/// Emit a direct call of `args` at a site whose symbol, expected object and
-/// slot are `sym_v`, `exp_v` and `slot_v` (see the module docs). The
+/// Emit a direct call of `args` at a site whose callee and slot are
+/// `callee` and `slot_v` (see the module docs and [`DirectCallee`]). The
 /// caller has rooted the residual stack; the arguments are not spilled yet.
 pub(crate) fn emit_direct_bytecode_call(
     fb: &mut FunctionBuilder,
     rt: &RtCtx,
     site: &DirectSite,
     args: &[ClifValue],
-    sym_v: ClifValue,
-    exp_v: ClifValue,
+    callee: DirectCallee,
     slot_v: ClifValue,
 ) -> DirectCall {
     debug_assert_eq!(args.len(), site.nargs);
@@ -131,7 +180,10 @@ pub(crate) fn emit_direct_bytecode_call(
     let result = fb.declare_var(types::I64);
     let slow = fb.create_block();
     let join = fb.create_block();
-    let hot_done = fb.create_block();
+    let hot_done = match callee {
+        DirectCallee::Symbol { .. } => Some(fb.create_block()),
+        DirectCallee::Source { .. } => None,
+    };
     fb.set_cold_block(slow);
     let vmctx = fb.use_var(rt.vmctx_var);
 
@@ -169,13 +221,24 @@ pub(crate) fn emit_direct_bytecode_call(
     let pending = fb.ins().bor(attention, async_word);
     let pending = icmp_imm_p(fb, IntCC::NotEqual, pending, 0);
     next(fb, pending);
-    // 3. Epoch.
-    let live_epoch = fb.ins().load(
-        types::I64,
-        flags,
-        vmctx,
-        (CONTEXT_OBARRAY_OFFSET + OBARRAY_FUNCTION_EPOCH_OFFSET) as i32,
-    );
+    // 3. Epoch: the function epoch a named slot was validated at, or the
+    // leaf-slot epoch a source slot's leaf was armed under (a JIT-only
+    // bake of a process address).
+    let live_epoch = match callee {
+        DirectCallee::Symbol { .. } => fb.ins().load(
+            types::I64,
+            flags,
+            vmctx,
+            (CONTEXT_OBARRAY_OFFSET + OBARRAY_FUNCTION_EPOCH_OFFSET) as i32,
+        ),
+        DirectCallee::Source { .. } => {
+            let epoch_addr = fb.ins().iconst(
+                ptr_ty,
+                crate::emacs_core::jit::cache::leaf_slot_epoch_addr() as i64,
+            );
+            fb.ins().load(types::I64, flags, epoch_addr, 0)
+        }
+    };
     let armed_epoch = fb
         .ins()
         .load(types::I64, flags, slot_v, SPEC_SLOT_EPOCH_OFFSET as i32);
@@ -227,7 +290,12 @@ pub(crate) fn emit_direct_bytecode_call(
         .iconst(types::I64, site.frame.header_with(site.small) as i64);
     fb.ins()
         .store(flags, header, at, site.frame.header_offset as i32);
-    fb.ins().store(flags, sym_v, at, site.frame.field(0) as i32);
+    let recorded = match callee {
+        DirectCallee::Symbol { sym_v, .. } => sym_v,
+        DirectCallee::Source { callee } => callee,
+    };
+    fb.ins()
+        .store(flags, recorded, at, site.frame.field(0) as i32);
     match site.nargs {
         1 => {
             fb.ins()
@@ -261,11 +329,20 @@ pub(crate) fn emit_direct_bytecode_call(
     let leaf = fb
         .ins()
         .load(types::I64, flags, slot_v, SPEC_SLOT_LEAF_OFFSET as i32);
-    // The key is the constant base with the register flag set.
-    let key = fb
-        .ins()
-        .load(types::I64, flags, slot_v, SPEC_SLOT_KEY_OFFSET as i32);
-    let aux = super::lowering::band_imm_p(fb, key, !(SpecSlot::KEY_FLAGS as i64));
+    let aux = match (callee, site.consts_ptr) {
+        (DirectCallee::Source { callee }, Some(consts_ptr)) => {
+            // The executing instance's own constant base.
+            let object = super::lowering::band_imm_p(fb, callee, !(TAG_MASK as i64));
+            fb.ins().load(types::I64, flags, object, consts_ptr as i32)
+        }
+        _ => {
+            // The key is the constant base with the register flag set.
+            let key = fb
+                .ins()
+                .load(types::I64, flags, slot_v, SPEC_SLOT_KEY_OFFSET as i32);
+            super::lowering::band_imm_p(fb, key, !(SpecSlot::KEY_FLAGS as i64))
+        }
+    };
     let sig = fb.import_signature(
         LeafAbi::Register {
             arity: site.nargs as u8,
@@ -346,14 +423,28 @@ pub(crate) fn emit_direct_bytecode_call(
     fb.ins()
         .store(flags, depth3, vmctx, CONTEXT_DEPTH_OFFSET as i32);
     fb.def_var(result, value);
-    fb.ins().jump(hot_done, &[]);
+    match hot_done {
+        Some(hot_done) => {
+            fb.ins().jump(hot_done, &[]);
+        }
+        None => {
+            // A source site: the value where the other paths leave theirs.
+            fb.ins().stack_store(ptr_ty, value, rt.call_result_slot, 0);
+            let ok = fb.ins().iconst(types::I64, STATUS_OK);
+            fb.def_var(status_var, ok);
+            fb.ins().jump(join, &[]);
+        }
+    }
 
     // The cold exit: the shim's own (`call_spec_finish`), by baked address.
     fb.switch_to_block(cold);
     let cold_status = fb.block_params(cold)[0];
     let cold_value = fb.block_params(cold)[1];
     let vmctx_c = fb.use_var(rt.vmctx_var);
-    let exp_c = fb.ins().iconst(types::I64, site.expected as i64);
+    let exp_c = match callee {
+        DirectCallee::Symbol { .. } => fb.ins().iconst(types::I64, site.expected as i64),
+        DirectCallee::Source { callee } => callee,
+    };
     let args_c = if site.nargs <= 2 {
         // The frame holds the arguments; the finish reads them there.
         fb.ins().iconst(ptr_ty, 0)
@@ -399,11 +490,18 @@ pub(crate) fn emit_direct_bytecode_call(
     let args_addr = fb.ins().stack_addr(ptr_ty, rt.call_args_slot, 0);
     let out_addr = fb.ins().stack_addr(ptr_ty, rt.call_result_slot, 0);
     let n_val = fb.ins().iconst(types::I64, site.nargs as i64);
-    let call_spec = rt.refs.get(fb.func, Shim::CallSpec);
-    let shim = fb.ins().call(
-        call_spec,
-        &[vmctx_s, sym_v, exp_v, slot_v, args_addr, n_val, out_addr],
-    );
+    let shim = match callee {
+        DirectCallee::Symbol { sym_v, exp_v } => {
+            let call_spec = rt.refs.get(fb.func, Shim::CallSpec);
+            fb.ins().call(
+                call_spec,
+                &[vmctx_s, sym_v, exp_v, slot_v, args_addr, n_val, out_addr],
+            )
+        }
+        DirectCallee::Source { callee } => super::source_slots::emit_source_call(
+            fb, rt, slot_v, vmctx_s, callee, args_addr, n_val, out_addr,
+        ),
+    };
     let shim_status = fb.inst_results(shim)[0];
     fb.def_var(status_var, shim_status);
     let loaded = fb

@@ -276,10 +276,6 @@ pub(crate) fn runtime_identity_word(runtime: &crate::emacs_core::jit::Runtime) -
 /// `make-closure`-patched leaf loads through. `None` when the vector
 /// storage's layout is not the same for owned and mapped pools
 /// (`LispValueVec::jit_slice_offsets`).
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "consumer: closure source guards (P2.1 C5)")
-)]
 pub(crate) fn bytecode_constants_offsets() -> Option<(usize, usize)> {
     let (ptr, len) = crate::tagged::header::LispValueVec::jit_slice_offsets()?;
     let base = BYTECODE_OBJ_DATA_OFFSET

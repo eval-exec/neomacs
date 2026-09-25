@@ -957,6 +957,13 @@ impl CompiledLeaf {
                 cleared += 1;
             }
         }
+        // A closure source slot's direct entry into the dead leaf.
+        for slot in self.source_spec_slots() {
+            if slot.leaf_ptr() == dead {
+                slot.clear_source();
+                cleared += 1;
+            }
+        }
         cleared
     }
 

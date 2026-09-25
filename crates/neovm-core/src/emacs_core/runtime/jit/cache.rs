@@ -280,6 +280,12 @@ pub(crate) fn leaf_slot_epoch() -> u64 {
     LEAF_SLOT_EPOCH.load(Ordering::Relaxed)
 }
 
+/// The address of the leaf-slot epoch, for a closure source site's direct
+/// call (JIT-only: a baked process address).
+pub(crate) fn leaf_slot_epoch_addr() -> usize {
+    std::ptr::from_ref(&LEAF_SLOT_EPOCH) as usize
+}
+
 fn bump_leaf_slot_epoch() {
     LEAF_SLOT_EPOCH.fetch_add(1, Ordering::Relaxed);
 }

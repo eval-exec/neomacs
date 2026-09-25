@@ -16,22 +16,24 @@
 //! `STATUS_NEED_GENERIC` for anything its fast path does not take, which
 //! runs the site's generic call. The site never deopts.
 //!
-//! The slot ([`SpecSlotKind::Source`]) holds immutable words: `leaf` the
-//! source's `RuntimeState` address, `direct_consts` its identity word.
-//! Walkers never touch it (`CompiledLeaf::bytecode_spec_slots`), and the
-//! leaf holds the source's `RuntimeState` (`CompiledLeaf::feedback_holds`),
-//! so the identity it bakes stays unique while its code can run.
+//! The slot ([`SpecSlotKind::Source`]) holds the source's identity word in
+//! `direct_consts` (immutable); under `NEOVM_JIT_DIRECT_CALL` the shim arms
+//! `leaf`, `direct_entry` and `epoch` (the `leaf_slot_epoch` it was armed
+//! under) with the source's leaf, and the site calls the leaf directly
+//! (`direct_call`, [`SpecSlot::arm_source`]). The leaf walk that retires a
+//! leaf (`unlink_spec_slots`) clears a source slot holding it; every other
+//! retirement moves the epoch. The leaf holds the source's `RuntimeState`
+//! (`CompiledLeaf::feedback_holds`), so the identity it bakes stays unique
+//! while its code can run.
 
 use super::dispatch::{FastRun, call_spec_finish, call_spec_framed_run};
 use super::jit_layout::{BYTECODE_RUNTIME_WORD_OFFSET, VECLIKE_TYPE_TAG_OFFSET};
 use super::lowering::{RtCtx, band_imm_p, icmp_imm_p};
 use super::*;
 use crate::emacs_core::eval::AttentionMask;
-use crate::emacs_core::jit::RuntimeState;
 use crate::emacs_core::jit::feedback::{CallTarget, SiteShape};
 use crate::tagged::header::VecLikeType;
 use cranelift_codegen::isa::CallConv;
-use std::sync::Arc;
 
 /// Calls a source slot's fast path took (tests and debug builds).
 #[cfg(any(test, debug_assertions))]
@@ -74,18 +76,40 @@ pub(crate) fn add_source_sites(
                 kind: SpecCalleeKind::Source,
             },
         );
-        slots.push(SpecSlot::source(Arc::as_ptr(target), identity as u64));
+        slots.push(SpecSlot::source(identity as u64));
     }
 }
 
 impl SpecSlot {
-    /// A source site's slot: its immutable words name the source (see the
-    /// module docs).
-    pub(crate) fn source(state: *const RuntimeState, identity: u64) -> Self {
+    /// A source site's slot (see the module docs): the source's identity
+    /// word (immutable), no leaf yet.
+    pub(crate) fn source(identity: u64) -> Self {
         let slot = Self::at_epoch(0);
-        slot.leaf.store(state as usize as u64, Ordering::Relaxed);
         slot.direct_consts.store(identity, Ordering::Relaxed);
         slot
+    }
+
+    /// A source slot's identity word.
+    pub(crate) fn source_identity(&self) -> u64 {
+        self.direct_consts.load(Ordering::Relaxed)
+    }
+
+    /// Arm a source slot with its source's leaf and that leaf's register
+    /// entry, valid under `epoch` (the `leaf_slot_epoch` the leaf was armed
+    /// under): the epoch and the leaf first, the entry last.
+    pub(crate) fn arm_source(&self, leaf: *const CompiledLeaf, entry: *const u8, epoch: u64) {
+        self.epoch.store(epoch, Ordering::Relaxed);
+        self.leaf.store(leaf as usize as u64, Ordering::Relaxed);
+        self.direct_entry
+            .store(entry as usize as u64, Ordering::Relaxed);
+    }
+
+    /// Drop a source slot's leaf: the entry first (the arming order,
+    /// reversed); the identity stays.
+    pub(crate) fn clear_source(&self) {
+        self.direct_entry.store(0, Ordering::Relaxed);
+        self.leaf.store(0, Ordering::Relaxed);
+        self.epoch.store(0, Ordering::Relaxed);
     }
 }
 
@@ -144,7 +168,7 @@ pub(crate) fn emit_source_guard(
 pub(crate) fn emit_source_call(
     fb: &mut FunctionBuilder,
     rt: &RtCtx,
-    slot_ptr: i64,
+    slot_v: ClifValue,
     vmctx: ClifValue,
     func_val: ClifValue,
     args_addr: ClifValue,
@@ -156,7 +180,6 @@ pub(crate) fn emit_source_call(
         rt.ptr_ty,
         neovm_jit_call_source_spec as *const () as usize as i64,
     );
-    let slot_v = fb.ins().iconst(types::I64, slot_ptr);
     fb.ins().call_indirect(
         sig,
         callee,
@@ -205,10 +228,11 @@ pub(crate) extern "C" fn neovm_jit_call_source_spec(
     debug_assert!({
         // SAFETY: the executing leaf's slot.
         let slot = unsafe { &*(slot as *const SpecSlot) };
-        callee.bytecode_runtime_word() == Some(slot.direct_consts.load(Ordering::Relaxed) as usize)
+        callee.bytecode_runtime_word() == Some(slot.source_identity() as usize)
     });
-    if jit_force_slow_spec()
-        || !ctx_ref.attention_clear(AttentionMask::SPEC_CALL)
+    // The attention word carries `NEOVM_JIT_FORCE_SLOW_SPEC` too
+    // (`AttentionMask::SPEC_CALL`).
+    if !ctx_ref.attention_clear(AttentionMask::SPEC_CALL)
         || ctx_ref.debug_on_next_call_is_armed()
         || ctx_ref.depth >= ctx_ref.max_depth
     {
@@ -241,6 +265,16 @@ pub(crate) extern "C" fn neovm_jit_call_source_spec(
     rt.bump_heat();
     #[cfg(any(test, debug_assertions))]
     SOURCE_SLOT_FAST_CALLS.fetch_add(1, Ordering::Relaxed);
+    // `NEOVM_JIT_DIRECT_CALL`: (re-)arm the site's direct entry with this
+    // leaf, so the next call of the source enters it from the site. One
+    // compare while it holds this leaf.
+    {
+        // SAFETY: the executing leaf's slot.
+        let slot = unsafe { &*(slot as *const SpecSlot) };
+        if slot.leaf_ptr() != ptr {
+            arm_source_direct_entry(slot, leaf, nargs);
+        }
+    }
     let consts = bc.jit_constant_base();
     let bt_count = ctx_ref.specpdl.len();
     // SAFETY: `args_ptr` addresses `nargs` valid tagged words (the caller's
@@ -295,6 +329,32 @@ pub(crate) extern "C" fn neovm_jit_call_source_spec(
         }
     };
     call_spec_finish(ctx, callee, leaf, args_ptr, nargs, out, bt_count, run)
+}
+
+/// Arm a source site's direct entry for `leaf`, the source's current armed
+/// leaf (under `NEOVM_JIT_DIRECT_CALL`, when the site may enter it: its
+/// register ABI takes exactly `nargs` words, it is frameless, and the lean
+/// frame layout was probed). Out of line: once per leaf the source runs.
+#[cold]
+#[inline(never)]
+fn arm_source_direct_entry(slot: &SpecSlot, leaf: &CompiledLeaf, nargs: usize) {
+    slot.clear_source();
+    let eligible = jit_direct_call_on()
+        && leaf.abi
+            == (LeafAbi::Register {
+                arity: nargs.min(u8::MAX as usize) as u8,
+            })
+        && leaf.arity == nargs
+        && !leaf.has_rest
+        && leaf.direct_call_eligible()
+        && super::jit_layout::backtrace_layout().is_some();
+    if eligible {
+        slot.arm_source(
+            leaf,
+            leaf.entry,
+            crate::emacs_core::jit::cache::leaf_slot_epoch(),
+        );
+    }
 }
 
 /// The fast path declined: the site runs its generic call.

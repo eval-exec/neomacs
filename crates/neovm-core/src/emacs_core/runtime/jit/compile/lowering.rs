@@ -4375,8 +4375,17 @@ fn lower_direct_call_site(
     };
     let exp_v = fb.ins().iconst(types::I64, words.expected as i64);
     let slot_v = fb.ins().iconst(types::I64, words.slot_ptr);
-    let call =
-        super::direct_call::emit_direct_bytecode_call(fb, rt, &site, &args, sym_v, exp_v, slot_v);
+    let call = super::direct_call::emit_direct_bytecode_call(
+        fb,
+        rt,
+        &site,
+        &args,
+        super::direct_call::DirectCallee::Symbol { sym_v, exp_v },
+        slot_v,
+    );
+    let hot_done = call
+        .hot_done
+        .expect("a named direct call has its own hit end");
     // The slow and cold paths: the shim call site's tail.
     emit_cond_residual_roots_post(fb, rt, saved);
     let se = signal_target_for_site(fb, signal_exit, handlers, pending, stack, reps);
@@ -4384,8 +4393,8 @@ fn lower_direct_call_site(
     let ok = icmp_imm_p(fb, IntCC::Equal, call.status, STATUS_OK);
     fb.ins().brif(ok, cont, &[], se, &[]);
     // The hit: restore the root window, continue with the value.
-    fb.switch_to_block(call.hot_done);
-    fb.seal_block(call.hot_done);
+    fb.switch_to_block(hot_done);
+    fb.seal_block(hot_done);
     emit_cond_residual_roots_post(fb, rt, saved);
     fb.ins().jump(cont, &[]);
     fb.switch_to_block(cont);
@@ -7048,14 +7057,22 @@ fn lower_simple_op_arms(
                     None
                 }
             };
-            let func_val = stack[args_at - 1];
-            stack.truncate(args_at - 1);
             // `NEOVM_JIT_SPEC_SOURCES` (JIT only): a closure source site
-            // guards the callee's source identity (`source_slots`).
+            // guards the callee's source identity (`source_slots`), and
+            // under `NEOVM_JIT_DIRECT_CALL` calls the leaf from the site.
             let source_identity: Option<u64> = match spec {
                 Some((_, identity, _, _, SpecCalleeKind::Source)) => Some(identity),
                 _ => None,
             };
+            let source_direct = source_identity
+                .and_then(|_| super::direct_call::DirectSite::plan_source(rt, aot, n));
+            let source_args: SmallVec<[ClifValue; 6]> = if source_direct.is_some() {
+                stack[args_at..].iter().copied().collect()
+            } else {
+                SmallVec::new()
+            };
+            let func_val = stack[args_at - 1];
+            stack.truncate(args_at - 1);
             // What the generic call uses must dominate the guard's edge into
             // it, so a guarded site defines the call buffers first.
             let guarded_buffers = (guarded_sym.is_some() || source_identity.is_some()).then(|| {
@@ -7135,138 +7152,175 @@ fn lower_simple_op_arms(
             // call; bytecode-kind sites keep their everything-inside-the-shim
             // protocol. `None` = no NEED_GENERIC possible.
             let mut generic_fallback: Option<Block> = guard_generic;
-            let call = match spec {
-                // A closure source site's hit: the source shim, which answers
-                // STATUS_NEED_GENERIC for what its fast path declines.
-                Some((_, _, slot_ptr, _, SpecCalleeKind::Source)) => {
-                    super::source_slots::emit_source_call(
-                        fb, rt, slot_ptr, vmctx, func_val, args_addr, n_val, out_addr,
-                    )
-                }
-                Some((sym, expected, slot_ptr, slot_idx, SpecCalleeKind::Bytecode)) => {
-                    // The callee's frame records the called symbol: the shim
-                    // takes its tagged bits.
-                    let sym_v = materialize_op_sym_value(fb, reloc_base, reloc_index, sym);
-                    let exp_v =
-                        materialize_spec_expected(fb, aot, spec_expected_base, expected, slot_idx);
-                    let slot_v = materialize_spec_slot(fb, aot, spec_slot_base, slot_ptr, slot_idx);
-                    let call_spec = rt.refs.get(fb.func, Shim::CallSpec);
-                    fb.ins().call(
-                        call_spec,
-                        &[vmctx, sym_v, exp_v, slot_v, args_addr, n_val, out_addr],
-                    )
-                }
-                Some((sym, expected, slot_ptr, slot_idx, kind)) => {
-                    // PRESERVE emission order: create the generic-fallback block
-                    // FIRST (byte-identical to before B2), then the operands.
-                    // A guarded site already made it (both edges enter it).
-                    if generic_fallback.is_none() {
-                        generic_fallback = Some(fb.create_block());
-                    }
-                    let sym_v = materialize_op_sym_id(fb, reloc_base, reloc_index, sym);
-                    let exp_v =
-                        materialize_spec_expected(fb, aot, spec_expected_base, expected, slot_idx);
-                    let slot_v = materialize_spec_slot(fb, aot, spec_slot_base, slot_ptr, slot_idx);
-                    // The refs are Some whenever a subr-kind site exists (the
-                    // declare is keyed on exactly that condition).
-                    match (kind, &reg_args) {
-                        (SpecCalleeKind::SubrGeneral, _) => {
-                            let f = rt
-                                .refs
-                                .try_get(fb.func, Shim::CallSubrSpec)
-                                .ok_or(CompileError::UnsupportedOp("subr-spec-refs"))?;
-                            fb.ins().call(
-                                f,
-                                &[vmctx, sym_v, exp_v, slot_v, args_addr, n_val, out_addr],
-                            )
-                        }
-                        (
-                            SpecCalleeKind::PredRecordp
-                            | SpecCalleeKind::PredSymbolWithPos
-                            | SpecCalleeKind::PredTypeOf
-                            | SpecCalleeKind::PredClTypeOf
-                            | SpecCalleeKind::PredFboundp
-                            | SpecCalleeKind::PredAutoloadDoLoad,
-                            Some(args),
-                        ) => {
-                            let f = rt
-                                .refs
-                                .try_get(fb.func, Shim::PredSpec)
-                                .ok_or(CompileError::UnsupportedOp("subr-spec-refs"))?;
-                            let kind_v = fb.ins().iconst(
-                                types::I64,
-                                match kind {
-                                    SpecCalleeKind::PredRecordp => PRED_KIND_RECORDP,
-                                    SpecCalleeKind::PredSymbolWithPos => {
-                                        PRED_KIND_SYMBOL_WITH_POS_P
-                                    }
-                                    SpecCalleeKind::PredTypeOf => PRED_KIND_TYPE_OF,
-                                    SpecCalleeKind::PredFboundp => PRED_KIND_FBOUNDP,
-                                    SpecCalleeKind::PredAutoloadDoLoad => {
-                                        PRED_KIND_AUTOLOAD_DO_LOAD
-                                    }
-                                    _ => PRED_KIND_CL_TYPE_OF,
-                                },
-                            );
-                            fb.ins()
-                                .call(f, &[vmctx, kind_v, sym_v, exp_v, slot_v, args[0], out_addr])
-                        }
-                        (SpecCalleeKind::EqInclProps, Some(args)) => {
-                            let f = rt
-                                .refs
-                                .try_get(fb.func, Shim::EqInclPropsSpec)
-                                .ok_or(CompileError::UnsupportedOp("subr-spec-refs"))?;
-                            fb.ins().call(
-                                f,
-                                &[vmctx, sym_v, exp_v, slot_v, args[0], args[1], out_addr],
-                            )
-                        }
-                        (SpecCalleeKind::ArithIntrinsic { op }, Some(args)) => {
-                            let f = rt
-                                .refs
-                                .try_get(fb.func, Shim::ArithSpec)
-                                .ok_or(CompileError::UnsupportedOp("subr-spec-refs"))?;
-                            let kind_v = fb.ins().iconst(types::I64, op as i64);
-                            // lognot is 1-arg: pass a dummy `b` (the shim ignores it
-                            // for LOGNOT). The 2-arg ops collected both.
-                            let b_v = args.get(1).copied().unwrap_or_else(|| {
-                                fb.ins().iconst(types::I64, Value::NIL.bits() as i64)
-                            });
-                            fb.ins().call(
-                                f,
-                                &[vmctx, kind_v, sym_v, exp_v, slot_v, args[0], b_v, out_addr],
-                            )
-                        }
-                        // Reg-arg kinds always collected their args above.
-                        _ => return Err(CompileError::UnsupportedOp("subr-spec-shape")),
-                    }
-                }
-                // `NEOVM_JIT_FEEDBACK` (JIT only): a site whose target the
-                // source's call-site table records calls the recording shim
-                // (P2.1 C3/C4); with the knob off there is no such site.
-                None => match (!aot)
-                    .then(|| super::call_feedback::recording_site_at(pc))
-                    .flatten()
-                {
-                    Some(site) => super::call_feedback::emit_prof_call(
+            // `NEOVM_JIT_DIRECT_CALL` (JIT only): a closure source site
+            // calls its source's leaf from the site, the source shim being
+            // its slow path (`direct_call::DirectCallee::Source`).
+            let direct_source_status = match (spec, source_direct) {
+                (Some((_, _, slot_ptr, _, SpecCalleeKind::Source)), Some(site)) => {
+                    let slot_v = fb.ins().iconst(types::I64, slot_ptr);
+                    let call = super::direct_call::emit_direct_bytecode_call(
                         fb,
                         rt,
-                        matches!(op, Op::Apply(_)),
-                        site,
-                        vmctx,
-                        func_val,
-                        args_addr,
-                        n_val,
-                        out_addr,
-                    ),
-                    None => {
-                        let shim = rt.refs.get(fb.func, shim);
-                        fb.ins()
-                            .call(shim, &[vmctx, func_val, args_addr, n_val, out_addr])
-                    }
-                },
+                        &site,
+                        &source_args,
+                        super::direct_call::DirectCallee::Source { callee: func_val },
+                        slot_v,
+                    );
+                    Some(call.status)
+                }
+                _ => None,
             };
-            let status = fb.inst_results(call)[0];
+            let status = if let Some(status) = direct_source_status {
+                status
+            } else {
+                let call = match spec {
+                    // A closure source site's hit: the source shim, which answers
+                    // STATUS_NEED_GENERIC for what its fast path declines.
+                    Some((_, _, slot_ptr, _, SpecCalleeKind::Source)) => {
+                        let slot_v = fb.ins().iconst(types::I64, slot_ptr);
+                        super::source_slots::emit_source_call(
+                            fb, rt, slot_v, vmctx, func_val, args_addr, n_val, out_addr,
+                        )
+                    }
+                    Some((sym, expected, slot_ptr, slot_idx, SpecCalleeKind::Bytecode)) => {
+                        // The callee's frame records the called symbol: the shim
+                        // takes its tagged bits.
+                        let sym_v = materialize_op_sym_value(fb, reloc_base, reloc_index, sym);
+                        let exp_v = materialize_spec_expected(
+                            fb,
+                            aot,
+                            spec_expected_base,
+                            expected,
+                            slot_idx,
+                        );
+                        let slot_v =
+                            materialize_spec_slot(fb, aot, spec_slot_base, slot_ptr, slot_idx);
+                        let call_spec = rt.refs.get(fb.func, Shim::CallSpec);
+                        fb.ins().call(
+                            call_spec,
+                            &[vmctx, sym_v, exp_v, slot_v, args_addr, n_val, out_addr],
+                        )
+                    }
+                    Some((sym, expected, slot_ptr, slot_idx, kind)) => {
+                        // PRESERVE emission order: create the generic-fallback block
+                        // FIRST (byte-identical to before B2), then the operands.
+                        // A guarded site already made it (both edges enter it).
+                        if generic_fallback.is_none() {
+                            generic_fallback = Some(fb.create_block());
+                        }
+                        let sym_v = materialize_op_sym_id(fb, reloc_base, reloc_index, sym);
+                        let exp_v = materialize_spec_expected(
+                            fb,
+                            aot,
+                            spec_expected_base,
+                            expected,
+                            slot_idx,
+                        );
+                        let slot_v =
+                            materialize_spec_slot(fb, aot, spec_slot_base, slot_ptr, slot_idx);
+                        // The refs are Some whenever a subr-kind site exists (the
+                        // declare is keyed on exactly that condition).
+                        match (kind, &reg_args) {
+                            (SpecCalleeKind::SubrGeneral, _) => {
+                                let f = rt
+                                    .refs
+                                    .try_get(fb.func, Shim::CallSubrSpec)
+                                    .ok_or(CompileError::UnsupportedOp("subr-spec-refs"))?;
+                                fb.ins().call(
+                                    f,
+                                    &[vmctx, sym_v, exp_v, slot_v, args_addr, n_val, out_addr],
+                                )
+                            }
+                            (
+                                SpecCalleeKind::PredRecordp
+                                | SpecCalleeKind::PredSymbolWithPos
+                                | SpecCalleeKind::PredTypeOf
+                                | SpecCalleeKind::PredClTypeOf
+                                | SpecCalleeKind::PredFboundp
+                                | SpecCalleeKind::PredAutoloadDoLoad,
+                                Some(args),
+                            ) => {
+                                let f = rt
+                                    .refs
+                                    .try_get(fb.func, Shim::PredSpec)
+                                    .ok_or(CompileError::UnsupportedOp("subr-spec-refs"))?;
+                                let kind_v = fb.ins().iconst(
+                                    types::I64,
+                                    match kind {
+                                        SpecCalleeKind::PredRecordp => PRED_KIND_RECORDP,
+                                        SpecCalleeKind::PredSymbolWithPos => {
+                                            PRED_KIND_SYMBOL_WITH_POS_P
+                                        }
+                                        SpecCalleeKind::PredTypeOf => PRED_KIND_TYPE_OF,
+                                        SpecCalleeKind::PredFboundp => PRED_KIND_FBOUNDP,
+                                        SpecCalleeKind::PredAutoloadDoLoad => {
+                                            PRED_KIND_AUTOLOAD_DO_LOAD
+                                        }
+                                        _ => PRED_KIND_CL_TYPE_OF,
+                                    },
+                                );
+                                fb.ins().call(
+                                    f,
+                                    &[vmctx, kind_v, sym_v, exp_v, slot_v, args[0], out_addr],
+                                )
+                            }
+                            (SpecCalleeKind::EqInclProps, Some(args)) => {
+                                let f = rt
+                                    .refs
+                                    .try_get(fb.func, Shim::EqInclPropsSpec)
+                                    .ok_or(CompileError::UnsupportedOp("subr-spec-refs"))?;
+                                fb.ins().call(
+                                    f,
+                                    &[vmctx, sym_v, exp_v, slot_v, args[0], args[1], out_addr],
+                                )
+                            }
+                            (SpecCalleeKind::ArithIntrinsic { op }, Some(args)) => {
+                                let f = rt
+                                    .refs
+                                    .try_get(fb.func, Shim::ArithSpec)
+                                    .ok_or(CompileError::UnsupportedOp("subr-spec-refs"))?;
+                                let kind_v = fb.ins().iconst(types::I64, op as i64);
+                                // lognot is 1-arg: pass a dummy `b` (the shim ignores it
+                                // for LOGNOT). The 2-arg ops collected both.
+                                let b_v = args.get(1).copied().unwrap_or_else(|| {
+                                    fb.ins().iconst(types::I64, Value::NIL.bits() as i64)
+                                });
+                                fb.ins().call(
+                                    f,
+                                    &[vmctx, kind_v, sym_v, exp_v, slot_v, args[0], b_v, out_addr],
+                                )
+                            }
+                            // Reg-arg kinds always collected their args above.
+                            _ => return Err(CompileError::UnsupportedOp("subr-spec-shape")),
+                        }
+                    }
+                    // `NEOVM_JIT_FEEDBACK` (JIT only): a site whose target the
+                    // source's call-site table records calls the recording shim
+                    // (P2.1 C3/C4); with the knob off there is no such site.
+                    None => match (!aot)
+                        .then(|| super::call_feedback::recording_site_at(pc))
+                        .flatten()
+                    {
+                        Some(site) => super::call_feedback::emit_prof_call(
+                            fb,
+                            rt,
+                            matches!(op, Op::Apply(_)),
+                            site,
+                            vmctx,
+                            func_val,
+                            args_addr,
+                            n_val,
+                            out_addr,
+                        ),
+                        None => {
+                            let shim = rt.refs.get(fb.func, shim);
+                            fb.ins()
+                                .call(shim, &[vmctx, func_val, args_addr, n_val, out_addr])
+                        }
+                    },
+                };
+                fb.inst_results(call)[0]
+            };
             emit_cond_residual_roots_post(fb, rt, saved);
             // STATUS_OK -> continue with the result; STATUS_NEED_GENERIC (subr
             // spec sites only) -> the generic fallback block; anything else is

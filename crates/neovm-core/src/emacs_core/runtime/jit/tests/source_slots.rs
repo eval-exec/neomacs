@@ -116,6 +116,7 @@ fn off() {
     force_feedback_mode_for_test(None);
     force_spec_sources_for_test(None);
     force_slow_spec_for_test(None);
+    force_direct_call_for_test(None);
 }
 
 fn fast_calls() -> u64 {
@@ -286,5 +287,123 @@ fn only_a_monomorphic_source_gets_a_slot() {
     record(&caller, 2, Value::make_bytecode(adder(2)));
     let leaf = compile(&ev, &caller);
     assert!(!leaf.spec_slot_kinds.contains(&SpecSlotKind::Source));
+    off();
+}
+
+/// The caller leaf's one source slot.
+fn source_slot(leaf: &CompiledLeaf) -> &SpecSlot {
+    let mut slots = leaf.source_spec_slots();
+    let slot = slots.next().expect("a source slot");
+    assert!(slots.next().is_none());
+    slot
+}
+
+/// `NEOVM_JIT_DIRECT_CALL`: the first call through the shim arms the
+/// slot's direct entry with the source's register entry; later instances
+/// enter the leaf from the site (no shim call), each with its own captured
+/// constant. The leaf walk that retires the leaf clears the entry, and a
+/// retirement that moves the leaf-slot epoch sends the site back to the
+/// shim, which re-arms.
+#[test]
+fn with_direct_calls_instances_enter_the_leaf_from_the_site() {
+    on(true);
+    force_direct_call_for_test(Some(true));
+    let mut ev = Context::new();
+    let proto = adder(1);
+    arm(&mut ev, &proto);
+    let caller = funcall_caller();
+    record(&caller, 2, instance(&proto, 1));
+    let leaf = compile(&ev, &caller);
+    let slot = source_slot(&leaf);
+    assert!(
+        slot.direct_entry().is_null(),
+        "unarmed until the first call"
+    );
+    let fast = fast_calls();
+    assert_eq!(
+        run(&mut ev, &leaf, &[instance(&proto, 10), Value::make_int(5)]),
+        Ok(Value::make_int(15))
+    );
+    assert_eq!(fast_calls() - fast, 1, "the first call took the shim");
+    let armed = proto
+        .jit_runtime()
+        .armed_leaf_slot(cache::leaf_slot_epoch())
+        .expect("armed");
+    // SAFETY: the cache holds the source's leaf.
+    assert_eq!(slot.direct_entry(), unsafe { (*armed).entry });
+    let fast = fast_calls();
+    for k in [20, 30, 40] {
+        assert_eq!(
+            run(&mut ev, &leaf, &[instance(&proto, k), Value::make_int(5)]),
+            Ok(Value::make_int(5 + k))
+        );
+    }
+    assert_eq!(fast_calls(), fast, "direct: no shim call");
+    // The walk that retires the source's leaf (`cache::unlink_spec_slots`,
+    // over the cached leaves; this caller is not cached) clears the entry.
+    assert_eq!(leaf.unlink_spec_slots_to(armed), 1);
+    assert!(slot.direct_entry().is_null());
+    assert_eq!(
+        run(&mut ev, &leaf, &[instance(&proto, 2), Value::make_int(5)]),
+        Ok(Value::make_int(7))
+    );
+    assert!(!slot.direct_entry().is_null(), "re-armed by the shim");
+    // Another source misses the guard; the depth limit declines to the
+    // generic call with its error, as the knob-off site does.
+    assert_eq!(
+        run(
+            &mut ev,
+            &leaf,
+            &[Value::make_bytecode(adder(100)), Value::make_int(1)]
+        ),
+        Ok(Value::make_int(101))
+    );
+    let saved = (ev.depth, ev.max_depth);
+    ev.max_depth = ev.depth.max(100);
+    ev.depth = ev.max_depth;
+    let deep = run(&mut ev, &leaf, &[instance(&proto, 2), Value::make_int(1)]);
+    (ev.depth, ev.max_depth) = saved;
+    assert!(
+        deep.unwrap_err().contains("max-lisp-eval-depth"),
+        "the depth error"
+    );
+    off();
+}
+
+/// A callee whose arity the site does not match exactly never arms: its
+/// calls keep the shim (and the generic call), with the generic answers.
+#[test]
+fn with_direct_calls_an_inexact_callee_keeps_the_shim() {
+    on(true);
+    force_direct_call_for_test(Some(true));
+    let mut ev = Context::new();
+    // (lambda (x &optional y) x): the site passes one argument.
+    let proto = {
+        let mut f = ByteCodeFunction::new(LambdaParams {
+            required: vec![SymId(1)],
+            optional: vec![SymId(2)],
+            rest: None,
+        });
+        f.lexical = true;
+        f.ops = vec![Op::StackRef(1), Op::Return];
+        f.constants = vec![Value::make_int(0)].into();
+        f.max_stack = 4;
+        f.seal_hand_assembled_ops();
+        f.jit_runtime()
+            .set_reopt_level_for_test(ReoptLevel::BaselineOnly);
+        f
+    };
+    arm(&mut ev, &proto);
+    let caller = funcall_caller();
+    record(&caller, 2, Value::make_bytecode(proto.clone()));
+    let leaf = compile(&ev, &caller);
+    for i in 0..3 {
+        let f = Value::make_bytecode(proto.clone());
+        assert_eq!(
+            run(&mut ev, &leaf, &[f, Value::make_int(i)]),
+            Ok(Value::make_int(i))
+        );
+    }
+    assert!(source_slot(&leaf).direct_entry().is_null(), "never armed");
     off();
 }
