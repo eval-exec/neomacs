@@ -9102,15 +9102,15 @@ pub(crate) fn re_search(
     let mut regs = MatchRegisters::default();
     // `NEOVM_REGEX_DFA`: the existence DFA filters the candidates, when on
     // and usable for this search (see `dfa::DfaLease::acquire`).  Every
-    // candidate of a search has a stop at most `max_stop`.
-    let max_stop = if range >= 0 {
-        start.saturating_add(range as usize).min(text_len)
-    } else {
-        start
-    };
+    // candidate of a search stops at most at `max_stop`.
     let mut dfa_lease = if dfa::dfa_mode() == dfa::DfaMode::Off || fastmap_force_disabled() {
         None
     } else {
+        let max_stop = if range >= 0 {
+            start.saturating_add(range as usize).min(text_len)
+        } else {
+            start
+        };
         dfa::DfaLease::acquire(pattern, syntax, max_stop)
     };
     macro_rules! try_candidate {
