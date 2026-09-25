@@ -58,6 +58,15 @@ fn native(ctx_ptr: *mut u8, leaf: &CompiledLeaf, args: &[Value], what: &str) -> 
     }
 }
 
+/// Evaluate `srcs` into values kept live by a global (`inline-heap-keep`)
+/// until the next call: under `NEOVM_GC_STRESS` every evaluation collects,
+/// and a value held only in a Rust local would be swept.
+fn keep(eval: &mut Context, srcs: &[&str]) -> Vec<Value> {
+    let form = format!("(setq inline-heap-keep (list {}))", srcs.join(" "));
+    let list = eval.eval_str(&form).expect("operands");
+    crate::emacs_core::value::list_to_vec(&list).expect("list")
+}
+
 fn shim_calls() -> usize {
     super::dispatch::LIST_STORE_SHIM_CALLS.with(|c| c.get())
 }
@@ -91,12 +100,7 @@ fn cons_stores_match_the_interpreter_natively() {
         for cell_src in CELLS {
             for value_src in VALUES {
                 let what = format!("({op:?} {cell_src} {value_src})");
-                let fresh = |eval: &mut Context| {
-                    let pair = eval
-                        .eval_str(&format!("(cons {cell_src} {value_src})"))
-                        .expect("operands");
-                    vec![pair.cons_car(), pair.cons_cdr()]
-                };
+                let fresh = |eval: &mut Context| keep(eval, &[cell_src, value_src]);
                 let args = fresh(&mut eval);
                 let cell = args[0];
                 let want = interpret(&mut eval, &f, args);
@@ -126,8 +130,8 @@ fn a_covering_window_sends_every_store_to_the_barrier() {
     let mut eval = Context::new();
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let leaf = compile_bytecode_function(&store_fn(Op::Setcar)).expect("compiles");
-    let cell = eval.eval_str("(cons 1 2)").expect("cell");
-    let value = eval.eval_str("(list 'new)").expect("value");
+    let args = keep(&mut eval, &["(cons 1 2)", "(list 'new)"]);
+    let (cell, value) = (args[0], args[1]);
 
     eval.tagged_heap
         .set_write_tracking_mode(WriteTrackingMode::OwnersAndRecords);
@@ -156,8 +160,8 @@ fn a_store_during_a_concurrent_mark_logs_its_pre_image() {
     let mut eval = Context::new();
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let leaf = compile_bytecode_function(&store_fn(Op::Setcar)).expect("compiles");
-    let old = eval.eval_str("(list 'old)").expect("old");
-    let cell = eval.eval_str("(cons nil 2)").expect("cell");
+    let args = keep(&mut eval, &["(list 'old)", "(cons nil 2)"]);
+    let (old, cell) = (args[0], args[1]);
     crate::tagged::mutate::set_cons_car(cell, old);
 
     eval.tagged_heap.set_concurrent_active_for_test(true);
@@ -195,8 +199,8 @@ fn an_image_owner_is_remembered_and_a_heap_owner_is_not() {
     }])) as *mut ConsCell;
     unsafe { eval.tagged_heap.register_mapped_cons_range(image_cell, 1) };
     let image = unsafe { Value::from_cons_ptr(image_cell) };
-    let heap_cell = eval.eval_str("(cons 1 nil)").expect("cell");
-    let child = eval.eval_str("(list 'young)").expect("child");
+    let args = keep(&mut eval, &["(cons 1 nil)", "(list 'young)"]);
+    let (heap_cell, child) = (args[0], args[1]);
 
     let before = shim_calls();
     assert_eq!(native(ctx_ptr, &leaf, &[image, child], "image"), "(young)");
@@ -307,7 +311,7 @@ fn the_inline_heap_write_knob_turns_the_inline_stores_off() {
         "no inline store under the knob"
     );
     assert!(!leaf.needs_vmctx);
-    let cell = eval.eval_str("(cons 1 2)").expect("cell");
+    let cell = keep(&mut eval, &["(cons 1 2)"])[0];
     let before = shim_calls();
     assert_eq!(native(ctx_ptr, &leaf, &[cell, Value::T], "knob off"), "t");
     assert_eq!(shim_calls() - before, 1);
