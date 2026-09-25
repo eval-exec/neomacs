@@ -2504,6 +2504,10 @@ fn scan_sexp_backward(
     }
 
     idx -= 1; // move to the character we're examining
+    // GNU `scan_lists' error data is (LAST_GOOD FROM): LAST_GOOD is the last
+    // character examined at the starting depth -- the one that begins this
+    // sexp -- and FROM where the scan stopped.
+    let sexp_char = idx;
     let ch = chars.char_at(idx);
     let syn_entry = effective_syntax_entry_for_abs_char(buf, table, ch, idx, prop_cache);
     let mut syn = syn_entry.class;
@@ -2591,16 +2595,20 @@ fn scan_sexp_backward(
                 }
             }
             if depth != 0 {
-                return Err(ScanListError::unbalanced(idx, start));
+                return Err(ScanListError::unbalanced(sexp_char, idx));
             }
             Ok(idx)
         }
-        SyntaxClass::Open => Err(ScanListError::containing_ends_prematurely(idx, start)),
+        // GNU: the open paren drops below the starting depth while it is
+        // itself the last character examined at that depth.
+        SyntaxClass::Open => Err(ScanListError::containing_ends_prematurely(
+            sexp_char, sexp_char,
+        )),
         SyntaxClass::StringDelim | SyntaxClass::StringFence => {
             // Scan backward to matching string delimiter.
             let delim_class = syn;
             if idx == start_bound {
-                return Err(ScanListError::unbalanced(idx, start));
+                return Err(ScanListError::unbalanced(sexp_char, idx));
             }
             idx -= 1;
             while idx > start_bound {
@@ -2617,7 +2625,7 @@ fn scan_sexp_backward(
             let c = chars.char_at(idx);
             let s = effective_syntax_entry_for_abs_char(buf, table, c, idx, prop_cache).class;
             if !(s == delim_class && (syn == SyntaxClass::StringFence || c == ch)) {
-                return Err(ScanListError::unbalanced(idx, start));
+                return Err(ScanListError::unbalanced(sexp_char, idx));
             }
             Ok(idx)
         }
@@ -2652,14 +2660,14 @@ fn scan_sexp_backward(
         SyntaxClass::Math => {
             let delim = ch;
             if idx == start_bound {
-                return Err(ScanListError::unbalanced(idx, start));
+                return Err(ScanListError::unbalanced(sexp_char, idx));
             }
             idx -= 1;
             while idx > start_bound && chars.char_at(idx) != delim {
                 idx -= 1;
             }
             if chars.char_at(idx) != delim {
-                return Err(ScanListError::unbalanced(idx, start));
+                return Err(ScanListError::unbalanced(sexp_char, idx));
             }
             Ok(idx)
         }
@@ -7698,3 +7706,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/flat_ascii_syntax_entry_cache_test.rs"]
 mod flat_ascii_syntax_entry_cache_tests;
+
+#[cfg(test)]
+#[path = "tests/scan_error_data_gnu.rs"]
+mod scan_error_data_gnu_tests;

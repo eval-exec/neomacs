@@ -2,6 +2,7 @@
 
 mod local_strict_edge_semantics;
 mod parse_state;
+mod scan_error_data;
 mod table;
 mod table_advanced;
 mod table_comprehensive;
