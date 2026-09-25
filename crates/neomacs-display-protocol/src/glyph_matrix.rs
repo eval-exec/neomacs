@@ -2785,27 +2785,8 @@ impl FrameDisplayState {
             );
         }
         for entry in &self.window_matrices {
-            // Body (`Text`) rows clip to the text-area band so a vscroll's
-            // top-clipped first row / exposed bottom row do not bleed over the
-            // header/tab-line or mode-line; chrome rows keep the window bounds.
             for (row_idx, glyph_row) in entry.matrix.rows.iter().enumerate() {
-                let row_bounds = entry.row_pixel_bounds(glyph_row.role);
-                let area_layout = self.glyph_row_area_layout(entry, glyph_row.role);
-                let char_w = if entry.matrix.ncols > 0 {
-                    row_bounds.width / entry.matrix.ncols as f32
-                } else {
-                    self.char_width
-                };
-                self.for_each_grid_row_glyph(
-                    entry.window_id,
-                    row_idx as u32,
-                    glyph_row,
-                    row_bounds,
-                    area_layout,
-                    char_w,
-                    self.char_height,
-                    &mut push,
-                );
+                self.for_each_window_row_glyph(entry, row_idx, glyph_row, &mut push);
             }
         }
 
@@ -2975,6 +2956,53 @@ impl FrameDisplayState {
                 thumb_color: sb.thumb_color,
             });
         }
+    }
+
+    /// The glyphs [`Self::for_each_glyph`] materializes for the window-matrix
+    /// rows ACCEPT keeps, and nothing else, in the same order and with the
+    /// same geometry (the same per-row code runs).
+    pub fn for_each_window_matrix_row_glyph(
+        &self,
+        mut accept: impl FnMut(&WindowMatrixEntry, usize, &GlyphRow) -> bool,
+        mut push: impl FnMut(FrameGlyph),
+    ) {
+        for entry in &self.window_matrices {
+            for (row_idx, glyph_row) in entry.matrix.rows.iter().enumerate() {
+                if accept(entry, row_idx, glyph_row) {
+                    self.for_each_window_row_glyph(entry, row_idx, glyph_row, &mut push);
+                }
+            }
+        }
+    }
+
+    /// One window-matrix row of [`Self::for_each_glyph`].
+    fn for_each_window_row_glyph(
+        &self,
+        entry: &WindowMatrixEntry,
+        row_idx: usize,
+        glyph_row: &GlyphRow,
+        push: &mut impl FnMut(FrameGlyph),
+    ) {
+        // Body (`Text`) rows clip to the text-area band so a vscroll's
+        // top-clipped first row / exposed bottom row do not bleed over the
+        // header/tab-line or mode-line; chrome rows keep the window bounds.
+        let row_bounds = entry.row_pixel_bounds(glyph_row.role);
+        let area_layout = self.glyph_row_area_layout(entry, glyph_row.role);
+        let char_w = if entry.matrix.ncols > 0 {
+            row_bounds.width / entry.matrix.ncols as f32
+        } else {
+            self.char_width
+        };
+        self.for_each_grid_row_glyph(
+            entry.window_id,
+            row_idx as u32,
+            glyph_row,
+            row_bounds,
+            area_layout,
+            char_w,
+            self.char_height,
+            push,
+        );
     }
 
     /// Resolve face attributes for grid materialization.

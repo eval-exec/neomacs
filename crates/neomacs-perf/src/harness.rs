@@ -1412,6 +1412,8 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     // the per-frame verify report.
     "NEOMACS_TTY_DAMAGE",
     "NEOMACS_TTY_DAMAGE_REPORT_FILE",
+    // Chrome string positions from chrome rows: `frame` (default) or `rows`.
+    "NEOMACS_PRESENT_CHROME_POS",
 ];
 
 pub(crate) fn configure_benchmark_environment(command: &mut Command, sandbox: &MelpaSandbox) {

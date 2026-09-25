@@ -384,7 +384,51 @@ fn has_adjacent_window(
         })
 }
 
-fn window_chrome_string_positions(
+/// Where [`window_chrome_string_positions`] finds its glyphs' bounds
+/// (`NEOMACS_PRESENT_CHROME_POS`, P3.5 C1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ChromePositionSource {
+    /// Materialize every glyph of the frame and keep the chrome ones (the
+    /// old path: about 0.3M instructions per 40x120 frame).
+    Frame,
+    /// Materialize only the enabled tab-line, header-line and mode-line rows,
+    /// through the same per-row code, so the bounds are identical.
+    Rows,
+}
+
+#[cfg(test)]
+thread_local! {
+    static CHROME_POSITION_SOURCE_OVERRIDE: std::cell::Cell<Option<ChromePositionSource>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Force SOURCE on this thread (tests only).
+#[cfg(test)]
+pub(crate) fn set_chrome_position_source_for_test(source: Option<ChromePositionSource>) {
+    CHROME_POSITION_SOURCE_OVERRIDE.with(|cell| cell.set(source));
+}
+
+/// The knob, read once per process: `rows` selects [`ChromePositionSource::Rows`];
+/// unset or anything else keeps [`ChromePositionSource::Frame`].
+fn chrome_position_source() -> ChromePositionSource {
+    #[cfg(test)]
+    if let Some(source) = CHROME_POSITION_SOURCE_OVERRIDE.with(|cell| cell.get()) {
+        return source;
+    }
+    static SOURCE: std::sync::OnceLock<ChromePositionSource> = std::sync::OnceLock::new();
+    *SOURCE.get_or_init(|| {
+        match std::env::var("NEOMACS_PRESENT_CHROME_POS")
+            .ok()
+            .map(|value| value.trim().to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("rows" | "on" | "1") => ChromePositionSource::Rows,
+            _ => ChromePositionSource::Frame,
+        }
+    })
+}
+
+pub(crate) fn window_chrome_string_positions(
     state: &FrameDisplayState,
 ) -> Result<Vec<PresentedStringPosition>, PresentedHitError> {
     let mut sources = rustc_hash::FxHashMap::default();
@@ -419,7 +463,7 @@ fn window_chrome_string_positions(
     }
 
     let mut positions = Vec::with_capacity(sources.len());
-    state.for_each_glyph(|glyph| {
+    let push = |glyph: neomacs_display_protocol::frame_glyphs::FrameGlyph| {
         let Some(slot) = glyph.slot_id() else {
             return;
         };
@@ -439,9 +483,26 @@ fn window_chrome_string_positions(
             string,
             char_index,
         ));
-    });
+    };
+    match chrome_position_source() {
+        ChromePositionSource::Frame => state.for_each_glyph(push),
+        ChromePositionSource::Rows => {
+            // Every source slot lies on an enabled chrome row of a window
+            // matrix, and only those rows' glyphs carry such slots.
+            if !sources.is_empty() {
+                state.for_each_window_matrix_row_glyph(
+                    |_, _, row| row.enabled && window_chrome_region(row.role).is_some(),
+                    push,
+                );
+            }
+        }
+    }
     Ok(positions)
 }
+
+#[cfg(test)]
+#[path = "tests/spatial_chrome_positions_test.rs"]
+mod chrome_positions_tests;
 
 fn window_chrome_region(role: GlyphRowRole) -> Option<PresentedWindowChromeArea> {
     match role {
