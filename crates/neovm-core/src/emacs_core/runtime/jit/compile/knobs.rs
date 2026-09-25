@@ -476,3 +476,51 @@ pub(crate) fn jit_mir_reach() -> MirReach {
     static REACH: OnceLock<MirReach> = OnceLock::new();
     *REACH.get_or_init(|| MirReach::parse(std::env::var("NEOVM_JIT_MIR_REACH").ok().as_deref()))
 }
+
+#[cfg(test)]
+std::thread_local! {
+    static TAIL_UNROOTED_TEST_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// Force tail-call residual elision on/off for compiles on the current
+/// thread (tests only); `None` returns to the environment's.
+#[cfg(test)]
+pub(crate) fn force_tail_unrooted_for_test(on: Option<bool>) {
+    TAIL_UNROOTED_TEST_OVERRIDE.with(|c| c.set(on));
+}
+
+/// A call in tail position roots no residuals
+/// (`lowering::tail_call_dead_residuals`). Default on;
+/// `NEOVM_JIT_TAIL_UNROOTED=off` roots them as before, CLIF-identical to the
+/// lowering without the elision: the single-build A/B. Read at compile time
+/// only.
+pub(crate) fn jit_tail_unrooted_on() -> bool {
+    #[cfg(test)]
+    if let Some(on) = TAIL_UNROOTED_TEST_OVERRIDE.with(|c| c.get()) {
+        return on;
+    }
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("NEOVM_JIT_TAIL_UNROOTED").ok().as_deref(),
+            Some("0" | "off" | "false" | "no")
+        )
+    })
+}
+
+/// A MIR leaf reads its arguments first in its entry, before the hoisted
+/// root-window check, so the argument pointer is not live across that
+/// check's cold grow call. Default on; `NEOVM_JIT_ARGS_FIRST=off` reads them
+/// last, as before, CLIF-identical: the single-build A/B. Read at compile
+/// time only.
+pub(crate) fn jit_args_first_on() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("NEOVM_JIT_ARGS_FIRST").ok().as_deref(),
+            Some("0" | "off" | "false" | "no")
+        )
+    })
+}

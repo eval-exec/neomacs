@@ -48,6 +48,7 @@ fn two_calls(tail: bool) -> ByteCodeFunction {
 #[test]
 fn a_tail_call_stores_no_residual_and_other_calls_still_do() {
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+    force_tail_unrooted_for_test(Some(true));
     let ev = Context::new();
     let before = tail_calls_unrooted();
     let leaf =
@@ -69,6 +70,14 @@ fn a_tail_call_stores_no_residual_and_other_calls_still_do() {
         "a call followed by more code keeps `l` rooted (carried from the first site)"
     );
     assert_eq!(tail_calls_unrooted(), before + 1, "no second tail call");
+
+    // `NEOVM_JIT_TAIL_UNROOTED=off`: the tail call roots `l` as before.
+    force_tail_unrooted_for_test(Some(false));
+    let leaf =
+        compile_bytecode_function_with(&two_calls(true), Some(&ev.obarray)).expect("compiles");
+    assert_eq!(leaf.tier, super::leaf::LeafTier::Baseline);
+    assert_eq!(rootwin_counters(), (1, 1), "the knob restores the rooting");
+    force_tail_unrooted_for_test(None);
 }
 
 /// listlen-tc's shape through the MIR tier: its self-call in tail position
@@ -77,6 +86,7 @@ fn a_tail_call_stores_no_residual_and_other_calls_still_do() {
 #[test]
 fn a_compiled_tail_recursion_survives_a_collection_at_its_bottom() {
     crate::test_utils::init_test_tracing();
+    force_tail_unrooted_for_test(Some(true));
     let mut ev = crate::test_utils::runtime_startup_context();
     ev.eval_str(
         "(progn

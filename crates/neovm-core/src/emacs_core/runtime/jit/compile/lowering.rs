@@ -3211,17 +3211,21 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
         // slot, and read here the pointer to it dies at once, instead of
         // staying live across the root-window prologue's cold grow call
         // (a callee-saved copy and a restore on every entry).
-        let arg_vals: Vec<BlockArg> = (0..m.arity)
-            .map(|i| {
-                let v = fb.ins().load(
-                    types::I64,
-                    MemFlagsData::trusted(),
-                    args_ptr,
-                    (i * 8) as i32,
-                );
-                BlockArg::Value(v)
-            })
-            .collect();
+        // `NEOVM_JIT_ARGS_FIRST=off` reads them last, as before.
+        let load_args = |fb: &mut FunctionBuilder| -> Vec<BlockArg> {
+            (0..m.arity)
+                .map(|i| {
+                    let v = fb.ins().load(
+                        types::I64,
+                        MemFlagsData::trusted(),
+                        args_ptr,
+                        (i * 8) as i32,
+                    );
+                    BlockArg::Value(v)
+                })
+                .collect()
+        };
+        let args_first = jit_args_first_on().then(|| load_args(&mut fb));
         if let Some(slot) = backedge_counter {
             let one = fb.ins().iconst(types::I64, 1);
             fb.ins().stack_store(ptr_ty, one, slot, 0);
@@ -3276,6 +3280,7 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
             meta_depth_addr,
             meta_handlers_addr,
         );
+        let arg_vals = args_first.unwrap_or_else(|| load_args(&mut fb));
         fb.ins().jump(clif_blocks[0], &arg_vals);
 
         for (bi, blk) in m.blocks.iter().enumerate() {
@@ -5771,7 +5776,8 @@ pub(crate) fn tail_call_dead_residuals(
     let (Op::Call(n) | Op::Apply(n)) = op else {
         return None;
     };
-    if next != Some(&Op::Return)
+    if !jit_tail_unrooted_on()
+        || next != Some(&Op::Return)
         || handlers_active
         || matches!(spec, Some(SpecCalleeKind::ArithIntrinsic { .. }))
     {
