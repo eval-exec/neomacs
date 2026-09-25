@@ -6884,6 +6884,10 @@ fn lower_simple_op_arms(
             // bits are relocated there) or inline arithmetic (which deopts).
             let mut guarded_sym: Option<u32> = None;
             let spec = spec.filter(|&(sym, _, _, _, kind)| {
+                // A closure source site guards the callee itself (below).
+                if kind == SpecCalleeKind::Source {
+                    return true;
+                }
                 if callee_is_symbol_const(fb, stack[args_at - 1], sym, reloc_base, reloc_index) {
                     return true;
                 }
@@ -7046,9 +7050,15 @@ fn lower_simple_op_arms(
             };
             let func_val = stack[args_at - 1];
             stack.truncate(args_at - 1);
+            // `NEOVM_JIT_SPEC_SOURCES` (JIT only): a closure source site
+            // guards the callee's source identity (`source_slots`).
+            let source_identity: Option<u64> = match spec {
+                Some((_, identity, _, _, SpecCalleeKind::Source)) => Some(identity),
+                _ => None,
+            };
             // What the generic call uses must dominate the guard's edge into
             // it, so a guarded site defines the call buffers first.
-            let guarded_buffers = guarded_sym.map(|_| {
+            let guarded_buffers = (guarded_sym.is_some() || source_identity.is_some()).then(|| {
                 (
                     fb.ins().stack_addr(rt.ptr_ty, rt.call_args_slot, 0),
                     fb.ins().stack_addr(rt.ptr_ty, rt.call_result_slot, 0),
@@ -7057,22 +7067,28 @@ fn lower_simple_op_arms(
             });
             // The guarded site's check, before anything the speculated path
             // stores: a mismatch enters the generic-fallback block below.
-            let guard_generic: Option<Block> = guarded_sym.map(|sym| {
-                let bits = Value::from_sym_id(crate::emacs_core::intern::SymId(sym)).bits();
-                #[cfg(test)]
-                let bits = if FORCE_SPEC_GUARD_MISS.with(|c| c.get()) {
-                    !bits
-                } else {
-                    bits
-                };
-                let is_sym = icmp_imm_p(fb, IntCC::Equal, func_val, bits as i64);
-                let speculated = fb.create_block();
-                let generic = fb.create_block();
-                fb.ins().brif(is_sym, speculated, &[], generic, &[]);
-                fb.switch_to_block(speculated);
-                fb.seal_block(speculated);
-                generic
-            });
+            let guard_generic: Option<Block> = guarded_sym
+                .map(|sym| {
+                    let bits = Value::from_sym_id(crate::emacs_core::intern::SymId(sym)).bits();
+                    #[cfg(test)]
+                    let bits = if FORCE_SPEC_GUARD_MISS.with(|c| c.get()) {
+                        !bits
+                    } else {
+                        bits
+                    };
+                    let is_sym = icmp_imm_p(fb, IntCC::Equal, func_val, bits as i64);
+                    let speculated = fb.create_block();
+                    let generic = fb.create_block();
+                    fb.ins().brif(is_sym, speculated, &[], generic, &[]);
+                    fb.switch_to_block(speculated);
+                    fb.seal_block(speculated);
+                    generic
+                })
+                .or_else(|| {
+                    source_identity.map(|identity| {
+                        super::source_slots::emit_source_guard(fb, func_val, identity)
+                    })
+                });
             // Root every value that stays live across the call (the callee +
             // args are rooted by the shim; the constants are rooted by the
             // dispatch seam via the executing function). Pred/EqIncl direct
@@ -7120,6 +7136,13 @@ fn lower_simple_op_arms(
             // protocol. `None` = no NEED_GENERIC possible.
             let mut generic_fallback: Option<Block> = guard_generic;
             let call = match spec {
+                // A closure source site's hit: the source shim, which answers
+                // STATUS_NEED_GENERIC for what its fast path declines.
+                Some((_, _, slot_ptr, _, SpecCalleeKind::Source)) => {
+                    super::source_slots::emit_source_call(
+                        fb, rt, slot_ptr, vmctx, func_val, args_addr, n_val, out_addr,
+                    )
+                }
                 Some((sym, expected, slot_ptr, slot_idx, SpecCalleeKind::Bytecode)) => {
                     // The callee's frame records the called symbol: the shim
                     // takes its tagged bits.
@@ -7287,10 +7310,29 @@ fn lower_simple_op_arms(
                     emit_model_roots_pre(fb, rt, stack, reps)
                 };
                 let vmctx_gen = fb.use_var(rt.vmctx_var);
-                let shim = rt.refs.get(fb.func, shim);
-                let call_gen = fb
-                    .ins()
-                    .call(shim, &[vmctx_gen, func_val, args_addr, n_val, out_addr]);
+                // A recording site records here too (`NEOVM_JIT_FEEDBACK`):
+                // a source site's misses and declines reach the lattice.
+                let call_gen = match (!aot)
+                    .then(|| super::call_feedback::recording_site_at(pc))
+                    .flatten()
+                {
+                    Some(site) => super::call_feedback::emit_prof_call(
+                        fb,
+                        rt,
+                        matches!(op, Op::Apply(_)),
+                        site,
+                        vmctx_gen,
+                        func_val,
+                        args_addr,
+                        n_val,
+                        out_addr,
+                    ),
+                    None => {
+                        let shim = rt.refs.get(fb.func, shim);
+                        fb.ins()
+                            .call(shim, &[vmctx_gen, func_val, args_addr, n_val, out_addr])
+                    }
+                };
                 let status_gen = fb.inst_results(call_gen)[0];
                 emit_cond_residual_roots_post(fb, rt, saved_gen);
                 rootwin_carry_meet(&carry_fast);

@@ -19,7 +19,7 @@
 use super::lowering::RtCtx;
 use super::*;
 use crate::emacs_core::jit::RuntimeState;
-use crate::emacs_core::jit::feedback::CallSiteFeedback;
+use crate::emacs_core::jit::feedback::{CallSiteFeedback, CallTarget, SiteShape};
 use cranelift_codegen::isa::CallConv;
 use std::sync::Arc;
 
@@ -126,6 +126,20 @@ pub(crate) fn recording_site_at(pc: usize) -> Option<*const CallSiteFeedback> {
         let site = source.call_sites()?.site_at(pc)? as *const CallSiteFeedback;
         hold_for_leaf(source);
         Some(site)
+    })
+}
+
+/// The target recorded at the call at lowered pc `pc`, when the compile
+/// may read targets (`NEOVM_JIT_FEEDBACK=use`).
+pub(crate) fn recorded_target_at(pc: usize) -> Option<(CallTarget, SiteShape)> {
+    if !ACTIVE_CALL_TARGETS_READ.with(std::cell::Cell::get) {
+        return None;
+    }
+    let pc = original_pc(pc)?;
+    ACTIVE_CALL_SOURCE.with(|s| {
+        let source = s.borrow();
+        let site = source.as_ref()?.call_sites()?.site_at(pc)?;
+        Some((site.target(), site.shape()))
     })
 }
 

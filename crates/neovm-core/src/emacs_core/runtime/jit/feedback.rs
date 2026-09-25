@@ -112,7 +112,9 @@ pub(crate) fn feedback_mode_test_override() -> Option<FeedbackMode> {
 }
 
 /// The process's [`FeedbackMode`], read once: `NEOVM_JIT_FEEDBACK=off|record|
-/// use`; unset, the former `NEOVM_JIT_CALL_FEEDBACK=on` means `record`.
+/// use`; unset, the former `NEOVM_JIT_CALL_FEEDBACK=on` means `record`, and
+/// `NEOVM_JIT_SPEC_SOURCES=on` raises either to `use` (its consumer needs
+/// its input).
 #[inline]
 pub fn feedback_mode() -> FeedbackMode {
     #[cfg(test)]
@@ -130,13 +132,19 @@ fn feedback_mode_from_env() -> FeedbackMode {
     if let (Some(raw), None) = (&raw, parsed) {
         tracing::warn!(target: "neovm_jit", raw, "NEOVM_JIT_FEEDBACK: expected off|record|use; off");
     }
-    let mode = parsed.unwrap_or_else(|| {
+    #[allow(unused_mut)]
+    let mut mode = parsed.unwrap_or_else(|| {
         if std::env::var("NEOVM_JIT_CALL_FEEDBACK").as_deref() == Ok("on") {
             FeedbackMode::Record
         } else {
             FeedbackMode::Off
         }
     });
+    // The source-slot consumer needs its input.
+    #[cfg(feature = "jit")]
+    if super::compile::jit_spec_sources_on() && mode < FeedbackMode::Use {
+        mode = FeedbackMode::Use;
+    }
     if mode != FeedbackMode::Off {
         tracing::info!(target: "neovm_jit", mode = mode.name(), "NEOVM_JIT_FEEDBACK");
     }
@@ -276,6 +284,16 @@ impl Runtime {
     pub(crate) fn share_state(&self) -> Arc<RuntimeState> {
         Arc::clone(&self.shared)
     }
+}
+
+/// The identity word of the source `state` (what a byte-code object of it
+/// holds in its `runtime` field, and what a source guard compares), read
+/// through `jit_layout::runtime_identity_word`, the golden-tested reader.
+#[cfg(feature = "jit")]
+pub(crate) fn identity_word_of(state: &Arc<RuntimeState>) -> usize {
+    super::compile::jit_layout::runtime_identity_word(&Runtime {
+        shared: Arc::clone(state),
+    })
 }
 
 // ---------------------------------------------------------------------------

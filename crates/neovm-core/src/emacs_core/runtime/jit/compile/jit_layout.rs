@@ -233,6 +233,17 @@ const _: () = {
 // Byte-code function words (p2-0-integration S0.7).
 // ---------------------------------------------------------------------------
 
+/// From the untagged address of a veclike object, its `VecLikeType` byte
+/// (the type test of a closure source guard, P2.1 C5).
+pub(crate) const VECLIKE_TYPE_TAG_OFFSET: usize =
+    offset_of!(crate::tagged::header::VecLikeHeader, type_tag);
+
+const _: () = {
+    assert!(size_of::<crate::tagged::header::VecLikeType>() == 1);
+    // A byte-code object starts with its veclike header.
+    assert!(offset_of!(crate::tagged::header::ByteCodeObj, header) == 0);
+};
+
 /// From the untagged address of a byte-code object, its `ByteCodeFunction`.
 pub(crate) const BYTECODE_OBJ_DATA_OFFSET: usize =
     offset_of!(crate::tagged::header::ByteCodeObj, data);
@@ -242,10 +253,6 @@ pub(crate) const BYTECODE_OBJ_DATA_OFFSET: usize =
 /// instance of a source shares). The word holds what
 /// [`runtime_identity_word`] answers -- NOT `Arc::as_ptr`, which is 16 bytes
 /// further on (P2.1 correction 5): compare against this word only.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "consumer: closure source guards (P2.1 C5)")
-)]
 pub(crate) const BYTECODE_RUNTIME_WORD_OFFSET: usize =
     BYTECODE_OBJ_DATA_OFFSET + offset_of!(crate::emacs_core::bytecode::ByteCodeFunction, runtime);
 
@@ -255,10 +262,6 @@ const _: () = assert!(size_of::<Option<crate::emacs_core::jit::Runtime>>() == WO
 /// `runtime`: the source identity a closure source guard compares
 /// (`callee.runtime word == baked word`). Read out of an `Option<Runtime>`
 /// the way the object stores it, so it is exactly the field's bit pattern.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "consumer: closure source guards (P2.1 C5)")
-)]
 pub(crate) fn runtime_identity_word(runtime: &crate::emacs_core::jit::Runtime) -> usize {
     let held: ManuallyDrop<Option<crate::emacs_core::jit::Runtime>> =
         ManuallyDrop::new(Some(runtime.clone()));

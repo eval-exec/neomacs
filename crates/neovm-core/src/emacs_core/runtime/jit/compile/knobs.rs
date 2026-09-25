@@ -931,3 +931,40 @@ pub(crate) fn jit_inline_vars() -> InlineVarsKnob {
         InlineVarsKnob::parse(std::env::var("NEOVM_JIT_INLINE_VARS").ok().as_deref())
     })
 }
+
+#[cfg(test)]
+std::thread_local! {
+    static SPEC_SOURCES_TEST_OVERRIDE: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Force `NEOVM_JIT_SPEC_SOURCES` on/off on the current thread (tests only;
+/// `None` returns to the process setting).
+#[cfg(test)]
+pub(crate) fn force_spec_sources_for_test(on: Option<bool>) {
+    SPEC_SOURCES_TEST_OVERRIDE.with(|c| c.set(on));
+}
+
+/// `NEOVM_JIT_SPEC_SOURCES=on` (P2.1 C5, `compile::source_slots`): a T1 or
+/// OSR compile speculates an `Op::Call` whose callee is not a constant and
+/// whose recorded target is one closure source, behind the source's
+/// identity guard. Default off (the lowering is unchanged); `on` implies
+/// `NEOVM_JIT_FEEDBACK=use`. Read at compile time only.
+pub(crate) fn jit_spec_sources_on() -> bool {
+    #[cfg(test)]
+    if let Some(on) = SPEC_SOURCES_TEST_OVERRIDE.with(std::cell::Cell::get) {
+        return on;
+    }
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        let on = matches!(
+            std::env::var("NEOVM_JIT_SPEC_SOURCES").ok().as_deref(),
+            Some("on" | "1" | "true" | "yes")
+        );
+        if on {
+            tracing::info!(target: "neovm_jit", "NEOVM_JIT_SPEC_SOURCES=on");
+        }
+        on
+    })
+}

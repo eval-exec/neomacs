@@ -33,12 +33,9 @@ pub(crate) enum SpecSlotKind {
     /// words (a `SubrGeneral` site's symbol and expected subr; zero for the
     /// other subr kinds, whose shims read neither).
     Subr,
-    /// RESERVED for P2.1 C5's closure source slots (a source's runtime word
-    /// as the key). No site builds one yet; walkers skip it like a subr slot.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "reserved: P2.1 C5 closure source slots")
-    )]
+    /// A closure source site (P2.1 C5, `compile::source_slots`): immutable
+    /// words, `leaf` the source's `RuntimeState` address and
+    /// `direct_consts` its identity word. Walkers skip it like a subr slot.
     Source,
 }
 
@@ -60,6 +57,7 @@ impl SpecCalleeKind {
             // slot, and would be a builtin's if it did.
             | SpecCalleeKind::CbsymTierA { .. }
             | SpecCalleeKind::CbsymTierB => SpecSlotKind::Subr,
+            SpecCalleeKind::Source => SpecSlotKind::Source,
         }
     }
 }

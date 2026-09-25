@@ -1265,7 +1265,7 @@ unsafe fn spec_rest_frame(
 /// healing to the caller leaf's exit (see the fast path).
 /// `key` is the slot's fast-path key, the constant base with its flags.
 #[inline(never)]
-fn call_spec_framed_run(
+pub(super) fn call_spec_framed_run(
     ctx: *mut u8,
     leaf: &CompiledLeaf,
     key: u64,

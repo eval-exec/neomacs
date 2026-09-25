@@ -1396,6 +1396,11 @@ pub(crate) enum SpecCalleeKind {
     /// trip. Bounces to [`STATUS_NEED_GENERIC`] (→ the general CBSym lowering)
     /// when the fresh entry is not `Some` + `Builtin`.
     CbsymTierB,
+    /// A closure SOURCE (P2.1 C5, `compile::source_slots`): the callee is
+    /// not a constant, and its recorded target is one byte-code source;
+    /// `expected_bits` is the source's identity word, which the site's guard
+    /// compares. JIT-only (never an AOT site).
+    Source,
 }
 
 /// Tier-A `which` discriminants (baked into generated code as an `iconst` and
@@ -1495,6 +1500,8 @@ impl SpecCalleeKind {
             SpecCalleeKind::PredFboundp => Some(13),
             SpecCalleeKind::PredAutoloadDoLoad => Some(14),
             SpecCalleeKind::CbsymTierA { .. } | SpecCalleeKind::CbsymTierB => None,
+            // JIT-only: never baked into an AOT object.
+            SpecCalleeKind::Source => None,
         }
     }
 
@@ -3223,6 +3230,9 @@ pub fn lower_leaf_full_osr(
     // every reachable edge; untyped slots still retain their per-op guards.
     let known_fixnum_slots = compute_known_fixnum_slots(ops, constants, &cfg);
     let n = ops.len();
+    // What the lowering bakes addresses inside goes into the leaf (see
+    // `call_feedback::FeedbackHolds`).
+    let holds = call_feedback::FeedbackHolds::enter();
     // Direct-call speculation sites + their armed-epoch slots. The Box's heap
     // storage is address-stable: slot pointers are baked into the generated
     // code as immediates and the Box moves into the CompiledLeaf at the end.
@@ -3241,18 +3251,20 @@ pub fn lower_leaf_full_osr(
                     site.expected_bits,
                 ));
             }
-            let slots: Box<[SpecSlot]> = slots
+            let mut slots: Vec<SpecSlot> = slots
                 .into_iter()
                 .map(|slot| slot.expect("spec slots are numbered densely"))
                 .collect();
-            (sites, slots)
+            let mut sites = sites;
+            // `NEOVM_JIT_SPEC_SOURCES`: closure source sites after them.
+            if jit_spec_sources_on() {
+                source_slots::add_source_sites(ops, &mut sites, &mut slots);
+            }
+            (sites, slots.into_boxed_slice())
         }
         None => (HashMap::new(), Box::from([])),
     };
     let spec_slot_kinds = spec_slot_kinds_of(&spec_sites, spec_slots.len());
-    // The source states the lowering bakes addresses inside (recording
-    // sites, speculated closure sources) move into the leaf.
-    let holds = call_feedback::FeedbackHolds::enter();
     // Precise-deopt buffers: live operand-stack spill (max depth) + the
     // pc/depth/handler-count cells. Address-stable Boxes owned by the leaf;
     // generated code writes through baked raw addresses.
@@ -4530,6 +4542,7 @@ pub(crate) mod jit_layout;
 pub(crate) mod reg_abi;
 pub(crate) use reg_abi::LeafAbi;
 pub(crate) mod snapshot;
+pub(crate) mod source_slots;
 pub(crate) use snapshot::{
     active_numeric_feedback, arith_site_takes_generic, call_site_inlinable_at,
     publish_numeric_feedback, publish_numeric_feedback_vec,
@@ -4625,6 +4638,9 @@ mod osr_poll_tests;
 #[cfg(test)]
 #[path = "tests/predicate_branches.rs"]
 mod predicate_branch_tests;
+#[cfg(test)]
+#[path = "tests/source_slots.rs"]
+mod source_slot_tests;
 #[cfg(test)]
 #[path = "tests/spec_frames.rs"]
 mod spec_frame_tests;
