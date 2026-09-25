@@ -884,6 +884,10 @@ pub struct TaggedHeap {
     /// Scratch: last `seed_mapped_remembered` cost/volume (owners re-scanned).
     last_remembered_seed_us: u64,
     last_remembered_seed_roots: usize,
+    /// The generation census (`census.rs`), present only under
+    /// `NEOVM_GC_CENSUS` / `NEOVM_GC_CENSUS_REMSET` (read once, here at
+    /// construction). Trace-only: it never changes what is marked or freed.
+    census: Option<Box<GenCensus>>,
 }
 
 impl Default for TaggedHeap {
@@ -924,7 +928,7 @@ pub(crate) fn set_verify_marked_objects_for_test(on: bool) {
 
 impl TaggedHeap {
     pub fn new() -> Self {
-        Self {
+        let heap = Self {
             jit: JitHeapState::new(),
             region_book: RegionBook::new(),
             region_stats: RegionStats::default(),
@@ -1086,7 +1090,13 @@ impl TaggedHeap {
             last_remembered_seed_roots: 0,
             dump_addr_lo: usize::MAX,
             dump_addr_hi: 0,
-        }
+            census: GenCensus::from_knob(),
+        };
+        // The census's remembered-set probe widens the window compiled code
+        // tests from the start (the thread-local mirror follows when the heap
+        // is installed, `set_tagged_heap`).
+        heap.jit.set_barrier_window(heap.barrier_window());
+        heap
     }
 
     pub(crate) fn identity(&self) -> usize {
@@ -2494,6 +2504,13 @@ pub(crate) use barrier_window::BarrierWindow;
 
 mod jit_state;
 
+mod knobs;
+
+mod census;
+#[cfg(test)]
+use census::CensusRecord;
+use census::{CensusCycleKind, GenCensus, census_remset_probe_on};
+
 mod alloc_region;
 #[cfg(test)]
 use alloc_region::{CONS_REGION_MAX_CELLS, ConsRegionSource, FLOAT_REGION_MAX_SLOTS};
@@ -2526,6 +2543,12 @@ mod barrier_window_tests;
 #[cfg(test)]
 #[path = "gc/tests/bignum_arena_tests.rs"]
 mod bignum_arena_tests;
+/// The generation census: survivor classes across cycles on both
+/// termination paths, the remembered-set probe, and that it measures without
+/// changing anything.
+#[cfg(test)]
+#[path = "gc/tests/census_tests.rs"]
+mod census_tests;
 #[cfg(test)]
 mod cons_alloc_tests;
 /// A fake pdump image in one allocation (see the module doc for why one).

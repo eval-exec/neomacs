@@ -5,7 +5,9 @@
 //! single `(lo, len)` range over owner addresses:
 //!
 //! - **ALL** while a concurrent mark runs (the SATB log) or owner tracking is
-//!   on (the dirty-owner tables): every heap write is recorded.
+//!   on (the dirty-owner tables): every heap write is recorded. Also ALL for
+//!   the whole life of a heap under the census's remembered-set probe
+//!   (`census.rs`), which must see every store.
 //! - **The dump span** when only the dump partition is active (the steady
 //!   state of a session with a loaded pdump): a write by a mapped owner may
 //!   add it to the remembered set.
@@ -75,7 +77,10 @@ impl BarrierWindow {
 impl TaggedHeap {
     /// The window this heap's current state implies (see the module doc).
     pub(crate) fn barrier_window(&self) -> BarrierWindow {
-        if self.concurrent_mark_running || self.write_tracking_mode != WriteTrackingMode::Disabled {
+        if self.concurrent_mark_running
+            || self.write_tracking_mode != WriteTrackingMode::Disabled
+            || self.census.as_deref().is_some_and(GenCensus::remset_probe)
+        {
             BarrierWindow::ALL
         } else if self.partition_dump {
             // `extend_dump_span` sets the partition only with a non-empty

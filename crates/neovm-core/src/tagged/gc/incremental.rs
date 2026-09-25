@@ -94,6 +94,15 @@ impl TaggedHeap {
         self.unchain_dead_markers();
         self.handshake.last_term_unchain_us = unchain_t0.elapsed().as_micros() as u64;
 
+        // The generation census reads the final marks before the sweep
+        // detaches the young list (no-op unless `NEOVM_GC_CENSUS`).
+        if self.census.is_some() {
+            let mark_window_alloc = self
+                .bytes_since_gc
+                .saturating_sub(self.pace_mark_start_bytes);
+            self.census_at_termination(CensusCycleKind::Concurrent, mark_window_alloc);
+        }
+
         // Begin the deferred sweep. Detach the young non-cons list (new non-cons
         // allocations link onto a fresh `all_objects` and are not swept this
         // cycle) and reset the cons free list (rebuilt as blocks are swept).
@@ -1007,6 +1016,7 @@ impl TaggedHeap {
         let Self {
             cons_blocks,
             cons_free_list,
+            census,
             ..
         } = self;
         cons_blocks.retain_mut(|block| {
@@ -1018,6 +1028,9 @@ impl TaggedHeap {
                 // reachable from the allocator.
                 *cons_free_list = saved;
                 released += 1;
+                if let Some(census) = census.as_deref_mut() {
+                    census.forget_cons_block(block.base_addr());
+                }
                 false
             } else {
                 new_live += live;
@@ -1078,6 +1091,17 @@ impl TaggedHeap {
 
         self.cons_free_list = std::ptr::null_mut();
         self.mark_cons_block_cache = None;
+        if self.census.is_some() {
+            let released: Vec<usize> = self
+                .cons_blocks
+                .iter()
+                .filter(|block| block.count_marked() == 0)
+                .map(ConsBlock::base_addr)
+                .collect();
+            for base in released {
+                self.census_forget_cons_block(base);
+            }
+        }
         self.cons_blocks.retain(|block| block.count_marked() != 0);
         self.cons_blocks.shrink_to_fit();
 

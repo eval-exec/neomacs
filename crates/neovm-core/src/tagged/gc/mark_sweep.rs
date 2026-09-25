@@ -1670,6 +1670,11 @@ impl TaggedHeap {
         bytes_before: usize,
         t0: std::time::Instant,
     ) {
+        // The generation census reads the final marks before the sweep (no-op
+        // unless `NEOVM_GC_CENSUS`).
+        if self.census.is_some() {
+            self.census_at_termination(CensusCycleKind::StopTheWorld, 0);
+        }
         // Dump-partition safety gate: prove no live heap object reachable only
         // through a dumped object was left unmarked (i.e. the write barrier's
         // remembered set is complete). Off unless explicitly verifying.

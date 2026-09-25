@@ -1183,6 +1183,9 @@ fn note_heap_write_slow(
         slot,
         value,
     };
+    if census_remset_probe_on() {
+        with_tagged_heap(|heap| heap.census_note_write(record));
+    }
     let disabled =
         TAGGED_HEAP_WRITE_TRACKING_MODE.with(|mode| mode.get()) == WriteTrackingMode::Disabled;
     let concurrent = TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.get());

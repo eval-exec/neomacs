@@ -1079,6 +1079,22 @@ impl<T: PagedObject> ObjectArena<T> {
         out
     }
 
+    /// Visit the header of every ALLOCATED slot of a non-retired page, in
+    /// place (allocated-bit-first). Retired pages are skipped: every slot
+    /// on one is tenured. `visit` must not touch this arena.
+    pub(super) fn for_each_allocated_slot(&self, visit: &mut impl FnMut(*mut GcHeader)) {
+        for page in self.pages.iter().filter(|page| !page.retired) {
+            for word_index in 0..ObjectPage::<T>::ALLOC_WORDS {
+                let mut bits = page.alloc_bits[word_index];
+                while bits != 0 {
+                    let bit = bits.trailing_zeros() as usize;
+                    bits &= bits - 1;
+                    visit(page.slot_ptr(word_index * usize::BITS as usize + bit) as *mut GcHeader);
+                }
+            }
+        }
+    }
+
     /// Exact page/slot occupancy plus directly-owned payload capacity for
     /// diagnostics. The allocation bitmap is authoritative, just as it is for
     /// sweep and ownership checks; unallocated slot bytes are never read.
