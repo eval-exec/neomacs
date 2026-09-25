@@ -5308,6 +5308,18 @@ pub(crate) fn fail_stack_may_overflow_with(push_sites: usize, consumed: usize) -
         >= FAIL_STACK_ENTRY_LIMIT
 }
 
+/// The consumed spans that cannot overflow, as one bound: for every
+/// `consumed`, `consumed < fail_stack_overflow_free_span(push_sites)` exactly
+/// when `!fail_stack_may_overflow_with(push_sites, consumed)`.
+pub(crate) fn fail_stack_overflow_free_span(push_sites: usize) -> usize {
+    match push_sites.checked_mul(2) {
+        Some(0) => usize::MAX,
+        // `(consumed + 1) * per < LIMIT` iff `consumed + 1 <= (LIMIT - 1) / per`.
+        Some(per) => (FAIL_STACK_ENTRY_LIMIT - 1) / per,
+        None => 0,
+    }
+}
+
 /// [`pike_match`] with [`re_match_candidate_in`]'s out-parameter protocol.
 #[cold]
 fn pike_match_into(

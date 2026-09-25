@@ -42,7 +42,7 @@
 use super::{
     CompiledPattern, LookupClassKey, MatchRegisters, MatchScratch, RegexOp, SyntaxAssertion,
     SyntaxCacheKey, SyntaxLookup, evaluate_syntax_assertion, extract_number, extract_number_u16,
-    fail_stack_may_overflow_with, match_anychar_at, match_categoryspec_at, match_charset_at,
+    fail_stack_overflow_free_span, match_anychar_at, match_categoryspec_at, match_charset_at,
     match_exactn_char_at, match_syntaxspec_at, match_syntaxspecset_at, matcher_overflow_pending,
     opcode_len, posix_class_bits_read_syntax, re_match_candidate_in, re_text_char,
     regex_syntax_char,
@@ -865,6 +865,9 @@ pub(crate) const MAX_CLASSES: usize = UNKNOWN_CLASS as usize;
 const WIDE_SLOTS: usize = 512;
 const WIDE_EMPTY: u32 = u32::MAX;
 const POSITIONAL_SLOTS: usize = 64;
+/// `byte_facts` value of a byte whose facts are not known yet (facts use
+/// the low five bits).
+const NO_FACTS: u8 = 0xFF;
 
 /// What the character-to-class maps of one pattern are valid for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -927,6 +930,10 @@ pub(crate) struct CharClasses {
     /// Direct-mapped `(character code, syntax class there, class)` memo for
     /// characters inside `syntax-table` property runs.
     positional: Box<[(u32, u8, u8)]>,
+    /// The facts of each tabled byte's character ([`NO_FACTS`]: not known
+    /// yet), for the character before a candidate, which the DFA need not
+    /// have classified.
+    byte_facts: [u8; 256],
     keys: Vec<ClassKey>,
     ids: FxHashMap<ClassKey, u8>,
     context: Option<ClassContext>,
@@ -941,6 +948,7 @@ impl CharClasses {
             byte_class: [UNKNOWN_CLASS; 256],
             wide: vec![(WIDE_EMPTY, 0); WIDE_SLOTS].into_boxed_slice(),
             positional: vec![(WIDE_EMPTY, 0, 0); POSITIONAL_SLOTS].into_boxed_slice(),
+            byte_facts: [NO_FACTS; 256],
             keys: Vec::new(),
             ids: FxHashMap::default(),
             context: None,
@@ -960,6 +968,7 @@ impl CharClasses {
         self.byte_class = [UNKNOWN_CLASS; 256];
         self.wide.fill((WIDE_EMPTY, 0));
         self.positional.fill((WIDE_EMPTY, 0, 0));
+        self.byte_facts = [NO_FACTS; 256];
         self.context = Some(context);
     }
 
@@ -1063,22 +1072,43 @@ impl CharClasses {
         Ok((class, len))
     }
 
-    /// The facts of the character before `d`, or [`Facts::EDGE`] at 0 (the
-    /// matcher's `re_prev_char_start` view of the previous character), read
-    /// through `syntax` at that character's position.
-    pub(crate) fn previous_facts(
+    /// The facts of the tabled byte `text[at]` (a byte of unibyte text, or
+    /// ASCII) where the base table applies: its class's facts, or memoized.
+    #[inline]
+    fn byte_facts_at(
+        &mut self,
+        text: &[u8],
+        at: usize,
+        target_multibyte: bool,
+        base: &BaseTableView<'_>,
+    ) -> Facts {
+        let byte = text[at];
+        let class = self.byte_class[byte as usize];
+        if class != UNKNOWN_CLASS {
+            return self.facts(class);
+        }
+        let memo = self.byte_facts[byte as usize];
+        if memo != NO_FACTS {
+            return Facts(memo);
+        }
+        let facts = self.facts_at(text, at, target_multibyte, base);
+        self.byte_facts[byte as usize] = facts.0;
+        facts
+    }
+
+    /// The facts of the character at `at` (the matcher's view of the
+    /// character before a candidate), read through `syntax` at `at`.  A
+    /// memoized class carries the same facts where the base table applies.
+    pub(crate) fn facts_at(
         &self,
         text: &[u8],
-        d: usize,
+        at: usize,
         target_multibyte: bool,
         syntax: &dyn SyntaxLookup,
     ) -> Facts {
-        let Some(start) = super::re_prev_char_start(text, d, target_multibyte) else {
-            return Facts::EDGE;
-        };
         let (code, _) =
-            re_text_char(text, start, target_multibyte).expect("the previous character exists");
-        Facts::of_char(code, text[start], syntax, start, self.mask)
+            re_text_char(text, at, target_multibyte).expect("the previous character exists");
+        Facts::of_char(code, text[at], syntax, at, self.mask)
     }
 }
 
@@ -1191,6 +1221,10 @@ pub(crate) struct ExistenceDfa {
     memory: usize,
     clears_this_search: u32,
     search: SearchSyntax,
+    /// A property-free input stretch this search has looked up.
+    plain: std::ops::Range<usize>,
+    /// Whether the pattern tests point (`\=`).
+    has_at_dot: bool,
     pub(crate) counters: DfaCounters,
     gave_up: Option<DfaGaveUp>,
 }
@@ -1217,9 +1251,12 @@ impl ExistenceDfa {
             memory: 0,
             clears_this_search: 0,
             search: SearchSyntax::PLAIN,
+            plain: 0..0,
+            has_at_dot: false,
             counters: DfaCounters::default(),
             gave_up: None,
         };
+        dfa.has_at_dot = dfa.nfa.assertions.contains(Assertions::AT_DOT);
         dfa.trans.resize(dfa.stride(), UNKNOWN);
         dfa
     }
@@ -1244,6 +1281,7 @@ impl ExistenceDfa {
     /// lookup.
     pub(crate) fn begin_search(&mut self, pattern: &CompiledPattern, syntax: &dyn SyntaxLookup) {
         self.clears_this_search = 0;
+        self.plain = 0..0;
         self.search = SearchSyntax {
             positional: self.nfa.reads_syntax && syntax.position_dependent(),
             // The matcher records syntax reads past the frontier only for a
@@ -1426,7 +1464,9 @@ impl ExistenceDfa {
 
     /// Can a match of `pattern` start at `p` and end by `stop`?  The same
     /// question the backtracker answers at the candidate, without registers.
-    #[inline(never)]
+    /// Inlined into the out-of-line [`DfaLease::candidate`]: a rejection the
+    /// cached loop settles costs one call from `re_search`.
+    #[inline]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn anchored_exists(
         &mut self,
@@ -1455,6 +1495,107 @@ impl ExistenceDfa {
         verdict
     }
 
+    /// The end of the property-free stretch from `at` (see
+    /// [`SyntaxLookup::plain_syntax_until`]), remembered for the search: the
+    /// candidates of a scan mostly fall into the stretch the last one did.
+    #[inline]
+    fn plain_until(&mut self, at: usize, syntax: &dyn SyntaxLookup) -> usize {
+        if self.plain.start <= at && at < self.plain.end {
+            return self.plain.end;
+        }
+        self.counters.plain_runs += 1;
+        let end = syntax.plain_syntax_until(at);
+        if end > at {
+            self.plain = at..end;
+        }
+        end
+    }
+
+    /// The start state at candidate `p` and the end of the property-free
+    /// stretch the cached loop may run in from `p`: the previous character's
+    /// facts come from its memoized class when the base table applies there.
+    #[inline(always)]
+    fn start_at(
+        &mut self,
+        text: &[u8],
+        p: usize,
+        target_multibyte: bool,
+        syntax: &dyn SyntaxLookup,
+    ) -> (u32, usize) {
+        let positional = self.search.positional;
+        if p == 0 {
+            let plain_end = if positional {
+                self.plain_until(0, syntax)
+            } else {
+                usize::MAX
+            };
+            return (
+                self.start_row(Facts(Facts::EDGE.0 & self.prev_mask.0)),
+                plain_end,
+            );
+        }
+        let byte = text[p - 1];
+        if byte < 0x80 || !target_multibyte {
+            // A single-byte previous character at `p - 1`: one lookup says
+            // both whether its memoized class applies and how far the
+            // stretch runs (one that ends at `p` is renewed there).
+            let (plain_end, prev_plain) = if positional {
+                let end = self.plain_until(p - 1, syntax);
+                (end, end > p - 1)
+            } else {
+                (usize::MAX, true)
+            };
+            if prev_plain {
+                let base = BaseTableView(syntax);
+                let facts = self
+                    .classes
+                    .byte_facts_at(text, p - 1, target_multibyte, &base);
+                return (self.start_row(Facts(facts.0 & self.prev_mask.0)), plain_end);
+            }
+            return (
+                self.start_row_slow(text, p, target_multibyte, syntax),
+                plain_end,
+            );
+        }
+        let plain_end = if positional {
+            self.plain_until(p, syntax)
+        } else {
+            usize::MAX
+        };
+        (
+            self.start_row_slow(text, p, target_multibyte, syntax),
+            plain_end,
+        )
+    }
+
+    /// The start state at `p` from the previous character read at its
+    /// position (the lookup the closures use).
+    #[cold]
+    #[inline(never)]
+    fn start_row_slow(
+        &mut self,
+        text: &[u8],
+        p: usize,
+        target_multibyte: bool,
+        syntax: &dyn SyntaxLookup,
+    ) -> u32 {
+        let base = BaseTableView(syntax);
+        let lookup: &dyn SyntaxLookup = if self.search.positional {
+            syntax
+        } else {
+            &base
+        };
+        let facts = match super::re_prev_char_start(text, p, target_multibyte) {
+            None => Facts::EDGE,
+            Some(start) => self.classes.facts_at(text, start, target_multibyte, lookup),
+        };
+        self.start_row(Facts(facts.0 & self.prev_mask.0))
+    }
+
+    /// The decision at one candidate: the start state, then the cached loop,
+    /// which settles most rejections by itself (a cached dead transition);
+    /// everything else resumes out of line.
+    #[inline(always)]
     #[allow(clippy::too_many_arguments)]
     fn run(
         &mut self,
@@ -1465,23 +1606,95 @@ impl ExistenceDfa {
         point: usize,
         syntax: &dyn SyntaxLookup,
     ) -> Exists {
-        let base = BaseTableView(syntax);
-        let target_multibyte = pattern.target_multibyte;
         let stop = stop.min(text.len());
         if p > stop {
             return Exists::No { consumed: 0 };
         }
-        let search = self.search;
         // Every syntax read of a candidate is at or below the furthest
         // position its threads reach, and the matcher's threads are among
         // the DFA's (the rewind view only adds paths).  So a candidate the
         // DFA decides without reaching the lazy-propertize frontier is one
         // the matcher would have failed without recording a read there; one
         // that reaches it is left to the matcher, which records its reads.
-        if p >= search.read_limit {
+        let read_limit = self.search.read_limit;
+        if p >= read_limit {
             self.counters.frontier_unknown += 1;
             return Exists::Unknown;
         }
+        let (mut row, plain_end) = self.start_at(text, p, pattern.target_multibyte, syntax);
+        // `\=` holds at point only: that position's closure is never cached.
+        let special = if self.has_at_dot && point >= p {
+            point
+        } else {
+            usize::MAX
+        };
+        let limit = stop.min(special).min(plain_end).min(read_limit);
+        let chunk = limit.min(p.saturating_add(QUIT_POLL_BYTES));
+        let mut d = p;
+        let stride = 1u32 << self.stride_shift;
+        let mut next = stride;
+        {
+            let byte_class = &self.classes.byte_class;
+            let trans = &self.trans[..];
+            let window = &text[..chunk];
+            while d < window.len() {
+                let class = byte_class[window[d] as usize];
+                if class == UNKNOWN_CLASS {
+                    next = UNKNOWN;
+                    break;
+                }
+                let at = row as usize + class as usize;
+                debug_assert!(at < trans.len());
+                // SAFETY: `row` is the row of a live state (every row is
+                // `stride` entries of `trans`) and a class in the byte table
+                // is below `classes.len() <= stride` (`fit_classes` runs after
+                // every new class).
+                next = unsafe { *trans.get_unchecked(at) };
+                if next < stride {
+                    break;
+                }
+                row = next;
+                d += 1;
+            }
+        }
+        // A cached dead or accepting transition at `d` (a plain position
+        // short of every special one) is the answer the slow path would
+        // compute there.
+        match next {
+            DEAD => {
+                self.counters.bytes += (d - p) as u64;
+                Exists::No { consumed: d - p }
+            }
+            MATCH => {
+                self.counters.bytes += (d - p) as u64;
+                Exists::Yes
+            }
+            _ => self.resume(
+                pattern, text, p, d, row, stop, point, special, plain_end, syntax,
+            ),
+        }
+    }
+
+    /// The rest of a candidate the cached loop could not settle: new
+    /// classes and transitions, property runs, point, the stop, quit polls.
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    fn resume(
+        &mut self,
+        pattern: &CompiledPattern,
+        text: &[u8],
+        p: usize,
+        mut d: usize,
+        mut row: u32,
+        stop: usize,
+        point: usize,
+        mut special: usize,
+        mut plain_end: usize,
+        syntax: &dyn SyntaxLookup,
+    ) -> Exists {
+        let base = BaseTableView(syntax);
+        let target_multibyte = pattern.target_multibyte;
+        let search = self.search;
         // Where `syntax-table` properties may apply, every syntax the DFA
         // reads -- assertions in the closure, the previous character, a
         // character inside a property run -- is read through the matcher's
@@ -1500,28 +1713,7 @@ impl ExistenceDfa {
             target_multibyte,
             syntax: lookup,
         };
-        // `\=` holds at point only: that position's closure is never cached.
-        let mut special = if self.nfa.assertions.contains(Assertions::AT_DOT) && point >= p {
-            point
-        } else {
-            usize::MAX
-        };
-        let prev = Facts(
-            self.classes
-                .previous_facts(text, p, target_multibyte, lookup)
-                .bits()
-                & self.prev_mask.bits(),
-        );
-        let mut row = self.start_row(prev);
-        let mut d = p;
-        let mut polled = 0usize;
-        // The end of the property-free stretch the cached loop is in.
-        let mut plain_end = if search.positional {
-            self.counters.plain_runs += 1;
-            syntax.plain_syntax_until(p)
-        } else {
-            usize::MAX
-        };
+        let mut polled = d - p;
         loop {
             // The cached loop: single-byte characters with a known class and
             // a cached live transition, in chunks between quit polls.
@@ -1540,10 +1732,7 @@ impl ExistenceDfa {
                     }
                     let at = row as usize + class as usize;
                     debug_assert!(at < trans.len());
-                    // SAFETY: `row` is the row of a live state (every row is
-                    // `stride` entries of `trans`) and a class in the byte
-                    // table is below `classes.len() <= stride` (`fit_classes`
-                    // runs after every new class).
+                    // SAFETY: as in `run`.
                     let next = unsafe { *trans.get_unchecked(at) };
                     if next < stride {
                         break;
@@ -1579,8 +1768,7 @@ impl ExistenceDfa {
             // inside a property run.
             let mut at_position = false;
             if d >= plain_end {
-                self.counters.plain_runs += 1;
-                plain_end = syntax.plain_syntax_until(d);
+                plain_end = self.plain_until(d, syntax);
                 if plain_end > d {
                     continue;
                 }
@@ -1833,9 +2021,24 @@ const BYPASS_HOLIDAY: u32 = 256;
 /// A pattern's DFA, with its adaptive-bypass window.
 pub(crate) struct LiveDfa {
     pub(crate) dfa: ExistenceDfa,
+    /// A rejection that consumed fewer bytes than this cannot hide a
+    /// fail-stack overflow ([`fail_stack_overflow_free_span`]).
+    overflow_free_span: usize,
     decisions: u32,
     yes: u32,
     holiday: u32,
+}
+
+impl LiveDfa {
+    fn new(dfa: ExistenceDfa) -> Self {
+        Self {
+            overflow_free_span: fail_stack_overflow_free_span(dfa.nfa().push_sites),
+            dfa,
+            decisions: 0,
+            yes: 0,
+            holiday: 0,
+        }
+    }
 }
 
 /// The state of a pattern's existence DFA.
@@ -1923,6 +2126,24 @@ impl Drop for DfaLease<'_> {
     }
 }
 
+/// The matcher alone at one candidate (`re_search`'s own call).
+#[inline]
+#[allow(clippy::too_many_arguments)]
+fn classic_candidate(
+    scratch: &mut MatchScratch,
+    pattern: &CompiledPattern,
+    text: &[u8],
+    pos: usize,
+    stop: usize,
+    syntax: &dyn SyntaxLookup,
+    point: usize,
+    regs: &mut MatchRegisters,
+) -> Option<usize> {
+    #[cfg(test)]
+    super::MATCHER_ENTRY_COUNT.with(|c| c.set(c.get() + 1));
+    re_match_candidate_in(scratch, pattern, text, pos, stop, syntax, point, regs)
+}
+
 impl<'p> DfaLease<'p> {
     /// The lease for a search of `pattern` whose candidates all stop by
     /// `max_stop`, or `None` when the DFA cannot serve it:
@@ -2001,10 +2222,79 @@ impl<'p> DfaLease<'p> {
         point: usize,
         regs: &mut MatchRegisters,
     ) -> Option<usize> {
+        if self.mode == DfaMode::On
+            && let DfaSlot::Live(live) = &mut *self.slot
+        {
+            let verdict = live
+                .dfa
+                .anchored_exists(pattern, text, pos, stop, point, syntax);
+            live.note(verdict);
+            // A rejection within the fail-stack bound: the matcher would
+            // fail here without a side effect.  (A DFA that gave up answers
+            // `Unknown`, so a rejection never comes from one.)
+            if let Exists::No { consumed } = verdict
+                && consumed < live.overflow_free_span
+            {
+                self.skipped += 1;
+                return None;
+            }
+            return self.settle(
+                verdict, scratch, pattern, text, pos, stop, syntax, point, regs,
+            );
+        }
+        self.candidate_slow(scratch, pattern, text, pos, stop, syntax, point, regs)
+    }
+
+    /// A live DFA's verdict that does not skip the candidate: the matcher
+    /// runs (after retiring a DFA that gave up).
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    fn settle(
+        &mut self,
+        verdict: Exists,
+        scratch: &mut MatchScratch,
+        pattern: &CompiledPattern,
+        text: &[u8],
+        pos: usize,
+        stop: usize,
+        syntax: &dyn SyntaxLookup,
+        point: usize,
+        regs: &mut MatchRegisters,
+    ) -> Option<usize> {
+        if let DfaSlot::Live(live) = &*self.slot
+            && let Some(why) = live.dfa.gave_up()
+        {
+            self.retire(why);
+        } else if matches!(verdict, Exists::No { .. }) {
+            self.overflow_guarded += 1;
+        }
+        classic_candidate(scratch, pattern, text, pos, stop, syntax, point, regs)
+    }
+
+    #[cold]
+    fn retire(&mut self, why: DfaGaveUp) {
+        stat(|s| s.gave_up += 1);
+        self.counters_before = None;
+        *self.slot = DfaSlot::Disabled(why);
+        tracing::debug!(target: "neovm::regex", ?why, "existence DFA gave up");
+    }
+
+    /// Every candidate of a slot that is not live, and of verify mode.
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    fn candidate_slow(
+        &mut self,
+        scratch: &mut MatchScratch,
+        pattern: &CompiledPattern,
+        text: &[u8],
+        pos: usize,
+        stop: usize,
+        syntax: &dyn SyntaxLookup,
+        point: usize,
+        regs: &mut MatchRegisters,
+    ) -> Option<usize> {
         let classic = |scratch: &mut MatchScratch, regs: &mut MatchRegisters| {
-            #[cfg(test)]
-            super::MATCHER_ENTRY_COUNT.with(|c| c.set(c.get() + 1));
-            re_match_candidate_in(scratch, pattern, text, pos, stop, syntax, point, regs)
+            classic_candidate(scratch, pattern, text, pos, stop, syntax, point, regs)
         };
         let live = match &mut *self.slot {
             DfaSlot::Live(live) => live,
@@ -2025,16 +2315,10 @@ impl<'p> DfaLease<'p> {
             .anchored_exists(pattern, text, pos, stop, point, syntax);
         live.note(verdict);
         if let Some(why) = live.dfa.gave_up() {
-            stat(|s| s.gave_up += 1);
-            self.counters_before = None;
-            *self.slot = DfaSlot::Disabled(why);
-            tracing::debug!(target: "neovm::regex", ?why, "existence DFA gave up");
+            self.retire(why);
             return classic(scratch, regs);
         }
-        let push_sites = match &*self.slot {
-            DfaSlot::Live(live) => live.dfa.nfa().push_sites,
-            _ => unreachable!("the slot is live"),
-        };
+        let overflow_free_span = live.overflow_free_span;
         match (self.mode, verdict) {
             (DfaMode::Verify, verdict) => {
                 let found = classic(scratch, regs);
@@ -2067,12 +2351,12 @@ impl<'p> DfaLease<'p> {
                 found
             }
             (_, Exists::No { consumed }) => {
-                if fail_stack_may_overflow_with(push_sites, consumed) {
-                    self.overflow_guarded += 1;
-                    classic(scratch, regs)
-                } else {
+                if consumed < overflow_free_span {
                     self.skipped += 1;
                     None
+                } else {
+                    self.overflow_guarded += 1;
+                    classic(scratch, regs)
                 }
             }
             _ => classic(scratch, regs),
@@ -2092,12 +2376,7 @@ impl<'p> DfaLease<'p> {
                 dfa.begin_search(pattern, syntax);
                 stat(|s| s.builds += 1);
                 self.counters_before = Some(DfaCounters::default());
-                *self.slot = DfaSlot::Live(Box::new(LiveDfa {
-                    dfa,
-                    decisions: 0,
-                    yes: 0,
-                    holiday: 0,
-                }));
+                *self.slot = DfaSlot::Live(Box::new(LiveDfa::new(dfa)));
             }
             Err(why) => {
                 stat(|s| s.ineligible += 1);
@@ -2120,12 +2399,7 @@ pub(crate) fn prime(
     if let Some(context) = ClassContext::of_search(pattern, dfa.nfa(), syntax) {
         dfa.classes.sync(context);
     }
-    *pattern.dfa.0.borrow_mut() = DfaSlot::Live(Box::new(LiveDfa {
-        dfa,
-        decisions: 0,
-        yes: 0,
-        holiday: 0,
-    }));
+    *pattern.dfa.0.borrow_mut() = DfaSlot::Live(Box::new(LiveDfa::new(dfa)));
     Ok(())
 }
 

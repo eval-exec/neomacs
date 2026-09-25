@@ -1460,6 +1460,53 @@ fn a_candidate_reaching_the_frontier_is_left_to_the_matcher() {
     assert_eq!(dfa.counters.frontier_unknown, 2);
 }
 
+/// The filter's one-compare overflow bound answers exactly as the bound (for
+/// every span a text can have: `consumed` is below `usize::MAX`).
+#[test]
+fn the_overflow_free_span_is_the_fail_stack_bound() {
+    use crate::emacs_core::regex_emacs::fail_stack_may_overflow_with;
+    for push_sites in [
+        0,
+        1,
+        2,
+        3,
+        7,
+        64,
+        100,
+        4_096,
+        133_332,
+        133_333,
+        266_666,
+        usize::MAX / 3,
+    ] {
+        let span = fail_stack_overflow_free_span(push_sites);
+        for consumed in [
+            0,
+            1,
+            2,
+            5,
+            999,
+            1_300,
+            1_332,
+            1_333,
+            1_334,
+            133_332,
+            133_333,
+            usize::MAX - 1,
+        ]
+        .into_iter()
+        .chain([span.saturating_sub(1), span, span.saturating_add(1)])
+        .map(|consumed| consumed.min(usize::MAX - 1))
+        {
+            assert_eq!(
+                consumed < span,
+                !fail_stack_may_overflow_with(push_sites, consumed),
+                "push sites {push_sites}, consumed {consumed}, span {span}"
+            );
+        }
+    }
+}
+
 /// A rejection whose consumed span could have filled GNU's fail stack runs
 /// the matcher, which signals the overflow as GNU does.
 #[test]
