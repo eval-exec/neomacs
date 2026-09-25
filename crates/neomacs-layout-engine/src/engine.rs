@@ -3005,7 +3005,7 @@ impl LayoutEngine {
                     let Some(display_snapshot) = self
                         .window_snapshots
                         .iter()
-                        .map(WindowPresentationSnapshot::display_snapshot)
+                        .map(WindowPresentationSnapshot::shared_display_snapshot)
                         .find(|snapshot| snapshot.window_id.0 as i64 == entry.window_id.get())
                         .cloned()
                     else {
@@ -3803,19 +3803,18 @@ impl LayoutEngine {
                         // produced and there is no field on screen to report.
                         None,
                     ));
-                self.window_snapshots
-                    .push(WindowPresentationSnapshot::LiveWindow(
-                        WindowDisplaySnapshot {
-                            window_id,
-                            cell_origin: neovm_core::window::geometry::CellOrigin::new(
-                                params.left_col,
-                                params.top_line,
-                            ),
-                            regions: layout_box.regions(),
-                            regions_materialized: false,
-                            ..Default::default()
-                        },
-                    ));
+                self.window_snapshots.push(WindowPresentationSnapshot::live(
+                    WindowDisplaySnapshot {
+                        window_id,
+                        cell_origin: neovm_core::window::geometry::CellOrigin::new(
+                            params.left_col,
+                            params.top_line,
+                        ),
+                        regions: layout_box.regions(),
+                        regions_materialized: false,
+                        ..Default::default()
+                    },
+                ));
                 return LeafLayoutAttempt::Completed {
                     outcome: WindowLayoutOutcome::Skipped,
                     window_end_attempt: None,
@@ -3973,19 +3972,18 @@ impl LayoutEngine {
                         // produced and there is no field on screen to report.
                         None,
                     ));
-                self.window_snapshots
-                    .push(WindowPresentationSnapshot::LiveWindow(
-                        WindowDisplaySnapshot {
-                            window_id,
-                            cell_origin: neovm_core::window::geometry::CellOrigin::new(
-                                params.left_col,
-                                params.top_line,
-                            ),
-                            regions: layout_box.regions(),
-                            regions_materialized: false,
-                            ..WindowDisplaySnapshot::default()
-                        },
-                    ));
+                self.window_snapshots.push(WindowPresentationSnapshot::live(
+                    WindowDisplaySnapshot {
+                        window_id,
+                        cell_origin: neovm_core::window::geometry::CellOrigin::new(
+                            params.left_col,
+                            params.top_line,
+                        ),
+                        regions: layout_box.regions(),
+                        regions_materialized: false,
+                        ..WindowDisplaySnapshot::default()
+                    },
+                ));
                 self.mark_inactive_echo_snapshot_geometry_only(window_id, position_publication);
                 return LeafLayoutAttempt::Completed {
                     outcome: WindowLayoutOutcome::Skipped,

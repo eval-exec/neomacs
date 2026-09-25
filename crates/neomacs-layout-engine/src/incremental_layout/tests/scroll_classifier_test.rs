@@ -78,7 +78,7 @@ fn synthetic_matrix(base: i64, n_body: usize) -> RetainedWindowMatrix {
         matrix,
         key: synthetic_key(base, 0),
         validity: MatrixValidity::Valid,
-        display_snapshot: WindowDisplaySnapshot {
+        display_snapshot: std::sync::Arc::new(WindowDisplaySnapshot {
             window_id: WindowId(1),
             text_area_left_offset: 0,
             mode_line_height: 16,
@@ -89,7 +89,7 @@ fn synthetic_matrix(base: i64, n_body: usize) -> RetainedWindowMatrix {
             points: Vec::new(),
             rows: Vec::new(),
             ..WindowDisplaySnapshot::default()
-        },
+        }),
         presented_cursor: None,
         face_generation: FrameFaceGeneration::default(),
         chrome_uses_column: false,

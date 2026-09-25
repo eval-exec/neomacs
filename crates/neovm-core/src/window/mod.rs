@@ -3381,26 +3381,49 @@ struct FramePresentationState {
 /// echo buffer through the minibuffer window, then restores the live
 /// minibuffer state. Its geometry must remain available to rendering and hit
 /// testing, but it must never become evidence about the live minibuffer.
+///
+/// The snapshot is shared (`Arc`): a frame's publication, its presentation
+/// geometry, the frame's redisplay cache and the layout engine's retained
+/// matrix all hold the same one, where each used to copy every visible
+/// position and row of every window on every frame.
 #[derive(Clone, Debug, PartialEq)]
 pub enum WindowPresentationSnapshot {
-    LiveWindow(WindowDisplaySnapshot),
-    GeometryOnly(WindowDisplaySnapshot),
+    LiveWindow(std::sync::Arc<WindowDisplaySnapshot>),
+    GeometryOnly(std::sync::Arc<WindowDisplaySnapshot>),
 }
 
 impl WindowPresentationSnapshot {
+    /// A snapshot of a window's live buffer.
+    pub fn live(snapshot: WindowDisplaySnapshot) -> Self {
+        Self::LiveWindow(std::sync::Arc::new(snapshot))
+    }
+
+    /// A snapshot kept only as renderer and interaction geometry.
+    pub fn geometry_only(snapshot: WindowDisplaySnapshot) -> Self {
+        Self::GeometryOnly(std::sync::Arc::new(snapshot))
+    }
+
     pub fn window_id(&self) -> WindowId {
         self.display_snapshot().window_id
     }
 
     pub fn display_snapshot(&self) -> &WindowDisplaySnapshot {
+        self.shared_display_snapshot()
+    }
+
+    /// The snapshot itself, to share rather than copy.
+    pub fn shared_display_snapshot(&self) -> &std::sync::Arc<WindowDisplaySnapshot> {
         match self {
             Self::LiveWindow(snapshot) | Self::GeometryOnly(snapshot) => snapshot,
         }
     }
 
+    /// Mutable access; copies the snapshot first if another holder shares it.
     pub fn display_snapshot_mut(&mut self) -> &mut WindowDisplaySnapshot {
         match self {
-            Self::LiveWindow(snapshot) | Self::GeometryOnly(snapshot) => snapshot,
+            Self::LiveWindow(snapshot) | Self::GeometryOnly(snapshot) => {
+                std::sync::Arc::make_mut(snapshot)
+            }
         }
     }
 
@@ -3415,6 +3438,12 @@ impl WindowPresentationSnapshot {
     /// Snapshot evidence that is valid for the window's live buffer.
     /// Geometry-only publications deliberately cannot produce this value.
     pub fn live_window_snapshot(&self) -> Option<&WindowDisplaySnapshot> {
+        self.shared_live_window_snapshot()
+            .map(|snapshot| &**snapshot)
+    }
+
+    /// [`Self::live_window_snapshot`], to share rather than copy.
+    pub fn shared_live_window_snapshot(&self) -> Option<&std::sync::Arc<WindowDisplaySnapshot>> {
         match self {
             Self::LiveWindow(snapshot) => Some(snapshot),
             Self::GeometryOnly(_) => None,
@@ -3849,7 +3878,7 @@ pub struct Frame {
     presentation_state: FramePresentationState,
     /// Latest completed layout output used for incremental redisplay and GNU
     /// output bookkeeping. This cache is not renderer-active geometry.
-    redisplay_cache: HashMap<WindowId, WindowDisplaySnapshot>,
+    redisplay_cache: HashMap<WindowId, std::sync::Arc<WindowDisplaySnapshot>>,
     /// Last recorded redisplay state for GNU window change hooks.
     pub(crate) window_hook_record: FrameWindowHookRecord,
     /// GNU `frame-window-state-change` flag.
@@ -4881,7 +4910,7 @@ impl Frame {
         let publications: Vec<_> = snapshots
             .iter()
             .cloned()
-            .map(WindowPresentationSnapshot::LiveWindow)
+            .map(WindowPresentationSnapshot::live)
             .collect();
         self.commit_completed_window_output(generation, &publications);
         self.replace_redisplay_cache_for_test(snapshots);
@@ -4911,7 +4940,7 @@ impl Frame {
             presentation,
             snapshots
                 .into_iter()
-                .map(WindowPresentationSnapshot::LiveWindow)
+                .map(WindowPresentationSnapshot::live)
                 .collect(),
         )
     }
@@ -4927,9 +4956,9 @@ impl Frame {
             .into_iter()
             .filter(|publication| self.find_window(publication.window_id()).is_some())
             .collect();
-        let snapshots: Vec<WindowDisplaySnapshot> = publications
+        let snapshots: Vec<std::sync::Arc<WindowDisplaySnapshot>> = publications
             .iter()
-            .map(|publication| publication.display_snapshot().clone())
+            .map(|publication| publication.shared_display_snapshot().clone())
             .collect();
         let candidate = geometry::PresentationGeometry::new_with_frame_placement(
             self.id,
@@ -4974,7 +5003,7 @@ impl Frame {
             prepared
                 .publications
                 .iter()
-                .filter_map(WindowPresentationSnapshot::live_window_snapshot)
+                .filter_map(WindowPresentationSnapshot::shared_live_window_snapshot)
                 .cloned()
                 .map(|snapshot| (snapshot.window_id, snapshot)),
         );
@@ -5150,14 +5179,14 @@ impl Frame {
         self.redisplay_cache = snapshots
             .into_iter()
             .filter(|snapshot| self.find_window(snapshot.window_id).is_some())
-            .map(|snapshot| (snapshot.window_id, snapshot))
+            .map(|snapshot| (snapshot.window_id, std::sync::Arc::new(snapshot)))
             .collect();
     }
 
     /// Latest completed redisplay output for WINDOW-ID, independent of which
     /// presentation is renderer-active.
     pub fn redisplay_snapshot(&self, id: WindowId) -> Option<&WindowDisplaySnapshot> {
-        self.redisplay_cache.get(&id)
+        self.redisplay_cache.get(&id).map(|snapshot| &**snapshot)
     }
 
     /// GNU `coordinates_in_window`'s inputs for one live window of this frame

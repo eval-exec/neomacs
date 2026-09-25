@@ -464,7 +464,9 @@ pub struct RetainedWindowMatrix {
     /// snapshots + per-span display points). The cursor-only fast path (Phase 1)
     /// replays its body half verbatim, re-decorating only the cursor; the
     /// position fields are unchanged because the visible region did not move.
-    pub display_snapshot: neovm_core::window::WindowDisplaySnapshot,
+    /// The window's snapshot from the frame that produced this matrix, shared
+    /// with that frame's publication (never copied).
+    pub display_snapshot: std::sync::Arc<neovm_core::window::WindowDisplaySnapshot>,
     /// Exact renderer-facing cursor produced by the accepted full display walk.
     /// Kept separately from the integer window snapshot so unchanged cursor-only
     /// replay preserves subpixel geometry and explicit display-string placement.

@@ -517,7 +517,7 @@ fn geometry_only_snapshot_is_interactive_but_not_live_redisplay_evidence() {
     frame
         .prepare_display_presentation(
             PresentationId::new(42),
-            vec![WindowPresentationSnapshot::GeometryOnly(
+            vec![WindowPresentationSnapshot::geometry_only(
                 WindowDisplaySnapshot {
                     window_id,
                     text_area_left_offset: 24,
@@ -548,13 +548,11 @@ fn geometry_only_snapshot_is_interactive_but_not_live_redisplay_evidence() {
     assert_eq!(
         frame.prepare_display_presentation(
             PresentationId::new(42),
-            vec![WindowPresentationSnapshot::LiveWindow(
-                WindowDisplaySnapshot {
-                    window_id,
-                    text_area_left_offset: 24,
-                    ..WindowDisplaySnapshot::default()
-                },
-            )],
+            vec![WindowPresentationSnapshot::live(WindowDisplaySnapshot {
+                window_id,
+                text_area_left_offset: 24,
+                ..WindowDisplaySnapshot::default()
+            },)],
         ),
         Err(PresentationPrepareError::ReusedPresentation(
             PresentationId::new(42)
@@ -3767,4 +3765,41 @@ fn grow_mini_window_always_moves_from_a_whole_row_count_at_a_fractional_unit() {
         .bounds()
         .height;
     assert!((h - 4.0 * 11.9).abs() < 0.01, "expected four rows, got {h}");
+}
+
+/// A prepared presentation's publication and the frame's redisplay cache hold
+/// the same window snapshot: preparing one copies no visible position or row.
+#[test]
+fn a_prepared_presentation_shares_its_window_snapshots() {
+    use super::geometry::PresentationId;
+
+    let mut manager = FrameManager::new();
+    let frame_id = manager.create_frame("shared-snapshots", 800, 600, BufferId(1));
+    let frame = manager.get_mut(frame_id).expect("frame");
+    let window_id = frame.selected_window;
+    let publication = WindowPresentationSnapshot::live(WindowDisplaySnapshot {
+        window_id,
+        text_area_left_offset: 8,
+        ..WindowDisplaySnapshot::default()
+    });
+    let shared = publication.shared_display_snapshot().clone();
+    frame
+        .prepare_display_presentation(PresentationId::new(7), vec![publication])
+        .expect("prepare");
+    frame
+        .activate_display_presentation(PresentationId::new(7))
+        .expect("activate");
+    let cached = frame.redisplay_snapshot(window_id).expect("cached");
+    assert!(
+        std::ptr::eq(cached, &*shared),
+        "the cache shares the snapshot"
+    );
+    let active = frame
+        .active_window_presentation(window_id)
+        .expect("active publication")
+        .display_snapshot();
+    assert!(
+        std::ptr::eq(active, &*shared),
+        "the publication shares the snapshot"
+    );
 }

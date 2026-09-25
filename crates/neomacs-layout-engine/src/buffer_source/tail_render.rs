@@ -289,7 +289,7 @@ impl<'a> BufferSourceTailRequestContext<'a> {
         let finished_window = self
             .finish_request(measured_chrome_heights)
             .finish_and_snapshot(finish_state);
-        window_snapshots.push(WindowPresentationSnapshot::LiveWindow(
+        window_snapshots.push(WindowPresentationSnapshot::live(
             finished_window.into_snapshot(),
         ));
     }

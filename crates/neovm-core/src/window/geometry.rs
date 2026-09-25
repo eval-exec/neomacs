@@ -131,14 +131,14 @@ enum PresentedBufferPositionMatch<'a> {
 }
 
 impl PresentationGeometry {
-    pub(crate) fn new(
+    pub(crate) fn new<S: std::borrow::Borrow<WindowDisplaySnapshot>>(
         frame: FrameId,
         presentation: PresentationId,
-        snapshots: impl IntoIterator<Item = WindowDisplaySnapshot>,
+        snapshots: impl IntoIterator<Item = S>,
     ) -> Result<Self, GeometryError> {
         let mut windows = HashMap::default();
         for snapshot in snapshots {
-            let window = PresentationWindow::from_snapshot(snapshot)?;
+            let window = PresentationWindow::from_snapshot(snapshot.borrow())?;
             let id = window.id;
             if windows.insert(id, window).is_some() {
                 return Err(GeometryError::DuplicateWindow(id));
@@ -163,7 +163,7 @@ impl PresentationGeometry {
     }
 
     #[allow(clippy::too_many_arguments)] // constructor receives the complete immutable frame placement
-    pub(crate) fn new_with_frame_placement(
+    pub(crate) fn new_with_frame_placement<S: std::borrow::Borrow<WindowDisplaySnapshot>>(
         frame: FrameId,
         presentation: PresentationId,
         parent: Option<FrameId>,
@@ -172,7 +172,7 @@ impl PresentationGeometry {
         width: u32,
         height: u32,
         z_order: i32,
-        snapshots: impl IntoIterator<Item = WindowDisplaySnapshot>,
+        snapshots: impl IntoIterator<Item = S>,
     ) -> Result<Self, GeometryError> {
         let mut geometry = Self::new(frame, presentation, snapshots)?;
         let (left, top) = if parent.is_some() {
@@ -230,7 +230,7 @@ impl PresentationGeometry {
 }
 
 impl PresentationWindow {
-    fn from_snapshot(snapshot: WindowDisplaySnapshot) -> Result<Self, GeometryError> {
+    fn from_snapshot(snapshot: &WindowDisplaySnapshot) -> Result<Self, GeometryError> {
         let outer = PixelRect::from_transport(&snapshot.regions.outer)?;
         let regions = snapshot
             .regions_materialized

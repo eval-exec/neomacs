@@ -1850,7 +1850,7 @@ fn presented_mouse_position_over_the_inactive_echo_area_reports_the_mini_windows
         frame
             .prepare_display_presentation(
                 crate::window::geometry::PresentationId::new(3),
-                vec![WindowPresentationSnapshot::GeometryOnly(
+                vec![WindowPresentationSnapshot::geometry_only(
                     WindowDisplaySnapshot {
                         window_id: minibuffer_window,
                         regions: PresentedWindowRegions {
@@ -1972,7 +1972,7 @@ fn geometry_only_echo_area_hit_cannot_publish_live_minibuffer_help_echo() {
         frame
             .prepare_display_presentation(
                 crate::window::geometry::PresentationId::new(4),
-                vec![WindowPresentationSnapshot::GeometryOnly(
+                vec![WindowPresentationSnapshot::geometry_only(
                     WindowDisplaySnapshot {
                         window_id: minibuffer_window,
                         regions: PresentedWindowRegions {

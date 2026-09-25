@@ -22,21 +22,33 @@ pub(crate) fn publish_row_fringe_bitmaps(
     snapshots: &mut [WindowPresentationSnapshot],
 ) {
     for publication in snapshots.iter_mut() {
-        let snapshot = publication.display_snapshot_mut();
+        let window_id = publication.display_snapshot().window_id;
         let Some(entry) = entries
             .iter()
-            .find(|entry| entry.window_id.get() == snapshot.window_id.0 as i64)
+            .find(|entry| entry.window_id.get() == window_id.0 as i64)
         else {
             continue;
         };
-        for row in &mut snapshot.rows {
-            let fringe = usize::try_from(row.row)
+        let fringe_of = |row: &neovm_core::window::DisplayRowSnapshot| {
+            usize::try_from(row.row)
                 .ok()
                 .and_then(|index| entry.matrix.rows.get(index))
                 .filter(|matrix_row| matrix_row.enabled)
                 .map(|matrix_row| row_fringe_bitmaps(matrix_row))
-                .unwrap_or_default();
-            row.fringe = fringe;
+                .unwrap_or_default()
+        };
+        // The snapshot is shared with the retained matrix: copy it only when a
+        // row's fringe actually changes.
+        if publication
+            .display_snapshot()
+            .rows
+            .iter()
+            .all(|row| row.fringe == fringe_of(row))
+        {
+            continue;
+        }
+        for row in &mut publication.display_snapshot_mut().rows {
+            row.fringe = fringe_of(row);
         }
     }
 }
