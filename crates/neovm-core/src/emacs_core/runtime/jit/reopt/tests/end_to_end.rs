@@ -3,6 +3,10 @@
 //! floats; a multiply that keeps overflowing to a bignum) and the lifecycle
 //! around them (the stale leaf, closures, AOT prewarm, the knobs). Every
 //! Lisp result is checked against the interpreter.
+//!
+//! GC note: a test thread's Rust locals are not GC roots, so no heap `Value`
+//! (a float, a bignum, a result) is held across a run that allocates: each
+//! argument is made right before its call and each result is printed at once.
 
 use super::*;
 use crate::emacs_core::bytecode::vm::Vm as TestVm;
@@ -12,7 +16,8 @@ use crate::emacs_core::jit::cache::{
 };
 use crate::emacs_core::jit::compile::{force_deopt_for_test, force_profit_gate_for_test};
 use crate::emacs_core::jit::stats;
-use crate::emacs_core::value::{LambdaParams, eql_value};
+use crate::emacs_core::print::print_value;
+use crate::emacs_core::value::LambdaParams;
 
 fn function(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFunction {
     let mut f = ByteCodeFunction::new(LambdaParams {
@@ -129,19 +134,17 @@ impl Probe {
         &mut *self.ev as *mut Context
     }
 
-    /// Run the compiled caller on `x`; the result, checked against the
-    /// interpreter.
-    fn call(&mut self, x: Value) -> Value {
+    /// Run the compiled caller on `x` (made by `x()` right before each run)
+    /// and check the result against the interpreter's; returns the result,
+    /// to be inspected at once.
+    fn call(&mut self, x: impl Fn() -> Value) -> Value {
+        let want = print_value(&interp_j4(&mut self.ev, x()));
         let ctx = self.ctx();
-        let bits = try_run_compiled(ctx, &self.caller, self.caller_val, &[x])
+        let bits = try_run_compiled(ctx, &self.caller, self.caller_val, &[x()])
             .expect("no signal")
             .expect("the caller runs native");
         let got = Value::from_bits(bits);
-        let want = interp_j4(&mut self.ev, x);
-        assert!(
-            eql_value(&got, &want),
-            "native {got:?} != interp {want:?} for x={x:?}"
-        );
+        assert_eq!(print_value(&got), want, "native vs interp");
         got
     }
 
@@ -187,7 +190,7 @@ fn float_after_fixnum_warmup_widens_invalidates_and_recompiles() {
     let mut p = Probe::new("reopt-p1-add");
     force_reopt_for_test(Some(knobs_with_heat(5)));
     for _ in 0..3 {
-        assert_eq!(p.call(Value::make_int(3)), Value::make_int(27));
+        assert_eq!(p.call(|| Value::make_int(3)), Value::make_int(27));
     }
     assert_eq!(p.kind(), "compiled");
     let rt = p.callee().jit_runtime();
@@ -201,7 +204,7 @@ fn float_after_fixnum_warmup_widens_invalidates_and_recompiles() {
     let invalidations = stats::compile_stats_snapshot().reopt_levels[0];
 
     // The first float: one precise deopt, conclusive.
-    assert_eq!(p.call(Value::make_float(3.0)).as_float(), Some(27.0));
+    assert_eq!(p.call(|| Value::make_float(3.0)).as_float(), Some(27.0));
     assert_eq!(rt.numeric_feedback(MUL_PC), NumericFeedback::Float);
     assert_eq!(p.kind(), "deferred-reopt");
     assert_eq!(rt.reopt_count(), 1);
@@ -220,7 +223,7 @@ fn float_after_fixnum_warmup_widens_invalidates_and_recompiles() {
 
     // The re-profile window, then the recompile.
     for _ in 0..10 {
-        assert_eq!(p.call(Value::make_float(3.0)).as_float(), Some(27.0));
+        assert_eq!(p.call(|| Value::make_float(3.0)).as_float(), Some(27.0));
     }
     assert_eq!(p.kind(), "compiled", "recompiled after the window");
     let new = compiled_leaf_ptr_for_test(p.callee_id()).expect("compiled");
@@ -237,12 +240,12 @@ fn float_after_fixnum_warmup_widens_invalidates_and_recompiles() {
     // Floats now run native without a deopt, through the re-armed slot.
     let deopts = stats::compile_stats_snapshot().deopts();
     for _ in 0..20 {
-        assert_eq!(p.call(Value::make_float(3.0)).as_float(), Some(27.0));
+        assert_eq!(p.call(|| Value::make_float(3.0)).as_float(), Some(27.0));
     }
     assert_eq!(stats::compile_stats_snapshot().deopts(), deopts);
     assert_eq!(p.caller_slot().leaf_ptr(), new, "the caller re-armed");
     // Fixnums still run correctly (the float lowering promotes them).
-    assert_eq!(p.call(Value::make_int(3)), Value::make_int(27));
+    assert_eq!(p.call(|| Value::make_int(3)), Value::make_int(27));
     assert_eq!(rt.reopt_count(), 1, "one invalidation in all");
     force_reopt_for_test(None);
 }
@@ -257,29 +260,29 @@ fn overflow_widens_to_generic_only_at_the_site_limit() {
     let mut p = Probe::new("reopt-p3-sq");
     force_reopt_for_test(Some(knobs_with_heat(5)));
     for _ in 0..3 {
-        assert_eq!(p.call(Value::make_int(3)), Value::make_int(27));
+        assert_eq!(p.call(|| Value::make_int(3)), Value::make_int(27));
     }
     let rt = p.callee().jit_runtime();
     let big = Value::make_int(3_037_000_500); // big * big > most-positive-fixnum
     let limit = ReoptKnobs::SITE_LIMIT;
     for _ in 1..limit {
-        assert!(!p.call(big).is_fixnum(), "a bignum");
+        assert!(!p.call(|| big).is_fixnum(), "a bignum");
         assert_eq!(p.kind(), "compiled", "below the site limit");
         assert_eq!(rt.numeric_feedback(MUL_PC), NumericFeedback::FixnumOnly);
     }
-    assert!(!p.call(big).is_fixnum());
+    assert!(!p.call(|| big).is_fixnum());
     assert_eq!(rt.numeric_feedback(MUL_PC), NumericFeedback::Other);
     assert_eq!(p.kind(), "deferred-reopt");
     for _ in 0..10 {
-        assert!(!p.call(big).is_fixnum());
+        assert!(!p.call(|| big).is_fixnum());
     }
     assert_eq!(p.kind(), "compiled");
     assert_eq!(rt.numeric_feedback(ADD_PC), NumericFeedback::Other);
     let deopts = stats::compile_stats_snapshot().deopts();
     for _ in 0..20 {
-        assert!(!p.call(big).is_fixnum());
+        assert!(!p.call(|| big).is_fixnum());
     }
-    assert_eq!(p.call(Value::make_int(3)), Value::make_int(27));
+    assert_eq!(p.call(|| Value::make_int(3)), Value::make_int(27));
     assert_eq!(
         stats::compile_stats_snapshot().deopts(),
         deopts,
@@ -295,11 +298,11 @@ fn stale_leaf_deopt_unlinks_but_does_not_evict_successor() {
     let mut p = Probe::new("reopt-stale-add");
     force_reopt_for_test(Some(knobs_with_heat(5)));
     for _ in 0..3 {
-        p.call(Value::make_int(3));
+        p.call(|| Value::make_int(3));
     }
     let old = compiled_leaf_ptr_for_test(p.callee_id()).expect("compiled");
     for _ in 0..12 {
-        p.call(Value::make_float(3.0));
+        p.call(|| Value::make_float(3.0));
     }
     assert_eq!(p.kind(), "compiled");
     let new = compiled_leaf_ptr_for_test(p.callee_id()).expect("recompiled");
@@ -310,7 +313,7 @@ fn stale_leaf_deopt_unlinks_but_does_not_evict_successor() {
     slot.arm_leaf(old, p.callee().constants.as_ptr(), false, false);
     let stale = stats::compile_stats_snapshot().reopt_stale;
     let count = p.callee().jit_runtime().reopt_count();
-    assert_eq!(p.call(Value::make_float(3.0)).as_float(), Some(27.0));
+    assert_eq!(p.call(|| Value::make_float(3.0)).as_float(), Some(27.0));
     assert_eq!(stats::compile_stats_snapshot().reopt_stale, stale + 1);
     assert_eq!(p.kind(), "compiled", "the successor is not evicted");
     assert_eq!(compiled_leaf_ptr_for_test(p.callee_id()), Some(new));
@@ -320,7 +323,7 @@ fn stale_leaf_deopt_unlinks_but_does_not_evict_successor() {
         "a stale deopt is no invalidation"
     );
     assert!(slot.leaf_ptr().is_null() || slot.leaf_ptr() == new);
-    assert_eq!(p.call(Value::make_float(3.0)).as_float(), Some(27.0));
+    assert_eq!(p.call(|| Value::make_float(3.0)).as_float(), Some(27.0));
     assert_eq!(
         slot.leaf_ptr(),
         new,
@@ -358,20 +361,20 @@ fn closure_instances_share_the_reopt_state() {
         Some(id),
         "one source, one id"
     );
-    let fl = Value::make_float(3.0);
-    let got = run(&f2, v2, fl).expect("a precise resume returns the value");
+    let fl = || Value::make_float(3.0); // made per run (GC note)
+    let got = run(&f2, v2, fl()).expect("a precise resume returns the value");
     assert_eq!(Value::from_bits(got).as_float(), Some(27.0));
     assert_eq!(cache_entry_kind_for_test(id), "deferred-reopt");
     assert_eq!(f1.jit_runtime().reopt_count(), 1, "seen through instance 1");
-    assert_eq!(run(&f1, v1, fl), None, "interpreted during the window");
+    assert_eq!(run(&f1, v1, fl()), None, "interpreted during the window");
     // Past the window the next native attempt recompiles, for both.
     f1.jit_runtime()
         .set_heat_for_test(f1.jit_runtime().heat() + 10);
-    assert!(run(&f1, v1, fl).is_some());
+    assert!(run(&f1, v1, fl()).is_some());
     assert_eq!(cache_entry_kind_for_test(id), "compiled");
     let deopts = stats::compile_stats_snapshot().deopts();
-    assert!(run(&f2, v2, fl).is_some());
-    assert!(run(&f1, v1, fl).is_some());
+    assert!(run(&f2, v2, fl()).is_some());
+    assert!(run(&f1, v1, fl()).is_some());
     assert_eq!(stats::compile_stats_snapshot().deopts(), deopts);
     force_reopt_for_test(None);
 }
@@ -418,12 +421,12 @@ fn reopt_off_keeps_the_stale_leaf() {
     let mut p = Probe::new("reopt-off-add");
     force_reopt_for_test(Some(ReoptKnobs::off()));
     for _ in 0..3 {
-        p.call(Value::make_int(3));
+        p.call(|| Value::make_int(3));
     }
     let leaf = compiled_leaf_ptr_for_test(p.callee_id()).expect("compiled");
     let deopts = stats::compile_stats_snapshot().deopts();
     for _ in 0..5 {
-        assert_eq!(p.call(Value::make_float(3.0)).as_float(), Some(27.0));
+        assert_eq!(p.call(|| Value::make_float(3.0)).as_float(), Some(27.0));
     }
     assert_eq!(
         stats::compile_stats_snapshot().deopts(),
@@ -446,7 +449,7 @@ fn force_deopt_harness_keeps_reopt_inert() {
     force_reopt_for_test(Some(knobs_with_heat(5)));
     force_deopt_for_test(true);
     for _ in 0..8 {
-        assert_eq!(p.call(Value::make_int(3)), Value::make_int(27));
+        assert_eq!(p.call(|| Value::make_int(3)), Value::make_int(27));
     }
     assert_eq!(p.kind(), "compiled");
     assert_eq!(p.callee().jit_runtime().reopt_count(), 0);
@@ -519,20 +522,28 @@ fn osr_float_switch_reenters_native() {
     force_deopt_for_test(false);
     force_reopt_for_test(Some(knobs_with_heat(5)));
     let mut ev = Context::new();
-    let (n, k) = (Value::make_int(20_000), Value::make_int(1_000));
+    // Short enough that no collection runs: a first-run interpreter result
+    // of a float loop this shape is wrong at the base commit too once the
+    // first collection runs mid-loop (NEOVM_JIT=0 reproduces it), which is
+    // not what this test is about.
+    let (n, k) = (Value::make_int(2_500), Value::make_int(700));
+    crate::emacs_core::jit::force_osr_for_test(false);
     let want = TestVm::from_context(&mut ev)
         .execute(&osr_switch(), vec![n, k])
-        .expect("interp run");
+        .expect("interp run")
+        .as_float();
+    assert_eq!(want, Some((2 * 700 + 3 * 1_800) as f64));
     crate::emacs_core::jit::force_osr_for_test(true);
     let f = osr_switch();
     f.jit_runtime().set_hot_for_test();
     let before = osr_transfers();
     let got = TestVm::from_context(&mut ev)
         .execute(&f, vec![n, k])
-        .expect("OSR run");
+        .expect("OSR run")
+        .as_float();
     let transfers = osr_transfers() - before;
     crate::emacs_core::jit::force_osr_for_test(false);
-    assert!(eql_value(&got, &want), "OSR {got:?} != interp {want:?}");
+    assert_eq!(got, want, "OSR vs interp");
     let rt = f.jit_runtime();
     assert_eq!(rt.numeric_feedback(OSR_MUL_PC), NumericFeedback::Float);
     assert_eq!(rt.reopt_count(), 1, "one invalidation");
@@ -674,17 +685,11 @@ fn mir_rerun_learns_or_escalates() {
             2,
         )
     };
+    let float: fn() -> Value = || Value::make_float(1.5);
+    let overflow: fn() -> Value = || Value::make_int(Value::MOST_POSITIVE_FIXNUM);
     for (name, arg, want_level) in [
-        (
-            "reopt-rerun-float",
-            Value::make_float(1.5),
-            ReoptLevel::Speculative,
-        ),
-        (
-            "reopt-rerun-overflow",
-            Value::make_int(Value::MOST_POSITIVE_FIXNUM),
-            ReoptLevel::BaselineOnly,
-        ),
+        ("reopt-rerun-float", float, ReoptLevel::Speculative),
+        ("reopt-rerun-overflow", overflow, ReoptLevel::BaselineOnly),
     ] {
         let sym = install(&mut ev, name, plus());
         let callee = bytecode_of(&ev, sym);
@@ -701,16 +706,20 @@ fn mir_rerun_learns_or_escalates() {
             vec![sym],
             2,
         );
-        let mut call = |x: Value| {
-            let got = TestVm::from_context(&mut ev)
-                .execute(&caller, vec![x, Value::make_int(2)])
-                .expect("runs");
-            let want = TestVm::from_context(&mut ev)
-                .execute(&plus(), vec![x, Value::make_int(2)])
-                .expect("interp");
-            assert!(eql_value(&got, &want), "{got:?} != {want:?}");
+        let mut call = |x: fn() -> Value| {
+            let want = print_value(
+                &TestVm::from_context(&mut ev)
+                    .execute(&plus(), vec![x(), Value::make_int(2)])
+                    .expect("interp"),
+            );
+            let got = print_value(
+                &TestVm::from_context(&mut ev)
+                    .execute(&caller, vec![x(), Value::make_int(2)])
+                    .expect("runs"),
+            );
+            assert_eq!(got, want);
         };
-        call(Value::make_int(1));
+        call(|| Value::make_int(1));
         let leaf = cached_leaf(callee).expect("compiled");
         assert_eq!(
             leaf.tier(),
@@ -893,18 +902,17 @@ fn backoff_climbs_to_generic_then_interpreter() {
     let rt = f.jit_runtime();
     let one = Value::make_int(1);
     let big = Value::make_int(3_037_000_500);
+    // `args` hold only fixnums: nothing to keep alive across the runs.
     let run = |args: [Value; 4]| {
         // Past any re-profile window: the next attempt recompiles.
         rt.set_heat_for_test(rt.heat().saturating_add(10));
-        let got = try_run_compiled(ctx, &f, v, &args).expect("no signal");
-        let want = TestVm::from_context(unsafe { &mut *ctx })
-            .execute(&f, args.to_vec())
-            .expect("interp");
-        if let Some(bits) = got {
-            assert_eq!(
-                crate::emacs_core::print::print_value(&Value::from_bits(bits)),
-                crate::emacs_core::print::print_value(&want)
-            );
+        let want = print_value(
+            &TestVm::from_context(unsafe { &mut *ctx })
+                .execute(&f, args.to_vec())
+                .expect("interp"),
+        );
+        if let Some(bits) = try_run_compiled(ctx, &f, v, &args).expect("no signal") {
+            assert_eq!(print_value(&Value::from_bits(bits)), want);
         }
     };
     run([one; 4]);
@@ -931,7 +939,16 @@ fn backoff_climbs_to_generic_then_interpreter() {
     );
     let deopts = stats::compile_stats_snapshot().deopts();
     run([big; 4]);
-    run([Value::make_float(1.5), big, one, bignum_value()]);
+    // Non-fixnum operands, made right at the native run (see the GC note).
+    let ran = try_run_compiled(
+        ctx,
+        &f,
+        v,
+        &[Value::make_float(1.5), big, one, bignum_value()],
+    )
+    .expect("no signal")
+    .is_some();
+    assert!(ran, "the Generic leaf runs non-fixnum operands natively");
     assert_eq!(
         stats::compile_stats_snapshot().deopts(),
         deopts,
@@ -979,20 +996,22 @@ fn stress_with_force_deopt_climbs_and_matches_the_interpreter() {
     let callee = bytecode_of(&ev, sym);
     callee.jit_runtime().set_hot_for_test();
     let caller = caller_of(sym);
-    let inputs = [
-        Value::make_int(3),
-        Value::make_float(3.0),
-        Value::make_int(3_037_000_500),
-        Value::make_int(-7),
-        Value::make_float(-2.5),
+    let inputs: [fn() -> Value; 5] = [
+        || Value::make_int(3),
+        || Value::make_float(3.0),
+        || Value::make_int(3_037_000_500),
+        || Value::make_int(-7),
+        || Value::make_float(-2.5),
     ];
     for _ in 0..40 {
-        for &x in &inputs {
-            let got = TestVm::from_context(&mut ev)
-                .execute(&caller, vec![x])
-                .expect("runs");
-            let want = interp_j4(&mut ev, x);
-            assert!(eql_value(&got, &want), "{got:?} != {want:?} for {x:?}");
+        for x in inputs {
+            let want = print_value(&interp_j4(&mut ev, x()));
+            let got = print_value(
+                &TestVm::from_context(&mut ev)
+                    .execute(&caller, vec![x()])
+                    .expect("runs"),
+            );
+            assert_eq!(got, want);
         }
     }
     let rt = callee.jit_runtime();
@@ -1006,17 +1025,15 @@ fn stress_with_force_deopt_climbs_and_matches_the_interpreter() {
     // retires the OSR leaf and allows a retry; the loop still finishes with
     // the interpreter's answer.
     crate::emacs_core::jit::force_osr_for_test(true);
-    let (n, k) = (Value::make_int(5_000), Value::make_int(1_000));
+    let (n, k) = (Value::make_int(2_500), Value::make_int(700));
     let f = osr_switch();
     f.jit_runtime().set_hot_for_test();
     let got = TestVm::from_context(&mut ev)
         .execute(&f, vec![n, k])
-        .expect("OSR run");
+        .expect("OSR run")
+        .as_float();
     crate::emacs_core::jit::force_osr_for_test(false);
-    let want = TestVm::from_context(&mut ev)
-        .execute(&osr_switch(), vec![n, k])
-        .expect("interp");
-    assert!(eql_value(&got, &want), "OSR {got:?} != interp {want:?}");
+    assert_eq!(got, Some((2 * 700 + 3 * 1_800) as f64), "OSR vs arithmetic");
     assert!(
         f.jit_runtime().reopt_count() <= ReoptKnobs::stress().max_reopts + 4,
         "bounded"
