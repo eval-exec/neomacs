@@ -155,3 +155,20 @@ fn named_call_effects_keep_fast_reads_separate_from_fallbacks() {
         .unwrap();
     assert!(add.effect.contains(Effects::MAY_DEOPT));
 }
+
+/// `parse-partial-sexp` runs `syntax-propertize` from inside its scan, as GNU
+/// does (U0.7): a named call to it, fast path included, may run Lisp and
+/// collect, and moves point. No table may ever classify it as a pure read.
+#[test]
+fn parse_partial_sexp_call_effects_include_lisp_and_gc() {
+    use super::calls::Effects;
+    let _ev = Context::new();
+    let call = named_builtin_call(&Op::CallBuiltinSym(intern("parse-partial-sexp"), 6))
+        .expect("parse-partial-sexp is a named builtin");
+    for effects in [call.fast_effects, call.effects] {
+        assert!(effects.contains(Effects::MAY_REENTER), "{effects:?}");
+        assert!(effects.contains(Effects::MAY_GC), "{effects:?}");
+        assert!(effects.contains(Effects::WRITE_BUFFER), "{effects:?}");
+        assert!(!effects.is_read_only(), "{effects:?}");
+    }
+}

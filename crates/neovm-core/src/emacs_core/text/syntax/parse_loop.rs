@@ -50,15 +50,18 @@ pub(super) struct LoopState {
 }
 
 /// Where a scan starts.
-// Resumes have no production caller until `parse-partial-sexp` pauses for
-// `syntax-propertize` and caches runs; the resume self-test drives them.
-#[cfg_attr(not(test), allow(dead_code))]
-pub(super) enum Entry<'s> {
-    /// GNU `scan_sexps_forward` from `from_char` (absolute, 0-based), with
-    /// `oldstate` internalized as `internalize_parse_state` does.
+pub(super) enum Entry {
+    /// GNU `scan_sexps_forward` from `from_char` (absolute, 0-based) in
+    /// `state`: an OLDSTATE internalized by
+    /// [`PartialParseState::from_oldstate`] (GNU `internalize_parse_state`),
+    /// which callers do before anything else can run, as GNU does.
     Fresh {
         from_char: usize,
-        oldstate: Option<&'s Value>,
+        state: PartialParseState,
+        /// Whether an OLDSTATE was given at all: only then can the first
+        /// character complete a two-character comment opener begun before
+        /// FROM (GNU's entry through `in_2char_comment_start`).
+        from_oldstate: bool,
     },
     /// Continue a scan at the loop top it paused or was recorded at.
     Resume {
@@ -73,7 +76,6 @@ pub(super) enum Entry<'s> {
 }
 
 /// How a scan ended.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(super) enum ScanEnd {
     Finished(ScanFinish),
     /// The mode asked to pause at this loop top.
@@ -81,7 +83,6 @@ pub(super) enum ScanEnd {
 }
 
 /// A finished scan: the finalized state and where the scan stopped.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(super) struct ScanFinish {
     pub(super) state: PartialParseState,
     /// The Lisp position the scan stopped at (point after `parse-partial-sexp`).
@@ -89,7 +90,6 @@ pub(super) struct ScanFinish {
 }
 
 /// A loop top as a [`ScanMode`] sees it.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(super) struct LoopTop<'a> {
     pub(super) char_pos: usize,
     pub(super) byte_pos: EmacsBytePos,
@@ -112,7 +112,6 @@ impl LoopTop<'_> {
 }
 
 /// What the loop does after a mode's loop-top hook.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(super) enum TopAction {
     /// Keep scanning; call the hook again at the first loop top at or after
     /// this absolute position.
@@ -189,7 +188,7 @@ impl ScanMode for SafePositionRecorder<'_> {
 pub(super) fn run_parse_loop<M: ScanMode>(
     buf: &Buffer,
     table: &SyntaxTable,
-    entry: Entry<'_>,
+    entry: Entry,
     to_char: usize,
     target_depth: Option<i64>,
     stop_before: bool,
@@ -205,14 +204,14 @@ pub(super) fn run_parse_loop<M: ScanMode>(
         mut atom_start,
         mut comment_resume_syntax,
         mut first_syntax,
-        oldstate,
+        from_oldstate,
     ) = match entry {
         Entry::Fresh {
             from_char,
-            oldstate,
+            state,
+            from_oldstate,
         } => {
             let point_min = buf.accessible_char_region().start().get();
-            let state = PartialParseState::from_oldstate(oldstate);
             let comment_resume = (state.in_comment.is_some() && from_char != point_min)
                 .then(|| CommentResumeSyntax::from_parse_state(state.prev_syntax));
             (
@@ -222,7 +221,7 @@ pub(super) fn run_parse_loop<M: ScanMode>(
                 None,
                 comment_resume,
                 None,
-                oldstate,
+                from_oldstate,
             )
         }
         Entry::Resume { at, first_syntax } => {
@@ -234,7 +233,7 @@ pub(super) fn run_parse_loop<M: ScanMode>(
                 at.atom_start,
                 at.comment_resume,
                 first_syntax,
-                None,
+                false,
             )
         }
     };
@@ -291,7 +290,7 @@ pub(super) fn run_parse_loop<M: ScanMode>(
     // nested `(*`) was read as punctuation and a star: a resumed parse -- every
     // syntax-ppss cache midpoint -- missed the comment and miscounted parens.
     let mut stopped_at_entry = false;
-    if oldstate.is_some()
+    if from_oldstate
         && state.in_comment.is_none()
         && state.in_string.is_none()
         && !state.quoted

@@ -221,7 +221,7 @@ fn random_opts(rng: &mut Rng) -> Opts {
 /// One scan of the current buffer under the context's own environment.
 fn scan<M: ScanMode>(
     eval: &crate::emacs_core::eval::Context,
-    entry: Entry<'_>,
+    entry: Entry,
     to_char: usize,
     opts: Opts,
     mode: &mut M,
@@ -338,7 +338,8 @@ fn a_scan_resumed_at_any_loop_top_answers_as_the_uninterrupted_scan() {
                         let to_char = to - 1;
                         let fresh = || Entry::Fresh {
                             from_char,
-                            oldstate: oldstate.as_ref(),
+                            state: PartialParseState::from_oldstate(oldstate.as_ref()),
+                            from_oldstate: oldstate.is_some(),
                         };
                         let want = finished(scan(&eval, fresh(), to_char, opts, &mut Plain));
                         let mut rec = RecordAll { tops: Vec::new() };

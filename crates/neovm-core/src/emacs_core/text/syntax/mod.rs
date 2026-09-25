@@ -22,6 +22,7 @@ use crate::buffer::{
 use crate::heap_types::LispString;
 
 mod parse_loop;
+mod pps_propertize;
 use parse_loop::{Entry, Plain, SafePositionRecorder, ScanEnd, ScanFinish, run_parse_loop};
 
 /// The `syntax-table` property symbol, interned once.
@@ -5214,7 +5215,8 @@ fn back_comment_reparse(
                 &table,
                 Entry::Fresh {
                     from_char: start0,
-                    oldstate: None,
+                    state: PartialParseState::new(),
+                    from_oldstate: false,
                 },
                 to_char,
                 None,
@@ -6846,7 +6848,8 @@ fn parse_state_from_range_core(
         table,
         Entry::Fresh {
             from_char,
-            oldstate,
+            state: PartialParseState::from_oldstate(oldstate),
+            from_oldstate: oldstate.is_some(),
         },
         to_char,
         target_depth,
@@ -6953,6 +6956,31 @@ pub(crate) fn builtin_parse_partial_sexp_6(
     let oldstate = args.get(4).filter(|v| !v.is_nil());
     let commentstop = parse_commentstop_mode(args.get(5));
     let honor = parse_sexp_lookup_properties_enabled(eval);
+    // GNU runs `syntax-propertize` from inside the scan when it enters text
+    // `syntax-propertize--done` does not cover (U0.7): only possible when
+    // properties are honoured and `done` lies at or before TO.
+    if honor && pps_propertize::may_propertize(eval, to) {
+        let (state, stop_pos) = pps_propertize::parse_partial_sexp_propertizing(
+            eval,
+            from,
+            to,
+            target_depth,
+            stop_before,
+            PartialParseState::from_oldstate(oldstate),
+            oldstate.is_some(),
+            commentstop,
+        )?;
+        let buf = eval
+            .buffers
+            .current_buffer()
+            .ok_or_else(|| signal("error", vec![Value::string("No current buffer")]))?;
+        let current_id = buf.id;
+        let stop_byte = lisp_pos_to_byte(buf, LispCharPos1::new(stop_pos));
+        let _ = eval
+            .buffers
+            .goto_buffer_emacs_byte_pos(current_id, stop_byte);
+        return Ok(state.into_value());
+    }
     // Parse-span observability: one line per call when NEOMACS_SYNTAX_STATS_FILE
     // names a path. The per-keystroke syntax cost is O(parsed span); this is
     // the only way to see WHO parses from WHERE (syntax-ppss cache misses
@@ -7259,6 +7287,10 @@ mod flat_ascii_syntax_entry_cache_tests;
 #[cfg(test)]
 #[path = "tests/scan_error_data_gnu.rs"]
 mod scan_error_data_gnu_tests;
+
+#[cfg(test)]
+#[path = "tests/pps_propertize_gnu.rs"]
+mod pps_propertize_gnu_tests;
 
 #[cfg(test)]
 #[path = "tests/parse_state_divergence_gnu.rs"]
