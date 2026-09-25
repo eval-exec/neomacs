@@ -63,6 +63,8 @@ mod mode_line_eval_count_oracle;
 mod modes;
 #[path = "org.rs"]
 mod org;
+#[path = "pre_redisplay_function_oracle.rs"]
+mod pre_redisplay_function_oracle;
 #[path = "programming.rs"]
 mod programming;
 #[path = "project.rs"]

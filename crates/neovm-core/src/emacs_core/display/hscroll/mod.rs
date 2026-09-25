@@ -515,14 +515,24 @@ pub(crate) fn update_auto_hscroll_before_redisplay(ctx: &mut Context) {
             // and re-deriving the minibuffer arm duplicated it, and duplicating
             // a lookup is how the two come to disagree.
             let window = frame.find_window_mut(snap.window_id);
-            if let Some(Window::Leaf {
-                old_point,
-                suspend_auto_hscroll,
-                ..
-            }) = window
-            {
-                *suspend_auto_hscroll = effective_suspend;
-                *old_point = snap.point_lisp.max(crate::buffer::LispCharPos1::ONE);
+            if let Some(window) = window {
+                if let Window::Leaf {
+                    suspend_auto_hscroll,
+                    ..
+                } = window
+                {
+                    *suspend_auto_hscroll = effective_suspend;
+                }
+                // The MARKER, as GNU sets it: writing only the cached position
+                // let the next marker sync (every redisplay starts with one)
+                // put the stale position back, so `window-old-point` flipped
+                // between the two and the redisplay signature never matched --
+                // no idle `(redisplay)` could ever skip.
+                crate::window::window_markers::set_window_old_point_with_marker(
+                    &mut ctx.buffers,
+                    window,
+                    snap.point_lisp,
+                );
             }
         }
 

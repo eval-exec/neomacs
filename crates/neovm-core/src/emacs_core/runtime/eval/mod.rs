@@ -422,6 +422,84 @@ pub(crate) enum ModeLineUpdateTarget {
     AllBuffers,
 }
 
+impl RedisplaySignature {
+    /// The names of the parts that differ from OTHER, down to the window and
+    /// buffer fields (diagnostics only; `neomacs::redisplay_sig` debug).
+    fn moved_fields(&self, other: &Self) -> Vec<String> {
+        let mut moved = Vec::new();
+        macro_rules! field {
+            ($name:ident) => {
+                if self.$name != other.$name {
+                    moved.push(stringify!($name).to_string());
+                }
+            };
+        }
+        field!(selected_frame);
+        field!(selected_window);
+        field!(current_buffer);
+        field!(current_message);
+        field!(active_minibuffer_window);
+        field!(minibuffer_selected_window);
+        field!(face_change_count);
+        field!(obarray_function_epoch);
+        field!(redisplay_generation);
+        match (&self.frame, &other.frame) {
+            (Some(a), Some(b)) => {
+                if a.layout != b.layout {
+                    moved.push("frame.layout".to_string());
+                }
+                if a.selected_window != b.selected_window {
+                    moved.push("frame.selected_window".to_string());
+                }
+                if a.window_state_change != b.window_state_change {
+                    moved.push("frame.window_state_change".to_string());
+                }
+                if a.windows.len() != b.windows.len() {
+                    moved.push("frame.windows.len".to_string());
+                }
+                for (index, (wa, wb)) in a.windows.iter().zip(&b.windows).enumerate() {
+                    if wa.layout != wb.layout {
+                        moved.push(format!("window[{index}].layout"));
+                    }
+                    if wa.window_end != wb.window_end {
+                        moved.push(format!("window[{index}].window_end"));
+                    }
+                    if wa.old_point != wb.old_point {
+                        moved.push(format!("window[{index}].old_point"));
+                    }
+                    match (&wa.buffer, &wb.buffer) {
+                        (Some(ba), Some(bb)) => {
+                            if ba.layout != bb.layout {
+                                moved.push(format!("window[{index}].buffer.layout"));
+                            }
+                            if ba.save_modified_tick != bb.save_modified_tick
+                                || ba.autosave_modified_tick != bb.autosave_modified_tick
+                            {
+                                moved.push(format!("window[{index}].buffer.modified"));
+                            }
+                            if ba.point != bb.point || ba.point_emacs_byte != bb.point_emacs_byte {
+                                moved.push(format!("window[{index}].buffer.point"));
+                            }
+                            if ba.last_window_start != bb.last_window_start
+                                || ba.last_selected_window != bb.last_selected_window
+                            {
+                                moved.push(format!("window[{index}].buffer.last_window"));
+                            }
+                        }
+                        (a, b) if a.is_some() != b.is_some() => {
+                            moved.push(format!("window[{index}].buffer"));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            (a, b) if a.is_some() != b.is_some() => moved.push("frame".to_string()),
+            _ => {}
+        }
+        moved
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RedisplayFrameSignature {
     layout: crate::window::FrameLayoutInputState,
@@ -7465,6 +7543,10 @@ mod gc_forced_first_cycle_tests;
 #[cfg(test)]
 #[path = "tests/attention.rs"]
 mod attention_word_tests;
+
+#[cfg(test)]
+#[path = "tests/idle_redisplay.rs"]
+mod idle_redisplay_tests;
 // The debug leaf guard: GC safe points, Lisp entries and binding pushes
 // refuse to run under a leaf builtin, and leaves leave state untouched.
 #[cfg(all(test, debug_assertions))]

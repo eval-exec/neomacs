@@ -1552,22 +1552,38 @@ impl Context {
                 self.last_redisplay_signature.is_some()
             );
         }
+        if tracing::enabled!(target: "neomacs::redisplay_sig", tracing::Level::DEBUG)
+            && let Some(last) = self.last_redisplay_signature.as_ref()
+            && *last != before_signature
+        {
+            // P3.5 C0: which part of the visible state moved since the last
+            // redisplay -- the question behind every redisplay that could
+            // have been skipped and was not.
+            tracing::debug!(
+                target: "neomacs::redisplay_sig",
+                moved = ?last.moved_fields(&before_signature),
+                "signature moved"
+            );
+        }
+        // GNU `prepare_menu_bars` (xdisp.c:14237-14262) runs
+        // `pre-redisplay-function` on EVERY redisplay that is not inhibited,
+        // before the window layout, so hooks on `pre-redisplay-functions`
+        // (e.g. `global-hl-line-mode` with sticky-flag 'window, the region
+        // overlay) can refresh their overlays before redisplay reads them.
+        // It passes nil -- the selected window only -- when no window needs
+        // redisplay, which is what an unchanged visible state means here, and
+        // t otherwise (GNU's per-window list is not tracked). The skip check
+        // then reads the state the hooks left.
+        let unchanged = self.last_redisplay_signature.as_ref() == Some(&before_signature);
+        self.run_pre_redisplay_function(if unchanged { Value::NIL } else { Value::T });
         if !force
             && !self.echo_area_resize_exact_pending
-            && self.last_redisplay_signature.as_ref() == Some(&before_signature)
+            && self.last_redisplay_signature.is_some()
+            && self.last_redisplay_signature.as_ref() == Some(&self.redisplay_signature())
         {
             tracing::debug!("redisplay skipped: visible state unchanged");
             return;
         }
-        // GNU `prepare_menu_bars` (xdisp.c:14230-14246) runs
-        // `pre-redisplay-function` just before the window layout so hooks on
-        // `pre-redisplay-functions` (e.g. `global-hl-line-mode` with sticky-flag
-        // 'window, the region overlay) can refresh their overlays before
-        // redisplay reads them. Placed AFTER the visible-state skip check so it
-        // never runs on a skipped redisplay; `last_redisplay_signature` is
-        // recomputed at the end of this function and absorbs any overlay change,
-        // keeping the next unchanged redisplay skippable (no thrash).
-        self.run_pre_redisplay_function();
         self.resize_minibuffer_only_frames();
         // GNU `redisplay_internal` calls `hscroll_window_tree` (src/xdisp.c)
         // before laying out windows so each window's `hscroll` follows point;
@@ -1610,7 +1626,7 @@ impl Context {
     /// so a nested redisplay triggered by a hook is a no-op; an error from the
     /// hook is demoted (GNU calls via `dsafe_calln`, and the lisp driver wraps
     /// each hook in `with-demoted-errors`).
-    pub(super) fn run_pre_redisplay_function(&mut self) {
+    pub(super) fn run_pre_redisplay_function(&mut self, windows: Value) {
         let Some(function) = self.obarray.symbol_value("pre-redisplay-function").copied() else {
             return;
         };
@@ -1626,9 +1642,10 @@ impl Context {
             tracing::debug!("pre-redisplay binding signalled (ignored): {flow:?}");
             return;
         }
-        // GNU passes the list of windows being redisplayed; `t` makes
-        // `redisplay--pre-redisplay-functions` iterate every live window.
-        let result = self.funcall_general(function, vec![Value::T]);
+        // GNU passes the list of windows being redisplayed: `t` makes
+        // `redisplay--pre-redisplay-functions` iterate every live window, nil
+        // runs the hooks for the selected window only.
+        let result = self.funcall_general(function, vec![windows]);
         let result = self.unbind_to_with_result(specpdl_count, result);
         if let Err(flow) = result {
             tracing::debug!("pre-redisplay-function signalled (ignored): {flow:?}");
