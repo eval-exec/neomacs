@@ -69,3 +69,39 @@ fn skip_syntax_answers_alike_with_the_knob_on_and_off() {
     };
     assert_eq!(run(true), run(false));
 }
+
+#[test]
+fn parse_partial_sexp_answers_alike_with_the_knob_on_and_off() {
+    crate::test_utils::init_test_tracing();
+    let form = r#"
+(let ((out nil))
+  (with-temp-buffer
+    (insert "(defun f (x) \"s(tr\" ; c(\n  (let ((y 'z)) [x y] ?\\( #'car))\n(a (b (c")
+    (emacs-lisp-mode)
+    (dolist (from '(1 2 8 15 23 30 44))
+      (dolist (to '(1 10 20 40 60 70))
+        (when (<= from to)
+          (dolist (target '(nil 0 1 -1))
+            (dolist (stop '(nil t))
+              (dolist (commentstop '(nil t syntax-table))
+                (goto-char 1)
+                (let ((state (condition-case err
+                                 (parse-partial-sexp from (min to (point-max)) target stop nil commentstop)
+                               (error (list 'signal err)))))
+                  (push (list from to target stop commentstop state (point)
+                              (and (consp state) (not (eq (car state) 'signal))
+                                   (condition-case err
+                                       (parse-partial-sexp (point) (point-max) nil nil state)
+                                     (error (list 'signal err)))))
+                        out)))))))))
+  (nreverse out))
+"#;
+    let run = |frontend: bool| {
+        set_builtin_frontend_for_test(Some(frontend));
+        let mut eval = crate::test_utils::runtime_startup_context();
+        let result = eval.eval_str(form).expect("the pps matrix evaluates");
+        set_builtin_frontend_for_test(None);
+        crate::emacs_core::print::print_value(&result)
+    };
+    assert_eq!(run(true), run(false));
+}

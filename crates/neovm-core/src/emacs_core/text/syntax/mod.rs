@@ -6733,7 +6733,7 @@ impl PartialParseState {
             None => (Value::NIL, Value::NIL),
         };
 
-        Value::list(vec![
+        let elements = [
             Value::fixnum(self.depth),
             containing_sexp_start.map_or(Value::NIL, Value::fixnum),
             completed_sexp_start.map_or(Value::NIL, Value::fixnum),
@@ -6746,7 +6746,13 @@ impl PartialParseState {
                 .map_or(Value::NIL, Value::fixnum),
             stack_value,
             self.prev_syntax_element(),
-        ])
+        ];
+        // U2.8: GNU `Flist` from the stack, not through a heap vector.
+        if super::eval::builtin_frontend_on() {
+            Value::list_from_slice(&elements)
+        } else {
+            Value::list(elements.to_vec())
+        }
     }
 }
 
