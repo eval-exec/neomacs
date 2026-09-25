@@ -57,6 +57,8 @@ mod menu_bar;
 mod minibuffer_line;
 #[path = "minor_mode_order_repro.rs"]
 mod minor_mode_order_repro;
+#[path = "mode_line_eval_count_oracle.rs"]
+mod mode_line_eval_count_oracle;
 #[path = "modes.rs"]
 mod modes;
 #[path = "org.rs"]
