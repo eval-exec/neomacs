@@ -80,16 +80,27 @@ impl Context {
             );
             if !closure_hook.is_nil() {
                 self.push_specpdl_root(closure_hook);
-                let result = self.apply(
-                    closure_hook,
-                    vec![
+                let result = if self.cconv_filter_call_applies(closure_hook) {
+                    self.cconv_filter_call(
+                        closure_hook,
                         params_value,
                         body_value,
                         env_value,
                         docstring_value,
                         iform_value,
-                    ],
-                );
+                    )
+                } else {
+                    self.apply(
+                        closure_hook,
+                        vec![
+                            params_value,
+                            body_value,
+                            env_value,
+                            docstring_value,
+                            iform_value,
+                        ],
+                    )
+                };
                 self.restore_specpdl_roots(root_scope);
                 return result;
             }

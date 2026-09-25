@@ -368,6 +368,7 @@ pub(crate) fn stderr_message_ends_with_newline(
 
 pub(crate) fn builtin_message(ctx: &mut super::eval::Context, args: Vec<Value>) -> EvalResult {
     expect_min_args("message", &args, 1)?;
+    ctx.note_output_effect();
     // GNU Emacs: nil or empty string clears the echo area and returns as-is.
     // GNU routes both through `message1 (0)' -> `message3 (Qnil)', which logs
     // and then, unless `inhibit-message', reaches `message_to_stderr (Qnil)' in

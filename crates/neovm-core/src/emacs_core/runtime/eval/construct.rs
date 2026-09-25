@@ -2308,6 +2308,7 @@ impl Context {
             macro_perf_enabled: std::env::var_os("NEOVM_TRACE_MACRO_PERF").is_some(),
             macro_perf_stats: MacroPerfStats::default(),
             interpreted_closure_filter_fn: None,
+            cconv_memo: cconv_memo::CconvMemo::from_env(),
             fringe_bitmaps: super::super::builtins::fringe_bitmap::FringeBitmapRegistry::new(),
         };
         super::super::runtime_identity::install(&mut ev);

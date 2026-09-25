@@ -3463,6 +3463,9 @@ pub struct Context {
     /// Bootstrapped standard interpreted-closure filter function object.
     /// Rooted so the dumped startup state's runtime closure hook remains live.
     interpreted_closure_filter_fn: Option<Value>,
+    /// `cconv-make-interpreted-closure` statistics and effect counters
+    /// (`NEOVM_CCONV_MEMO`, P4.1 Stage 0).
+    pub(crate) cconv_memo: cconv_memo::CconvMemo,
     /// User-defined fringe bitmaps registered via `define-fringe-bitmap`.
     /// GC-safe: holds no raw `Value`s (bits are `Vec<u16>`, faces are names).
     pub(crate) fringe_bitmaps: super::builtins::fringe_bitmap::FringeBitmapRegistry,
@@ -7341,6 +7344,10 @@ pub(crate) use builtin_vars::builtin_frontend_on;
 pub(crate) use builtin_vars::{parse_builtin_frontend_knob, set_builtin_frontend_for_test};
 
 mod var_fast;
+
+mod cconv_memo;
+#[cfg(test)]
+pub(crate) use cconv_memo::{CconvMemoEvent, CconvMemoMode, parse_cconv_memo_knob};
 #[cfg(test)]
 pub(crate) use var_fast::{
     VarCacheEvent, VarCacheTier, parse_var_cache_knob, reset_var_cache_events,
@@ -7399,6 +7406,9 @@ mod apply1_bytecode_tests;
 #[path = "tests/varset_plain_fast_path.rs"]
 mod varset_plain_fast_path_tests;
 // Every variable shape through bytecode read/setq/let/unbind, both engines.
+#[cfg(test)]
+#[path = "tests/cconv_memo.rs"]
+mod cconv_memo_tests;
 #[cfg(test)]
 #[path = "tests/var_fast.rs"]
 mod var_fast_tests;

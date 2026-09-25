@@ -2353,6 +2353,7 @@ pub(crate) fn load_file_with_requested_and_found_options(
     found: &LispString,
     options: LoadOptions,
 ) -> Result<Value, EvalError> {
+    eval.note_load_effect();
     if is_unsupported_compiled_path(path) {
         return Err(EvalError::signal(
             intern("error"),
