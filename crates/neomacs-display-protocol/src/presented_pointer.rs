@@ -573,6 +573,116 @@ impl std::fmt::Display for PresentedHitError {
 
 impl std::error::Error for PresentedHitError {}
 
+/// Where a deferred hit index finds its text positions
+/// ([`PresentedHitIndex::with_deferred_text`]).
+///
+/// The positions are what an eager index would have been built with; the
+/// source runs at most once, on the first query that needs them.
+pub trait PresentedTextPositionSource: Send + Sync + std::fmt::Debug {
+    fn text_positions(&self) -> Result<Vec<PresentedTextPosition>, PresentedHitError>;
+}
+
+/// The text positions of a hit index and their buckets, built at
+/// construction or on first use.
+#[derive(Clone)]
+struct PresentedTextIndex {
+    source: Option<std::sync::Arc<dyn PresentedTextPositionSource>>,
+    built: std::sync::OnceLock<PresentedTextParts>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+struct PresentedTextParts {
+    positions: Vec<PresentedTextPosition>,
+    buckets: Vec<PresentedHitBucket>,
+}
+
+impl PresentedTextParts {
+    fn new(positions: Vec<PresentedTextPosition>) -> Self {
+        let buckets = build_presented_hit_buckets(
+            positions
+                .iter()
+                .enumerate()
+                .map(|(index, position)| (index, position.bounds)),
+        );
+        Self { positions, buckets }
+    }
+}
+
+impl PresentedTextIndex {
+    fn built(positions: Vec<PresentedTextPosition>) -> Self {
+        let built = std::sync::OnceLock::new();
+        let _ = built.set(PresentedTextParts::new(positions));
+        Self {
+            source: None,
+            built,
+        }
+    }
+
+    fn deferred(source: std::sync::Arc<dyn PresentedTextPositionSource>) -> Self {
+        Self {
+            source: Some(source),
+            built: std::sync::OnceLock::new(),
+        }
+    }
+
+    fn parts(&self) -> &PresentedTextParts {
+        self.built.get_or_init(|| {
+            let Some(source) = self.source.as_ref() else {
+                return PresentedTextParts::default();
+            };
+            match source.text_positions() {
+                Ok(positions)
+                    if positions
+                        .iter()
+                        .all(|position| rect_has_valid_geometry(position.bounds)) =>
+                {
+                    PresentedTextParts::new(positions)
+                }
+                Ok(_) => {
+                    tracing::error!(
+                        "deferred hit index: {:?}",
+                        PresentedHitError::InvalidTextPositionGeometry
+                    );
+                    PresentedTextParts::default()
+                }
+                Err(error) => {
+                    tracing::error!(?error, "deferred hit index: no text positions");
+                    PresentedTextParts::default()
+                }
+            }
+        })
+    }
+}
+
+impl std::fmt::Debug for PresentedTextIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match (self.built.get(), &self.source) {
+            (Some(parts), _) => f
+                .debug_struct("PresentedTextIndex")
+                .field("positions", &parts.positions.len())
+                .finish(),
+            (None, Some(source)) => f
+                .debug_struct("PresentedTextIndex")
+                .field("deferred", source)
+                .finish(),
+            (None, None) => f.write_str("PresentedTextIndex(empty)"),
+        }
+    }
+}
+
+impl PartialEq for PresentedTextIndex {
+    fn eq(&self, other: &Self) -> bool {
+        self.parts() == other.parts()
+    }
+}
+
+fn serialize_text_positions<S: serde::Serializer>(
+    text: &PresentedTextIndex,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serde::Serialize::serialize(&text.parts().positions, serializer)
+}
+
 /// Immutable, presentation-qualified semantic hit index.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct PresentedHitIndex {
@@ -580,15 +690,14 @@ pub struct PresentedHitIndex {
     regions: Vec<PresentedHitRegion>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     resize_handles: Vec<PresentedResizeHandle>,
-    text_positions: Vec<PresentedTextPosition>,
+    #[serde(rename = "text_positions", serialize_with = "serialize_text_positions")]
+    text: PresentedTextIndex,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     string_positions: Vec<PresentedStringPosition>,
     #[serde(skip)]
     region_buckets: Vec<PresentedHitBucket>,
     #[serde(skip)]
     resize_handle_buckets: Vec<PresentedHitBucket>,
-    #[serde(skip)]
-    text_buckets: Vec<PresentedHitBucket>,
     #[serde(skip)]
     string_buckets: Vec<PresentedHitBucket>,
     #[serde(skip)]
@@ -647,11 +756,13 @@ impl PresentedHitIndex {
             presentation,
             regions: Vec::new(),
             resize_handles: Vec::new(),
-            text_positions: Vec::new(),
+            text: PresentedTextIndex {
+                source: None,
+                built: std::sync::OnceLock::new(),
+            },
             string_positions: Vec::new(),
             region_buckets: Vec::new(),
             resize_handle_buckets: Vec::new(),
-            text_buckets: Vec::new(),
             string_buckets: Vec::new(),
             pointer_regions: Vec::new(),
             pointer_buckets: Vec::new(),
@@ -704,12 +815,6 @@ impl PresentedHitIndex {
                 .enumerate()
                 .map(|(index, region)| (index, region.bounds)),
         );
-        let text_buckets = build_presented_hit_buckets(
-            text_positions
-                .iter()
-                .enumerate()
-                .map(|(index, position)| (index, position.bounds)),
-        );
         let string_buckets = build_presented_hit_buckets(
             string_positions
                 .iter()
@@ -720,11 +825,10 @@ impl PresentedHitIndex {
             presentation,
             regions,
             resize_handles: Vec::new(),
-            text_positions,
+            text: PresentedTextIndex::built(text_positions),
             string_positions,
             region_buckets,
             resize_handle_buckets: Vec::new(),
-            text_buckets,
             string_buckets,
             pointer_regions: Vec::new(),
             pointer_buckets: Vec::new(),
@@ -841,19 +945,20 @@ impl PresentedHitIndex {
         if region.kind != PresentedRegionKind::TextBody {
             return None;
         }
+        let text = self.text.parts();
         let mut selected = None;
         for_each_presented_hit_candidate(
-            &self.text_buckets,
+            &text.buckets,
             x,
             y,
-            |index| self.text_positions[index].bounds,
+            |index| text.positions[index].bounds,
             |index| {
-                if Some(self.text_positions[index].window) == region.window {
+                if Some(text.positions[index].window) == region.window {
                     selected = Some(selected.map_or(index, |current: usize| current.min(index)));
                 }
             },
         );
-        selected.map(|index| self.text_positions[index])
+        selected.map(|index| text.positions[index])
     }
 
     fn resolve_string_position(
@@ -888,7 +993,7 @@ impl PresentedHitIndex {
     pub fn is_empty(&self) -> bool {
         self.regions.is_empty()
             && self.resize_handles.is_empty()
-            && self.text_positions.is_empty()
+            && self.text.parts().positions.is_empty()
             && self.string_positions.is_empty()
     }
 
@@ -950,7 +1055,30 @@ impl PresentedHitIndex {
 
     #[must_use]
     pub fn text_positions(&self) -> &[PresentedTextPosition] {
-        &self.text_positions
+        &self.text.parts().positions
+    }
+
+    /// Replace the text positions with ones SOURCE builds on first use.
+    ///
+    /// Every frame's index used to carry one position per visible character,
+    /// built and sorted into buckets as the frame was composed, although only
+    /// a pointer query ever reads them (GNU hit-tests its current matrix on
+    /// demand). The source is expected to produce exactly what the eager
+    /// index would have been built with; geometry it gets wrong is logged
+    /// and yields no text position, where the eager index refused the frame.
+    #[must_use]
+    pub fn with_deferred_text(
+        mut self,
+        source: std::sync::Arc<dyn PresentedTextPositionSource>,
+    ) -> Self {
+        self.text = PresentedTextIndex::deferred(source);
+        self
+    }
+
+    /// Whether the text positions are still to be built.
+    #[must_use]
+    pub fn text_deferred(&self) -> bool {
+        self.text.built.get().is_none()
     }
 
     #[must_use]
@@ -1002,11 +1130,12 @@ impl PresentedHitIndex {
             |index| self.resize_handles[index].bounds,
             |_| count += 1,
         );
+        let text = self.text.parts();
         for_each_presented_hit_candidate(
-            &self.text_buckets,
+            &text.buckets,
             x,
             y,
-            |index| self.text_positions[index].bounds,
+            |index| text.positions[index].bounds,
             |_| count += 1,
         );
         for_each_presented_hit_candidate(

@@ -31,6 +31,8 @@ impl PresentationSpatialPlan {
         let mut regions = Vec::new();
         let mut resize_handles = Vec::new();
         let mut positions = Vec::new();
+        let text_positions_mode = presented_text_positions_mode();
+        let mut deferred_text = Vec::new();
 
         for (window_z, info) in state.window_infos.iter().enumerate() {
             let Some(snapshot) = snapshots
@@ -140,52 +142,30 @@ impl PresentationSpatialPlan {
                 }
             }
 
-            // Points are ordered by buffer position, so consecutive points
-            // almost always share a row: memoize the last hit in front of
-            // the (sorted body_rows) binary search. The previous per-point
-            // linear scan was O(points x rows) per window per frame.
-            let mut last_body_row: Option<&neovm_core::window::PresentedBodyRowSnapshot> = None;
-            for point in &snapshot.points {
-                let body_row = match last_body_row.filter(|row| row.output_row == point.row) {
-                    Some(row) => row,
-                    None => {
-                        let row = snapshot.body_row_for_output_row(point.row).ok_or(
-                            PresentedHitError::MissingBodyRow {
-                                window: info.window_id,
-                                output_row: point.row,
-                            },
-                        )?;
-                        last_body_row = Some(row);
-                        row
-                    }
-                };
-                let raw_x = window_regions.text_body.x + point.x as f32;
-                let raw_y = window_regions.text_body.y + body_row.body_y as f32;
-                let left = raw_x.max(window_regions.text_body.x);
-                let top = raw_y.max(window_regions.text_body.y);
-                let right = (raw_x + point.width.max(1) as f32)
-                    .min(window_regions.text_body.x + window_regions.text_body.width);
-                let bottom = (raw_y + point.height.max(1) as f32)
-                    .min(window_regions.text_body.y + window_regions.text_body.height);
-                if right <= left || bottom <= top {
-                    continue;
-                }
-                let bounds = FrameRect::new(left, top, right - left, bottom - top)
-                    .map_err(|_| PresentedHitError::InvalidTextPositionGeometry)?;
-                positions.push(PresentedTextPosition::new(
+            match text_positions_mode {
+                PresentedTextPositionsMode::Eager => push_window_text_positions(
+                    &mut positions,
                     info.window_id,
-                    bounds,
-                    point.buffer_pos.as_i64(),
-                    body_row.body_row,
-                    point.col,
-                ));
+                    snapshot,
+                    window_regions.text_body,
+                )?,
+                PresentedTextPositionsMode::Lazy => {
+                    if let Some(shared) = snapshots
+                        .iter()
+                        .find(|publication| {
+                            publication.display_snapshot().window_id.0 as i64
+                                == info.window_id.get()
+                        })
+                        .map(WindowPresentationSnapshot::shared_display_snapshot)
+                    {
+                        deferred_text.push(DeferredWindowText {
+                            window: info.window_id,
+                            snapshot: shared.clone(),
+                            text_body: window_regions.text_body,
+                        });
+                    }
+                }
             }
-            push_row_fallback_positions(
-                &mut positions,
-                info.window_id,
-                snapshot,
-                window_regions.text_body,
-            )?;
         }
 
         for band in state.frame_chrome.bands() {
@@ -200,16 +180,19 @@ impl PresentationSpatialPlan {
 
         let string_positions = window_chrome_string_positions(state)?;
 
-        Ok(Self {
-            windows,
-            hit_index: PresentedHitIndex::from_parts_with_strings(
-                state.presentation_id,
-                regions,
-                positions,
-                string_positions,
-            )?
-            .with_resize_handles(resize_handles)?,
-        })
+        let mut hit_index = PresentedHitIndex::from_parts_with_strings(
+            state.presentation_id,
+            regions,
+            positions,
+            string_positions,
+        )?
+        .with_resize_handles(resize_handles)?;
+        if text_positions_mode == PresentedTextPositionsMode::Lazy {
+            hit_index = hit_index.with_deferred_text(std::sync::Arc::new(DeferredFrameText {
+                windows: deferred_text,
+            }));
+        }
+        Ok(Self { windows, hit_index })
     }
 
     #[cfg(test)]
@@ -511,6 +494,130 @@ fn window_chrome_region(role: GlyphRowRole) -> Option<PresentedWindowChromeArea>
         GlyphRowRole::ModeLine => Some(PresentedWindowChromeArea::ModeLine),
         GlyphRowRole::Text | GlyphRowRole::Minibuffer | GlyphRowRole::TabBar => None,
     }
+}
+
+/// When a frame's text hit positions are built (`NEOMACS_PRESENT_HIT`,
+/// P3.5 C6).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PresentedTextPositionsMode {
+    /// While composing every frame: one position per visible character plus
+    /// the row fallbacks, bucketed and sorted (the old path).
+    Eager,
+    /// On the first pointer query that needs them, from the frame's shared
+    /// window snapshots, by the same code.
+    Lazy,
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEXT_POSITIONS_MODE_OVERRIDE: std::cell::Cell<Option<PresentedTextPositionsMode>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Force MODE on this thread (tests only).
+#[cfg(test)]
+pub(crate) fn set_presented_text_positions_mode_for_test(mode: Option<PresentedTextPositionsMode>) {
+    TEXT_POSITIONS_MODE_OVERRIDE.with(|cell| cell.set(mode));
+}
+
+/// The knob, read once per process: `lazy` selects
+/// [`PresentedTextPositionsMode::Lazy`]; unset or anything else keeps
+/// [`PresentedTextPositionsMode::Eager`].
+fn presented_text_positions_mode() -> PresentedTextPositionsMode {
+    #[cfg(test)]
+    if let Some(mode) = TEXT_POSITIONS_MODE_OVERRIDE.with(std::cell::Cell::get) {
+        return mode;
+    }
+    static MODE: std::sync::OnceLock<PresentedTextPositionsMode> = std::sync::OnceLock::new();
+    *MODE.get_or_init(|| {
+        match std::env::var("NEOMACS_PRESENT_HIT")
+            .ok()
+            .map(|value| value.trim().to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("lazy" | "rows" | "on" | "1") => PresentedTextPositionsMode::Lazy,
+            _ => PresentedTextPositionsMode::Eager,
+        }
+    })
+}
+
+/// One window's input to its text hit positions.
+#[derive(Debug)]
+struct DeferredWindowText {
+    window: DisplayWindowId,
+    snapshot: std::sync::Arc<WindowDisplaySnapshot>,
+    text_body: neomacs_display_protocol::Rect,
+}
+
+/// A frame's text hit positions, built on first use from its windows'
+/// shared snapshots, in the order the eager path pushes them.
+#[derive(Debug)]
+struct DeferredFrameText {
+    windows: Vec<DeferredWindowText>,
+}
+
+impl neomacs_display_protocol::PresentedTextPositionSource for DeferredFrameText {
+    fn text_positions(&self) -> Result<Vec<PresentedTextPosition>, PresentedHitError> {
+        let mut positions = Vec::new();
+        for window in &self.windows {
+            push_window_text_positions(
+                &mut positions,
+                window.window,
+                &window.snapshot,
+                window.text_body,
+            )?;
+        }
+        Ok(positions)
+    }
+}
+
+/// A window's text hit positions: one per display point, then the row
+/// fallbacks.
+fn push_window_text_positions(
+    positions: &mut Vec<PresentedTextPosition>,
+    window: DisplayWindowId,
+    snapshot: &WindowDisplaySnapshot,
+    text_body: neomacs_display_protocol::Rect,
+) -> Result<(), PresentedHitError> {
+    // Points are ordered by buffer position, so consecutive points almost
+    // always share a row: memoize the last hit in front of the (sorted
+    // body_rows) binary search. The previous per-point linear scan was
+    // O(points x rows) per window per frame.
+    let mut last_body_row: Option<&neovm_core::window::PresentedBodyRowSnapshot> = None;
+    for point in &snapshot.points {
+        let body_row = match last_body_row.filter(|row| row.output_row == point.row) {
+            Some(row) => row,
+            None => {
+                let row = snapshot.body_row_for_output_row(point.row).ok_or(
+                    PresentedHitError::MissingBodyRow {
+                        window,
+                        output_row: point.row,
+                    },
+                )?;
+                last_body_row = Some(row);
+                row
+            }
+        };
+        let raw_x = text_body.x + point.x as f32;
+        let raw_y = text_body.y + body_row.body_y as f32;
+        let left = raw_x.max(text_body.x);
+        let top = raw_y.max(text_body.y);
+        let right = (raw_x + point.width.max(1) as f32).min(text_body.x + text_body.width);
+        let bottom = (raw_y + point.height.max(1) as f32).min(text_body.y + text_body.height);
+        if right <= left || bottom <= top {
+            continue;
+        }
+        let bounds = FrameRect::new(left, top, right - left, bottom - top)
+            .map_err(|_| PresentedHitError::InvalidTextPositionGeometry)?;
+        positions.push(PresentedTextPosition::new(
+            window,
+            bounds,
+            point.buffer_pos.as_i64(),
+            body_row.body_row,
+            point.col,
+        ));
+    }
+    push_row_fallback_positions(positions, window, snapshot, text_body)
 }
 
 /// Fill the source-position gaps that have no glyph rectangle of their own.

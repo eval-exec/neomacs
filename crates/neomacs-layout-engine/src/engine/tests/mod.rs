@@ -40,6 +40,7 @@ mod edit_replay_row_extent_test;
 mod edit_sync_engine_test;
 #[path = "../../engine_layout_validity_test.rs"]
 mod layout_validity;
+mod lazy_text_hit_test;
 mod mini_window_still_test;
 mod mode_line_gate_engine_test;
 mod replay_cursor_on_tab_test;

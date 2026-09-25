@@ -1417,6 +1417,9 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     "NEOMACS_TTY_ROW_IDENTITY",
     // Chrome string positions from chrome rows: `frame` (default) or `rows`.
     "NEOMACS_PRESENT_CHROME_POS",
+    // Text hit positions built while composing (`eager`, default) or on the
+    // first pointer query (`lazy`).
+    "NEOMACS_PRESENT_HIT",
     // The mini-window stands still when what it shows is unchanged: `on`.
     "NEOMACS_LAYOUT_MINI_STILL",
     // The visible automatic-composition scan's ASCII fast path and memo: `on`.
