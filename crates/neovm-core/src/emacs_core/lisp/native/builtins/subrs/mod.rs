@@ -4733,7 +4733,7 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
     ));
     ctx.register_subr(SubrSpec::new(
         "make-closure",
-        NativeFn::ContextVec(|_ctx, args| builtin_make_closure(args)),
+        NativeFn::ContextSlice(|_ctx, args| builtin_make_closure(args)),
         SubrArity::new(1, None),
     ));
     ctx.register_subr(SubrSpec::new(

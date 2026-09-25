@@ -6258,7 +6258,9 @@ fn make_char_code(charset: &str, code1: i64) -> Option<u32> {
     }
 }
 
-pub(crate) fn builtin_make_closure(args: Vec<Value>) -> EvalResult {
+/// `make-closure` (GNU `Fmake_closure`, alloc.c). Registered as a slice
+/// builtin: the VM hands it the caller's operand stack without a copy.
+pub(crate) fn builtin_make_closure(args: &[Value]) -> EvalResult {
     // (make-closure PROTOTYPE &rest CLOSURE-VARS)
     if args.is_empty() {
         return Err(signal(

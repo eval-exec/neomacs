@@ -26310,7 +26310,7 @@ fn jit_closure_prototype(
 fn jit_make_closure(proto: Value, vars: &[Value]) -> Value {
     let mut args = vec![proto];
     args.extend_from_slice(vars);
-    crate::emacs_core::builtins::symbols::builtin_make_closure(args).expect("make-closure")
+    crate::emacs_core::builtins::symbols::builtin_make_closure(&args).expect("make-closure")
 }
 
 #[cfg(feature = "jit")]

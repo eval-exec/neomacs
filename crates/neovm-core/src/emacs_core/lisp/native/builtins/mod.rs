@@ -655,6 +655,10 @@ mod fixed_arity_hot_subrs;
 mod replace_region_contents_test;
 
 #[cfg(test)]
+#[path = "tests/make_closure_instance.rs"]
+mod make_closure_instance_test;
+
+#[cfg(test)]
 #[path = "tests/obarray_growth.rs"]
 mod obarray_growth_test;
 #[cfg(test)]
