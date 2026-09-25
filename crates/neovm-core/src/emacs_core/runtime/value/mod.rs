@@ -2218,6 +2218,15 @@ impl TaggedValue {
         with_tagged_heap(|h| h.alloc_bignum(value))
     }
 
+    /// [`Self::bignum`] with the arena allocation inlined into the caller:
+    /// for the out-of-line arithmetic result constructors only, so a
+    /// kernel's result goes from registers straight into its slot. The 53
+    /// other callers keep the out-of-line `bignum`.
+    #[inline(always)]
+    pub(crate) fn bignum_inline(value: Integer) -> Self {
+        with_tagged_heap(|h| h.alloc_bignum_inline(value))
+    }
+
     /// Canonical "make a Lisp integer from this machine integer" fast
     /// path. Mirrors GNU `make_int` (`src/lisp.h:3041`): return an
     /// immediate fixnum when possible and allocate a bignum only when

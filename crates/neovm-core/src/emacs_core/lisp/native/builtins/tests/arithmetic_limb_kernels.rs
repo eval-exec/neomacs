@@ -191,3 +191,41 @@ fn small_quotient_is_exact_or_declines() {
     // The shortcut must actually take the common case, or it is dead weight.
     assert!(hits * 10 >= tries * 9, "fast path took {hits} of {tries}");
 }
+
+/// The value-returning signed sum (the `+`/`-` unit's body) against
+/// malachite, over every length pair and sign pair: exact, and a fixnum
+/// exactly when the result fits one.
+#[test]
+fn signed_add_limbs_value_matches_malachite() {
+    crate::test_utils::init_test_tracing();
+    let fixnum = |x: &Integer| {
+        *x >= Integer::from(Value::MOST_NEGATIVE_FIXNUM)
+            && *x <= Integer::from(Value::MOST_POSITIVE_FIXNUM)
+    };
+    let mut rng = Rng(0x0bad_5eed_1234_4321);
+    for &la in LENS {
+        for &lb in LENS {
+            for a in patterns(&mut rng, la) {
+                for b in patterns(&mut rng, lb) {
+                    // Significant limbs, as the callers pass them.
+                    let (na, nb) = (nat(&a), nat(&b));
+                    let (sa, sb) = (na.to_limbs_asc(), nb.to_limbs_asc());
+                    for (a_neg, b_neg) in
+                        [(false, false), (false, true), (true, false), (true, true)]
+                    {
+                        let ia = Integer::from_sign_and_abs(!a_neg, na.clone());
+                        let ib = Integer::from_sign_and_abs(!b_neg, nb.clone());
+                        let want = &ia + &ib;
+                        let got = signed_add_limbs_value(a_neg, &sa, b_neg, &sb);
+                        let got_exact = match got.as_fixnum() {
+                            Some(n) => Integer::from(n),
+                            None => got.as_bignum().expect("integer").clone(),
+                        };
+                        assert_eq!(got_exact, want, "{la} {lb} {a_neg} {b_neg}");
+                        assert_eq!(got.is_fixnum(), fixnum(&want), "{la} {lb} demotion");
+                    }
+                }
+            }
+        }
+    }
+}

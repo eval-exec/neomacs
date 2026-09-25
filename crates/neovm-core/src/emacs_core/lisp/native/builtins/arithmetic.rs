@@ -255,7 +255,10 @@ fn limbs_sub_same_to(xs: &[u64], ys: &[u64], dst: &mut [MaybeUninit<u64>]) -> bo
 }
 
 /// A limb vector filled by `fill` over its first `len` limbs, with room for
-/// one carry limb; `fill` returns that carry (0 for none).
+/// one carry limb; `fill` returns that carry (0 for none). Inline into the
+/// kernel wrappers so the vector's fields stay in registers up to the slot
+/// store (see [`integer_value`]).
+#[inline(always)]
 fn natural_from_kernel(len: usize, fill: impl FnOnce(&mut [MaybeUninit<u64>]) -> u64) -> Natural {
     let mut out: Vec<u64> = Vec::with_capacity(len + 1);
     let carry = fill(&mut out.spare_capacity_mut()[..len]);
@@ -327,6 +330,187 @@ fn integer_add_ref(a: &Integer, b: &Integer) -> Integer {
 /// `a - b` for two integers, by reference.
 fn integer_sub_ref(a: &Integer, b: &Integer) -> Integer {
     integer_add_signed(a, b.unsigned_abs_ref(), *b > 0)
+}
+
+// ---------------------------------------------------------------------------
+// Results built in place
+// ---------------------------------------------------------------------------
+//
+// GNU computes a bignum result into the temporary `mpz[0]` and `mpz_swap`s
+// it into a freshly allocated vector-block object (`make_bignum_bits`,
+// bignum.c:94), or returns a fixnum when it fits (`make_integer_mpz`,
+// bignum.c:146). The wrappers below do the same in one out-of-line unit per
+// operation: the kernel fills a limb vector, the sign and magnitude decide
+// fixnum-or-bignum in registers, and a bignum is written straight into its
+// arena slot. No `Integer`, `Natural` or `Vec` crosses a non-inlined call
+// between the kernel and the slot store, so nothing is copied by value right
+// after the kernel's narrow stores (the copy those stores could not forward
+// to was 89% of `alloc_bignum`'s cycles on pidigits).
+
+/// `x < 0`, from the sign bit alone.
+#[inline(always)]
+fn integer_is_negative(x: &Integer) -> bool {
+    use malachite::base::num::arithmetic::traits::Sign;
+    x.sign() == std::cmp::Ordering::Less
+}
+
+/// GNU `make_integer_mpz` (`src/bignum.c:146`) for a kernel result: a
+/// fixnum when it fits, otherwise a bignum written straight into its arena
+/// slot. THE constructor for kernel results (the integer-width check of GNU
+/// `make_bignum_bits` would live here).
+#[inline(always)]
+fn integer_value(negative: bool, magnitude: Natural) -> Value {
+    let limbs = magnitude.as_limbs_asc();
+    if limbs.len() <= 1 {
+        let m = limbs.first().copied().unwrap_or(0);
+        if let Some(n) = Value::fixnum_from_sign_magnitude(negative, m) {
+            // At most one limb: malachite `Small`, nothing to free.
+            return Value::fixnum(n);
+        }
+    }
+    Value::bignum_inline(Integer::from_sign_and_abs(!negative, magnitude))
+}
+
+/// An exact `i128` result of two fixnum-range operands (an `i64 x i64`
+/// product always fits): below 2^64 in magnitude it is malachite `Small`
+/// and needs no limb allocation; otherwise one two-limb vector.
+#[inline(always)]
+fn integer_value_i128(r: i128) -> Value {
+    let negative = r < 0;
+    let m = r.unsigned_abs();
+    let magnitude = if m >> 64 == 0 {
+        Natural::from(m as u64)
+    } else {
+        Natural::from_owned_limbs_asc(vec![m as u64, (m >> 64) as u64])
+    };
+    integer_value(negative, magnitude)
+}
+
+/// `|a| <=> |b|` for significant (normalized) limb slices.
+#[inline]
+fn limbs_cmp(a: &[u64], b: &[u64]) -> std::cmp::Ordering {
+    a.len()
+        .cmp(&b.len())
+        .then_with(|| a.iter().rev().cmp(b.iter().rev()))
+}
+
+/// `a + b` for signed magnitudes given as significant limb slices: GNU
+/// `mpz_add` into a fresh result. A fixnum operand passes its magnitude as
+/// a one-limb slice (empty for 0), so no `Integer` temporary is built.
+/// Inline into [`int_add_value`], the out-of-line unit for `+` and `-`.
+#[inline(always)]
+fn signed_add_limbs_value(a_negative: bool, a: &[u64], b_negative: bool, b: &[u64]) -> Value {
+    if a_negative == b_negative {
+        return integer_value(a_negative, natural_add_limbs(a, b));
+    }
+    match limbs_cmp(a, b) {
+        std::cmp::Ordering::Equal => Value::fixnum(0),
+        std::cmp::Ordering::Greater => integer_value(a_negative, natural_sub_limbs(a, b)),
+        std::cmp::Ordering::Less => integer_value(b_negative, natural_sub_limbs(b, a)),
+    }
+}
+
+/// `x * n` for a bignum `x` and a fixnum-range `n`: one kernel pass into
+/// one limb vector, then the slot (GNU `mpz_mul_si` into `mpz[0]`).
+#[inline(always)]
+fn bignum_mul_i64_value_inline(x: &Integer, n: i64) -> Value {
+    let xs = x.unsigned_abs_ref().as_limbs_asc();
+    if n == 0 || xs.is_empty() {
+        return Value::fixnum(0);
+    }
+    let negative = integer_is_negative(x) != (n < 0);
+    let m = n.unsigned_abs();
+    let magnitude = natural_from_kernel(xs.len(), |dst| limbs_mul_limb_to(xs, m, dst));
+    integer_value(negative, magnitude)
+}
+
+/// A Lisp integer operand read in place: a fixnum's value, or a bignum's
+/// `Integer` by reference (never cloned).
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum IntOperand<'a> {
+    Fixnum(i64),
+    Bignum(&'a Integer),
+}
+
+impl IntOperand<'static> {
+    /// The operand `value` is, if it is an integer (fixnum or bignum).
+    /// `None` for a marker, a float or a non-number: those take the full
+    /// builtin, which coerces or signals.
+    #[inline(always)]
+    pub(crate) fn of(value: &Value) -> Option<Self> {
+        match value.as_fixnum() {
+            Some(n) => Some(Self::Fixnum(n)),
+            None => value.as_bignum().map(Self::Bignum),
+        }
+    }
+}
+
+impl IntOperand<'_> {
+    /// Sign and significant magnitude limbs; a fixnum's single limb lives
+    /// in `scratch`.
+    #[inline(always)]
+    fn sign_limbs<'s>(&'s self, scratch: &'s mut [u64; 1]) -> (bool, &'s [u64]) {
+        match *self {
+            Self::Fixnum(n) => {
+                scratch[0] = n.unsigned_abs();
+                (n < 0, if n == 0 { &[] } else { &scratch[..] })
+            }
+            Self::Bignum(x) => (integer_is_negative(x), x.unsigned_abs_ref().as_limbs_asc()),
+        }
+    }
+}
+
+/// `x + y`, or `x - y` when `negate_y`, for two integer operands: GNU
+/// `arith_driver`'s fixnum step, then `bignum_arith_driver`'s `mpz_add` /
+/// `mpz_sub` into a fresh result. Never returns an operand object (a
+/// bignum result is always fresh, as in GNU). One out-of-line unit.
+#[inline(never)]
+pub(crate) fn int_add_value(x: IntOperand<'_>, y: IntOperand<'_>, negate_y: bool) -> Value {
+    if let (IntOperand::Fixnum(a), IntOperand::Fixnum(b)) = (x, y) {
+        // Fixnums are 62-bit, so this cannot overflow an i64.
+        return Value::make_int(if negate_y { a - b } else { a + b });
+    }
+    let (mut xs, mut ys) = ([0u64; 1], [0u64; 1]);
+    let (x_negative, x_limbs) = x.sign_limbs(&mut xs);
+    let (y_negative, y_limbs) = y.sign_limbs(&mut ys);
+    signed_add_limbs_value(x_negative, x_limbs, y_negative != negate_y, y_limbs)
+}
+
+/// `x * y` for two integer operands: the fixnum product in `i128` (exact),
+/// a bignum by a fixnum through the one-limb kernel, and two bignums
+/// through malachite (Karatsuba/Toom and up). Never returns an operand
+/// object. One out-of-line unit.
+#[inline(never)]
+pub(crate) fn int_mul_value(x: IntOperand<'_>, y: IntOperand<'_>) -> Value {
+    match (x, y) {
+        (IntOperand::Fixnum(a), IntOperand::Fixnum(b)) => {
+            integer_value_i128(i128::from(a) * i128::from(b))
+        }
+        (IntOperand::Bignum(p), IntOperand::Fixnum(n))
+        | (IntOperand::Fixnum(n), IntOperand::Bignum(p)) => bignum_mul_i64_value_inline(p, n),
+        (IntOperand::Bignum(p), IntOperand::Bignum(q)) => {
+            let product = p * q;
+            let negative = integer_is_negative(&product);
+            integer_value(
+                negative,
+                malachite::base::num::arithmetic::traits::UnsignedAbs::unsigned_abs(product),
+            )
+        }
+    }
+}
+
+/// `-x` for a bignum: GNU `mpz_neg` into a fresh result, which demotes when
+/// `x` is `-most-negative-fixnum`.
+#[inline(never)]
+fn bignum_negate_value(x: &Integer) -> Value {
+    integer_value(!integer_is_negative(x), x.unsigned_abs_ref().clone())
+}
+
+/// The exact `i128` result of an N-ary fixnum fold that left the `i64`
+/// range, as the running accumulator of the bignum continuation.
+#[inline]
+fn integer_from_i128(r: i128) -> Integer {
+    Integer::from(r)
 }
 
 /// `floor (x / 2^k)` for a magnitude `x` of at most `k + 128` bits.
@@ -424,6 +608,13 @@ pub(crate) fn builtin_add_slice(
             if let Some(sum) = try_small_fixnum_add(args) {
                 return Ok(sum);
             }
+            // Two integers, at least one a bignum: the result goes straight
+            // into its slot.
+            if let [a, b] = args
+                && let (Some(x), Some(y)) = (IntOperand::of(a), IntOperand::of(b))
+            {
+                return Ok(int_add_value(x, y, false));
+            }
         }
     }
 
@@ -438,9 +629,8 @@ pub(crate) fn builtin_add_slice(
                     continue;
                 }
                 None => {
-                    let mut acc = Integer::from(sum);
-                    acc += Integer::from(n);
-                    return continue_bignum_add(eval, &args[i + 1..], acc);
+                    let acc = i128::from(sum) + i128::from(n);
+                    return continue_bignum_add(eval, &args[i + 1..], integer_from_i128(acc));
                 }
             }
         }
@@ -483,9 +673,8 @@ pub(crate) fn builtin_add_slice(
                     continue;
                 }
                 None => {
-                    let mut acc = Integer::from(sum);
-                    acc += Integer::from(n);
-                    return continue_bignum_add(eval, &args[i + 1..], acc);
+                    let acc = i128::from(sum) + i128::from(n);
+                    return continue_bignum_add(eval, &args[i + 1..], integer_from_i128(acc));
                 }
             }
         }
@@ -563,6 +752,14 @@ pub(crate) fn builtin_sub_slice(
     if args.len() == 1 {
         return negate_value(eval, &args[0]);
     }
+    // Two integers, at least one a bignum: the result goes straight into its
+    // slot. (Two fixnums stay on the loop below, which inlines them.)
+    if let [a, b] = args
+        && !(a.is_fixnum() && b.is_fixnum())
+        && let (Some(x), Some(y)) = (IntOperand::of(a), IntOperand::of(b))
+    {
+        return Ok(int_add_value(x, y, true));
+    }
 
     let first = &args[0];
     let mut acc: i64 = if let Some(n) = first.as_fixnum() {
@@ -600,9 +797,8 @@ pub(crate) fn builtin_sub_slice(
                     continue;
                 }
                 None => {
-                    let mut bacc = Integer::from(acc);
-                    bacc -= Integer::from(n);
-                    return continue_bignum_sub(eval, &args[i + 2..], bacc);
+                    let bacc = i128::from(acc) - i128::from(n);
+                    return continue_bignum_sub(eval, &args[i + 2..], integer_from_i128(bacc));
                 }
             }
         }
@@ -622,9 +818,8 @@ pub(crate) fn builtin_sub_slice(
                     continue;
                 }
                 None => {
-                    let mut bacc = Integer::from(acc);
-                    bacc -= Integer::from(n);
-                    return continue_bignum_sub(eval, &args[i + 2..], bacc);
+                    let bacc = i128::from(acc) - i128::from(n);
+                    return continue_bignum_sub(eval, &args[i + 2..], integer_from_i128(bacc));
                 }
             }
         }
@@ -678,7 +873,7 @@ fn negate_value(eval: &super::super::eval::Context, value: &Value) -> EvalResult
         return Ok(Value::make_float(-value.xfloat()));
     }
     if let Some(big) = value.as_bignum() {
-        return Ok(Value::make_integer(-big.clone()));
+        return Ok(bignum_negate_value(big));
     }
     let n = match try_i64_from_value(eval, value)? {
         Some(n) => n,
@@ -698,6 +893,14 @@ fn negate_value(eval: &super::super::eval::Context, value: &Value) -> EvalResult
 /// stack dispatcher has to materialize an owned vector for a `Many` subr. On
 /// `nbody` that was a malloc and a free for a million multiplications.
 pub(crate) fn builtin_mul(args: &[Value]) -> EvalResult {
+    // Two integers, not both fixnums (the loop below inlines those): the
+    // result goes straight into its slot.
+    if let [a, b] = args
+        && !(a.is_fixnum() && b.is_fixnum())
+        && let (Some(x), Some(y)) = (IntOperand::of(a), IntOperand::of(b))
+    {
+        return Ok(int_mul_value(x, y));
+    }
     let mut prod: i64 = 1;
     for (i, a) in args.iter().enumerate() {
         if let Some(n) = a.as_fixnum() {
@@ -707,9 +910,14 @@ pub(crate) fn builtin_mul(args: &[Value]) -> EvalResult {
                     continue;
                 }
                 None => {
-                    let mut acc = Integer::from(prod);
-                    acc *= Integer::from(n);
-                    return continue_bignum_mul(&args[i + 1..], acc);
+                    // An exact i64 x i64 product: the last operand's result
+                    // needs no Integer at all.
+                    let acc = i128::from(prod) * i128::from(n);
+                    let rest = &args[i + 1..];
+                    if rest.is_empty() {
+                        return Ok(integer_value_i128(acc));
+                    }
+                    return continue_bignum_mul(rest, integer_from_i128(acc));
                 }
             }
         }
@@ -741,9 +949,8 @@ pub(crate) fn builtin_mul(args: &[Value]) -> EvalResult {
                     continue;
                 }
                 None => {
-                    let mut acc = Integer::from(prod);
-                    acc *= Integer::from(n);
-                    return continue_bignum_mul(&args[i + 1..], acc);
+                    let acc = i128::from(prod) * i128::from(n);
+                    return continue_bignum_mul(&args[i + 1..], integer_from_i128(acc));
                 }
             }
         }
@@ -1022,8 +1229,10 @@ fn add1_value(arg: Value) -> EvalResult {
             None => Ok(Value::make_integer(Integer::from(n) + Integer::from(1))),
         },
         ValueKind::Float => Ok(Value::make_float(arg.xfloat() + 1.0)),
-        ValueKind::Veclike(VecLikeType::Bignum) => Ok(Value::make_integer(
-            arg.as_bignum().unwrap().clone() + Integer::from(1),
+        ValueKind::Veclike(VecLikeType::Bignum) => Ok(int_add_value(
+            IntOperand::Bignum(arg.as_bignum().unwrap()),
+            IntOperand::Fixnum(1),
+            false,
         )),
         _ if arg.is_marker() => {
             let n = super::marker::marker_position_as_int(&arg)?;
@@ -1052,8 +1261,10 @@ fn sub1_value(arg: Value) -> EvalResult {
             None => Ok(Value::make_integer(Integer::from(n) - Integer::from(1))),
         },
         ValueKind::Float => Ok(Value::make_float(arg.xfloat() - 1.0)),
-        ValueKind::Veclike(VecLikeType::Bignum) => Ok(Value::make_integer(
-            arg.as_bignum().unwrap().clone() - Integer::from(1),
+        ValueKind::Veclike(VecLikeType::Bignum) => Ok(int_add_value(
+            IntOperand::Bignum(arg.as_bignum().unwrap()),
+            IntOperand::Fixnum(1),
+            true,
         )),
         _ if arg.is_marker() => {
             let n = super::marker::marker_position_as_int(&arg)?;
@@ -1759,8 +1970,7 @@ fn rounding_with_divisor(
             d.unsigned_abs_ref().as_limbs_asc(),
         )
     {
-        let q = Integer::from(q);
-        return Ok(Value::make_integer(if negative { -q } else { q }));
+        return Ok(integer_value(negative, Natural::from(q)));
     }
     Ok(Value::make_integer(a.div_round(d, mode).0))
 }
