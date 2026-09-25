@@ -431,6 +431,12 @@ pub(crate) enum ReportTag {
     /// Exit report: the persistent JIT backend and its code arena.
     #[strum(serialize = "neovm-jit-final-code-memory")]
     FinalCodeMemory,
+    /// Exit report: the call-target census (`NEOVM_JIT_FEEDBACK`).
+    #[strum(serialize = "neovm-jit-final-calls")]
+    FinalCalls,
+    /// Exit report: one of the most executed recording call sites.
+    #[strum(serialize = "neovm-jit-final-call-site")]
+    FinalCallSite,
 }
 
 /// The process-wide report sink, chosen once from `NEOVM_JIT_STATS_FILE`.
@@ -875,6 +881,12 @@ pub fn report_at_exit(ctx: &crate::emacs_core::eval::Context) {
         for (tag, line) in report.render() {
             report_line(tag, &line);
         }
+        if super::feedback::feedback_mode().records() {
+            let (sources, rows) = calls::collect(ctx);
+            for (tag, line) in calls::render(sources, rows) {
+                report_line(tag, &line);
+            }
+        }
     }
     if let Some(path) = super::compile::jit_profile_path() {
         let rows = report.profile_leaf_rows();
@@ -1076,6 +1088,7 @@ pub(crate) fn reset_compile_stats() {
 }
 
 pub(crate) mod asm_dump;
+pub(crate) mod calls;
 pub(crate) mod epoch;
 pub(crate) mod perf_map;
 pub(crate) mod phases;

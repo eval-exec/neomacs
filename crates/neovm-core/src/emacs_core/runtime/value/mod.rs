@@ -3325,6 +3325,28 @@ impl TaggedValue {
         data
     }
 
+    /// The word a byte-code object's `runtime` field holds (`None` for any
+    /// other value): the source identity a compiled closure-source guard
+    /// compares (`jit_layout::BYTECODE_RUNTIME_WORD_OFFSET`), 0 on a pdump
+    /// stub. Never materializes a stub. The call-target recorder's key.
+    #[cfg(feature = "jit")]
+    #[inline(always)]
+    pub(crate) fn bytecode_runtime_word(self) -> Option<usize> {
+        if self.veclike_type()? != VecLikeType::ByteCode {
+            return None;
+        }
+        let ptr = (self.bits() & !TAG_MASK) as *const ByteCodeObj;
+        // SAFETY: a live byte-code object (the type test above); the field
+        // is one word (`Option<Runtime>`'s null niche, asserted in
+        // `bytecode::chunk`), read without forming a reference to the
+        // function, which a stub has not filled.
+        Some(unsafe {
+            std::ptr::addr_of!((*ptr).data.runtime)
+                .cast::<usize>()
+                .read()
+        })
+    }
+
     /// [`Self::get_bytecode_data`] that promises NOT to materialize a lazy
     /// pdump stub (once stubs exist): the peek for scanners that only care
     /// about already-live functions — AOT post-insert marking, PGO drains.

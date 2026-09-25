@@ -64,6 +64,7 @@
 //! | `NEOVM_JIT_MIR_REACH` | `=dead` (or `all`) | MIR reach admissions (design `p2-5-mir-reach`; the only legacy-MIR bit is `dead`, the others belong to the opt tier). `dead`: the MIR builder skips a block leader no path reaches (the `Return` `seal_ops` appends after a named-let's or `cl-loop`'s final `goto`) instead of bailing the body as `mir-unreachable-block`. Tier-up compiles only (AOT and inline callees never use it). Read at compile time; unset/`off` bails exactly as before (single-build A/B). Census: `reach_dead=`/`dead_leaders=` in the `mir[...]` summary. Blocker: F-R1 (P2.5 §7): admitted bodies must be at parity with the baseline. |
 //! | `NEOVM_JIT_EQ_PREFILTER` | on | Answer native `eq`/`symbolp` inline unless an operand is a veclike (a symbol-with-pos is one); `=off` calls `neovm_jit_eq_slow`/`neovm_jit_symbolp_slow` for every mismatch/non-symbol (single-build A/B). |
 //! | `NEOVM_JIT_COLD_EXITS` | on (unset); `=off`, `=share` | Mark every exit block cold in both tiers (`compile::cold_exits`, P2.2 O0.2): precise-deopt and rerun blocks, the shared signal exit and per-site handler dispatches, the back-edge poll's slow path and the root-window grow calls, so Cranelift emits them after the hot code instead of between hot blocks. `share` also sends every precise-deopt block of a function through one cold tail that writes the pc/depth/handler cells and returns (each site keeps only its framestate spill). Read at compile time; unset/`off` marks nothing new, CLIF-identical (single-build A/B of all three). Census: `cold_exits[deopt= rerun= signal= dispatch= poll= grow= deopt_tail=]` in the `NEOVM_JIT_COMPILE_STATS=1` summary. Graduation: same-binary neutral or better on the six rows and org (P2.0 T0.3). |
+//! | `NEOVM_JIT_FEEDBACK` | `=record`, `=use` | P2.1 C3/C4 call-target feedback (`jit/feedback.rs`, `compile/call_feedback.rs`): `record` makes the interpreter's `Op::Call` record the targets of the body's NON-constant call sites (a callee that is a variable or a closure, the function an `apply` spreads into, the callback of `mapc`/`mapcar`/`mapcan`/`mapconcat`) into the source's call-site table (a symbol, up to 4 closure sources, or megamorphic; closure instances of one source are one target), compiled code record and count them through the JIT-only `neovm_jit_call_prof`/`_apply_prof`/`_record_call_target` shims, and the exit report adds `[neovm-jit-final-calls]` (the census: sites by shape and state, executions, the stability window's late transitions) under `NEOVM_JIT_COMPILE_STATS`. `use`: compiles also read the targets (`NEOVM_JIT_SPEC_SOURCES` implies it). Unset/`off`: nothing recorded, the interpreter's `Op::Call` pays one field compare as before and the lowering is CLIF-identical (single-build A/B). `NEOVM_JIT_CALL_FEEDBACK=on` is an alias of `record`. Blocker: F-1 R1 (recording tax <= 0.3% instructions on every row). |
 //! | `NEOVM_JIT_GATE_RELAX` | `=on` | Relax the calls ≤ arith profit gate. Default-on was tried and REVERTED (regressed byte-compile 21%) — measure byte-compile before ever re-flipping. |
 //! | `NEOVM_JIT_LEAF` | `opcode,bcall,string` (unset); `=all`/`=on` adds the default-off parts; `=off`, or a comma list of `opcode`, `bcall`, `string`, `vars`, `batch` | Leaf builtins (design `p1-2-builtin-intrinsics`, `compile/leaf_abi.rs`). `opcode`: `Op::Get/Length/Nth/Nthcdr/Elt/Member/Equal/StringEqual/StringLessp` sites call their leaf's bare trampoline (register args, the result's bits or a tag-`001` sentinel) instead of the `neovm_jit_builtin1/2` table shim. `bcall`: an `Op::Call` site speculated on `gethash`, `plist-get` or `get-char-property` (any symbol bound to them) calls the leaf's Bcall trampoline: a guard (no pending quit/signal/profiler tick/throw-on-input, no compiler overrides, not `NEOVM_JIT_FORCE_SLOW_SPEC`, no `debug-on-next-call`, depth below the limit, the function cell unchanged) then the leaf, with no frame on success; a signal pushes GNU's `Bcall` frame lazily (`neovm_jit_leaf_signal_frame`) before dispatch; any guard miss or declined shape runs today's `neovm_jit_call_subr_spec` protocol. `string`: `aref` of a unibyte or all-ASCII multibyte string reads the byte inline (I1), and `aset` stores a same-width byte into owned string storage inline behind the `aset` redefinition gate (I2); every other shape calls `neovm_jit_aref`/`neovm_jit_aset` as before. `vars` (default off): `Op::SymbolValue` sites call the `symbol-value` leaf's bare trampoline and `Op::Call` sites on `buffer-local-value` its armed one; both are their references' bodies; `buffer-local-value` answers a buffer-local variable loaded for the current buffer through P1.4 Stage A's `Context::read_var_cached`. `batch` (default off): `Op::Call` sites on the first leaf batch -- `assoc` (a TESTFN bounces), `rassq`, `delq`, `copy-sequence`, `symbol-name`, `boundp`, `keywordp` -- call their armed trampolines. Read at compile time only. `opcode,bcall,string` default ON since the F-B gate passed (dhrystone -18% instructions, elb-eieio -4.7%, pack-unpack -4%, board org-editing -1%, no row worse); `=off` emits the former code exactly (single-build A/B). Exit census: `[neovm-jit-final-builtin-leaves]` under `NEOVM_JIT_COMPILE_STATS=1`. |
 //! | `NEOVM_JIT_INTRINSICS` | off; `=on`/`=all`, or a comma list of `length`, `nth`, `memq`, `symbol-value` | CLIF intrinsics for leaf builtins (design `p1-2-builtin-intrinsics` §2.7, `compile/intrinsics.rs`), each an inline PREFIX of its opcode site whose miss falls through to the site's usual call (leaf trampoline, value shim or table shim), never to a deopt. `length` (I3): nil, a proper list of at most 64 conses (a bounded walk), a string, a plain vector or record. `nth` (I4): `nth`/`nthcdr`/`elt` of a list at a constant index 0..4, unrolled. `memq` (I5): `memq`/`assq`, and `member` with a fixnum or bare-symbol key, over the first 16 conses by bit identity, only while `symbols-with-pos-enabled` is off. `symbol-value` (I6): a bare symbol whose value cell is plain and bound (the `Op::VarRef` inline read; a nil value is refused unless the symbol is a known constant that is not a dedicated buffer-local). JIT only; read at compile time; unset/`off` emits the former code exactly (single-build A/B). Census: `intrinsic-<name>:inline_sites=` in `[neovm-jit-final-builtin-leaves]`. |
@@ -732,10 +733,16 @@ std::thread_local! {
         const { std::cell::Cell::new(None) };
 }
 
-/// Force per-call feedback collection on/off on the current thread (tests only).
+/// Force per-call feedback collection on/off on the current thread (tests
+/// only): `NEOVM_JIT_FEEDBACK=record` or `off`.
 #[cfg(test)]
 pub fn force_call_feedback_for_test(on: bool) {
     CALL_FEEDBACK_TEST_OVERRIDE.with(|c| c.set(Some(on)));
+    feedback::force_feedback_mode_for_test(Some(if on {
+        feedback::FeedbackMode::Record
+    } else {
+        feedback::FeedbackMode::Off
+    }));
 }
 
 /// Whether the VM records per-call-site target feedback (`record_call`) on the
@@ -779,14 +786,18 @@ pub fn jit_bcall_cache_forced() -> bool {
     *V.get_or_init(|| std::env::var("NEOVM_JIT_BCALL_CACHE").as_deref() == Ok("on"))
 }
 
+///
+/// Since P2.1 C3 this is `NEOVM_JIT_FEEDBACK` ([`feedback::feedback_mode`]),
+/// with `NEOVM_JIT_CALL_FEEDBACK=on` its alias for `record`; the interpreter
+/// records the targets of its NON-constant call sites into the source's
+/// call-site table ([`feedback::CallSites`]), not this per-op word.
 #[inline]
 pub fn call_feedback_collection_enabled() -> bool {
     #[cfg(test)]
     if let Some(o) = CALL_FEEDBACK_TEST_OVERRIDE.with(|c| c.get()) {
         return o;
     }
-    static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var("NEOVM_JIT_CALL_FEEDBACK").as_deref() == Ok("on"))
+    feedback::feedback_mode().records()
 }
 
 /// OSR (on-stack replacement): transfer a hot loop in a rarely-/once-called

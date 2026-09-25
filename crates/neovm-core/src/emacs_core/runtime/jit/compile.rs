@@ -3250,6 +3250,9 @@ pub fn lower_leaf_full_osr(
         None => (HashMap::new(), Box::from([])),
     };
     let spec_slot_kinds = spec_slot_kinds_of(&spec_sites, spec_slots.len());
+    // The source states the lowering bakes addresses inside (recording
+    // sites, speculated closure sources) move into the leaf.
+    let holds = call_feedback::FeedbackHolds::enter();
     // Precise-deopt buffers: live operand-stack spill (max depth) + the
     // pc/depth/handler-count cells. Address-stable Boxes owned by the leaf;
     // generated code writes through baked raw addresses.
@@ -3392,6 +3395,7 @@ pub fn lower_leaf_full_osr(
         compiled_level: crate::emacs_core::jit::ReoptLevel::Speculative,
         retired: core::cell::Cell::new(false),
         spec_slot_kinds,
+        feedback_holds: holds.finish(),
         abi,
         entry_shape: EntryShape::of(abi, has_binds, has_handlers, /*has_sidecar=*/ false),
         entry,
@@ -4492,6 +4496,7 @@ fn build_leaf_fn<S: LeafSink>(
 mod knobs;
 pub(crate) use knobs::*;
 
+pub(crate) mod call_feedback;
 pub(crate) mod calls;
 use calls::{cbsym_spec_kind, named_builtin_call};
 
@@ -4543,6 +4548,9 @@ mod arith_generic_integer_tests;
 #[cfg(test)]
 #[path = "tests/array_shims.rs"]
 mod array_shim_tests;
+#[cfg(test)]
+#[path = "tests/call_feedback.rs"]
+mod call_feedback_tests;
 #[cfg(test)]
 #[path = "tests/compile_pipeline.rs"]
 mod compile_pipeline_tests;

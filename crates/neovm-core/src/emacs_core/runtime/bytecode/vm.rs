@@ -1992,21 +1992,41 @@ const _: () = {
 enum BytecodeTierPolicy {
     InterpreterOnly,
     Adaptive,
+    /// [`Self::Adaptive`], and `Op::Call` records the targets of the
+    /// body's non-constant call sites (`NEOVM_JIT_FEEDBACK`, P2.1 C3):
+    /// folding the knob into the policy keeps the off arm the one
+    /// predictable field compare it always was.
+    AdaptiveRecording,
 }
 
 #[cfg(feature = "jit")]
 impl BytecodeTierPolicy {
     fn for_process() -> Self {
-        if crate::emacs_core::jit::jit_runtime_enabled() {
-            Self::Adaptive
-        } else {
+        if !crate::emacs_core::jit::jit_runtime_enabled() {
             Self::InterpreterOnly
+        } else if crate::emacs_core::jit::call_feedback_collection_enabled() {
+            Self::AdaptiveRecording
+        } else {
+            Self::Adaptive
+        }
+    }
+
+    /// The process policy under a test's per-thread feedback override.
+    #[cfg(test)]
+    fn with_test_feedback_override(self) -> Self {
+        match (
+            self,
+            crate::emacs_core::jit::feedback::feedback_mode_test_override(),
+        ) {
+            (Self::InterpreterOnly, _) | (_, None) => self,
+            (_, Some(mode)) if mode.records() => Self::AdaptiveRecording,
+            (_, Some(_)) => Self::Adaptive,
         }
     }
 
     #[inline(always)]
     fn records_call_feedback(self) -> bool {
-        matches!(self, Self::Adaptive)
+        matches!(self, Self::AdaptiveRecording)
     }
 }
 
@@ -2254,6 +2274,11 @@ impl<'a> Vm<'a> {
     pub(crate) fn from_context(ctx: &'a mut crate::emacs_core::eval::Context) -> Self {
         #[cfg(feature = "jit")]
         let knobs = VmProcessKnobs::get();
+        #[cfg(all(feature = "jit", test))]
+        let knobs = VmProcessKnobs {
+            tier_policy: knobs.tier_policy.with_test_feedback_override(),
+            ..knobs
+        };
         Self {
             ctx,
             recent_interpreter_call: RecentInterpreterCall::EMPTY,
@@ -4434,18 +4459,27 @@ impl<'a> Vm<'a> {
                             };
                             (args_start, args_start.saturating_sub(1), func_val)
                         };
-                        // JIT Phase 1: record the callee for direct-call speculation.
-                        // Only NAMED (symbol) callees carry a SymId; the call-site
-                        // index is `pc_local - 1` (pc was advanced past Call above).
-                        // GC-safe: a SymId is a stable index, never a heap pointer.
-                        // Gated process-wide until a tier consumes the feedback:
-                        // see `jit::call_feedback_collection_enabled`.
+                        // P2.1 C3/C4: record the call's target -- the callee of a
+                        // non-constant site, the function of an `apply`, the
+                        // callback of a mapping builtin -- into the source's
+                        // call-site table (`jit::feedback`). The call-site index
+                        // is `pc_local - 1` (pc was advanced past Call above).
+                        // GC-safe: the table holds symbol ids and source
+                        // identities, never a Value. Off unless
+                        // `NEOVM_JIT_FEEDBACK` records (one field compare).
                         #[cfg(feature = "jit")]
-                        if self.bytecode_tier_policy.records_call_feedback()
-                            && crate::emacs_core::jit::call_feedback_collection_enabled()
-                            && let ValueKind::Symbol(id) = func_val.kind()
-                        {
-                            func.jit_runtime().record_call(pc_local - 1, ops_len, id);
+                        if self.bytecode_tier_policy.records_call_feedback() {
+                            let arg0 = if n > 0 {
+                                stk!()[args_start]
+                            } else {
+                                Value::NIL
+                            };
+                            func.jit_runtime().record_call_target(
+                                pc_local - 1,
+                                func,
+                                func_val,
+                                arg0,
+                            );
                         }
                         // Round-2 profiling: attribute this Op::Call to its callee
                         // symbol (the find_spec_sites entry population). Resolve a

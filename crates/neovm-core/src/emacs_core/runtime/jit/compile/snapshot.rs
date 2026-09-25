@@ -48,6 +48,14 @@ pub(crate) struct FeedbackSnapshot {
     /// Per pc: a deopt barred inlining the call there (every pc at
     /// `NoInline` and above).
     pub(crate) no_inline: Vec<bool>,
+    /// The source, when its call sites record (`NEOVM_JIT_FEEDBACK`): the
+    /// lowering bakes pointers into its call-site table (built here if the
+    /// interpreter never recorded), and reads the targets recorded there
+    /// when `read_call_targets` (`=use`). The lattice is read at the site
+    /// being lowered: the compile is synchronous, so that is this moment.
+    pub(crate) call_source: Option<std::sync::Arc<crate::emacs_core::jit::RuntimeState>>,
+    /// Whether the compile may read the recorded call targets.
+    pub(crate) read_call_targets: bool,
 }
 
 impl FeedbackSnapshot {
@@ -78,7 +86,17 @@ impl FeedbackSnapshot {
                 .collect()
         };
         rt.note_numeric_feedback_consumed();
-        FeedbackSnapshot { numeric, no_inline }
+        let mode = crate::emacs_core::jit::feedback::feedback_mode();
+        let call_source = mode.records().then(|| {
+            rt.call_sites_for(ops, &f.constants);
+            rt.share_state()
+        });
+        FeedbackSnapshot {
+            numeric,
+            no_inline,
+            call_source,
+            read_call_targets: mode.uses(),
+        }
     }
 
     /// Make this snapshot the compile's ambient feedback until the returned
@@ -93,6 +111,10 @@ impl FeedbackSnapshot {
                 ACTIVE_NO_INLINE_CALL_SITES
                     .with(|v| std::mem::replace(&mut *v.borrow_mut(), self.no_inline)),
             ),
+            Some(super::call_feedback::CallSourceScope::enter(
+                self.call_source,
+                self.read_call_targets,
+            )),
         )
     }
 }
@@ -160,8 +182,17 @@ pub(crate) fn arith_site_takes_generic(op: &Op, pc: usize) -> bool {
 }
 
 /// Restores the numeric feedback (and, for a whole-body publish, the
-/// no-inline call sites) the compile inside it replaced.
-pub(crate) struct NumericFeedbackScope(Option<Vec<NumericFeedback>>, Option<Vec<bool>>);
+/// no-inline call sites and the call-feedback source) the compile inside it
+/// replaced.
+pub(crate) struct NumericFeedbackScope(
+    Option<Vec<NumericFeedback>>,
+    Option<Vec<bool>>,
+    #[expect(
+        dead_code,
+        reason = "held for its Drop, which restores the outer source"
+    )]
+    Option<super::call_feedback::CallSourceScope>,
+);
 
 impl Drop for NumericFeedbackScope {
     fn drop(&mut self) {
@@ -181,6 +212,7 @@ impl Drop for NumericFeedbackScope {
 pub(crate) fn publish_numeric_feedback_vec(seen: Vec<NumericFeedback>) -> NumericFeedbackScope {
     NumericFeedbackScope(
         Some(ACTIVE_NUMERIC_FEEDBACK.with(|v| std::mem::replace(&mut *v.borrow_mut(), seen))),
+        None,
         None,
     )
 }

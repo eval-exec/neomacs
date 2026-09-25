@@ -1105,19 +1105,21 @@ fn vm_arithmetic_bcall_fast_path_observes_live_function_cell() {
     assert_eq!(result, Value::fixnum(99));
 }
 
-/// JIT Phase 1b: executing a call to a NAMED function records the callee in the
-/// function's call-site feedback (monomorphically), at the right instruction
-/// index, without disturbing the result. Feature-gated (the `runtime` field +
-/// the recording exist only under `jit`).
+/// P2.1 C3: the interpreter records the TARGET of a call whose callee is not
+/// a constant -- here a function passed as an argument, first a symbol, then
+/// a byte-code object -- into the source's call-site table, at the call's
+/// instruction index, without disturbing the result. A call of a constant
+/// symbol records nothing: the compile reads its callee from the code.
+/// Feature-gated (the `runtime` field and the recording exist only under
+/// `jit`).
 #[cfg(feature = "jit")]
 #[test]
-fn vm_records_call_feedback_for_named_callee() {
-    use crate::emacs_core::jit::CallFeedback;
+fn vm_records_call_targets_of_non_constant_call_sites() {
+    use crate::emacs_core::jit::feedback::CallTarget;
     crate::test_utils::init_test_tracing();
     let mut eval = Context::new_minimal_vm_harness();
 
-    // Callee `vm-feedback-callee`: a bytecode function returning 99.
-    // Collection is off by default until a tier reads the feedback; this test
+    // Recording is off by default (`NEOVM_JIT_FEEDBACK`); this test
     // exercises the mechanism itself, so opt in.
     crate::emacs_core::jit::force_call_feedback_for_test(true);
     let callee_sym = intern("vm-feedback-callee");
@@ -1129,44 +1131,118 @@ fn vm_records_call_feedback_for_named_callee() {
     let v99 = callee.add_constant(Value::fixnum(99));
     callee.ops = vec![Op::Constant(v99), Op::Return];
     callee.max_stack = 2;
+    let callee_value = Value::make_bytecode(callee);
     eval.obarray
-        .set_symbol_function_id(callee_sym, Value::make_bytecode(callee));
+        .set_symbol_function_id(callee_sym, callee_value);
 
-    // Caller: push the SYMBOL, push an arg, Call(1). The Call is ops[2].
+    // (lambda (f) (vm-feedback-callee (funcall f 1))): the call of the
+    // argument is ops[3], the constant call ops[4].
     let mut caller = ByteCodeFunction::new(LambdaParams {
-        required: vec![],
+        required: vec![intern("f")],
         optional: vec![],
         rest: None,
     });
+    caller.lexical = true;
     let callee_idx = caller.add_constant(Value::from_sym_id(callee_sym));
     let arg_idx = caller.add_constant(Value::fixnum(1));
     caller.ops = vec![
         Op::Constant(callee_idx),
+        Op::StackRef(1),
         Op::Constant(arg_idx),
+        Op::Call(1),
         Op::Call(1),
         Op::Return,
     ];
-    caller.max_stack = 3;
+    caller.max_stack = 4;
     // Seal in place: the assertions below inspect THIS object's runtime
     // feedback, so the execute harness must not run a sealed clone instead.
     caller.seal_hand_assembled_ops_for_test();
+    assert!(caller.jit_runtime().call_sites().is_none(), "nothing yet");
 
-    // No feedback before execution.
-    assert_eq!(caller.jit_runtime().call_feedback(2), CallFeedback::Uninit);
-
+    let run = |eval: &mut Context, f: Value| {
+        let mut vm = new_vm(eval);
+        vm.execute(&caller, vec![f]).expect("caller executes")
+    };
     for _ in 0..3 {
-        let mut vm = new_vm(&mut eval);
-        let result = vm.execute(&caller, vec![]).expect("caller executes");
-        assert_eq!(result, Value::fixnum(99));
+        assert_eq!(
+            run(&mut eval, Value::from_sym_id(callee_sym)),
+            Value::fixnum(99)
+        );
     }
-
-    // The call site (ops[2]) is now monomorphic on the named callee; the
-    // Constant site (ops[0]) is not a call and stays Uninit.
-    assert_eq!(
-        caller.jit_runtime().call_feedback(2),
-        CallFeedback::Monomorphic(callee_sym)
+    let sites = caller.jit_runtime().call_sites().expect("recorded");
+    assert!(
+        sites.site_at(4).is_none(),
+        "the constant call records nothing"
     );
-    assert_eq!(caller.jit_runtime().call_feedback(0), CallFeedback::Uninit);
+    assert!(
+        matches!(sites.site_at(3).unwrap().target(), CallTarget::Sym(id) if id == callee_sym),
+        "a symbol target"
+    );
+    // The same site called with the byte-code object itself: a symbol then
+    // a source is megamorphic.
+    assert_eq!(run(&mut eval, callee_value), Value::fixnum(99));
+    assert!(matches!(
+        sites.site_at(3).unwrap().target(),
+        CallTarget::Mega
+    ));
+    // The interpreter counts nothing (compiled code's recording shims do).
+    assert_eq!(sites.site_at(3).unwrap().count(), 0);
+    crate::emacs_core::jit::force_call_feedback_for_test(false);
+}
+
+/// A call of a byte-code object records its SOURCE: every `make-closure`
+/// instance of one prototype is one target.
+#[cfg(feature = "jit")]
+#[test]
+fn vm_records_one_source_for_instances_of_a_closure() {
+    use crate::emacs_core::jit::feedback::CallTarget;
+    crate::test_utils::init_test_tracing();
+    let mut eval = Context::new_minimal_vm_harness();
+    crate::emacs_core::jit::force_call_feedback_for_test(true);
+    let mut proto = ByteCodeFunction::new(LambdaParams {
+        required: vec![],
+        optional: vec![],
+        rest: None,
+    });
+    let seven = proto.add_constant(Value::fixnum(7));
+    proto.ops = vec![Op::Constant(seven), Op::Return];
+    proto.max_stack = 1;
+    // (lambda (f) (funcall f)): the call is ops[1].
+    let mut caller = ByteCodeFunction::new(LambdaParams {
+        required: vec![intern("f")],
+        optional: vec![],
+        rest: None,
+    });
+    caller.lexical = true;
+    caller.ops = vec![Op::StackRef(0), Op::Call(0), Op::Return];
+    caller.max_stack = 2;
+    caller.seal_hand_assembled_ops_for_test();
+    for _ in 0..2 {
+        // Two instances (clones share the source's runtime).
+        let instance = Value::make_bytecode(proto.clone());
+        let mut vm = new_vm(&mut eval);
+        assert_eq!(
+            vm.execute(&caller, vec![instance]).unwrap(),
+            Value::fixnum(7)
+        );
+    }
+    let site = caller
+        .jit_runtime()
+        .call_sites()
+        .unwrap()
+        .site_at(1)
+        .unwrap();
+    match site.target() {
+        CallTarget::Sources(sources) => {
+            assert_eq!(sources.len(), 1);
+            assert!(std::ptr::eq(
+                std::sync::Arc::as_ptr(&sources[0]),
+                proto.jit_runtime().state_ptr()
+            ));
+        }
+        other => panic!("expected one source, got {other:?}"),
+    }
+    crate::emacs_core::jit::force_call_feedback_for_test(false);
 }
 
 /// `NEOVM_JIT=0` is a real interpreter-only execution policy, not merely a
@@ -1200,18 +1276,25 @@ fn vm_interpreter_only_policy_skips_jit_call_feedback() {
     caller.ops = vec![Op::Constant(callee_idx), Op::Call(0), Op::Return];
     caller.max_stack = 1;
 
+    // Even with recording on, an interpreter-only VM records nothing.
+    crate::emacs_core::jit::force_call_feedback_for_test(true);
     let result = {
         let mut vm = new_vm(&mut eval);
         vm.force_interpreter_only_for_test();
         vm.execute(&caller, vec![])
             .expect("interpreter-only bytecode call should execute")
     };
+    crate::emacs_core::jit::force_call_feedback_for_test(false);
 
     assert_eq!(result, Value::fixnum(42));
     assert_eq!(
         caller.jit_runtime().call_feedback(1),
         CallFeedback::Uninit,
         "interpreter-only Bcall must not pay for adaptive-tier feedback"
+    );
+    assert!(
+        caller.jit_runtime().call_sites().is_none(),
+        "interpreter-only Bcall must not build a call-site table"
     );
 }
 

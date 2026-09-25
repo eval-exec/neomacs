@@ -535,6 +535,16 @@ pub struct CompiledLeaf {
     /// ([`Self::bytecode_spec_slots`]); the words of other kinds are not
     /// leaf pointers and must be left alone.
     pub(crate) spec_slot_kinds: Box<[SpecSlotKind]>,
+    /// The source states this leaf's code bakes an address inside (P2.1
+    /// C3/C5): its own source's call-site table (a recording site's
+    /// pointer) and each speculated closure source. Holding them keeps
+    /// those addresses valid, and a source address unique, while the code
+    /// can run. Holds no `Value`; empty unless `NEOVM_JIT_FEEDBACK` records.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "held for the baked addresses, never read")
+    )]
+    pub(crate) feedback_holds: Box<[std::sync::Arc<crate::emacs_core::jit::RuntimeState>]>,
     /// R2 increment B2 (AOT only): the per-site `expected` (subr/bytecode VALUE
     /// bits) array parallel to `spec_slots`, one entry per `Op::Call` spec site in
     /// slot order. AOT code loads `spec_expected_base[slot_idx]` from the sidecar
@@ -919,6 +929,7 @@ impl CompiledLeaf {
             compiled_level: crate::emacs_core::jit::ReoptLevel::Speculative,
             retired: Cell::new(false),
             spec_slot_kinds,
+            feedback_holds: Box::from([]),
             abi: LeafAbi::Memory,
             // The sidecar makes every AOT leaf framed.
             entry_shape: EntryShape::Framed,

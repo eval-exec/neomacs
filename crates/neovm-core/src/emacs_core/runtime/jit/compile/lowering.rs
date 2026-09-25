@@ -2749,6 +2749,7 @@ pub(super) fn lower_mir_with_plan(
         compiled_level: crate::emacs_core::jit::ReoptLevel::Speculative,
         retired: core::cell::Cell::new(false),
         spec_slot_kinds,
+        feedback_holds: Box::from([]),
         abi,
         entry_shape: super::EntryShape::of(abi, false, false, false),
         entry,
@@ -7017,6 +7018,17 @@ fn lower_simple_op_arms(
                     pending,
                 );
             }
+            // `NEOVM_JIT_FEEDBACK` (JIT only): a speculated mapping builtin
+            // records its callback (argument 0) at the site first (P2.1 C4).
+            if spec.is_some()
+                && !aot
+                && n > 0
+                && let Some(site) = super::call_feedback::recording_site_at(pc)
+                // SAFETY: the leaf keeps its source's table alive.
+                && unsafe { &*site }.shape() == crate::emacs_core::jit::feedback::SiteShape::CallbackArg
+            {
+                super::call_feedback::emit_record_call_target(fb, rt, site, stack[args_at]);
+            }
             // Pred/EqIncl sites pass their 1–2 args in REGISTERS on the direct
             // path (no spill; their fallback block spills for itself). Every
             // other shape spills the args into the call buffer for its shim.
@@ -7206,11 +7218,30 @@ fn lower_simple_op_arms(
                         _ => return Err(CompileError::UnsupportedOp("subr-spec-shape")),
                     }
                 }
-                None => {
-                    let shim = rt.refs.get(fb.func, shim);
-                    fb.ins()
-                        .call(shim, &[vmctx, func_val, args_addr, n_val, out_addr])
-                }
+                // `NEOVM_JIT_FEEDBACK` (JIT only): a site whose target the
+                // source's call-site table records calls the recording shim
+                // (P2.1 C3/C4); with the knob off there is no such site.
+                None => match (!aot)
+                    .then(|| super::call_feedback::recording_site_at(pc))
+                    .flatten()
+                {
+                    Some(site) => super::call_feedback::emit_prof_call(
+                        fb,
+                        rt,
+                        matches!(op, Op::Apply(_)),
+                        site,
+                        vmctx,
+                        func_val,
+                        args_addr,
+                        n_val,
+                        out_addr,
+                    ),
+                    None => {
+                        let shim = rt.refs.get(fb.func, shim);
+                        fb.ins()
+                            .call(shim, &[vmctx, func_val, args_addr, n_val, out_addr])
+                    }
+                },
             };
             let status = fb.inst_results(call)[0];
             emit_cond_residual_roots_post(fb, rt, saved);
