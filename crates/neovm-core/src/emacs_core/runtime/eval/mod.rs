@@ -7371,6 +7371,7 @@ mod var_fast;
 mod cconv_memo;
 mod cconv_shape;
 mod cconv_trust;
+pub(crate) use cconv_memo::note_function_epoch_move;
 #[cfg(test)]
 pub(crate) use cconv_memo::{
     CconvMemoEvent, CconvMemoMode, HeadVerdict, parse_cconv_fast_knob, parse_cconv_memo_knob,

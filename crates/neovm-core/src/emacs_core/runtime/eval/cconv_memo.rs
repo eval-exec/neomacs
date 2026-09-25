@@ -90,11 +90,13 @@
 //! observable" check: loads, echo-area output, buffer creation and text
 //! changes, `gensym-counter`, function-cell writes, newly interned symbols and
 //! the match data.  Taken before and after a run, a difference means the run
-//! had an effect.
+//! had an effect.  A verify mismatch names the fields that moved (and the
+//! function cells written, and the collections completed, during the run).
 
 use super::cconv_shape::{ClosureFacts, ClosureShape, EnvSummary, FactsRefusal};
 use super::cconv_trust::TrustedSet;
 use super::*;
+use crate::emacs_core::symbol::FunctionEpochBump;
 use std::sync::atomic::{AtomicU8, Ordering};
 use strum::{EnumCount, IntoEnumIterator};
 
@@ -320,12 +322,67 @@ pub(crate) struct EffectSnapshot {
     loads: u64,
     outputs: u64,
     next_buffer_id: u64,
-    live_buffers: usize,
-    buffer_ticks: i64,
+    /// Every live buffer and its `buffer-modified-tick`, in `buffer-list`
+    /// order.
+    buffer_ticks: Vec<(BufferId, i64)>,
     gensym_counter: usize,
     function_epoch: u64,
     obarray_len: usize,
     match_data: Option<String>,
+}
+
+impl EffectSnapshot {
+    /// The fields that differ in AFTER, as `name: before -> after`, for a
+    /// verify mismatch report.
+    pub(crate) fn describe_change(&self, after: &EffectSnapshot) -> String {
+        let mut out = Vec::new();
+        macro_rules! field {
+            ($name:ident) => {
+                if self.$name != after.$name {
+                    out.push(format!(
+                        "{}: {:?} -> {:?}",
+                        stringify!($name),
+                        self.$name,
+                        after.$name
+                    ));
+                }
+            };
+        }
+        field!(loads);
+        field!(outputs);
+        field!(next_buffer_id);
+        if self.buffer_ticks != after.buffer_ticks {
+            let changed: Vec<String> = after
+                .buffer_ticks
+                .iter()
+                .filter(|entry| !self.buffer_ticks.contains(entry))
+                .map(|(id, tick)| {
+                    let old = self
+                        .buffer_ticks
+                        .iter()
+                        .find(|(old_id, _)| old_id == id)
+                        .map(|(_, t)| *t);
+                    format!("{id:?}: {old:?} -> {tick}")
+                })
+                .collect();
+            let killed = self
+                .buffer_ticks
+                .iter()
+                .filter(|(id, _)| !after.buffer_ticks.iter().any(|(a, _)| a == id))
+                .count();
+            out.push(format!(
+                "buffer_ticks: live {} -> {}, killed {killed}, changed [{}]",
+                self.buffer_ticks.len(),
+                after.buffer_ticks.len(),
+                changed.join(", ")
+            ));
+        }
+        field!(gensym_counter);
+        field!(function_epoch);
+        field!(obarray_len);
+        field!(match_data);
+        out.join("; ")
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -478,6 +535,31 @@ struct MemoHit {
 struct Analysis {
     shape: ClosureShape,
     facts: Box<[MemoFact]>,
+}
+
+/// Most function-cell writes a verify run logs for its mismatch report.
+const OBSERVED_WRITE_LOG_CAP: usize = 16;
+
+/// Function-cell writes (why, and the symbol when there is one).
+type FunctionWriteLog = Vec<(FunctionEpochBump, Option<SymId>)>;
+
+thread_local! {
+    /// While a verify run is observed: the function-cell writes it made, for
+    /// the mismatch report (a moved `function_epoch` alone names nothing).
+    static OBSERVED_FUNCTION_WRITES: RefCell<Option<FunctionWriteLog>> =
+        const { RefCell::new(None) };
+}
+
+/// A function-cell write or other `function_epoch` move (the obarray calls
+/// this for every one); logged only while a verify run is observed.
+pub(crate) fn note_function_epoch_move(why: FunctionEpochBump, sym: Option<SymId>) {
+    OBSERVED_FUNCTION_WRITES.with(|log| {
+        if let Some(log) = log.borrow_mut().as_mut()
+            && log.len() < OBSERVED_WRITE_LOG_CAP
+        {
+            log.push((why, sym));
+        }
+    });
 }
 
 cached_symbol_id!(
@@ -652,16 +734,19 @@ impl Context {
     /// The current [`EffectSnapshot`].  Walks the live buffers, so it is
     /// taken around a recorded run, never on a hit.
     pub(crate) fn cconv_effect_snapshot(&self) -> EffectSnapshot {
-        let live = self.buffers.buffer_list();
-        let buffer_ticks = live
-            .iter()
-            .filter_map(|id| self.buffers.get(*id))
-            .fold(0i64, |sum, buffer| sum.wrapping_add(buffer.modified_tick()));
+        let buffer_ticks = self
+            .buffers
+            .buffer_list()
+            .into_iter()
+            .map(|id| {
+                let tick = self.buffers.get(id).map_or(0, |b| b.modified_tick());
+                (id, tick)
+            })
+            .collect();
         EffectSnapshot {
             loads: self.cconv_memo.loads,
             outputs: self.cconv_memo.outputs,
             next_buffer_id: self.buffers.dump_next_id(),
-            live_buffers: live.len(),
             buffer_ticks,
             gensym_counter: self
                 .obarray
@@ -1283,9 +1368,14 @@ impl Context {
         if let Ok(closure) = &memo {
             self.push_specpdl_root(*closure);
         }
+        OBSERVED_FUNCTION_WRITES.with(|log| *log.borrow_mut() = Some(Vec::new()));
+        let gc_count = self.gc_count;
         let before = self.cconv_effect_snapshot();
         let lisp = self.cconv_run_lisp(closure_hook, params, body, env, docstring, iform);
-        let quiet = self.cconv_effect_snapshot() == before;
+        let after = self.cconv_effect_snapshot();
+        let gc_cycles = self.gc_count.wrapping_sub(gc_count);
+        let writes = OBSERVED_FUNCTION_WRITES.with(|log| log.borrow_mut().take());
+        let quiet = after == before;
         let agree = match (&memo, &lisp) {
             (Ok(m), Ok(l)) => closures_agree(*m, *l),
             _ => false,
@@ -1299,17 +1389,42 @@ impl Context {
                 Ok(v) => super::super::print::print_value(v),
                 Err(flow) => format!("{flow:?}"),
             };
+            let mut effect = before.describe_change(&after);
+            if after.obarray_len > before.obarray_len {
+                let names = self.obarray.all_symbols();
+                let fresh = after.obarray_len - before.obarray_len;
+                let tail = &names[names.len().saturating_sub(fresh.min(16))..];
+                effect.push_str(&format!("; newest symbol ids {tail:?}"));
+            }
+            if let Some(writes) = writes.filter(|w| !w.is_empty()) {
+                let shown: Vec<String> = writes
+                    .iter()
+                    .map(|(why, sym)| {
+                        let why: &'static str = why.into();
+                        match sym {
+                            Some(id) => format!("{} ({why})", resolve_sym(*id)),
+                            None => format!("({why})"),
+                        }
+                    })
+                    .collect();
+                effect.push_str(&format!("; function writes [{}]", shown.join(", ")));
+            }
+            effect.push_str(&format!("; collections during the run {gc_cycles}"));
+            let backtrace = self.render_lisp_backtrace(24);
             tracing::error!(
                 target: "neovm::cconv_memo",
                 body = %super::super::print::print_value(&body),
                 memo = %shown(&memo),
                 lisp = %shown(&lisp),
                 quiet,
+                effect = %effect,
+                backtrace = %backtrace,
                 "cconv memo verify mismatch"
             );
             if self.cconv_memo.strict {
                 panic!(
-                    "cconv memo verify mismatch: body {} memo {} lisp {} quiet {quiet}",
+                    "cconv memo verify mismatch: body {} memo {} lisp {} quiet {quiet} \
+                     effect [{effect}]\nLisp backtrace:\n{backtrace}",
                     super::super::print::print_value(&body),
                     shown(&memo),
                     shown(&lisp)

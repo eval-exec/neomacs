@@ -987,8 +987,9 @@ impl Clone for LispSymbol {
 }
 
 /// Why [`Obarray::function_epoch`] moved. Observability only: the JIT's
-/// report counts bumps per reason (`jit::stats`). No behaviour depends on
-/// it — every writer bumps exactly when and how it did before.
+/// report counts bumps per reason (`jit::stats`), and a cconv memo verify
+/// mismatch lists the writes its run made. No behaviour depends on it —
+/// every writer bumps exactly when and how it did before.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, strum::EnumCount, strum::EnumIter, strum::IntoStaticStr,
 )]
@@ -3954,10 +3955,9 @@ impl Obarray {
     pub(crate) fn bump_function_epoch(&mut self, why: FunctionEpochBump) {
         crate::emacs_core::subr::leaf::debug_assert_no_leaf_active!("a function-epoch bump");
         self.advance_function_epoch();
+        crate::emacs_core::eval::note_function_epoch_move(why, None);
         #[cfg(feature = "jit")]
         crate::emacs_core::jit::stats::note_function_epoch_bump(why, None);
-        #[cfg(not(feature = "jit"))]
-        let _ = why;
     }
 
     /// Move `function_epoch` by one, skipping the reserved `u64::MAX`.
@@ -3978,13 +3978,15 @@ impl Obarray {
     /// entries of callers that INLINED `id` -- the only invalidation inlined
     /// callees get, so every function-cell write must come through here (see
     /// jit::cache::evict_inline_dependents). `why` only feeds the JIT's
-    /// per-reason bump counters; it changes nothing else. `previous` is what
+    /// per-reason bump counters and the cconv memo's verify report; it
+    /// changes nothing else. `previous` is what
     /// the cell held: a compiled activation called through `id` may still be
     /// running it, and its frame records only the symbol, so the JIT keeps it
     /// alive while such a frame lives (`jit::cache::pin_redefined_function`;
     /// GNU's bytecode frame holds its `fun`, src/bytecode.c:518).
     fn note_function_redefined(&mut self, id: SymId, why: FunctionEpochBump, previous: Value) {
         self.advance_function_epoch();
+        crate::emacs_core::eval::note_function_epoch_move(why, Some(id));
         #[cfg(feature = "jit")]
         {
             crate::emacs_core::jit::stats::note_function_epoch_bump(why, Some(id));
