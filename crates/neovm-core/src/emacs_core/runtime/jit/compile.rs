@@ -4664,6 +4664,7 @@ pub(crate) use knobs::*;
 pub(crate) mod calls;
 use calls::{cbsym_spec_kind, named_builtin_call};
 
+pub(crate) mod intrinsics;
 pub(crate) mod leaf_abi;
 
 mod leaf;

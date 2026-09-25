@@ -374,6 +374,74 @@ impl LeafKnob {
     }
 }
 
+/// Which CLIF intrinsics `NEOVM_JIT_INTRINSICS` turns on (design
+/// `p1-2-builtin-intrinsics` §2.7, `compile/intrinsics.rs`): inline fast
+/// paths in front of an opcode site's call. Default OFF; read at compile
+/// time only, and off emits exactly the former code (single-build A/B).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub(crate) struct IntrinsicKnob {
+    /// I6: `Op::SymbolValue` of a bare symbol with a plain, bound cell.
+    pub(crate) symbol_value: bool,
+}
+
+impl IntrinsicKnob {
+    pub(crate) const OFF: Self = Self {
+        symbol_value: false,
+    };
+    pub(crate) const ALL: Self = Self { symbol_value: true };
+
+    /// Unset/`off`/`0`: nothing; `on`/`1`/`all`: every intrinsic; otherwise
+    /// a comma list of `symbol-value`.
+    pub(crate) fn parse(value: Option<&str>) -> Self {
+        let Some(value) = value.map(str::trim) else {
+            return Self::OFF;
+        };
+        match value {
+            "" | "0" | "off" | "false" | "no" => return Self::OFF,
+            "1" | "on" | "all" | "true" | "yes" => return Self::ALL,
+            _ => {}
+        }
+        let mut knob = Self::OFF;
+        for part in value.split(',').map(str::trim) {
+            match part {
+                "symbol-value" => knob.symbol_value = true,
+                other => tracing::warn!(
+                    target: "neovm_jit",
+                    part = other,
+                    "NEOVM_JIT_INTRINSICS: unknown part ignored \
+                     (expected symbol-value)"
+                ),
+            }
+        }
+        knob
+    }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static INTRINSIC_KNOB_TEST_OVERRIDE: std::cell::Cell<Option<IntrinsicKnob>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Force the intrinsic knob for compiles on the current thread (tests
+/// only); `None` returns to the environment's.
+#[cfg(test)]
+pub(crate) fn force_intrinsic_knob_for_test(knob: Option<IntrinsicKnob>) {
+    INTRINSIC_KNOB_TEST_OVERRIDE.with(|c| c.set(knob));
+}
+
+/// The `NEOVM_JIT_INTRINSICS` setting compiles use (read once).
+pub(crate) fn jit_intrinsic_knob() -> IntrinsicKnob {
+    #[cfg(test)]
+    if let Some(knob) = INTRINSIC_KNOB_TEST_OVERRIDE.with(|c| c.get()) {
+        return knob;
+    }
+    use std::sync::OnceLock;
+    static KNOB: OnceLock<IntrinsicKnob> = OnceLock::new();
+    *KNOB
+        .get_or_init(|| IntrinsicKnob::parse(std::env::var("NEOVM_JIT_INTRINSICS").ok().as_deref()))
+}
+
 #[cfg(test)]
 std::thread_local! {
     static LEAF_KNOB_TEST_OVERRIDE: std::cell::Cell<Option<LeafKnob>> = const { std::cell::Cell::new(None) };

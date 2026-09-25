@@ -6738,92 +6738,11 @@ fn lower_simple_op_arms(
             let slow = fb.create_block();
             let cont = fb.create_block();
             {
-                use super::jit_layout::{
-                    LISP_SYMBOL_FLAGS_OFFSET, LISP_SYMBOL_SIZE, LISP_SYMBOL_VAL_OFFSET,
-                    OBARRAY_CHUNK_BITS, OBARRAY_CHUNK_SLOTS, OBARRAY_JIT_LEN_OFFSET,
-                    OBARRAY_JIT_SPINE_OFFSET, SYMBOL_FLAGS_REDIRECT_MASK,
-                };
-                let ob = super::jit_layout::CONTEXT_OBARRAY_OFFSET;
-                let vmctx = fb.use_var(rt.vmctx_var);
-                let len = fb.ins().load(
-                    types::I64,
-                    MemFlagsData::trusted(),
-                    vmctx,
-                    (ob + OBARRAY_JIT_LEN_OFFSET) as i32,
-                );
-                let in_range = fb.ins().icmp(IntCC::UnsignedLessThan, sym_v, len);
-                let cell_blk = fb.create_block();
-                fb.ins().brif(in_range, cell_blk, &[], slow, &[]);
-                fb.switch_to_block(cell_blk);
-                fb.seal_block(cell_blk);
-                let spine = fb.ins().load(
-                    rt.ptr_ty,
-                    MemFlagsData::trusted(),
-                    vmctx,
-                    (ob + OBARRAY_JIT_SPINE_OFFSET) as i32,
-                );
-                // Same-session JIT symbol identities are constants. AOT may
-                // load a relocated identity, so fold only proven constants.
-                let offsets = iconst_bits(fb, sym_v)
-                    .and_then(|sym| u32::try_from(sym).ok())
-                    .and_then(|sym| {
-                        let cell = (sym as usize & (OBARRAY_CHUNK_SLOTS - 1))
-                            .checked_mul(LISP_SYMBOL_SIZE)?;
-                        Some((
-                            i64::from(sym >> OBARRAY_CHUNK_BITS) * 8,
-                            i64::try_from(cell).ok()?,
-                        ))
-                    });
-                let chunk_off = if let Some((chunk, _)) = offsets {
-                    fb.ins().iconst(types::I64, chunk)
-                } else {
-                    let chunk_index = ushr_imm_p(fb, sym_v, OBARRAY_CHUNK_BITS as i64);
-                    ishl_imm_p(fb, chunk_index, 3)
-                };
-                let chunk_slot = fb.ins().iadd(spine, chunk_off);
-                let chunk = fb
-                    .ins()
-                    .load(rt.ptr_ty, MemFlagsData::trusted(), chunk_slot, 0);
-                let cell_off = if let Some((_, cell)) = offsets {
-                    fb.ins().iconst(types::I64, cell)
-                } else {
-                    let slot_index = band_imm_p(fb, sym_v, (OBARRAY_CHUNK_SLOTS - 1) as i64);
-                    fb.ins().imul_imm_u(slot_index, LISP_SYMBOL_SIZE as i64)
-                };
-                let cell = fb.ins().iadd(chunk, cell_off);
-                let flags = fb.ins().uload8(
-                    types::I64,
-                    MemFlagsData::trusted(),
-                    cell,
-                    LISP_SYMBOL_FLAGS_OFFSET as i32,
-                );
-                let redirect = band_imm_p(fb, flags, SYMBOL_FLAGS_REDIRECT_MASK as i64);
-                let plain = icmp_imm_p(fb, IntCC::Equal, redirect, 0);
-                let val_blk = fb.create_block();
-                fb.ins().brif(plain, val_blk, &[], slow, &[]);
-                fb.switch_to_block(val_blk);
-                fb.seal_block(val_blk);
-                let val = fb.ins().load(
-                    types::I64,
-                    MemFlagsData::trusted(),
-                    cell,
-                    LISP_SYMBOL_VAL_OFFSET as i32,
-                );
-                let unbound = icmp_imm_p(fb, IntCC::Equal, val, Value::UNBOUND.bits() as i64);
-                let refused = if crate::buffer::buffer::DedicatedBufferLocal::from_sym_id(
+                let refuse_nil = crate::buffer::buffer::DedicatedBufferLocal::from_sym_id(
                     crate::emacs_core::intern::SymId(sym),
                 )
-                .is_some()
-                {
-                    let nil = icmp_imm_p(fb, IntCC::Equal, val, Value::NIL.bits() as i64);
-                    fb.ins().bor(unbound, nil)
-                } else {
-                    unbound
-                };
-                let fast_blk = fb.create_block();
-                fb.ins().brif(refused, slow, &[], fast_blk, &[]);
-                fb.switch_to_block(fast_blk);
-                fb.seal_block(fast_blk);
+                .is_some();
+                let val = super::intrinsics::emit_symbol_cell_read(fb, rt, sym_v, refuse_nil, slow);
                 fb.def_var(res, val);
                 fb.ins().jump(cont, &[]);
             }
@@ -7888,6 +7807,10 @@ fn lower_simple_op_arms(
             let at = stack.len() - arity;
             let operands: Vec<ClifValue> = stack[at..].to_vec();
             stack.truncate(at);
+            // `NEOVM_JIT_INTRINSICS` (JIT only): an inline fast path in front
+            // of the call below, which becomes its miss path
+            // (`intrinsics::finish` joins the two results).
+            let prefix = super::intrinsics::emit_prefix(fb, rt, other, &operands, aot);
             // `NEOVM_JIT_LEAF=opcode` (JIT only): call the op's leaf builtin
             // through its bare trampoline -- register arguments, the result's
             // own bits or a tag-`001` sentinel, no table index, status word or
@@ -7907,7 +7830,8 @@ fn lower_simple_op_arms(
                 fb.ins().brif(is_signal, se, &[], cont, &[]);
                 fb.switch_to_block(cont);
                 fb.seal_block(cont);
-                stack.push(word);
+                let result = super::intrinsics::finish(fb, prefix, word);
+                stack.push(result);
                 return Ok(());
             }
             let value_shim = match other {
@@ -7995,13 +7919,17 @@ fn lower_simple_op_arms(
                 fb.seal_block(cont);
                 match inline_aref {
                     Some((merge, res)) => {
+                        debug_assert!(prefix.is_none(), "one inline path per site");
                         fb.def_var(res, word);
                         fb.ins().jump(merge, &[]);
                         fb.switch_to_block(merge);
                         fb.seal_block(merge);
                         stack.push(fb.use_var(res));
                     }
-                    None => stack.push(word),
+                    None => {
+                        let result = super::intrinsics::finish(fb, prefix, word);
+                        stack.push(result);
+                    }
                 }
                 return Ok(());
             }
@@ -8047,6 +7975,7 @@ fn lower_simple_op_arms(
             let result = fb
                 .ins()
                 .stack_load(rt.ptr_ty, types::I64, rt.call_result_slot, 0);
+            let result = super::intrinsics::finish(fb, prefix, result);
             stack.push(result);
         }
     }

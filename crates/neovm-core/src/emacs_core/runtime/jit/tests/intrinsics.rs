@@ -1,0 +1,262 @@
+//! CLIF intrinsics (`NEOVM_JIT_INTRINSICS`, design `p1-2-builtin-intrinsics`
+//! §2.7): every intrinsic site must answer exactly as the interpreter's
+//! opcode arm -- value or signal -- on the shapes it takes inline and on the
+//! ones it leaves to the call, under both miss paths (the leaf trampoline and
+//! the table or value shim). Each test also proves the inline path ANSWERED
+//! the shapes it claims (the call it falls through to did not run) and
+//! missed the others, since a correctness assertion alone passes just as
+//! well when nothing was emitted.
+
+use super::super::leaf_abi::leaf_trampoline_calls;
+use super::*;
+use crate::emacs_core::bytecode::opcode::Op;
+use crate::emacs_core::bytecode::{ByteCodeFunction, Vm};
+use crate::emacs_core::eval::Context;
+use crate::emacs_core::print::print_value;
+use crate::emacs_core::subr::leaf::LeafId;
+use crate::emacs_core::value::LambdaParams;
+
+fn lexical_fn(nargs: u32, ops: Vec<Op>, constants: Vec<Value>) -> ByteCodeFunction {
+    let mut f = ByteCodeFunction::new(LambdaParams {
+        required: (1..=nargs).map(crate::emacs_core::intern::SymId).collect(),
+        optional: Vec::new(),
+        rest: None,
+    });
+    f.lexical = true;
+    f.ops = ops;
+    f.constants = constants.into();
+    f.max_stack = 8;
+    f
+}
+
+/// `(lambda (a [b]) (OP a [b]))`.
+fn opcode_fn(op: Op, nargs: u32) -> ByteCodeFunction {
+    let ops = if nargs == 1 {
+        vec![Op::StackRef(0), op, Op::Return]
+    } else {
+        vec![Op::StackRef(1), Op::StackRef(1), op, Op::Return]
+    };
+    lexical_fn(nargs, ops, vec![])
+}
+
+fn flow_text(flow: crate::emacs_core::error::Flow) -> String {
+    match flow {
+        crate::emacs_core::error::Flow::Signal(sig) => format!(
+            "signal {} {:?}",
+            sig.symbol_name(),
+            sig.data.iter().map(print_value).collect::<Vec<_>>()
+        ),
+        other => format!("{other:?}"),
+    }
+}
+
+/// Printed so that a circular answer cannot hang the comparison: a cons is
+/// compared by identity.
+fn show(v: Value) -> String {
+    if v.is_cons() {
+        format!("#<cons {:x}>", v.bits())
+    } else {
+        print_value(&v)
+    }
+}
+
+fn interpret(eval: &mut Context, f: &ByteCodeFunction, args: Vec<Value>) -> String {
+    let mut vm = Vm::from_context(eval);
+    match vm.execute(f, args) {
+        Ok(v) => show(v),
+        Err(flow) => flow_text(flow),
+    }
+}
+
+fn native(ctx_ptr: *mut u8, leaf: &CompiledLeaf, args: &[Value], what: &str) -> String {
+    match leaf.call(ctx_ptr, args) {
+        NativeRun::Ok(bits) => show(Value::from_bits(bits)),
+        NativeRun::Signal => flow_text(take_pending_flow().expect("flow stashed")),
+        other => panic!("{what} must not leave native code: {other:?}"),
+    }
+}
+
+/// Compile under the two knobs (and restore the environment's).
+fn compile_with(f: &ByteCodeFunction, leaf: LeafKnob, intrinsics: IntrinsicKnob) -> CompiledLeaf {
+    force_profit_gate_for_test(false);
+    force_leaf_knob_for_test(Some(leaf));
+    force_intrinsic_knob_for_test(Some(intrinsics));
+    let compiled = compile_bytecode_function(f).expect("compiles");
+    force_intrinsic_knob_for_test(None);
+    force_leaf_knob_for_test(None);
+    compiled
+}
+
+/// Evaluate `(list SRC...)` once, rooted.
+fn operands(ev: &mut Context, sources: &[&str]) -> Vec<Value> {
+    let list = ev
+        .eval_str(&format!("(list {})", sources.join(" ")))
+        .expect("operands");
+    crate::emacs_core::eval::push_scratch_gc_root(list);
+    crate::emacs_core::value::list_to_vec(&list).expect("proper")
+}
+
+#[test]
+fn intrinsic_knob_parses() {
+    assert_eq!(IntrinsicKnob::parse(None), IntrinsicKnob::OFF);
+    for off in ["", "0", "off", "false", "no"] {
+        assert_eq!(IntrinsicKnob::parse(Some(off)), IntrinsicKnob::OFF, "{off}");
+    }
+    for on in ["1", "on", "all", "true", "yes"] {
+        assert_eq!(IntrinsicKnob::parse(Some(on)), IntrinsicKnob::ALL, "{on}");
+    }
+    assert_eq!(
+        IntrinsicKnob::parse(Some("symbol-value,bogus")),
+        IntrinsicKnob {
+            symbol_value: true,
+            ..IntrinsicKnob::OFF
+        }
+    );
+}
+
+/// With the knob off nothing is emitted: the census stays put.
+#[test]
+fn knob_off_emits_no_intrinsic() {
+    let before: Vec<u64> = Intrinsic::ALL
+        .iter()
+        .map(|&w| intrinsic_sites_for_test(w))
+        .collect();
+    for (op, nargs) in [(Op::SymbolValue, 1)] {
+        compile_with(&opcode_fn(op, nargs), LeafKnob::DEFAULT, IntrinsicKnob::OFF);
+    }
+    let after: Vec<u64> = Intrinsic::ALL
+        .iter()
+        .map(|&w| intrinsic_sites_for_test(w))
+        .collect();
+    assert_eq!(before, after);
+}
+
+// ---------------------------------------------------------------------------
+// I6: symbol-value.
+// ---------------------------------------------------------------------------
+
+/// `symbol-value` of a dynamic operand over every variable shape, natively
+/// against `Bsymbol_value`, under both miss paths. A plain bound non-nil
+/// value is answered inline; nil values (the site cannot tell a dedicated
+/// buffer-local), void, buffer-local, forwarded and aliased variables,
+/// symbols with position and non-symbols reach the call.
+#[test]
+fn symbol_value_intrinsic_matches_bsymbol_value() {
+    let mut ev = Context::new();
+    ev.eval_str(
+        "(progn
+           (defvar leaf-iv-plain 'plain)
+           (defvar leaf-iv-nil nil)
+           (defvar leaf-iv-local 'local-default)
+           (make-variable-buffer-local 'leaf-iv-local)
+           (defvaralias 'leaf-iv-alias 'leaf-iv-plain)
+           (setq leaf-iv-local 'here))",
+    )
+    .expect("setup");
+    let ctx_ptr = &mut ev as *mut Context as *mut u8;
+    // (source, answered inline)
+    let cases: &[(&str, bool)] = &[
+        ("'leaf-iv-plain", true),
+        ("'leaf-iv-nil", false),
+        ("'leaf-iv-void", false),
+        ("'leaf-iv-local", false),
+        ("'leaf-iv-alias", false),
+        ("'fill-column", false),
+        ("'gc-cons-threshold", false),
+        ("'buffer-undo-list", false),
+        ("t", true),
+        ("nil", false),
+        ("(position-symbol 'leaf-iv-plain 3)", false),
+        ("5", false),
+        ("\"leaf-iv-plain\"", false),
+    ];
+    let sources: Vec<&str> = cases.iter().map(|(s, _)| *s).collect();
+    let values = operands(&mut ev, &sources);
+    let f = opcode_fn(Op::SymbolValue, 1);
+    let with_vars = LeafKnob {
+        vars: true,
+        ..LeafKnob::DEFAULT
+    };
+    for leaf_knob in [with_vars, LeafKnob::DEFAULT, LeafKnob::OFF] {
+        let sites0 = intrinsic_sites_for_test(Intrinsic::SymbolValue);
+        let leaf = compile_with(&f, leaf_knob, IntrinsicKnob::ALL);
+        assert_eq!(intrinsic_sites_for_test(Intrinsic::SymbolValue), sites0 + 1);
+        for swp in [false, true] {
+            ev.symbols_with_pos_enabled = swp;
+            for (&v, (src, inline)) in values.iter().zip(cases) {
+                let what = format!("(symbol-value {src}) swp={swp} {leaf_knob:?}");
+                let want = interpret(&mut ev, &f, vec![v]);
+                let calls0 = leaf_trampoline_calls(LeafId::SymbolValue);
+                assert_eq!(native(ctx_ptr, &leaf, &[v], &what), want, "{what}");
+                if leaf_knob.vars {
+                    assert_eq!(
+                        leaf_trampoline_calls(LeafId::SymbolValue) - calls0,
+                        u64::from(!inline),
+                        "{what}: answered inline = {inline}"
+                    );
+                }
+            }
+        }
+        ev.symbols_with_pos_enabled = false;
+    }
+}
+
+/// A constant symbol operand folds the cell address; a constant
+/// non-symbol emits nothing.
+#[test]
+fn symbol_value_of_a_constant() {
+    let mut ev = Context::new();
+    ev.eval_str("(defvar leaf-iv-const 'const-value)")
+        .expect("defvar");
+    let ctx_ptr = &mut ev as *mut Context as *mut u8;
+    let with_vars = LeafKnob {
+        vars: true,
+        ..LeafKnob::DEFAULT
+    };
+    for (constant, emits) in [
+        (Value::symbol("leaf-iv-const"), true),
+        (Value::symbol("leaf-iv-const-void"), true),
+        (Value::fixnum(3), false),
+    ] {
+        let f = lexical_fn(
+            0,
+            vec![Op::Constant(0), Op::SymbolValue, Op::Return],
+            vec![constant],
+        );
+        let sites0 = intrinsic_sites_for_test(Intrinsic::SymbolValue);
+        let leaf = compile_with(&f, with_vars, IntrinsicKnob::ALL);
+        assert_eq!(
+            intrinsic_sites_for_test(Intrinsic::SymbolValue) - sites0,
+            u64::from(emits)
+        );
+        let want = interpret(&mut ev, &f, vec![]);
+        assert_eq!(native(ctx_ptr, &leaf, &[], "constant"), want);
+    }
+    // A later `setq` is seen: the cell is read, not the compile-time value.
+    let f = lexical_fn(
+        0,
+        vec![Op::Constant(0), Op::SymbolValue, Op::Return],
+        vec![Value::symbol("leaf-iv-const")],
+    );
+    let leaf = compile_with(&f, with_vars, IntrinsicKnob::ALL);
+    ev.eval_str("(setq leaf-iv-const 'changed)").expect("setq");
+    assert_eq!(native(ctx_ptr, &leaf, &[], "after setq"), "changed");
+}
+
+/// `Op::VarRef` reads through the same cell-read emitter
+/// (`emit_symbol_cell_read`, factored out of its lowering) and still answers
+/// a plain variable.
+#[test]
+fn varref_keeps_its_inline_read() {
+    let mut ev = Context::new();
+    ev.eval_str("(defvar leaf-iv-ref 'ref-value)")
+        .expect("defvar");
+    let ctx_ptr = &mut ev as *mut Context as *mut u8;
+    let f = lexical_fn(
+        0,
+        vec![Op::VarRef(0), Op::Return],
+        vec![Value::symbol("leaf-iv-ref")],
+    );
+    let leaf = compile_with(&f, LeafKnob::DEFAULT, IntrinsicKnob::ALL);
+    assert_eq!(native(ctx_ptr, &leaf, &[], "varref"), "ref-value");
+}

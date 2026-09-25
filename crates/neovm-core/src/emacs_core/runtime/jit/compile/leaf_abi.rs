@@ -123,8 +123,10 @@ pub(crate) fn render_leaf_stats() -> String {
             out.push(format!("{name}:inline_sites={sites}"));
         }
     }
-    // Direct calls between compiled leaves (`direct_call`) share the line.
+    // Direct calls between compiled leaves (`direct_call`) and the CLIF
+    // intrinsics' sites (`intrinsics`) share the line.
     out.extend(super::direct_call::render_direct_call_stats());
+    out.extend(super::intrinsics::render_intrinsic_stats());
     out.join(" ")
 }
 
