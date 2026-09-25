@@ -256,7 +256,7 @@ pub fn compile_bytecode_function(f: &ByteCodeFunction) -> Result<CompiledLeaf, C
 /// did not). Used to justify (or
 /// not) the optimizing Tier-2 investment, and by the 2026-09-05 census
 /// (`tmp/rr/wf2/census/report.py`).
-fn jit_profile_path() -> Option<&'static str> {
+pub(crate) fn jit_profile_path() -> Option<&'static str> {
     use std::sync::OnceLock;
     static PATH: OnceLock<Option<String>> = OnceLock::new();
     PATH.get_or_init(|| std::env::var("NEOVM_JIT_PROFILE").ok())

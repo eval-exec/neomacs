@@ -3593,6 +3593,31 @@ fn maybe_drain_aot_pgo(mode: RuntimeMode, evaluator: &Context) {
 #[cfg(not(feature = "jit"))]
 fn maybe_drain_aot_pgo(_mode: RuntimeMode, _evaluator: &Context) {}
 
+/// Snapshot the JIT counters right before the outer command loop, so the
+/// exit report can print what the session did apart from startup. No-op
+/// unless a JIT report knob (`NEOVM_JIT_COMPILE_STATS`,
+/// `NEOVM_JIT_STATS_FILE`, `NEOVM_JIT_PROFILE`) is set.
+#[cfg(feature = "jit")]
+fn mark_jit_command_loop_entry() {
+    neovm_core::emacs_core::jit::stats::mark_command_loop_entry();
+}
+
+#[cfg(not(feature = "jit"))]
+fn mark_jit_command_loop_entry() {}
+
+/// Print the JIT's final report once the command loop has returned. Like
+/// `maybe_drain_aot_pgo`, it runs on the eval thread that owns the JIT's
+/// thread-local caches and before the shutdown-request early return, so
+/// `kill-emacs` and the batch-error exit report too. No-op unless a JIT
+/// report knob is set; never writes stdout.
+#[cfg(feature = "jit")]
+fn maybe_report_jit_stats(evaluator: &Context) {
+    neovm_core::emacs_core::jit::stats::report_at_exit(evaluator);
+}
+
+#[cfg(not(feature = "jit"))]
+fn maybe_report_jit_stats(_evaluator: &Context) {}
+
 fn run_gui_evaluator_worker(
     mode: RuntimeMode,
     startup: StartupOptions,
@@ -3815,6 +3840,7 @@ fn run_gui_evaluator_worker(
     // R2-C3: native-from-call-1 — prepopulate the AOT preload before first dispatch.
     maybe_prepopulate_aot(mode, &evaluator);
     tracing::info!("Entering GNU command loop on GUI evaluator worker...");
+    mark_jit_command_loop_entry();
     let exit_status = evaluator.recursive_edit();
     // Stop/join the native settings owner on every normal shutdown, before
     // the evaluator is deliberately retained for process exit. Unwinding and
@@ -3831,6 +3857,10 @@ fn run_gui_evaluator_worker(
         .cmd_tx
         .try_send(RenderCommand::Lifecycle(LifecycleCommand::Shutdown));
     render_waker.wake();
+
+    // The JIT's final report (same thread and placement rules as the
+    // drain below). No-op unless a JIT report knob is set.
+    maybe_report_jit_stats(&evaluator);
 
     // R2 increment C: persist this session's proven-hot JIT leaves before exit
     // (Context still alive on this eval thread; runs BEFORE the shutdown-request
@@ -4476,6 +4506,7 @@ pub fn run(mode: RuntimeMode) {
     // R2-C3: native-from-call-1 — prepopulate the AOT preload before first dispatch.
     maybe_prepopulate_aot(mode, &evaluator);
     tracing::info!("Entering GNU command loop (recursive-edit)...");
+    mark_jit_command_loop_entry();
     let exit_status = evaluator.recursive_edit();
     if exit_status.is_ok() {
         tracing::info!("Command loop exited normally");
@@ -4493,6 +4524,10 @@ pub fn run(mode: RuntimeMode) {
         tty_init::tty_shutdown_terminal();
     }
     log_clean_process_exit(process_started_at, &process_args);
+
+    // The JIT's final report (same thread and placement rules as the
+    // drain below). No-op unless a JIT report knob is set.
+    maybe_report_jit_stats(&evaluator);
 
     // R2 increment C: persist this session's proven-hot JIT leaves before exit
     // (Context still alive on this eval thread; runs BEFORE the shutdown-request

@@ -96,6 +96,42 @@ pub(crate) struct CompileStats {
     pub mir_inlined_callees: u64,
 }
 
+impl CompileStats {
+    /// The counts accumulated since `base`, an earlier snapshot of the same
+    /// thread's stats (the command-loop mark). `max_us`/`max_fn_len` are not
+    /// additive; the later values are kept.
+    pub(crate) fn since(&self, base: &CompileStats) -> CompileStats {
+        let d = |now: u64, then: u64| now.saturating_sub(then);
+        let mut histogram_us = [0u64; 8];
+        for (i, slot) in histogram_us.iter_mut().enumerate() {
+            *slot = d(self.histogram_us[i], base.histogram_us[i]);
+        }
+        CompileStats {
+            total_compiles: d(self.total_compiles, base.total_compiles),
+            total_us: d(self.total_us, base.total_us),
+            max_us: self.max_us,
+            max_fn_len: self.max_fn_len,
+            compiled_ok: d(self.compiled_ok, base.compiled_ok),
+            native_entries: d(self.native_entries, base.native_entries),
+            dispatch_consulted: d(self.dispatch_consulted, base.dispatch_consulted),
+            dispatch_said_compiled: d(self.dispatch_said_compiled, base.dispatch_said_compiled),
+            not_profitable: d(self.not_profitable, base.not_profitable),
+            not_compilable: d(self.not_compilable, base.not_compilable),
+            aot_loads: d(self.aot_loads, base.aot_loads),
+            retiers: d(self.retiers, base.retiers),
+            histogram_us,
+            mir_gate_optional: d(self.mir_gate_optional, base.mir_gate_optional),
+            mir_gate_rest: d(self.mir_gate_rest, base.mir_gate_rest),
+            mir_gate_prefix: d(self.mir_gate_prefix, base.mir_gate_prefix),
+            mir_build_failed: d(self.mir_build_failed, base.mir_build_failed),
+            mir_lower_failed: d(self.mir_lower_failed, base.mir_lower_failed),
+            mir_tier_rejected: d(self.mir_tier_rejected, base.mir_tier_rejected),
+            mir_taken: d(self.mir_taken, base.mir_taken),
+            mir_inlined_callees: d(self.mir_inlined_callees, base.mir_inlined_callees),
+        }
+    }
+}
+
 thread_local! {
     /// `NEOVM_JIT_COMPILE_STATS=1`: WHY the MIR tier bailed, keyed by the
     /// `CompileError::UnsupportedOp` reason — and for the catch-all
@@ -259,6 +295,19 @@ pub(crate) enum ReportTag {
     /// Periodic MIR-bail census.
     #[strum(serialize = "neovm-jit-mir-bails")]
     MirBails,
+    /// Exit report: the compile aggregates (whole process, then since the
+    /// command loop was entered).
+    #[strum(serialize = "neovm-jit-final")]
+    Final,
+    /// Exit report: the MIR-bail census.
+    #[strum(serialize = "neovm-jit-final-mir-bails")]
+    FinalMirBails,
+    /// Exit report: the fuser census.
+    #[strum(serialize = "neovm-jit-final-inline")]
+    FinalInline,
+    /// Exit report: native-run totals.
+    #[strum(serialize = "neovm-jit-final-runs")]
+    FinalRuns,
 }
 
 /// The process-wide report sink, chosen once from `NEOVM_JIT_STATS_FILE`.
@@ -472,6 +521,87 @@ fn record_native_entry_enabled() {
     });
 }
 
+/// Snapshot taken when the outer command loop is entered, so the exit report
+/// can separate startup (loadup, `after-pdump-load-hook`) from the session.
+struct LoopMark {
+    at: std::time::Instant,
+    compile: CompileStats,
+}
+
+thread_local! {
+    static LOOP_MARK: std::cell::RefCell<Option<LoopMark>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Snapshot the counters the exit report prints as `since_command_loop`
+/// deltas. Called once, right before the outer `recursive_edit`, on the eval
+/// thread. A no-op unless a report knob is set.
+pub fn mark_command_loop_entry() {
+    if !report_requested() {
+        return;
+    }
+    let compile = STATS.with(Cell::get);
+    LOOP_MARK.with(|m| {
+        *m.borrow_mut() = Some(LoopMark {
+            at: std::time::Instant::now(),
+            compile,
+        })
+    });
+}
+
+/// Whether any knob asks for the exit report: `NEOVM_JIT_COMPILE_STATS=1`,
+/// `NEOVM_JIT_STATS_FILE` or `NEOVM_JIT_PROFILE`.
+fn report_requested() -> bool {
+    summary_enabled() || super::compile::jit_profile_path().is_some()
+}
+
+/// The final report, printed once when the command loop has returned
+/// (`kill-emacs`, the end of `--batch`, a batch error's exit 255). No-op
+/// unless a report knob is set. MUST run on the eval thread: it reads the
+/// thread-local compile aggregates and caches. Read-only on `ctx`: no
+/// interning, no Lisp allocation, no safepoint.
+pub fn report_at_exit(_ctx: &crate::emacs_core::eval::Context) {
+    if !report_requested() {
+        return;
+    }
+    let report = collect_final_report();
+    if summary_enabled() {
+        for (tag, line) in report.render() {
+            report_line(tag, &line);
+        }
+    }
+    tracing::debug!(
+        target: "neovm_jit",
+        compiles = report.compile.total_compiles,
+        native_entries = report.compile.native_entries,
+        osr_transfers = report.osr_transfers,
+        "final jit report"
+    );
+}
+
+/// Gather this thread's aggregates and the process-wide JIT counters.
+fn collect_final_report() -> report::FinalReport {
+    use std::sync::atomic::Ordering;
+    let compile = STATS.with(Cell::get);
+    let (since_command_loop_ms, compile_since_loop) = LOOP_MARK.with(|m| match &*m.borrow() {
+        Some(mark) => (
+            Some(mark.at.elapsed().as_millis() as u64),
+            Some(compile.since(&mark.compile)),
+        ),
+        None => (None, None),
+    });
+    report::FinalReport {
+        pid: std::process::id(),
+        since_command_loop_ms,
+        compile,
+        compile_since_loop,
+        mir_bails: mir_bail_summary(32),
+        inline: inline_census_summary(32),
+        osr_transfers: super::cache::OSR_TRANSFER_COUNT.load(Ordering::Relaxed),
+        seam_fallbacks: super::cache::SEAM_INTERP_FALLBACK_COUNT.load(Ordering::Relaxed),
+    }
+}
+
 /// Test-only: this thread's current compile-stall aggregate.
 #[cfg(test)]
 pub(crate) fn compile_stats_snapshot() -> CompileStats {
@@ -484,6 +614,12 @@ pub(crate) fn reset_compile_stats() {
     STATS.with(|s| s.set(CompileStats::default()));
 }
 
+mod report;
+
 #[cfg(test)]
 #[path = "stats/tests/stats_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "stats/tests/report_test.rs"]
+mod report_tests;
