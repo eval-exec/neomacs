@@ -3903,6 +3903,7 @@ fn build_leaf_fn<S: LeafSink>(
     let variable_raw = uniform_raw_osr_slots(cfg, known_fixnum_slots, osr_pc);
     let has_raw_slots = variable_raw.iter().any(|&raw| raw);
     lowering::imm_pool_reset();
+    cold_exits::begin_function();
     LAST_IR_STATS.with(|c| c.set((0, 0, 0, 0)));
     lowering::flonum_census_reset();
     heap_inline::inline_heap_sites_reset();

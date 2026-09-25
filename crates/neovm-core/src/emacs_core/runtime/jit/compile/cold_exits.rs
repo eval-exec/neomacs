@@ -20,7 +20,12 @@
 //!
 //! Every exit is already shared where its state is: one signal exit and one
 //! rerun block per function, one deopt block per guarded op (all its guards
-//! branch there), one dispatch per protected signal site.
+//! branch there), one dispatch per protected signal site. `share` also
+//! shares what the precise-deopt blocks have in common: each one spills its
+//! own framestate and jumps to the function's one deopt tail with its pc,
+//! depth and handler count, and the tail writes the cells and returns
+//! (`lowering::deopt_tail`), instead of every site carrying those stores
+//! and a return epilogue of its own.
 //!
 //! An exit that branches further (the poll's rooting and signal check, a
 //! dispatch's handler compare chain) is marked with every block created
@@ -31,7 +36,7 @@
 use cranelift_codegen::ir::Block;
 use cranelift_frontend::FunctionBuilder;
 
-use super::jit_cold_exits_on;
+use super::{ColdExitsMode, jit_cold_exits, jit_cold_exits_on};
 
 /// Which exit a cold mark is for: the compile census
 /// (`stats::CompileStats::cold_exits`, the `cold_exits[...]` summary group
@@ -55,6 +60,38 @@ pub(crate) enum ColdExit {
     Poll,
     /// A root-window grow call (per site, or the hoisted entry check).
     Grow,
+    /// A function's shared deopt tail (`share` only).
+    DeoptTail,
+}
+
+thread_local! {
+    /// The deopt tail of the function being lowered (`share`), created by
+    /// its first precise-deopt site.
+    static DEOPT_TAIL: std::cell::Cell<Option<Block>> = const { std::cell::Cell::new(None) };
+}
+
+/// Start a function: forget the previous function's deopt tail. Both tiers'
+/// builders call this before lowering anything.
+pub(crate) fn begin_function() {
+    DEOPT_TAIL.with(|t| t.set(None));
+}
+
+/// The function's shared deopt tail under `share`: the cached block, or
+/// the one `create` builds (and fills) now. `None` in the other modes.
+pub(crate) fn shared_deopt_tail(
+    fb: &mut FunctionBuilder,
+    create: impl FnOnce(&mut FunctionBuilder) -> Block,
+) -> Option<Block> {
+    if jit_cold_exits() != ColdExitsMode::Share {
+        return None;
+    }
+    if let Some(tail) = DEOPT_TAIL.with(std::cell::Cell::get) {
+        return Some(tail);
+    }
+    let tail = create(fb);
+    mark_exit_cold(fb, tail, ColdExit::DeoptTail);
+    DEOPT_TAIL.with(|t| t.set(Some(tail)));
+    Some(tail)
 }
 
 /// Mark exit block `block` (a `kind` exit) cold, when the knob is on.

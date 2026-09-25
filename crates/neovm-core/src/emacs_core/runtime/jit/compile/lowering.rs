@@ -3039,6 +3039,7 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
     imm_pool_reset();
     guards_emitted_reset();
     rootwin_counters_reset();
+    super::cold_exits::begin_function();
     use mir::{BinKind, CmpKind, MirOp, MirTerm, PredKind as MP, UnaryKind as MU};
 
     // The block-parameter type fixpoint (the MIR twin of the baseline's
@@ -4842,13 +4843,21 @@ pub(crate) fn emit_pending_deopts(
         ));
     });
     let cold = super::cold_exits::ColdSpan::begin(fb);
+    // `NEOVM_JIT_COLD_EXITS=share`: the cell stores and the return live in
+    // one tail per function. Created here, between filled blocks.
+    let tail = if pending.is_empty() {
+        None
+    } else {
+        super::cold_exits::shared_deopt_tail(fb, |fb| deopt_tail(fb, refs))
+    };
     for pd in pending.drain(..) {
         fb.switch_to_block(pd.block);
         fb.seal_block(pd.block);
         super::cold_exits::mark_exit_cold(fb, pd.block, super::cold_exits::ColdExit::Deopt);
         // Materialize the four bases. For Baked, the iconsts live in THIS cold
         // block (the original JIT placement); for Sidecar they are entry values.
-        let (spill_base, meta_pc, meta_depth, meta_handlers) = match refs {
+        // A site that jumps to the shared tail needs only the spill base.
+        let (spill_base, metas) = match refs {
             DeoptRefs::Baked {
                 spill_base,
                 meta_pc,
@@ -4856,16 +4865,20 @@ pub(crate) fn emit_pending_deopts(
                 meta_handlers,
             } => (
                 fb.ins().iconst(types::I64, spill_base),
-                fb.ins().iconst(types::I64, meta_pc),
-                fb.ins().iconst(types::I64, meta_depth),
-                fb.ins().iconst(types::I64, meta_handlers),
+                tail.is_none().then(|| {
+                    (
+                        fb.ins().iconst(types::I64, meta_pc),
+                        fb.ins().iconst(types::I64, meta_depth),
+                        fb.ins().iconst(types::I64, meta_handlers),
+                    )
+                }),
             ),
             DeoptRefs::Sidecar {
                 spill_base,
                 meta_pc,
                 meta_depth,
                 meta_handlers,
-            } => (spill_base, meta_pc, meta_depth, meta_handlers),
+            } => (spill_base, Some((meta_pc, meta_depth, meta_handlers))),
         };
         // Inside an inlined region the interpreter must resume at the CALL,
         // with the stack the caller had before it — the region's own operand
@@ -4907,6 +4920,22 @@ pub(crate) fn emit_pending_deopts(
             fb.ins()
                 .store(MemFlagsData::trusted(), tagged, spill_base, (j * 8) as i32);
         }
+        if let Some(tail) = tail {
+            let pc_v = fb.ins().iconst(types::I64, pc as i64);
+            let depth_v = fb.ins().iconst(types::I64, stack.len() as i64);
+            let h_v = fb.ins().iconst(types::I64, pd.handlers_len as i64);
+            fb.ins().jump(
+                tail,
+                &[
+                    BlockArg::Value(pc_v),
+                    BlockArg::Value(depth_v),
+                    BlockArg::Value(h_v),
+                ],
+            );
+            continue;
+        }
+        let (meta_pc, meta_depth, meta_handlers) =
+            metas.expect("a site without the shared tail materializes the cells");
         let pc_v = fb.ins().iconst(types::I64, pc as i64);
         fb.ins().store(MemFlagsData::trusted(), pc_v, meta_pc, 0);
         let depth_v = fb.ins().iconst(types::I64, stack.len() as i64);
@@ -4919,6 +4948,47 @@ pub(crate) fn emit_pending_deopts(
         fb.ins().return_(&[code]);
     }
     cold.end(fb, None);
+}
+
+/// Build the function's shared precise-deopt tail
+/// (`NEOVM_JIT_COLD_EXITS=share`): `(pc, depth, handlers)` block parameters
+/// stored in the leaf's cells, then [`STATUS_DEOPT_AT`]. Every site has
+/// spilled its framestate before it jumps here. The tail is left unsealed:
+/// its predecessors arrive with every later site, and the builder seals all
+/// blocks at the end (it reads no variable, so sealing late changes
+/// nothing). Must be called between filled blocks.
+fn deopt_tail(fb: &mut FunctionBuilder, refs: DeoptRefs) -> Block {
+    let tail = fb.create_block();
+    let pc_v = fb.append_block_param(tail, types::I64);
+    let depth_v = fb.append_block_param(tail, types::I64);
+    let h_v = fb.append_block_param(tail, types::I64);
+    fb.switch_to_block(tail);
+    let (meta_pc, meta_depth, meta_handlers) = match refs {
+        DeoptRefs::Baked {
+            meta_pc,
+            meta_depth,
+            meta_handlers,
+            ..
+        } => (
+            fb.ins().iconst(types::I64, meta_pc),
+            fb.ins().iconst(types::I64, meta_depth),
+            fb.ins().iconst(types::I64, meta_handlers),
+        ),
+        DeoptRefs::Sidecar {
+            meta_pc,
+            meta_depth,
+            meta_handlers,
+            ..
+        } => (meta_pc, meta_depth, meta_handlers),
+    };
+    fb.ins().store(MemFlagsData::trusted(), pc_v, meta_pc, 0);
+    fb.ins()
+        .store(MemFlagsData::trusted(), depth_v, meta_depth, 0);
+    fb.ins()
+        .store(MemFlagsData::trusted(), h_v, meta_handlers, 0);
+    let code = fb.ins().iconst(types::I64, STATUS_DEOPT_AT);
+    fb.ins().return_(&[code]);
+    tail
 }
 
 /// Build the [`DeoptRefs`] for this leaf.

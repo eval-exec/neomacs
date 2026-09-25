@@ -1,6 +1,7 @@
 //! `NEOVM_JIT_COLD_EXITS` (P2.2 O0.2): off, the CLIF is what it was; `on`,
 //! it differs only in cold marks, every exit block carries one, and the
-//! compile census counts them by kind.
+//! compile census counts them by kind; `share` also sends every precise
+//! deopt through one tail per function.
 
 use super::*;
 use crate::emacs_core::bytecode::ByteCodeFunction;
@@ -252,33 +253,71 @@ fn cold_exits_change_only_the_cold_marks() {
     }
 }
 
-/// On, every block that leaves through a deopt or signal status is cold,
-/// and no block that returns a value is.
+/// On (and shared), every block that leaves through a deopt or signal
+/// status is cold, and no block that returns a value is. Shared, a
+/// function returns `STATUS_DEOPT_AT` from one block at most.
 #[test]
 fn cold_exits_mark_every_exit_block() {
     force_deopt_for_test(false);
     force_profit_gate_for_test(false);
     let ev = Context::new();
-    for (name, path, f) in corpus() {
-        for clif in clif_of(&ev, path, &f, ColdExitsMode::On) {
-            let blocks = blocks(&clif);
-            assert!(!blocks[0].is_cold(), "{name}: the entry is cold\n{clif}");
-            let mut exits = 0;
-            for block in &blocks {
-                match block.returned_status() {
-                    Some(STATUS_DEOPT | STATUS_DEOPT_AT | STATUS_SIGNAL) => {
-                        exits += 1;
-                        assert!(block.is_cold(), "{name}: {} is hot\n{clif}", block.header);
+    for mode in [ColdExitsMode::On, ColdExitsMode::Share] {
+        for (name, path, f) in corpus() {
+            for clif in clif_of(&ev, path, &f, mode) {
+                let blocks = blocks(&clif);
+                assert!(!blocks[0].is_cold(), "{name}: the entry is cold\n{clif}");
+                let mut exits = 0;
+                let mut deopt_returns = 0;
+                for block in &blocks {
+                    match block.returned_status() {
+                        Some(status @ (STATUS_DEOPT | STATUS_DEOPT_AT | STATUS_SIGNAL)) => {
+                            exits += 1;
+                            deopt_returns += usize::from(status == STATUS_DEOPT_AT);
+                            assert!(block.is_cold(), "{name}: {} is hot\n{clif}", block.header);
+                        }
+                        Some(STATUS_OK) => {
+                            assert!(!block.is_cold(), "{name}: {} is cold\n{clif}", block.header)
+                        }
+                        _ => {}
                     }
-                    Some(STATUS_OK) => {
-                        assert!(!block.is_cold(), "{name}: {} is cold\n{clif}", block.header)
-                    }
-                    _ => {}
+                }
+                assert!(exits > 0, "{name}: no exit found\n{clif}");
+                if mode == ColdExitsMode::Share {
+                    assert!(
+                        deopt_returns <= 1,
+                        "{name}: {deopt_returns} deopt returns\n{clif}"
+                    );
                 }
             }
-            assert!(exits > 0, "{name}: no exit found\n{clif}");
         }
     }
+}
+
+/// Shared, a body with several guarded ops returns through one tail, which
+/// the sites reach by jumping with their pc, depth and handler count.
+#[test]
+fn shared_deopt_tail_serves_every_site() {
+    force_deopt_for_test(false);
+    force_profit_gate_for_test(false);
+    let ev = Context::new();
+    let (name, path, f) = corpus().remove(0);
+    let on = clif_of(&ev, path, &f, ColdExitsMode::On);
+    let share = clif_of(&ev, path, &f, ColdExitsMode::Share);
+    let deopt_returns = |clif: &str| {
+        blocks(clif)
+            .iter()
+            .filter(|b| b.returned_status() == Some(STATUS_DEOPT_AT))
+            .count()
+    };
+    assert!(deopt_returns(&on[0]) >= 2, "{name}: {}", on[0]);
+    assert_eq!(deopt_returns(&share[0]), 1, "{name}: {}", share[0]);
+    let tail = blocks(&share[0])
+        .into_iter()
+        .find(|b| b.returned_status() == Some(STATUS_DEOPT_AT))
+        .expect("the tail");
+    assert!(tail.is_cold());
+    let params = tail.header.matches(": i64").count();
+    assert_eq!(params, 3, "pc, depth, handlers: {}", tail.header);
 }
 
 fn cold_census() -> [u64; stats::COLD_EXIT_KINDS] {
@@ -297,7 +336,7 @@ fn cold_exit_census_counts_each_kind() {
         let before = cold_census();
         let _ = clif_of(&ev, path, &f, ColdExitsMode::Off);
         assert_eq!(cold_census(), before, "{name}: counted with the knob off");
-        let _ = clif_of(&ev, path, &f, ColdExitsMode::On);
+        let _ = clif_of(&ev, path, &f, ColdExitsMode::Share);
         let after = cold_census();
         for (i, slot) in seen.iter_mut().enumerate() {
             *slot += after[i] - before[i];
@@ -317,8 +356,8 @@ fn cold_exit_census_counts_each_kind() {
     );
 }
 
-/// The corpus runs the same with the knob on: a cold mark moves code, it
-/// does not change what the code does.
+/// The corpus runs the same in every mode: a cold mark moves code and the
+/// shared tail writes the same cells; neither changes what the code does.
 #[test]
 fn cold_exits_run_the_corpus_unchanged() {
     force_deopt_for_test(false);
@@ -357,8 +396,10 @@ fn cold_exits_run_the_corpus_unchanged() {
             // A float operand deopts at the first guard, in both.
             let args = vec![arg; f.params.required.len()];
             let off = describe(run(&mut ev, ColdExitsMode::Off, &f, &args));
-            let on = describe(run(&mut ev, ColdExitsMode::On, &f, &args));
-            assert_eq!(on, off, "{name}");
+            for mode in [ColdExitsMode::On, ColdExitsMode::Share] {
+                let got = describe(run(&mut ev, mode, &f, &args));
+                assert_eq!(got, off, "{name} {mode:?}");
+            }
         }
     }
 }

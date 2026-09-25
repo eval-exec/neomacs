@@ -613,12 +613,17 @@ pub(crate) enum ColdExitsMode {
     /// the root-window grow calls), so Cranelift emits them after the
     /// function's hot code. The CLIF differs from `Off` only in the marks.
     On,
+    /// [`Self::On`], and the precise-deopt blocks of a function share one
+    /// cold tail that stores the pc, depth and handler cells and returns:
+    /// each site keeps only its framestate spill.
+    Share,
 }
 
 impl ColdExitsMode {
     pub(crate) fn parse(value: Option<&str>) -> Self {
         match value {
             Some("1" | "on" | "true" | "yes") => Self::On,
+            Some("share") => Self::Share,
             _ => Self::Off,
         }
     }
@@ -631,8 +636,8 @@ pub(crate) fn force_cold_exits_for_test(mode: Option<ColdExitsMode>) {
     COLD_EXITS_TEST_OVERRIDE.with(|c| c.set(mode));
 }
 
-/// `NEOVM_JIT_COLD_EXITS=off|on` (default off; see [`ColdExitsMode`]).
-/// Read at compile time only.
+/// `NEOVM_JIT_COLD_EXITS=off|on|share` (default off; see
+/// [`ColdExitsMode`]). Read at compile time only.
 pub(crate) fn jit_cold_exits() -> ColdExitsMode {
     #[cfg(test)]
     if let Some(mode) = COLD_EXITS_TEST_OVERRIDE.with(|c| c.get()) {
@@ -644,7 +649,7 @@ pub(crate) fn jit_cold_exits() -> ColdExitsMode {
         .get_or_init(|| ColdExitsMode::parse(std::env::var("NEOVM_JIT_COLD_EXITS").ok().as_deref()))
 }
 
-/// Whether exit blocks are marked cold.
+/// Whether exit blocks are marked cold (`on` or `share`).
 #[inline]
 pub(crate) fn jit_cold_exits_on() -> bool {
     jit_cold_exits() != ColdExitsMode::Off
