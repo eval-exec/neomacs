@@ -1581,6 +1581,7 @@ impl Context {
             && !self.echo_area_resize_exact_pending
             && self.last_redisplay_signature.is_some()
             && self.last_redisplay_signature.as_ref() == Some(&self.redisplay_signature())
+            && !(force && self.displayed_buffer_changes_unacknowledged())
         {
             tracing::debug!("redisplay skipped: visible state unchanged");
             return;
@@ -1676,6 +1677,35 @@ impl Context {
         for frame in frames {
             let _ = self.safe_funcall(Value::symbol("window--resize-mini-frame"), vec![frame]);
         }
+    }
+
+    /// Whether a buffer the selected frame shows changed since redisplay last
+    /// acknowledged it (the layout's `reset_unchanged_region`, GNU's
+    /// `mark_window_display_accurate`).
+    ///
+    /// The skip signature is taken when a redisplay ENDS, after the window
+    /// change hooks; a change made after the layout's acknowledgement (by
+    /// those hooks, say) is then part of the signature and yet was never laid
+    /// out. GNU's next redisplay sees such a buffer as modified since its
+    /// display and redisplays it, so a forced redisplay must not skip it: the
+    /// change would otherwise reach the next edit frame as damage outside the
+    /// edited line (the mode-line `:eval` oracle's `typenofl` case, where GNU
+    /// keeps the mode line and the skipped redisplay made neomacs evaluate it).
+    pub(super) fn displayed_buffer_changes_unacknowledged(&self) -> bool {
+        let Some(frame) = self.frames.selected_frame() else {
+            return false;
+        };
+        let mut window_ids = frame.window_list();
+        if let Some(minibuffer_window) = frame.minibuffer_window {
+            window_ids.push(minibuffer_window);
+        }
+        window_ids.into_iter().any(|window_id| {
+            frame
+                .find_window(window_id)
+                .and_then(|window| window.buffer_id())
+                .and_then(|buffer_id| self.buffers.get(buffer_id))
+                .is_some_and(|buffer| buffer.changed_char_range().is_some())
+        })
     }
 
     pub(super) fn redisplay_signature(&self) -> RedisplaySignature {

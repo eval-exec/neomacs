@@ -24,8 +24,19 @@ fn idle_context() -> (Context, std::rc::Rc<std::cell::Cell<usize>>) {
     .expect("setup");
     let layouts = std::rc::Rc::new(std::cell::Cell::new(0usize));
     let counter = layouts.clone();
-    eval.redisplay_fn = Some(Box::new(move |_eval| counter.set(counter.get() + 1)));
+    eval.redisplay_fn = Some(Box::new(move |eval| {
+        counter.set(counter.get() + 1);
+        // A layout acknowledges the buffers it displayed (the engine's
+        // `reset_unchanged_region`, GNU's `mark_window_display_accurate`).
+        acknowledge_current_buffer(eval);
+    }));
     (eval, layouts)
+}
+
+fn acknowledge_current_buffer(eval: &Context) {
+    if let Some(buffer) = eval.buffers.current_buffer() {
+        buffer.reset_unchanged_region();
+    }
 }
 
 fn prered_args(eval: &mut Context) -> String {
@@ -79,4 +90,36 @@ fn window_old_point_follows_its_marker_across_redisplays() {
         eval.eval_str("(window-old-point)").expect("old point"),
         Value::fixnum(123)
     );
+}
+
+/// A change made after the layout acknowledged the buffer (here by the
+/// layout's own caller, as a window change hook does) is part of the skip
+/// signature taken when the redisplay ends, yet was never laid out. GNU's
+/// next redisplay redisplays such a buffer, so a forced one must not skip.
+#[test]
+fn a_forced_idle_redisplay_lays_out_a_change_made_after_the_last_layout() {
+    let (mut eval, layouts) = idle_context();
+    let changed_after = std::rc::Rc::new(std::cell::Cell::new(false));
+    let flag = changed_after.clone();
+    let counter = layouts.clone();
+    eval.redisplay_fn = Some(Box::new(move |eval| {
+        counter.set(counter.get() + 1);
+        acknowledge_current_buffer(eval);
+        if !flag.replace(true) {
+            eval.eval_str("(put-text-property 1 5 'face 'bold)")
+                .expect("post-layout change");
+        }
+    }));
+    crate::emacs_core::xdisp::set_redisplay_idle_skip_for_test(Some(true));
+    eval.eval_str("(redisplay t)").expect("first");
+    assert_eq!(layouts.get(), 1);
+    eval.eval_str("(redisplay t)").expect("second");
+    assert_eq!(
+        layouts.get(),
+        2,
+        "the change after the first layout's acknowledgement is laid out"
+    );
+    eval.eval_str("(redisplay t)").expect("third");
+    crate::emacs_core::xdisp::set_redisplay_idle_skip_for_test(None);
+    assert_eq!(layouts.get(), 2, "now idle, the forced redisplay skips");
 }
