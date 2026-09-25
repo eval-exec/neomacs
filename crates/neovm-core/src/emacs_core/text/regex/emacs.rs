@@ -329,14 +329,11 @@ pub(crate) struct CompiledPattern {
     /// five org font-lock operations); SipHash on a `usize` key was 1.7M Ir/op.
     pub charset_class_bits: FxHashMap<usize, u32>,
 
-    /// True if the pattern used a non-greedy optional `??`.  Its
-    /// `OnFailureKeepStringJump` does NOT restore the string position on
-    /// backtrack, so the fallback resumes at the failure position rather
-    /// than the split position — semantics a Pike VM (which explores the
-    /// jump target from the CURRENT position) cannot reproduce.  The
-    /// smart-loop `OnFailureKeepStringJump` is safe (no-rewind ≡ rewind
-    /// under its mutual-exclusivity precondition), so only this `??`-sourced
-    /// form forces Pike ineligibility.  Set at the sole `??` emit site.
+    /// True if the pattern used a non-greedy optional `??`.  Set at the sole
+    /// `??` emit site, which produces GNU's `on_failure_jump` + `jump` shape
+    /// (regex-emacs.c:2009-2015; no keep-string jump).  It keeps the pattern
+    /// off the Pike VM (see [`compute_pike_eligible`]), whose priority order
+    /// for that skip-first split has not been validated.
     pub has_nongreedy_optional: bool,
 
     /// True if this pattern is eligible for the non-backtracking Pike VM
@@ -356,22 +353,10 @@ pub(crate) struct CompiledPattern {
     /// False (e.g. a hand-assembled test buffer) keeps the checked loop.
     pub buffer_sealed: bool,
 
-    /// Pike-only view of the bytecode: identical to `buffer` except that
-    /// smart keep-string loops (`OnFailureKeepStringJump` whose jump-back
-    /// targets the loop body) are de-optimized back to the equivalent
-    /// REWIND loop (`OnFailureJump` with the jump-back targeting the split).
-    ///
-    /// Keep-string jumps resume the loop EXIT at the position where the body
-    /// fails, which a Pike VM (each thread pinned to the current position)
-    /// cannot represent.  The rewind form re-evaluates the exit at every
-    /// position, which the Pike VM handles correctly and which is
-    /// semantically identical (the compiler only applies the keep-string
-    /// optimization when body and continuation are mutually exclusive).
-    /// The transform preserves byte LENGTH and all opcode positions, so the
-    /// position-keyed charset side tables stay valid.  `None` when the
-    /// pattern is ineligible or has no keep-string loop that needs the
-    /// rewrite (in which case the Pike VM reads `buffer` directly).
-    pub pike_buffer: Option<Vec<u8>>,
+    /// The rewind view of the bytecode, for the engines that step every
+    /// thread one position at a time (the Pike VM, the existence DFA): see
+    /// [`RewindView`].  Computed for every pattern at compile time.
+    pub rewind: RewindView,
 
     /// Multi-literal SIMD prefilter that AUGMENTS (never replaces) the
     /// backtracker's search skip loop.  When `Some`, `re_search`'s forward
@@ -435,6 +420,41 @@ impl CompiledPattern {
             Some(scan) => Some(scan),
             None if may_build => Some(cell.get_or_init(|| build_folded_scan(self, table))),
             None => None,
+        }
+    }
+}
+
+/// The bytecode with every smart keep-string loop (`OnFailureKeepStringJump`
+/// whose jump-back targets the loop body) de-optimized back to the equivalent
+/// REWIND loop (`OnFailureJump` with the jump-back targeting the split).
+///
+/// Keep-string jumps resume the loop EXIT at the position where the body
+/// fails, which an engine that keeps each thread pinned to the current
+/// position cannot represent.  The rewind form re-evaluates the exit at every
+/// position, which such an engine handles correctly and which is semantically
+/// identical (the compiler only applies the keep-string optimization when body
+/// and continuation are mutually exclusive, GNU `mutually_exclusive_p`).  The
+/// transform preserves byte LENGTH and all opcode positions, so the
+/// position-keyed charset side tables stay valid.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum RewindView {
+    /// No keep-string loop: the rewind view is `buffer` itself.
+    Buffer,
+    /// `buffer` with its keep-string loops rewritten.
+    Rewritten(Box<[u8]>),
+    /// A keep-string jump of an unexpected shape (fail closed: no engine
+    /// that needs the view may run this pattern).
+    Unavailable,
+}
+
+impl CompiledPattern {
+    /// The rewind view's bytecode, or `None` when it is [`RewindView::Unavailable`].
+    #[inline]
+    pub(crate) fn rewind_bytecode(&self) -> Option<&[u8]> {
+        match &self.rewind {
+            RewindView::Buffer => Some(&self.buffer),
+            RewindView::Rewritten(bytecode) => Some(bytecode),
+            RewindView::Unavailable => None,
         }
     }
 }
@@ -808,7 +828,7 @@ impl CompiledPattern {
             has_nongreedy_optional: false,
             pike_eligible: false,
             buffer_sealed: false,
-            pike_buffer: None,
+            rewind: RewindView::Buffer,
             prefilter: std::cell::OnceCell::new(),
             start_anchor: StartAnchor::None,
         }
@@ -2102,17 +2122,12 @@ pub(crate) fn regex_compile_lisp_with_translation(
     // depends only on the bytecode's required-literal structure, which is
     // syntax-table independent, so it survives `recompute_fastmap` cloning.
 
-    // Decide once whether the non-backtracking Pike VM can simulate this
-    // bytecode byte-exactly (see `compute_pike_eligible`).
-    buf.pike_eligible = compute_pike_eligible(&buf);
-    if buf.pike_eligible {
-        // Build the Pike-only rewind view of any keep-string loops.  If a
-        // keep-string jump has an unexpected shape, fail closed (ineligible).
-        match build_pike_buffer(&buf) {
-            Some(pike_buf) => buf.pike_buffer = pike_buf,
-            None => buf.pike_eligible = false,
-        }
-    }
+    // The rewind view of any keep-string loops, then whether the
+    // non-backtracking Pike VM can simulate this bytecode byte-exactly (see
+    // `compute_pike_eligible`); it runs on the view, so a keep-string jump of
+    // an unexpected shape fails closed (ineligible).
+    buf.rewind = build_rewind_view(&buf.buffer);
+    buf.pike_eligible = buf.rewind != RewindView::Unavailable && compute_pike_eligible(&buf);
 
     // Seal: prove the buffer safe for unchecked backtracker dispatch. Runs
     // LAST — after every post-compile rewrite (fusion, splices) — so the
@@ -2228,21 +2243,25 @@ fn validate_sealed_buffer(pattern: &CompiledPattern) -> bool {
     true
 }
 
-/// Build the Pike-only bytecode view: de-optimize every keep-string smart
-/// loop (`OnFailureKeepStringJump` whose jump-back targets the loop body)
-/// into the equivalent rewind loop (`OnFailureJump` whose jump-back targets
-/// the split).  See [`CompiledPattern::pike_buffer`].
+/// Build the [`RewindView`]: de-optimize every keep-string smart loop
+/// (`OnFailureKeepStringJump` whose jump-back targets the loop body) into the
+/// equivalent rewind loop (`OnFailureJump` whose jump-back targets the split).
 ///
-/// Returns `Some(None)` if no rewrite is needed (Pike reads `buffer`),
-/// `Some(Some(buf))` with the rewritten copy, or `None` if a keep-string
-/// jump does not match the expected smart-loop shape (the caller then marks
-/// the pattern ineligible — fail closed).  The pattern is already known not
-/// to contain a non-greedy `??` keep-string (that sets
-/// `has_nongreedy_optional`, which makes it ineligible before we get here),
-/// so every `OnFailureKeepStringJump` reaching this point must be a loop.
+/// Every `OnFailureKeepStringJump` the compiler emits comes from
+/// `resolve_smart_jumps`, so each must have the smart-loop shape; one that
+/// does not makes the view [`RewindView::Unavailable`].
+fn build_rewind_view(orig: &[u8]) -> RewindView {
+    match rewrite_keep_string_loops(orig) {
+        Some(None) => RewindView::Buffer,
+        Some(Some(rewritten)) => RewindView::Rewritten(rewritten.into_boxed_slice()),
+        None => RewindView::Unavailable,
+    }
+}
+
+/// `Some(None)` when nothing needs rewriting, `Some(Some(copy))` with the
+/// rewritten copy, `None` for an unexpected keep-string shape.
 #[allow(clippy::option_option)]
-fn build_pike_buffer(buf: &CompiledPattern) -> Option<Option<Vec<u8>>> {
-    let orig = &buf.buffer;
+fn rewrite_keep_string_loops(orig: &[u8]) -> Option<Option<Vec<u8>>> {
     let mut rewritten: Option<Vec<u8>> = None;
     let mut pc = 0usize;
     while pc < orig.len() {
@@ -2268,7 +2287,7 @@ fn build_pike_buffer(buf: &CompiledPattern) -> Option<Option<Vec<u8>>> {
             }
             // Rewrite: OFKSJ → OnFailureJump (same offset to LEXIT), and
             // retarget the jump-back from the body (pc+3) to the split (pc).
-            let out = rewritten.get_or_insert_with(|| orig.clone());
+            let out = rewritten.get_or_insert_with(|| orig.to_vec());
             out[pc] = RegexOp::OnFailureJump as u8;
             let new_off = pc as i64 - (jump_at as i64 + 3);
             store_number(out, jump_at + 1, new_off as i16);
@@ -2294,10 +2313,10 @@ fn build_pike_buffer(buf: &CompiledPattern) -> Option<Option<Vec<u8>>> {
 ///     Pike VM's `seen` dedup does not model, so it is excluded.
 ///     (Non-greedy quantifiers over NON-nullable bodies use
 ///     `OnFailureJump` and stay eligible.)
-///   * A non-greedy `??` (`has_nongreedy_optional`) — its
-///     `OnFailureKeepStringJump` has genuine keep-string semantics with no
-///     loop back-edge, unlike the smart-loop keep-string that
-///     [`build_pike_buffer`] de-optimizes.
+///   * A non-greedy `??` (`has_nongreedy_optional`) — it compiles to GNU's
+///     skip-first `on_failure_jump` + `jump` shape (an earlier emit used a
+///     keep-string jump); the Pike VM's priority order has not been
+///     validated on it, so it stays excluded.
 ///   * POSIX-longest mode (`buf.posix`) — the Pike VM produces
 ///     leftmost-greedy captures, not POSIX-longest, so it must not run
 ///     for a POSIX pattern.
@@ -2324,7 +2343,7 @@ fn compute_pike_eligible(buf: &CompiledPattern) -> bool {
     if buf.posix {
         return false;
     }
-    // Non-greedy `??` uses a keep-string jump the Pike VM cannot model.
+    // Non-greedy `??`: see the doc above.
     if buf.has_nongreedy_optional {
         return false;
     }
@@ -6740,10 +6759,12 @@ fn pike_match_inner(
     point: usize,
 ) -> PikeOutcome {
     debug_assert!(pattern.pike_eligible);
-    // Read opcodes from the Pike-only rewind view when present (keep-string
-    // loops de-optimized); charset bitmaps are identical in both buffers so
-    // `match_charset_at` may keep reading `pattern.buffer`.
-    let bytecode = pattern.pike_buffer.as_deref().unwrap_or(&pattern.buffer);
+    // Read opcodes from the rewind view (keep-string loops de-optimized);
+    // charset bitmaps are identical in both buffers so `match_charset_at`
+    // may keep reading `pattern.buffer`.
+    let bytecode = pattern
+        .rewind_bytecode()
+        .expect("a Pike-eligible pattern has a rewind view");
     let num_regs = pattern.re_nsub + 1;
     let translate = &pattern.translate;
     let pattern_multibyte = pattern.multibyte;

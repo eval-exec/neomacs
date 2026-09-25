@@ -1991,6 +1991,38 @@ fn pike_capture_in_nullable_loop_is_ineligible() {
     }
 }
 
+/// The rewind view exists for every pattern, not only the Pike-eligible ones:
+/// the existence DFA reads it for POSIX patterns and `??`, and it costs
+/// nothing to have it for the rest (a backreference here).
+#[test]
+fn rewind_view_is_built_for_every_pattern() {
+    for (pattern, posix, keep_string) in [
+        // `[a-z]*` before `:` is exclusive: a keep-string loop to rewrite.
+        ("[a-z]*:", false, true),
+        ("[a-z]*:", true, true),
+        ("\\(x\\)\\1[a-z]*:", false, true),
+        ("x??[a-z]*:", false, true),
+        ("a*a", false, false),
+    ] {
+        let compiled = regex_compile(pattern, posix, false).expect("compile");
+        let has_keep_string = compiled
+            .buffer
+            .contains(&(RegexOp::OnFailureKeepStringJump as u8));
+        assert_eq!(has_keep_string, keep_string, "{pattern:?}");
+        let view = compiled.rewind_bytecode().expect("a rewind view");
+        assert_eq!(view.len(), compiled.buffer.len(), "{pattern:?}");
+        assert!(
+            !view.contains(&(RegexOp::OnFailureKeepStringJump as u8)),
+            "{pattern:?}: the view has no keep-string jump left"
+        );
+        assert_eq!(
+            matches!(compiled.rewind, RewindView::Rewritten(_)),
+            keep_string,
+            "{pattern:?}"
+        );
+    }
+}
+
 /// The production routing is backtracker-by-default with a Pike fallback that
 /// triggers ONLY on catastrophic backtracking: a well-behaved pattern must
 /// never fall back (so it keeps the backtracker's speed), while `a*a*b` on a
