@@ -45,9 +45,12 @@ use std::cell::RefCell;
 /// does not imply collecting, and signaling does not subsume state mutation.
 ///
 /// Shared by the leaf declarations here and by the JIT's call contracts
-/// (`jit::compile::calls`), which re-export it.
+/// (`jit::compile::calls`), which re-export it. A `u32` (widened once, before
+/// any consumer beyond MIR loop admission, per p3-0-integration §3.11): 13
+/// bits are taken, and the mid-end's alias classes, the inliner's
+/// frame-observation bits and the var-op effects claim more of the rest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Effects(u16);
+pub struct Effects(u32);
 
 impl Effects {
     pub const PURE: Self = Self(0);
@@ -65,6 +68,10 @@ impl Effects {
     pub const MAY_SIGNAL: Self = Self(1 << 11);
     pub const MAY_DEOPT: Self = Self(1 << 12);
     pub const UNKNOWN: Self = Self((1 << 13) - 1);
+
+    /// How many bits are declared: every one below this is a named effect,
+    /// and [`Self::UNKNOWN`] is all of them.
+    pub const DECLARED_BITS: u32 = 13;
 
     pub const fn with(self, other: Self) -> Self {
         Self(self.0 | other.0)
@@ -93,6 +100,13 @@ impl Effects {
     pub const FORBIDDEN_IN_LEAF: Self =
         Self(Self::MAY_GC.0 | Self::MAY_REENTER.0 | Self::MAY_DEOPT.0 | Self::WRITE_BINDINGS.0);
 }
+
+// A 32-bit set whose declared bits are exactly the named effects.
+const _: () = {
+    assert!(std::mem::size_of::<Effects>() == 4);
+    assert!(Effects::UNKNOWN.0 == (1 << Effects::DECLARED_BITS) - 1);
+    assert!(Effects::MAY_DEOPT.0 == 1 << (Effects::DECLARED_BITS - 1));
+};
 
 /// Why a leaf body produced no value.
 #[derive(Debug)]
