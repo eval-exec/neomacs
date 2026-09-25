@@ -308,11 +308,17 @@ pub(crate) fn force_deopt_for_test(on: bool) {
 /// armed fast path would normally short-circuit — the spec-machinery analogue
 /// of [`jit_force_deopt`].
 ///
-/// One relaxed byte load on the armed fast path: a `OnceLock` answered the
-/// same question with its state load, a compare and the value load on every
-/// speculated call (`neovm_jit_call_spec` and `neovm_jit_pred_spec` both ask).
+/// The armed fast paths do not ask: the knob is a bit of each Context's
+/// attention word (`AttentionBit::ForceSlowSpec`, set by `attention_of` from
+/// this function), which the spec gates test together with the quit poll.
+/// The re-validating slow halves and the compile-time switch still read it
+/// here.
 #[inline(always)]
-fn jit_force_slow_spec() -> bool {
+pub(crate) fn jit_force_slow_spec() -> bool {
+    #[cfg(test)]
+    if let Some(on) = FORCE_SLOW_SPEC_TEST_OVERRIDE.with(|c| c.get()) {
+        return on;
+    }
     use std::sync::atomic::{AtomicU8, Ordering};
     /// 0 = not read yet, 1 = off, 2 = on.
     static FORCE: AtomicU8 = AtomicU8::new(0);
@@ -328,6 +334,20 @@ fn jit_force_slow_spec() -> bool {
         2 => true,
         _ => read_knob(),
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    static FORCE_SLOW_SPEC_TEST_OVERRIDE: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Force the every-spec-call-re-validates harness on/off (or back to the
+/// environment with `None`) for the current thread (tests only). A Context
+/// built before the switch must `refresh_attention_for_test` to see it.
+#[cfg(test)]
+pub(crate) fn force_slow_spec_for_test(on: Option<bool>) {
+    FORCE_SLOW_SPEC_TEST_OVERRIDE.with(|c| c.set(on));
 }
 
 /// Verification harness (R2): when `NEOVM_JIT_FORCE_CBSYM_GENERIC=1`, EVERY
@@ -4811,6 +4831,9 @@ mod osr_poll_tests;
 #[cfg(test)]
 #[path = "tests/predicate_branches.rs"]
 mod predicate_branch_tests;
+#[cfg(test)]
+#[path = "tests/spec_gate.rs"]
+mod spec_gate_tests;
 #[cfg(test)]
 #[path = "tests/compile.rs"]
 mod tests;

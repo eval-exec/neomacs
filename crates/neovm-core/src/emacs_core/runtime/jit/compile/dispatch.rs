@@ -4,6 +4,7 @@
 //! parent's view of its private items (`use super::*`).
 
 use super::*;
+use crate::emacs_core::eval::AttentionMask;
 
 pub(crate) type JitBuiltin1 = fn(&mut Context, Value) -> Result<Value, Flow>;
 pub(crate) type JitBuiltin2 = fn(&mut Context, Value, Value) -> Result<Value, Flow>;
@@ -1003,9 +1004,8 @@ pub extern "C" fn neovm_jit_call_spec(
     let slot_ref = unsafe { &*(slot as *const SpecSlot) };
     let direct_consts = slot_ref.direct_consts.load(Ordering::Relaxed);
     if direct_consts != 0
-        && ctx_ref.maybe_quit_hot_ok()
+        && ctx_ref.attention_clear(AttentionMask::SPEC_CALL)
         && slot_ref.epoch.load(Ordering::Relaxed) == ctx_ref.obarray.function_epoch()
-        && !jit_force_slow_spec()
         && !ctx_ref.debug_on_next_call_is_armed()
         && ctx_ref.depth < ctx_ref.max_depth
     {
@@ -1411,6 +1411,24 @@ pub(crate) fn arith_intrinsic_op_by_name(name: &str, nargs: usize) -> Option<u8>
     Some(op as u8)
 }
 
+/// [`subr_spec_armed_reference`]'s answer, with its common case inline: no
+/// compiler overrides and no force harness (the two conditions besides a
+/// stale epoch that leave its compare, both bits of the attention word) and
+/// an epoch equal to the obarray's. The reference then answers `true` as
+/// well: a DISARMED slot never equals a live epoch (`advance_function_epoch`
+/// skips `u64::MAX`), so it would pass its DISARMED test, find no overrides,
+/// no force, and an equal epoch. Every other state runs the reference body
+/// unchanged.
+#[inline(always)]
+pub(crate) fn subr_spec_armed(ctx: &Context, sym: i64, expected: i64, slot: &SpecSlot) -> bool {
+    if ctx.attention_word_clear(AttentionMask::SUBR_ARMING)
+        && slot.epoch.load(Ordering::Relaxed) == ctx.obarray.function_epoch()
+    {
+        return true;
+    }
+    subr_spec_armed_reference(ctx, sym, expected, slot)
+}
+
 /// Shared arming check for the three subr spec shims: TRUE iff the site's
 /// direct fast path is still valid — the symbol's function cell (validated via
 /// the per-site epoch, re-validated on any epoch move exactly like
@@ -1422,8 +1440,18 @@ pub(crate) fn arith_intrinsic_op_by_name(name: &str, nargs: usize) -> Option<u8>
 /// `resolve_named_call_target_by_id` and live in a VARIABLE, invisible to
 /// `function_epoch`), so an armed site must bounce to the generic block then
 /// too. Never allocates, never runs lisp — callers rely on this being GC-free.
-#[inline]
-pub(crate) fn subr_spec_armed(ctx: &Context, sym: i64, expected: i64, slot: &SpecSlot) -> bool {
+///
+/// This is the reference body; [`subr_spec_armed`] answers the common case
+/// (nothing in [`AttentionMask::SUBR_ARMING`], an equal epoch) without it.
+/// `#[inline(never)]`, not `#[cold]`: epoch re-validation is routine while
+/// `.el` files load.
+#[inline(never)]
+pub(crate) fn subr_spec_armed_reference(
+    ctx: &Context,
+    sym: i64,
+    expected: i64,
+    slot: &SpecSlot,
+) -> bool {
     let slot_epoch = slot.epoch.load(Ordering::Relaxed);
     // A loader-DISARMED site never re-arms (see SPEC_EPOCH_DISARMED /
     // neovm_jit_call_spec): the pred/eq shims' fast paths are keyed on the BAKED
@@ -1614,45 +1642,100 @@ pub extern "C" fn neovm_jit_call_subr_spec(
         let nargs = nargs as usize;
         // SAFETY: see neovm_jit_call's function-level contract.
         let ctx = unsafe { &mut *(ctx as *mut Context) };
-        if let Err(flow) = ctx.maybe_quit() {
-            stash_pending_flow(flow);
-            return STATUS_SIGNAL;
-        }
         // SAFETY: slot points into the executing leaf's spec_slots.
         let slot = unsafe { &*(slot as *const SpecSlot) };
-        if !subr_spec_armed(ctx, sym, expected, slot) {
-            #[cfg(debug_assertions)]
-            SUBR_SPEC_GENERIC_COUNT.fetch_add(1, Ordering::Relaxed);
-            return STATUS_NEED_GENERIC;
-        }
-        #[cfg(debug_assertions)]
-        SUBR_SPEC_FAST_COUNT.fetch_add(1, Ordering::Relaxed);
-        let target = Value::from_bits(expected as usize);
-        // Direct fixed-arity call (the common case): the subr object is re-read
-        // on EVERY call (its entry is rewritten in place at registration, so the
-        // fn pointer is never cached), the frame records the SYMBOL over the
-        // native args slot, and the builtin is called by pointer with the args
-        // in registers — no operand-stack copy, no span frame, no dispatch hop.
-        // Everything else (Many/slice subrs, an arity the fixed entry rejects,
-        // a debugger armed) takes the stack path below, the reference protocol.
-        if !ctx.debug_on_next_call_is_armed()
-            && let Some(res) =
-                call_fixed_builtin_from_native(ctx, SymId(sym as u32), target, args_ptr, nargs)
+        // One gate for the common case: nothing for the quit poll, no
+        // compiler overrides, no force harness (the attention words), an
+        // armed epoch, the debugger down. Then the reference sequence below
+        // would poll and find nothing, arm (`subr_spec_armed`'s own fast
+        // answer), and take the direct fixed-arity call -- so this does.
+        // Every other state runs that sequence verbatim.
+        if ctx.attention_clear(AttentionMask::SPEC_SUBR)
+            && slot.epoch.load(Ordering::Relaxed) == ctx.obarray.function_epoch()
+            && !ctx.debug_on_next_call_is_armed()
         {
-            return match res {
-                Ok(value) => {
-                    // SAFETY: `out` is the generated code's result stack slot.
-                    unsafe { *out = value.bits() as i64 };
-                    STATUS_OK
-                }
-                Err(flow) => {
-                    stash_pending_flow(flow);
-                    STATUS_SIGNAL
-                }
-            };
+            #[cfg(debug_assertions)]
+            SUBR_SPEC_FAST_COUNT.fetch_add(1, Ordering::Relaxed);
+            let target = Value::from_bits(expected as usize);
+            if let Some(res) =
+                call_fixed_builtin_from_native(ctx, SymId(sym as u32), target, args_ptr, nargs)
+            {
+                return match res {
+                    Ok(value) => {
+                        // SAFETY: `out` is the generated code's result stack slot.
+                        unsafe { *out = value.bits() as i64 };
+                        STATUS_OK
+                    }
+                    Err(flow) => {
+                        stash_pending_flow(flow);
+                        STATUS_SIGNAL
+                    }
+                };
+            }
+            return call_stack_builtin_from_native(
+                ctx,
+                SymId(sym as u32),
+                target,
+                args_ptr,
+                nargs,
+                out,
+            );
         }
-        call_stack_builtin_from_native(ctx, SymId(sym as u32), target, args_ptr, nargs, out)
+        subr_spec_call_reference(ctx, sym, expected, slot, args_ptr, nargs, out)
     })
+}
+
+/// [`neovm_jit_call_subr_spec`]'s reference sequence: the quit poll first
+/// (interpreter `Op::Call` order), then the arming check, then the direct
+/// fixed-arity call or the stack path. Runs inside the shim's containment
+/// frame. `#[inline(never)]`, not `#[cold]`: re-validation after an epoch
+/// move is routine while `.el` files load.
+#[inline(never)]
+fn subr_spec_call_reference(
+    ctx: &mut Context,
+    sym: i64,
+    expected: i64,
+    slot: &SpecSlot,
+    args_ptr: *const i64,
+    nargs: usize,
+    out: *mut i64,
+) -> i64 {
+    if let Err(flow) = ctx.maybe_quit() {
+        stash_pending_flow(flow);
+        return STATUS_SIGNAL;
+    }
+    if !subr_spec_armed(ctx, sym, expected, slot) {
+        #[cfg(debug_assertions)]
+        SUBR_SPEC_GENERIC_COUNT.fetch_add(1, Ordering::Relaxed);
+        return STATUS_NEED_GENERIC;
+    }
+    #[cfg(debug_assertions)]
+    SUBR_SPEC_FAST_COUNT.fetch_add(1, Ordering::Relaxed);
+    let target = Value::from_bits(expected as usize);
+    // Direct fixed-arity call (the common case): the subr object is re-read
+    // on EVERY call (its entry is rewritten in place at registration, so the
+    // fn pointer is never cached), the frame records the SYMBOL over the
+    // native args slot, and the builtin is called by pointer with the args
+    // in registers — no operand-stack copy, no span frame, no dispatch hop.
+    // Everything else (Many/slice subrs, an arity the fixed entry rejects,
+    // a debugger armed) takes the stack path below, the reference protocol.
+    if !ctx.debug_on_next_call_is_armed()
+        && let Some(res) =
+            call_fixed_builtin_from_native(ctx, SymId(sym as u32), target, args_ptr, nargs)
+    {
+        return match res {
+            Ok(value) => {
+                // SAFETY: `out` is the generated code's result stack slot.
+                unsafe { *out = value.bits() as i64 };
+                STATUS_OK
+            }
+            Err(flow) => {
+                stash_pending_flow(flow);
+                STATUS_SIGNAL
+            }
+        };
+    }
+    call_stack_builtin_from_native(ctx, SymId(sym as u32), target, args_ptr, nargs, out)
 }
 
 /// Stack-argument fallback for an armed native subr call. Keep its argument

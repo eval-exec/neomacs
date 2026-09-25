@@ -2997,10 +2997,11 @@ pub struct Context {
     /// poll's guard is true in any session that owns an input channel -- 8 M
     /// lookups in a 20-keystroke rust-lsp run.
     throw_on_input: Value,
-    /// The attention word (`attention.rs`): one bit per input above that a
-    /// safe point must look at.  Derived from `quit_flag` and
-    /// `throw_on_input`, and written ONLY by `refresh_attention` and the
-    /// constructors; compiled code reads it at `CONTEXT_ATTENTION_OFFSET`.
+    /// The attention word (`attention.rs`): one bit per input a safe point
+    /// or a speculated call site must look at.  Derived from `quit_flag`,
+    /// `throw_on_input`, `compiler_function_overrides_active` and the
+    /// force-slow-spec harness, and written ONLY by `refresh_attention` and
+    /// the constructors; compiled code reads it at `CONTEXT_ATTENTION_OFFSET`.
     attention: u32,
     /// Nonzero while `unbind_to` is running unwind cleanup forms.
     ///
@@ -4276,6 +4277,7 @@ impl Context {
                 );
             }
             self.compiler_function_overrides_active = active;
+            self.refresh_attention();
         } else if sym_id == self.noninteractive_symbol {
             self.noninteractive = value.is_truthy();
         } else if sym_id == self.symbols_with_pos_enabled_symbol {

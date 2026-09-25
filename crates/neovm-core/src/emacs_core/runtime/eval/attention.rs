@@ -40,6 +40,15 @@ pub(crate) enum AttentionBit {
     /// that session one cold trip per poll and nothing else -- the slow path
     /// re-checks `has_throw_on_input_poll_source`.
     ThrowOnInput = 1 << 1,
+    /// `internal--compiler-function-overrides` is a cons: the overrides
+    /// shadow function cells from a VARIABLE, invisible to the function
+    /// epoch, so a speculated subr site must bounce to the generic call
+    /// (neomacs-only state; GNU has no such cache).
+    CompilerOverrides = 1 << 2,
+    /// The `NEOVM_JIT_FORCE_SLOW_SPEC=1` verification harness: every
+    /// speculated call site re-validates its binding on every call
+    /// (process-constant; never set in a production run).
+    ForceSlowSpec = 1 << 3,
 }
 
 /// Which [`AttentionBit`]s a particular safe point or call gate must see
@@ -53,6 +62,30 @@ impl AttentionMask {
     pub(crate) const QUIT: Self =
         Self(AttentionBit::QuitFlag as u32 | AttentionBit::ThrowOnInput as u32);
 
+    /// `neovm_jit_call_spec`'s gate: the quit poll it makes first, plus the
+    /// force harness, which sends every call to the re-validating slow half.
+    /// (That half polls with [`Self::QUIT`] only, so the harness bit cannot
+    /// make it loop.)
+    pub(crate) const SPEC_CALL: Self = Self(Self::QUIT.0 | AttentionBit::ForceSlowSpec as u32);
+
+    /// The subr spec shims' gate: [`Self::SPEC_CALL`], plus active compiler
+    /// overrides, which refuse a direct subr call.
+    pub(crate) const SPEC_SUBR: Self =
+        Self(Self::SPEC_CALL.0 | AttentionBit::CompilerOverrides as u32);
+
+    /// What `subr_spec_armed` must see clear before it trusts an equal epoch:
+    /// the two conditions besides a stale epoch that leave its compare.
+    pub(crate) const SUBR_ARMING: Self =
+        Self(AttentionBit::CompilerOverrides as u32 | AttentionBit::ForceSlowSpec as u32);
+
+    /// The JIT's inline entry guards (an inlined callee, an inline
+    /// `type-of`): the quit poll the skipped call would make, plus active
+    /// compiler overrides. Not the force harness: an inlined call has no spec
+    /// slot to re-validate, and the harness's compile-time switch already
+    /// withholds the inline `type-of`.
+    pub(crate) const INLINE_ENTRY: Self =
+        Self(Self::QUIT.0 | AttentionBit::CompilerOverrides as u32);
+
     /// The mask as the word compiled code ANDs with the attention word.
     #[inline(always)]
     pub(crate) const fn bits(self) -> u32 {
@@ -63,7 +96,7 @@ impl AttentionMask {
 /// The attention word the canonical fields imply.  `Context::attention` must
 /// equal this at every read ([`Context::attention_clear`] asserts it in debug
 /// builds); [`Context::refresh_attention`] is the only way to move it.
-pub(super) fn attention_of(quit_flag: Value, throw_on_input: Value) -> u32 {
+pub(super) fn attention_of(quit_flag: Value, throw_on_input: Value, overrides: bool) -> u32 {
     let mut word = 0;
     if !quit_flag.is_nil() {
         word |= AttentionBit::QuitFlag as u32;
@@ -71,17 +104,39 @@ pub(super) fn attention_of(quit_flag: Value, throw_on_input: Value) -> u32 {
     if !throw_on_input.is_nil() {
         word |= AttentionBit::ThrowOnInput as u32;
     }
+    if overrides {
+        word |= AttentionBit::CompilerOverrides as u32;
+    }
+    #[cfg(feature = "jit")]
+    if crate::emacs_core::jit::compile::jit_force_slow_spec() {
+        word |= AttentionBit::ForceSlowSpec as u32;
+    }
     word
 }
 
 impl Context {
     /// Re-derive the attention word after a write to one of its inputs.
-    /// Every writer of `quit_flag` and `throw_on_input` calls this
+    /// Every writer of `quit_flag`, `throw_on_input` and
+    /// `compiler_function_overrides_active` calls this
     /// (`sync_cached_runtime_binding_by_id`, `set_quit_flag_value`); the
     /// constructors initialize the word from the same inputs.
     #[inline]
     pub(super) fn refresh_attention(&mut self) {
-        self.attention = attention_of(self.quit_flag, self.throw_on_input);
+        self.attention = attention_of(
+            self.quit_flag,
+            self.throw_on_input,
+            self.compiler_function_overrides_active,
+        );
+    }
+
+    /// Whether this Context's own word is clear under MASK, without the
+    /// asynchronous word: for a gate that polls separately
+    /// (`subr_spec_armed`, which its callers reach after their quit poll).
+    #[inline(always)]
+    pub(crate) fn attention_word_clear(&self, mask: AttentionMask) -> bool {
+        #[cfg(debug_assertions)]
+        self.assert_attention_is_derived();
+        self.attention & mask.0 == 0
     }
 
     /// True when neither this Context's attention word under MASK nor the
@@ -102,9 +157,13 @@ impl Context {
     fn assert_attention_is_derived(&self) {
         assert_eq!(
             self.attention,
-            attention_of(self.quit_flag, self.throw_on_input),
-            "stale attention word: a writer of quit-flag/throw-on-input skipped \
-             refresh_attention"
+            attention_of(
+                self.quit_flag,
+                self.throw_on_input,
+                self.compiler_function_overrides_active,
+            ),
+            "stale attention word: a writer of quit-flag/throw-on-input/\
+             compiler overrides skipped refresh_attention"
         );
     }
 
@@ -113,8 +172,19 @@ impl Context {
     pub(crate) fn attention_words_for_test(&self) -> (u32, u32) {
         (
             self.attention,
-            attention_of(self.quit_flag, self.throw_on_input),
+            attention_of(
+                self.quit_flag,
+                self.throw_on_input,
+                self.compiler_function_overrides_active,
+            ),
         )
+    }
+
+    /// Re-derive the word after a test flipped the force harness's
+    /// thread-local override (`jit::compile::force_slow_spec_for_test`).
+    #[cfg(test)]
+    pub(crate) fn refresh_attention_for_test(&mut self) {
+        self.refresh_attention();
     }
 }
 

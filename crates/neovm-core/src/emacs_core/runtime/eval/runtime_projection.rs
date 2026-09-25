@@ -7,15 +7,11 @@
 
 use super::*;
 
-/// Where compiled code reads `Context::compiler_function_overrides_active`
-/// (a `bool` byte): an armed call site bounces to the generic call while
-/// overrides shadow function cells.
-pub(crate) const CONTEXT_COMPILER_OVERRIDES_ACTIVE_OFFSET: usize =
-    std::mem::offset_of!(Context, compiler_function_overrides_active);
-const _: () = assert!(std::mem::size_of::<bool>() == 1);
 /// Where compiled code reads `Context::attention` (a `u32`), the Context half
-/// of `maybe_quit_hot_ok`'s two-word test. Baked only by JIT code (the inline
-/// guards refuse AOT), so it is not salted into the AOT ABI tag.
+/// of `maybe_quit_hot_ok`'s two-word test; it also carries active compiler
+/// overrides, which bounce an armed call site to the generic call. Baked
+/// only by JIT code (the inline guards refuse AOT), so it is not salted into
+/// the AOT ABI tag.
 pub(crate) const CONTEXT_ATTENTION_OFFSET: usize = std::mem::offset_of!(Context, attention);
 const _: () = assert!(std::mem::size_of::<u32>() == 4);
 /// Where compiled code finds the buffer manager, the first hop of the walk to
