@@ -1027,6 +1027,17 @@ impl BufferSourceOutputSetup {
             // that never synchronized ran to the window bottom instead and
             // produced those rows itself.
             let edit_sync_reached = output.builder().finish_edit_sync();
+            // A backward scroll that never met its old first row (the start
+            // moved back by more than the window, or into a line the rows do
+            // not align with) walked the whole window without the viewport
+            // checks a full layout makes: lay it out properly instead.
+            if !scroll.edit && scroll.sync.is_some() && edit_sync_reached.is_none() {
+                crate::window_output::restore_text_window_retry_checkpoint(
+                    output.reborrow(),
+                    retry_checkpoint,
+                );
+                return BufferSourceRenderAttemptOutcome::ReplayMispredicted;
+            }
             let mut edit_sync_shift = None;
             // Where the walked rows end when the walk synchronized: the first
             // synchronized row starts here.

@@ -1424,6 +1424,8 @@ const BENCHMARK_PASSTHROUGH_ENVIRONMENT: &[&str] = &[
     // Edit replays synchronize with the rows below the edit (GNU
     // try_window_id): `prove` (default) or `sync`.
     "NEOMACS_LAYOUT_EDIT_SYNC",
+    // A window whose start moved back reuses its old rows: `on`.
+    "NEOMACS_LAYOUT_SCROLL_BACK",
     // U2.8 builtin front-end diets: `=off` restores the general search,
     // syntax and text-property paths for a same-binary board A/B.
     "NEOVM_BUILTIN_FRONTEND",

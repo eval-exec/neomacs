@@ -81,6 +81,69 @@ pub(crate) fn edit_sync_mode() -> EditSyncMode {
     })
 }
 
+#[cfg(test)]
+thread_local! {
+    static SCROLL_BACK_OVERRIDE: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Force `NEOMACS_LAYOUT_SCROLL_BACK` on this thread (tests only).
+#[cfg(test)]
+pub(crate) fn set_scroll_back_for_test(enabled: Option<bool>) {
+    SCROLL_BACK_OVERRIDE.with(|cell| cell.set(enabled));
+}
+
+/// `NEOMACS_LAYOUT_SCROLL_BACK=on` (P3.5 G3): a window whose start moved
+/// BACK reuses its old rows below the newly exposed ones (GNU
+/// `try_window_reusing_current_matrix`, xdisp.c:21766). Read once; default
+/// off.
+pub(crate) fn scroll_back_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(enabled) = SCROLL_BACK_OVERRIDE.with(std::cell::Cell::get) {
+        return enabled;
+    }
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        matches!(
+            std::env::var("NEOMACS_LAYOUT_SCROLL_BACK")
+                .ok()
+                .map(|value| value.trim().to_ascii_lowercase())
+                .as_deref(),
+            Some("on" | "1" | "true" | "yes")
+        )
+    })
+}
+
+/// The synchronization plan of a BACKWARD scroll: the walk runs from the
+/// new window start until the next row would begin at the old first row's
+/// start, and every old row is reused below what it produced, shifted down
+/// by its height; rows pushed past the bottom are dropped (GNU
+/// `try_window_reusing_current_matrix`, the "start moved backward" branch,
+/// xdisp.c:21932-22060). `body` is the retained body rows in matrix order.
+pub(crate) fn backward_scroll_plan(
+    prev: &RetainedWindowMatrix,
+    body: &[(usize, &MatrixRow)],
+) -> Option<EditSyncPlan> {
+    let &(first_index, first_row) = body.first()?;
+    let mut indices = rustc_hash::FxHashSet::default();
+    let rows = body
+        .iter()
+        .map(|&(index, row)| {
+            indices.insert(index as i64);
+            (index, shift_row_positions(row, 0, 0))
+        })
+        .collect();
+    let (row_snapshots, points) = shifted_snapshots(prev, &indices, 0);
+    Some(EditSyncPlan {
+        stop_charpos: first_row.start_charpos,
+        first_unchanged_index: first_index,
+        first_unchanged_y: first_row.pixel_y,
+        rows,
+        row_snapshots,
+        points,
+    })
+}
+
 /// How an edit replay may reuse the rows below the edit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum BelowReuse {

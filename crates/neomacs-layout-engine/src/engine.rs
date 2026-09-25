@@ -2917,7 +2917,11 @@ impl LayoutEngine {
                             RowDamage::Reused
                         } else if let Some((ref reused, dvpos)) = scroll_reused {
                             if reused.contains(idx) {
-                                RowDamage::ReusedShifted { dvpos: Px(dvpos) }
+                                // A backward scroll records its shift with
+                                // the rows (P3.5 G3); a forward one plans it.
+                                RowDamage::ReusedShifted {
+                                    dvpos: Px(reused.shift_of(idx).unwrap_or(dvpos)),
+                                }
                             } else {
                                 RowDamage::New
                             }

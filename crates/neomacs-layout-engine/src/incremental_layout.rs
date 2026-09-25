@@ -1233,6 +1233,33 @@ impl RetainedWindowMatrix {
         // is always the position of a line that shows text, so gating on
         // `displays_text` keeps a positionless-but-real empty row from being
         // taken as the new top (GNU only starts a window at a text row).
+        // P3.5 G3: the start moved BACK. Walk the newly exposed rows from the
+        // new start and synchronize with the old first row below them.
+        if curr.window_start < body[0].1.start_charpos as i64 && edit_sync::scroll_back_enabled() {
+            let plan = edit_sync::backward_scroll_plan(self, &body)?;
+            let (first_index, first_row) = body[0];
+            return Some(ScrollReplay {
+                // The real shift is what the walk produces; the install
+                // records it with the reused rows.
+                dvpos: 0.0,
+                reused_rows: Vec::new(),
+                reused_row_snapshots: Vec::new(),
+                reused_points: Vec::new(),
+                walk_start: PartialBodyWalkStart::new(curr.window_start),
+                exposed_row_base: first_index,
+                exposed_row_count: body.len(),
+                exposed_text_y: first_row.pixel_y,
+                new_window_start: curr.window_start,
+                new_point: curr.point,
+                bound_walk: false,
+                expected_walk: None,
+                chrome: None,
+                one_line_contract: None,
+                sync: Some(plan),
+                edit: false,
+                face_generation: self.face_generation,
+            });
+        }
         let s = body.iter().position(|(_, row)| {
             row.displays_text && row.start_charpos as i64 == curr.window_start
         })?;

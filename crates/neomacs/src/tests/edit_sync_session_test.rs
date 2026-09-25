@@ -49,6 +49,7 @@ impl Session {
             std::env::set_var("NEOMACS_LAYOUT_EDIT_SYNC", "sync");
             std::env::set_var("NEOMACS_LAYOUT_MINI_STILL", "on");
             std::env::set_var("NEOMACS_MODE_LINE_GATE", "gnu");
+            std::env::set_var("NEOMACS_LAYOUT_SCROLL_BACK", "on");
         }
         let mut eval = create_bootstrap_evaluator_cached_with_features(&["neomacs"])
             .expect("cached bootstrap evaluator");
@@ -172,4 +173,36 @@ fn edit_sync_keystrokes_walk_only_the_edited_rows_and_match_a_full_layout() {
         }
     }
     tracing::info!("edit sync session:\n{}", report.join("\n"));
+}
+
+/// P3.5 G3 in process: scrolling back walks only the exposed rows and
+/// reuses the rest shifted down, exactly as a full layout draws them.
+#[test]
+fn scrolling_back_walks_only_the_exposed_rows_and_matches_a_full_layout() {
+    let mut s = Session::new();
+    s.step("load source", SOURCE);
+    s.step("scroll forward", "(scroll-up 12)");
+    let mut report = Vec::new();
+    for (label, lisp, exposed) in [
+        ("scroll back one line", "(scroll-down 1)", 1),
+        ("scroll back three lines", "(scroll-down 3)", 3),
+        ("scroll forward again", "(scroll-up 2)", 2),
+        ("scroll back two lines", "(scroll-down 2)", 2),
+    ] {
+        let stats = s.step(label, lisp);
+        report.push(format!(
+            "{label:<24} scroll={} full={} relaid={} shifted={}",
+            stats.scroll_windows,
+            stats.full_windows,
+            stats.relaid_body_rows,
+            stats.reused_shifted_rows
+        ));
+        assert_eq!(stats.scroll_windows, 1, "{label}\n{}", report.join("\n"));
+        assert!(
+            stats.relaid_body_rows <= exposed,
+            "{label}: only the exposed rows are walked\n{}",
+            report.join("\n")
+        );
+    }
+    tracing::info!("scroll-back session:\n{}", report.join("\n"));
 }
