@@ -383,9 +383,11 @@ pub(crate) struct CompiledPattern {
     /// SOUND: every match must contain one of them at `LiteralPrefilter.offset`
     /// bytes from the match start (see `build_literal_prefilter`).  `None` when
     /// no such literal set could be proven (fall back to the fastmap — always
-    /// correct).  Never set for case-fold patterns or patterns whose only
-    /// required literals are single bytes (the fastmap's memchr already handles
-    /// those).
+    /// correct).  A case-folded pattern gets the ASCII case variants of its
+    /// literals, and only under a translation that folds nothing non-ASCII
+    /// into ASCII (see [`fold_prefix_literals`]).  Never set for patterns whose
+    /// only required literals are single bytes (the fastmap's memchr already
+    /// handles those).
     ///
     /// Built on first use by a search long enough to use it
     /// ([`CompiledPattern::literal_prefilter`]): most compiled patterns only
@@ -963,6 +965,17 @@ thread_local! {
 #[cfg(test)]
 pub(crate) fn pike_fallback_count() -> u64 {
     PIKE_FALLBACK_COUNT.with(|c| c.get())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Matcher entries made by `re_search`'s candidate scans, for tests that
+    /// check how many candidates a scan leaves to the matcher.
+    static MATCHER_ENTRY_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+#[cfg(test)]
+pub(crate) fn matcher_entry_count() -> u64 {
+    MATCHER_ENTRY_COUNT.with(|c| c.get())
 }
 
 fn set_pike_fallback() {
@@ -7921,16 +7934,23 @@ const PREFILTER_BUDGET: usize = 16_384;
 /// which is fragile under multibyte, so it is deliberately not attempted
 /// (conservative = sound).
 ///
-/// Case-fold patterns are skipped (the fastmap already handles them via
-/// `TRANSLATE` indexing; folding every literal into the needle set is left as
-/// a future refinement).  Patterns whose only required literals are single
-/// bytes are skipped too — the fastmap's `memchr` already covers those, so a
-/// prefilter would add cost without narrowing the candidate set.
+/// A case-folded pattern stores its literals translated; its needles are
+/// every ASCII spelling of each literal's ASCII prefix
+/// ([`fold_prefix_literals`]).  That is sound only when no non-ASCII
+/// character translates into ASCII (`AsciiPreimage::AsciiOnly`); a case-canon
+/// char-table makes no such promise, so it gets no prefilter.  Patterns whose
+/// only required literals are single bytes are skipped too — the fastmap's
+/// `memchr` already covers those, so a prefilter would add cost without
+/// narrowing the candidate set.
 fn build_literal_prefilter(pattern: &CompiledPattern) -> Option<LiteralPrefilter> {
-    // Case-fold: skip (sound + simple).  See doc comment.
-    if pattern.translate.is_some() {
-        return None;
-    }
+    let fold = match pattern.translate.as_ref() {
+        None => None,
+        Some(table) => match table.ascii_preimage() {
+            AsciiPreimage::AsciiOnly => Some(table),
+            // Any character may fold into a needle byte.
+            AsciiPreimage::Unknown => return None,
+        },
+    };
     // Nullable patterns match the empty string, so no non-empty literal is
     // required.  `re_search` also disables the fastmap skip for these
     // (GNU regex-emacs.c:3483) — keep the same gate.
@@ -7958,6 +7978,10 @@ fn build_literal_prefilter(pattern: &CompiledPattern) -> Option<LiteralPrefilter
     if literals.is_empty() {
         return None;
     }
+    let mut literals = match fold {
+        None => literals,
+        Some(table) => fold_prefix_literals(table, &literals)?,
+    };
     // Deduplicate (nested alternations can re-derive the same prefix).
     literals.sort();
     literals.dedup();
@@ -7975,6 +7999,86 @@ fn build_literal_prefilter(pattern: &CompiledPattern) -> Option<LiteralPrefilter
         return None;
     }
     Some(LiteralPrefilter { pf, offset: 0 })
+}
+
+/// Caps on the ASCII case variants of one literal, tried in turn until the
+/// whole needle set fits [`FOLDED_VARIANTS_MAX`].  A literal is cut where its
+/// variants would pass the cap.
+const FOLDED_VARIANT_CAPS: [usize; 4] = [16, 8, 4, 2];
+/// Cap on a case-folded needle set: Teddy stays fast to about 64 needles
+/// (regex-automata's teddy.rs), and aho-corasick's packed searcher takes at
+/// most 128.
+const FOLDED_VARIANTS_MAX: usize = 64;
+
+/// Replace each required prefix literal of a case-folded pattern by every
+/// byte string a match can start with.
+///
+/// Sound: the pattern stores its literals translated, and the matcher
+/// accepts a text character `c` against a stored ASCII character `x` iff
+/// `translate(c) == x` (`match_exactn_char_at` and the `Exactn` run).  Under
+/// `AsciiPreimage::AsciiOnly` every such `c` is an ASCII byte, one byte of
+/// text; a unibyte text's bytes from 0x80 up are characters from 0x80 up (or
+/// raw bytes, never translated), so they never match an ASCII `x` either.
+/// So a match starting at `p` has, at `p`, one of the returned spellings of
+/// its literal's ASCII prefix.  Cutting a literal short -- at its first
+/// non-ASCII byte, or where its variants would pass the cap -- keeps it a
+/// required prefix.  `None` (no prefilter) when a literal starts with a
+/// non-ASCII byte, or holds an ASCII byte no character translates to.
+#[cold]
+#[inline(never)]
+fn fold_prefix_literals(table: &CaseTranslation, literals: &[Vec<u8>]) -> Option<Vec<Vec<u8>>> {
+    let mut preimage: [SmallVec<[u8; 2]>; 0x80] = std::array::from_fn(|_| SmallVec::new());
+    for y in 0..0x80u8 {
+        let x = table.translate(u32::from(y));
+        if x < 0x80 {
+            preimage[x as usize].push(y);
+        }
+    }
+    'caps: for cap in FOLDED_VARIANT_CAPS {
+        let mut out: Vec<Vec<u8>> = Vec::new();
+        for literal in literals {
+            let mut variants: Vec<Vec<u8>> = vec![Vec::with_capacity(literal.len())];
+            for &x in literal {
+                if x >= 0x80 {
+                    break;
+                }
+                let spellings = &preimage[x as usize];
+                if spellings.is_empty() {
+                    // Nothing translates to `x`: the literal cannot match.
+                    return None;
+                }
+                if variants.len() * spellings.len() > cap {
+                    break;
+                }
+                variants = variants
+                    .iter()
+                    .flat_map(|prefix| {
+                        spellings.iter().map(move |&y| {
+                            let mut spelled = prefix.clone();
+                            spelled.push(y);
+                            spelled
+                        })
+                    })
+                    .collect();
+            }
+            if variants[0].is_empty() {
+                // A leading non-ASCII character: no ASCII prefix to require.
+                return None;
+            }
+            out.extend(variants);
+            if out.len() > FOLDED_VARIANTS_MAX {
+                continue 'caps;
+            }
+        }
+        tracing::debug!(
+            target: "neovm::regex",
+            needles = out.len(),
+            cap,
+            "case-folded literal prefilter"
+        );
+        return Some(out);
+    }
+    None
 }
 
 /// Finalize a branch's accumulated required prefix.  An EMPTY prefix means the
@@ -8379,7 +8483,9 @@ pub(crate) fn re_search(
     // fills them only on success, so a failed candidate moves nothing.
     let mut regs = MatchRegisters::default();
     macro_rules! try_candidate {
-        ($pos:expr, $stop:expr) => {
+        ($pos:expr, $stop:expr) => {{
+            #[cfg(test)]
+            MATCHER_ENTRY_COUNT.with(|c| c.set(c.get() + 1));
             match re_match_candidate_in(
                 scratch, pattern, text, $pos, $stop, syntax, point, &mut regs,
             ) {
@@ -8391,7 +8497,7 @@ pub(crate) fn re_search(
                     None
                 }
             }
-        };
+        }};
     }
 
     if range >= 0 {
@@ -8455,9 +8561,10 @@ pub(crate) fn re_search(
                 // backtracker still verifies every candidate, so correctness
                 // rests only on the literal set being SOUND — every match
                 // contains one of the needles at `off` bytes from its start
-                // (see `build_literal_prefilter`).  The prefilter is only ever
-                // built for non-case-fold patterns, so `translate` is None
-                // here.
+                // (see `build_literal_prefilter`).  A case-folded pattern's
+                // needles are every ASCII spelling of its literals
+                // (`fold_prefix_literals`), so the scan itself needs no
+                // translation.
                 let off = pref.offset;
                 // The literal for a match starting at `m` sits at
                 // `text[m + off ..]`; the earliest candidate is `start`, whose

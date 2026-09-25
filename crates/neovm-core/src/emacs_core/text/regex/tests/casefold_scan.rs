@@ -5,6 +5,9 @@
 //! scans exact, and compare them with the exhaustive scan.
 
 use super::*;
+use crate::fuzz_support::{
+    RegexCase, RegexCheck, RegexDifferential, SearchTarget, check_regex_differential,
+};
 
 /// `AsciiPreimage::AsciiOnly` is a claim about every character code: the
 /// standard translation keeps ASCII in ASCII and non-ASCII out of it.  The
@@ -318,11 +321,12 @@ fn folded_scan_is_rebuilt_with_the_fastmap() {
 }
 
 /// Like the literal prefilter, the folded scan is built by the first search
-/// long enough to use it; a short search runs the per-character loop.
+/// long enough to use it; a short search runs the per-character loop.  (The
+/// pattern's only literal is one byte, so no prefilter takes over.)
 #[test]
 fn folded_scan_is_built_by_the_first_long_search() {
     crate::test_utils::init_test_tracing();
-    let cp = regex_compile("(defun", false, true).expect("compile");
+    let cp = regex_compile("(\\w+", false, true).expect("compile");
     let table = cp.translate.clone().expect("folded");
     let short = b"xx (DeFun";
     let found = re_search(&cp, short, 0, short.len() as isize, &DefaultSyntaxLookup, 0);
@@ -342,4 +346,127 @@ fn folded_scan_is_built_by_the_first_long_search() {
         ),
         "a long search builds and uses the scan"
     );
+}
+
+/// The folded prefilter's search equals the exhaustive search at every start,
+/// forward and backward, in both representations.
+fn assert_folded_prefilter_equiv(pattern: &str, text: &[u8]) {
+    for target in [SearchTarget::Multibyte, SearchTarget::Unibyte] {
+        for start in 0..=text.len() {
+            let case = RegexCase::new(pattern, text, true, start, start).with_target(target);
+            assert_eq!(
+                check_regex_differential(case, RegexDifferential::SearchOptimizations),
+                Ok(RegexCheck::Equivalent { comparisons: 2 }),
+                "{pattern:?} {target} start={start}"
+            );
+        }
+    }
+}
+
+#[test]
+fn casefold_prefilter_is_built_and_sound() {
+    crate::test_utils::init_test_tracing();
+    let text = "x(DEFUN a) (Defun b) (defun c) (deſun d) (d\u{130}fun e) (defu \
+                BYTE-COMPILE byte-compile xbyte-compile Byte-Compilex \
+                let LET* Let*x (CATCH (Throw (rEqUiRe (\u{212A}ey) (key) (KEY) \
+                ſ\u{212A}\u{130}\u{131} ß ẞ 中文 (defun"
+        .as_bytes();
+    for pattern in [
+        "(defun \\([-a-z0-9]+\\)",
+        "\\_<byte-compile\\_>",
+        "\\_<let\\*?\\_>",
+        "(\\(catch\\|throw\\|featurep\\|provide\\|require\\)\\_>",
+        "(\\(key\\|KEY\\)",
+        "Defun",
+    ] {
+        let cp = regex_compile(pattern, false, true).expect("compile");
+        assert!(
+            cp.literal_prefilter().is_some(),
+            "{pattern:?} should get a folded prefilter"
+        );
+        assert_folded_prefilter_equiv(pattern, text);
+    }
+    // No prefilter: a leading non-ASCII literal, and single-byte heads.
+    for pattern in ["\u{e9}t\u{e9}", "k", "(\\w+"] {
+        let cp = regex_compile(pattern, false, true).expect("compile");
+        assert!(
+            cp.literal_prefilter().is_none(),
+            "{pattern:?} should get no prefilter"
+        );
+        assert_folded_prefilter_equiv(pattern, text);
+    }
+}
+
+/// Only the ASCII spellings of a literal are needles; a literal past its
+/// variant cap is cut short, and a long keyword set drops to a smaller cap.
+#[test]
+fn folded_literals_are_the_ascii_spellings_of_a_required_prefix() {
+    crate::test_utils::init_test_tracing();
+    let table = CaseTranslation::standard();
+    let fold = |literals: &[&str]| {
+        let literals: Vec<Vec<u8>> = literals.iter().map(|l| l.as_bytes().to_vec()).collect();
+        fold_prefix_literals(&table, &literals).map(|mut needles| {
+            needles.sort();
+            needles
+        })
+    };
+    assert_eq!(
+        fold(&["(k-1"]),
+        Some(vec![b"(K-1".to_vec(), b"(k-1".to_vec()])
+    );
+    // 2^4 spellings of "(defu"; the "n" would make 32.
+    let defun = fold(&["(defun "]).expect("folded");
+    assert_eq!(defun.len(), 16);
+    assert!(defun.iter().all(|needle| needle.len() == 5));
+    assert!(defun.contains(&b"(DeFu".to_vec()));
+    // Five keywords at 16 spellings each pass 64 needles: cap 8 instead.
+    let keywords =
+        fold(&["(catch", "(throw", "(featurep", "(provide", "(require"]).expect("folded");
+    assert_eq!(keywords.len(), 40);
+    // A non-ASCII byte ends the prefix; a leading one leaves none.
+    assert_eq!(
+        fold(&["ab\u{e9}c"]),
+        Some(vec![
+            b"AB".to_vec(),
+            b"Ab".to_vec(),
+            b"aB".to_vec(),
+            b"ab".to_vec()
+        ])
+    );
+    assert_eq!(fold(&["\u{e9}t\u{e9}"]), None);
+    // Nothing translates to an upper-case letter: unmatchable, no prefilter.
+    assert_eq!(fold(&["D"]), None);
+}
+
+/// With the folded prefilter a case-folded search enters the matcher only
+/// where a spelling of the literal starts; the folded memchr scan enters it
+/// at every `(` and at the end of the text.
+#[test]
+fn casefold_candidate_entries_drop_to_literal_hits() {
+    crate::test_utils::init_test_tracing();
+    let text = b"( ( (DeFun a) ( (Defun b)";
+    let search = |cp: &CompiledPattern| {
+        let before = matcher_entry_count();
+        let found = re_search(cp, text, 0, text.len() as isize, &DefaultSyntaxLookup, 0);
+        (found.map(|(pos, _)| pos), matcher_entry_count() - before)
+    };
+    let cp = regex_compile("(defun x", false, true).expect("compile");
+    build_search_optimizations(&cp);
+    assert!(cp.literal_prefilter().is_some());
+    assert_eq!(
+        search(&cp),
+        (None, 2),
+        "prefilter: the two `(defun` spellings"
+    );
+
+    let mut memchr_only = regex_compile("(defun x", false, true).expect("compile");
+    memchr_only.prefilter = std::cell::OnceCell::from(None);
+    build_search_optimizations(&memchr_only);
+    assert_eq!(
+        search(&memchr_only),
+        (None, 6),
+        "folded memchr: five `(` and the end of the text"
+    );
+    let exhaustive = with_fastmap_disabled(|| search(&memchr_only));
+    assert_eq!(exhaustive, (None, text.len() as u64 + 1));
 }

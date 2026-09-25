@@ -2323,6 +2323,14 @@ fn search_optimization_fuzz_smoke_across_folding_and_targets() {
                 "every case-folded case is compared exhaustively"
             );
         }
+        // Case-folded patterns get the folded literal prefilter too.
+        assert!(
+            c.with_prefilter > c.compiled / 20,
+            "the stream should build a prefilter on many cases \
+             (with_prefilter={} compiled={})",
+            c.with_prefilter,
+            c.compiled
+        );
     }
 }
 
@@ -2406,12 +2414,24 @@ fn prefilter_none_for_leading_nonliteral() {
 }
 
 #[test]
-fn prefilter_none_for_casefold() {
-    // regex_compile(pattern, posix, case_fold).
-    let cp = regex_compile("defun", false, true).expect("compile");
+fn prefilter_none_for_custom_case_table() {
+    // A case-canon char-table may fold any character into a needle byte, so
+    // its patterns get no prefilter; the standard translation's do.
+    let table = Value::make_char_table(Value::symbol("case-table"), Value::NIL, 3);
+    let cp = regex_compile_lisp_with_translation(
+        &crate::heap_types::LispString::from_utf8("defun"),
+        false,
+        Some(CaseTranslation::from_char_table(table)),
+    )
+    .expect("compile");
     assert!(
         cp.literal_prefilter().is_none(),
-        "case-fold patterns are deliberately skipped"
+        "a custom case table must not get a prefilter"
+    );
+    let cp = regex_compile("defun", false, true).expect("compile");
+    assert!(
+        cp.literal_prefilter().is_some(),
+        "the standard translation gets the folded prefilter"
     );
 }
 
