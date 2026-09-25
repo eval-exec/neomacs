@@ -285,27 +285,22 @@ pub(crate) fn reset_bytecode_function_clone_count_for_test() {
     BYTECODE_FUNCTION_CLONE_COUNT.store(0, Ordering::Relaxed);
 }
 
+/// Test-only: count a whole-function copy made without `Clone` (the
+/// in-place `make-closure` instance writer).
+#[cfg(test)]
+pub(crate) fn note_bytecode_function_clone_for_test() {
+    BYTECODE_FUNCTION_CLONE_COUNT.fetch_add(1, Ordering::Relaxed);
+}
+
 #[cfg(test)]
 pub(crate) fn bytecode_function_clone_count_for_test() -> usize {
     BYTECODE_FUNCTION_CLONE_COUNT.load(Ordering::Relaxed)
 }
 
+// `TaggedHeap::alloc_bytecode_instance` (`make-closure`) copies the same
+// fields in place; its exhaustive destructure keeps the two in step.
 impl Clone for ByteCodeFunction {
     fn clone(&self) -> Self {
-        self.clone_with_constants(self.constants.clone())
-    }
-}
-
-impl ByteCodeFunction {
-    /// A copy of this function whose constant pool is `constants` instead of
-    /// a copy of this one's — `make-closure`'s instance, which builds its
-    /// pool (captured prefix, then the prototype's tail) in one pass rather
-    /// than copying the prototype's and overwriting the prefix. Every other
-    /// field is [`Clone`]'s.
-    pub(crate) fn clone_with_constants(
-        &self,
-        constants: crate::tagged::header::LispValueVec,
-    ) -> Self {
         #[cfg(test)]
         BYTECODE_FUNCTION_CLONE_COUNT.fetch_add(1, Ordering::Relaxed);
 
@@ -323,7 +318,7 @@ impl ByteCodeFunction {
             ops: self.ops.clone(),
             ops_sealed: self.ops_sealed,
             stack_verified: self.stack_verified,
-            constants,
+            constants: self.constants.clone(),
             max_stack: self.max_stack,
             params: self.params.clone(),
             arglist: self.arglist,

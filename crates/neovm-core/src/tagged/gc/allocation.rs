@@ -711,6 +711,109 @@ impl TaggedHeap {
         unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
     }
 
+    /// Allocate a `make-closure` instance of `proto` whose constant pool is
+    /// `constants`: every other field is `proto`'s (the `Clone` shares its
+    /// bytes, decode cell and tiering state), written STRAIGHT INTO the arena
+    /// slot field by field. `alloc_bytecode` of a clone moved the whole
+    /// ~336-byte function through several stack temporaries on the way into
+    /// the slot (wide copies whose loads hit the narrow stores that had just
+    /// built them); here no temporary of the whole function exists.
+    ///
+    /// Same chokepoint contract as [`Self::alloc_bytecode`]: a FULL header
+    /// write before anything else, every data field written (the destructure
+    /// below is exhaustive, so a new `ByteCodeFunction` field fails to
+    /// compile here until it is copied), then the born-at-parity store — all
+    /// before the value exists, so no barrier is needed and the concurrent
+    /// claim arm, which reads only pre-cycle objects, never sees the slot
+    /// half-written. Same accounting.
+    #[inline(never)]
+    pub fn alloc_bytecode_instance(
+        &mut self,
+        proto: &crate::emacs_core::bytecode::ByteCodeFunction,
+        constants: LispValueVec,
+    ) -> TaggedValue {
+        debug_assert!(
+            !proto.is_pdump_stub(),
+            "instantiating an unmaterialized pdump stub"
+        );
+        #[cfg(test)]
+        crate::emacs_core::bytecode::chunk::note_bytecode_function_clone_for_test();
+        let crate::emacs_core::bytecode::ByteCodeFunction {
+            source_id,
+            ops,
+            ops_sealed,
+            stack_verified,
+            constants: _,
+            max_stack,
+            params,
+            arglist,
+            lexical,
+            env,
+            gnu_byte_offset_map,
+            gnu_bytecode_bytes,
+            docstring,
+            doc_form,
+            interactive,
+            closure_slot_count,
+            extra_slots,
+            #[cfg(feature = "jit")]
+            runtime,
+            lazy_gnu_code,
+        } = proto;
+        // Every clone BEFORE the slot is claimed: `alloc_slot` marks it
+        // allocated, and the sweep would drop whatever a panic left there.
+        let ops = ops.clone();
+        let params = params.clone();
+        let gnu_byte_offset_map = gnu_byte_offset_map.clone();
+        let gnu_bytecode_bytes = gnu_bytecode_bytes.clone();
+        let docstring = docstring.clone();
+        let extra_slots = extra_slots.clone();
+        #[cfg(feature = "jit")]
+        let runtime = runtime.clone();
+        let lazy_gnu_code = lazy_gnu_code.clone();
+
+        let ptr = self.bytecode_arena.alloc_slot();
+        // SAFETY: `ptr` is a claimed, correctly aligned slot of this heap's
+        // bytecode arena. Every field is written exactly once through a raw
+        // field pointer (never through a reference to the uninitialized
+        // slot), header first, and nothing reads the slot before the value
+        // is returned.
+        unsafe {
+            use std::ptr::addr_of_mut;
+            // FULL-HEADER WRITE: never partially reuse prior slot bytes.
+            addr_of_mut!((*ptr).header).write(VecLikeHeader::new(VecLikeType::ByteCode));
+            let data = addr_of_mut!((*ptr).data);
+            addr_of_mut!((*data).source_id).write(*source_id);
+            addr_of_mut!((*data).ops).write(ops);
+            addr_of_mut!((*data).ops_sealed).write(*ops_sealed);
+            addr_of_mut!((*data).stack_verified).write(*stack_verified);
+            addr_of_mut!((*data).constants).write(constants);
+            addr_of_mut!((*data).max_stack).write(*max_stack);
+            addr_of_mut!((*data).params).write(params);
+            addr_of_mut!((*data).arglist).write(*arglist);
+            addr_of_mut!((*data).lexical).write(*lexical);
+            addr_of_mut!((*data).env).write(*env);
+            addr_of_mut!((*data).gnu_byte_offset_map).write(gnu_byte_offset_map);
+            addr_of_mut!((*data).gnu_bytecode_bytes).write(gnu_bytecode_bytes);
+            addr_of_mut!((*data).docstring).write(docstring);
+            addr_of_mut!((*data).doc_form).write(*doc_form);
+            addr_of_mut!((*data).interactive).write(*interactive);
+            addr_of_mut!((*data).closure_slot_count).write(*closure_slot_count);
+            addr_of_mut!((*data).extra_slots).write(extra_slots);
+            #[cfg(feature = "jit")]
+            addr_of_mut!((*data).runtime).write(runtime);
+            addr_of_mut!((*data).lazy_gnu_code).write(lazy_gnu_code);
+            // BORN-AT-PARITY, unconditionally — the link seam's store (see
+            // `link_veclike`).
+            (*ptr).header.gc.set_marked(self.mark_parity);
+        }
+        #[cfg(test)]
+        alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
+        self.allocated_count += 1;
+        self.note_allocation_bytes(unsafe { Self::bytecode_object_bytes(&*ptr) });
+        unsafe { TaggedValue::from_veclike_ptr(ptr as *const VecLikeHeader) }
+    }
+
     /// Allocate a record.
     ///
     /// Allocated from the RECORD ARENA PAGES (task 03/3b): the single

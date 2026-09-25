@@ -6312,9 +6312,7 @@ pub(crate) fn builtin_make_closure(args: &[Value]) -> EvalResult {
         crate::emacs_core::jit::cache::evict_compiled(id);
     }
 
-    Ok(Value::make_bytecode(
-        proto.clone_with_constants(constants.into()),
-    ))
+    Ok(Value::make_bytecode_instance(proto, constants.into()))
 }
 
 /// Replace the first N values in a cons alist with closure_vars.

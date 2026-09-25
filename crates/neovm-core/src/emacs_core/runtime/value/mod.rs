@@ -2426,6 +2426,16 @@ impl TaggedValue {
         with_tagged_heap(|h| h.alloc_bytecode(bc))
     }
 
+    /// Allocate a `make-closure` instance of `proto` with the constant pool
+    /// `constants`, built in place in its arena slot (see
+    /// `TaggedHeap::alloc_bytecode_instance`).
+    pub(crate) fn make_bytecode_instance(
+        proto: &super::bytecode::ByteCodeFunction,
+        constants: crate::tagged::header::LispValueVec,
+    ) -> Self {
+        with_tagged_heap(|h| h.alloc_bytecode_instance(proto, constants))
+    }
+
     /// Allocate a hash table.
     pub fn hash_table(test: HashTableTest) -> Self {
         with_tagged_heap(|h| h.alloc_hash_table(LispHashTable::new(test)))

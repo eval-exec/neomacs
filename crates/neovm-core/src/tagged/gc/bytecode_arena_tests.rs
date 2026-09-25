@@ -1294,3 +1294,215 @@ fn bytecode_shared_gnu_bytes_survive_the_sweep_of_either_holder() {
     assert_eq!(heap.live_bytes(), per_object(instance));
     heap.assert_object_arenas_coherent();
 }
+
+/// Data of a live bytecode value.
+fn bc_data(v: TaggedValue) -> &'static ByteCodeFunction {
+    unsafe { &(*(v.as_veclike_ptr().unwrap() as *const ByteCodeObj)).data }
+}
+
+/// A prototype with every optional field populated, so a readback proves
+/// each one was written.
+fn full_prototype_fn(constants: Vec<TaggedValue>) -> ByteCodeFunction {
+    let mut f = bytecode_fn(constants, 6, 48);
+    f.params = LambdaParams {
+        required: vec![crate::emacs_core::intern::intern("bia-a")],
+        optional: vec![crate::emacs_core::intern::intern("bia-b")],
+        rest: Some(crate::emacs_core::intern::intern("bia-r")),
+    };
+    f.arglist = TaggedValue::fixnum(0x0181);
+    f.lexical = true;
+    f.max_stack = 11;
+    f.ops_sealed = true;
+    f.stack_verified = true;
+    f.gnu_byte_offset_map = Some(vec![GnuByteOffsetMapEntry::new(0, 0)]);
+    f.docstring = Some(crate::heap_types::LispString::from_utf8("Instance doc."));
+    f.doc_form = Some(TaggedValue::fixnum(41));
+    f.interactive = Some(TaggedValue::fixnum(42));
+    f.closure_slot_count = 8;
+    f.extra_slots = vec![TaggedValue::fixnum(43), TaggedValue::fixnum(44)];
+    f
+}
+
+/// `alloc_bytecode_instance` (`make-closure`'s in-place writer): a page
+/// slot born at parity, accounted exactly as `alloc_bytecode` of a clone
+/// with the same pool, reading back every prototype field but the pool.
+#[test]
+fn bytecode_instance_reads_back_as_the_prototype_with_its_own_pool() {
+    crate::test_utils::init_test_tracing();
+    let mut heap = TaggedHeap::new();
+    set_tagged_heap(&mut heap);
+
+    let proto = heap.alloc_bytecode(full_prototype_fn(vec![
+        TaggedValue::fixnum(1),
+        TaggedValue::fixnum(2),
+        TaggedValue::fixnum(3),
+    ]));
+    let p = bc_data(proto);
+    let pool = vec![
+        TaggedValue::fixnum(10),
+        TaggedValue::fixnum(2),
+        TaggedValue::fixnum(3),
+    ];
+
+    let before = heap.bytes_since_gc();
+    let instance = heap.alloc_bytecode_instance(p, LispValueVec::owned(pool.clone()));
+    let instance_bytes = heap.bytes_since_gc() - before;
+    let mut clone = p.clone();
+    clone.constants = LispValueVec::owned(pool.clone());
+    let before = heap.bytes_since_gc();
+    let cloned = heap.alloc_bytecode(clone);
+    assert_eq!(instance_bytes, heap.bytes_since_gc() - before);
+    assert_eq!(
+        TaggedHeap::object_bytes_from_header(bc_ptr(instance) as *const GcHeader),
+        TaggedHeap::object_bytes_from_header(bc_ptr(cloned) as *const GcHeader),
+    );
+
+    assert_eq!(instance.veclike_type(), Some(VecLikeType::ByteCode));
+    assert!(heap.bytecode_arena.owns(bc_ptr(instance)));
+    assert_eq!(heap.non_cons_object_addrs.len(), 0);
+    assert!(unsafe {
+        (*instance.as_veclike_ptr().unwrap())
+            .gc
+            .is_marked_at(heap.mark_parity)
+    });
+
+    let i = bc_data(instance);
+    assert_eq!(i.constants.as_slice(), pool.as_slice());
+    assert_ne!(
+        i.constants.as_slice().as_ptr(),
+        p.constants.as_slice().as_ptr()
+    );
+    assert_eq!(i.source_id, p.source_id);
+    assert_eq!(i.ops, p.ops);
+    assert_eq!(i.ops_sealed, p.ops_sealed);
+    assert_eq!(i.stack_verified, p.stack_verified);
+    assert_eq!(i.max_stack, p.max_stack);
+    assert_eq!(i.params.required, p.params.required);
+    assert_eq!(i.params.optional, p.params.optional);
+    assert_eq!(i.params.rest, p.params.rest);
+    assert_eq!(i.arglist, p.arglist);
+    assert_eq!(i.lexical, p.lexical);
+    assert_eq!(i.env, p.env);
+    assert_eq!(i.gnu_byte_offset_map, p.gnu_byte_offset_map);
+    assert!(
+        i.gnu_bytecode_bytes
+            .as_ref()
+            .unwrap()
+            .shares_storage_with(p.gnu_bytecode_bytes.as_ref().unwrap())
+    );
+    assert_eq!(
+        i.docstring.as_ref().unwrap().as_bytes(),
+        p.docstring.as_ref().unwrap().as_bytes()
+    );
+    assert_eq!(i.doc_form, p.doc_form);
+    assert_eq!(i.interactive, p.interactive);
+    assert_eq!(i.closure_slot_count, p.closure_slot_count);
+    assert_eq!(i.extra_slots, p.extra_slots);
+    #[cfg(feature = "jit")]
+    assert!(std::ptr::eq(&**i.jit_runtime(), &**p.jit_runtime()));
+    assert_eq!(i.lazy_gnu_code.is_some(), p.lazy_gnu_code.is_some());
+
+    // The instance survives on its own, and the prototype's sweep leaves
+    // everything the instance shares intact.
+    heap.collect_exact(std::iter::once(instance));
+    assert!(!heap.bytecode_arena.owns(bc_ptr(proto)));
+    let i = bc_data(instance);
+    assert_eq!(i.constants.as_slice(), pool.as_slice());
+    assert_eq!(i.gnu_bytecode_bytes.as_deref().unwrap(), &[0xAA; 48][..]);
+    assert_eq!(i.docstring.as_ref().unwrap().as_bytes(), b"Instance doc.");
+    heap.assert_object_arenas_coherent();
+}
+
+/// An instance born MID-MARK is allocate-black: it survives its birth
+/// cycle unseeded, and rooted in the next cycle it keeps its pool's heap
+/// child alive (the pool is traced like any bytecode's).
+#[test]
+fn bytecode_instance_born_mid_mark_survives_and_traces_its_pool() {
+    crate::test_utils::init_test_tracing();
+    let mut heap = TaggedHeap::new();
+    set_tagged_heap(&mut heap);
+
+    let mut spine = TaggedValue::fixnum(0);
+    for i in 0..100_000 {
+        spine = heap.alloc_cons(TaggedValue::fixnum(i), spine);
+    }
+    let proto = heap.alloc_bytecode(full_prototype_fn(vec![
+        TaggedValue::fixnum(0),
+        TaggedValue::fixnum(7),
+    ]));
+    heap.collect_exact([spine, proto].into_iter());
+    assert!(heap.should_run_concurrent());
+
+    heap.concurrent_begin();
+    heap.seed_root(spine);
+    heap.seed_root(proto);
+    heap.launch_concurrent_mark();
+    let child = heap.alloc_cons(TaggedValue::fixnum(99), TaggedValue::NIL);
+    let instance = heap.alloc_bytecode_instance(
+        bc_data(proto),
+        LispValueVec::owned(vec![child, TaggedValue::fixnum(7)]),
+    );
+    let instance_ptr = bc_ptr(instance);
+    while !heap.concurrent_mark_done() {
+        std::thread::yield_now();
+    }
+    heap.join_concurrent_mark();
+    heap.reseed_runtime_and_remembered_roots();
+    heap.seed_root(spine);
+    heap.seed_root(proto); // the instance deliberately NOT seeded
+    let bytes_before = heap.live_bytes();
+    heap.incremental_drain_all();
+    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    heap.finish_incremental_sweep_now();
+    assert!(
+        heap.owns_non_cons_object(instance_ptr),
+        "allocate-black instance must survive the cycle it was born in",
+    );
+
+    run_concurrent_cycle(&mut heap, &[spine, proto, instance]);
+    run_concurrent_cycle(&mut heap, &[spine, proto, instance]);
+    assert!(heap.owns_non_cons_object(instance_ptr));
+    let pool_child = bc_constant(instance, 0);
+    assert_eq!(pool_child.bits(), child.bits());
+    assert_eq!(pool_child.cons_car().as_fixnum(), Some(99));
+    heap.assert_object_arenas_coherent();
+}
+
+/// Churn: 100K instances of one prototype through repeated collections,
+/// each with a heap child only its pool reaches; the rooted ones keep
+/// theirs and every slot the sweep recycles is rebuilt cleanly.
+#[test]
+fn bytecode_instance_churn_through_collections() {
+    crate::test_utils::init_test_tracing();
+    let mut heap = TaggedHeap::new();
+    set_tagged_heap(&mut heap);
+
+    let proto = heap.alloc_bytecode(full_prototype_fn(vec![
+        TaggedValue::fixnum(0),
+        TaggedValue::fixnum(-1),
+    ]));
+    let mut kept: Vec<(TaggedValue, i64)> = Vec::new();
+    for i in 0..100_000_i64 {
+        let child = heap.alloc_cons(TaggedValue::fixnum(i), TaggedValue::NIL);
+        let instance = heap.alloc_bytecode_instance(
+            bc_data(proto),
+            LispValueVec::owned(vec![child, TaggedValue::fixnum(-1)]),
+        );
+        if i % 997 == 0 {
+            kept.push((instance, i));
+        }
+        if i % 10_000 == 9_999 {
+            let roots: Vec<TaggedValue> = std::iter::once(proto)
+                .chain(kept.iter().map(|&(v, _)| v))
+                .collect();
+            heap.collect_exact(roots.into_iter());
+            for &(v, n) in &kept {
+                assert_eq!(bc_constant(v, 0).cons_car().as_fixnum(), Some(n));
+                assert_eq!(bc_constant(v, 1).as_fixnum(), Some(-1));
+                assert_eq!(bc_data(v).extra_slots, bc_data(proto).extra_slots);
+            }
+            heap.assert_object_arenas_coherent();
+        }
+    }
+    assert_eq!(kept.len(), 101);
+}
