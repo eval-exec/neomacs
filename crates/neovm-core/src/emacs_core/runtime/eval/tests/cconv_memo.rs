@@ -1056,3 +1056,127 @@ fn bypasses() {
     );
     assert_eq!(count(&eval, CconvMemoEvent::BypassCompileEnv), before + 2);
 }
+
+// ---------------------------------------------------------------------------
+// S0.6: the native untrimmed path
+// ---------------------------------------------------------------------------
+
+use crate::emacs_core::eval::parse_cconv_fast_knob;
+
+fn startup_fast(mode: CconvMemoMode) -> Context {
+    let mut eval = startup(mode);
+    eval.cconv_memo.set_fast(true);
+    eval
+}
+
+const UNTRIMMED: &[&str] = &[
+    // `(t)' only.
+    "(defun cm-n1 () (lambda (x) x))",
+    // Dynamic entries only.
+    "(defun cm-n2 () (defvar cm-n2-var) (lambda () cm-n2-var))",
+    // The marker with forms after it: dropped, the environment kept whole.
+    "(defun cm-n3 () (let ((a 1) (b 2)) (lambda () :closure-dont-trim-context a)))",
+    // The marker alone is the body (not dropped).
+    "(defun cm-n4 () (lambda () :closure-dont-trim-context))",
+    // Docstring and interactive form pass through.
+    "(defun cm-n5 () (lambda (x) \"doc\" (interactive \"p\") x))",
+    "(defun cm-n6 () (lambda (&optional x &rest r) (list x r)))",
+];
+
+fn untrimmed_transcript(eval: &mut Context) -> Vec<String> {
+    for form in UNTRIMMED {
+        eval_ok(eval, form);
+    }
+    let mut out = Vec::new();
+    for i in 1..=UNTRIMMED.len() {
+        out.push(printed(eval, &format!("(cm-n{i})")));
+        out.push(printed(
+            eval,
+            &format!("(let ((f (cm-n{i}))) (list (eq (aref f 1) (aref (cm-n{i}) 1)) (length f)))"),
+        ));
+    }
+    // A non-list arglist: cconv's cl-assert signals from the Lisp.
+    out.push(format!(
+        "{:?}",
+        eval.eval_str("(let ((a 1)) (lambda x :closure-dont-trim-context a))")
+            .is_err()
+    ));
+    out
+}
+
+#[test]
+fn fast_knob_values() {
+    crate::test_utils::init_test_tracing();
+    assert!(!parse_cconv_fast_knob(None));
+    assert!(!parse_cconv_fast_knob(Some("off")));
+    assert!(!parse_cconv_fast_knob(Some("0")));
+    assert!(parse_cconv_fast_knob(Some("on")));
+    assert!(parse_cconv_fast_knob(Some(" 1 ")));
+    assert_eq!(parse_cconv_memo_knob(Some("on")), CconvMemoMode::On);
+    assert_eq!(parse_cconv_memo_knob(Some("1")), CconvMemoMode::On);
+    assert_eq!(parse_cconv_memo_knob(Some("verify")), CconvMemoMode::Verify);
+}
+
+#[test]
+fn fast_untrimmed_path_builds_what_the_lisp_builds() {
+    crate::test_utils::init_test_tracing();
+    let expected = untrimmed_transcript(&mut startup(CconvMemoMode::Off));
+    let mut fast = startup_fast(CconvMemoMode::Off);
+    assert_eq!(untrimmed_transcript(&mut fast), expected);
+    assert!(
+        count(&fast, CconvMemoEvent::FastServed) >= 10,
+        "{}",
+        fast.cconv_memo_report()
+    );
+    assert!(
+        count(&fast, CconvMemoEvent::DontTrim) >= 2,
+        "{}",
+        fast.cconv_memo_report()
+    );
+    let mut verify = startup_fast(CconvMemoMode::Verify);
+    assert_eq!(untrimmed_transcript(&mut verify), expected);
+    assert!(
+        count(&verify, CconvMemoEvent::VerifyMatch) >= 10,
+        "{}",
+        verify.cconv_memo_report()
+    );
+    assert_eq!(count(&verify, CconvMemoEvent::VerifyMismatch), 0);
+}
+
+#[test]
+fn fast_untrimmed_path_leaves_edge_cases_to_the_lisp() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = startup_fast(CconvMemoMode::Off);
+    eval_ok(&mut eval, "(defun cm-e1 () (lambda () 1))");
+    // Advice on the filter: the Lisp runs (and the advice with it).
+    eval_ok(
+        &mut eval,
+        "(progn (defvar cm-e-calls 0)
+                (defun cm-e-count (f &rest args) (setq cm-e-calls (1+ cm-e-calls)) (apply f args))
+                (advice-add 'cconv-make-interpreted-closure :around #'cm-e-count))",
+    );
+    printed(&mut eval, "(cm-e1)");
+    assert_eq!(eval_ok(&mut eval, "cm-e-calls"), Value::fixnum(1));
+    eval_ok(
+        &mut eval,
+        "(advice-remove 'cconv-make-interpreted-closure #'cm-e-count)",
+    );
+    let served = count(&eval, CconvMemoEvent::FastServed);
+    printed(&mut eval, "(cm-e1)");
+    assert_eq!(count(&eval, CconvMemoEvent::FastServed), served + 1);
+    // Near the depth limit: the same outcome as the Lisp at every depth.
+    let setup = "(defun cm-e-deep (n) (if (> n 0) (cm-e-deep (1- n)) (lambda () 1)))";
+    let probe = "(let ((max-lisp-eval-depth 200) (out nil))
+                   (dotimes (i 60)
+                     (push (condition-case err (progn (cm-e-deep (+ 150 i)) 'ok) (error (car err))) out))
+                   (nreverse out))";
+    let mut off = startup(CconvMemoMode::Off);
+    eval_ok(&mut off, setup);
+    eval_ok(&mut eval, setup);
+    assert_eq!(printed(&mut eval, probe), printed(&mut off, probe));
+    assert!(
+        count(&eval, CconvMemoEvent::FastRefused) > 0,
+        "{}",
+        eval.cconv_memo_report()
+    );
+}

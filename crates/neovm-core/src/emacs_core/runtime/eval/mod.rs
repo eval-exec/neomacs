@@ -7349,7 +7349,9 @@ mod cconv_memo;
 mod cconv_shape;
 mod cconv_trust;
 #[cfg(test)]
-pub(crate) use cconv_memo::{CconvMemoEvent, CconvMemoMode, HeadVerdict, parse_cconv_memo_knob};
+pub(crate) use cconv_memo::{
+    CconvMemoEvent, CconvMemoMode, HeadVerdict, parse_cconv_fast_knob, parse_cconv_memo_knob,
+};
 #[cfg(test)]
 pub(crate) use cconv_shape::{
     ClosureFacts, ClosureShape, EnvSummary, FactsRefusal, SHAPE_NODE_CAP, ShapeRefusal, ShapeTok,

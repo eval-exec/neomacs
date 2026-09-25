@@ -66,6 +66,19 @@
 //!   them element by element, return the Lisp's closure and count
 //!   mismatches; `NEOVM_CCONV_MEMO_STRICT=1` (and test builds) panic on one.
 //!
+//! `NEOVM_CCONV_FAST` (read once per process; `on` or `1` enables, default
+//! off) serves the untrimmed case natively (S0.6): when the environment
+//! binds no lexical variable, or the body starts with
+//! `:closure-dont-trim-context` followed by more forms, cconv.el:923-949
+//! only asserts `(consp body)` and `(listp args)`, drops the marker, and
+//! calls `make-interpreted-closure` with the environment unchanged.  The
+//! native path does exactly that while the trusted set stands (the filter
+//! and `make-interpreted-closure` are the dumped ones), outside
+//! `debug-on-next-call` and a pending quit, with 8 levels of
+//! `max-lisp-eval-depth` to spare; an assertion or argument error runs the
+//! Lisp so it signals from the same frames.  Under `NEOVM_CCONV_MEMO=verify`
+//! it is compared with the Lisp like a memo hit.
+//!
 //! The counts are logged at `info` under the `neovm::cconv_memo` target every
 //! 4096 trimming calls; [`Context::cconv_memo_report`] formats them.
 //!
@@ -124,6 +137,31 @@ pub(crate) fn parse_cconv_memo_knob(value: Option<&str>) -> CconvMemoMode {
     }
 }
 
+/// `NEOVM_CCONV_FAST` before it is read.
+const FAST_UNREAD: u8 = 0xff;
+
+static CCONV_FAST: AtomicU8 = AtomicU8::new(FAST_UNREAD);
+
+/// Whether a value of `NEOVM_CCONV_FAST` enables the native untrimmed path.
+pub(crate) fn parse_cconv_fast_knob(value: Option<&str>) -> bool {
+    matches!(
+        value.map(|v| v.trim().to_ascii_lowercase()).as_deref(),
+        Some("1" | "on" | "true" | "yes")
+    )
+}
+
+/// The process-wide `NEOVM_CCONV_FAST`, read on first use.
+fn cconv_fast_from_env() -> bool {
+    match CCONV_FAST.load(Ordering::Relaxed) {
+        FAST_UNREAD => {
+            let on = parse_cconv_fast_knob(std::env::var("NEOVM_CCONV_FAST").ok().as_deref());
+            CCONV_FAST.store(u8::from(on), Ordering::Relaxed);
+            on
+        }
+        byte => byte == 1,
+    }
+}
+
 /// Whether a verify mismatch panics: `NEOVM_CCONV_MEMO_STRICT=1`, and every
 /// test build.
 fn cconv_memo_strict_from_env() -> bool {
@@ -165,6 +203,14 @@ pub(crate) enum CconvMemoEvent {
     /// The environment binds no lexical variable (cconv.el:935-949 returns
     /// the closure untrimmed).
     NoLexvars,
+    /// The body starts with `:closure-dont-trim-context` and more forms:
+    /// the environment is kept whole (bug#59213).
+    DontTrim,
+    /// `NEOVM_CCONV_FAST`: an untrimmed closure built natively.
+    FastServed,
+    /// `NEOVM_CCONV_FAST`: an untrimmed call left to the Lisp (trusted set,
+    /// debugger, quit, depth, a non-list, or an argument error).
+    FastRefused,
     /// The environment binds lexical variables: the trimming path.
     Trim,
     /// The trusted set does not stand (see `cconv_trust`): a trusted
@@ -289,6 +335,8 @@ pub(crate) struct EffectSnapshot {
 #[derive(Debug)]
 pub(crate) struct CconvMemo {
     mode: CconvMemoMode,
+    /// `NEOVM_CCONV_FAST`: serve the untrimmed case natively.
+    fast: bool,
     /// Panic on a verify mismatch.
     strict: bool,
     stats: CconvMemoStats,
@@ -303,9 +351,10 @@ pub(crate) struct CconvMemo {
 }
 
 impl CconvMemo {
-    pub(crate) fn new(mode: CconvMemoMode) -> Self {
+    pub(crate) fn new(mode: CconvMemoMode, fast: bool) -> Self {
         Self {
             mode,
+            fast,
             strict: cconv_memo_strict_from_env(),
             stats: CconvMemoStats::default(),
             trusted: TrustedSet::default(),
@@ -316,19 +365,25 @@ impl CconvMemo {
         }
     }
 
-    /// A memo in the process-wide mode (`NEOVM_CCONV_MEMO`).
+    /// A memo in the process-wide modes (`NEOVM_CCONV_MEMO`,
+    /// `NEOVM_CCONV_FAST`).
     pub(crate) fn from_env() -> Self {
-        Self::new(cconv_memo_mode_from_env())
+        Self::new(cconv_memo_mode_from_env(), cconv_fast_from_env())
     }
 
     #[inline(always)]
     pub(crate) fn engaged(&self) -> bool {
-        self.mode != CconvMemoMode::Off
+        self.mode != CconvMemoMode::Off || self.fast
     }
 
     #[cfg(test)]
     pub(crate) fn set_mode(&mut self, mode: CconvMemoMode) {
         self.mode = mode;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_fast(&mut self, fast: bool) {
+        self.fast = fast;
     }
 
     #[cfg(test)]
@@ -529,6 +584,36 @@ fn closures_agree(memo: Value, lisp: Value) -> bool {
         }
     }
     true
+}
+
+cached_symbol_id!(
+    closure_dont_trim_context_symbol,
+    ":closure-dont-trim-context"
+);
+
+/// Levels of `max-lisp-eval-depth` the native untrimmed path leaves for the
+/// Lisp it replaces (the filter, `mapcar` and its `car-safe` calls,
+/// `make-interpreted-closure`).
+const FAST_DEPTH_BUDGET: usize = 8;
+
+/// cconv.el:936-939: the body starts with `:closure-dont-trim-context` and
+/// has more forms after it.
+fn body_keeps_whole_context(body: Value) -> bool {
+    body.is_cons()
+        && body.cons_car().as_symbol_id() == Some(closure_dont_trim_context_symbol())
+        && !body.cons_cdr().is_nil()
+}
+
+/// ENV is a proper list (so `(mapcar #'car-safe env)` does not signal).
+fn is_proper_list(env: Value) -> bool {
+    let mut tail = env;
+    for _ in 0..super::cconv_shape::ENV_ENTRY_CAP {
+        if !tail.is_cons() {
+            return tail.is_nil();
+        }
+        tail = tail.cons_cdr();
+    }
+    false
 }
 
 /// Whether ENV binds a lexical variable the way cconv.el:931 sees it:
@@ -958,8 +1043,27 @@ impl Context {
         iform: Value,
     ) -> EvalResult {
         self.cconv_memo.note(CconvMemoEvent::Call);
-        if !env_has_lexvars(env) {
-            self.cconv_memo.note(CconvMemoEvent::NoLexvars);
+        let keeps_whole_context = body_keeps_whole_context(body);
+        if keeps_whole_context || !env_has_lexvars(env) {
+            self.cconv_memo.note(if keeps_whole_context {
+                CconvMemoEvent::DontTrim
+            } else {
+                CconvMemoEvent::NoLexvars
+            });
+            if self.cconv_memo.fast {
+                return self.cconv_untrimmed(
+                    closure_hook,
+                    params,
+                    body,
+                    env,
+                    docstring,
+                    iform,
+                    keeps_whole_context,
+                );
+            }
+            return self.cconv_run_lisp(closure_hook, params, body, env, docstring, iform);
+        }
+        if self.cconv_memo.mode == CconvMemoMode::Off {
             return self.cconv_run_lisp(closure_hook, params, body, env, docstring, iform);
         }
         self.cconv_memo.note(CconvMemoEvent::Trim);
@@ -984,18 +1088,35 @@ impl Context {
                 self.cconv_memo.note(CconvMemoEvent::Hit);
                 return match self.cconv_memo.mode {
                     CconvMemoMode::On => {
-                        self.cconv_memo.note(CconvMemoEvent::Served);
-                        self.cconv_memo_build(params, body, env, docstring, iform, &hit)
+                        match self.cconv_memo_build(params, body, env, docstring, iform, &hit) {
+                            Ok(closure) => {
+                                self.cconv_memo.note(CconvMemoEvent::Served);
+                                Ok(closure)
+                            }
+                            // Unreachable for a recorded shape; the Lisp
+                            // signals from its own frames if it must.
+                            Err(_) => self.cconv_run_lisp(
+                                closure_hook,
+                                params,
+                                body,
+                                env,
+                                docstring,
+                                iform,
+                            ),
+                        }
                     }
-                    CconvMemoMode::Verify => self.cconv_memo_verify(
-                        closure_hook,
-                        params,
-                        body,
-                        env,
-                        docstring,
-                        iform,
-                        &hit,
-                    ),
+                    CconvMemoMode::Verify => {
+                        let memo = self.cconv_memo_build(params, body, env, docstring, iform, &hit);
+                        self.cconv_verify_against_lisp(
+                            closure_hook,
+                            params,
+                            body,
+                            env,
+                            docstring,
+                            iform,
+                            memo,
+                        )
+                    }
                     CconvMemoMode::Stats | CconvMemoMode::Off => {
                         self.cconv_run_lisp(closure_hook, params, body, env, docstring, iform)
                     }
@@ -1074,9 +1195,9 @@ impl Context {
         memo.note(CconvMemoEvent::Recorded);
     }
 
-    /// `verify` on a hit: build the memo's closure, run the Lisp, compare.
+    /// The native untrimmed path (S0.6, see the module docs).
     #[allow(clippy::too_many_arguments)]
-    fn cconv_memo_verify(
+    fn cconv_untrimmed(
         &mut self,
         closure_hook: Value,
         params: Value,
@@ -1084,9 +1205,64 @@ impl Context {
         env: Value,
         docstring: Value,
         iform: Value,
-        hit: &MemoHit,
+        keeps_whole_context: bool,
     ) -> EvalResult {
-        let memo = self.cconv_memo_build(params, body, env, docstring, iform, hit);
+        let servable = body.is_cons()
+            && (params.is_nil() || params.is_cons())
+            && is_proper_list(env)
+            && self.cconv_trusted_set_valid()
+            && !self.debug_on_next_call_is_armed()
+            && self.quit_flag.is_nil()
+            && self.depth.saturating_add(FAST_DEPTH_BUDGET) <= self.cconv_eval_depth_limit();
+        let built = if servable {
+            let kept_body = if keeps_whole_context {
+                body.cons_cdr()
+            } else {
+                body
+            };
+            builtins::symbols::make_interpreted_closure_from_parts(
+                &params,
+                &kept_body,
+                &env,
+                Some(&docstring),
+                Some(&iform),
+            )
+            .ok()
+        } else {
+            None
+        };
+        let Some(closure) = built else {
+            self.cconv_memo.note(CconvMemoEvent::FastRefused);
+            return self.cconv_run_lisp(closure_hook, params, body, env, docstring, iform);
+        };
+        if self.cconv_memo.mode == CconvMemoMode::Verify {
+            return self.cconv_verify_against_lisp(
+                closure_hook,
+                params,
+                body,
+                env,
+                docstring,
+                iform,
+                Ok(closure),
+            );
+        }
+        self.cconv_memo.note(CconvMemoEvent::FastServed);
+        Ok(closure)
+    }
+
+    /// `verify`: run the Lisp next to the memo's closure MEMO, compare them
+    /// and the effect snapshot, return the Lisp's result.
+    #[allow(clippy::too_many_arguments)]
+    fn cconv_verify_against_lisp(
+        &mut self,
+        closure_hook: Value,
+        params: Value,
+        body: Value,
+        env: Value,
+        docstring: Value,
+        iform: Value,
+        memo: EvalResult,
+    ) -> EvalResult {
         let scope = self.save_specpdl_roots();
         if let Ok(closure) = &memo {
             self.push_specpdl_root(*closure);
