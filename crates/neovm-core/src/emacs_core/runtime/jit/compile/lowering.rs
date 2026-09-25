@@ -47,6 +47,7 @@ pub(crate) fn guards_emitted_reset() {
     UNTAG_COUNT.with(|c| c.set(0));
     RETAG_COUNT.with(|c| c.set(0));
     flonum_census_reset();
+    super::heap_inline::inline_heap_sites_reset();
 }
 
 /// Guards emitted since the last [`guards_emitted_reset`].
@@ -2636,6 +2637,7 @@ pub(super) fn lower_mir_with_plan(
         has_rest: false,
         has_binds: false,
         has_handlers: false,
+        needs_vmctx: super::heap_inline::inline_heap_sites() > 0,
         // Set by compile_bytecode_function_inner after a successful inline pass.
         inline_epoch: None,
         // A shim-bearing body runs a side effect ahead of its (precise) deopts, so
@@ -3050,6 +3052,7 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
                 call_args_slot,
                 call_result_slot,
                 rootwin: None,
+                heap: None,
             })
         } else {
             None
@@ -3850,6 +3853,10 @@ pub(crate) struct RtCtx {
     /// Root-window state hoisted to the function entry (baseline leaves;
     /// `None` keeps the per-site sequence): see [`HoistedRootWin`].
     pub(crate) rootwin: Option<HoistedRootWin>,
+    /// The running context's `*const TaggedHeap`, loaded once in the entry
+    /// block for a body whose inline heap sites justify it
+    /// (`heap_inline::hoist_heap_ptr`); `None` makes each site load it.
+    pub(crate) heap: Option<ClifValue>,
 }
 
 /// The residual root window's frame base, loaded once at entry, with its
@@ -7473,7 +7480,10 @@ fn lower_simple_op_arms(
                 //
                 // JIT `aref` of a plain vector or record at an in-range fixnum
                 // index reads the slot inline and calls the shim for anything
-                // else (see `emit_inline_aref`).
+                // else (see `emit_inline_aref`); JIT `setcar`/`setcdr` of a
+                // cons outside the write barrier's window store inline
+                // (`heap_inline::emit_inline_cons_store`), the shim becoming
+                // the cold path.
                 let mut inline_aref = if matches!(other, Op::Aref) && !aot && jit_inline_aref_on() {
                     let merge = fb.create_block();
                     let slow = fb.create_block();
@@ -7483,6 +7493,27 @@ fn lower_simple_op_arms(
                         fb.seal_block(slow);
                         (merge, res)
                     })
+                } else if matches!(other, Op::Setcar | Op::Setcdr)
+                    && !aot
+                    && jit_inline_heap_write_on()
+                {
+                    let merge = fb.create_block();
+                    let slow = fb.create_block();
+                    let res = fb.declare_var(types::I64);
+                    super::heap_inline::emit_inline_cons_store(
+                        fb,
+                        rt,
+                        operands[0],
+                        operands[1],
+                        matches!(other, Op::Setcdr),
+                        slow,
+                        res,
+                        merge,
+                    );
+                    fb.switch_to_block(slow);
+                    fb.seal_block(slow);
+                    fb.set_cold_block(slow);
+                    Some((merge, res))
                 } else {
                     None
                 };

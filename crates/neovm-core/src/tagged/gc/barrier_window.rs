@@ -58,6 +58,18 @@ impl BarrierWindow {
     pub(crate) fn covers(self, addr: usize) -> bool {
         addr.wrapping_sub(self.lo) < self.len
     }
+
+    /// The window's first address (what compiled code subtracts).
+    #[inline(always)]
+    pub(crate) fn lo(self) -> usize {
+        self.lo
+    }
+
+    /// The window's length in bytes (what compiled code compares against).
+    #[inline(always)]
+    pub(crate) fn len(self) -> usize {
+        self.len
+    }
 }
 
 impl TaggedHeap {
@@ -76,10 +88,12 @@ impl TaggedHeap {
     }
 
     /// THE publisher of the barrier window: recompute it from this heap's
-    /// state and store it where the barrier reads it — the thread-local
-    /// mirror the Rust stores test. Called at every writer of an input.
+    /// state and store it where the barriers read it — the thread-local
+    /// mirror the Rust stores test and the heap field compiled code tests
+    /// (`JitHeapState`). Called at every writer of an input.
     pub(super) fn publish_barrier_window(&mut self) {
         let window = self.barrier_window();
+        self.jit.set_barrier_window(window);
         TAGGED_HEAP_BARRIER_WINDOW.with(|w| w.set(window));
     }
 
@@ -93,6 +107,24 @@ impl TaggedHeap {
         self.concurrent_mark_running = on;
         TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(on));
         self.publish_barrier_window();
+    }
+}
+
+#[cfg(test)]
+impl TaggedHeap {
+    /// Test hook: drain the SATB buffer the barrier logs pre-images into.
+    pub(crate) fn take_satb_shared_for_test(&mut self) -> Vec<TaggedValue> {
+        std::mem::take(&mut *self.satb_shared.lock().unwrap())
+    }
+
+    /// Test hook: is `owner` in the dump remembered set?
+    pub(crate) fn is_remembered_for_test(&self, owner: TaggedValue) -> bool {
+        self.mapped_remembered.contains(&owner.bits())
+    }
+
+    /// Test hook: the window compiled code tests (`JitHeapState`).
+    pub(crate) fn jit_barrier_window_for_test(&self) -> BarrierWindow {
+        self.jit.barrier_window()
     }
 }
 

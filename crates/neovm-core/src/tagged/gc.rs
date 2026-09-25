@@ -330,6 +330,9 @@ impl CanonicalEmptyStrings {
 
 /// The tagged pointer heap. Owns all heap-allocated Lisp objects.
 pub struct TaggedHeap {
+    /// State compiled code reads and writes in place (`jit_state.rs`): the
+    /// barrier window. Reached as `vmctx -> Context.tagged_heap -> jit`.
+    jit: JitHeapState,
     /// Process-unique heap identity used by side tables that carry GC-managed
     /// Lisp values.  It deliberately does not use this heap's address: boxed
     /// heaps are routinely dropped and recreated by snapshot-based tests, and
@@ -914,6 +917,7 @@ pub(crate) fn set_verify_marked_objects_for_test(on: bool) {
 impl TaggedHeap {
     pub fn new() -> Self {
         Self {
+            jit: JitHeapState::new(),
             identity: next_tagged_heap_identity(),
             cons_blocks: Vec::new(),
             cons_block_index_by_base: FxHashMap::default(),
@@ -2445,8 +2449,11 @@ pub use gc_thread::*;
 
 mod barrier_window;
 pub(crate) use barrier_window::BarrierWindow;
+
+mod jit_state;
 #[cfg(test)]
 pub(crate) use barrier_window::published_barrier_window;
+pub(crate) use jit_state::{HEAP_JIT_BARRIER_LEN, HEAP_JIT_BARRIER_LO, JitHeapState};
 /// The write barrier's owner window against the gate it replaced, state by
 /// state and owner by owner, and its republication at every input writer.
 #[cfg(test)]

@@ -101,6 +101,21 @@ pub(crate) fn jit_inline_aref_on() -> bool {
     })
 }
 
+/// Store `setcar`/`setcdr` inline at JIT sites when the cons lies outside
+/// the write barrier's owner window (`heap_inline::emit_inline_cons_store`).
+/// Default on; `NEOVM_JIT_INLINE_HEAP_WRITE=off` calls `neovm_jit_setcar`/
+/// `_setcdr` at every site — the single-build A/B.
+pub(crate) fn jit_inline_heap_write_on() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("NEOVM_JIT_INLINE_HEAP_WRITE").ok().as_deref(),
+            Some("0" | "off" | "false" | "no")
+        )
+    })
+}
+
 #[cfg(test)]
 std::thread_local! {
     static INLINE_SWITCH_TEST_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };

@@ -493,6 +493,11 @@ pub struct CompiledLeaf {
     /// `cleanup_bytecode_frame` — no stale frame may be matchable while unbind
     /// cleanups run lisp) and requires a non-null vmctx.
     pub(crate) has_handlers: bool,
+    /// Whether the body reads the heap through its vmctx at an inline heap
+    /// site (`compile::heap_inline`): such a leaf must never be entered with
+    /// a null vmctx, which only the test adapter [`Self::call_for_test`]
+    /// passes.
+    pub(crate) needs_vmctx: bool,
     /// If this leaf INLINED a callee, the obarray `function_epoch` armed at compile
     /// time. The dispatch (try_run_compiled / resolve_compiled_leaf_ptr) recompiles
     /// the leaf when the epoch moves — so redefining any inlined callee re-JITs and
@@ -769,6 +774,8 @@ impl CompiledLeaf {
             has_rest: meta.has_rest,
             has_binds: meta.has_binds,
             has_handlers: meta.has_handlers,
+            // AOT code never inlines heap sites (their offsets are JIT-only).
+            needs_vmctx: false,
             // AOT leaves never inline (no epoch staleness; never re-JIT'd).
             inline_epoch: None,
             has_side_effects: meta.has_side_effects,
@@ -1042,6 +1049,10 @@ impl CompiledLeaf {
         } else {
             None
         };
+        debug_assert!(
+            !(self.needs_vmctx && vmctx.is_null()),
+            "a body with inline heap sites reads the heap through its vmctx"
+        );
         let cond_base = if self.has_handlers {
             debug_assert!(!vmctx.is_null(), "handler bodies require a Context");
             // SAFETY: as above — only a length read.
@@ -1361,6 +1372,10 @@ impl CompiledLeaf {
     /// A `Signal` panics — no shim-free test body can produce one.
     #[cfg(test)]
     pub(crate) fn call_for_test(&self, args: &[Value]) -> Option<usize> {
+        assert!(
+            !self.needs_vmctx,
+            "a body with inline heap sites reads its vmctx: run it on a real Context"
+        );
         match self.call(core::ptr::null_mut(), args) {
             NativeRun::Ok(bits) => Some(bits),
             NativeRun::Deopt | NativeRun::DeoptAt(_) => None,

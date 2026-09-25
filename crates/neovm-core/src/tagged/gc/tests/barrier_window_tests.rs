@@ -425,3 +425,30 @@ fn the_remembered_bit_is_set_exactly_when_the_owner_is_remembered() {
     assert!(!header_remembered(young));
     assert!(!heap.mapped_remembered.contains(&young.bits()));
 }
+
+/// The heap field compiled code reads always equals the thread-local mirror
+/// the Rust stores read, across every transition.
+#[test]
+fn compiled_code_and_rust_stores_see_the_same_window() {
+    crate::test_utils::init_test_tracing();
+    let mut heap = TaggedHeap::new();
+    set_tagged_heap(&mut heap);
+    let same = |heap: &TaggedHeap, what: &str| {
+        assert_eq!(
+            heap.jit_barrier_window_for_test(),
+            published_barrier_window(),
+            "{what}"
+        );
+    };
+    same(&heap, "new heap");
+    let _image = mapped_cons(&mut heap);
+    same(&heap, "dump span");
+    heap.set_write_tracking_mode(WriteTrackingMode::OwnersAndRecords);
+    same(&heap, "tracking on");
+    heap.set_write_tracking_mode(WriteTrackingMode::Disabled);
+    same(&heap, "tracking off");
+    heap.set_concurrent_active_for_test(true);
+    same(&heap, "marking");
+    heap.set_concurrent_active_for_test(false);
+    same(&heap, "not marking");
+}

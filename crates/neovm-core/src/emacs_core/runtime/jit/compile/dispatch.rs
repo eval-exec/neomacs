@@ -382,6 +382,14 @@ thread_local! {
 
 #[cfg(test)]
 thread_local! {
+    /// Test hook: how many times compiled code called `neovm_jit_setcar` or
+    /// `neovm_jit_setcdr` (a store its inline path left to the shim).
+    pub(crate) static LIST_STORE_SHIM_CALLS: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+thread_local! {
     /// Test hook: how many times an array shim fell past its fast path.
     pub(crate) static ARRAY_SHIM_SLOW_CALLS: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
@@ -495,6 +503,8 @@ pub extern "C" fn neovm_jit_assq(ctx: *mut u8, key: i64, list: i64) -> i64 {
 #[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
 #[unsafe(no_mangle)]
 pub extern "C" fn neovm_jit_setcar(ctx: *mut u8, cell: i64, new_car: i64) -> i64 {
+    #[cfg(test)]
+    LIST_STORE_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     let cell = Value::from_bits(cell as usize);
     let new_car = Value::from_bits(new_car as usize);
     if crate::tagged::mutate::set_cons_car(cell, new_car) {
@@ -508,6 +518,8 @@ pub extern "C" fn neovm_jit_setcar(ctx: *mut u8, cell: i64, new_car: i64) -> i64
 #[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
 #[unsafe(no_mangle)]
 pub extern "C" fn neovm_jit_setcdr(ctx: *mut u8, cell: i64, new_cdr: i64) -> i64 {
+    #[cfg(test)]
+    LIST_STORE_SHIM_CALLS.with(|c| c.set(c.get() + 1));
     let cell = Value::from_bits(cell as usize);
     let new_cdr = Value::from_bits(new_cdr as usize);
     if crate::tagged::mutate::set_cons_cdr(cell, new_cdr) {

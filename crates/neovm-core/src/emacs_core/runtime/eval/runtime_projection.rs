@@ -19,6 +19,14 @@ const _: () = assert!(std::mem::size_of::<u32>() == 4);
 /// [`crate::buffer::buffer::jit_layout`] for the rest of the chain and for why
 /// two of its hops are probed rather than baked.
 pub(crate) const CONTEXT_BUFFERS_OFFSET: usize = std::mem::offset_of!(Context, buffers);
+/// Where compiled code reads the `Box<TaggedHeap>` pointer, the first hop to
+/// the heap state it tests and bumps in place (`tagged::gc::JitHeapState`).
+/// The box is assigned only by the constructors, so the pointer is stable
+/// for the context's life.
+pub(crate) const CONTEXT_TAGGED_HEAP_OFFSET: usize = std::mem::offset_of!(Context, tagged_heap);
+const _: () = assert!(
+    std::mem::size_of::<Box<crate::tagged::gc::TaggedHeap>>() == std::mem::size_of::<usize>()
+);
 /// The gate's membership as one bit per symbol id, resolved against the
 /// current obarray (after any dump remap): the Context mirrors passed in by
 /// `install_core_eval_symbols`, the keyboard maps, the GC settings the

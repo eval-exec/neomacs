@@ -3630,6 +3630,7 @@ pub fn lower_leaf_full_osr(
                 Op::PushConditionCase(_) | Op::PushConditionCaseRaw(_) | Op::PushCatch(_)
             )
         }),
+        needs_vmctx: heap_inline::inline_heap_sites() > 0,
         spec_slots,
         // JIT bakes each site's `expected` as an iconst; no sidecar array needed.
         spec_expected: Box::from([]),
@@ -3840,6 +3841,7 @@ fn build_leaf_fn<S: LeafSink>(
     lowering::imm_pool_reset();
     LAST_IR_STATS.with(|c| c.set((0, 0, 0, 0)));
     lowering::flonum_census_reset();
+    heap_inline::inline_heap_sites_reset();
     let frontend_config = sink.module().target_config();
     let call_conv = frontend_config.default_call_conv;
     let ptr_ty = frontend_config.pointer_type();
@@ -3919,6 +3921,7 @@ fn build_leaf_fn<S: LeafSink>(
                 call_args_slot,
                 call_result_slot,
                 rootwin: None,
+                heap: None,
             })
         } else {
             None
@@ -4045,6 +4048,14 @@ fn build_leaf_fn<S: LeafSink>(
         lowering::imm_pool_define(&mut fb, lowering::POOLED_IMMEDIATES);
         if let Some(rt) = rt.as_mut() {
             fb.def_var(rt.vmctx_var, vmctx_param);
+            // The heap pointer every inline heap site reads, loaded once here
+            // (the entry block dominates every block, the OSR jump included)
+            // when the body has two such sites or one in a loop; else each
+            // site loads its own. Only a body with inline sites loads it, and
+            // such a body dereferences its vmctx anyway.
+            if !aot && heap_inline::hoist_heap_ptr(ops, has_back_edge(ops)) {
+                rt.heap = Some(heap_inline::load_heap_ptr(&mut fb, vmctx_param));
+            }
             // Root-window base + capacity check once per activation instead
             // of once per site (`lowering::HoistedRootWin`). Only for a body
             // with rooting sites: those dereference the vmctx anyway, so it is
@@ -4729,6 +4740,10 @@ mod array_shim_tests;
 #[cfg(test)]
 #[path = "tests/compile_pipeline.rs"]
 mod compile_pipeline_tests;
+pub(crate) mod heap_inline;
+#[cfg(test)]
+#[path = "tests/inline_heap_ops.rs"]
+mod inline_heap_ops_tests;
 #[cfg(test)]
 #[path = "tests/inline.rs"]
 mod inline_tests;
