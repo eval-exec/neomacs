@@ -620,9 +620,13 @@ pub(crate) enum ColdExitsMode {
 }
 
 impl ColdExitsMode {
+    /// Unset means [`Self::On`] (the default since the same-binary A/B:
+    /// cycles -4.6% geomean over bubble, bubble-no-cons, dhrystone, fibn,
+    /// flet, inclist and nbody, instructions +0.5%); `off`/`0` restores the
+    /// former lowering exactly.
     pub(crate) fn parse(value: Option<&str>) -> Self {
-        match value {
-            Some("1" | "on" | "true" | "yes") => Self::On,
+        match value.map(str::trim) {
+            None | Some("1" | "on" | "true" | "yes") => Self::On,
             Some("share") => Self::Share,
             _ => Self::Off,
         }
@@ -636,7 +640,7 @@ pub(crate) fn force_cold_exits_for_test(mode: Option<ColdExitsMode>) {
     COLD_EXITS_TEST_OVERRIDE.with(|c| c.set(mode));
 }
 
-/// `NEOVM_JIT_COLD_EXITS=off|on|share` (default off; see
+/// `NEOVM_JIT_COLD_EXITS=off|on|share` (default on; see
 /// [`ColdExitsMode`]). Read at compile time only.
 pub(crate) fn jit_cold_exits() -> ColdExitsMode {
     #[cfg(test)]
