@@ -85,6 +85,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use super::backend::BackendError;
 use super::inline;
 use super::mir;
+use crate::emacs_core::bytecode::ArithGenericKind;
 use crate::emacs_core::bytecode::chunk::GnuByteOffsetMapEntry;
 use crate::emacs_core::bytecode::opcode::Op;
 use crate::emacs_core::bytecode::vm::condition_frame_resume;
@@ -1198,7 +1199,7 @@ pub(crate) fn publish_numeric_feedback(f: &ByteCodeFunction) -> NumericFeedbackS
         .iter()
         .enumerate()
         .map(|(pc, op)| {
-            if generic && Vm::arith_generic_kind(op).is_some() {
+            if generic && ArithGenericKind::from_op(op).is_some() {
                 NumericFeedback::Other
             } else {
                 rt.numeric_feedback(pc)

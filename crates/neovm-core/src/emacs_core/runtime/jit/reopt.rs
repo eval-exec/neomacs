@@ -45,8 +45,9 @@
 
 use super::compile::CompiledLeaf;
 use super::{NumericFeedback, ReoptLevel};
+use crate::emacs_core::bytecode::ArithGenericKind;
+use crate::emacs_core::bytecode::ByteCodeFunction;
 use crate::emacs_core::bytecode::opcode::Op;
-use crate::emacs_core::bytecode::{ByteCodeFunction, Vm};
 use crate::emacs_core::eval::Context;
 use crate::emacs_core::value::Value;
 
@@ -173,8 +174,8 @@ pub(crate) fn classify(
     let Some(op) = ops.get(pc) else {
         return DeoptCause::Unattributed;
     };
-    let arith = Vm::arith_generic_kind(op);
-    if let Some((_, nargs)) = arith
+    let arith = ArithGenericKind::from_op(op);
+    if let Some(nargs) = arith.map(ArithGenericKind::arity)
         && let Some(base) = stack.len().checked_sub(nargs)
     {
         match NumericFeedback::of_operands(&stack[base..]) {
@@ -358,7 +359,7 @@ fn respond(
 fn any_arith_site_widened(func: &ByteCodeFunction) -> bool {
     let rt = func.jit_runtime();
     func.executable_ops().iter().enumerate().any(|(pc, op)| {
-        Vm::arith_generic_kind(op).is_some()
+        ArithGenericKind::from_op(op).is_some()
             && rt.numeric_feedback(pc) != NumericFeedback::FixnumOnly
     })
 }

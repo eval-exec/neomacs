@@ -1,6 +1,7 @@
 //! Deopt classification and the release deopt census.
 
 use super::*;
+use crate::emacs_core::bytecode::ArithGenericKind;
 use crate::emacs_core::bytecode::vm::Vm as TestVm;
 use crate::emacs_core::intern::SymId;
 use crate::emacs_core::jit::compile::{force_deopt_for_test, lower_nullary_leaf};
@@ -67,7 +68,9 @@ fn classify_arith_float_other_overflow() {
         Op::Negate,
     ];
     for op in arith {
-        let (_, nargs) = Vm::arith_generic_kind(&op).expect("an arithmetic op");
+        let nargs = ArithGenericKind::from_op(&op)
+            .expect("an arithmetic op")
+            .arity();
         let ops = [Op::Nil, op.clone()];
         // One unrelated slot below the operands: only the top `nargs` count.
         let with = |v: Value| {
