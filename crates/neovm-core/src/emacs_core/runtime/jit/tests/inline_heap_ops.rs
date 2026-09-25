@@ -571,14 +571,15 @@ fn tenured_owners_store_inline_once_remembered() {
     let mut eval = Context::new();
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let leaf = compile_bytecode_function(&aset_fn()).expect("aset compiles");
-    // A fake image turns the dump partition on; the next collection is its
-    // first cycle and tenures every survivor. Its vector's slots are mapped
-    // storage.
+    // The owners exist (and are reachable) before a fake image turns the
+    // dump partition on, so whichever collection runs the partition's first
+    // cycle — the explicit one below, or under GC stress an earlier safe
+    // point — tenures them. The image vector's slots are mapped storage.
+    eval.eval_str("(setq aset-old-a (vector 1 2 3) aset-old-b (record 'r 1 2))")
+        .expect("owners");
     let image = crate::tagged::gc::fake_image::FakeImage::leak(true);
     image.register_cons(&mut eval.tagged_heap);
     let image_vector = image.register_vector(&mut eval.tagged_heap);
-    eval.eval_str("(setq aset-old-a (vector 1 2 3) aset-old-b (record 'r 1 2))")
-        .expect("owners");
     eval.eval_str("(garbage-collect)")
         .expect("first partition cycle");
     let a = eval.eval_str("aset-old-a").expect("a");
