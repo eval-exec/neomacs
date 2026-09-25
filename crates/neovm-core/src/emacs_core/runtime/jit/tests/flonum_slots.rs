@@ -56,9 +56,9 @@ fn compile_in(mode: FlonumMode, f: &ByteCodeFunction) -> (CompiledLeaf, lowering
 
 /// Run `leaf` natively and count the objects it allocated.
 fn run_counting(ev: &mut Context, leaf: &CompiledLeaf, args: &[Value]) -> (NativeRun, usize) {
-    let before = ev.tagged_heap.allocated_count;
+    let before = ev.tagged_heap.allocated_count();
     let run = leaf.call(ev as *mut Context as *mut u8, args);
-    (run, ev.tagged_heap.allocated_count - before)
+    (run, ev.tagged_heap.allocated_count() - before)
 }
 
 fn ok_value(run: NativeRun) -> Value {
@@ -541,13 +541,13 @@ fn mixed_compare_on_a_flonum_breaks_ties_on_integers() {
         let f = cmp(op.clone());
         let (leaf, census) = compile_in(FlonumMode::OpLocal, &f);
         assert_eq!((census.results, census.escape_boxes), (1, 0));
-        let before = ev.tagged_heap.allocated_count;
+        let before = ev.tagged_heap.allocated_count();
         assert_eq!(
             leaf.call(ctx, &args),
             NativeRun::Ok(expect.bits()),
             "{op:?} (+ 2^53 1) 2^53.0 must decide on the exact integers, as GNU does"
         );
-        assert_eq!(ev.tagged_heap.allocated_count, before, "nothing escapes");
+        assert_eq!(ev.tagged_heap.allocated_count(), before, "nothing escapes");
         let interp = Vm::from_context(&mut ev)
             .execute(&f, args.to_vec())
             .expect("interpreter");
@@ -885,13 +885,13 @@ fn a_fused_region_entry_boxes_flonums_before_its_framestate() {
             (1, 1),
             "{mode:?}: one box, at the region's entry"
         );
-        let before = ev.tagged_heap.allocated_count;
+        let before = ev.tagged_heap.allocated_count();
         assert_eq!(
             leaf.call(&mut ev as *mut Context as *mut u8, &args),
             NativeRun::Ok(Value::T.bits()),
             "{mode:?}: (eq (id p) p)"
         );
-        assert_eq!(ev.tagged_heap.allocated_count - before, 1, "{mode:?}");
+        assert_eq!(ev.tagged_heap.allocated_count() - before, 1, "{mode:?}");
         // A failed region guard replays the call from the framestate taken
         // at the region's entry: already boxed, and aliases shared. (Only a
         // spliced call has a guard here: unfused, the body would run to the

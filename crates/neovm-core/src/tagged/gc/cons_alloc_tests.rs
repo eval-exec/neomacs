@@ -1,6 +1,7 @@
 //! Cons allocation: the three cell sources (free list, block bump, fresh
-//! block), the counters they advance, the allocate-black rule while a sweep
-//! or a concurrent mark is in flight, and `list_from_slice` (GNU `Flist`).
+//! block), the counters they advance (charged per allocation region, read
+//! through the exact views), the allocate-black rule while a sweep or a
+//! concurrent mark is in flight, and `list_from_slice` (GNU `Flist`).
 
 use super::*;
 
@@ -42,10 +43,10 @@ fn list_cars(mut value: TaggedValue) -> Vec<TaggedValue> {
 fn cons_allocation_advances_the_consing_counters_but_not_live_bytes() {
     let mut heap = TaggedHeap::new();
     let before_counts = heap.memory_use_counts_snapshot()[MemoryUseCountSlot::ConsCells.index()];
-    let before_bytes = heap.bytes_since_gc();
+    let before_bytes = heap.bytes_since_gc_exact();
     let before_live = heap.live_bytes();
-    let before_allocated = heap.allocated_count;
-    let before_cons_live = heap.cons_live_count;
+    let before_allocated = heap.allocated_count();
+    let before_cons_live = heap.cons_live_count_exact();
 
     let cell = heap.alloc_cons(TaggedValue::T, TaggedValue::NIL);
 
@@ -54,14 +55,17 @@ fn cons_allocation_advances_the_consing_counters_but_not_live_bytes() {
         heap.memory_use_counts_snapshot()[MemoryUseCountSlot::ConsCells.index()],
         before_counts + 1
     );
-    assert_eq!(heap.bytes_since_gc(), before_bytes + size_of::<ConsCell>());
+    assert_eq!(
+        heap.bytes_since_gc_exact(),
+        before_bytes + size_of::<ConsCell>()
+    );
     assert_eq!(
         heap.live_bytes(),
         before_live,
         "allocation must not move the sweep's live count"
     );
-    assert_eq!(heap.allocated_count, before_allocated + 1);
-    assert_eq!(heap.cons_live_count, before_cons_live + 1);
+    assert_eq!(heap.allocated_count(), before_allocated + 1);
+    assert_eq!(heap.cons_live_count_exact(), before_cons_live + 1);
 }
 
 #[test]
@@ -103,15 +107,15 @@ fn cons_allocation_is_black_only_while_sweeping_or_marking() {
     let quiet = heap.alloc_cons(TaggedValue::NIL, TaggedValue::NIL);
     assert!(!is_black(&heap, quiet), "a quiet-heap cons is white");
 
-    heap.sweep_in_progress = true;
+    heap.set_sweep_in_progress_for_test(true);
     let during_sweep = heap.alloc_cons(TaggedValue::NIL, TaggedValue::NIL);
     assert!(is_black(&heap, during_sweep));
-    heap.sweep_in_progress = false;
+    heap.set_sweep_in_progress_for_test(false);
 
-    heap.concurrent_mark_running = true;
+    heap.set_concurrent_active_for_test(true);
     let during_mark = heap.alloc_cons(TaggedValue::NIL, TaggedValue::NIL);
     assert!(is_black(&heap, during_mark));
-    heap.concurrent_mark_running = false;
+    heap.set_concurrent_active_for_test(false);
 
     let after = heap.alloc_cons(TaggedValue::NIL, TaggedValue::NIL);
     assert!(!is_black(&heap, after));
@@ -145,16 +149,16 @@ fn reclaimed_cells_come_back_through_the_free_list() {
         "the collection must reclaim the unrooted conses"
     );
 
-    let before_allocated = heap.allocated_count;
-    let before_live = heap.cons_live_count;
+    let before_allocated = heap.allocated_count();
+    let before_live = heap.cons_live_count_exact();
     let reused = heap.alloc_cons(TaggedValue::T, TaggedValue::NIL);
     assert!(
         doomed_addrs.contains(&(reused.as_cons_ptr().unwrap() as usize)),
         "the free list must hand back a reclaimed cell"
     );
     assert_eq!(car_cdr(reused), (TaggedValue::T, TaggedValue::NIL));
-    assert_eq!(heap.allocated_count, before_allocated + 1);
-    assert_eq!(heap.cons_live_count, before_live + 1);
+    assert_eq!(heap.allocated_count(), before_allocated + 1);
+    assert_eq!(heap.cons_live_count_exact(), before_live + 1);
 }
 
 /// GNU `Flist`: cons from the end, so the cars keep their order.
@@ -164,9 +168,9 @@ fn list_from_slice_builds_a_proper_list_in_order() {
     let a = heap.alloc_cons(TaggedValue::T, TaggedValue::NIL);
     let elements = [TaggedValue::T, a, TaggedValue::NIL];
 
-    let before = heap.cons_live_count;
+    let before = heap.cons_live_count_exact();
     let list = heap.list_from_slice(&elements);
-    assert_eq!(heap.cons_live_count, before + elements.len());
+    assert_eq!(heap.cons_live_count_exact(), before + elements.len());
 
     let cars = list_cars(list);
     assert_eq!(cars.len(), elements.len());
@@ -180,7 +184,7 @@ fn list_from_slice_builds_a_proper_list_in_order() {
 
     let empty = heap.list_from_slice(&[]);
     assert!(empty.is_nil());
-    assert_eq!(heap.cons_live_count, before + elements.len());
+    assert_eq!(heap.cons_live_count_exact(), before + elements.len());
 }
 
 /// `list_from_slice` charges the consing counters once for the whole list:
@@ -204,9 +208,9 @@ fn list_from_slice_charges_every_counter_per_cons() {
         .map(TaggedValue::fixnum)
         .collect();
     let before_counts = heap.memory_use_counts_snapshot()[MemoryUseCountSlot::ConsCells.index()];
-    let before_bytes = heap.bytes_since_gc();
-    let before_allocated = heap.allocated_count;
-    let before_live = heap.cons_live_count;
+    let before_bytes = heap.bytes_since_gc_exact();
+    let before_allocated = heap.allocated_count();
+    let before_live = heap.cons_live_count_exact();
     let blocks_before = heap.cons_blocks.len();
 
     let list = heap.list_from_slice(&elements);
@@ -217,11 +221,11 @@ fn list_from_slice_charges_every_counter_per_cons() {
         before_counts + n as u64
     );
     assert_eq!(
-        heap.bytes_since_gc(),
+        heap.bytes_since_gc_exact(),
         before_bytes + n * size_of::<ConsCell>()
     );
-    assert_eq!(heap.allocated_count, before_allocated + n);
-    assert_eq!(heap.cons_live_count, before_live + n);
+    assert_eq!(heap.allocated_count(), before_allocated + n);
+    assert_eq!(heap.cons_live_count_exact(), before_live + n);
     assert!(
         heap.cons_blocks.len() > blocks_before,
         "the list spans a new block"
@@ -253,18 +257,18 @@ fn list_from_slice_is_black_only_while_sweeping_or_marking() {
     let quiet = heap.list_from_slice(&elements);
     assert!(cells(&heap, quiet).iter().all(|c| !is_black(&heap, *c)));
 
-    heap.sweep_in_progress = true;
+    heap.set_sweep_in_progress_for_test(true);
     let during_sweep = heap.list_from_slice(&elements);
-    heap.sweep_in_progress = false;
+    heap.set_sweep_in_progress_for_test(false);
     assert!(
         cells(&heap, during_sweep)
             .iter()
             .all(|c| is_black(&heap, *c))
     );
 
-    heap.concurrent_mark_running = true;
+    heap.set_concurrent_active_for_test(true);
     let during_mark = heap.list_from_slice(&elements);
-    heap.concurrent_mark_running = false;
+    heap.set_concurrent_active_for_test(false);
     assert!(
         cells(&heap, during_mark)
             .iter()
@@ -296,7 +300,7 @@ fn the_lifetime_allocation_total_survives_a_budget_reset() {
     );
 
     heap.reset_bytes_since_gc();
-    assert_eq!(heap.bytes_since_gc(), 0, "the budget is spent");
+    assert_eq!(heap.bytes_since_gc_exact(), 0, "the budget is spent");
     assert_eq!(
         heap.total_allocated_bytes(),
         after_first,

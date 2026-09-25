@@ -167,20 +167,56 @@ impl ConsBlock {
         true
     }
 
-    /// Take the next never-used cell from this block's bump cursor, or None
-    /// when the block is full.  The cursor only: `alloc_cons` writes car and
-    /// cdr once, for cells from all three sources (GNU's `cons_block_index`
-    /// bump is likewise just the cursor).
-    #[inline(always)]
-    pub(super) fn alloc_bump_cell(&mut self) -> Option<*mut ConsCell> {
-        let idx = self.next_index;
-        if idx as usize >= CONS_BLOCK_SIZE {
-            return None;
+    /// Reserve up to `want` never-used cells from this block's bump cursor
+    /// as one run (an allocation region): answers `(first cell index,
+    /// count)`, `count == 0` when the block is full. The cursor only: the
+    /// allocator writes car and cdr at hand-out, for cells from every source
+    /// (GNU's `cons_block_index` bump is likewise just the cursor).
+    #[inline]
+    pub(super) fn reserve_tail(&mut self, want: usize) -> (usize, usize) {
+        let first = self.next_index as usize;
+        let n = want.min(CONS_BLOCK_SIZE - first);
+        self.next_index = (first + n) as u16;
+        (first, n)
+    }
+
+    /// Give the tail `[index, next_index)` back to the bump cursor (an
+    /// allocation region's unused tail). Its mark bits must already be
+    /// clear: bits at or above `next_index` are never set.
+    pub(super) fn rewind_tail(&mut self, index: usize) {
+        debug_assert!(index <= self.next_index as usize);
+        self.next_index = index as u16;
+    }
+
+    /// Set (`set == true`) or clear the mark bits of cells
+    /// `[start, start + n)` of the block whose storage begins at `base`,
+    /// a word at a time with the same relaxed atomics the marker uses
+    /// (`mark_cell_offset`): an allocation region pre-marked black at grant,
+    /// or its unused tail unmarked at close. Needs no `&mut` block, so a
+    /// region names its block by address alone.
+    pub(super) fn mark_run_at(base: usize, start: usize, n: usize, set: bool) {
+        debug_assert!(start + n <= CONS_BLOCK_SIZE);
+        let words = (base + CONS_MARKS_OFFSET) as *const AtomicUsize;
+        let end = start + n;
+        let mut i = start;
+        while i < end {
+            let bit = i % CONS_MARK_BITS_PER_WORD;
+            let span = (CONS_MARK_BITS_PER_WORD - bit).min(end - i);
+            let mask = if span == CONS_MARK_BITS_PER_WORD {
+                usize::MAX
+            } else {
+                ((1usize << span) - 1) << bit
+            };
+            // SAFETY: `base` is a live block's storage and the word index is
+            // below `CONS_MARK_WORDS` (`i < CONS_BLOCK_SIZE`).
+            let word = unsafe { &*words.add(i / CONS_MARK_BITS_PER_WORD) };
+            if set {
+                word.fetch_or(mask, Ordering::Relaxed);
+            } else {
+                word.fetch_and(!mask, Ordering::Relaxed);
+            }
+            i += span;
         }
-        self.next_index = idx + 1;
-        // SAFETY: `idx` is below the block's cell count, so the offset lands
-        // inside this block's cells.
-        Some(unsafe { self.cells_ptr().add(idx as usize) })
     }
 
     /// Clear all mark bits used by this block. Runs stop-the-world (at

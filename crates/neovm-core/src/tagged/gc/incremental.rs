@@ -57,6 +57,11 @@ impl TaggedHeap {
         bytes_before: usize,
         _pause_t0: std::time::Instant,
     ) {
+        // Before anything else: the free list is reset below, and a
+        // free-list region closed after that would push its cells onto the
+        // list the sweep rebuilds, then the sweep would push them again (a
+        // double hand-out). Also I1: `sweep_in_progress` flips below.
+        self.close_alloc_regions();
         // Queue doomed finalizers first (mirrors `complete_collection`; a miss
         // here would mean finalizers silently never run under the concurrent
         // collector). The main mark has drained — the termination handshake
@@ -205,6 +210,9 @@ impl TaggedHeap {
     /// allocated meanwhile are born black (see `alloc_cons`), so an unswept
     /// block never reclaims a live new cell.
     pub(crate) fn incremental_sweep_slice(&mut self, budget: usize) -> bool {
+        // Collector code never sees an open allocation region
+        // (`alloc_region.rs`, invariant I2).
+        self.close_alloc_regions();
         let t0 = std::time::Instant::now();
         // -- cons: reclaim up to `budget` blocks (each ~64KB of cells) --
         let mut swept_blocks = 0usize;
@@ -350,6 +358,8 @@ impl TaggedHeap {
     /// bitmaps (cheap popcount; counts allocate-black new conses, excludes
     /// reclaimed ones), fix the allocation accounting, and emit the cycle trace.
     pub(super) fn finish_incremental_sweep(&mut self) {
+        // I1 (`sweep_in_progress` clears below) and I2 (the recount).
+        self.close_alloc_regions();
         let recount: usize = self.cons_blocks.iter().map(ConsBlock::count_marked).sum();
         // allocated_count carries the tracked cons live count; replace it with
         // the true recount (delta may be negative -> use checked sub).
@@ -421,6 +431,7 @@ impl TaggedHeap {
         // completion. Its lifecycle is clear-at-BEGIN (`begin_collection`), the
         // ABA-safe per-cycle discipline shared with the SATB sets; see the note
         // in `begin_collection` and `complete_collection`.
+        self.trace_region_stats();
         self.sweep_in_progress = false;
     }
 
@@ -968,6 +979,9 @@ impl TaggedHeap {
 
     /// Sweep unmarked cons cells back to free lists.
     pub(super) fn sweep_cons(&mut self) -> usize {
+        // Collector code never sees an open allocation region
+        // (`alloc_region.rs`, invariant I2).
+        self.close_alloc_regions();
         let old_live = self.cons_live_count;
         let mut new_live = 0;
         let mut released = 0usize;
@@ -1043,6 +1057,10 @@ impl TaggedHeap {
     /// Call only after a complete eager or deferred sweep, when mark bits are
     /// the authoritative live-cell set and no sweep cursor remains active.
     pub(super) fn release_empty_cons_blocks(&mut self) -> usize {
+        debug_assert!(
+            !self.alloc_regions_open(),
+            "releasing blocks under a region"
+        );
         let old_len = self.cons_blocks.len();
         if !self
             .cons_blocks
@@ -1075,6 +1093,7 @@ impl TaggedHeap {
     /// Release every completely empty young arena page after a full sweep.
     /// Per-class indices and partial chains are rebuilt inside each arena.
     pub(super) fn release_empty_object_pages(&mut self) -> usize {
+        debug_assert!(!self.alloc_regions_open(), "releasing pages under a region");
         self.float_arena.release_empty_pages()
             + self.string_arena.release_empty_pages()
             + self.vector_arena.release_empty_pages()
@@ -1089,6 +1108,9 @@ impl TaggedHeap {
 
     /// Sweep non-cons objects: walk intrusive list, free unmarked, rebuild list.
     pub(super) fn sweep_objects(&mut self) -> usize {
+        // Collector code never sees an open allocation region
+        // (`alloc_region.rs`, invariant I2).
+        self.close_alloc_regions();
         // `unchain_dead_markers` (invoked in `complete_collection`
         // between mark and sweep) has already spliced unmarked markers
         // out of every live buffer's intrusive chain, so freeing them
@@ -1140,6 +1162,9 @@ impl TaggedHeap {
     ///
     /// Returns `(survivor bytes, slots freed)` summed over the classes.
     pub(super) fn sweep_arena_pages_ranges(&mut self, ranges: ArenaSweepRanges) -> (usize, usize) {
+        // Collector code never sees an open allocation region
+        // (`alloc_region.rs`, invariant I2).
+        self.close_alloc_regions();
         let parity = self.mark_parity;
         let ArenaSweepRanges {
             float,

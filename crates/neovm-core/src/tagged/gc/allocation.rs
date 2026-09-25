@@ -8,127 +8,57 @@ use super::*;
 impl TaggedHeap {
     /// Allocate a cons cell. Returns a tagged Value.
     ///
-    /// GNU `Fcons` (`src/alloc.c:2599`): pop the free list, else bump the
-    /// current block (allocating a fresh one only when it is full), store
-    /// car and cdr, advance the consing counters.  Like `Fcons`, this MUST
-    /// NOT collect or run Lisp: the list builders below and the JIT shims
+    /// GNU `Fcons` (`src/alloc.c:2599`): take a cell, store car and cdr.
+    /// The cell comes from the open allocation region (`alloc_region.rs`),
+    /// which was charged to the consing counters and, when the heap
+    /// allocates black, pre-marked when it was granted — so there is
+    /// nothing per cons to count or mark. Like `Fcons`, this MUST NOT
+    /// collect or run Lisp: the list builders below and the JIT shims
     /// (`neovm_jit_cons`, `neovm_jit_list`) hold an unrooted accumulator
     /// across it, exactly as GNU's C locals do.
     #[inline]
     pub fn alloc_cons(&mut self, car: TaggedValue, cdr: TaggedValue) -> TaggedValue {
         let cell = self.take_cons_cell();
         // SAFETY: `cell` is a live, cell-aligned slot of a block this heap
-        // owns, and is not on the free list any more.
+        // owns, reserved for this allocation by the open region.
         unsafe {
             (*cell).set_car(car);
             (*cell).set_cdr(cdr);
-        }
-        self.note_conses_allocated(1);
-        // Allocate-black during the deferred sweep OR a concurrent mark: a cons
-        // born while a block is unswept must survive that block's reclaim, and a
-        // cons born during concurrent marking must survive this cycle's sweep
-        // (the GC thread won't reach it, and a black owner may point at it before
-        // the next root snapshot). New conses are always live, so this is exact
-        // (cleared at the next mark's begin).
-        if self.allocates_black() {
-            self.mark_cons_allocated_black(cell);
-        }
-        // SAFETY: `cell` was just fully initialized.
-        unsafe { TaggedValue::from_cons_ptr(cell) }
-    }
-
-    /// A cell for a new cons: pop the free list, else bump the current
-    /// block, else start a fresh one (GNU `Fcons`'s three arms).
-    #[inline(always)]
-    fn take_cons_cell(&mut self) -> *mut ConsCell {
-        if !self.cons_free_list.is_null() {
-            let cell = self.cons_free_list;
-            // SAFETY: the free list links reclaimed cells of owned blocks
-            // through `free_next`; the head is such a cell.
-            unsafe { self.cons_free_list = (*cell).free_next() };
-            cell
-        } else if let Some(block) = self.cons_blocks.last_mut()
-            && let Some(cell) = block.alloc_bump_cell()
-        {
-            cell
-        } else {
-            self.alloc_cons_from_fresh_block()
+            TaggedValue::from_cons_ptr(cell)
         }
     }
 
-    /// Charge COUNT new conses to the consing counters.
+    /// Whether a new object must be born marked: a cons born while a block
+    /// is unswept must survive that block's reclaim, and one born during a
+    /// concurrent mark must survive this cycle's sweep (the GC thread won't
+    /// reach it, and a black owner may point at it before the next root
+    /// snapshot). A property of the allocation region, decided at its grant.
     #[inline(always)]
-    fn note_conses_allocated(&mut self, count: usize) {
-        self.add_memory_use_count(MemoryUseCountSlot::ConsCells, count as u64);
-        self.allocated_count += count;
-        self.cons_live_count += count;
-        self.note_allocation_bytes(count * size_of::<ConsCell>());
-    }
-
-    /// Whether a new cons must be born marked (see `alloc_cons`).
-    #[inline(always)]
-    fn allocates_black(&self) -> bool {
+    pub(super) fn allocates_black(&self) -> bool {
         self.sweep_in_progress || self.concurrent_mark_running
-    }
-
-    /// Every existing block is exhausted and nothing was reclaimed: take a
-    /// fresh block and bump from it, matching GNU's `cons_block`/
-    /// `cons_block_index` path.  Out of line so the hot path is the free-list
-    /// pop and the cursor bump.
-    #[cold]
-    #[inline(never)]
-    fn alloc_cons_from_fresh_block(&mut self) -> *mut ConsCell {
-        let mut block = ConsBlock::new();
-        let block_base = block.base_addr();
-        let cell = block
-            .alloc_bump_cell()
-            .expect("fresh block should have space");
-        self.cons_blocks.push(block);
-        let block_index = self.cons_blocks.len() - 1;
-        self.cons_block_index_by_base
-            .insert(block_base, block_index);
-        cell
-    }
-
-    /// The allocate-black tail (see `alloc_cons`): reached only while a
-    /// deferred sweep or a concurrent mark is in flight.
-    #[cold]
-    #[inline(never)]
-    fn mark_cons_allocated_black(&mut self, cell: *mut ConsCell) {
-        self.mark_cons(cell);
     }
 
     /// GNU `Flist` (`src/alloc.c:2699`): `val = Qnil; while (nargs > 0) val =
     /// Fcons (args[--nargs], val);`.
     ///
-    /// The accumulator crosses only `alloc_cons`, which cannot collect or run
-    /// Lisp, so it needs no root — GNU's `Flist` roots nothing either.  VALUES
-    /// stay the caller's responsibility (they are its operand-stack span, its
-    /// subr arguments, or its own locals), exactly as for `alloc_cons`'s
-    /// `car`.
-    ///
-    /// The per-list work is done once: the counters are charged for the
-    /// whole list, and the allocate-black test is made before the loop --
-    /// neither the sweep nor the concurrent mark can start or finish inside
-    /// it, since nothing here reaches a safe point.
+    /// The accumulator crosses only `take_cons_cell`, which cannot collect or
+    /// run Lisp, so it needs no root — GNU's `Flist` roots nothing either.
+    /// VALUES stay the caller's responsibility (they are its operand-stack
+    /// span, its subr arguments, or its own locals), exactly as for
+    /// `alloc_cons`'s `car`.
     #[inline]
     pub fn list_from_slice(&mut self, values: &[TaggedValue]) -> TaggedValue {
-        let black = self.allocates_black();
         let mut acc = TaggedValue::NIL;
         for &value in values.iter().rev() {
             let cell = self.take_cons_cell();
-            // SAFETY: as in `alloc_cons`: an owned, off-free-list cell, fully
-            // initialized before it is marked or published.
+            // SAFETY: as in `alloc_cons`: an owned cell the region reserved,
+            // fully initialized before it is published.
             unsafe {
                 (*cell).set_car(value);
                 (*cell).set_cdr(acc);
+                acc = TaggedValue::from_cons_ptr(cell);
             }
-            if black {
-                self.mark_cons_allocated_black(cell);
-            }
-            acc = unsafe { TaggedValue::from_cons_ptr(cell) };
         }
-        self.note_conses_allocated(values.len());
         acc
     }
 

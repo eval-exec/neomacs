@@ -512,13 +512,13 @@ fn gc_basic_collection() {
     let _unreachable = heap.alloc_cons(TaggedValue::fixnum(1), TaggedValue::NIL);
     let reachable = heap.alloc_cons(TaggedValue::fixnum(2), TaggedValue::NIL);
 
-    assert_eq!(heap.allocated_count, 2);
+    assert_eq!(heap.allocated_count(), 2);
 
     // Collect with only `reachable` as a root
     heap.collect(std::iter::once(reachable));
 
     // The unreachable cons should be freed
-    assert_eq!(heap.allocated_count, 1);
+    assert_eq!(heap.allocated_count(), 1);
 
     // The reachable cons should still be accessible
     assert_eq!(reachable.cons_car().as_fixnum(), Some(2));
@@ -537,12 +537,12 @@ fn gc_transitive_reachability() {
     // Also allocate an unreachable cons
     let _garbage = heap.alloc_cons(TaggedValue::fixnum(999), TaggedValue::NIL);
 
-    assert_eq!(heap.allocated_count, 4);
+    assert_eq!(heap.allocated_count(), 4);
 
     // Collect with c1 as root — c2 and c3 should survive transitively
     heap.collect(std::iter::once(c1));
 
-    assert_eq!(heap.allocated_count, 3); // c1, c2, c3 survive; _garbage freed
+    assert_eq!(heap.allocated_count(), 3); // c1, c2, c3 survive; _garbage freed
 
     // Verify the chain is intact
     assert_eq!(c1.cons_car().as_fixnum(), Some(1));
@@ -558,11 +558,11 @@ fn gc_float_collection() {
     let f1 = heap.alloc_float(1.0);
     let _f2 = heap.alloc_float(2.0); // unreachable
 
-    assert_eq!(heap.allocated_count, 2);
+    assert_eq!(heap.allocated_count(), 2);
 
     heap.collect(std::iter::once(f1));
 
-    assert_eq!(heap.allocated_count, 1);
+    assert_eq!(heap.allocated_count(), 1);
     assert!((f1.xfloat() - 1.0).abs() < f64::EPSILON);
 }
 
@@ -580,7 +580,7 @@ fn gc_collect_exact_does_not_scan_the_machine_stack() {
 
     heap.collect_exact(std::iter::empty());
 
-    assert_eq!(heap.allocated_count, 0);
+    assert_eq!(heap.allocated_count(), 0);
 }
 
 #[test]

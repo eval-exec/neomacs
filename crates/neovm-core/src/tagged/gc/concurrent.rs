@@ -94,6 +94,9 @@ impl TaggedHeap {
     /// tenure the objects it allocated black during its mark, dead or not, so
     /// the explicit collection could never free them.
     pub(crate) fn begin_stw_collection(&mut self) {
+        // Collector code never sees an open allocation region
+        // (`alloc_region.rs`, invariant I2).
+        self.close_alloc_regions();
         if self.first_cycle_concurrent {
             debug_assert!(
                 !self.concurrent_mark_running && !self.sweep_in_progress,
@@ -336,6 +339,9 @@ impl TaggedHeap {
         self.gc_stop
             .store(false, std::sync::atomic::Ordering::Release);
         self.gc_exited = Some(exited_rx);
+        // A region granted white must not stay open into the black window
+        // (I1).
+        self.close_alloc_regions();
         self.concurrent_mark_running = true;
         // Keep the write-barrier fast path reaching `record_heap_write` so the
         // SATB log fires even with owner-tracking Disabled / no partition:
@@ -404,6 +410,9 @@ impl TaggedHeap {
         if let Some(rx) = self.gc_exited.take() {
             let _ = rx.recv(); // block until the GC thread leaves its mark loop
         }
+        // The GC thread has exited, so nothing reads the bitmaps while the
+        // black regions granted during the mark give their tails back (I1).
+        self.close_alloc_regions();
         self.concurrent_mark_running = false;
         TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(false));
         self.publish_barrier_window();

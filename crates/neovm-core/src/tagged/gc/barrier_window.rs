@@ -104,6 +104,7 @@ impl TaggedHeap {
     /// barrier window stale and test the old gate.
     #[cfg(test)]
     pub(crate) fn set_concurrent_active_for_test(&mut self, on: bool) {
+        self.close_alloc_regions();
         self.concurrent_mark_running = on;
         TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(on));
         self.publish_barrier_window();

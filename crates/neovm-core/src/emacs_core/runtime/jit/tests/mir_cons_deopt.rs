@@ -145,10 +145,10 @@ fn assert_block_local_loop_allocation_count(singleton: bool) {
     assert_eq!(leaf.tier, leaf::LeafTier::Mir);
     // Fewer than 255 back edges avoids a service poll, so the allocation
     // counter directly observes this loop's conses without GC bookkeeping.
-    let before = ev.tagged_heap.allocated_count;
+    let before = ev.tagged_heap.allocated_count();
     let result = leaf.call(&mut ev as *mut Context as *mut u8, &[Value::make_int(100)]);
     assert_eq!(result, NativeRun::Ok(Value::make_int(5050).bits()));
-    assert_eq!(ev.tagged_heap.allocated_count, before);
+    assert_eq!(ev.tagged_heap.allocated_count(), before);
 }
 
 #[test]

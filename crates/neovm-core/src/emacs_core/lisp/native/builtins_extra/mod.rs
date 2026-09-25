@@ -766,7 +766,12 @@ fn arena_layout_value(stats: &crate::tagged::gc::ArenaLayoutStats) -> Value {
 /// and nested payloads that do not live in the tagged heap's arenas.
 pub(crate) fn builtin_neomacs_heap_layout_stats(args: Vec<Value>) -> EvalResult {
     expect_args("neomacs--heap-layout-stats", &args, 0)?;
-    let stats = crate::tagged::gc::with_tagged_heap(|heap| heap.layout_stats());
+    let stats = crate::tagged::gc::with_tagged_heap(|heap| {
+        // An open allocation region's cells are neither on the free list nor
+        // handed out: give them back so the census is exact.
+        heap.close_alloc_regions();
+        heap.layout_stats()
+    });
 
     let cons = Value::list(vec![
         layout_stat_pair("pages", stats.cons.pages),

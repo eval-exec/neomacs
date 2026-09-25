@@ -223,6 +223,7 @@ mod max_char_operations;
 mod md5_semantics;
 mod member;
 mod member_alist_semantics;
+mod memory_use_counts_exact;
 mod memq;
 mod merge_ordered_lists_semantics;
 mod message_format_advanced;

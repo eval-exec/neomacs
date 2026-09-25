@@ -144,7 +144,7 @@ fn concurrent_mark_overlaps_mutation_and_retains_live_set() {
     let pivot = heap.alloc_cons(TaggedValue::fixnum(-1), head);
     // Unreachable garbage allocated before the mark begins.
     let _garbage = heap.alloc_cons(TaggedValue::fixnum(-2), TaggedValue::fixnum(0));
-    let allocated_before = heap.cons_live_count;
+    let allocated_before = heap.cons_live_count_exact();
 
     // Start the concurrent mark with `pivot` as the sole root (pivot -> head
     // -> whole list). begin_collection clears marks + seeds internal roots.
@@ -179,7 +179,7 @@ fn concurrent_mark_overlaps_mutation_and_retains_live_set() {
     // are allocate-black so they survive this cycle too; only `_garbage` is
     // reclaimed. So exactly one cons (the pre-mark garbage) was swept.
     assert_eq!(
-        heap.cons_live_count,
+        heap.cons_live_count_exact(),
         allocated_before + 1 /* D */ + 5_000 /* churn */ - 1, /* garbage */
         "concurrent mark must retain the live + SATB + allocate-black set",
     );
@@ -1839,7 +1839,7 @@ fn dumpless_heap_enables_concurrent_after_bootstrap_and_collects() {
         unrooted = heap.alloc_cons(TaggedValue::fixnum(1_000_000 + i), unrooted);
     }
     let _unrooted_head = unrooted;
-    let before = heap.cons_live_count;
+    let before = heap.cons_live_count_exact();
 
     // One full concurrent cycle, mirroring the driver's state machine:
     // start handshake -> GC thread marks -> STW termination -> deferred
@@ -1860,7 +1860,7 @@ fn dumpless_heap_enables_concurrent_after_bootstrap_and_collects() {
     heap.finish_incremental_sweep_now();
 
     // The unrooted churn was reclaimed...
-    let after = heap.cons_live_count;
+    let after = heap.cons_live_count_exact();
     assert!(
         after < before,
         "the concurrent cycle must reclaim garbage (before={before}, after={after})",
@@ -2373,11 +2373,11 @@ fn collect_exact_retains_rooted_and_frees_unrooted() {
         unrooted = heap.alloc_cons(TaggedValue::fixnum(1_000_000 + i), unrooted);
     }
     let _unrooted_head = unrooted;
-    let before = heap.cons_live_count;
+    let before = heap.cons_live_count_exact();
 
     // Force a full collection with only the rooted list reachable.
     heap.collect_exact(std::iter::once(rooted_head));
-    let after = heap.cons_live_count;
+    let after = heap.cons_live_count_exact();
 
     // The unrooted list was reclaimed...
     assert!(
@@ -2560,7 +2560,7 @@ fn immediate_join_mid_drain_hands_residual_work_to_termination() {
     }
     let root = list;
     let _garbage = heap.alloc_cons(TaggedValue::fixnum(-2), TaggedValue::fixnum(0));
-    let live_before = heap.cons_live_count;
+    let live_before = heap.cons_live_count_exact();
 
     heap.concurrent_begin();
     heap.seed_root(root);
@@ -2575,7 +2575,7 @@ fn immediate_join_mid_drain_hands_residual_work_to_termination() {
     heap.finish_incremental_sweep_now();
 
     assert_eq!(
-        heap.cons_live_count,
+        heap.cons_live_count_exact(),
         live_before - 1,
         "exactly the one garbage cons is swept; the whole rooted list survives",
     );
@@ -2615,7 +2615,7 @@ fn collect_exact_retains_rooted_graph_and_frees_garbage() {
     // Unrooted garbage: reachable from neither the root nor the spine.
     let _g1 = heap.alloc_cons(TaggedValue::fixnum(-1), TaggedValue::fixnum(0));
     let _g2 = heap.alloc_cons(TaggedValue::fixnum(-2), TaggedValue::fixnum(0));
-    let live_before = heap.cons_live_count;
+    let live_before = heap.cons_live_count_exact();
     assert!(live_before >= 5);
 
     // Force a full collection rooted only at `a`.
@@ -2623,7 +2623,7 @@ fn collect_exact_retains_rooted_graph_and_frees_garbage() {
 
     // The 3-cons rooted spine survives; the 2 garbage conses are reclaimed.
     assert_eq!(
-        heap.cons_live_count,
+        heap.cons_live_count_exact(),
         live_before - 2,
         "rooted graph retained, unrooted garbage reclaimed",
     );

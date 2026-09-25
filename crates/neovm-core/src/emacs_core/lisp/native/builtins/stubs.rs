@@ -1205,8 +1205,9 @@ pub(crate) fn builtin_gap_size(
 /// `garbage_collect ()` and returns `t`; otherwise it returns `nil`. FACTOR
 /// must be a non-negative fixnum (`CHECK_FIXNAT`).
 ///
-/// Our heap exposes the same quantities: `bytes_since_gc()` is GNU's
-/// `since_gc` and `should_collect()` is the FACTOR-of-1 special case
+/// Our heap exposes the same quantities: `bytes_since_gc_exact()` is GNU's
+/// `since_gc` (the consing counter less the open allocation regions'
+/// unused cells) and `should_collect()` is the FACTOR-of-1 special case
 /// (`since_gc >= gc_threshold`). We implement GNU's exact FACTOR-scaled
 /// condition and drive the real collector via `gc_collect_exact()`.
 pub(crate) fn builtin_garbage_collect_maybe(
@@ -1227,7 +1228,7 @@ pub(crate) fn builtin_garbage_collect_maybe(
         ));
     }
 
-    let since_gc = eval.tagged_heap.bytes_since_gc();
+    let since_gc = eval.tagged_heap.bytes_since_gc_exact();
     let threshold = eval.tagged_heap.gc_threshold();
     if factor >= 1 && since_gc > threshold / (factor as usize) {
         eval.gc_collect_exact();

@@ -331,8 +331,14 @@ impl CanonicalEmptyStrings {
 /// The tagged pointer heap. Owns all heap-allocated Lisp objects.
 pub struct TaggedHeap {
     /// State compiled code reads and writes in place (`jit_state.rs`): the
-    /// barrier window. Reached as `vmctx -> Context.tagged_heap -> jit`.
+    /// allocation region cursors and the barrier window. Reached as
+    /// `vmctx -> Context.tagged_heap -> jit`.
     jit: JitHeapState,
+    /// Where the open allocation regions came from and their color
+    /// (`alloc_region.rs`); Rust-only bookkeeping.
+    region_book: RegionBook,
+    /// Region refill statistics since the last finished collection.
+    region_stats: RegionStats,
     /// Process-unique heap identity used by side tables that carry GC-managed
     /// Lisp values.  It deliberately does not use this heap's address: boxed
     /// heaps are routinely dropped and recreated by snapshot-based tests, and
@@ -381,8 +387,10 @@ pub struct TaggedHeap {
     /// set of live owned Vector objects at every handshake.
     vector_object_addrs: FxHashSet<usize>,
 
-    /// Total number of allocated objects (cons + non-cons).
-    pub allocated_count: usize,
+    /// Total number of allocated objects (cons + non-cons), CHARGED: an
+    /// open allocation region counts whole. [`Self::allocated_count`] is
+    /// the exact view.
+    allocated_count: usize,
     /// Lisp-visible allocation statistics backing `memory-use-counts`.
     memory_use_counts: [u64; MEMORY_USE_COUNT_LEN],
 
@@ -918,6 +926,8 @@ impl TaggedHeap {
     pub fn new() -> Self {
         Self {
             jit: JitHeapState::new(),
+            region_book: RegionBook::new(),
+            region_stats: RegionStats::default(),
             identity: next_tagged_heap_identity(),
             cons_blocks: Vec::new(),
             cons_block_index_by_base: FxHashMap::default(),
@@ -1179,8 +1189,10 @@ impl TaggedHeap {
         self.gc_threshold_overridden
     }
 
+    /// Allocated objects (cons + non-cons), exact: the open allocation
+    /// regions' unused cells are not counted.
     pub fn allocated_count(&self) -> usize {
-        self.allocated_count
+        self.allocated_count - self.open_cons_unused()
     }
 
     /// Total number of completed GC collection cycles since this heap was
@@ -1234,13 +1246,31 @@ impl TaggedHeap {
         self.memory_use_counts[index] = self.memory_use_counts[index].wrapping_add(delta);
     }
 
+    /// The Lisp-visible allocation counts (`memory-use-counts`), exact: one
+    /// per object handed out, the open allocation regions' unused cells
+    /// excluded (they were charged when the region was granted).
     #[inline]
     pub(crate) fn memory_use_counts_snapshot(&self) -> [u64; MEMORY_USE_COUNT_LEN] {
-        self.memory_use_counts
+        let mut counts = self.memory_use_counts;
+        let conses = MemoryUseCountSlot::ConsCells.index();
+        counts[conses] = counts[conses].wrapping_sub(self.open_cons_unused() as u64);
+        counts
     }
 
+    /// Bytes allocated since the last collection, as CHARGED: an open
+    /// allocation region counts whole. Never below the exact count, and a
+    /// region is never granted past the threshold
+    /// (`TaggedHeap::region_budget`), so the pacing gates that read this
+    /// collect when they did before — at most one region early, never late.
     pub fn bytes_since_gc(&self) -> usize {
         self.bytes_since_gc
+    }
+
+    /// Bytes allocated since the last collection, exact (GNU's `since_gc`):
+    /// the open allocation regions' unused cells excluded. What
+    /// `garbage-collect-maybe`'s FACTOR test and the memory profiler read.
+    pub fn bytes_since_gc_exact(&self) -> usize {
+        self.bytes_since_gc - self.open_cons_unused() * size_of::<ConsCell>()
     }
 
     /// The one place `bytes_since_gc` returns to zero.
@@ -1249,6 +1279,8 @@ impl TaggedHeap {
     /// stays exact without the allocation path counting it a second time.
     /// Every collector site resets through here for that reason.
     pub(crate) fn reset_bytes_since_gc(&mut self) {
+        // Close first, so what is banked is exactly what was handed out.
+        self.close_alloc_regions();
         self.bytes_banked_at_resets = self
             .bytes_banked_at_resets
             .saturating_add(self.bytes_since_gc as u64);
@@ -1617,7 +1649,7 @@ impl TaggedHeap {
     /// to zero, so the sum is exact by construction.
     pub(crate) fn total_allocated_bytes(&self) -> u64 {
         self.bytes_banked_at_resets
-            .saturating_add(self.bytes_since_gc as u64)
+            .saturating_add(self.bytes_since_gc_exact() as u64)
     }
 
     fn vector_storage_bytes<T>(values: &Vec<T>) -> usize {
@@ -2010,6 +2042,12 @@ impl TaggedHeap {
     /// allocator metadata, and nested hash-key allocations live outside this
     /// accounting and are intentionally exposed as the RSS remainder.
     pub(crate) fn layout_stats(&self) -> HeapLayoutStats {
+        // The free-list walk below would miss an open region's cells and
+        // `cons_live_count` would count them: callers close first.
+        debug_assert!(
+            !self.alloc_regions_open(),
+            "layout_stats with an open allocation region"
+        );
         let mut free_cells_by_block = vec![0usize; self.cons_blocks.len()];
         let bumped_cons_slots: usize = self
             .cons_blocks
@@ -2451,9 +2489,19 @@ mod barrier_window;
 pub(crate) use barrier_window::BarrierWindow;
 
 mod jit_state;
+
+mod alloc_region;
+#[cfg(test)]
+use alloc_region::{CONS_REGION_MAX_CELLS, ConsRegionSource};
+use alloc_region::{RegionBook, RegionStats};
 #[cfg(test)]
 pub(crate) use barrier_window::published_barrier_window;
 pub(crate) use jit_state::{HEAP_JIT_BARRIER_LEN, HEAP_JIT_BARRIER_LO, JitHeapState};
+/// Allocation regions: sources, give-back, exact counters, black across
+/// the phase flags, and the close at every collector entry.
+#[cfg(test)]
+#[path = "gc/tests/alloc_region_tests.rs"]
+mod alloc_region_tests;
 /// The write barrier's owner window against the gate it replaced, state by
 /// state and owner by owner, and its republication at every input writer.
 #[cfg(test)]

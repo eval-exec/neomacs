@@ -8,6 +8,7 @@ fn layout_stats_report_exact_page_occupancy_and_payload_capacity() {
     let _string = heap.alloc_string(LispString::from_utf8("abc"));
     let _vector = heap.alloc_vector(vec![TaggedValue::NIL; 3]);
 
+    heap.close_alloc_regions();
     let stats = heap.layout_stats();
     assert_eq!(stats.allocated_objects, 3);
     assert_eq!(stats.cons.pages, 1);
@@ -83,6 +84,7 @@ fn layout_stats_report_bignum_slots_and_limb_payload() {
     let _small = heap.alloc_bignum(Integer::from(1u64 << 62));
     let _large = heap.alloc_bignum(Integer::from(2).pow(200));
 
+    heap.close_alloc_regions();
     let stats = heap.layout_stats();
     let bignum = stats
         .arenas

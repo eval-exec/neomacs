@@ -11,25 +11,37 @@
 
 use super::*;
 
-/// The write barrier's owner window as compiled code sees it: an owner at
-/// address `a` with `a - barrier_lo <u barrier_len` must take the
-/// out-of-line barrier (the shim). The heap-side twin of the thread-local
+/// The allocation cursors and the write barrier's owner window.
+///
+/// **Cons region** (`cons_cur`, `cons_lim`): the open cons allocation region
+/// (`alloc_region.rs`) — `cons_cur` is the next cell to hand out, `cons_lim`
+/// one past the region's last cell; both are 0 when no region is open.
+/// Regions are whole cells, so `cur < lim` iff a cell is left. Rust
+/// (`TaggedHeap::take_cons_cell`) and compiled code bump the same cursor.
+///
+/// **Barrier window** (`barrier_lo`, `barrier_len`): an owner at address `a`
+/// with `a - barrier_lo <u barrier_len` must take the out-of-line barrier
+/// (the shim). The heap-side twin of the thread-local
 /// `TAGGED_HEAP_BARRIER_WINDOW`, written by the same publisher
 /// (`TaggedHeap::publish_barrier_window`), so the two never disagree while
 /// the heap is installed.
 #[repr(C)]
 pub(crate) struct JitHeapState {
+    pub(crate) cons_cur: Cell<usize>,
+    pub(crate) cons_lim: Cell<usize>,
     pub(crate) barrier_lo: Cell<usize>,
     pub(crate) barrier_len: Cell<usize>,
 }
 
-const _: () = assert!(size_of::<JitHeapState>() == 16);
+const _: () = assert!(size_of::<JitHeapState>() == 32);
 
 impl JitHeapState {
-    /// A new heap's state: an empty window (no partition, no mark, no
-    /// tracking).
+    /// A new heap's state: no open region, an empty window (no partition,
+    /// no mark, no tracking).
     pub(super) const fn new() -> Self {
         Self {
+            cons_cur: Cell::new(0),
+            cons_lim: Cell::new(0),
             barrier_lo: Cell::new(0),
             barrier_len: Cell::new(0),
         }

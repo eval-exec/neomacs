@@ -82,6 +82,9 @@ impl TaggedHeap {
         // clear walk that measured ~98% of the clear phase. The flip lives in
         // `begin_collection` ONLY (`concurrent_begin` delegates here; no other
         // entry point may flip).
+        // A region never outlives the phase it was granted in (I1): close
+        // before the flip that ends it.
+        self.close_alloc_regions();
         self.mark_parity = !self.mark_parity;
         self.image_premarked = false;
 
@@ -212,6 +215,9 @@ impl TaggedHeap {
     /// blacken the mapped dump image, and build the initial remembered set.
     /// Thereafter both regions are permanently black and skipped each cycle.
     pub(super) fn promote_and_blacken(&mut self) {
+        // An open region's reserved slots would be tenured (and its full
+        // pages retired) as survivors.
+        self.close_alloc_regions();
         // 1. Promote every surviving heap object to tenured (old generation).
         //    The first partition cycle ran a full trace+sweep, so everything
         //    still in `all_objects` is alive = a permanent (the preloaded world
@@ -853,6 +859,7 @@ impl TaggedHeap {
     /// Panics on the first violation. Expensive (full dump scan); verification
     /// runs only.
     pub(super) fn verify_dump_partition(&mut self) {
+        debug_assert!(!self.alloc_regions_open(), "verifier with an open region");
         let mut violations: std::collections::BTreeMap<String, usize> =
             std::collections::BTreeMap::new();
         let mut sample: Option<usize> = None;
@@ -982,6 +989,7 @@ impl TaggedHeap {
     /// edge created by the mutator during marking (a UAF about to happen).
     /// Panics on the first batch of violations. Expensive; verification only.
     pub(super) fn verify_incremental_tricolor(&mut self) {
+        debug_assert!(!self.alloc_regions_open(), "verifier with an open region");
         let mut violations: std::collections::BTreeMap<String, usize> =
             std::collections::BTreeMap::new();
         let mut sample: Option<usize> = None;
@@ -1440,6 +1448,9 @@ impl TaggedHeap {
     }
 
     pub(crate) fn complete_collection(&mut self) {
+        // Collector code never sees an open allocation region
+        // (`alloc_region.rs`, invariant I2).
+        self.close_alloc_regions();
         let bytes_before = self.live_bytes;
         let t0 = std::time::Instant::now();
 
@@ -1709,6 +1720,7 @@ impl TaggedHeap {
             .saturating_add(page_live_bytes)
             .saturating_add(mapped_object_live_bytes);
         self.reset_bytes_since_gc();
+        self.trace_region_stats();
         // Pacer: a stop-the-world cycle has no concurrent mark window; drop
         // any stale stamp so the next concurrent cycle measures cleanly.
         self.pace_mark_start = None;

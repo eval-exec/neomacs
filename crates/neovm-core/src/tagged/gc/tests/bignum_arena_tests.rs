@@ -68,7 +68,8 @@ fn assert_big(v: TaggedValue, id: i64) {
     assert_eq!(*big_value(v), big_integer(id), "bignum {id} lost its value");
 }
 
-fn bignum_layout(heap: &TaggedHeap) -> ArenaLayoutStats {
+fn bignum_layout(heap: &mut TaggedHeap) -> ArenaLayoutStats {
+    heap.close_alloc_regions();
     heap.layout_stats()
         .arenas
         .into_iter()
@@ -547,7 +548,7 @@ fn bignum_payload_pages_freed_at_heap_drop_body(mid_mark: bool) {
             garbage.push(big(&mut heap, i));
         }
         assert!(LIVE_BIGNUM_PAGES.load(Ordering::Relaxed) > before);
-        let stats = bignum_layout(&heap);
+        let stats = bignum_layout(&mut heap);
         assert_eq!(stats.allocated_slots, 3_000);
         assert_eq!(
             stats.payload_logical_bytes,
@@ -556,7 +557,7 @@ fn bignum_payload_pages_freed_at_heap_drop_body(mid_mark: bool) {
         );
         assert_eq!(stats.owned_payloads, 3_000);
         heap.collect_exact(std::iter::empty());
-        let stats = bignum_layout(&heap);
+        let stats = bignum_layout(&mut heap);
         assert_eq!(stats.allocated_slots, 0);
         assert_eq!(
             stats.payload_logical_bytes, 0,
