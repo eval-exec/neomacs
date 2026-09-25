@@ -714,14 +714,15 @@ impl Context {
             if entry.dispatch_kind == SubrDispatchKind::ContextCallable {
                 return self.apply_evaluator_callable_by_id(sym_id, args);
             }
-            return self
-                .dispatch_subr_entry_unchecked(entry, args)
-                .unwrap_or_else(|| {
-                    Err(signal(
-                        LispCondition::VoidFunction,
-                        vec![Value::from_sym_id(sym_id)],
-                    ))
-                });
+            // Value first: `unwrap_or_else` moved the whole result.
+            return match self.dispatch_subr_entry_unchecked(entry, args) {
+                Some(Ok(value)) => Ok(value),
+                Some(Err(flow)) => Err(flow),
+                None => Err(signal(
+                    LispCondition::VoidFunction,
+                    vec![Value::from_sym_id(sym_id)],
+                )),
+            };
         }
 
         // A byte-code callee takes its arguments where they lie, through the

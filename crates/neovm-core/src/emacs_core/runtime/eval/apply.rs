@@ -1549,6 +1549,48 @@ impl Context {
         self.pop_bytecode_backtrace_frame_with_result(frame.base(), result)
     }
 
+    /// GNU's post-call order for a builtin whose frame
+    /// [`Self::push_backtrace_frame_from_bc_stack`] recorded (`Bcall` on a
+    /// subr, `funcall_subr`): the signal hook on a signal, the exit debugger
+    /// if the frame is flagged, then `specpdl_ptr--`. The token-frame twin of
+    /// [`Self::finish_traced_call`].
+    ///
+    /// The balanced successful return moves only the `Value`: passing the
+    /// 16-byte `EvalResult` whole through the pop made LLVM copy it with a
+    /// wide load over the builtin's narrow tag and value stores, which cannot
+    /// store-forward. The fast condition is exactly that of
+    /// [`Self::pop_bytecode_backtrace_token_fast_or_slow`]; everything else
+    /// (a signal, a flagged frame, a callee that left bindings) takes the
+    /// cold helper, which runs the same two steps as before.
+    #[inline(always)]
+    pub(crate) fn finish_traced_builtin_call(
+        &mut self,
+        frame: BytecodeBacktraceFrame,
+        result: EvalResult,
+    ) -> EvalResult {
+        match result {
+            Ok(value)
+                if self.specpdl.len() == frame.base() + 1
+                    && !self.backtrace_frame_wants_debug_on_exit(frame.base()) =>
+            {
+                self.pop_fast_bytecode_backtrace_frame_unchecked(frame);
+                Ok(value)
+            }
+            result => self.finish_traced_builtin_call_slow(frame, result),
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn finish_traced_builtin_call_slow(
+        &mut self,
+        frame: BytecodeBacktraceFrame,
+        result: EvalResult,
+    ) -> EvalResult {
+        let result = self.dispatch_signal_result_if_needed(result);
+        self.pop_bytecode_backtrace_token_fast_or_slow(frame, result)
+    }
+
     /// GNU `Breturn`: `if (backtrace_debug_on_exit (pdl)) val = call_debugger
     /// (list2 (Qexit, val));` and only then `specpdl_ptr--`
     /// (`src/bytecode.c:825-828`).
@@ -2636,7 +2678,12 @@ impl Context {
                 vec![wrong_arity_callee, Value::fixnum(nargs as i64)],
             )));
         }
-        Some(self.dispatch_subr_func_unchecked(func, args))
+        // Value first: `Some(call(..))` copied the builtin's result 16 bytes
+        // wide right after its narrow tag and value stores.
+        Some(match self.dispatch_subr_func_unchecked(func, args) {
+            Ok(value) => Ok(value),
+            Err(flow) => Err(flow),
+        })
     }
 
     #[inline]
@@ -2646,7 +2693,11 @@ impl Context {
         args: LispArgVec,
     ) -> Option<EvalResult> {
         let func = entry.function?;
-        Some(self.dispatch_subr_func_unchecked(func, args))
+        // Value first, as in `dispatch_subr_entry_internal`.
+        Some(match self.dispatch_subr_func_unchecked(func, args) {
+            Ok(value) => Ok(value),
+            Err(flow) => Err(flow),
+        })
     }
 
     #[inline]
@@ -2928,13 +2979,13 @@ impl Context {
         if entry.dispatch_kind == SubrDispatchKind::ContextCallable {
             return self.apply_evaluator_callable_by_id(sym_id, args);
         }
-        if let Some(result) = self.dispatch_subr_entry_internal(entry, args, function) {
-            result.map_err(|flow| self.validate_throw(flow))
-        } else {
-            Err(signal(
+        match self.dispatch_subr_entry_internal(entry, args, function) {
+            Some(Ok(value)) => Ok(value),
+            Some(Err(flow)) => Err(self.validate_throw(flow)),
+            None => Err(signal(
                 LispCondition::VoidFunction,
                 vec![Value::from_sym_id(sym_id)],
-            ))
+            )),
         }
     }
 

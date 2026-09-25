@@ -124,6 +124,15 @@ impl Context {
         self.dispatch_signal_result_cold(result)
     }
 
+    /// [`Self::dispatch_signal_result_if_needed`] for a caller that already
+    /// took the `Err` apart: its success path rebuilds `Ok(value)` from the
+    /// value alone, and only a failure comes here.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn dispatch_signal_flow_cold(&mut self, flow: Flow) -> EvalResult {
+        self.dispatch_signal_result_if_needed(Err(flow))
+    }
+
     #[cold]
     #[inline(never)]
     fn dispatch_signal_result_cold(&mut self, result: EvalResult) -> EvalResult {

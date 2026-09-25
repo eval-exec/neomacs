@@ -7090,14 +7090,11 @@ impl<'a> Vm<'a> {
                 match entry.function {
                     Some(function) => Vm::dispatch_builtin_subr_from_stack_args_unchecked(
                         vm.ctx, function, args_start, nargs,
-                    )
-                    .unwrap_or_else(|| Err(signal(LispCondition::VoidFunction, vec![func_val]))),
+                    ),
                     None => Err(signal(LispCondition::VoidFunction, vec![func_val])),
                 }
             };
-            let result = vm.ctx.dispatch_signal_result_if_needed(result);
-            vm.ctx
-                .pop_bytecode_backtrace_token_fast_or_slow(backtrace, result)
+            vm.ctx.finish_traced_builtin_call(backtrace, result)
         })
     }
 
@@ -7840,21 +7837,14 @@ impl<'a> Vm<'a> {
                 match function {
                     Some(function) => Self::dispatch_builtin_subr_from_stack_args_unchecked(
                         ctx, function, args_start, nargs,
-                    )
-                    .unwrap_or_else(|| {
-                        Err(signal(
-                            LispCondition::VoidFunction,
-                            vec![Value::from_sym_id(sym_id)],
-                        ))
-                    }),
+                    ),
                     None => Err(signal(
                         LispCondition::VoidFunction,
                         vec![Value::from_sym_id(sym_id)],
                     )),
                 }
             };
-        let result = ctx.dispatch_signal_result_if_needed(result);
-        ctx.pop_bytecode_backtrace_token_fast_or_slow(backtrace, result)
+        ctx.finish_traced_builtin_call(backtrace, result)
     }
 
     /// GNU's arithmetic-opcode arm: `Bplus` is `TOP = Fplus (2, &TOP)` — the
@@ -7939,8 +7929,12 @@ impl<'a> Vm<'a> {
                 }
             }
         }
+        // Value first: rebuilding `Ok(v)` from the value moves one word, where
+        // passing the whole result through moved 16 bytes over the callee's
+        // narrow tag and value stores.
         match Self::call_arith_builtin_on_context(self.ctx, kind, args_start, nargs) {
-            Some(result) => result,
+            Some(Ok(value)) => Ok(value),
+            Some(Err(flow)) => Err(flow),
             // These are static subrs, so this is unreachable in practice; take
             // the traced path rather than invent a dispatch for it.
             None => self.call_function_from_stack_args(
@@ -7968,36 +7962,48 @@ impl<'a> Vm<'a> {
         let func_val = Value::subr_from_sym_id(kind.builtin_id());
         let callee = ResolvedBuiltinCallee::from_subr_value(func_val)?;
         let (sym_id, function, min_args, max_args) = callee.dispatch_parts();
-        let result =
-            if nargs < min_args as usize || max_args.is_some_and(|max| nargs > max as usize) {
-                Err(signal(
-                    LispCondition::WrongNumberOfArguments,
-                    vec![callee.wrong_arity_value(), Value::fixnum(nargs as i64)],
-                ))
-            } else if matches!(function, Some(SubrFn::ManySlice(_)))
-                && let Some(value) = Self::try_dispatch_builtin_subr_fast_value_from_stack_args(
-                    ctx, sym_id, args_start, nargs,
-                )
-            {
-                return Some(Ok(value));
-            } else {
-                match function {
-                    Some(function) => Self::dispatch_builtin_subr_from_stack_args_unchecked(
-                        ctx, function, args_start, nargs,
-                    )
-                    .unwrap_or_else(|| {
-                        Err(signal(
-                            LispCondition::VoidFunction,
-                            vec![Value::from_sym_id(sym_id)],
-                        ))
-                    }),
-                    None => Err(signal(
-                        LispCondition::VoidFunction,
-                        vec![Value::from_sym_id(sym_id)],
-                    )),
-                }
-            };
-        Some(ctx.dispatch_signal_result_if_needed(result))
+        if nargs < min_args as usize || max_args.is_some_and(|max| nargs > max as usize) {
+            return Some(ctx.dispatch_signal_flow_cold(signal(
+                LispCondition::WrongNumberOfArguments,
+                vec![callee.wrong_arity_value(), Value::fixnum(nargs as i64)],
+            )));
+        }
+        if matches!(function, Some(SubrFn::ManySlice(_)))
+            && let Some(value) = Self::try_dispatch_builtin_subr_fast_value_from_stack_args(
+                ctx, sym_id, args_start, nargs,
+            )
+        {
+            return Some(Ok(value));
+        }
+        let Some(function) = function else {
+            return Some(Self::arith_void_function_cold(ctx, sym_id));
+        };
+        // Value first: the success result is rebuilt from the value alone
+        // (a tag store and a value store, no wide copy of the builtin's
+        // result); a signal goes to the cold hook dispatch.
+        Some(
+            match Self::dispatch_builtin_subr_from_stack_args_unchecked(
+                ctx, function, args_start, nargs,
+            ) {
+                Ok(value) => Ok(value),
+                Err(flow) => ctx.dispatch_signal_flow_cold(flow),
+            },
+        )
+    }
+
+    /// [`Self::call_arith_builtin_on_context`] on a static subr with no Rust
+    /// entry: `void-function`, through the signal hook as every signal from
+    /// that arm.
+    #[cold]
+    #[inline(never)]
+    fn arith_void_function_cold(
+        ctx: &mut crate::emacs_core::eval::Context,
+        sym_id: SymId,
+    ) -> EvalResult {
+        ctx.dispatch_signal_flow_cold(signal(
+            LispCondition::VoidFunction,
+            vec![Value::from_sym_id(sym_id)],
+        ))
     }
 
     #[inline]
@@ -8123,12 +8129,19 @@ impl<'a> Vm<'a> {
         Some(Value::make_int(acc))
     }
 
+    /// Call `func` on the `nargs` operands at `ctx.bc_buf[args_start..]`,
+    /// padding a fixed-arity subr's missing optionals with nil. Every arm's
+    /// call is in tail position, so its `EvalResult` is written straight into
+    /// this function's return slot: the vestigial `Option` this returned
+    /// (every arm was `Some`) made the arms meet before the `Some` and copy
+    /// the builtin's result 16 bytes wide right after its narrow tag and
+    /// value stores, a store-forwarding stall per builtin call.
     fn dispatch_builtin_subr_from_stack_args_unchecked(
         ctx: &mut crate::emacs_core::eval::Context,
         func: SubrFn,
         args_start: usize,
         nargs: usize,
-    ) -> Option<EvalResult> {
+    ) -> EvalResult {
         let args = &ctx.bc_buf;
         macro_rules! stack_arg {
             ($idx:expr) => {{
@@ -8141,28 +8154,28 @@ impl<'a> Vm<'a> {
             }};
         }
         match func {
-            SubrFn::A0(func) => Some(func(ctx)),
+            SubrFn::A0(func) => func(ctx),
             SubrFn::A1(func) => {
                 let arg0 = stack_arg!(0);
-                Some(func(ctx, arg0))
+                func(ctx, arg0)
             }
             SubrFn::A2(func) => {
                 let arg0 = stack_arg!(0);
                 let arg1 = stack_arg!(1);
-                Some(func(ctx, arg0, arg1))
+                func(ctx, arg0, arg1)
             }
             SubrFn::A3(func) => {
                 let arg0 = stack_arg!(0);
                 let arg1 = stack_arg!(1);
                 let arg2 = stack_arg!(2);
-                Some(func(ctx, arg0, arg1, arg2))
+                func(ctx, arg0, arg1, arg2)
             }
             SubrFn::A4(func) => {
                 let arg0 = stack_arg!(0);
                 let arg1 = stack_arg!(1);
                 let arg2 = stack_arg!(2);
                 let arg3 = stack_arg!(3);
-                Some(func(ctx, arg0, arg1, arg2, arg3))
+                func(ctx, arg0, arg1, arg2, arg3)
             }
             SubrFn::A5(func) => {
                 let arg0 = stack_arg!(0);
@@ -8170,7 +8183,7 @@ impl<'a> Vm<'a> {
                 let arg2 = stack_arg!(2);
                 let arg3 = stack_arg!(3);
                 let arg4 = stack_arg!(4);
-                Some(func(ctx, arg0, arg1, arg2, arg3, arg4))
+                func(ctx, arg0, arg1, arg2, arg3, arg4)
             }
             SubrFn::A6(func) => {
                 let arg0 = stack_arg!(0);
@@ -8179,7 +8192,7 @@ impl<'a> Vm<'a> {
                 let arg3 = stack_arg!(3);
                 let arg4 = stack_arg!(4);
                 let arg5 = stack_arg!(5);
-                Some(func(ctx, arg0, arg1, arg2, arg3, arg4, arg5))
+                func(ctx, arg0, arg1, arg2, arg3, arg4, arg5)
             }
             SubrFn::A7(func) => {
                 let arg0 = stack_arg!(0);
@@ -8189,7 +8202,7 @@ impl<'a> Vm<'a> {
                 let arg4 = stack_arg!(4);
                 let arg5 = stack_arg!(5);
                 let arg6 = stack_arg!(6);
-                Some(func(ctx, arg0, arg1, arg2, arg3, arg4, arg5, arg6))
+                func(ctx, arg0, arg1, arg2, arg3, arg4, arg5, arg6)
             }
             SubrFn::A8(func) => {
                 let arg0 = stack_arg!(0);
@@ -8200,19 +8213,19 @@ impl<'a> Vm<'a> {
                 let arg5 = stack_arg!(5);
                 let arg6 = stack_arg!(6);
                 let arg7 = stack_arg!(7);
-                Some(func(ctx, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7))
+                func(ctx, arg0, arg1, arg2, arg3, arg4, arg5, arg6, arg7)
             }
             SubrFn::Many(func) => {
                 let args = args[args_start..args_start + nargs].to_vec();
-                Some(func(ctx, args))
+                func(ctx, args)
             }
             SubrFn::ManyNoContext(func) => {
                 let args = args[args_start..args_start + nargs].to_vec();
-                Some(func(args))
+                func(args)
             }
-            SubrFn::ManySlice(func) => Some(Self::call_many_slice_subr_from_stack_args(
-                ctx, func, args_start, nargs,
-            )),
+            SubrFn::ManySlice(func) => {
+                Self::call_many_slice_subr_from_stack_args(ctx, func, args_start, nargs)
+            }
         }
     }
 
@@ -8784,7 +8797,7 @@ impl<'a> Vm<'a> {
         // routing these through the function cell would make neomacs MORE
         // advisable than GNU, breaking parity.
         if let Some(function) = Self::inline_builtin_function(sym) {
-            return self.call_inline_builtin(function, sym, args_start, nargs);
+            return self.call_inline_builtin(function, args_start, nargs);
         }
         let writeback_args = (self
             .ctx
@@ -8911,31 +8924,27 @@ impl<'a> Vm<'a> {
     pub(crate) fn call_inline_builtin_from_stack(
         ctx: &mut crate::emacs_core::eval::Context,
         function: SubrFn,
-        sym: SymId,
         args_start: usize,
         nargs: usize,
     ) -> EvalResult {
         #[cfg(test)]
         INLINE_BUILTIN_DIRECT_COUNT.with(|count| count.set(count.get() + 1));
-        let result =
-            Self::dispatch_builtin_subr_from_stack_args_unchecked(ctx, function, args_start, nargs)
-                .unwrap_or_else(|| {
-                    Err(signal(
-                        LispCondition::VoidFunction,
-                        vec![Value::from_sym_id(sym)],
-                    ))
-                });
-        ctx.dispatch_signal_result_if_needed(result)
+        // Value first (see `dispatch_builtin_subr_from_stack_args_unchecked`).
+        match Self::dispatch_builtin_subr_from_stack_args_unchecked(
+            ctx, function, args_start, nargs,
+        ) {
+            Ok(value) => Ok(value),
+            Err(flow) => ctx.dispatch_signal_flow_cold(flow),
+        }
     }
 
     fn call_inline_builtin(
         &mut self,
         function: SubrFn,
-        sym: SymId,
         args_start: usize,
         nargs: usize,
     ) -> EvalResult {
-        Self::call_inline_builtin_from_stack(self.ctx, function, sym, args_start, nargs)
+        Self::call_inline_builtin_from_stack(self.ctx, function, args_start, nargs)
     }
 
     fn dispatch_vm_builtin_unrooted(&mut self, name: &str, args: LispArgVec) -> EvalResult {
@@ -9290,6 +9299,10 @@ fn sym_id_at(constants: &[Value], idx: u16) -> SymId {
 #[path = "tests/vm.rs"]
 mod tests;
 
+#[cfg(test)]
+#[path = "tests/builtin_result_return.rs"]
+mod builtin_result_return_tests;
+
 impl ArithGenericKind {
     /// The builtin this kind's slow arm calls: the SAME cached symbol ids the
     /// interpreter always used (`Negate` is `-` with one operand).
@@ -9356,13 +9369,11 @@ impl crate::emacs_core::eval::Context {
             match entry.function {
                 Some(function) => Vm::dispatch_builtin_subr_from_stack_args_unchecked(
                     self, function, args_start, nargs,
-                )
-                .unwrap_or_else(|| Err(signal(LispCondition::VoidFunction, vec![func_val]))),
+                ),
                 None => Err(signal(LispCondition::VoidFunction, vec![func_val])),
             }
         };
-        let result = self.dispatch_signal_result_if_needed(result);
-        let result = self.pop_bytecode_backtrace_token_fast_or_slow(backtrace, result);
+        let result = self.finish_traced_builtin_call(backtrace, result);
         debug_assert!(self.depth > 0);
         self.depth -= 1;
         result

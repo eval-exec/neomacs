@@ -1952,22 +1952,25 @@ pub extern "C" fn neovm_jit_arith_generic(
         if nargs == 2 {
             ctx.bc_buf.push(Value::from_bits(b as usize));
         }
-        let res =
-            Vm::call_arith_builtin_on_context(ctx, kind, args_start, nargs).unwrap_or_else(|| {
-                Err(signal(
-                    crate::emacs_core::error::LispCondition::VoidFunction,
-                    vec![Value::from_sym_id(kind.builtin_id())],
-                ))
-            });
+        let res = Vm::call_arith_builtin_on_context(ctx, kind, args_start, nargs);
         ctx.bc_buf.truncate(args_start);
+        // Value first: an `unwrap_or_else` on the `Option<EvalResult>` copied
+        // it 16 bytes wide over the callee's narrow stores.
         match res {
-            Ok(value) => {
+            Some(Ok(value)) => {
                 // SAFETY: `out` is the generated code's result stack slot.
                 unsafe { *out = value.bits() as i64 };
                 STATUS_OK
             }
-            Err(flow) => {
+            Some(Err(flow)) => {
                 stash_pending_flow(flow);
+                STATUS_SIGNAL
+            }
+            None => {
+                stash_pending_flow(signal(
+                    crate::emacs_core::error::LispCondition::VoidFunction,
+                    vec![Value::from_sym_id(kind.builtin_id())],
+                ));
                 STATUS_SIGNAL
             }
         }
@@ -2166,7 +2169,7 @@ pub extern "C" fn neovm_jit_cbsym_spec(
         let res = if inline_kind == crate::emacs_core::eval::InlineSubrKind::Direct {
             Vm::call_fixed_builtin_direct(ctx, Some(function), sym_id, args_start, nargs)
         } else {
-            Vm::call_inline_builtin_from_stack(ctx, function, sym_id, args_start, nargs)
+            Vm::call_inline_builtin_from_stack(ctx, function, args_start, nargs)
         };
         ctx.bc_buf.truncate(args_start);
         let status = match res {
