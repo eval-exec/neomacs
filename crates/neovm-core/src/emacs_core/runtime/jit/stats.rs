@@ -338,6 +338,13 @@ pub(crate) fn report_line(tag: ReportTag, body: &str) {
 /// `NEOVM_JIT_COMPILE_STATS=1` (or `NEOVM_JIT_STATS_FILE=<path>`, which
 /// implies it): print a one-line running summary every 64 compiles (and on
 /// the dispatch cadence) through [`report_line`].
+///
+/// `#[inline(always)]` is load-bearing: `record_dispatch` asks this once per
+/// native call from a mapping builtin, and when the env read below sat in
+/// this body LLVM stopped inlining it -- an out-of-line call per `mapc`
+/// callback, +17 instructions each (map-closure +4.1% instructions, +7%
+/// cycles). The first-time read lives in the cold helper.
+#[inline(always)]
 pub(crate) fn summary_enabled() -> bool {
     #[cfg(test)]
     if let Some(o) = OBSERVE_OVERRIDE.with(Cell::get) {
@@ -349,18 +356,22 @@ pub(crate) fn summary_enabled() -> bool {
     // acquire fence on every call, while this costs one load and one compare.
     // `0` = not read yet, `1` = off, `2` = on; the env var cannot change
     // under us, so a racing double read resolves to the same value.
-    use std::sync::atomic::{AtomicU8, Ordering};
-    static ENABLED: AtomicU8 = AtomicU8::new(0);
-    match ENABLED.load(Ordering::Relaxed) {
+    match SUMMARY_ENABLED.load(std::sync::atomic::Ordering::Relaxed) {
         1 => false,
         2 => true,
-        _ => {
-            let on = std::env::var("NEOVM_JIT_COMPILE_STATS").as_deref() == Ok("1")
-                || std::env::var_os("NEOVM_JIT_STATS_FILE").is_some();
-            ENABLED.store(1 + u8::from(on), Ordering::Relaxed);
-            on
-        }
+        _ => summary_enabled_first_read(),
     }
+}
+
+static SUMMARY_ENABLED: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+#[cold]
+#[inline(never)]
+fn summary_enabled_first_read() -> bool {
+    let on = std::env::var("NEOVM_JIT_COMPILE_STATS").as_deref() == Ok("1")
+        || std::env::var_os("NEOVM_JIT_STATS_FILE").is_some();
+    SUMMARY_ENABLED.store(1 + u8::from(on), std::sync::atomic::Ordering::Relaxed);
+    on
 }
 
 /// Record one JIT compile attempt at the cache-miss seam: `elapsed` wall time
