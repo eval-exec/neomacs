@@ -776,6 +776,41 @@ pub(crate) fn evict_compiled(id: u64) {
     });
 }
 
+/// Point every caller on this thread that caches `dead` in a spec slot back
+/// at the cache: clear each BYTECODE-kind spec slot of every live, retired
+/// and OSR leaf whose cached callee leaf is `dead` (see
+/// [`CompiledLeaf::unlink_spec_slots_to`]). Returns how many slots it
+/// cleared. The next call through such a slot re-resolves its callee
+/// (`call_spec_slow` -> `call_armed_callee_native` ->
+/// `resolve_compiled_leaf_ptr`), which finds whatever the cache now holds.
+///
+/// O(spec slots on the thread): about 10K relaxed loads for 2,000 leaves of
+/// 5 slots each. Used where a leaf stops being current: the deopt
+/// invalidation (`jit::reopt`) and, later, a re-tier or a per-symbol resync.
+/// Must run outside any `COMPILED`/`OSR_CACHE` borrow.
+// The first caller lands with the deopt invalidation.
+#[allow(dead_code)]
+pub(crate) fn unlink_spec_slots(dead: *const CompiledLeaf) -> usize {
+    let mut cleared = 0;
+    COMPILED.with(|c| {
+        let cache = c.borrow();
+        for entry in cache.values() {
+            if let CacheEntry::Compiled(leaf) = entry {
+                cleared += leaf.unlink_spec_slots_to(dead);
+            }
+        }
+        for leaf in &cache.retired {
+            cleared += leaf.unlink_spec_slots_to(dead);
+        }
+    });
+    OSR_CACHE.with(|c| {
+        for entry in c.borrow().values().flatten() {
+            cleared += entry.leaf.unlink_spec_slots_to(dead);
+        }
+    });
+    cleared
+}
+
 /// Evictions after which a callee counts as unstable (see `INLINE_EVICTIONS`).
 const UNSTABLE_INLINE_EVICTIONS: u32 = 2;
 

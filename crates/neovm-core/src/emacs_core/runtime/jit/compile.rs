@@ -1771,6 +1771,41 @@ impl SpecCalleeKind {
     /// assigns (0..DISC_COUNT). Salted into `ABI_TAG` so a renumber/count change
     /// re-tags stale `.so`s.
     pub(crate) const DISC_COUNT: u8 = 15;
+
+    /// The inverse of [`to_spec_disc`](Self::to_spec_disc): the kind an AOT
+    /// descriptor's baked discriminant names (`None` past `DISC_COUNT`).
+    pub(crate) fn from_spec_disc(disc: u8) -> Option<Self> {
+        Some(match disc {
+            0 => SpecCalleeKind::Bytecode,
+            1 => SpecCalleeKind::SubrGeneral,
+            2 => SpecCalleeKind::PredRecordp,
+            3 => SpecCalleeKind::PredSymbolWithPos,
+            4 => SpecCalleeKind::EqInclProps,
+            5..=10 => SpecCalleeKind::ArithIntrinsic { op: disc - 5 },
+            11 => SpecCalleeKind::PredTypeOf,
+            12 => SpecCalleeKind::PredClTypeOf,
+            13 => SpecCalleeKind::PredFboundp,
+            14 => SpecCalleeKind::PredAutoloadDoLoad,
+            _ => return None,
+        })
+    }
+}
+
+/// The per-slot kinds of a leaf's spec slots (`CompiledLeaf::spec_slot_kinds`),
+/// from the site map whose `slot` fields number `0..n` densely.
+pub(crate) fn spec_slot_kinds_of(
+    sites: &HashMap<usize, SpecSite>,
+    n: usize,
+) -> Box<[SpecCalleeKind]> {
+    let mut kinds: Vec<Option<SpecCalleeKind>> = vec![None; n];
+    for site in sites.values() {
+        debug_assert!(kinds[site.slot].is_none(), "one site per slot");
+        kinds[site.slot] = Some(site.kind);
+    }
+    kinds
+        .into_iter()
+        .map(|k| k.expect("spec slots are numbered densely"))
+        .collect()
 }
 
 /// A speculated direct-call site: an `Op::Call` whose callee slot provably
@@ -1778,7 +1813,7 @@ impl SpecCalleeKind {
 /// object or fixed-arity builtin subr `expected_bits` (see `kind`). `slot`
 /// indexes the leaf's armed-epoch slots.
 #[derive(Clone, Copy)]
-struct SpecSite {
+pub(crate) struct SpecSite {
     sym: u32,
     expected_bits: u64,
     slot: usize,
@@ -3633,6 +3668,7 @@ pub fn lower_leaf_full_osr(
         }
         None => (HashMap::new(), Box::from([])),
     };
+    let spec_slot_kinds = spec_slot_kinds_of(&spec_sites, spec_slots.len());
     // Precise-deopt buffers: live operand-stack spill (max depth) + the
     // pc/depth/handler-count cells. Address-stable Boxes owned by the leaf;
     // generated code writes through baked raw addresses.
@@ -3787,6 +3823,7 @@ pub fn lower_leaf_full_osr(
         dynamic_prefix: u32::try_from(dynamic_prefix).expect("patched prefix fits u32"),
         obs,
         retired: core::cell::Cell::new(false),
+        spec_slot_kinds,
         entry,
         _backing: LeafBacking::Jit(module),
     })

@@ -442,6 +442,12 @@ pub struct CompiledLeaf {
     /// live Rc of this leaf).
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
     pub(crate) spec_slots: Box<[SpecSlot]>,
+    /// The callee kind each of `spec_slots` was speculated on, parallel to
+    /// it. Only a [`SpecCalleeKind::Bytecode`] slot ever caches a callee
+    /// LEAF in its `leaf` word, so only those are ever cleared by a walk that
+    /// retires a leaf ([`Self::unlink_spec_slots_to`]); the words of other
+    /// kinds are not leaf pointers and must be left alone.
+    pub(crate) spec_slot_kinds: Box<[SpecCalleeKind]>,
     /// R2 increment B2 (AOT only): the per-site `expected` (subr/bytecode VALUE
     /// bits) array parallel to `spec_slots`, one entry per `Op::Call` spec site in
     /// slot order. AOT code loads `spec_expected_base[slot_idx]` from the sidecar
@@ -679,6 +685,15 @@ impl CompiledLeaf {
         }
         let spec_slots: Box<[SpecSlot]> = spec_slots_vec.into_boxed_slice();
         let spec_expected: Box<[u64]> = spec_expected_vec.into_boxed_slice();
+        // A disc no kind carries leaves the slot disarmed above; any
+        // non-Bytecode placeholder keeps it out of the leaf walks.
+        let spec_slot_kinds: Box<[SpecCalleeKind]> = spec_sites
+            .iter()
+            .map(|site| {
+                SpecCalleeKind::from_spec_disc(site.kind_disc)
+                    .unwrap_or(SpecCalleeKind::SubrGeneral)
+            })
+            .collect();
         // Build the sidecar from the FINAL boxes (move-stability: a Box's heap
         // pointee does not move when the owning CompiledLeaf moves into Rc::new,
         // and these boxes are never reallocated for the leaf's life — only the
@@ -735,6 +750,7 @@ impl CompiledLeaf {
             // AOT code never carries the entry counter.
             obs: LeafObs::new(false),
             retired: Cell::new(false),
+            spec_slot_kinds,
             entry,
             _backing: LeafBacking::Aot(backing),
         }
@@ -743,6 +759,24 @@ impl CompiledLeaf {
     /// The SymIds of the callees this leaf inlined (its precise dependency set).
     pub(crate) fn inline_deps(&self) -> &[crate::emacs_core::intern::SymId] {
         &self.inline_deps
+    }
+
+    /// Clear each of this leaf's BYTECODE-kind spec slots whose cached callee
+    /// leaf is `dead`; returns how many. A slot cleared while a call through
+    /// it is in flight is harmless: the shim already loaded the pointer and
+    /// `dead` stays allocated (retired). The next call re-resolves the callee
+    /// through the cache (`call_spec_slow`). Slots of other kinds are skipped:
+    /// their words are not leaf pointers (see `spec_slot_kinds`).
+    pub(crate) fn unlink_spec_slots_to(&self, dead: *const CompiledLeaf) -> usize {
+        debug_assert_eq!(self.spec_slots.len(), self.spec_slot_kinds.len());
+        let mut cleared = 0;
+        for (slot, kind) in self.spec_slots.iter().zip(self.spec_slot_kinds.iter()) {
+            if *kind == SpecCalleeKind::Bytecode && slot.leaf_ptr() == dead {
+                slot.clear_leaf();
+                cleared += 1;
+            }
+        }
+        cleared
     }
 
     /// Whether this leaf's code is backed by a loaded AOT `.so` (vs the JIT's

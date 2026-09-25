@@ -598,3 +598,139 @@ fn retired_leaf_is_marked_and_its_constants_stay_rooted() {
         "the probe counts the retired leaf where it counted the live one"
     );
 }
+
+/// `SpecCalleeKind::from_spec_disc` inverts `to_spec_disc` (the AOT loader
+/// recovers each slot's kind from its baked discriminant).
+#[test]
+fn spec_callee_kind_disc_round_trips() {
+    use crate::emacs_core::jit::compile::SpecCalleeKind;
+    for disc in 0..SpecCalleeKind::DISC_COUNT {
+        let kind = SpecCalleeKind::from_spec_disc(disc).expect("every disc names a kind");
+        assert_eq!(kind.to_spec_disc(), Some(disc));
+    }
+    assert_eq!(
+        SpecCalleeKind::from_spec_disc(SpecCalleeKind::DISC_COUNT),
+        None
+    );
+}
+
+fn lexical_fn(ops: Vec<Op>, constants: Vec<Value>, arity: usize) -> ByteCodeFunction {
+    let mut f = ByteCodeFunction::new(LambdaParams {
+        required: (0..arity)
+            .map(|i| crate::emacs_core::intern::SymId(i as u32 + 1))
+            .collect(),
+        optional: Vec::new(),
+        rest: None,
+    });
+    f.lexical = true;
+    f.ops = ops;
+    f.constants = constants.into();
+    f.max_stack = 16;
+    f.seal_hand_assembled_ops();
+    f
+}
+
+/// Install a multi-block bytecode callee (the MIR inliner leaves a call to
+/// it in place): `(lambda (n) (if n (1- n) 0))`.
+fn install_step(ev: &mut crate::emacs_core::eval::Context, name: &str) -> Value {
+    let sym = Value::symbol(name);
+    let step = lexical_fn(
+        vec![
+            Op::StackRef(0),
+            Op::GotoIfNil(5),
+            Op::StackRef(0),
+            Op::Sub1,
+            Op::Return,
+            Op::Constant(0),
+            Op::Return,
+        ],
+        vec![Value::make_int(0)],
+        1,
+    );
+    ev.obarray
+        .set_symbol_function_id(sym.as_symbol_id().unwrap(), Value::make_bytecode(step));
+    sym
+}
+
+/// A leaf clears only its BYTECODE-kind spec slots that cache the dead
+/// leaf: the words of other slot kinds are not leaf pointers.
+#[test]
+fn unlink_spec_slots_to_clears_only_bytecode_slots_caching_the_dead_leaf() {
+    use crate::emacs_core::jit::compile::SpecCalleeKind;
+    let mut ev = crate::emacs_core::eval::Context::new();
+    let step = install_step(&mut ev, "unlink-kind-step");
+    // (lambda (x) (unlink-kind-step x))
+    let f = lexical_fn(
+        vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return],
+        vec![step],
+        1,
+    );
+    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+    let mut leaf =
+        crate::emacs_core::jit::compile::compile_bytecode_function_with(&f, Some(&ev.obarray))
+            .expect("compiles");
+    assert_eq!(&*leaf.spec_slot_kinds, &[SpecCalleeKind::Bytecode]);
+    let other = lexical_fn(vec![Op::Constant(0), Op::Return], vec![Value::NIL], 0);
+    let dead = crate::emacs_core::jit::compile::compile_bytecode_function_with(&other, None)
+        .expect("compiles");
+    let dead_ptr: *const CompiledLeaf = &dead;
+    let slot = &leaf.spec_slots[0];
+    slot.arm_leaf(dead_ptr, std::ptr::null(), false, false);
+    assert_eq!(
+        leaf.unlink_spec_slots_to(std::ptr::null()),
+        0,
+        "not the dead leaf"
+    );
+    assert_eq!(leaf.spec_slots[0].leaf_ptr(), dead_ptr);
+    assert_eq!(leaf.unlink_spec_slots_to(dead_ptr), 1);
+    assert!(leaf.spec_slots[0].leaf_ptr().is_null(), "cleared");
+    // The same word in a slot of another kind is left alone.
+    leaf.spec_slot_kinds = Box::new([SpecCalleeKind::SubrGeneral]);
+    leaf.spec_slots[0].arm_leaf(dead_ptr, std::ptr::null(), false, false);
+    assert_eq!(leaf.unlink_spec_slots_to(dead_ptr), 0);
+    assert_eq!(
+        leaf.spec_slots[0].leaf_ptr(),
+        dead_ptr,
+        "a subr slot is untouched"
+    );
+}
+
+/// The thread-wide walk reaches the spec slots of cached leaves: a caller's
+/// slot that cached its callee's leaf is cleared, and the caller keeps
+/// running correctly (it re-resolves the callee).
+#[test]
+fn unlink_spec_slots_clears_a_cached_callers_slot() {
+    crate::emacs_core::jit::compile::force_deopt_for_test(false);
+    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+    let mut ev = crate::emacs_core::eval::Context::new();
+    let step = install_step(&mut ev, "unlink-walk-step");
+    // (lambda (x) (unlink-walk-step x))
+    let f = lexical_fn(
+        vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return],
+        vec![step],
+        1,
+    );
+    let f_val = Value::make_bytecode(f.clone());
+    let ctx = &mut ev as *mut crate::emacs_core::eval::Context;
+    let run = || try_run_compiled(ctx, &f, f_val, &[Value::make_int(5)]).expect("no signal");
+    for _ in 0..3 {
+        assert_eq!(run(), Some(Value::make_int(4).bits()));
+    }
+    let caller_id = f.jit_runtime().compiled_id().expect("compiled");
+    // SAFETY: cached leaves stay allocated for the test's duration.
+    let caller = unsafe { &*compiled_leaf_ptr_for_test(caller_id).expect("caller cached") };
+    let callee_ptr = caller.spec_slots[0].leaf_ptr();
+    assert!(
+        !callee_ptr.is_null(),
+        "the speculated call cached its callee's leaf"
+    );
+    assert_eq!(unlink_spec_slots(callee_ptr), 1);
+    assert!(caller.spec_slots[0].leaf_ptr().is_null());
+    assert_eq!(unlink_spec_slots(callee_ptr), 0, "idempotent");
+    assert_eq!(run(), Some(Value::make_int(4).bits()), "still correct");
+    assert_eq!(
+        caller.spec_slots[0].leaf_ptr(),
+        callee_ptr,
+        "the next call re-resolved the (still current) callee leaf"
+    );
+}

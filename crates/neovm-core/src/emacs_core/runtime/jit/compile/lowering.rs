@@ -2424,6 +2424,7 @@ pub(super) fn lower_mir_with_plan(
         clif_insts: super::clif_size_now().0,
     });
     obs.label = label.map(String::into_boxed_str);
+    let spec_slot_kinds = super::spec_slot_kinds_of(&plan.spec_sites, plan.spec_slots.len());
 
     Ok(CompiledLeaf {
         tier: LeafTier::Mir,
@@ -2457,6 +2458,7 @@ pub(super) fn lower_mir_with_plan(
         dynamic_prefix: 0,
         obs,
         retired: core::cell::Cell::new(false),
+        spec_slot_kinds,
         entry,
         _backing: LeafBacking::Jit(module),
     })
