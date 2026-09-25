@@ -22,7 +22,7 @@ pub mod window;
 // Curated facade: the front door for consumers of the Lisp engine. The
 // full module tree stays reachable for specialized needs; these are the
 // types nearly every embedder touches.
-pub use emacs_core::error::{EvalError, Flow};
+pub use emacs_core::error::{EvalError, Flow, FlowKind, FlowRef, FlowResultExt};
 pub use emacs_core::eval::Context;
 pub use emacs_core::value::{Value, ValueKind};
 

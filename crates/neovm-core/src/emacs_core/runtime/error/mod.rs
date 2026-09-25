@@ -122,9 +122,18 @@ pub(crate) fn flow_from_eval_error(err: EvalError) -> Flow {
     }
 }
 
-/// Internal non-local control flow.
+/// Internal non-local control flow: the OWNED view of a flow.
+///
+/// Today [`Flow`] is an alias of this enum (P0.12 Stage A), so matching on
+/// `Flow::Signal(..)` and on `FlowKind::Signal(..)` is the same thing. New
+/// code should match through [`FlowKind`] and read through the accessors
+/// below ([`FlowKind::kind`], [`FlowKind::as_signal`], [`FlowKind::as_throw`],
+/// ...), which are the whole surface a one-word `Flow` (P0.12 Stage B, the
+/// `flow-word` representation) will keep. Constructing: `signal(..)`,
+/// `Flow::throw`, `Flow::thread_blocked`, [`FlowKind::signal_boxed`],
+/// [`FlowKind::shutdown`], or `Flow::from_kind(FlowKind::X(..))`.
 #[derive(Clone, Debug)]
-pub enum Flow {
+pub enum FlowKind {
     Signal(Box<SignalData>),
     /// `throw` to a `catch` tag. The payload is an owned struct for the same
     /// reason `Signal`'s is: it carries a private [`InFlightRoots`] pin, so a
@@ -152,6 +161,152 @@ pub enum Flow {
     /// a module that clears it still exits, because the recorded request — not
     /// the propagating variant — is what the evaluator acts on.
     Shutdown(super::eval::ShutdownRequest),
+}
+
+/// The carrier of a flow in `EvalResult` and every `Result<_, Flow>`.
+///
+/// P0.12 Stage A: an alias of the owned enum, so all existing
+/// `Flow::Variant` paths keep compiling and nothing changes in the generated
+/// code. Stage B replaces it (behind the `flow-word` feature) with a
+/// one-word tagged owning pointer, so `EvalResult` returns in two registers;
+/// then only [`FlowKind`]/[`FlowRef`] and the accessor API remain matchable.
+pub type Flow = FlowKind;
+
+/// The BORROWED view of a flow, for `match flow.kind()` and `if let`
+/// guards. Built by [`FlowKind::kind`] and [`FlowResultExt::kinded_ref`].
+#[derive(Clone, Copy, Debug)]
+pub enum FlowRef<'a> {
+    Signal(&'a SignalData),
+    Throw(&'a ThrowData),
+    ThreadBlocked(&'a ThreadBlockedData),
+    Shutdown(super::eval::ShutdownRequest),
+}
+
+impl FlowKind {
+    /// Pack an owned flow into its carrier. The identity today; a pointer
+    /// tag under the one-word representation. Deliberately not a
+    /// `From<FlowKind> for Flow`: a second `From` makes `?` ambiguous (see
+    /// [`flow_from_eval_error`]).
+    #[inline(always)]
+    pub fn from_kind(kind: FlowKind) -> Flow {
+        kind
+    }
+
+    /// Unpack the carrier into the owned enum, for `match flow.into_kind()`
+    /// and for code that needs the payload `Box` itself. The identity today.
+    #[inline(always)]
+    pub fn into_kind(self) -> FlowKind {
+        self
+    }
+
+    /// The borrowed view, for matching without moving the flow.
+    #[inline]
+    pub fn kind(&self) -> FlowRef<'_> {
+        match self {
+            Self::Signal(data) => FlowRef::Signal(data),
+            Self::Throw(data) => FlowRef::Throw(data),
+            Self::ThreadBlocked(data) => FlowRef::ThreadBlocked(data),
+            Self::Shutdown(request) => FlowRef::Shutdown(*request),
+        }
+    }
+
+    /// A signal flow around an already boxed payload (for code that took the
+    /// box out of a flow with [`FlowKind::into_kind`] and re-raises it).
+    #[inline]
+    pub fn signal_boxed(data: Box<SignalData>) -> Flow {
+        Self::Signal(data)
+    }
+
+    /// The `kill-emacs` flow. Never allocates.
+    #[inline]
+    pub fn shutdown(request: super::eval::ShutdownRequest) -> Flow {
+        Self::Shutdown(request)
+    }
+
+    #[inline]
+    pub fn is_signal(&self) -> bool {
+        matches!(self, Self::Signal(_))
+    }
+
+    #[inline]
+    pub fn as_signal(&self) -> Option<&SignalData> {
+        match self {
+            Self::Signal(data) => Some(data),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn as_signal_mut(&mut self) -> Option<&mut SignalData> {
+        match self {
+            Self::Signal(data) => Some(data),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn is_throw(&self) -> bool {
+        matches!(self, Self::Throw(_))
+    }
+
+    #[inline]
+    pub fn as_throw(&self) -> Option<&ThrowData> {
+        match self {
+            Self::Throw(data) => Some(data),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn is_thread_blocked(&self) -> bool {
+        matches!(self, Self::ThreadBlocked(_))
+    }
+
+    #[inline]
+    pub fn as_thread_blocked(&self) -> Option<&ThreadBlockedData> {
+        match self {
+            Self::ThreadBlocked(data) => Some(data),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn is_shutdown(&self) -> bool {
+        matches!(self, Self::Shutdown(_))
+    }
+
+    #[inline]
+    pub fn shutdown_request(&self) -> Option<super::eval::ShutdownRequest> {
+        match self {
+            Self::Shutdown(request) => Some(*request),
+            _ => None,
+        }
+    }
+}
+
+/// Views of a `Result<T, Flow>` whose error side is a [`FlowKind`] /
+/// [`FlowRef`], for `match` scrutinees that name flow variants. Identity
+/// conversions while [`Flow`] is the enum.
+pub trait FlowResultExt<T> {
+    /// The owned view: `match result.kinded() { Err(FlowKind::Throw(t)) => .. }`.
+    fn kinded(self) -> Result<T, FlowKind>;
+    /// The borrowed view: `matches!(result.kinded_ref(), Err(FlowRef::Signal(_)))`.
+    fn kinded_ref(&self) -> Result<&T, FlowRef<'_>>;
+}
+
+impl<T> FlowResultExt<T> for Result<T, Flow> {
+    #[inline(always)]
+    fn kinded(self) -> Result<T, FlowKind> {
+        self.map_err(Flow::into_kind)
+    }
+
+    #[inline]
+    fn kinded_ref(&self) -> Result<&T, FlowRef<'_>> {
+        match self {
+            Ok(value) => Ok(value),
+            Err(flow) => Err(flow.kind()),
+        }
+    }
 }
 
 impl Flow {
@@ -1827,6 +1982,9 @@ pub fn format_eval_result_bytes_with_eval(
     }
     out
 }
+#[cfg(test)]
+#[path = "tests/flow_kind.rs"]
+mod flow_kind_tests;
 #[cfg(test)]
 #[path = "tests/mod.rs"]
 mod tests;
