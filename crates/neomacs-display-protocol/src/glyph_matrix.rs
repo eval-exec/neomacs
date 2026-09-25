@@ -1107,6 +1107,57 @@ pub struct GlyphRow {
     /// `if (left_p && row->overlay_arrow_bitmap != NO_FRINGE_BITMAP)`), and
     /// `fringe-bitmaps-at-pos` reports the two independently.
     pub overlay_arrow_bitmap: Option<FringeBitmapInfo>,
+    /// What the row draws, as an identity (see [`RowAppearance`]). Not part
+    /// of the row's content: rows compare and serialize without it.
+    #[serde(skip)]
+    appearance: RowAppearance,
+}
+
+/// The identity of what a [`GlyphRow`] DRAWS: its glyphs and every other
+/// field a renderer reads. Two rows with the same appearance draw the same
+/// thing wherever they are placed.
+///
+/// Each new row, and each copy of a row, gets a fresh appearance, so a copy
+/// that is then changed can never be mistaken for its original. Only code
+/// that changes nothing a renderer draws -- the row's placement (`pixel_y`),
+/// its buffer positions (row and glyph charpos, string-source and pointer
+/// ranges) or the layout-only cursor decoration (`cursor_col`,
+/// `cursor_type`) -- may declare the copy the same appearance, with
+/// [`GlyphRow::keep_appearance_of`]. Ids are never reused.
+///
+/// This is what lets a renderer key a row by content identity across the
+/// copies incremental layout makes: the rows below an edit are copied to
+/// shift their buffer positions, and the rows of a scroll to move them, yet
+/// they draw exactly what they drew.
+#[derive(Debug)]
+pub struct RowAppearance(u64);
+
+impl RowAppearance {
+    fn fresh() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        Self(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
+}
+
+impl Default for RowAppearance {
+    fn default() -> Self {
+        Self::fresh()
+    }
+}
+
+impl Clone for RowAppearance {
+    /// A copy is a new appearance until declared otherwise.
+    fn clone(&self) -> Self {
+        Self::fresh()
+    }
+}
+
+impl PartialEq for RowAppearance {
+    /// An identity, not content: two rows with equal fields are equal rows
+    /// whatever their appearance ids.
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
 }
 
 /// Per-row fringe-bitmap reference: the resolved registry index and the face id
@@ -1147,7 +1198,25 @@ impl GlyphRow {
             left_fringe_bitmap: None,
             right_fringe_bitmap: None,
             overlay_arrow_bitmap: None,
+            appearance: RowAppearance::fresh(),
         }
+    }
+
+    /// The row's appearance id (see [`RowAppearance`]).
+    #[inline]
+    pub fn appearance_id(&self) -> u64 {
+        self.appearance.0
+    }
+
+    /// Declare that this row draws exactly what SOURCE draws.
+    ///
+    /// Only for a copy of SOURCE whose changes since are confined to its
+    /// placement (`pixel_y`), its buffer positions and the layout-only cursor
+    /// decoration; anything else makes a renderer keyed on the appearance
+    /// show a stale row.
+    #[inline]
+    pub fn keep_appearance_of(&mut self, source: &GlyphRow) {
+        self.appearance = RowAppearance(source.appearance.0);
     }
 
     /// Compute FNV-1a hash over all glyph areas.
@@ -1525,6 +1594,7 @@ impl GlyphRow {
     }
 
     pub fn clear(&mut self) {
+        self.appearance = RowAppearance::fresh();
         for area in &mut self.glyphs {
             area.clear();
         }

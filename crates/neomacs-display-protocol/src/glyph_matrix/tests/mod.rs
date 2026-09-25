@@ -19,6 +19,8 @@ fn settled_point(
 
 use super::*;
 use crate::DisplayFrameId;
+
+mod row_appearance_test;
 use crate::face::Face;
 use crate::frame_chrome::PresentationId;
 use crate::frame_glyphs::{DisplaySlotId, PhysCursor};
