@@ -203,6 +203,10 @@ pub(crate) enum LeafBacking {
     /// JIT: the `JITModule` owns the executable memory `entry` points into.
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
     Jit(JITModule),
+    /// JIT into the thread's persistent module (`compile::shared`): the code
+    /// lives in the thread's code arena, which is never unmapped, so the
+    /// leaf holds nothing to keep it mapped.
+    Shared,
     /// AOT: a loaded shared object owns the code `entry` points into. `Arc` so
     /// several leaves from one unit share the single mapping; never unloaded
     /// while any backed leaf is cached.
@@ -214,6 +218,7 @@ impl core::fmt::Debug for LeafBacking {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             LeafBacking::Jit(_) => f.write_str("LeafBacking::Jit"),
+            LeafBacking::Shared => f.write_str("LeafBacking::Shared"),
             LeafBacking::Aot(_) => f.write_str("LeafBacking::Aot"),
         }
     }

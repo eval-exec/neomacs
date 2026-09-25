@@ -382,6 +382,9 @@ pub(crate) enum ReportTag {
     /// Exit report: compile origins and phase split.
     #[strum(serialize = "neovm-jit-final-phases")]
     FinalPhases,
+    /// Exit report: the persistent JIT backend and its code arena.
+    #[strum(serialize = "neovm-jit-final-code-memory")]
+    FinalCodeMemory,
 }
 
 /// The process-wide report sink, chosen once from `NEOVM_JIT_STATS_FILE`.
@@ -847,6 +850,7 @@ fn collect_final_report(ctx: &crate::emacs_core::eval::Context) -> report::Final
         inline: inline_census_summary(32),
         osr_transfers: super::cache::OSR_TRANSFER_COUNT.load(Ordering::Relaxed),
         seam_fallbacks: super::cache::SEAM_INTERP_FALLBACK_COUNT.load(Ordering::Relaxed),
+        code_memory: super::compile::shared::code_memory_stats(),
         function_epoch: ctx.obarray.function_epoch(),
         epoch,
         epoch_since_loop,

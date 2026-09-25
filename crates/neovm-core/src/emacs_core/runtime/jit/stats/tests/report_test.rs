@@ -32,6 +32,7 @@ fn jit_final_report_renders_every_section() {
         inline: String::new(),
         osr_transfers: 2,
         seam_fallbacks: 17,
+        code_memory: Default::default(),
         function_epoch: 91234,
         epoch: {
             let mut e = super::epoch::EpochCounters::default();
@@ -79,6 +80,7 @@ fn jit_final_report_renders_every_section() {
         [
             "neovm-jit-final",
             "neovm-jit-final-phases",
+            "neovm-jit-final-code-memory",
             "neovm-jit-final-mir-bails",
             "neovm-jit-final-inline",
             "neovm-jit-final-runs",
@@ -101,6 +103,11 @@ fn jit_final_report_renders_every_section() {
         "origin[-] phase_us[gate=0,mir_build=0,fuse=0,lower=0,setup=0,codegen=0,finalize=0,other=0] \
          phase_total_us=0",
         "no origin rows and no split: every field still prints"
+    );
+    assert_eq!(
+        body_of(&lines, ReportTag::FinalCodeMemory),
+        "shared_leaves=0 per_leaf_modules=0 reentrant_fallbacks=0 modules_created=0 \
+         modules_retired=0 arena_regions=0 arena_page_bytes=0 arena_code_bytes=0 arena_seals=0"
     );
     assert_eq!(
         body_of(&lines, ReportTag::FinalMirBails),

@@ -439,3 +439,13 @@ fn jit_pipeline_optional_shim_groups_follow_the_leaf_not_the_module() {
     assert_eq!(refs.get(&mut func, Shim::Cons), cons, "imported once");
     assert_eq!(func.dfg.ext_funcs.len(), 1);
 }
+
+/// [`compile_corpus`] for the persistent-module tests.
+pub(super) fn compile_corpus_for_test() -> Vec<String> {
+    compile_corpus()
+}
+
+/// The corpus size.
+pub(super) fn corpus_len_for_test() -> usize {
+    corpus().len()
+}

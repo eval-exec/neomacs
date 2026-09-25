@@ -2539,16 +2539,6 @@ pub(super) fn lower_mir_with_plan(
     // host addresses (AOT replaces this with `Linkage::Import` + dlopen);
     // `JITModule::new` (AOT: `ObjectModule::new`); `finalize_definitions` +
     // `get_finalized_function` below (AOT: `ObjectModule::finish()` + `dlsym`).
-    let setup_phase = super::super::stats::enter_phase(super::super::stats::CompilePhase::Setup);
-    let mut builder = JITBuilder::with_isa(jit_isa()?, default_libcall_names());
-    if plan.needs_rt {
-        // The shims the calls-slice + cons allocation reference; the leaf
-        // declares the shim set but Cranelift resolves only referenced ones.
-        // Every shim, from the one table (see `super::shims::JIT_SHIM_TABLE`).
-        super::shims::register_shims(&mut builder);
-    }
-    let mut module = JITModule::new(builder);
-    drop(setup_phase);
 
     // Precise-deopt spill buffer + cells, sized to the deepest pre-op operand stack
     // (the framestate a post-call guard spills). Empty/inert for pure bodies (which
@@ -2600,32 +2590,30 @@ pub(super) fn lower_mir_with_plan(
     // address of `obs.entries`.
     let mut obs = LeafObs::new(super::super::stats::entry_counting_enabled());
 
-    // Build + define the leaf into the module via the module-generic seam
-    // (`build_mir_leaf_fn`). The buffers are owned here and threaded in by
-    // reference so their addresses (baked into the generated loads) stay stable
-    // and so the wrapper can move them into the returned `CompiledLeaf`.
-    let fid = build_mir_leaf_fn(
-        &mut module,
-        m,
-        &deopt_spill,
-        &deopt_meta,
-        &reloc_data,
-        &reloc_index,
-        &plan,
-        entry_name,
-        Linkage::Local,
-        /*aot=*/ false,
-        obs.entry_counter(),
-    )?;
+    // Build + define the leaf via the module-generic seam (`build_mir_leaf_fn`)
+    // into the thread's persistent module (or a module of its own; see
+    // `shared::define_jit_leaf`), then finalize it. The buffers are owned here
+    // and threaded in by reference so their addresses (baked into the
+    // generated loads) stay stable and so the wrapper can move them into the
+    // returned `CompiledLeaf`. A runtime-free body's own module registers no
+    // shim symbols (it calls none).
+    let defined = super::shared::define_jit_leaf(plan.needs_rt, |sink| {
+        build_mir_leaf_fn(
+            sink,
+            m,
+            &deopt_spill,
+            &deopt_meta,
+            &reloc_data,
+            &reloc_index,
+            &plan,
+            entry_name,
+            Linkage::Local,
+            /*aot=*/ false,
+            obs.entry_counter(),
+        )
+    })?;
 
-    // --- JIT-only module epilogue (the wrapper). ----------------------------
-    let finalize_phase =
-        super::super::stats::enter_phase(super::super::stats::CompilePhase::Finalize);
-    module
-        .finalize_definitions()
-        .map_err(|e| CompileError::Backend(BackendError::Finalize(e.to_string())))?;
-    let entry = module.get_finalized_function(fid);
-    drop(finalize_phase);
+    let entry = defined.entry;
     super::super::stats::asm_dump::flush(&super::super::stats::asm_dump::AsmLeafInfo {
         tier: super::super::stats::perf_map::LabelTier::Mir,
         entry_name,
@@ -2671,7 +2659,7 @@ pub(super) fn lower_mir_with_plan(
         retired: core::cell::Cell::new(false),
         spec_slot_kinds,
         entry,
-        _backing: LeafBacking::Jit(module),
+        _backing: defined.backing,
     })
 }
 

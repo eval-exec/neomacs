@@ -76,8 +76,8 @@ use cranelift_codegen::ir::{
     StackSlotData, StackSlotKind, Type, UserFuncName, types,
 };
 use cranelift_frontend::{FunctionBuilder, Variable};
-use cranelift_jit::{JITBuilder, JITModule};
-use cranelift_module::{Linkage, Module, default_libcall_names};
+use cranelift_jit::JITModule;
+use cranelift_module::{Linkage, Module};
 use smallvec::SmallVec;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -3524,20 +3524,6 @@ pub fn lower_leaf_full_osr(
     }
     let reloc_data: Box<[Value]> = reloc_vals.into_boxed_slice();
 
-    // Baseline tier runs Cranelift at the default opt_level="none": its job is
-    // FAST compilation (low tier-up latency; the soak compiles every function).
-    // Measured opt_level="speed" (2026-06-13): no runtime win on fib (call-
-    // bound) or the arithmetic loop, because Cranelift sees our tagged Values
-    // as opaque i64 — it can't unbox, drop fixnum guards, or reason about lisp
-    // effects. The real headroom is semantic (unboxing/inlining), which needs
-    // an MIR-level optimizing Tier-2; opt_level="speed" belongs there, not at
-    // this tier where it would only cost compile time.
-    let setup_phase = super::stats::enter_phase(super::stats::CompilePhase::Setup);
-    let mut builder = JITBuilder::with_isa(jit_isa()?, default_libcall_names());
-    // Every shim, from the one table (see `shims::JIT_SHIM_TABLE`).
-    shims::register_shims(&mut builder);
-    let mut module = JITModule::new(builder);
-    drop(setup_phase);
     // has_backedge + needs_rt via the shared single-source helpers (R2-E) — same
     // logic as before, just factored so the baseline-AOT emit can reuse it.
     let has_backedge = baseline_has_backedge(ops, &cfg);
@@ -3557,42 +3543,46 @@ pub fn lower_leaf_full_osr(
     // the address of `obs.entries`.
     let mut obs = LeafObs::new(super::stats::entry_counting_enabled());
 
-    // Build + define the leaf into the module via the module-generic seam
-    // (`build_leaf_fn`). Buffers (`spec_slots`/`deopt_*`/`reloc_data`) are owned
-    // here, threaded in by reference so their baked addresses stay stable, and
-    // moved into the returned `CompiledLeaf` below.
-    let fid = build_leaf_fn(
-        &mut module,
-        ops,
-        constants,
-        arity,
-        &cfg,
-        &known_fixnum_slots,
-        &spec_sites,
-        &spec_slots,
-        n,
-        &deopt_spill,
-        &deopt_meta,
-        &reloc_data,
-        &reloc_index,
-        has_backedge,
-        needs_rt,
-        /*aot=*/ false,
-        entry_name,
-        Linkage::Local,
-        osr_pc,
-        dynamic_prefix,
-        obs.entry_counter(),
-    )?;
-
-    // --- JIT-only module epilogue (the wrapper). ----------------------------
-    let finalize_phase = super::stats::enter_phase(super::stats::CompilePhase::Finalize);
-    module
-        .finalize_definitions()
-        .map_err(|e| CompileError::Backend(BackendError::Finalize(e.to_string())))?;
-
-    let entry = module.get_finalized_function(fid);
-    drop(finalize_phase);
+    // Baseline tier runs Cranelift at the default opt_level="none": its job is
+    // FAST compilation (low tier-up latency; the soak compiles every function).
+    // Measured opt_level="speed" (2026-06-13): no runtime win on fib (call-
+    // bound) or the arithmetic loop, because Cranelift sees our tagged Values
+    // as opaque i64 — it can't unbox, drop fixnum guards, or reason about lisp
+    // effects. The real headroom is semantic (unboxing/inlining), which needs
+    // an MIR-level optimizing Tier-2; opt_level="speed" belongs there, not at
+    // this tier where it would only cost compile time.
+    // Build + define the leaf via the module-generic seam (`build_leaf_fn`)
+    // into the thread's persistent module (or a module of its own; see
+    // `shared::define_jit_leaf`), then finalize it. Buffers
+    // (`spec_slots`/`deopt_*`/`reloc_data`) are owned here, threaded in by
+    // reference so their baked addresses stay stable, and moved into the
+    // returned `CompiledLeaf` below.
+    let defined = shared::define_jit_leaf(/*per_leaf_shims=*/ true, |sink| {
+        build_leaf_fn(
+            sink,
+            ops,
+            constants,
+            arity,
+            &cfg,
+            &known_fixnum_slots,
+            &spec_sites,
+            &spec_slots,
+            n,
+            &deopt_spill,
+            &deopt_meta,
+            &reloc_data,
+            &reloc_index,
+            has_backedge,
+            needs_rt,
+            /*aot=*/ false,
+            entry_name,
+            Linkage::Local,
+            osr_pc,
+            dynamic_prefix,
+            obs.entry_counter(),
+        )
+    })?;
+    let entry = defined.entry;
     super::stats::asm_dump::flush(&super::stats::asm_dump::AsmLeafInfo {
         tier: match osr_pc {
             Some(pc) => super::stats::perf_map::LabelTier::Osr(pc),
@@ -3655,7 +3645,7 @@ pub fn lower_leaf_full_osr(
         retired: core::cell::Cell::new(false),
         spec_slot_kinds,
         entry,
-        _backing: LeafBacking::Jit(module),
+        _backing: defined.backing,
     })
 }
 
@@ -4723,6 +4713,10 @@ pub(crate) use sink::{LeafEntry, LeafSink};
 pub(crate) mod shim_refs;
 pub(crate) use shim_refs::{RtRefs, Shim, ShimGroups, ShimIds};
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub(crate) mod code_arena;
+pub(crate) mod shared;
+
 mod dispatch;
 pub use dispatch::*;
 
@@ -4759,6 +4753,9 @@ mod observability_tests;
 #[cfg(test)]
 #[path = "tests/osr_bindings.rs"]
 mod osr_binding_tests;
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+#[path = "tests/shared_module.rs"]
+mod shared_module_tests;
 pub(crate) mod switch_dispatch;
 
 #[cfg(test)]

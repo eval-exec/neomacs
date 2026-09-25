@@ -128,6 +128,8 @@ pub(crate) struct FinalReport {
     /// Process-wide dispatch-seam interpreter fallbacks
     /// (`cache::SEAM_INTERP_FALLBACK_COUNT`).
     pub(crate) seam_fallbacks: u64,
+    /// This thread's persistent JIT backend and code arena.
+    pub(crate) code_memory: crate::emacs_core::jit::compile::shared::CodeMemoryStats,
     /// The obarray's `function_epoch` at exit (a cross-check on the bump
     /// total: they differ only by bumps on other threads or obarrays).
     pub(crate) function_epoch: u64,
@@ -175,6 +177,7 @@ impl FinalReport {
         }
         lines.push((ReportTag::Final, head));
         lines.push((ReportTag::FinalPhases, format_phases(&self.compile)));
+        lines.push((ReportTag::FinalCodeMemory, self.code_memory.render()));
         lines.push((ReportTag::FinalMirBails, or_dash(&self.mir_bails)));
         lines.push((ReportTag::FinalInline, or_dash(&self.inline)));
         let (mut entries_all, mut deopt_at, mut deopt_rerun, mut signals) = (

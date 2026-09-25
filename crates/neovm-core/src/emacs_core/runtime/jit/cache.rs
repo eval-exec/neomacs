@@ -1562,13 +1562,7 @@ pub fn try_run_compiled(
         let request = CompileRequest {
             regalloc: policy,
             bypass_profit_gate,
-            origin: if retier {
-                stats::CompileOrigin::Retier
-            } else if deferred.is_some() {
-                stats::CompileOrigin::DeferralExpired
-            } else {
-                stats::CompileOrigin::Dispatch
-            },
+            origin: stats::CompileOrigin::Dispatch,
         };
         match cache.get_or_insert_with(id, || {
             // R1c-6: consult AOT FIRST (additive — a miss/error falls through to
@@ -1606,7 +1600,21 @@ pub fn try_run_compiled(
             let name_hint = stats::naming_enabled()
                 .then(|| callee_name_hint(ctx, id))
                 .flatten();
-            compile_cache_entry(id, func, obarray, request, name_hint)
+            // The origin is only read on this cold miss path.
+            let origin = if retier {
+                stats::CompileOrigin::Retier
+            } else if deferred.is_some() {
+                stats::CompileOrigin::DeferralExpired
+            } else {
+                stats::CompileOrigin::Dispatch
+            };
+            compile_cache_entry(
+                id,
+                func,
+                obarray,
+                CompileRequest { origin, ..request },
+                name_hint,
+            )
         }) {
             // Only run native for a valid call (lambda-list range); a mismatch
             // is a wrong-arg-count call the interpreter must signal.
