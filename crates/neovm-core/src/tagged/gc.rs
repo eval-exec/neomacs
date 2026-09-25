@@ -1192,7 +1192,7 @@ impl TaggedHeap {
     /// Allocated objects (cons + non-cons), exact: the open allocation
     /// regions' unused cells are not counted.
     pub fn allocated_count(&self) -> usize {
-        self.allocated_count - self.open_cons_unused()
+        self.allocated_count - self.open_cons_unused() - self.open_float_unused()
     }
 
     /// Total number of completed GC collection cycles since this heap was
@@ -1254,6 +1254,8 @@ impl TaggedHeap {
         let mut counts = self.memory_use_counts;
         let conses = MemoryUseCountSlot::ConsCells.index();
         counts[conses] = counts[conses].wrapping_sub(self.open_cons_unused() as u64);
+        let floats = MemoryUseCountSlot::Floats.index();
+        counts[floats] = counts[floats].wrapping_sub(self.open_float_unused() as u64);
         counts
     }
 
@@ -1270,7 +1272,9 @@ impl TaggedHeap {
     /// the open allocation regions' unused cells excluded. What
     /// `garbage-collect-maybe`'s FACTOR test and the memory profiler read.
     pub fn bytes_since_gc_exact(&self) -> usize {
-        self.bytes_since_gc - self.open_cons_unused() * size_of::<ConsCell>()
+        self.bytes_since_gc
+            - self.open_cons_unused() * size_of::<ConsCell>()
+            - self.open_float_unused() * size_of::<FloatObj>()
     }
 
     /// The one place `bytes_since_gc` returns to zero.
@@ -2492,7 +2496,7 @@ mod jit_state;
 
 mod alloc_region;
 #[cfg(test)]
-use alloc_region::{CONS_REGION_MAX_CELLS, ConsRegionSource};
+use alloc_region::{CONS_REGION_MAX_CELLS, ConsRegionSource, FLOAT_REGION_MAX_SLOTS};
 use alloc_region::{RegionBook, RegionStats};
 #[cfg(test)]
 pub(crate) use barrier_window::published_barrier_window;

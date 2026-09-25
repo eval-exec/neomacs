@@ -120,13 +120,17 @@ impl TaggedHeap {
 
     /// Allocate a float object from the FLOAT ARENA PAGES.
     ///
-    /// Every slot allocation/reuse performs a FULL-HEADER WRITE — a complete
-    /// `FloatObj` (fresh `GcHeader`: kind=Float, tenured=false, next=null)
-    /// followed by the same unconditional born-at-parity store `link_object`
-    /// applies. A reused slot's stale bytes must never leak into the new
-    /// object: a stale mark bit is a same-cycle-reuse UAF, a stale kind is a
-    /// type-confused free, a stale tenured flag is a leak plus child-UAF
-    /// (never traced, never swept).
+    /// The slot comes from the open float allocation region
+    /// (`alloc_region.rs`), whose slots were reserved (alloc bits set),
+    /// charged to the consing counters and FULL-HEADER-WRITTEN when the
+    /// region was granted — a fresh `GcHeader` (kind=Float, tenured=false,
+    /// remembered=false, next=null) born at the heap's current mark parity,
+    /// exactly the header a float used to get at hand-out. A reused slot's
+    /// stale bytes never leak into the new object: a stale mark bit is a
+    /// same-cycle-reuse UAF, a stale kind a type-confused free, a stale
+    /// tenured flag a leak plus child-UAF (never traced, never swept). The
+    /// region closes before every parity flip, so the parity it wrote is
+    /// the current one. Only the value is written here.
     ///
     /// Page floats are OWNED via the page-span oracle (stage-3 fold-in: they
     /// no longer touch `non_cons_object_addrs` — `mark_value`'s
@@ -143,29 +147,12 @@ impl TaggedHeap {
     /// Other callers keep the call, so the VM's arithmetic arms stay small.
     #[inline(always)]
     pub(crate) fn alloc_float_inline(&mut self, value: f64) -> TaggedValue {
-        self.add_memory_use_count(MemoryUseCountSlot::Floats, 1);
-        let ptr = self.float_arena.alloc_slot();
-        unsafe {
-            // FULL-HEADER WRITE: never partially reuse prior slot bytes.
-            // BORN-AT-PARITY, unconditionally — the link seam's store (see
-            // `link_object`): allocate-black during a mark/sweep, pre-armed
-            // white for the next `begin_collection` flip otherwise. Written
-            // with the header, before the pointer escapes.
-            std::ptr::write(
-                ptr,
-                FloatObj {
-                    header: GcHeader {
-                        marked: std::sync::atomic::AtomicBool::new(self.mark_parity),
-                        ..GcHeader::new(HeapObjectKind::Float)
-                    },
-                    value,
-                },
-            );
-        }
+        let ptr = self.take_float_slot();
+        // SAFETY: a reserved slot of an owned float page whose header the
+        // region wrote; only the value is left.
+        unsafe { std::ptr::addr_of_mut!((*ptr).value).write(value) };
         #[cfg(test)]
         alloc_probe::record(ptr as *const GcHeader, self.non_cons_object_addrs.len());
-        self.allocated_count += 1;
-        self.note_allocation_bytes(size_of::<FloatObj>());
         unsafe { TaggedValue::from_float_ptr(ptr) }
     }
 

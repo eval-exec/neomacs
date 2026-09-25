@@ -1,11 +1,17 @@
-//! Allocation regions: conses are handed out from a bump region — a cursor
-//! and a limit in `JitHeapState`, shared by the Rust allocator and compiled
-//! code — instead of one free-list pop or block bump per cons.
+//! Allocation regions: conses and floats are handed out from bump regions —
+//! a cursor and a limit per class in `JitHeapState`, shared by the Rust
+//! allocator and compiled code — instead of one free-list pop or block bump
+//! (and its bookkeeping) per object.
 //!
-//! **Where a region comes from.** A refill (cold) takes one contiguous run of
-//! cells in GNU `Fcons`'s source order: the head of the free list (and every
-//! cell after it that is the next address, up to the budget), else the
-//! newest block's bump tail, else a fresh block.
+//! **Where a region comes from.** A refill (cold) takes one contiguous run
+//! in GNU `Fcons`/`make_float`'s source order: for conses the head of the
+//! free list (and every cell after it that is the next address, up to the
+//! budget), else the newest block's bump tail, else a fresh block; for
+//! floats the first partial page's free-list run, else the newest page's
+//! bump tail, else a new page (`ObjectArena::reserve_run`). A float
+//! region's slots get their full header at the grant (born at the current
+//! parity), so "alloc bit set implies a readable header" holds for every
+//! reserved slot, handed out or not.
 //!
 //! **Allocate-black is a property of the region.** A region granted while
 //! the heap allocates black (a deferred sweep or a concurrent mark is in
@@ -34,6 +40,11 @@ use super::*;
 
 /// The most cells one cons region takes (2 KiB).
 pub(super) const CONS_REGION_MAX_CELLS: usize = 128;
+/// The most slots one float region takes (2 KiB of slots, 1.5 KiB charged:
+/// a float is charged `size_of::<FloatObj>()`, 24 bytes).
+pub(super) const FLOAT_REGION_MAX_SLOTS: usize = 64;
+/// A float slot's stride.
+const FLOAT_SLOT: usize = <FloatObj as PagedObject>::SLOT_BYTES;
 
 /// Where the open cons region's cells came from, which decides how its
 /// unused tail goes back at close.
@@ -45,6 +56,15 @@ pub(super) enum ConsRegionSource {
     FreeListRun,
     /// The bump tail of the block at this `cons_blocks` index.
     BlockTail { block: usize },
+}
+
+/// Where the open float region's slots came from: which page, and whether
+/// its unhanded tail rewinds that page's bump cursor or goes back on its
+/// free list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FloatRegionSource {
+    Closed,
+    Run { page: usize, source: ArenaRunSource },
 }
 
 /// The collector color the open region's cells were born with.
@@ -62,6 +82,9 @@ pub(super) enum RegionColor {
 pub(super) struct RegionBook {
     pub(super) cons: ConsRegionSource,
     pub(super) cons_color: RegionColor,
+    /// Floats have no color: a slot is born at the current parity, which a
+    /// region cannot outlive (it closes before every parity flip).
+    pub(super) float: FloatRegionSource,
 }
 
 impl RegionBook {
@@ -69,6 +92,7 @@ impl RegionBook {
         Self {
             cons: ConsRegionSource::Closed,
             cons_color: RegionColor::White,
+            float: FloatRegionSource::Closed,
         }
     }
 }
@@ -87,6 +111,10 @@ pub(crate) struct RegionStats {
     pub(crate) cons_from_block_tail: u64,
     pub(crate) cons_from_fresh_block: u64,
     pub(crate) cons_tail_closes: u64,
+    pub(crate) float_refills: u64,
+    pub(crate) float_slots_granted: u64,
+    pub(crate) float_short_runs: u64,
+    pub(crate) float_tail_closes: u64,
 }
 
 impl TaggedHeap {
@@ -224,9 +252,16 @@ impl TaggedHeap {
         (self.jit.cons_lim.get() - self.jit.cons_cur.get()) / size_of::<ConsCell>()
     }
 
+    /// Slots of the open float region not handed out yet (0 when closed).
+    #[inline]
+    pub(super) fn open_float_unused(&self) -> usize {
+        (self.jit.float_lim.get() - self.jit.float_cur.get()) / FLOAT_SLOT
+    }
+
     /// Whether any allocation region is open.
     pub(crate) fn alloc_regions_open(&self) -> bool {
         self.region_book.cons != ConsRegionSource::Closed
+            || self.region_book.float != FloatRegionSource::Closed
     }
 
     /// Close every open allocation region: refund, un-mark and give back its
@@ -237,6 +272,107 @@ impl TaggedHeap {
         if self.region_book.cons != ConsRegionSource::Closed {
             self.close_cons_region();
         }
+        if self.region_book.float != FloatRegionSource::Closed {
+            self.close_float_region();
+        }
+    }
+
+    /// A slot for a new float: the open region's next slot (its header
+    /// already written), else a refill.
+    #[inline(always)]
+    pub(super) fn take_float_slot(&mut self) -> *mut FloatObj {
+        let cur = self.jit.float_cur.get();
+        if cur < self.jit.float_lim.get() {
+            self.jit.float_cur.set(cur + FLOAT_SLOT);
+            return cur as *mut FloatObj;
+        }
+        self.refill_float_region()
+    }
+
+    /// The open float region is exhausted (or none is open): close it,
+    /// reserve a new run, write every slot's full header born at the current
+    /// parity, charge the run, and hand out its first slot.
+    #[cold]
+    #[inline(never)]
+    fn refill_float_region(&mut self) -> *mut FloatObj {
+        self.close_float_region();
+        let want = self.region_budget(size_of::<FloatObj>(), FLOAT_REGION_MAX_SLOTS);
+        let run = self.float_arena.reserve_run(want);
+        debug_assert!(run.count >= 1 && run.count <= want);
+        let parity = self.mark_parity;
+        let page = &self.float_arena.pages[run.page];
+        for i in 0..run.count {
+            let slot = page.slot_ptr(run.first + i);
+            // SAFETY: a reserved slot of an owned page. FULL-HEADER WRITE:
+            // never partially reuse prior slot bytes (see `alloc_float`).
+            unsafe {
+                std::ptr::write(
+                    slot,
+                    FloatObj {
+                        header: GcHeader {
+                            marked: std::sync::atomic::AtomicBool::new(parity),
+                            ..GcHeader::new(HeapObjectKind::Float)
+                        },
+                        value: 0.0,
+                    },
+                );
+            }
+        }
+        let first = page.slot_ptr(run.first);
+        self.charge_floats(run.count);
+        self.region_book.float = FloatRegionSource::Run {
+            page: run.page,
+            source: run.source,
+        };
+        let stats = &mut self.region_stats;
+        stats.float_refills += 1;
+        stats.float_slots_granted += run.count as u64;
+        stats.float_short_runs += u64::from(run.count < 8);
+        let first_addr = first as usize;
+        self.jit.float_cur.set(first_addr + FLOAT_SLOT);
+        self.jit.float_lim.set(first_addr + run.count * FLOAT_SLOT);
+        first
+    }
+
+    /// Charge a granted region of `n` floats.
+    fn charge_floats(&mut self, n: usize) {
+        self.add_memory_use_count(MemoryUseCountSlot::Floats, n as u64);
+        self.allocated_count += n;
+        self.note_allocation_bytes(n * size_of::<FloatObj>());
+    }
+
+    /// Refund `m` never-handed-out floats of a closing region.
+    fn refund_floats(&mut self, m: usize) {
+        let index = MemoryUseCountSlot::Floats.index();
+        self.memory_use_counts[index] = self.memory_use_counts[index].wrapping_sub(m as u64);
+        self.allocated_count -= m;
+        self.bytes_since_gc -= m * size_of::<FloatObj>();
+    }
+
+    /// Close the float region: refund its unhanded slots and give them back
+    /// to their page (`ObjectArena::give_back_run`).
+    #[inline(never)]
+    fn close_float_region(&mut self) {
+        let book = self.region_book.float;
+        let cur = self.jit.float_cur.get();
+        let lim = self.jit.float_lim.get();
+        self.jit.float_cur.set(0);
+        self.jit.float_lim.set(0);
+        self.region_book.float = FloatRegionSource::Closed;
+        let FloatRegionSource::Run { page, source } = book else {
+            debug_assert!(cur == 0 && lim == 0, "a closed region has no cursor");
+            return;
+        };
+        let unused = (lim - cur) / FLOAT_SLOT;
+        if unused == 0 {
+            return;
+        }
+        self.region_stats.float_tail_closes += 1;
+        self.refund_floats(unused);
+        let base = self.float_arena.pages[page].base_addr();
+        debug_assert!(cur >= base && lim <= base + OBJECT_PAGE_BYTES);
+        let first = (cur - base) / FLOAT_SLOT;
+        self.float_arena.give_back_run(page, first, unused, source);
     }
 
     /// Close the cons region (see [`Self::close_alloc_regions`]). The unused
@@ -302,18 +438,38 @@ impl TaggedHeap {
     /// Trace and reset the refill statistics (once per finished collection).
     pub(super) fn trace_region_stats(&mut self) {
         let stats = std::mem::take(&mut self.region_stats);
-        if stats.cons_refills == 0 {
+        if stats.cons_refills == 0 && stats.float_refills == 0 {
             return;
         }
         tracing::debug!(
             target: "neovm::gc::region",
             cons_refills = stats.cons_refills,
-            cons_mean_run = stats.cons_cells_granted as f64 / stats.cons_refills as f64,
-            cons_short_run_share = stats.cons_short_runs as f64 / stats.cons_refills as f64,
+            cons_mean_run = if stats.cons_refills == 0 {
+                0.0
+            } else {
+                stats.cons_cells_granted as f64 / stats.cons_refills as f64
+            },
+            cons_short_run_share = if stats.cons_refills == 0 {
+                0.0
+            } else {
+                stats.cons_short_runs as f64 / stats.cons_refills as f64
+            },
             cons_from_free_list = stats.cons_from_free_list,
             cons_from_block_tail = stats.cons_from_block_tail,
             cons_from_fresh_block = stats.cons_from_fresh_block,
             cons_tail_closes = stats.cons_tail_closes,
+            float_refills = stats.float_refills,
+            float_mean_run = if stats.float_refills == 0 {
+                0.0
+            } else {
+                stats.float_slots_granted as f64 / stats.float_refills as f64
+            },
+            float_short_run_share = if stats.float_refills == 0 {
+                0.0
+            } else {
+                stats.float_short_runs as f64 / stats.float_refills as f64
+            },
+            float_tail_closes = stats.float_tail_closes,
             "allocation regions since the last collection"
         );
     }
@@ -330,6 +486,13 @@ impl TaggedHeap {
     #[cfg(test)]
     pub(crate) fn cons_region_for_test(&self) -> (usize, usize) {
         (self.jit.cons_cur.get(), self.jit.cons_lim.get())
+    }
+
+    /// Test hook: the open float region, `(cursor, limit)` (zeros when
+    /// closed).
+    #[cfg(test)]
+    pub(crate) fn float_region_for_test(&self) -> (usize, usize) {
+        (self.jit.float_cur.get(), self.jit.float_lim.get())
     }
 
     /// Test hook: the live-cons count, exact while a region is open.

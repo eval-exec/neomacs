@@ -19,6 +19,10 @@ use super::*;
 /// Regions are whole cells, so `cur < lim` iff a cell is left. Rust
 /// (`TaggedHeap::take_cons_cell`) and compiled code bump the same cursor.
 ///
+/// **Float region** (`float_cur`, `float_lim`): the same for float slots
+/// (stride `FloatObj::SLOT_BYTES`, 32), whose headers were written when
+/// the region was granted (`TaggedHeap::alloc_float_inline`).
+///
 /// **Barrier window** (`barrier_lo`, `barrier_len`): an owner at address `a`
 /// with `a - barrier_lo <u barrier_len` must take the out-of-line barrier
 /// (the shim). The heap-side twin of the thread-local
@@ -29,11 +33,13 @@ use super::*;
 pub(crate) struct JitHeapState {
     pub(crate) cons_cur: Cell<usize>,
     pub(crate) cons_lim: Cell<usize>,
+    pub(crate) float_cur: Cell<usize>,
+    pub(crate) float_lim: Cell<usize>,
     pub(crate) barrier_lo: Cell<usize>,
     pub(crate) barrier_len: Cell<usize>,
 }
 
-const _: () = assert!(size_of::<JitHeapState>() == 32);
+const _: () = assert!(size_of::<JitHeapState>() == 48);
 
 impl JitHeapState {
     /// A new heap's state: no open region, an empty window (no partition,
@@ -42,6 +48,8 @@ impl JitHeapState {
         Self {
             cons_cur: Cell::new(0),
             cons_lim: Cell::new(0),
+            float_cur: Cell::new(0),
+            float_lim: Cell::new(0),
             barrier_lo: Cell::new(0),
             barrier_len: Cell::new(0),
         }

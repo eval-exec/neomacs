@@ -502,6 +502,51 @@ impl<T: PagedObject> ObjectPage<T> {
         self.allocated += 1;
     }
 
+    /// Set the alloc bits of slots `[start, start + n)` (all clear: fresh
+    /// bump-tail slots) and add `n` to occupancy, a word at a time.
+    pub(super) fn set_allocated_range(&mut self, start: usize, n: usize) {
+        debug_assert!(start + n <= Self::SLOTS);
+        let mut i = start;
+        let end = start + n;
+        while i < end {
+            let bit = i % usize::BITS as usize;
+            let span = (usize::BITS as usize - bit).min(end - i);
+            let mask = if span == usize::BITS as usize {
+                usize::MAX
+            } else {
+                ((1usize << span) - 1) << bit
+            };
+            let word = &mut self.alloc_bits[i / usize::BITS as usize];
+            debug_assert_eq!(*word & mask, 0, "arena slot double-allocated");
+            *word |= mask;
+            i += span;
+        }
+        self.allocated += n;
+    }
+
+    /// Clear the alloc bits of slots `[start, start + n)` (all set: an
+    /// allocation region's unhanded tail going back to the bump cursor) and
+    /// subtract `n` from occupancy.
+    pub(super) fn clear_allocated_range(&mut self, start: usize, n: usize) {
+        debug_assert!(start + n <= Self::SLOTS);
+        let mut i = start;
+        let end = start + n;
+        while i < end {
+            let bit = i % usize::BITS as usize;
+            let span = (usize::BITS as usize - bit).min(end - i);
+            let mask = if span == usize::BITS as usize {
+                usize::MAX
+            } else {
+                ((1usize << span) - 1) << bit
+            };
+            let word = &mut self.alloc_bits[i / usize::BITS as usize];
+            debug_assert_eq!(*word & mask, mask, "arena slot not allocated");
+            *word &= !mask;
+            i += span;
+        }
+        self.allocated -= n;
+    }
+
     /// The free-list link word of slot `index` (meaningful only while free).
     #[inline]
     pub(super) fn free_link_ptr(&self, index: usize) -> *mut usize {
@@ -585,6 +630,26 @@ impl<T: PagedObject> Drop for ObjectPage<T> {
         }
         Self::free_storage(self.storage);
     }
+}
+
+/// Where an allocation region's arena run came from, which decides how its
+/// unhanded tail goes back (`ObjectArena::give_back_run`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ArenaRunSource {
+    /// Consecutive slots popped off a partial page's free list.
+    PageFreeRun,
+    /// The newest (or a new) page's bump tail.
+    PageTail,
+}
+
+/// One ascending run of reserved slots `[first, first + count)` of page
+/// `page` (`ObjectArena::reserve_run`).
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ArenaRun {
+    pub(super) page: usize,
+    pub(super) first: usize,
+    pub(super) count: usize,
+    pub(super) source: ArenaRunSource,
 }
 
 /// One size class of the object arena: its pages, the page-base registry
@@ -723,6 +788,117 @@ impl<T: PagedObject> ObjectArena<T> {
         let prev = self.page_index_by_base.insert(base, self.pages.len() - 1);
         debug_assert!(prev.is_none(), "arena page base registered twice");
         ptr
+    }
+
+    /// Reserve one ascending run of up to `want` (at least one) slots for an
+    /// allocation region, alloc bits set, in [`Self::alloc_slot`]'s source
+    /// order: the first partial page's free-list head and every slot below
+    /// it that the list names next (the sweep threads a page's dead slots
+    /// low to high, so the list DEscends and a run pops as consecutive
+    /// indices, ascending in address from its last pop), else the newest
+    /// page's bump tail, else a new page. The caller must full-header-write
+    /// every slot of the run before the mutator next yields.
+    pub(super) fn reserve_run(&mut self, want: usize) -> ArenaRun {
+        debug_assert!(want >= 1);
+        if self.partial_head != PAGE_NONE {
+            let page_index = self.partial_head;
+            let page = &mut self.pages[page_index];
+            let mut first = page.pop_free().expect("partial page must have free slots");
+            page.set_allocated(first);
+            let mut count = 1;
+            while count < want && page.free_head != PAGE_NONE && page.free_head + 1 == first {
+                first = page.pop_free().expect("the free head was just read");
+                page.set_allocated(first);
+                count += 1;
+            }
+            if page.free_head == PAGE_NONE {
+                // Drained: unlink from the partial chain (head pop — O(1)).
+                self.partial_head = page.next_partial;
+                page.next_partial = PAGE_NONE;
+                page.on_partial = false;
+            }
+            return ArenaRun {
+                page: page_index,
+                first,
+                count,
+                source: ArenaRunSource::PageFreeRun,
+            };
+        }
+        // Only the newest page can have never-used slots; a retired one is
+        // bump-exhausted by construction.
+        if let Some(page_index) = self.pages.len().checked_sub(1) {
+            let page = &mut self.pages[page_index];
+            let first = page.next_index;
+            let count = want.min(ObjectPage::<T>::SLOTS - first);
+            if count > 0 {
+                page.next_index += count;
+                page.set_allocated_range(first, count);
+                return ArenaRun {
+                    page: page_index,
+                    first,
+                    count,
+                    source: ArenaRunSource::PageTail,
+                };
+            }
+        }
+        self.reserve_run_in_new_page(want)
+    }
+
+    /// [`Self::reserve_run`]'s third source, out of line: a new page (over a
+    /// released page's storage when one is spare), the run at its start.
+    #[cold]
+    #[inline(never)]
+    fn reserve_run_in_new_page(&mut self, want: usize) -> ArenaRun {
+        let mut page = match self.spare_storage.pop() {
+            Some(storage) => {
+                self.spare_unused_floor = self.spare_unused_floor.min(self.spare_storage.len());
+                ObjectPage::<T>::over_storage(storage)
+            }
+            None => ObjectPage::<T>::new(),
+        };
+        let count = want.min(ObjectPage::<T>::SLOTS);
+        page.next_index = count;
+        page.set_allocated_range(0, count);
+        let base = page.base_addr();
+        self.pages.push(page);
+        let page_index = self.pages.len() - 1;
+        let prev = self.page_index_by_base.insert(base, page_index);
+        debug_assert!(prev.is_none(), "arena page base registered twice");
+        ArenaRun {
+            page: page_index,
+            first: 0,
+            count,
+            source: ArenaRunSource::PageTail,
+        }
+    }
+
+    /// Give an allocation region's unhanded slots `[first, first + count)`
+    /// of page `page_index` back: a bump tail still ending there rewinds the
+    /// page's cursor (bits cleared); anything else is freed slot by slot,
+    /// low to high (so the page's list descends, as the sweep leaves it),
+    /// and the page rejoins the partial chain. Their bytes are garbage again
+    /// once the bits clear.
+    pub(super) fn give_back_run(
+        &mut self,
+        page_index: usize,
+        first: usize,
+        count: usize,
+        source: ArenaRunSource,
+    ) {
+        let page = &mut self.pages[page_index];
+        if source == ArenaRunSource::PageTail && page.next_index == first + count {
+            page.clear_allocated_range(first, count);
+            page.next_index = first;
+            return;
+        }
+        for index in first..first + count {
+            page.free_slot(index);
+        }
+        if !page.on_partial {
+            page.on_partial = true;
+            page.next_partial = self.partial_head;
+            self.partial_head = page_index;
+        }
     }
 
     /// Sweep pages `[start, end)` of this class — the page objects' only

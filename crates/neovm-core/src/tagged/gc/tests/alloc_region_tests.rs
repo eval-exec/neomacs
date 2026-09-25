@@ -440,3 +440,202 @@ fn the_layout_census_is_exact_after_closing() {
     assert_eq!(stats.cons.live_slots, 5);
     assert_eq!(stats.cons.bumped_slots, 5);
 }
+
+// ---- float regions ----
+
+fn float_addr(value: TaggedValue) -> usize {
+    value.as_float_ptr().expect("a float") as usize
+}
+
+fn float_counts(heap: &TaggedHeap) -> (u64, usize, usize) {
+    (
+        heap.memory_use_counts_snapshot()[MemoryUseCountSlot::Floats.index()],
+        heap.allocated_count(),
+        heap.bytes_since_gc_exact(),
+    )
+}
+
+/// A fresh heap's float regions bump a new page's tail in order; every
+/// reserved slot has its alloc bit and a full header born at the current
+/// parity from the grant on, handed out or not.
+#[test]
+fn float_regions_bump_a_page_tail_with_headers_written_at_grant() {
+    let mut heap = TaggedHeap::new();
+    let first = heap.alloc_float(1.5);
+    let (cur, lim) = heap.float_region_for_test();
+    assert_eq!(cur, float_addr(first) + 32);
+    assert_eq!(lim - float_addr(first), FLOAT_REGION_MAX_SLOTS * 32);
+    assert_eq!(first.xfloat(), 1.5);
+    let page = &heap.float_arena.pages[0];
+    assert_eq!(page.next_index, FLOAT_REGION_MAX_SLOTS);
+    assert_eq!(page.allocated, FLOAT_REGION_MAX_SLOTS);
+    for index in 0..FLOAT_REGION_MAX_SLOTS {
+        assert!(page.is_allocated(index));
+        let header = unsafe { &*(page.slot_ptr(index) as *const GcHeader) };
+        assert_eq!(header.kind, HeapObjectKind::Float);
+        assert!(!header.tenured);
+        assert!(header.is_marked_at(heap.mark_parity), "born at parity");
+    }
+    let mut prev = float_addr(first);
+    for i in 1..(2 * FLOAT_REGION_MAX_SLOTS) {
+        let f = heap.alloc_float(i as f64);
+        assert_eq!(float_addr(f), prev + 32, "float {i} follows");
+        assert_eq!(f.xfloat(), i as f64);
+        prev = float_addr(f);
+    }
+    heap.close_alloc_regions();
+    heap.assert_object_arenas_coherent();
+}
+
+/// Closing gives the unhanded slots back: a page tail rewinds its cursor
+/// and clears their bits; a free-list run goes back on the page's list
+/// (descending, as the sweep leaves it) and the page rejoins the partial
+/// chain.
+#[test]
+fn closing_a_float_region_gives_its_tail_back() {
+    let mut heap = TaggedHeap::new();
+    let a = heap.alloc_float(1.0);
+    heap.alloc_float(2.0);
+    heap.close_alloc_regions();
+    let page = &heap.float_arena.pages[0];
+    assert_eq!(page.next_index, 2, "the bump tail rewound");
+    assert_eq!(page.allocated, 2);
+    assert!(!page.is_allocated(2));
+    let c = heap.alloc_float(3.0);
+    assert_eq!(float_addr(c), float_addr(a) + 64);
+
+    // A free-list run: keep 0..4 and 10..16, reclaim 4..10.
+    let mut heap = TaggedHeap::new();
+    let floats: Vec<TaggedValue> = (0..16).map(|i| heap.alloc_float(i as f64)).collect();
+    let kept: Vec<TaggedValue> = floats
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !(4..10).contains(i))
+        .map(|(_, f)| *f)
+        .collect();
+    heap.collect_exact(kept.iter().copied());
+    let page = &heap.float_arena.pages[0];
+    assert_eq!(page.free_head, 9, "the page list descends from its top");
+    let got = heap.alloc_float(99.0);
+    assert_eq!(
+        float_addr(got),
+        float_addr(floats[4]),
+        "the run ascends from its bottom"
+    );
+    let (cur, lim) = heap.float_region_for_test();
+    assert_eq!(cur, float_addr(floats[5]));
+    assert_eq!(lim, float_addr(floats[10]));
+    assert_eq!(heap.float_arena.partial_head, PAGE_NONE, "the page drained");
+    heap.close_alloc_regions();
+    let page = &heap.float_arena.pages[0];
+    assert!(page.on_partial, "the page is back on the partial chain");
+    let mut list = Vec::new();
+    let mut slot = page.free_head;
+    while slot != PAGE_NONE {
+        list.push(slot);
+        slot = unsafe { page.free_link_ptr(slot).read() };
+    }
+    assert_eq!(list, vec![9, 8, 7, 6, 5]);
+    heap.assert_object_arenas_coherent();
+    for (i, f) in floats.iter().enumerate() {
+        if !(4..10).contains(&i) {
+            assert_eq!(f.xfloat(), i as f64, "survivor {i} intact");
+        }
+    }
+    assert_eq!(got.xfloat(), 99.0);
+}
+
+/// The float counter views are exact with the region open or closed.
+#[test]
+fn the_float_counter_views_are_exact() {
+    for n in [1usize, 63, 64, 65, 200] {
+        let mut heap = TaggedHeap::new();
+        let before = float_counts(&heap);
+        for i in 0..n {
+            heap.alloc_float(i as f64);
+        }
+        let want = (
+            before.0 + n as u64,
+            before.1 + n,
+            before.2 + n * size_of::<FloatObj>(),
+        );
+        assert_eq!(float_counts(&heap), want, "{n} floats, region open");
+        heap.close_alloc_regions();
+        assert_eq!(float_counts(&heap), want, "{n} floats, region closed");
+    }
+}
+
+/// Floats born during a concurrent mark and across the deferred sweep's
+/// slices survive (born at the flipped parity); what the sweep frees is
+/// only what was garbage before the mark.
+#[test]
+fn float_allocation_across_a_concurrent_cycle_keeps_every_live_float() {
+    let mut heap = TaggedHeap::new();
+    set_tagged_heap(&mut heap);
+    let mut root = TaggedValue::NIL;
+    for i in 0..4000 {
+        let f = heap.alloc_float(i as f64);
+        if i % 4 == 0 {
+            root = heap.alloc_cons(f, root);
+        }
+    }
+    heap.collect_exact(std::iter::once(root));
+    let mut live: Vec<TaggedValue> = Vec::new();
+    let keep = |heap: &mut TaggedHeap, live: &mut Vec<TaggedValue>, n: usize| {
+        for _ in 0..n {
+            let v = live.len() as f64 + 0.5;
+            live.push(heap.alloc_float(v));
+            heap.alloc_float(-1.0); // garbage
+        }
+    };
+    heap.concurrent_begin();
+    heap.seed_root(root);
+    heap.launch_concurrent_mark();
+    keep(&mut heap, &mut live, 300);
+    while !heap.concurrent_mark_done() {
+        keep(&mut heap, &mut live, 3);
+        std::thread::yield_now();
+    }
+    heap.join_concurrent_mark();
+    heap.reseed_runtime_and_remembered_roots();
+    heap.seed_root(root);
+    heap.incremental_drain_all();
+    let bytes_before = heap.live_bytes();
+    heap.incremental_finish(bytes_before, std::time::Instant::now());
+    while heap.sweep_in_progress() {
+        keep(&mut heap, &mut live, 20);
+        heap.incremental_sweep_slice(1);
+    }
+    let addrs: std::collections::HashSet<usize> = live.iter().map(|f| float_addr(*f)).collect();
+    assert_eq!(addrs.len(), live.len(), "a live float's slot was reused");
+    for (i, f) in live.iter().enumerate() {
+        assert_eq!(f.xfloat(), i as f64 + 0.5, "live float {i} intact");
+    }
+    heap.assert_object_arenas_coherent();
+}
+
+/// Promotion never tenures a region's unhanded slots or retires a page for
+/// them: `promote_and_blacken` closes the regions first.
+#[test]
+fn promotion_does_not_tenure_a_regions_reserved_slots() {
+    let mut heap = TaggedHeap::new();
+    set_tagged_heap(&mut heap);
+    let _image = super::fake_image::FakeImage::leak(false).register_cons(&mut heap);
+    let kept: Vec<TaggedValue> = (0..3).map(|i| heap.alloc_float(i as f64)).collect();
+    let (cur, lim) = heap.float_region_for_test();
+    assert!(lim > cur);
+    heap.promote_and_blacken();
+    assert!(!heap.alloc_regions_open());
+    let page = &heap.float_arena.pages[0];
+    assert_eq!(page.allocated, 3, "only the handed-out floats remain");
+    assert!(!page.retired);
+    for f in &kept {
+        assert!(heap.value_is_tenured(*f));
+    }
+    for index in 3..FLOAT_REGION_MAX_SLOTS {
+        assert!(
+            !page.is_allocated(index),
+            "reserved slot {index} was freed, not tenured"
+        );
+    }
+}
