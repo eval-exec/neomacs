@@ -543,6 +543,8 @@ fn ceiling_interpreter_refuses_entry_and_osr_compiles() {
 /// A no-inline bit at a call site keeps the fuser from splicing it.
 #[test]
 fn no_inline_bit_skips_the_fuser() {
+    // The fuser is under test: on even when the suite runs NEOVM_JIT_INLINE=off.
+    crate::emacs_core::jit::inline::force_inline_for_test(Some(true));
     force_deopt_for_test(false);
     crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
     stats::force_observe_for_test(stats::ObserveOverride {
@@ -596,6 +598,7 @@ fn no_inline_bit_skips_the_fuser() {
         .set_reopt_level_for_test(ReoptLevel::NoInline);
     compile_bytecode_function_with(&g, Some(&ev.obarray)).expect("compiles");
     assert_eq!(census("reject:reopt"), rej0 + 2);
+    crate::emacs_core::jit::inline::force_inline_for_test(None);
 }
 
 /// A no-inline bit at a call site keeps the MIR inliner from inlining it.
