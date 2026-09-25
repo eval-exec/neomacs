@@ -3423,6 +3423,24 @@ impl TaggedValue {
         Some(data.params.optional.is_empty() && data.params.rest.is_none())
     }
 
+    /// The required-parameter count of a byte-code function that takes only
+    /// required parameters, `None` for any other function or value — read
+    /// from a lazy pdump stub's raw header without materializing it.
+    pub(crate) fn bytecode_required_only_arity_probe(self) -> Option<usize> {
+        if self.veclike_type()? != VecLikeType::ByteCode {
+            return None;
+        }
+        let ptr = self.as_veclike_ptr().unwrap() as *const ByteCodeObj;
+        let data = unsafe { &(*ptr).data };
+        if data.is_pdump_stub() {
+            return unsafe {
+                crate::emacs_core::pdump::stub_required_only_arity(ptr, data.closure_slot_count)
+            };
+        }
+        (data.params.optional.is_empty() && data.params.rest.is_none())
+            .then_some(data.params.required.len())
+    }
+
     pub(crate) fn bytecode_interactive_probe(self) -> Option<BytecodeInteractiveProbe> {
         if self.veclike_type()? != VecLikeType::ByteCode {
             return None;

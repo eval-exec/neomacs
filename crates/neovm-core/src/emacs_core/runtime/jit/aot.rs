@@ -4138,12 +4138,13 @@ pub struct PrepopulateStats {
 
 std::thread_local! {
     /// compiled_id → preload-manifest content hash, filled at prewarm-marking
-    /// time. Lets the cache-miss AOT consult dlsym the entry WITHOUT re-hashing
-    /// the body (the SHA was part of the measured per-leaf load floor). A side
-    /// table rather than a Runtime field: the 384-byte ByteCodeObj slot has no
-    /// room (the const assert in tagged/gc.rs enforces it). Exact by
-    /// construction: bytecode is immutable and marking verified the manifest
-    /// prekey against the very object whose id keys this map.
+    /// time (or, for a member marked as a lazy stub, when it materializes).
+    /// Lets the cache-miss AOT consult find the entry WITHOUT re-hashing the
+    /// body (the SHA was part of the measured per-leaf load floor). A side
+    /// table rather than a Runtime field: `Runtime` is shared by every
+    /// `make-closure` instance and absent on stubs. Exact by construction:
+    /// bytecode is immutable, and marking runs on the image as dumped (see
+    /// [`mark_preload_members_prewarmed`]).
     static PREWARM_HASHES: std::cell::RefCell<std::collections::HashMap<u64, u128>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
@@ -4161,6 +4162,12 @@ pub(crate) fn prewarm_hash_for(compiled_id: u64) -> Option<u128> {
 /// The EAGER `prepopulate_aot_from_preload` builds all ~1.2k leaves up front
 /// (~16.5ms measured) and is kept for tests/benchmarks.
 ///
+/// A member that is still a lazy pdump stub is NOT materialized (P4.2 A2:
+/// that cost 33M startup instructions for 1,696 members): required-only and
+/// arity come from its raw header, and the mark and hash land when it first
+/// materializes ([`note_materialized_stub`]). A materialized member is
+/// marked at once, after its ops count is checked as well.
+///
 /// EXACTNESS: the stashed manifest hash is what the consult serves by, with
 /// no re-hash of the body. It names the body the dump-time producer hashed
 /// under this NAME, so this must run on the image as dumped: before
@@ -4175,6 +4182,10 @@ pub fn mark_preload_members_prewarmed(ctx: &crate::emacs_core::eval::Context) ->
     let Some(prekeys) = load_preload_prekeys() else {
         return (0, 0);
     };
+    // A fresh marking pass: stale stub entries (an earlier image on this
+    // thread) must not adopt objects of this one.
+    PREWARM_STUBS.with(|m| m.borrow_mut().clear());
+    PREWARM_STUBS_PENDING.with(|p| p.set(false));
     let mut candidates = 0usize;
     let mut marked = 0usize;
     for (name_id, func_val) in ctx.obarray.interned_function_cells_with_names() {
@@ -4182,33 +4193,93 @@ pub fn mark_preload_members_prewarmed(ctx: &crate::emacs_core::eval::Context) ->
             continue;
         }
         // Prekey miss / non-member skips BEFORE touching the function data:
-        // once pdump stubs exist this obarray-wide sweep must not materialize
-        // thousands of never-called functions at startup. (`candidates` now
-        // counts prekey members rather than all required-only bytecode fns —
-        // a diagnostic-only shift.)
+        // this obarray-wide sweep must not materialize thousands of
+        // never-called functions at startup. (`candidates` counts prekey
+        // members, not all required-only bytecode fns.)
         let Some(key) = prekeys.get(crate::emacs_core::intern::resolve_name(name_id)) else {
             continue;
         };
         if !key.member {
             continue;
         }
-        let Some(bc) = func_val.get_bytecode_data() else {
+        // Required-only and the arity, from a lazy stub's raw header.
+        let Some(arity) = func_val.bytecode_required_only_arity_probe() else {
             continue;
         };
-        if !bc.params.optional.is_empty() || bc.params.rest.is_some() {
+        candidates += 1;
+        if key.arity != arity {
             continue;
         }
-        candidates += 1;
-        if key.ops_len == bc.executable_ops().len() && key.arity == bc.params.required.len() {
-            bc.jit_runtime().mark_aot_prewarmed();
-            PREWARM_HASHES.with(|m| {
-                m.borrow_mut()
-                    .insert(bc.jit_runtime().compiled_id_or_assign(), key.hash)
-            });
-            marked += 1;
+        match func_val.bytecode_data_if_materialized() {
+            Some(bc) => {
+                if key.ops_len != bc.executable_ops().len() {
+                    continue;
+                }
+                bc.jit_runtime().mark_aot_prewarmed();
+                PREWARM_HASHES.with(|m| {
+                    m.borrow_mut()
+                        .insert(bc.jit_runtime().compiled_id_or_assign(), key.hash)
+                });
+            }
+            // A lazy pdump stub (P4.2 A2): it has no Runtime to mark yet, and
+            // materializing it here cost 33M instructions of startup for
+            // 1,696 members. It is the dumped object itself (this runs before
+            // any Lisp), so its body is the one the manifest hashed; the mark
+            // lands when the stub materializes, on its first use.
+            None => {
+                let addr = func_val.as_veclike_ptr().expect("byte code") as usize;
+                PREWARM_STUBS.with(|m| m.borrow_mut().insert(addr, key.hash));
+                PREWARM_STUBS_PENDING.with(|p| p.set(true));
+            }
         }
+        marked += 1;
     }
     (candidates, marked)
+}
+
+std::thread_local! {
+    /// Preload members marked while still lazy pdump stubs, by object
+    /// address (the mapped image never moves): the manifest hash to stash
+    /// when the stub materializes ([`note_materialized_stub`]).
+    static PREWARM_STUBS: std::cell::RefCell<std::collections::HashMap<usize, u128>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+    /// Whether [`PREWARM_STUBS`] may hold an entry: the materializer's one
+    /// test when AOT is off or every marked stub has materialized.
+    static PREWARM_STUBS_PENDING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The pdump materializer published `value`'s function: if the stub was
+/// marked as a preload member, give it the prewarm mark and stash its
+/// manifest hash, as marking does for a materialized member.
+#[inline]
+pub(crate) fn note_materialized_stub(value: Value) {
+    if PREWARM_STUBS_PENDING.with(|p| p.get()) {
+        adopt_prewarmed_stub(value);
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn adopt_prewarmed_stub(value: Value) {
+    let Some(addr) = value.as_veclike_ptr().map(|p| p as usize) else {
+        return;
+    };
+    let Some(hash) = PREWARM_STUBS.with(|m| {
+        let mut m = m.borrow_mut();
+        let hash = m.remove(&addr);
+        if m.is_empty() {
+            PREWARM_STUBS_PENDING.with(|p| p.set(false));
+        }
+        hash
+    }) else {
+        return;
+    };
+    let Some(bc) = value.bytecode_data_if_materialized() else {
+        return;
+    };
+    let rt = bc.jit_runtime();
+    rt.mark_aot_prewarmed();
+    PREWARM_HASHES.with(|m| m.borrow_mut().insert(rt.compiled_id_or_assign(), hash));
 }
 
 /// R2-C3: PREPOPULATE the per-thread `COMPILED` cache from the preload `.so`, so

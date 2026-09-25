@@ -20,6 +20,7 @@ pub(crate) mod coding_system_image;
 pub mod convert;
 pub(crate) use convert::{
     materialize_and_publish_stub, stub_interactive_probe, stub_params_required_only,
+    stub_required_only_arity,
 };
 pub(crate) mod face_image;
 pub(crate) mod mapped_heap;

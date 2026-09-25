@@ -238,3 +238,100 @@ fn lazy_prewarm_battery_matches_the_interpreter_and_serves_every_member() {
     super::super::cache::clear();
     test_support::reset();
 }
+
+/// P4.2 A2: marking a pdump image's members must not materialize their lazy
+/// stubs (it cost 33M instructions of startup for 1,696 members). The mark
+/// lands when a stub first materializes, and the member is still served from
+/// the preload on that first call.
+#[cfg(target_os = "linux")]
+#[test]
+fn lazy_prewarm_marks_pdump_stubs_without_materializing_them() {
+    crate::test_utils::init_test_tracing();
+    let scratch = crate::emacs_core::eval::save_scratch_gc_roots();
+    let mut ctx = Context::new();
+    // GNU bytecode (the reader literal): dumped as a lazy stub.
+    ctx.eval_str("(defalias 'lazy-stub-add5 #[257 \"\\211\\300\\\\\\207\" [5] 3])")
+        .expect("defalias");
+    // The dump-time producer's view: the member's body and pre-key.
+    let leaves: Vec<_> = enumerate_loadup_leaves(&ctx, true)
+        .into_iter()
+        .filter(|leaf| leaf.name == "lazy-stub-add5")
+        .collect();
+    assert_eq!(leaves.len(), 1, "the member must be an AOT candidate");
+    let leaf = &leaves[0];
+    let mut prekeys = PreKeyMap::new();
+    prekeys.insert(
+        leaf.name.as_str().into(),
+        ManifestPreKey {
+            member: true,
+            ops_len: leaf.ops.len(),
+            arity: leaf.arity,
+            hash: leaf_content_hash(leaf.ops, leaf.constants, leaf.arity).expect("hashable"),
+        },
+    );
+    let (obj, built) = build_preload_object(&leaves, None).expect("build preload");
+    assert_eq!(built.unique_emitted, 1, "{built:?}");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let so_path = dir.path().join(PRELOAD_SO_NAME);
+    link_object_to_so(&obj, &so_path).expect("link");
+    let dump_path = dir.path().join("lazy-stubs.pdump");
+    crate::emacs_core::pdump::dump_to_file(&ctx, &dump_path).expect("dump");
+    crate::emacs_core::eval::restore_scratch_gc_roots(scratch);
+    let mut loaded = crate::emacs_core::pdump::load_from_dump(&dump_path).expect("load");
+
+    let lib = unsafe { libloading::Library::new(&so_path) }.expect("dlopen");
+    test_support::set_forced_enabled(true);
+    test_support::inject_preload(std::sync::Arc::new(super::super::compile::LoadedUnit::new(
+        lib,
+    )));
+    test_support::inject_prekeys(prekeys);
+    let mut prime: Vec<Value> = Vec::new();
+    super::super::cache::collect_jit_reloc_gc_roots(&mut prime);
+
+    let f = function_of(&loaded, "lazy-stub-add5");
+    assert!(
+        f.bytecode_data_if_materialized().is_none(),
+        "the dumped member loads as a lazy stub"
+    );
+    assert_eq!(mark_preload_members_prewarmed(&loaded), (1, 1));
+    assert!(
+        f.bytecode_data_if_materialized().is_none(),
+        "marking must not materialize the stub"
+    );
+
+    super::super::stats::reset_compile_stats();
+    assert_eq!(
+        loaded.apply1(f, Value::make_int(37)).unwrap(),
+        Value::make_int(42)
+    );
+    let bc = f
+        .bytecode_data_if_materialized()
+        .expect("the call materialized it");
+    let id = bc
+        .jit_runtime()
+        .compiled_id()
+        .expect("marked on materialization");
+    assert_eq!(
+        prewarm_hash_for(id),
+        Some(leaves_hash(&loaded, "lazy-stub-add5"))
+    );
+    let stats = super::super::stats::compile_stats_snapshot();
+    assert_eq!(stats.aot_loads, 1, "{stats:?}");
+    assert_eq!(stats.total_compiles, 0, "{stats:?}");
+    assert_eq!(
+        super::super::cache::cached_leaf_is_aot_for_test(id),
+        Some(true)
+    );
+
+    super::super::cache::clear();
+    test_support::reset();
+}
+
+/// The content hash of the live (materialized) function bound to `name`.
+fn leaves_hash(ctx: &Context, name: &str) -> u128 {
+    let bc = function_of(ctx, name)
+        .get_bytecode_data()
+        .expect("byte code");
+    leaf_content_hash(bc.executable_ops(), &bc.constants, bc.params.required.len())
+        .expect("hashable")
+}

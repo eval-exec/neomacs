@@ -2740,6 +2740,10 @@ pub(crate) fn materialize_and_publish_stub(value: Value) {
     unsafe {
         (*ptr).data = function;
     }
+    // A preload member marked while still a stub takes its prewarm mark now
+    // that it has a Runtime (P4.2 A2).
+    #[cfg(feature = "jit")]
+    crate::emacs_core::jit::aot::note_materialized_stub(value);
 }
 
 /// The command-classification facts of a LAZY stub, from the raw mapped
@@ -2799,6 +2803,27 @@ pub(crate) unsafe fn stub_params_required_only(
     let header: BytecodeExtras =
         unsafe { std::ptr::read_unaligned(extras_ptr.cast::<BytecodeExtras>()) };
     header.n_optional == 0 && header.flags & BC_FLAG_HAS_REST == 0
+}
+
+/// A LAZY stub's required-parameter count when it takes ONLY required
+/// parameters (no `&optional`, no `&rest`), from the raw extras header,
+/// without materializing; `None` otherwise.
+///
+/// # Safety
+/// Same preconditions as [`materialize_bytecode_from_extras_at`].
+pub(crate) unsafe fn stub_required_only_arity(
+    obj: *const crate::tagged::header::ByteCodeObj,
+    extras_len: usize,
+) -> Option<usize> {
+    use crate::emacs_core::pdump::mapped_heap::{BC_FLAG_HAS_REST, BytecodeExtras};
+    debug_assert!(extras_len >= std::mem::size_of::<BytecodeExtras>());
+    let extras_ptr = unsafe {
+        (obj as *const u8).add(std::mem::size_of::<crate::tagged::header::ByteCodeObj>())
+    };
+    let header: BytecodeExtras =
+        unsafe { std::ptr::read_unaligned(extras_ptr.cast::<BytecodeExtras>()) };
+    (header.n_optional == 0 && header.flags & BC_FLAG_HAS_REST == 0)
+        .then_some(header.n_required as usize)
 }
 
 pub(super) fn load_lisp_string(dump: &DumpLispString) -> LispString {
