@@ -12,14 +12,17 @@
 //! | D2 | unibyte `"\351\200y"`, backward POSIX `\b\(\w\)` | open |
 //! | D3 | failed `string-match` after a buffer search, `(match-data t)` | open |
 //! | D4 | `[[:upper:]]` on U+01C5 (a titlecase digraph) | open |
-//! | D5 | `\(?:a?\)*?b` never terminates (no `CHECK_INFINITE_LOOP` for `on_failure_jump_nastyloop`) | open |
-//! | D6 | `\(a\|\)+?x` signals a spurious "Stack overflow in regexp matcher" | open |
+//! | D5 | `\(?:a?\)*?b` never terminates (no `CHECK_INFINITE_LOOP` for `on_failure_jump_nastyloop`) | fixed (U0.5) |
+//! | D6 | `\(a\|\)+?x` signals a spurious "Stack overflow in regexp matcher" | fixed (U0.5) |
 //! | D7 | the Pike fallback masks GNU's "Stack overflow in regexp matcher" | open |
 //!
-//! D5 and the 300K-character D7 case do not finish on Neomacs while they are
-//! open (D5 loops forever; D7 re-runs a linear Pike match at each of 300K
-//! candidates), so those two pins are `#[ignore]`d until their fix lands; the
-//! fast D7 variant exercises the same masking with a single candidate.
+//! A fixed divergence keeps its test as a parity regression guard
+//! (`assert_oracle_parity_expect`, same GNU expectation).
+//!
+//! The 300K-character D7 case does not finish on Neomacs while it is open (a
+//! linear Pike match runs at each of 300K candidates), so that pin is
+//! `#[ignore]`d until its fix lands; the fast D7 variant exercises the same
+//! masking with a single candidate.
 
 use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 
@@ -77,7 +80,6 @@ fn oracle_pin_regexp_d4_upper_class_on_titlecase_digraph() {
 }
 
 #[test]
-#[ignore = "D5: Neomacs never returns until on_failure_jump_nastyloop gets CHECK_INFINITE_LOOP"]
 fn oracle_pin_regexp_d5_nullable_nongreedy_star_terminates() {
     return_if_neovm_enable_oracle_proptest_not_set!();
 
@@ -86,7 +88,7 @@ fn oracle_pin_regexp_d5_nullable_nongreedy_star_terminates() {
             (string-match "\\(?:a?\\)*?b" "aaab")
             (match-data))"#;
     let expect = expect_test::expect![[r#""OK (nil nil 0 (0 4))""#]];
-    crate::common::assert_oracle_divergence_expect(form, expect);
+    crate::common::assert_oracle_parity_expect(form, expect);
 }
 
 #[test]
@@ -99,7 +101,7 @@ fn oracle_pin_regexp_d6_nullable_nongreedy_plus_has_no_spurious_overflow() {
                 (list (string-match "\\(a\\|\\)+?x" "aaaax") (match-data))
               (error (list 'error err))))"#;
     let expect = expect_test::expect![[r#""OK (nil (0 (0 5 3 4)))""#]];
-    crate::common::assert_oracle_divergence_expect(form, expect);
+    crate::common::assert_oracle_parity_expect(form, expect);
 }
 
 #[test]

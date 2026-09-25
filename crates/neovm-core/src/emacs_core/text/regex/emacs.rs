@@ -992,6 +992,29 @@ struct FailureResume(usize);
 enum FailureInput {
     Restore(usize),
     KeepCurrent,
+    /// The failure point of an `on_failure_jump_nastyloop` (GNU
+    /// `PUSH_FAILURE_POINT (p - 3, d)`): popping it restores the position,
+    /// pushes a [`FailureInput::NastyloopMarker`] and enters the loop body
+    /// (regex-emacs.c:5249-5252).
+    NastyloopRetry(usize),
+    /// GNU's `no_op` cycle-detection frame, pushed when a nastyloop failure
+    /// point is popped: it marks where one iteration of the loop began, and
+    /// popping it just fails again (regex-emacs.c:5261-5263).
+    NastyloopMarker(usize),
+}
+
+impl FailureInput {
+    /// GNU `FAILURE_STR`: the string position recorded in the frame, or
+    /// `None` for a keep-string frame (GNU pushes `NULL`).
+    #[inline(always)]
+    fn string_place(self) -> Option<usize> {
+        match self {
+            FailureInput::Restore(position)
+            | FailureInput::NastyloopRetry(position)
+            | FailureInput::NastyloopMarker(position) => Some(position),
+            FailureInput::KeepCurrent => None,
+        }
+    }
 }
 
 /// One delta-undo entry (GNU `PUSH_FAILURE_REG` / `PUSH_NUMBER`).
@@ -2221,10 +2244,10 @@ fn build_pike_buffer(buf: &CompiledPattern) -> Option<Option<Vec<u8>>> {
 ///     carry mutable per-position state that would break the Pike VM's
 ///     `(pc)`-keyed thread dedup; conservatively excluded in Stage 1.
 ///   * `OnFailureJumpNastyloop` — a non-greedy quantifier over a NULLABLE
-///     body (`\(?:a\|\)*?`).  It has no infinite-loop guard and its exact
-///     zero-progress ordering can't be validated against the backtracker
-///     (which itself does not terminate on some of these), so it is
-///     excluded.  (Non-greedy quantifiers over NON-nullable bodies use
+///     body (`\(?:a\|\)*?`).  The backtracker's cycle check for it walks
+///     GNU's per-iteration marker frames, whose zero-progress ordering the
+///     Pike VM's `seen` dedup does not model, so it is excluded.
+///     (Non-greedy quantifiers over NON-nullable bodies use
 ///     `OnFailureJump` and stay eligible.)
 ///   * A non-greedy `??` (`has_nongreedy_optional`) — its
 ///     `OnFailureKeepStringJump` has genuine keep-string semantics with no
@@ -2273,10 +2296,9 @@ fn compute_pike_eligible(buf: &CompiledPattern) -> bool {
             | RegexOp::SetNumberAt
             // A non-greedy quantifier whose body can match empty (`a*?`/`+?`
             // with a nullable body) compiles to `OnFailureJumpNastyloop`,
-            // which has no infinite-loop guard.  Its exact zero-progress
-            // ordering is subtle and can't be validated against the
-            // backtracker (which itself does not terminate on some of these,
-            // e.g. `\(?:a\|\)*?b` on ""), so fall back conservatively.
+            // whose cycle check reads GNU's per-iteration marker frames
+            // (`goto_fail_nastyloop`); the Pike VM does not model that
+            // zero-progress ordering, so fall back conservatively.
             | RegexOp::OnFailureJumpNastyloop => return false,
             _ => {}
         }
@@ -6139,11 +6161,20 @@ fn re_match_loop<const SEALED: bool>(
             }
 
             RegexOp::OnFailureJumpNastyloop => {
-                // Same as OnFailureJumpLoop but for non-greedy
+                // GNU regex-emacs.c:4793-4806.  A non-greedy loop over a
+                // nullable body keeps one failure point at a time, so the
+                // cycle check looks for the marker frame that popping this
+                // op's failure point pushed at the loop's `no_op` (the byte
+                // before this op): finding it at the same position means the
+                // last iteration matched nothing, and the "try again" option
+                // is not pushed.
                 let offset = bc_num!(pc);
                 pc += 2;
                 let fail_pc = ((pc as i64) + (offset as i64)) as usize;
-                push_failure_point!(op_pc, fail_pc, FailureInput::Restore(d));
+                debug_assert_eq!(bytecode[op_pc - 1], RegexOp::NoOp as u8);
+                if !check_infinite_loop(frames, FailureOrigin(op_pc - 1), d) {
+                    push_failure_point!(op_pc, fail_pc, FailureInput::NastyloopRetry(d));
+                }
             }
 
             RegexOp::OnFailureJumpSmart => {
@@ -6824,8 +6855,8 @@ fn pike_match_inner(
 /// last here — an empty-match cycle.
 fn check_infinite_loop(frames: &[FailFrame], origin: FailureOrigin, d: usize) -> bool {
     for frame in frames.iter().rev() {
-        match frame.input {
-            FailureInput::Restore(sp) if sp != d => return false,
+        match frame.input.string_place() {
+            Some(sp) if sp != d => return false,
             _ => {
                 if frame.origin == origin {
                     return true;
@@ -6860,6 +6891,28 @@ fn goto_fail(
     if crate::emacs_core::eval::tls_quit_pending() {
         return None;
     }
+    let frame = pop_failure_point(frames, undo, regstart, regend, counters)?;
+    *pc = frame.resume.0;
+    match frame.input {
+        FailureInput::Restore(position) => *d = position,
+        FailureInput::KeepCurrent => {}
+        FailureInput::NastyloopRetry(_) | FailureInput::NastyloopMarker(_) => {
+            return goto_fail_nastyloop(frame, pc, d, frames, undo, regstart, regend, counters);
+        }
+    }
+    Some(())
+}
+
+/// GNU `POP_FAILURE_POINT` proper: pop the top frame and replay the undo log
+/// down to its mark.
+#[inline(always)]
+fn pop_failure_point(
+    frames: &mut Vec<FailFrame>,
+    undo: &mut Vec<FailUndo>,
+    regstart: &mut RegisterScratch,
+    regend: &mut RegisterScratch,
+    counters: &mut CounterTable,
+) -> Option<FailFrame> {
     let frame = frames.pop()?;
     while undo.len() > frame.undo_mark {
         match undo.pop().expect("undo log at least undo_mark deep") {
@@ -6874,11 +6927,66 @@ fn goto_fail(
             FailUndo::Counter { pos, val } => set_counter(counters, pos, val),
         }
     }
-    *pc = frame.resume.0;
-    if let FailureInput::Restore(position) = frame.input {
-        *d = position;
+    Some(frame)
+}
+
+/// The fail path for the two frames a non-greedy loop over a nullable body
+/// pushes (GNU regex-emacs.c:5249-5263).  Only patterns containing
+/// `on_failure_jump_nastyloop` ever get here.
+///
+/// * [`FailureInput::NastyloopRetry`]: push the iteration marker (at the
+///   loop's `no_op`, which sits right before the nastyloop opcode), restore the
+///   position and enter the loop body.  The marker replaces the popped frame,
+///   so the stack cannot outgrow its limit here.
+/// * [`FailureInput::NastyloopMarker`]: GNU's `case no_op: goto fail`: poll
+///   quit and pop the next frame.
+#[cold]
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn goto_fail_nastyloop(
+    mut frame: FailFrame,
+    pc: &mut usize,
+    d: &mut usize,
+    frames: &mut Vec<FailFrame>,
+    undo: &mut Vec<FailUndo>,
+    regstart: &mut RegisterScratch,
+    regend: &mut RegisterScratch,
+    counters: &mut CounterTable,
+) -> Option<()> {
+    loop {
+        match frame.input {
+            FailureInput::NastyloopRetry(position) => {
+                let marker = FailureOrigin(frame.origin.0 - 1);
+                frames.push(FailFrame {
+                    undo_mark: undo.len(),
+                    origin: marker,
+                    resume: FailureResume(marker.0),
+                    input: FailureInput::NastyloopMarker(position),
+                });
+                *d = position;
+                *pc = frame.resume.0;
+                return Some(());
+            }
+            FailureInput::NastyloopMarker(_) => {
+                if crate::emacs_core::eval::tls_quit_pending() {
+                    return None;
+                }
+                frame = pop_failure_point(frames, undo, regstart, regend, counters)?;
+                *pc = frame.resume.0;
+                match frame.input {
+                    FailureInput::Restore(position) => {
+                        *d = position;
+                        return Some(());
+                    }
+                    FailureInput::KeepCurrent => return Some(()),
+                    FailureInput::NastyloopRetry(_) | FailureInput::NastyloopMarker(_) => {}
+                }
+            }
+            FailureInput::Restore(_) | FailureInput::KeepCurrent => {
+                unreachable!("only nastyloop frames take the nastyloop fail path")
+            }
+        }
     }
-    Some(())
 }
 
 // ---------------------------------------------------------------------------
@@ -9137,3 +9245,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tests/casefold_scan.rs"]
 mod casefold_scan_tests;
+
+#[cfg(test)]
+#[path = "tests/fail_stack_parity.rs"]
+mod fail_stack_parity_tests;
