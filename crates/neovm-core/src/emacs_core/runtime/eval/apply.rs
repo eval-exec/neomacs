@@ -2678,12 +2678,7 @@ impl Context {
                 vec![wrong_arity_callee, Value::fixnum(nargs as i64)],
             )));
         }
-        // Value first: `Some(call(..))` copied the builtin's result 16 bytes
-        // wide right after its narrow tag and value stores.
-        Some(match self.dispatch_subr_func_unchecked(func, args) {
-            Ok(value) => Ok(value),
-            Err(flow) => Err(flow),
-        })
+        Some(self.dispatch_subr_func_unchecked(func, args))
     }
 
     #[inline]
@@ -2693,11 +2688,7 @@ impl Context {
         args: LispArgVec,
     ) -> Option<EvalResult> {
         let func = entry.function?;
-        // Value first, as in `dispatch_subr_entry_internal`.
-        Some(match self.dispatch_subr_func_unchecked(func, args) {
-            Ok(value) => Ok(value),
-            Err(flow) => Err(flow),
-        })
+        Some(self.dispatch_subr_func_unchecked(func, args))
     }
 
     #[inline]
@@ -2979,13 +2970,17 @@ impl Context {
         if entry.dispatch_kind == SubrDispatchKind::ContextCallable {
             return self.apply_evaluator_callable_by_id(sym_id, args);
         }
-        match self.dispatch_subr_entry_internal(entry, args, function) {
-            Some(Ok(value)) => Ok(value),
-            Some(Err(flow)) => Err(self.validate_throw(flow)),
-            None => Err(signal(
+        // Deliberately NOT value-first: destructuring here moved the result
+        // copy into `call_sort_predicate`/`merge_at`/`<` instead of removing it
+        // (a `(sort l #'<)` probe: store-forward blocks 10.8M -> 23.1M, cycles
+        // +24%). A register-returned `EvalResult` is the systemic fix.
+        if let Some(result) = self.dispatch_subr_entry_internal(entry, args, function) {
+            result.map_err(|flow| self.validate_throw(flow))
+        } else {
+            Err(signal(
                 LispCondition::VoidFunction,
                 vec![Value::from_sym_id(sym_id)],
-            )),
+            ))
         }
     }
 
