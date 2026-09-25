@@ -902,8 +902,12 @@ pub(crate) struct RedefinedPin {
 /// byte-code `previous` stays a GC root while any backtrace frame records
 /// `sym` ([`trace_redefined_pins`]); with none, nothing can be running it
 /// through `sym`, and the next collection drops the pin. Cold: one push per
-/// redefinition of a byte-code function, none for a pair already pinned.
+/// redefinition of a byte-code function, none for a pair among the latest
+/// pins (a `cl-letf` of a function in a loop alternates two values; an older
+/// duplicate only waits for the next collection).
 pub(crate) fn pin_redefined_function(sym: SymId, previous: Value) {
+    /// How many of the latest pins a new one is compared with.
+    const RECENT: usize = 16;
     if !previous.is_bytecode() {
         return;
     }
@@ -914,6 +918,8 @@ pub(crate) fn pin_redefined_function(sym: SymId, previous: Value) {
         let mut pins = pins.borrow_mut();
         if !pins
             .iter()
+            .rev()
+            .take(RECENT)
             .any(|pin| pin.heap == heap && pin.sym == sym && pin.function.bits() == previous.bits())
         {
             pins.push(RedefinedPin {
