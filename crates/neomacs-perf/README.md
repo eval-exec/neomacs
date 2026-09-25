@@ -257,7 +257,14 @@ host state; it never changes privileged global governor settings.
 
 `--hardware-counters` wraps only the editor in `perf stat`. The default
 `--counter-scope edit-loop` uses the same acknowledged enable/disable gate as
-native profiling; `--counter-scope whole-process` includes startup. Valid run
+native profiling; `--counter-scope whole-process` includes startup.
+`edit-loop-main-thread` and `whole-process-main-thread` count only the editor's
+main thread (`perf stat --no-inherit`; batch and native-GUI routes only). In
+batch mode that is the eval thread, so work moved to another thread (the
+concurrent GC, a background JIT worker) is excluded: pair it with a two-core
+affinity (`taskset -c 2,4 cargo xtask perf run ...` without `--cpu`) and the
+fixture's `elapsed_wall_us` to see an eval-thread gain, and keep the all-thread
+scope on one pinned core for the cost side. Valid run
 artifacts gain typed counts for cycles, instructions, page faults, branch
 misses, cache misses, L1 data-cache load misses, and data-TLB load misses, plus
 the raw `hardware-counters.csv`. If perf omits or cannot support any requested

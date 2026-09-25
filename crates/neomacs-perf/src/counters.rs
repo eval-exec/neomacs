@@ -26,6 +26,33 @@ const STANDARD_EVENTS: &[&str] = &[
 pub enum CounterScope {
     EditLoop,
     WholeProcess,
+    /// [`Self::EditLoop`], counting only the editor's main thread
+    /// (`perf stat --no-inherit`). In batch mode that is the eval thread: the
+    /// concurrent GC thread (and a background JIT worker) are excluded, so an
+    /// eval-thread gain that moves work to another core is visible here while
+    /// the all-thread scopes charge it back.
+    EditLoopMainThread,
+    /// [`Self::WholeProcess`], main thread only (see
+    /// [`Self::EditLoopMainThread`]).
+    WholeProcessMainThread,
+}
+
+impl CounterScope {
+    /// Whether counting is gated to the fixture's edit loop.
+    pub const fn gated_to_edit_loop(self) -> bool {
+        match self {
+            Self::EditLoop | Self::EditLoopMainThread => true,
+            Self::WholeProcess | Self::WholeProcessMainThread => false,
+        }
+    }
+
+    /// Whether only the editor's main thread is counted.
+    pub const fn main_thread_only(self) -> bool {
+        match self {
+            Self::EditLoopMainThread | Self::WholeProcessMainThread => true,
+            Self::EditLoop | Self::WholeProcess => false,
+        }
+    }
 }
 
 /// Parse `perf stat --field-separator , --no-big-num` output into typed metrics.
@@ -125,7 +152,14 @@ impl PerfStatCapture {
         if !cfg!(target_os = "linux") {
             return Err("hardware counter collection requires Linux perf".to_string());
         }
-        if self.scope == CounterScope::EditLoop {
+        if self.scope.main_thread_only() && matches!(route, CaptureRoute::Adapter(_)) {
+            return Err(
+                "main-thread counter scopes need a directly launched editor (batch or native \
+                 GUI); adapter frontends run their own perf stat"
+                    .to_string(),
+            );
+        }
+        if self.scope.gated_to_edit_loop() {
             self.gate = Some(ProfileGate::start(
                 self.output
                     .parent()
@@ -173,6 +207,11 @@ impl PerfStatCapture {
             OsString::from("--event"),
             OsString::from(STANDARD_EVENTS.join(",")),
         ];
+        if self.scope.main_thread_only() {
+            // Count the launched thread only: threads it spawns (the GC
+            // thread, JIT workers) are not inherited.
+            arguments.push(OsString::from("--no-inherit"));
+        }
         if let Some(gate) = &self.gate {
             let paths = gate.control_paths();
             arguments.push(OsString::from("--delay=-1"));

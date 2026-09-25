@@ -387,3 +387,26 @@ fn comparison_execution_flags_distinguish_inherit_unset_and_zero() {
         .is_err()
     );
 }
+
+#[test]
+fn counter_scope_accepts_the_main_thread_scopes() {
+    for (text, scope) in [
+        ("edit-loop-main-thread", CounterScope::EditLoopMainThread),
+        (
+            "whole-process-main-thread",
+            CounterScope::WholeProcessMainThread,
+        ),
+    ] {
+        let PerfCommand::Run { counters, .. } = parse(&[
+            "run",
+            "rust-lsp-typing",
+            "--hardware-counters",
+            "--counter-scope",
+            text,
+        ])
+        .expect("parse main-thread counter scope") else {
+            panic!("run command must remain typed")
+        };
+        assert_eq!(counters, Some(scope), "{text}");
+    }
+}

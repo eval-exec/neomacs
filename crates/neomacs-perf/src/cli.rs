@@ -267,6 +267,10 @@ impl CounterArgs {
 enum CounterScopeArg {
     EditLoop,
     WholeProcess,
+    /// The edit loop, main (eval) thread only: `perf stat --no-inherit`.
+    EditLoopMainThread,
+    /// The whole process, main (eval) thread only.
+    WholeProcessMainThread,
 }
 
 impl From<CounterScopeArg> for CounterScope {
@@ -274,6 +278,8 @@ impl From<CounterScopeArg> for CounterScope {
         match scope {
             CounterScopeArg::EditLoop => Self::EditLoop,
             CounterScopeArg::WholeProcess => Self::WholeProcess,
+            CounterScopeArg::EditLoopMainThread => Self::EditLoopMainThread,
+            CounterScopeArg::WholeProcessMainThread => Self::WholeProcessMainThread,
         }
     }
 }
