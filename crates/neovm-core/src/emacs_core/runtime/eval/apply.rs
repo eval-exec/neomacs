@@ -1509,30 +1509,39 @@ impl Context {
     /// [`Self::pop_bytecode_backtrace_frame_with_result`] path.
     ///
     /// GNU's pop does not care how many arguments the frame recorded, and
-    /// neither does this one: `push_backtrace_frame_from_native_args`
-    /// records a one-argument call as `Backtrace1` and a two-argument call
-    /// as `Backtrace2`, which are most native calls, and accepting only the
-    /// three-or-more-argument shape sent them all through the general path.
-    /// The accepted set is derived, not listed: it is exactly the entries
-    /// [`trivial_spec_binding_pop`] admits as owning nothing, so it cannot
-    /// drift from the fast path of [`Self::unbind_to_with_result`].  A frame
-    /// the debugger flagged is rewritten in place to the owned shape, so it
-    /// fails this test and keeps the general path, which is the only place
+    /// neither does this one: it accepts exactly the three unflagged shapes
+    /// `push_backtrace_frame_from_native_args` writes -- `Backtrace1` for one
+    /// argument, `Backtrace2` for two, `BacktraceNative` for any other count
+    /// -- and checks for them directly, which is GNU's
+    /// `backtrace_debug_on_exit (pdl)` test before `specpdl_ptr--`
+    /// (bytecode.c:826-829) rather than a classification of every entry kind.
+    /// Each of the three owns no heap payload (a subset of what
+    /// [`trivial_spec_binding_pop`] admits as `NoOwnedArgs`, pinned by
+    /// `native_backtrace_pop_accepts_exactly_the_shapes_it_pushes`).  Anything
+    /// else on top -- a frame the debugger flagged (a `Backtrace1` with its
+    /// bit set, or a frame promoted to the owned shape), or an entry a callee
+    /// left behind -- keeps the general path, which is the only place
     /// `run_debug_on_exit` runs.
     #[inline]
     pub(crate) fn pop_native_backtrace_frame(&mut self, count: usize) -> bool {
         if self.specpdl.len() != count + 1 {
             return false;
         }
+        // SAFETY: len == count + 1, so `count` is in bounds.
+        let top = unsafe { self.specpdl.get_unchecked(count) };
         if !matches!(
-            self.specpdl.last().and_then(trivial_spec_binding_pop),
-            Some(TrivialSpecBindingPop::NoOwnedArgs)
+            top,
+            SpecBinding::Backtrace1 {
+                debug_on_exit: false,
+                ..
+            } | SpecBinding::Backtrace2 { .. }
+                | SpecBinding::BacktraceNative { .. }
         ) {
             return false;
         }
-        // SAFETY: `NoOwnedArgs` is the closed proof that the entry owns no
-        // heap payload, so the length store alone is the pointer-decrement
-        // pop and no drop glue needs to run.
+        // SAFETY: none of the three shapes owns a heap payload (see above),
+        // so the length store alone is the pointer-decrement pop and no drop
+        // glue needs to run.
         unsafe { self.specpdl.set_len(count) };
         true
     }

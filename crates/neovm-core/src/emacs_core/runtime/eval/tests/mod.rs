@@ -25799,6 +25799,81 @@ fn native_backtrace_pop_accepts_every_arity_it_pushes() {
     assert_eq!(ev.specpdl.len(), count);
 }
 
+/// The native pop checks the exact shapes the native push writes, for every
+/// arity the push handles, and refuses every other entry on top -- including
+/// entries that own nothing (`GcRoot`, `Nop`) and a generic `Backtrace`,
+/// which the general unwinder retires (releasing its owned arguments).
+#[test]
+fn native_backtrace_pop_accepts_exactly_the_shapes_it_pushes() {
+    crate::test_utils::init_test_tracing();
+    let mut ev = Context::new();
+    let func = Value::from_sym_id(intern("neo-native-shapes"));
+    let args: Vec<Value> = (0..6).map(Value::fixnum).collect();
+    let args_ptr = args.as_ptr() as *const i64;
+    for nargs in 0..=5usize {
+        let count = ev.specpdl.len();
+        // SAFETY: `args` outlives the frame and holds six tagged words.
+        unsafe { ev.push_backtrace_frame_from_native_args(func, args_ptr, nargs) };
+        let top = ev.specpdl.last().expect("pushed");
+        assert!(
+            matches!(
+                top,
+                SpecBinding::Backtrace1 {
+                    debug_on_exit: false,
+                    ..
+                } | SpecBinding::Backtrace2 { .. }
+                    | SpecBinding::BacktraceNative { .. }
+            ),
+            "{nargs} arguments: the push writes one of the popped shapes"
+        );
+        assert!(
+            matches!(
+                trivial_spec_binding_pop(top),
+                Some(TrivialSpecBindingPop::NoOwnedArgs)
+            ),
+            "{nargs} arguments: the shape owns nothing"
+        );
+        assert!(
+            ev.pop_native_backtrace_frame(count),
+            "{nargs} arguments pop through the fast exit"
+        );
+        assert_eq!(ev.specpdl.len(), count);
+    }
+
+    let refused = |ev: &mut Context, push: &dyn Fn(&mut Context), what: &str| {
+        let count = ev.specpdl.len();
+        push(ev);
+        assert_eq!(ev.specpdl.len(), count + 1);
+        assert!(
+            !ev.pop_native_backtrace_frame(count),
+            "{what} on top is not a native frame"
+        );
+        assert_eq!(
+            ev.specpdl.len(),
+            count + 1,
+            "{what}: the refused entry stays"
+        );
+        let _ = ev.unbind_to_with_result(count, Ok(Value::NIL));
+        assert_eq!(ev.specpdl.len(), count);
+    };
+    refused(&mut ev, &|ev| ev.push_specpdl_root(Value::T), "a GcRoot");
+    refused(
+        &mut ev,
+        &|ev| ev.push_specpdl_with(|| SpecBinding::Nop),
+        "a Nop",
+    );
+    refused(
+        &mut ev,
+        &|ev| {
+            ev.push_backtrace_frame(
+                func,
+                &[Value::fixnum(1), Value::fixnum(2), Value::fixnum(3)],
+            )
+        },
+        "a generic Backtrace",
+    );
+}
+
 /// A two-argument native call copies both words into the compact
 /// `Backtrace2` entry; the entry must carry exactly the caller's values.
 #[test]
