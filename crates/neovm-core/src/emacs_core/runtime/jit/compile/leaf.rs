@@ -140,12 +140,62 @@ pub(crate) struct LoadedUnit {
     /// [`LoadedUnit::library`] at load (dlsym); held purely to keep the mapping
     /// alive afterwards (the leaf calls `entry` directly).
     pub(crate) lib: libloading::Library,
+    /// The unit's exported leaf index (`aot::unit_leaf_index`), looked up once:
+    /// `None` inside for a unit that exports none (a single-leaf `.so`).
+    index: std::sync::OnceLock<Option<AotUnitIndex>>,
+}
+
+/// One row of an AOT unit's exported leaf index (P4.2 A3): a leaf's content
+/// hash and the addresses of its entry and descriptor, which the dynamic
+/// loader relocated at `dlopen`. Rows are sorted by hash.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(crate) struct AotIndexRow {
+    pub(crate) hash_lo: u64,
+    pub(crate) hash_hi: u64,
+    pub(crate) entry: *const u8,
+    pub(crate) desc: *const u8,
+}
+
+/// A unit's leaf index: `len` rows at `rows`, inside the mapped `.so`.
+#[derive(Clone, Copy)]
+pub(crate) struct AotUnitIndex {
+    pub(crate) rows: *const AotIndexRow,
+    pub(crate) len: usize,
+}
+
+// SAFETY: the rows are immutable data of the mapped library, which the owning
+// `LoadedUnit` keeps mapped; sharing the addresses is sharing read-only memory.
+unsafe impl Send for AotUnitIndex {}
+unsafe impl Sync for AotUnitIndex {}
+
+impl AotUnitIndex {
+    /// The (entry, descriptor) of the leaf whose content hash is `hash`.
+    pub(crate) fn lookup(&self, hash: u128) -> Option<(*const u8, *const u8)> {
+        // SAFETY: `rows`/`len` describe the unit's exported index (validated
+        // by its magic at lookup), alive while the unit is.
+        let rows = unsafe { std::slice::from_raw_parts(self.rows, self.len) };
+        let key = |row: &AotIndexRow| (u128::from(row.hash_hi) << 64) | u128::from(row.hash_lo);
+        let at = rows.binary_search_by_key(&hash, key).ok()?;
+        Some((rows[at].entry, rows[at].desc))
+    }
 }
 
 impl LoadedUnit {
     /// Wrap an already-`dlopen`'d library so leaves can hold it alive.
     pub(crate) fn new(lib: libloading::Library) -> Self {
-        Self { lib }
+        Self {
+            lib,
+            index: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// The unit's leaf index, resolved by `init` on first use.
+    pub(crate) fn index_or_init(
+        &self,
+        init: impl FnOnce(&libloading::Library) -> Option<AotUnitIndex>,
+    ) -> Option<AotUnitIndex> {
+        *self.index.get_or_init(|| init(&self.lib))
     }
 
     /// The open library, for `dlsym`'ing the entry + descriptor (R1c-5). The

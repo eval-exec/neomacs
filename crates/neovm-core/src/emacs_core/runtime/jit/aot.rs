@@ -93,7 +93,9 @@ pub(crate) const ABI_TAG: u32 = compute_abi_tag();
 /// v11: `Op::Call` bytecode spec sites pass `neovm_jit_call_spec` the called
 /// symbol as its tagged `Value` bits (the callee's backtrace frame records
 /// it), not its `SymId`.
-const ABI_TAG_VERSION: u32 = 11;
+/// v12: descriptor v3 (each reloc slot carries its constant-pool index) and
+/// the preload's exported leaf index table (P4.2 A3).
+const ABI_TAG_VERSION: u32 = 12;
 
 /// Format version of the AOT descriptor spec-section + the runtime spec ABI
 /// (`SpecSlot`/`spec_expected` sidecar bases, the loader re-classify+arm protocol).
@@ -589,7 +591,15 @@ const DESC_MAGIC: u32 = 0x4e41_4f54; // "NAOT"
 /// `recipe_len`) and the blob gains a spec-section (`spec_count` × [`AotSpecSite`],
 /// [`SPEC_SITE_BYTES`] each) appended AFTER the recipe. A v1 loader/`.so` mismatch
 /// is refused by the version check (and the ABI_TAG changed anyway).
-const DESC_VERSION: u32 = 2;
+/// v3 (P4.2 A3): a pool-index section follows the spec-section: one `u32` per
+/// reloc slot, the slot's index in the function's constant pool, or
+/// [`RELOC_NOT_IN_POOL`] for a derived value (a symbol stripped from a
+/// symbol-with-position operand). The loader then resolves a pooled slot as
+/// an index into the live pool instead of rebuilding its recipe.
+const DESC_VERSION: u32 = 3;
+
+/// A reloc slot whose value is not an element of the constant pool.
+const RELOC_NOT_IN_POOL: u32 = u32::MAX;
 
 /// One `Op::Call` speculation site baked into an AOT baseline leaf, recorded so the
 /// LOADER can RE-CLASSIFY it against the live obarray and arm/disarm the runtime
@@ -637,6 +647,26 @@ pub(crate) struct AotDescriptor {
     /// R2 increment B2: the `Op::Call` spec sites, in slot order (empty for a MIR
     /// leaf or a baseline leaf with no armed spec site).
     pub spec_sites: Vec<AotSpecSite>,
+    /// v3: per reloc slot, its index in the constant pool, or
+    /// [`RELOC_NOT_IN_POOL`] (`reloc_count` entries).
+    pub pool_indices: Vec<u32>,
+}
+
+/// Each reloc value's index in `constants` by identity (the pool is part of
+/// the content hash, so the loading function's pool has the same order), or
+/// [`RELOC_NOT_IN_POOL`] for a value derived from, not stored in, the pool.
+fn reloc_pool_indices(relocs: &[Value], constants: &[Value]) -> Vec<u32> {
+    relocs
+        .iter()
+        .map(|reloc| {
+            constants
+                .iter()
+                .position(|c| c.bits() == reloc.bits())
+                .and_then(|i| u32::try_from(i).ok())
+                .filter(|&i| i != RELOC_NOT_IN_POOL)
+                .unwrap_or(RELOC_NOT_IN_POOL)
+        })
+        .collect()
 }
 
 /// Serialize an [`AotDescriptor`] to bytes (little-endian, fixed header + recipe
@@ -649,7 +679,9 @@ pub(crate) fn encode_descriptor(
     reloc_recipe: &[u8],
     reloc_count: u32,
     spec_sites: &[AotSpecSite],
+    pool_indices: &[u32],
 ) -> Vec<u8> {
+    debug_assert_eq!(pool_indices.len(), reloc_count as usize);
     let mut out = Vec::new();
     out.extend_from_slice(&DESC_MAGIC.to_le_bytes());
     out.extend_from_slice(&DESC_VERSION.to_le_bytes());
@@ -673,6 +705,10 @@ pub(crate) fn encode_descriptor(
         out.push(s.which);
         out.extend_from_slice(&s.nargs.to_le_bytes());
         out.extend_from_slice(&s.callee_reloc_idx.to_le_bytes());
+    }
+    // v3: the pool-index section, one u32 per reloc slot.
+    for &index in pool_indices {
+        out.extend_from_slice(&index.to_le_bytes());
     }
     out
 }
@@ -741,6 +777,14 @@ pub(crate) fn decode_descriptor(bytes: &[u8]) -> Option<AotDescriptor> {
             callee_reloc_idx,
         });
     }
+    // v3: the pool-index section after the spec-section.
+    if reloc_count > MAX_RELOC_COUNT {
+        return None;
+    }
+    let mut pool_indices = Vec::with_capacity(reloc_count as usize);
+    for _ in 0..reloc_count {
+        pool_indices.push(rd_u32(bytes, &mut at)?);
+    }
     Some(AotDescriptor {
         meta: super::compile::AotLeafMeta {
             arity,
@@ -755,6 +799,7 @@ pub(crate) fn decode_descriptor(bytes: &[u8]) -> Option<AotDescriptor> {
         reloc_recipe,
         reloc_count,
         spec_sites,
+        pool_indices,
     })
 }
 
@@ -817,13 +862,35 @@ fn resolve_reloc_from_descriptor(
     desc: &AotDescriptor,
     constants: &[Value],
 ) -> Option<Box<[Value]>> {
-    if desc.reloc_count > MAX_RELOC_COUNT {
+    if desc.reloc_count > MAX_RELOC_COUNT || desc.pool_indices.len() != desc.reloc_count as usize {
         return None;
     }
     let mut out = Vec::with_capacity(desc.reloc_count as usize);
     let mut at = 0usize;
-    for _ in 0..desc.reloc_count {
-        let (v, n) = rebuild_value(desc.reloc_recipe.get(at..)?, 0)?;
+    for &pool_index in &desc.pool_indices {
+        let recipe = desc.reloc_recipe.get(at..)?;
+        // v3 (P4.2 A3): a pooled slot IS the live pool's element at its
+        // index: the pool is part of the content hash that named this entry,
+        // so it has the emitting pool's order. One kind check against the
+        // recipe's tag replaces the rebuild (no allocation) and the deep-
+        // equal search over the pool; debug builds still rebuild and compare.
+        if let Some(&pooled) = constants.get(pool_index as usize) {
+            if !recipe_tag_matches(recipe, pooled) {
+                return None;
+            }
+            #[cfg(debug_assertions)]
+            {
+                let (rebuilt, _) = rebuild_value(recipe, 0)?;
+                debug_assert!(
+                    rebuilt == pooled,
+                    "reloc pool index {pool_index} does not hold the recipe's value"
+                );
+            }
+            at = at.checked_add(recipe_len(recipe, 0)?)?;
+            out.push(pooled);
+            continue;
+        }
+        let (v, n) = rebuild_value(recipe, 0)?;
         at = at.checked_add(n)?;
         let resolved = if v == Value::NIL || v == Value::T || v.is_fixnum() {
             v
@@ -835,16 +902,10 @@ fn resolve_reloc_from_descriptor(
             // symbol-with-position VarRef operand).
             v
         } else {
-            // Heap value: eq-UPGRADE to the pool's own object when a deep-
-            // equal match exists (`Value ==` is deep equal — the documented
-            // footgun is exactly the tool here; the pool object also carries
-            // any text properties the recipe's byte encoding could not).
-            // Absent from the pool (a derived value), keep the fresh rebuild —
-            // the pre-audit-#A behavior, correct if not identity-shared.
-            // Authenticity rests on the content hash that NAMED this entry:
-            // exact by construction on the prewarm path (manifest hash checked
-            // against the immutable marked object) and a 128-bit body hash on
-            // the general path.
+            // Heap value outside the pool (a derived value): eq-UPGRADE to
+            // the pool's own object when a deep-equal match exists, else keep
+            // the fresh rebuild. Authenticity rests on the content hash that
+            // NAMED this entry.
             constants.iter().copied().find(|&c| c == v).unwrap_or(v)
         };
         out.push(resolved);
@@ -853,6 +914,44 @@ fn resolve_reloc_from_descriptor(
         return None;
     }
     Some(out.into_boxed_slice())
+}
+
+/// Whether the value recipe at the start of `recipe` has the kind of
+/// `value` (the v3 pool-index check): nil, t, fixnum, string, symbol, cons.
+fn recipe_tag_matches(recipe: &[u8], value: Value) -> bool {
+    match recipe.first() {
+        Some(&RECIPE_NIL) => value == Value::NIL,
+        Some(&RECIPE_T) => value == Value::T,
+        Some(&RECIPE_FIXNUM) => value.is_fixnum(),
+        Some(&RECIPE_STRING) => value.is_string(),
+        Some(&RECIPE_SYMBOL) => value.as_symbol_id().is_some(),
+        Some(&RECIPE_CONS) => value.is_cons(),
+        _ => false,
+    }
+}
+
+/// Byte length of the value recipe at the start of `bytes`, without
+/// rebuilding it; `None` on a malformed, truncated or over-deep recipe
+/// ([`rebuild_value`]'s bounds).
+fn recipe_len(bytes: &[u8], depth: usize) -> Option<usize> {
+    if depth > MAX_RECIPE_CONS_DEPTH {
+        return None;
+    }
+    match *bytes.first()? {
+        RECIPE_NIL | RECIPE_T => Some(1),
+        RECIPE_FIXNUM => bytes.get(1..9).map(|_| 9),
+        RECIPE_STRING | RECIPE_SYMBOL => {
+            let len = u64::from_le_bytes(bytes.get(2..10)?.try_into().ok()?) as usize;
+            let end = 10usize.checked_add(len)?;
+            bytes.get(10..end).map(|_| end)
+        }
+        RECIPE_CONS => {
+            let n1 = recipe_len(bytes.get(1..)?, depth + 1)?;
+            let n2 = recipe_len(bytes.get(1 + n1..)?, depth + 1)?;
+            Some(1 + n1 + n2)
+        }
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1101,7 +1200,13 @@ fn prepare_leaf_emit(
     // The MIR tier never bakes `Op::Call` subr/bytecode spec sites (that pass runs
     // only under `Some(obarray)` at the baseline tier — increment B2), so it always
     // emits an empty spec-section.
-    let desc_bytes = encode_descriptor(&meta, &recipe, reloc_consts.len() as u32, &[]);
+    let desc_bytes = encode_descriptor(
+        &meta,
+        &recipe,
+        reloc_consts.len() as u32,
+        &[],
+        &reloc_pool_indices(&reloc_consts, constants),
+    );
     Ok(Some(PreparedLeaf {
         m,
         content_hash,
@@ -1286,6 +1391,8 @@ pub fn build_preload_object(
 ) -> Result<(Vec<u8>, PreloadBuildStats), CompileError> {
     let mut module = make_aot_object_module()?;
     let mut seen: std::collections::HashSet<u128> = std::collections::HashSet::new();
+    // The emitted leaves, for the unit's leaf index.
+    let mut emitted: Vec<(u128, String, String)> = Vec::new();
     let mut stats = PreloadBuildStats {
         candidates: leaves.len(),
         ..Default::default()
@@ -1318,6 +1425,7 @@ pub fn build_preload_object(
                     &p.entry_name,
                     Some((&p.desc_name, &p.desc_bytes)),
                 )?;
+                emitted.push((p.content_hash, p.entry_name, p.desc_name));
                 stats.unique_emitted += 1;
                 continue;
             }
@@ -1357,14 +1465,60 @@ pub fn build_preload_object(
             stats.skipped_unsupported += 1;
             continue;
         }
+        emitted.push((content_hash, entry_name, desc_name));
         stats.unique_emitted += 1;
     }
+    define_leaf_index_into_module(&mut module, &mut emitted)?;
     let obj = module
         .finish()
         .emit()
         .map_err(|e| module_init_err(e.to_string()))?;
     assert_aot_imports_exported(&obj)?;
     Ok((obj, stats))
+}
+
+/// Define the unit's exported leaf index (P4.2 A3, [`aot_index_symbol`]):
+/// [`INDEX_MAGIC`], the row count, then one `AotIndexRow` per emitted leaf,
+/// sorted by content hash, whose entry and descriptor addresses are
+/// relocations the dynamic loader resolves at `dlopen`.
+fn define_leaf_index_into_module(
+    module: &mut ObjectModule,
+    emitted: &mut [(u128, String, String)],
+) -> Result<(), CompileError> {
+    use cranelift_module::FuncOrDataId;
+    emitted.sort_unstable_by_key(|(hash, _, _)| *hash);
+    let mut bytes = vec![0u8; INDEX_HEADER_BYTES + emitted.len() * INDEX_ROW_BYTES];
+    bytes[0..8].copy_from_slice(&INDEX_MAGIC.to_le_bytes());
+    bytes[8..16].copy_from_slice(&(emitted.len() as u64).to_le_bytes());
+    let mut desc = cranelift_module::DataDescription::new();
+    for (row, (hash, entry_name, desc_name)) in emitted.iter().enumerate() {
+        let at = INDEX_HEADER_BYTES + row * INDEX_ROW_BYTES;
+        bytes[at..at + 8].copy_from_slice(&(*hash as u64).to_le_bytes());
+        bytes[at + 8..at + 16].copy_from_slice(&((*hash >> 64) as u64).to_le_bytes());
+        let Some(FuncOrDataId::Func(entry)) = module.declarations().get_name(entry_name) else {
+            return Err(module_init_err(format!("index: no entry {entry_name}")));
+        };
+        let Some(FuncOrDataId::Data(descriptor)) = module.declarations().get_name(desc_name) else {
+            return Err(module_init_err(format!("index: no descriptor {desc_name}")));
+        };
+        let entry = module.declare_func_in_data(entry, &mut desc);
+        desc.write_function_addr((at + 16) as u32, entry);
+        let descriptor = module.declare_data_in_data(descriptor, &mut desc);
+        desc.write_data_addr((at + 24) as u32, descriptor, 0);
+    }
+    desc.define(bytes.into_boxed_slice());
+    desc.set_align(8);
+    let index = module
+        .declare_data(
+            &aot_index_symbol(),
+            Linkage::Export,
+            /*writable=*/ false,
+            /*tls=*/ false,
+        )
+        .map_err(|e| module_init_err(e.to_string()))?;
+    module
+        .define_data(index, &desc)
+        .map_err(|e| module_init_err(e.to_string()))
 }
 
 /// File name of the dump-time AOT preload shared object (beside the pdump).
@@ -4087,42 +4241,35 @@ pub(crate) fn load_leaf_from_unit(
     // (threaded through to `from_aot`). `None` leaves every spec site disarmed.
     obarray: Option<&crate::emacs_core::symbol::Obarray>,
 ) -> Option<super::compile::CompiledLeaf> {
-    let entry_name = aot_entry_symbol(content_hash);
-    let desc_name = aot_descriptor_symbol(content_hash);
-
-    // dlsym the entry + descriptor out of the SAME unit (so the entry points
-    // into the library the Arc keeps mapped). Unified 4-param ABI (the 4th is the
-    // *const LeafSidecar); the ptr is cast to *const u8 and called via
+    // The entry + descriptor of the SAME unit (so the entry points into the
+    // library the Arc keeps mapped): from the unit's leaf index when it
+    // exports one (the preload, P4.2 A3), else by per-leaf dlsym. Unified
+    // 4-param ABI (the 4th is the *const LeafSidecar); the ptr is called via
     // CompiledLeaf::invoke_native, which passes the leaf's own sidecar.
-    type EntryFn =
-        unsafe extern "C" fn(*mut u8, *const i64, *mut i64, *const core::ffi::c_void) -> i64;
+    let (entry_ptr, desc_ptr) = unit_leaf_symbols(unit, content_hash)?;
     // Hardening (review): the descriptor lives in a `.so` from NEOVM_AOT_DIR — a
     // trust boundary. The data-object size is not available via dlsym, so we read
     // the FIXED header first, VALIDATE magic+version+ABI_TAG before trusting any
-    // length field, then bound + checked-add the recipe length before the second
-    // `from_raw_parts`. A foreign/corrupt blob whose first 12 bytes don't match
-    // is rejected here (→ JIT fallback) without ever reading an attacker-chosen
-    // length. (A blob that fakes a valid header but lies about recipe_len can
-    // still over-read within the cap; that is acceptable for the in-process,
-    // operator-controlled AOT dir — the cap bounds the damage and decode_descriptor
-    // re-checks the recipe count.)
+    // length field, then bound + checked-add the variable sections before the
+    // second `from_raw_parts`. A foreign/corrupt blob whose first 12 bytes don't
+    // match is rejected here (→ JIT fallback) without ever reading an
+    // attacker-chosen length. (A blob that fakes a valid header but lies about a
+    // length can still over-read within the caps; that is acceptable for the
+    // in-process, operator-controlled AOT dir — the caps bound the damage and
+    // decode_descriptor re-checks the counts.)
     // v2 (B2): the fixed header gained a `spec_count:u32` right before `recipe_len`,
     // and the blob gained a spec-section (`spec_count` × SPEC_SITE_BYTES) AFTER the
-    // recipe — so HDR is 4 larger (=57) and `total` includes the spec-section.
-    const HDR: usize = 4 + 4 + 4 + 8 + 8 + 5 + 8 + 4 + 4 + 8; // encode_descriptor v2 (=57)
+    // recipe. v3 (A3): a pool-index section (`reloc_count` × u32) follows it.
+    const HDR: usize = 4 + 4 + 4 + 8 + 8 + 5 + 8 + 4 + 4 + 8; // encode_descriptor (=57)
     // A generous cap: a leaf's reloc recipe is tiny in practice. Rejects an absurd
     // length before it drives a huge over-read.
     const MAX_RECIPE_LEN: usize = 1 << 20; // 1 MiB
-    // SAFETY: symbols we exported; the entry's ABI is the CompiledLeaf entry ABI.
-    let (entry_ptr, desc_bytes): (*const u8, Vec<u8>) = unsafe {
-        let lib = unit.library();
-        let entry: libloading::Symbol<EntryFn> = lib.get(entry_name.as_bytes()).ok()?;
-        let entry_ptr = *entry as *const u8;
-        let desc_sym: libloading::Symbol<*const u8> = lib.get(desc_name.as_bytes()).ok()?;
-        let desc_ptr = *desc_sym;
-        // 1) Read + copy the fixed header.
-        let hdr = std::slice::from_raw_parts(desc_ptr, HDR).to_vec();
-        // 2) Validate magic/version/ABI_TAG BEFORE trusting recipe_len: reject a
+    // SAFETY: `desc_ptr` is an exported descriptor of `unit` (the index or the
+    // dlsym named it); the header is read before any length is trusted.
+    let desc_bytes: &[u8] = unsafe {
+        // 1) The fixed header, in place.
+        let hdr = std::slice::from_raw_parts(desc_ptr, HDR);
+        // 2) Validate magic/version/ABI_TAG BEFORE trusting any length: reject a
         //    foreign blob without reading an attacker-chosen length.
         let magic = u32::from_le_bytes(hdr[0..4].try_into().ok()?);
         let version = u32::from_le_bytes(hdr[4..8].try_into().ok()?);
@@ -4130,8 +4277,12 @@ pub(crate) fn load_leaf_from_unit(
         if magic != DESC_MAGIC || version != DESC_VERSION || tag != ABI_TAG {
             return None;
         }
-        // 3) spec_count + recipe_len: bound BOTH, then checked-add the total size
-        //    (fixed header + recipe + spec-section). spec_count is at HDR-12..HDR-8.
+        // 3) reloc_count, spec_count and recipe_len: bound all three, then
+        //    checked-add the total size. They are the header's last 16 bytes.
+        let reloc_count = u32::from_le_bytes(hdr[HDR - 16..HDR - 12].try_into().ok()?);
+        if reloc_count > MAX_RELOC_COUNT {
+            return None;
+        }
         let spec_count = u32::from_le_bytes(hdr[HDR - 12..HDR - 8].try_into().ok()?);
         if spec_count > MAX_SPEC_SITES {
             return None;
@@ -4141,12 +4292,15 @@ pub(crate) fn load_leaf_from_unit(
             return None;
         }
         let spec_bytes = (spec_count as usize).checked_mul(SPEC_SITE_BYTES)?;
-        let total = HDR.checked_add(recipe_len)?.checked_add(spec_bytes)?;
-        let all = std::slice::from_raw_parts(desc_ptr, total).to_vec();
-        (entry_ptr, all)
+        let pool_bytes = (reloc_count as usize).checked_mul(4)?;
+        let total = HDR
+            .checked_add(recipe_len)?
+            .checked_add(spec_bytes)?
+            .checked_add(pool_bytes)?;
+        std::slice::from_raw_parts(desc_ptr, total)
     };
 
-    let desc = decode_descriptor(&desc_bytes)?;
+    let desc = decode_descriptor(desc_bytes)?;
     // Sanity: arity must match the call site's lambda list.
     if desc.meta.arity != arity {
         return None;
@@ -4190,6 +4344,9 @@ pub(crate) fn load_leaf_from_unit(
 /// (`live_reloc_for_emit_tier` runs `build_mir`) it gates. Only symbol PRESENCE
 /// is checked; the pointer is neither called nor retained.
 fn unit_has_entry(unit: &super::compile::LoadedUnit, content_hash: u128) -> bool {
+    if let Some(index) = unit_leaf_index(unit) {
+        return index.lookup(content_hash).is_some();
+    }
     let entry_name = aot_entry_symbol(content_hash);
     // SAFETY: a presence-only dlsym into a `.so` we emitted; the resolved address
     // is dropped immediately (the real load path re-resolves + type-checks it).
@@ -4197,6 +4354,70 @@ fn unit_has_entry(unit: &super::compile::LoadedUnit, content_hash: u128) -> bool
         unit.library()
             .get::<*const u8>(entry_name.as_bytes())
             .is_ok()
+    }
+}
+
+/// Magic word opening a unit's exported leaf index ("NAOTIDX1").
+const INDEX_MAGIC: u64 = u64::from_le_bytes(*b"NAOTIDX1");
+
+/// Byte width of the index header (magic, row count) and of one row.
+const INDEX_HEADER_BYTES: usize = 16;
+const INDEX_ROW_BYTES: usize = std::mem::size_of::<super::compile::AotIndexRow>();
+const _: () = assert!(INDEX_ROW_BYTES == 32);
+
+/// The exported symbol of a unit's leaf index (P4.2 A3): the preload exports
+/// one table of `(hash, entry, descriptor)` rows sorted by hash, so a leaf
+/// load is a binary search instead of two dlsyms by formatted name.
+fn aot_index_symbol() -> String {
+    format!("__neovm_aoti_{ABI_TAG:08x}")
+}
+
+/// `unit`'s leaf index, resolved once per unit; `None` for a unit that
+/// exports none (single-leaf `.so`s keep the per-leaf symbols) or a table
+/// whose header is not ours.
+fn unit_leaf_index(unit: &super::compile::LoadedUnit) -> Option<super::compile::AotUnitIndex> {
+    unit.index_or_init(|lib| {
+        // SAFETY: a data symbol of a `.so` we emitted: the header (magic,
+        // count) is checked before the rows are trusted; the count is capped.
+        unsafe {
+            let header: libloading::Symbol<*const u8> =
+                lib.get(aot_index_symbol().as_bytes()).ok()?;
+            let base = *header;
+            let words = std::slice::from_raw_parts(base.cast::<u64>(), 2);
+            if words[0] != INDEX_MAGIC || words[1] > u64::from(MAX_INDEX_ROWS) {
+                return None;
+            }
+            Some(super::compile::AotUnitIndex {
+                rows: base.add(INDEX_HEADER_BYTES).cast(),
+                len: words[1] as usize,
+            })
+        }
+    })
+}
+
+/// Cap on an index's row count, so a corrupt header cannot drive a huge
+/// slice (the loadup preload has ~1.7K leaves).
+const MAX_INDEX_ROWS: u32 = 1 << 20;
+
+/// The (entry, descriptor) addresses of the leaf `content_hash` in `unit`:
+/// by the unit's leaf index when it exports one, else by per-leaf dlsym.
+fn unit_leaf_symbols(
+    unit: &super::compile::LoadedUnit,
+    content_hash: u128,
+) -> Option<(*const u8, *const u8)> {
+    if let Some(index) = unit_leaf_index(unit) {
+        return index.lookup(content_hash);
+    }
+    // SAFETY: symbols we exported (the entry is called through the leaf ABI,
+    // the descriptor is validated by the caller before any length is trusted).
+    unsafe {
+        let lib = unit.library();
+        let entry: libloading::Symbol<*const u8> =
+            lib.get(aot_entry_symbol(content_hash).as_bytes()).ok()?;
+        let desc: libloading::Symbol<*const u8> = lib
+            .get(aot_descriptor_symbol(content_hash).as_bytes())
+            .ok()?;
+        Some((*entry, *desc))
     }
 }
 
@@ -4932,7 +5153,13 @@ fn define_baseline_leaf_into_module(
     };
     // Bake the baseline leaf's `Op::Call` spec sites (in slot order) into the
     // descriptor so the loader can re-classify + arm each runtime SpecSlot.
-    let desc_bytes = encode_descriptor(&meta, &recipe, reloc_data.len() as u32, &bmeta.spec_sites);
+    let desc_bytes = encode_descriptor(
+        &meta,
+        &recipe,
+        reloc_data.len() as u32,
+        &bmeta.spec_sites,
+        &reloc_pool_indices(&reloc_data, constants),
+    );
     let data_id = module
         .declare_data(
             desc_name,
@@ -5115,6 +5342,9 @@ pub(crate) mod test_support {
     }
 }
 
+#[cfg(test)]
+#[path = "aot/tests/descriptor_v3_test.rs"]
+mod descriptor_v3_tests;
 #[cfg(test)]
 #[path = "aot/tests/lazy_prewarm_test.rs"]
 mod lazy_prewarm_tests;
