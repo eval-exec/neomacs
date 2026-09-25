@@ -95,8 +95,16 @@ pub(crate) fn format_label(name: &str, id: u64, tier: LabelTier) -> String {
 
 /// The `<name>` part of a label made by [`format_label`].
 pub(crate) fn label_name(label: &str) -> Option<&str> {
+    label_parts(label).map(|(name, _)| name)
+}
+
+/// The `(<name>, <id>)` parts of a label made by [`format_label`].
+pub(crate) fn label_parts(label: &str) -> Option<(&str, &str)> {
     let rest = label.strip_prefix("lisp:")?;
-    Some(&rest[..rest.rfind('#')?])
+    let hash = rest.rfind('#')?;
+    let id = &rest[hash + 1..];
+    let id = &id[..id.find(':')?];
+    Some((&rest[..hash], id))
 }
 
 /// Whitespace and control characters become `_` (a perf-map line is

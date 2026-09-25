@@ -2377,6 +2377,13 @@ pub(super) fn lower_mir_with_plan(
         .finalize_definitions()
         .map_err(|e| CompileError::Backend(BackendError::Finalize(e.to_string())))?;
     let entry = module.get_finalized_function(fid);
+    super::super::stats::asm_dump::flush(&super::super::stats::asm_dump::AsmLeafInfo {
+        tier: super::super::stats::perf_map::LabelTier::Mir,
+        entry_name,
+        entry,
+        regalloc: active_regalloc_choice().name(),
+        clif_insts: super::clif_size_now().0,
+    });
     obs.label = label.map(String::into_boxed_str);
 
     Ok(CompiledLeaf {
@@ -2484,6 +2491,14 @@ impl RegallocChoice {
         match self {
             RegallocChoice::Fast => "single_pass",
             RegallocChoice::Full => "backtracking",
+        }
+    }
+
+    /// The short name the JIT reports print (`fast`/`full`).
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            RegallocChoice::Fast => "fast",
+            RegallocChoice::Full => "full",
         }
     }
 }
@@ -3508,9 +3523,17 @@ pub(crate) fn build_mir_leaf_fn<M: Module>(
     let mut ctx = module.make_context();
     ctx.func = func;
     super::note_clif_size(&ctx.func);
+    // NEOVM_JIT_DUMP_ASM: Cranelift renders its disassembly only when asked.
+    let disasm = super::super::stats::asm_dump::want_disasm(aot);
+    if disasm {
+        ctx.set_disasm(true);
+    }
     module
         .define_function(fid, &mut ctx)
         .map_err(|e| CompileError::Backend(BackendError::Define(e.to_string())))?;
+    if disasm {
+        super::super::stats::asm_dump::stash(&ctx);
+    }
     module.clear_context(&mut ctx);
 
     Ok(fid)

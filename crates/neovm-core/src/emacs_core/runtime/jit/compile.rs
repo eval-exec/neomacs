@@ -3520,6 +3520,16 @@ pub fn lower_leaf_full_osr(
         .map_err(|e| CompileError::Backend(BackendError::Finalize(e.to_string())))?;
 
     let entry = module.get_finalized_function(fid);
+    super::stats::asm_dump::flush(&super::stats::asm_dump::AsmLeafInfo {
+        tier: match osr_pc {
+            Some(pc) => super::stats::perf_map::LabelTier::Osr(pc),
+            None => super::stats::perf_map::LabelTier::Baseline,
+        },
+        entry_name,
+        entry,
+        regalloc: lowering::active_regalloc_choice().name(),
+        clif_insts: clif_size_now().0,
+    });
     obs.label = label.map(String::into_boxed_str);
     Ok(CompiledLeaf {
         tier: LeafTier::Baseline,
@@ -4561,9 +4571,17 @@ fn build_leaf_fn<M: Module>(
             ops.len()
         ),
     );
+    // NEOVM_JIT_DUMP_ASM: Cranelift renders its disassembly only when asked.
+    let disasm = super::stats::asm_dump::want_disasm(aot);
+    if disasm {
+        ctx.set_disasm(true);
+    }
     module
         .define_function(fid, &mut ctx)
         .map_err(|e| CompileError::Backend(BackendError::Define(e.to_string())))?;
+    if disasm {
+        super::stats::asm_dump::stash(&ctx);
+    }
     module.clear_context(&mut ctx);
 
     Ok(fid)

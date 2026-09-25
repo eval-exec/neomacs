@@ -598,8 +598,8 @@ pub(crate) fn entry_counting_enabled() -> bool {
 /// (`lisp:<fn>#<id>:<tier>`, see [`perf_map`]): whenever a report is
 /// requested, under `PERF_BUILDID_DIR` (cranelift-jit writes
 /// `/tmp/perf-<pid>.map` exactly then; `perf record -- cmd` sets it) and
-/// under `NEOVM_JIT_DUMP_CLIF`. Read only on compile-miss and spec re-arm
-/// paths, never per call.
+/// under `NEOVM_JIT_DUMP_CLIF` / `NEOVM_JIT_DUMP_ASM`. Read only on
+/// compile-miss and spec re-arm paths, never per call.
 pub(crate) fn naming_enabled() -> bool {
     #[cfg(test)]
     if let Some(o) = OBSERVE_OVERRIDE.with(Cell::get) {
@@ -610,6 +610,7 @@ pub(crate) fn naming_enabled() -> bool {
         report_requested()
             || std::env::var_os("PERF_BUILDID_DIR").is_some()
             || std::env::var_os("NEOVM_JIT_DUMP_CLIF").is_some()
+            || asm_dump::dump_requested_by_env()
     })
 }
 
@@ -762,10 +763,7 @@ fn leaf_report_rows(
                 tier: row.tier.name(),
                 state: row.state.into(),
                 osr_pc: row.obs.osr_pc,
-                regalloc: match row.regalloc {
-                    super::compile::lowering::RegallocChoice::Fast => "fast",
-                    super::compile::lowering::RegallocChoice::Full => "full",
-                },
+                regalloc: row.regalloc.name(),
                 clif_insts: row.clif_insts,
                 entry_counted: row.obs.entry_counted,
                 entries: row.obs.entries,
@@ -826,6 +824,7 @@ pub(crate) fn reset_compile_stats() {
     STATS.with(|s| s.set(CompileStats::default()));
 }
 
+pub(crate) mod asm_dump;
 pub(crate) mod epoch;
 pub(crate) mod perf_map;
 mod report;
@@ -847,3 +846,7 @@ mod epoch_tests;
 #[cfg(test)]
 #[path = "stats/tests/perf_map_test.rs"]
 mod perf_map_tests;
+
+#[cfg(test)]
+#[path = "stats/tests/asm_dump_test.rs"]
+mod asm_dump_tests;
