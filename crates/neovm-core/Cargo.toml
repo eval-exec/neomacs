@@ -188,6 +188,14 @@ path = "tests/aot_spec.rs"
 [[test]]
 name = "fringe_standard_indicators"
 path = "tests/fringe_standard_indicators.rs"
+
+# Runs its checks on a child process's MAIN thread, which libtest never
+# offers; the file answers the libtest CLI subset nextest uses.
+[[test]]
+name = "main_thread_stack"
+path = "tests/main_thread_stack.rs"
+harness = false
+
 [[bench]]
 name = "buffer_text_backends"
 harness = false

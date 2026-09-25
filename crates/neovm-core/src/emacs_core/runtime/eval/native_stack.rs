@@ -28,6 +28,14 @@
 //! it (every guarded entry takes the measuring slow path, which is exact) or
 //! above it (no guard there: the state before this module, never a false
 //! signal).
+//!
+//! Everything above trusts stacker's idea of where a segment ends, and for
+//! the process's main thread (the batch and `-nw` evaluator) that is glibc's
+//! `pthread_getattr_np`: the lower of the `RLIMIT_STACK` bound and the end of
+//! the mapping below the stack. The kernel stops the stack `stack_guard_gap`
+//! (1 MiB) short of that mapping, which glibc does not count, so the
+//! editor's `RLIMIT_STACK` must never promise more stack than the address
+//! space holds -- [`raise_main_stack_rlimit`] keeps that true.
 
 use super::Context;
 
@@ -101,6 +109,110 @@ pub(crate) fn grow_tracking_jit_limit<T: ?Sized, R>(
     result.unwrap_or_else(|payload| std::panic::resume_unwind(payload))
 }
 
+/// Raise `RLIMIT_STACK` toward `target` bytes -- the room the main thread's
+/// stack may grow into -- but never past what the address space below that
+/// stack holds, and never lower it. Call it on the main thread before
+/// anything asks stacker about the stack (its answer is cached per thread).
+///
+/// The kernel reserves room below the main stack for the `RLIMIT_STACK` in
+/// force at exec (at least 128 MiB, guard gap included) and places the
+/// mappings below that. With address-space randomization, the randomization
+/// pad usually adds gigabytes to it; without (gdb, rr, `setarch -R`, a
+/// shell under `ADDR_NO_RANDOMIZE`) it is exactly the reserve, so a limit
+/// raised to 128 MiB after exec is 1 MiB more than the stack can ever get:
+/// it stops `stack_guard_gap` above the mapping below (the kernel's
+/// `expand_downwards`), while glibc's `pthread_getattr_np` -- stacker's
+/// source -- bounds the main stack by that mapping's end. The native-stack
+/// guard and stacker's probes then place their red zones in addresses that
+/// are not stack, and a deep recursion dies of SIGSEGV instead of
+/// signalling.
+///
+/// Capped by the room the kernel really leaves, the limit is the binding
+/// bound, which glibc reads exactly: stacker, the guard and the kernel agree
+/// on where the stack ends. Later mappings cannot shrink that room: the
+/// kernel places them below its `mmap_base`, where the dynamic loader,
+/// mapped first, already ends.
+#[cfg(unix)]
+pub fn raise_main_stack_rlimit(target: usize) {
+    // SAFETY: plain libc calls with a valid out-pointer.
+    unsafe {
+        let mut rlim = std::mem::MaybeUninit::<libc::rlimit>::uninit();
+        if libc::getrlimit(libc::RLIMIT_STACK, rlim.as_mut_ptr()) != 0 {
+            return;
+        }
+        let mut rlim = rlim.assume_init();
+        let target = target as libc::rlim_t;
+        if rlim.rlim_cur >= target {
+            return;
+        }
+        let page = libc::sysconf(libc::_SC_PAGESIZE).max(1) as libc::rlim_t;
+        let mut want = target.min(rlim.rlim_max);
+        if let Some(room) = main_stack_room(page as usize) {
+            want = want.min(room as libc::rlim_t);
+        }
+        want -= want % page;
+        if want > rlim.rlim_cur {
+            rlim.rlim_cur = want;
+            let _ = libc::setrlimit(libc::RLIMIT_STACK, &rlim);
+        }
+    }
+}
+
+/// The most the main stack's mapping can span: see
+/// [`main_stack_room_in`]. `None` where `/proc` cannot tell.
+#[cfg(target_os = "linux")]
+fn main_stack_room(page: usize) -> Option<usize> {
+    let maps = std::fs::read_to_string("/proc/self/maps").ok()?;
+    let cmdline = std::fs::read_to_string("/proc/cmdline").unwrap_or_default();
+    main_stack_room_in(&maps, stack_guard_gap_in(&cmdline, page))
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn main_stack_room(_page: usize) -> Option<usize> {
+    None
+}
+
+/// The most the `[stack]` mapping of `maps` (`/proc/self/maps` text) can
+/// span: from its end down to `guard_gap` above the highest mapping below
+/// it, the lowest start the kernel lets the stack grow to. `None` without a
+/// `[stack]` line.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn main_stack_room_in(maps: &str, guard_gap: usize) -> Option<usize> {
+    let range = |line: &str| {
+        let (lo, hi) = line.split_whitespace().next()?.split_once('-')?;
+        Some((
+            usize::from_str_radix(lo, 16).ok()?,
+            usize::from_str_radix(hi, 16).ok()?,
+        ))
+    };
+    let (stack_lo, stack_hi) = maps
+        .lines()
+        .filter(|line| line.trim_end().ends_with("[stack]"))
+        .find_map(range)?;
+    let below = maps
+        .lines()
+        .filter_map(range)
+        .filter(|&(_, hi)| hi <= stack_lo)
+        .map(|(_, hi)| hi)
+        .max()
+        .unwrap_or(0);
+    stack_hi.checked_sub(below.checked_add(guard_gap)?)
+}
+
+/// The kernel's `stack_guard_gap` in bytes: the `stack_guard_gap=` boot
+/// parameter (pages) of `cmdline` (`/proc/cmdline` text) when it is a plain
+/// number, else the kernel's default of 256 pages.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn stack_guard_gap_in(cmdline: &str, page: usize) -> usize {
+    let pages = cmdline
+        .split_whitespace()
+        .filter_map(|arg| arg.strip_prefix("stack_guard_gap="))
+        .last()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(256);
+    pages.saturating_mul(page)
+}
+
 impl Context {
     /// Point [`Self::jit_stack_limit`] at the stack segment the calling
     /// thread runs on now (see the module docs).
@@ -113,3 +225,7 @@ impl Context {
         &mut self.jit_stack_limit
     }
 }
+
+#[cfg(test)]
+#[path = "tests/native_stack.rs"]
+mod tests;

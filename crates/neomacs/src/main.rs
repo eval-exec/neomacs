@@ -4121,7 +4121,8 @@ pub fn run(mode: RuntimeMode) {
     // `_SC_ARG_MAX` from RLIMIT_STACK as `MAX (131072, MIN (stack / 4, 6 MiB))`,
     // and `syms_of_callproc` initializes `command-line-max-length` to
     // `sysconf (_SC_ARG_MAX) / 4` (src/callproc.c:2246-2252) AFTER this point
-    // in GNU's own startup (src/emacs.c:2172). 128 MiB lands on glibc's 6 MiB
+    // in GNU's own startup (src/emacs.c:2172). 128 MiB (127 MiB where the
+    // address space caps it, see `increase_stack_limit`) lands on glibc's 6 MiB
     // cap, so that variable reads 1572864 here where GNU reads 626432 -- one
     // declaration, two stack policies. Both numbers are correct reports of the
     // editor that produced them; see ledger entry 168 item 2, and
@@ -5616,20 +5617,17 @@ fn publish_gui_frame(
 /// `src/emacs.c:1563-1623` -- but to a flat target rather than GNU's computed
 /// one, and the difference is measurable in `command-line-max-length`. See the
 /// call site for the derivation.
+///
+/// The target is capped by the room the kernel left below the main stack at
+/// exec, which without address-space randomization is 1 MiB short of it: a
+/// limit the stack cannot reach made glibc, and so stacker and the JIT's
+/// native-stack guard, place the stack's end in the kernel's guard gap, and a
+/// deep recursion in batch or `-nw` crashed instead of signalling
+/// (`neovm_core::emacs_core::eval::raise_main_stack_rlimit`).
 #[cfg(unix)]
 fn increase_stack_limit() {
-    const TARGET_STACK_MB: u64 = 128;
-    let target = TARGET_STACK_MB * 1024 * 1024;
-    unsafe {
-        let mut rlim = std::mem::MaybeUninit::<libc::rlimit>::uninit();
-        if libc::getrlimit(libc::RLIMIT_STACK, rlim.as_mut_ptr()) == 0 {
-            let mut rlim = rlim.assume_init();
-            if rlim.rlim_cur < target as libc::rlim_t {
-                rlim.rlim_cur = std::cmp::min(target as libc::rlim_t, rlim.rlim_max);
-                let _ = libc::setrlimit(libc::RLIMIT_STACK, &rlim);
-            }
-        }
-    }
+    const TARGET_STACK_MB: usize = 128;
+    neovm_core::emacs_core::eval::raise_main_stack_rlimit(TARGET_STACK_MB * 1024 * 1024);
 }
 
 #[cfg(not(unix))]
