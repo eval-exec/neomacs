@@ -782,7 +782,13 @@ pub(crate) fn builtin_line_number_at_pos(
         LineNumberScope::Accessible(buf.accessible_emacs_byte_region())
     };
     let range = scope.counting_range(byte_pos);
-    let line_num = count_newlines(buf, range.start(), range.end()) + 1;
+    // GNU `count_lines` -> `display_count_lines`, which honors
+    // `selective-display` t by ending lines at `\r` too.
+    let line_num = buf.count_line_ends_emacs_byte(
+        range.start(),
+        range.end().max(range.start()),
+        buf.line_end_for_counting(),
+    ) + 1;
     Ok(Value::fixnum(line_num as i64))
 }
 

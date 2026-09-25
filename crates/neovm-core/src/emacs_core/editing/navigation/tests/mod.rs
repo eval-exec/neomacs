@@ -1156,3 +1156,5 @@ fn test_forward_char_honors_narrowing_beginning() {
     let pos = eval_int(&mut ev, "(point)");
     assert_eq!(pos, 3);
 }
+
+mod selective_display_gnu;

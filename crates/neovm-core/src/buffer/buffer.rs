@@ -3672,6 +3672,29 @@ impl Buffer {
         self.text.prev_newline_emacs_byte(from, floor)
     }
 
+    /// What ends a line when this buffer's lines are counted: GNU
+    /// `display_count_lines` also stops at `\r` while `selective-display` is
+    /// non-nil and not an integer.
+    pub(crate) fn line_end_for_counting(&self) -> crate::buffer::buffer_text::LineEnd {
+        let selective_display = self.slots[BUFFER_SLOT_SELECTIVE_DISPLAY.index()];
+        if !selective_display.is_nil() && !selective_display.is_fixnum() {
+            crate::buffer::buffer_text::LineEnd::NewlineOrCarriageReturn
+        } else {
+            crate::buffer::buffer_text::LineEnd::Newline
+        }
+    }
+
+    /// Number of line ends in logical emacs-byte range `[from, limit)`.
+    /// See [`BufferText::count_line_ends_emacs_byte`].
+    pub(crate) fn count_line_ends_emacs_byte(
+        &self,
+        from: EmacsBytePos,
+        limit: EmacsBytePos,
+        line_end: crate::buffer::buffer_text::LineEnd,
+    ) -> usize {
+        self.text.count_line_ends_emacs_byte(from, limit, line_end)
+    }
+
     /// Number of `\n` in logical emacs-byte range `[from, limit)`.
     /// See [`BufferText::count_newlines_emacs_byte`].
     pub(crate) fn count_newlines_emacs_byte(

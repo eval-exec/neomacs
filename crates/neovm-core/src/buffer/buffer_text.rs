@@ -14,6 +14,17 @@ use crate::emacs_core::value::Value;
 use crate::gc_trace::GcTrace;
 
 use super::buffer::{BufferId, InsertionType};
+
+/// What ends a line when lines are counted (GNU `display_count_lines`,
+/// src/xdisp.c).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LineEnd {
+    /// `\n` alone.
+    Newline,
+    /// `\n` or `\r`: `selective-display` is non-nil and not an integer, so a
+    /// `\r` hides the rest of its line and counts as a line end.
+    NewlineOrCarriageReturn,
+}
 use super::gap_buffer::{GAP_BYTES_DFL, GAP_BYTES_MIN};
 use super::marker_data::{
     apply_marker_data_delta, marker_data_anchor, marker_data_byte_pos, set_marker_data_anchor,
@@ -1182,6 +1193,33 @@ impl BufferText {
         let _ =
             self.for_each_emacs_byte_range_chunk::<()>(EmacsByteRange::new(from, limit), |chunk| {
                 count += memchr::memchr_iter(b'\n', chunk).count();
+                Ok::<(), ()>(())
+            });
+        count
+    }
+
+    /// Number of line ends in the logical emacs-byte range `[from, limit)`:
+    /// `\n`, and with [`LineEnd::NewlineOrCarriageReturn`] `\r` too -- GNU
+    /// `display_count_lines` (src/xdisp.c) under `selective-display` t.
+    pub(crate) fn count_line_ends_emacs_byte(
+        &self,
+        from: EmacsBytePos,
+        limit: EmacsBytePos,
+        line_end: LineEnd,
+    ) -> usize {
+        if line_end == LineEnd::Newline {
+            return self.count_newlines_emacs_byte(from, limit);
+        }
+        let total = self.emacs_byte_end_pos();
+        let from = from.min(total);
+        let limit = limit.min(total);
+        if from >= limit {
+            return 0;
+        }
+        let mut count = 0usize;
+        let _ =
+            self.for_each_emacs_byte_range_chunk::<()>(EmacsByteRange::new(from, limit), |chunk| {
+                count += memchr::memchr2_iter(b'\n', b'\r', chunk).count();
                 Ok::<(), ()>(())
             });
         count
