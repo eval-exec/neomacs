@@ -255,6 +255,7 @@ mod overlay_helper_semantics;
 mod parse_colon_path_strict_edge_semantics;
 mod parse_time_semantics;
 mod pcase_comprehensive_patterns;
+mod pcase_switch_jump_table_semantics;
 mod plist;
 mod point;
 mod pos_bol_eol_semantics;

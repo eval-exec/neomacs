@@ -1329,3 +1329,4 @@ fn list_iter_terminates_on_a_circular_list() {
 }
 
 mod hash_probe;
+pub(super) mod jump_table_lookup;
