@@ -49,8 +49,13 @@ fn start_anchor_is_not_computed_with_the_knob_off() {
 
 /// A forward search finds the same match with the analysis on as with it off
 /// and as the exhaustive oracle, and enters the matcher only at line starts.
+/// (The existence DFA's filter stays off: entries count the scan.)
 #[test]
 fn alternation_anchored_search_tries_line_starts_only() {
+    dfa::with_dfa_mode(dfa::DfaMode::Off, alternation_anchored_search_entries);
+}
+
+fn alternation_anchored_search_entries() {
     let syntax = DefaultSyntaxLookup;
     let text = b"  - item\n  plain line\n * star\n- first\n+ plus\n  + deep\n";
     for pattern in [

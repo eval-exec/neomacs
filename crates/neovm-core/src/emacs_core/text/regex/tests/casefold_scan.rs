@@ -515,9 +515,13 @@ fn folded_literals_are_the_ascii_spellings_of_a_required_prefix() {
 fn casefold_candidate_entries_drop_to_literal_hits() {
     crate::test_utils::init_test_tracing();
     let text = b"( ( (DeFun a) ( (Defun b)";
+    // Entries count the scan's candidates: the existence DFA's filter
+    // (`NEOVM_REGEX_DFA`) stays off.
     let search = |cp: &CompiledPattern| {
         let before = matcher_entry_count();
-        let found = re_search(cp, text, 0, text.len() as isize, &DefaultSyntaxLookup, 0);
+        let found = dfa::with_dfa_mode(dfa::DfaMode::Off, || {
+            re_search(cp, text, 0, text.len() as isize, &DefaultSyntaxLookup, 0)
+        });
         (found.map(|(pos, _)| pos), matcher_entry_count() - before)
     };
     let cp = regex_compile("(defun x", false, true).expect("compile");
@@ -649,7 +653,9 @@ fn lisp_case_folded_search_engages_the_fast_scans() {
                             (string-match "k" (string #x212A)))))"#;
     let eval = |form: &str| {
         let before = matcher_entry_count();
-        let result = crate::test_utils::runtime_startup_eval_one(form);
+        let result = dfa::with_dfa_mode(dfa::DfaMode::Off, || {
+            crate::test_utils::runtime_startup_eval_one(form)
+        });
         (result, matcher_entry_count() - before)
     };
     // Each evaluation in the cached runtime makes searches of its own, and
@@ -684,7 +690,9 @@ fn char_table_walk_waits_for_a_long_search() {
     long.extend_from_slice(b"(DEFUN x");
     let entries = |text: &[u8]| {
         let before = matcher_entry_count();
-        let found = re_search(&cp, text, 0, text.len() as isize, &DefaultSyntaxLookup, 0);
+        let found = dfa::with_dfa_mode(dfa::DfaMode::Off, || {
+            re_search(&cp, text, 0, text.len() as isize, &DefaultSyntaxLookup, 0)
+        });
         assert_eq!(found.map(|(pos, _)| pos), Some(text.len() - 8));
         matcher_entry_count() - before
     };
