@@ -504,23 +504,39 @@ impl InstrStarts {
     }
 }
 
-// Pass one intentionally returns its three coupled decode artifacts together.
-#[allow(clippy::type_complexity)]
-fn decode_pass1(
-    bytecodes: &[u8],
-    _constants: &mut Vec<Value>,
-) -> Result<(Vec<RawOp>, InstrStarts, Vec<JumpPatch>), DecodeError> {
-    // Every instruction is at least one byte, so this is an upper bound.
-    let mut ops: Vec<RawOp> = Vec::with_capacity(bytecodes.len());
-    let mut offset_map = InstrStarts::new(bytecodes.len());
-    let mut jump_patches: Vec<JumpPatch> = Vec::new();
+/// Receiver of one pass over a GNU bytecode string ([`walk_gnu_bytecode`]).
+///
+/// The decoder ([`RawOpSink`]) materializes the instructions; a validator
+/// keeps only what the jump-target check needs. Both run the ONE walker
+/// below, so there is one opcode table and what they accept cannot drift
+/// apart.
+trait DecodeSink {
+    /// Instruction number `instr_idx` starts at `byte_offset`.
+    fn start(&mut self, byte_offset: usize, instr_idx: usize);
+    /// A complete instruction.
+    fn op(&mut self, op: Op);
+    /// A call of the builtin `name` with `arg_count` arguments that the
+    /// opcode names itself (GNU's inline dispatch of the buffer ops).
+    fn builtin(&mut self, name: &'static str, arg_count: u8);
+    /// A jump of `kind` to byte offset `target`, from the instruction at
+    /// `source_byte`.
+    fn jump(&mut self, kind: JumpKind, target: usize, source_byte: usize);
+}
+
+/// Walk `bytecodes` once, instruction by instruction, reporting each to
+/// `sink`. Fails on the first undecodable instruction: an unknown or
+/// obsolete opcode, or an operand past the end.
+#[inline]
+fn walk_gnu_bytecode<S: DecodeSink>(bytecodes: &[u8], sink: &mut S) -> Result<(), DecodeError> {
     let mut pos: usize = 0;
+    let mut instr_idx: usize = 0;
     let len = bytecodes.len();
 
     while pos < len {
         let byte_offset = pos;
-        let instr_idx = ops.len();
-        offset_map.record(byte_offset, instr_idx);
+        sink.start(byte_offset, instr_idx);
+        // Every arm below reports exactly one instruction or fails.
+        instr_idx += 1;
 
         let byte = bytecodes[pos];
         pos += 1;
@@ -529,90 +545,82 @@ fn decode_pass1(
             // -- Immediate-arg groups (8 bytes each) --
 
             // 0-7: stack-ref
-            0..=5 => ops.push(RawOp::Resolved(Op::StackRef(byte as u16))),
+            0..=5 => sink.op(Op::StackRef(byte as u16)),
             6 => {
                 let arg = fetch1(bytecodes, &mut pos, byte_offset)?;
-                ops.push(RawOp::Resolved(Op::StackRef(arg as u16)));
+                sink.op(Op::StackRef(arg as u16));
             }
             7 => {
                 let arg = fetch2(bytecodes, &mut pos, byte_offset)?;
-                ops.push(RawOp::Resolved(Op::StackRef(arg)));
+                sink.op(Op::StackRef(arg));
             }
 
             // 8-15: varref
-            8..=13 => ops.push(RawOp::Resolved(Op::VarRef((byte - 8) as u16))),
+            8..=13 => sink.op(Op::VarRef((byte - 8) as u16)),
             14 => {
                 let arg = fetch1(bytecodes, &mut pos, byte_offset)?;
-                ops.push(RawOp::Resolved(Op::VarRef(arg as u16)));
+                sink.op(Op::VarRef(arg as u16));
             }
             15 => {
                 let arg = fetch2(bytecodes, &mut pos, byte_offset)?;
-                ops.push(RawOp::Resolved(Op::VarRef(arg)));
+                sink.op(Op::VarRef(arg));
             }
 
             // 16-23: varset
-            16..=21 => ops.push(RawOp::Resolved(Op::VarSet((byte - 16) as u16))),
+            16..=21 => sink.op(Op::VarSet((byte - 16) as u16)),
             22 => {
                 let arg = fetch1(bytecodes, &mut pos, byte_offset)?;
-                ops.push(RawOp::Resolved(Op::VarSet(arg as u16)));
+                sink.op(Op::VarSet(arg as u16));
             }
             23 => {
                 let arg = fetch2(bytecodes, &mut pos, byte_offset)?;
-                ops.push(RawOp::Resolved(Op::VarSet(arg)));
+                sink.op(Op::VarSet(arg));
             }
 
             // 24-31: varbind
-            24..=29 => ops.push(RawOp::Resolved(Op::VarBind((byte - 24) as u16))),
+            24..=29 => sink.op(Op::VarBind((byte - 24) as u16)),
             30 => {
                 let arg = fetch1(bytecodes, &mut pos, byte_offset)?;
-                ops.push(RawOp::Resolved(Op::VarBind(arg as u16)));
+                sink.op(Op::VarBind(arg as u16));
             }
             31 => {
                 let arg = fetch2(bytecodes, &mut pos, byte_offset)?;
-                ops.push(RawOp::Resolved(Op::VarBind(arg)));
+                sink.op(Op::VarBind(arg));
             }
 
             // 32-39: call
-            32..=37 => ops.push(RawOp::Resolved(Op::Call((byte - 32) as u16))),
+            32..=37 => sink.op(Op::Call((byte - 32) as u16)),
             38 => {
                 let arg = fetch1(bytecodes, &mut pos, byte_offset)?;
-                ops.push(RawOp::Resolved(Op::Call(arg as u16)));
+                sink.op(Op::Call(arg as u16));
             }
             39 => {
                 let arg = fetch2(bytecodes, &mut pos, byte_offset)?;
-                ops.push(RawOp::Resolved(Op::Call(arg)));
+                sink.op(Op::Call(arg));
             }
 
             // 40-47: unbind
-            40..=45 => ops.push(RawOp::Resolved(Op::Unbind((byte - 40) as u16))),
+            40..=45 => sink.op(Op::Unbind((byte - 40) as u16)),
             46 => {
                 let arg = fetch1(bytecodes, &mut pos, byte_offset)?;
-                ops.push(RawOp::Resolved(Op::Unbind(arg as u16)));
+                sink.op(Op::Unbind(arg as u16));
             }
             47 => {
                 let arg = fetch2(bytecodes, &mut pos, byte_offset)?;
-                ops.push(RawOp::Resolved(Op::Unbind(arg)));
+                sink.op(Op::Unbind(arg));
             }
 
             // -- Fixed opcodes --
-            48 => ops.push(RawOp::Resolved(Op::PopHandler)),
+            48 => sink.op(Op::PopHandler),
             49 => {
                 // pushconditioncase: FETCH2 jump target
                 let target = fetch2(bytecodes, &mut pos, byte_offset)? as usize;
-                jump_patches.push(JumpPatch {
-                    instr_idx: ops.len(),
-                    source_byte: byte_offset,
-                });
-                ops.push(RawOp::Jump(JumpKind::PushConditionCaseRaw, target));
+                sink.jump(JumpKind::PushConditionCaseRaw, target, byte_offset);
             }
             50 => {
                 // pushcatch: FETCH2 jump target
                 let target = fetch2(bytecodes, &mut pos, byte_offset)? as usize;
-                jump_patches.push(JumpPatch {
-                    instr_idx: ops.len(),
-                    source_byte: byte_offset,
-                });
-                ops.push(RawOp::Jump(JumpKind::PushCatch, target));
+                sink.jump(JumpKind::PushCatch, target, byte_offset);
             }
 
             // 51-55: reserved/unused
@@ -621,46 +629,46 @@ fn decode_pass1(
                 return Err(DecodeError::UnknownOpcode(byte, byte_offset));
             }
 
-            56 => ops.push(RawOp::Resolved(Op::Nth)),
-            57 => ops.push(RawOp::Resolved(Op::Symbolp)),
-            58 => ops.push(RawOp::Resolved(Op::Consp)),
-            59 => ops.push(RawOp::Resolved(Op::Stringp)),
-            60 => ops.push(RawOp::Resolved(Op::Listp)),
-            61 => ops.push(RawOp::Resolved(Op::Eq)),
-            62 => ops.push(RawOp::Resolved(Op::Memq)),
-            63 => ops.push(RawOp::Resolved(Op::Not)),
-            64 => ops.push(RawOp::Resolved(Op::Car)),
-            65 => ops.push(RawOp::Resolved(Op::Cdr)),
-            66 => ops.push(RawOp::Resolved(Op::Cons)),
-            67 => ops.push(RawOp::Resolved(Op::List(1))),
-            68 => ops.push(RawOp::Resolved(Op::List(2))),
-            69 => ops.push(RawOp::Resolved(Op::List(3))),
-            70 => ops.push(RawOp::Resolved(Op::List(4))),
-            71 => ops.push(RawOp::Resolved(Op::Length)),
-            72 => ops.push(RawOp::Resolved(Op::Aref)),
-            73 => ops.push(RawOp::Resolved(Op::Aset)),
-            74 => ops.push(RawOp::Resolved(Op::SymbolValue)),
-            75 => ops.push(RawOp::Resolved(Op::SymbolFunction)),
-            76 => ops.push(RawOp::Resolved(Op::Set)),
-            77 => ops.push(RawOp::Resolved(Op::Fset)),
-            78 => ops.push(RawOp::Resolved(Op::Get)),
-            79 => ops.push(RawOp::Resolved(Op::Substring)),
-            80 => ops.push(RawOp::Resolved(Op::Concat(2))),
-            81 => ops.push(RawOp::Resolved(Op::Concat(3))),
-            82 => ops.push(RawOp::Resolved(Op::Concat(4))),
-            83 => ops.push(RawOp::Resolved(Op::Sub1)),
-            84 => ops.push(RawOp::Resolved(Op::Add1)),
-            85 => ops.push(RawOp::Resolved(Op::Eqlsign)),
-            86 => ops.push(RawOp::Resolved(Op::Gtr)),
-            87 => ops.push(RawOp::Resolved(Op::Lss)),
-            88 => ops.push(RawOp::Resolved(Op::Leq)),
-            89 => ops.push(RawOp::Resolved(Op::Geq)),
-            90 => ops.push(RawOp::Resolved(Op::Sub)),
-            91 => ops.push(RawOp::Resolved(Op::Negate)),
-            92 => ops.push(RawOp::Resolved(Op::Add)),
-            93 => ops.push(RawOp::Resolved(Op::Max)),
-            94 => ops.push(RawOp::Resolved(Op::Min)),
-            95 => ops.push(RawOp::Resolved(Op::Mul)),
+            56 => sink.op(Op::Nth),
+            57 => sink.op(Op::Symbolp),
+            58 => sink.op(Op::Consp),
+            59 => sink.op(Op::Stringp),
+            60 => sink.op(Op::Listp),
+            61 => sink.op(Op::Eq),
+            62 => sink.op(Op::Memq),
+            63 => sink.op(Op::Not),
+            64 => sink.op(Op::Car),
+            65 => sink.op(Op::Cdr),
+            66 => sink.op(Op::Cons),
+            67 => sink.op(Op::List(1)),
+            68 => sink.op(Op::List(2)),
+            69 => sink.op(Op::List(3)),
+            70 => sink.op(Op::List(4)),
+            71 => sink.op(Op::Length),
+            72 => sink.op(Op::Aref),
+            73 => sink.op(Op::Aset),
+            74 => sink.op(Op::SymbolValue),
+            75 => sink.op(Op::SymbolFunction),
+            76 => sink.op(Op::Set),
+            77 => sink.op(Op::Fset),
+            78 => sink.op(Op::Get),
+            79 => sink.op(Op::Substring),
+            80 => sink.op(Op::Concat(2)),
+            81 => sink.op(Op::Concat(3)),
+            82 => sink.op(Op::Concat(4)),
+            83 => sink.op(Op::Sub1),
+            84 => sink.op(Op::Add1),
+            85 => sink.op(Op::Eqlsign),
+            86 => sink.op(Op::Gtr),
+            87 => sink.op(Op::Lss),
+            88 => sink.op(Op::Leq),
+            89 => sink.op(Op::Geq),
+            90 => sink.op(Op::Sub),
+            91 => sink.op(Op::Negate),
+            92 => sink.op(Op::Add),
+            93 => sink.op(Op::Max),
+            94 => sink.op(Op::Min),
+            95 => sink.op(Op::Mul),
 
             // 96-127: buffer/point ops
             //
@@ -676,11 +684,10 @@ fn decode_pass1(
             // lambdas sharing a bytecode template).
             96..=127 => {
                 if byte == 114 {
-                    ops.push(RawOp::Resolved(Op::SaveCurrentBuffer));
+                    sink.op(Op::SaveCurrentBuffer);
                 } else {
                     let (name, arg_count) = buffer_op_info(byte);
-                    let sym = intern(name);
-                    ops.push(RawOp::Resolved(Op::CallBuiltinSym(sym, arg_count)));
+                    sink.builtin(name, arg_count);
                 }
             }
 
@@ -691,61 +698,41 @@ fn decode_pass1(
             // 129: constant2 with 2-byte index
             129 => {
                 let arg = fetch2(bytecodes, &mut pos, byte_offset)?;
-                ops.push(RawOp::Resolved(Op::Constant(arg)));
+                sink.op(Op::Constant(arg));
             }
 
             // 130: goto
             130 => {
                 let target = fetch2(bytecodes, &mut pos, byte_offset)? as usize;
-                jump_patches.push(JumpPatch {
-                    instr_idx: ops.len(),
-                    source_byte: byte_offset,
-                });
-                ops.push(RawOp::Jump(JumpKind::Goto, target));
+                sink.jump(JumpKind::Goto, target, byte_offset);
             }
             // 131: goto-if-nil
             131 => {
                 let target = fetch2(bytecodes, &mut pos, byte_offset)? as usize;
-                jump_patches.push(JumpPatch {
-                    instr_idx: ops.len(),
-                    source_byte: byte_offset,
-                });
-                ops.push(RawOp::Jump(JumpKind::GotoIfNil, target));
+                sink.jump(JumpKind::GotoIfNil, target, byte_offset);
             }
             // 132: goto-if-not-nil
             132 => {
                 let target = fetch2(bytecodes, &mut pos, byte_offset)? as usize;
-                jump_patches.push(JumpPatch {
-                    instr_idx: ops.len(),
-                    source_byte: byte_offset,
-                });
-                ops.push(RawOp::Jump(JumpKind::GotoIfNotNil, target));
+                sink.jump(JumpKind::GotoIfNotNil, target, byte_offset);
             }
             // 133: goto-if-nil-else-pop
             133 => {
                 let target = fetch2(bytecodes, &mut pos, byte_offset)? as usize;
-                jump_patches.push(JumpPatch {
-                    instr_idx: ops.len(),
-                    source_byte: byte_offset,
-                });
-                ops.push(RawOp::Jump(JumpKind::GotoIfNilElsePop, target));
+                sink.jump(JumpKind::GotoIfNilElsePop, target, byte_offset);
             }
             // 134: goto-if-not-nil-else-pop
             134 => {
                 let target = fetch2(bytecodes, &mut pos, byte_offset)? as usize;
-                jump_patches.push(JumpPatch {
-                    instr_idx: ops.len(),
-                    source_byte: byte_offset,
-                });
-                ops.push(RawOp::Jump(JumpKind::GotoIfNotNilElsePop, target));
+                sink.jump(JumpKind::GotoIfNotNilElsePop, target, byte_offset);
             }
 
-            135 => ops.push(RawOp::Resolved(Op::Return)),
-            136 => ops.push(RawOp::Resolved(Op::Pop)),
-            137 => ops.push(RawOp::Resolved(Op::Dup)),
+            135 => sink.op(Op::Return),
+            136 => sink.op(Op::Pop),
+            137 => sink.op(Op::Dup),
 
             138 => {
-                ops.push(RawOp::Resolved(Op::SaveExcursion));
+                sink.op(Op::SaveExcursion);
             }
 
             // 139: Bsave_window_excursion — GNU marks it obsolete since 24.1
@@ -753,11 +740,11 @@ fn decode_pass1(
             // GNU Emacs 31 contain it. Pops TOP, evaluates it with Fprogn
             // inside a save-window-excursion context.
             139 => {
-                ops.push(RawOp::Resolved(Op::SaveWindowExcursion));
+                sink.op(Op::SaveWindowExcursion);
             }
 
             140 => {
-                ops.push(RawOp::Resolved(Op::SaveRestriction));
+                sink.op(Op::SaveRestriction);
             }
 
             // 141: obsolete (was catch before Emacs 25)
@@ -765,7 +752,7 @@ fn decode_pass1(
 
             142 => {
                 // unwind-protect: GNU pops cleanup fn from TOS (no operand)
-                ops.push(RawOp::Resolved(Op::UnwindProtectPop));
+                sink.op(Op::UnwindProtectPop);
             }
 
             // 143, 144, 145: obsolete
@@ -776,45 +763,42 @@ fn decode_pass1(
 
             147 => {
                 // set-marker (GNU bytecode.c Bset_marker, inline dispatch)
-                ops.push(RawOp::Resolved(Op::CallBuiltinSym(intern("set-marker"), 3)));
+                sink.builtin("set-marker", 3);
             }
             148 => {
                 // match-beginning
-                ops.push(RawOp::Resolved(Op::CallBuiltinSym(
-                    intern("match-beginning"),
-                    1,
-                )));
+                sink.builtin("match-beginning", 1);
             }
             149 => {
                 // match-end
-                ops.push(RawOp::Resolved(Op::CallBuiltinSym(intern("match-end"), 1)));
+                sink.builtin("match-end", 1);
             }
             150 => {
                 // upcase
-                ops.push(RawOp::Resolved(Op::CallBuiltinSym(intern("upcase"), 1)));
+                sink.builtin("upcase", 1);
             }
             151 => {
                 // downcase
-                ops.push(RawOp::Resolved(Op::CallBuiltinSym(intern("downcase"), 1)));
+                sink.builtin("downcase", 1);
             }
 
-            152 => ops.push(RawOp::Resolved(Op::StringEqual)),
-            153 => ops.push(RawOp::Resolved(Op::StringLessp)),
-            154 => ops.push(RawOp::Resolved(Op::Equal)),
-            155 => ops.push(RawOp::Resolved(Op::Nthcdr)),
-            156 => ops.push(RawOp::Resolved(Op::Elt)),
-            157 => ops.push(RawOp::Resolved(Op::Member)),
-            158 => ops.push(RawOp::Resolved(Op::Assq)),
-            159 => ops.push(RawOp::Resolved(Op::Nreverse)),
-            160 => ops.push(RawOp::Resolved(Op::Setcar)),
-            161 => ops.push(RawOp::Resolved(Op::Setcdr)),
-            162 => ops.push(RawOp::Resolved(Op::CarSafe)),
-            163 => ops.push(RawOp::Resolved(Op::CdrSafe)),
-            164 => ops.push(RawOp::Resolved(Op::Nconc)),
-            165 => ops.push(RawOp::Resolved(Op::Div)),
-            166 => ops.push(RawOp::Resolved(Op::Rem)),
-            167 => ops.push(RawOp::Resolved(Op::Numberp)),
-            168 => ops.push(RawOp::Resolved(Op::Integerp)),
+            152 => sink.op(Op::StringEqual),
+            153 => sink.op(Op::StringLessp),
+            154 => sink.op(Op::Equal),
+            155 => sink.op(Op::Nthcdr),
+            156 => sink.op(Op::Elt),
+            157 => sink.op(Op::Member),
+            158 => sink.op(Op::Assq),
+            159 => sink.op(Op::Nreverse),
+            160 => sink.op(Op::Setcar),
+            161 => sink.op(Op::Setcdr),
+            162 => sink.op(Op::CarSafe),
+            163 => sink.op(Op::CdrSafe),
+            164 => sink.op(Op::Nconc),
+            165 => sink.op(Op::Div),
+            166 => sink.op(Op::Rem),
+            167 => sink.op(Op::Numberp),
+            168 => sink.op(Op::Integerp),
 
             // 169-174: unused/reserved in modern Emacs
             169..=174 => return Err(DecodeError::UnknownOpcode(byte, byte_offset)),
@@ -822,27 +806,27 @@ fn decode_pass1(
             175 => {
                 // listN: 1-byte count
                 let count = fetch1(bytecodes, &mut pos, byte_offset)?;
-                ops.push(RawOp::Resolved(Op::List(count as u16)));
+                sink.op(Op::List(count as u16));
             }
             176 => {
                 // concatN: 1-byte count
                 let count = fetch1(bytecodes, &mut pos, byte_offset)?;
-                ops.push(RawOp::Resolved(Op::Concat(count as u16)));
+                sink.op(Op::Concat(count as u16));
             }
             177 => {
                 // insertN: 1-byte count (GNU Binsert_n, inline dispatch)
                 let count = fetch1(bytecodes, &mut pos, byte_offset)?;
-                ops.push(RawOp::Resolved(Op::CallBuiltinSym(intern("insert"), count)));
+                sink.builtin("insert", count);
             }
             178 => {
                 // stack-set: 1-byte
                 let n = fetch1(bytecodes, &mut pos, byte_offset)?;
-                ops.push(RawOp::Resolved(Op::StackSet(n as u16)));
+                sink.op(Op::StackSet(n as u16));
             }
             179 => {
                 // stack-set2: 2-byte
                 let n = fetch2(bytecodes, &mut pos, byte_offset)?;
-                ops.push(RawOp::Resolved(Op::StackSet(n)));
+                sink.op(Op::StackSet(n));
             }
 
             // 180-181: unused/reserved
@@ -851,10 +835,10 @@ fn decode_pass1(
             182 => {
                 // discardN: 1-byte (high bit = preserve TOS)
                 let n = fetch1(bytecodes, &mut pos, byte_offset)?;
-                ops.push(RawOp::Resolved(Op::DiscardN(n)));
+                sink.op(Op::DiscardN(n));
             }
 
-            183 => ops.push(RawOp::Resolved(Op::Switch)),
+            183 => sink.op(Op::Switch),
 
             // 184-191: unused/reserved
             184..=191 => return Err(DecodeError::UnknownOpcode(byte, byte_offset)),
@@ -862,12 +846,64 @@ fn decode_pass1(
             // 192-255: constant with 6-bit immediate
             192..=255 => {
                 let idx = (byte - 192) as u16;
-                ops.push(RawOp::Resolved(Op::Constant(idx)));
+                sink.op(Op::Constant(idx));
             }
         }
     }
 
-    Ok((ops, offset_map, jump_patches))
+    Ok(())
+}
+
+/// [`DecodeSink`] of the decoder: the instructions (jumps still at byte
+/// offsets), the instruction-start table, and the jumps to patch.
+struct RawOpSink {
+    ops: Vec<RawOp>,
+    offset_map: InstrStarts,
+    jump_patches: Vec<JumpPatch>,
+}
+
+impl DecodeSink for RawOpSink {
+    #[inline]
+    fn start(&mut self, byte_offset: usize, instr_idx: usize) {
+        debug_assert_eq!(instr_idx, self.ops.len());
+        self.offset_map.record(byte_offset, instr_idx);
+    }
+
+    #[inline]
+    fn op(&mut self, op: Op) {
+        self.ops.push(RawOp::Resolved(op));
+    }
+
+    #[inline]
+    fn builtin(&mut self, name: &'static str, arg_count: u8) {
+        self.ops
+            .push(RawOp::Resolved(Op::CallBuiltinSym(intern(name), arg_count)));
+    }
+
+    #[inline]
+    fn jump(&mut self, kind: JumpKind, target: usize, source_byte: usize) {
+        self.jump_patches.push(JumpPatch {
+            instr_idx: self.ops.len(),
+            source_byte,
+        });
+        self.ops.push(RawOp::Jump(kind, target));
+    }
+}
+
+// Pass one intentionally returns its three coupled decode artifacts together.
+#[allow(clippy::type_complexity)]
+fn decode_pass1(
+    bytecodes: &[u8],
+    _constants: &mut Vec<Value>,
+) -> Result<(Vec<RawOp>, InstrStarts, Vec<JumpPatch>), DecodeError> {
+    let mut sink = RawOpSink {
+        // Every instruction is at least one byte, so this is an upper bound.
+        ops: Vec::with_capacity(bytecodes.len()),
+        offset_map: InstrStarts::new(bytecodes.len()),
+        jump_patches: Vec::new(),
+    };
+    walk_gnu_bytecode(bytecodes, &mut sink)?;
+    Ok((sink.ops, sink.offset_map, sink.jump_patches))
 }
 
 fn patch_jumps(
