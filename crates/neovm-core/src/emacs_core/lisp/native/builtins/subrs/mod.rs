@@ -7069,26 +7069,21 @@ pub(crate) fn register_subrs(ctx: &mut crate::emacs_core::eval::Context) {
         NativeFn::ContextVec(|_ctx, args| builtin_float(args)),
         SubrArity::new(1, Some(1)),
     ));
-    ctx.register_subr(SubrSpec::new(
+    // GNU's rounding functions are fixed 1..2-argument subrs: a missing
+    // divisor arrives as nil, which `rounding_driver` treats as omitted, as
+    // GNU does. (A `Many` subr materialized an argument vector per call.)
+    ctx.register_subr(SubrSpec::fixed2(
         "truncate",
-        NativeFn::ContextVec(|_ctx, args| builtin_truncate(args)),
-        SubrArity::new(1, Some(2)),
+        builtin_truncate_2,
+        FixedMin2::One,
     ));
-    ctx.register_subr(SubrSpec::new(
-        "floor",
-        NativeFn::ContextVec(|_ctx, args| builtin_floor(args)),
-        SubrArity::new(1, Some(2)),
-    ));
-    ctx.register_subr(SubrSpec::new(
+    ctx.register_subr(SubrSpec::fixed2("floor", builtin_floor_2, FixedMin2::One));
+    ctx.register_subr(SubrSpec::fixed2(
         "ceiling",
-        NativeFn::ContextVec(|_ctx, args| builtin_ceiling(args)),
-        SubrArity::new(1, Some(2)),
+        builtin_ceiling_2,
+        FixedMin2::One,
     ));
-    ctx.register_subr(SubrSpec::new(
-        "round",
-        NativeFn::ContextVec(|_ctx, args| builtin_round(args)),
-        SubrArity::new(1, Some(2)),
-    ));
+    ctx.register_subr(SubrSpec::fixed2("round", builtin_round_2, FixedMin2::One));
     ctx.register_subr(SubrSpec::new(
         "copysign",
         NativeFn::ContextVec(|_ctx, args| crate::emacs_core::floatfns::builtin_copysign(args)),

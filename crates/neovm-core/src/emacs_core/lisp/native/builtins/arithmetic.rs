@@ -1,5 +1,5 @@
 use super::*;
-use crate::emacs_core::error::{expect_args, expect_args_range, expect_max_args, expect_min_args};
+use crate::emacs_core::error::{expect_args, expect_max_args, expect_min_args};
 use malachite::base::num::arithmetic::traits::{Abs, DivRound, Pow};
 use malachite::base::num::conversion::traits::RoundingFrom;
 use malachite::base::num::logic::traits::SignificantBits;
@@ -1932,42 +1932,101 @@ pub(crate) fn builtin_float(args: Vec<Value>) -> EvalResult {
     }
 }
 
-/// Helper for 1-or-2-arg rounding functions.
-/// When called with 2 args, divides first by second, then applies the rounding op.
-/// For int/int with no remainder, returns integer directly.
-///
-/// Mirrors GNU `rounding_driver` (`src/floatfns.c`). The audit
-/// (§2.15, §2.17) flagged that NeoMacs used to truncate float
-/// results to i64 with `as i64` saturation, silently producing
-/// `i64::MAX`/`i64::MIN` for out-of-range floats and not surfacing
-/// overflow on infinity / NaN. We now route every integer result
-/// through `Value::make_integer`, and floats outside i64 range use
-/// `Integer::rounding_from` with `RoundingMode::Down` to produce a bignum.
-fn rounding_with_divisor(
-    name: &str,
-    args: &[Value],
-    round_fn: fn(f64) -> f64,
-    int_div: fn(i64, i64) -> i64,
-) -> EvalResult {
-    expect_args_range(name, args, 1, 2)?;
-    // GNU `rounding_driver` (`src/floatfns.c`) validates the numerator
-    // before doing anything else.  It then treats a nil (or omitted)
-    // divisor as the single-argument form, so cl-lib may safely forward an
-    // unsupplied `&optional y` as nil.
-    check_number(&args[0])?;
-    if args.len() == 1 || args[1].is_nil() {
-        return match args[0].kind() {
-            ValueKind::Fixnum(n) => Ok(Value::fixnum(n)),
-            ValueKind::Float => float_to_lisp_integer(round_fn(args[0].xfloat())),
-            ValueKind::Veclike(VecLikeType::Bignum) => {
-                Ok(Value::make_integer(args[0].as_bignum().unwrap().clone()))
+/// The four GNU rounding functions (`src/floatfns.c:559-607`): `truncate`,
+/// `floor`, `ceiling` and `round`, each GNU's `rounding_driver` with its own
+/// double rounding, fixnum division and integer division mode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LispRounding {
+    /// Toward zero.
+    Truncate,
+    /// Toward negative infinity.
+    Floor,
+    /// Toward positive infinity.
+    Ceiling,
+    /// To nearest, ties to even (GNU `rounddiv_q`, `emacs_rint`).
+    Round,
+}
+
+impl LispRounding {
+    /// The integer division mode (malachite's names for GNU's
+    /// `mpz_tdiv_q`/`mpz_fdiv_q`/`mpz_cdiv_q`/`rounddiv_q`).
+    #[inline]
+    fn mode(self) -> RoundingMode {
+        match self {
+            Self::Truncate => RoundingMode::Down,
+            Self::Floor => RoundingMode::Floor,
+            Self::Ceiling => RoundingMode::Ceiling,
+            Self::Round => RoundingMode::Nearest,
+        }
+    }
+
+    /// GNU's double rounding for the one-argument float form.
+    #[inline]
+    fn round_float(self, f: f64) -> f64 {
+        match self {
+            Self::Truncate => f.trunc(),
+            Self::Floor => f.floor(),
+            Self::Ceiling => f.ceil(),
+            Self::Round => f.round_ties_even(),
+        }
+    }
+
+    /// The quotient of two fixnums, `d != 0`. `MOST_NEGATIVE_FIXNUM / -1`
+    /// fits an i64, and `make_int` promotes it.
+    #[inline]
+    fn div_fixnum(self, a: i64, d: i64) -> i64 {
+        let q = a / d;
+        let r = a % d;
+        match self {
+            Self::Truncate => q,
+            Self::Floor => {
+                if r != 0 && (r ^ d) < 0 {
+                    q - 1
+                } else {
+                    q
+                }
             }
-            _ => Err(signal(
-                LispCondition::WrongTypeArgument,
-                vec![Value::symbol("numberp"), args[0]],
-            )),
+            Self::Ceiling => {
+                if r != 0 && (r ^ d) >= 0 {
+                    q + 1
+                } else {
+                    q
+                }
+            }
+            Self::Round => {
+                // |r| < |d| <= 2^61, so 2|r| cannot overflow.
+                let abs_r2 = (r * 2).abs();
+                let abs_d = d.abs();
+                let away = || if (r ^ d) >= 0 { q + 1 } else { q - 1 };
+                if abs_r2 > abs_d || (abs_r2 == abs_d && q % 2 != 0) {
+                    away()
+                } else {
+                    q
+                }
+            }
+        }
+    }
+}
+
+/// GNU `rounding_driver` (`src/floatfns.c:404`): `(OP N D)` for the four
+/// rounding functions, `D` nil when omitted (the fixed-arity subr pads it).
+///
+/// GNU checks `N` first, then treats a nil divisor as the one-argument form,
+/// which returns an integer `N` ITSELF (`return FLOATP (n) ? ... : n;`), so
+/// `(eq (truncate b) b)` holds for a bignum `b` too. A float result goes
+/// through `double_to_integer` (`overflow-error` on NaN and infinities).
+/// Integer results of the two-argument form route through `make_integer`
+/// (fixnum when it fits); floats out of i64 range become bignums.
+fn rounding_driver(n: Value, d: Value, rounding: LispRounding) -> EvalResult {
+    check_number(&n)?;
+    if d.is_nil() {
+        return if n.is_float() {
+            float_to_lisp_integer(rounding.round_float(n.xfloat()))
+        } else {
+            Ok(n)
         };
     }
+    let args = [n, d];
     // The non-nil divisor is likewise checked with GNU's `CHECK_NUMBER`
     // before integer/float dispatch.  Keeping this validation at the shared
     // boundary prevents an implementation-specific `integer-or-marker-p`
@@ -1982,21 +2041,14 @@ fn rounding_with_divisor(
             return Err(signal(LispCondition::ArithError, vec![]));
         }
         if let Some(a) = args[0].as_fixnum() {
-            return Ok(Value::make_int(int_div(a, d)));
+            return Ok(Value::make_int(rounding.div_fixnum(a, d)));
         }
     }
     if args[1].is_bignum() && *args[1].as_bignum().unwrap() == 0 {
         return Err(signal(LispCondition::ArithError, vec![]));
     }
-    // The four flavors, as `int_div` is for fixnums: `round` is half to
-    // even (malachite's `Nearest`, GNU's `rounddiv_q`).
-    let mode = match name {
-        "truncate" => RoundingMode::Down,
-        "floor" => RoundingMode::Floor,
-        "ceiling" => RoundingMode::Ceiling,
-        "round" => RoundingMode::Nearest,
-        _ => unreachable!("unknown rounding name {name}"),
-    };
+    // `round` is half to even (malachite's `Nearest`, GNU's `rounddiv_q`).
+    let mode = rounding.mode();
     if args[0].is_float() || args[1].is_float() {
         return rounding_float_exact(&args[0], &args[1], mode);
     }
@@ -2137,71 +2189,33 @@ fn float_to_lisp_integer(value: f64) -> EvalResult {
     Ok(Value::make_integer(big))
 }
 
-pub(crate) fn builtin_truncate(args: Vec<Value>) -> EvalResult {
-    rounding_with_divisor(
-        "truncate",
-        &args,
-        |f| f.trunc(),
-        |a, d| {
-            // Truncation: toward zero
-            a / d
-        },
-    )
+/// `(truncate NUMBER &optional DIVISOR)` — GNU `Ftruncate`
+/// (`src/floatfns.c:559`), a fixed 1..2-argument subr.
+pub(crate) fn builtin_truncate_2(
+    _eval: &mut super::eval::Context,
+    n: Value,
+    d: Value,
+) -> EvalResult {
+    rounding_driver(n, d, LispRounding::Truncate)
 }
 
-pub(crate) fn builtin_floor(args: Vec<Value>) -> EvalResult {
-    rounding_with_divisor(
-        "floor",
-        &args,
-        |f| f.floor(),
-        |a, d| {
-            // Floor division: toward negative infinity
-            let q = a / d;
-            let r = a % d;
-            if (r != 0) && ((r ^ d) < 0) { q - 1 } else { q }
-        },
-    )
+/// `(floor NUMBER &optional DIVISOR)` — GNU `Ffloor`.
+pub(crate) fn builtin_floor_2(_eval: &mut super::eval::Context, n: Value, d: Value) -> EvalResult {
+    rounding_driver(n, d, LispRounding::Floor)
 }
 
-pub(crate) fn builtin_ceiling(args: Vec<Value>) -> EvalResult {
-    rounding_with_divisor(
-        "ceiling",
-        &args,
-        |f| f.ceil(),
-        |a, d| {
-            // Ceiling division: toward positive infinity
-            let q = a / d;
-            let r = a % d;
-            if (r != 0) && ((r ^ d) >= 0) { q + 1 } else { q }
-        },
-    )
+/// `(ceiling NUMBER &optional DIVISOR)` — GNU `Fceiling`.
+pub(crate) fn builtin_ceiling_2(
+    _eval: &mut super::eval::Context,
+    n: Value,
+    d: Value,
+) -> EvalResult {
+    rounding_driver(n, d, LispRounding::Ceiling)
 }
 
-pub(crate) fn builtin_round(args: Vec<Value>) -> EvalResult {
-    rounding_with_divisor(
-        "round",
-        &args,
-        |f| f.round_ties_even(),
-        |a, d| {
-            // Banker's rounding (round half to even)
-            let q = a / d;
-            let r = a % d;
-            let abs_r2 = (r * 2).abs();
-            let abs_d = d.abs();
-            if abs_r2 > abs_d {
-                if (r ^ d) >= 0 { q + 1 } else { q - 1 }
-            } else if abs_r2 == abs_d {
-                // Tie: round to even
-                if q % 2 != 0 {
-                    if (r ^ d) >= 0 { q + 1 } else { q - 1 }
-                } else {
-                    q
-                }
-            } else {
-                q
-            }
-        },
-    )
+/// `(round NUMBER &optional DIVISOR)` — GNU `Fround` (ties to even).
+pub(crate) fn builtin_round_2(_eval: &mut super::eval::Context, n: Value, d: Value) -> EvalResult {
+    rounding_driver(n, d, LispRounding::Round)
 }
 
 // ===========================================================================

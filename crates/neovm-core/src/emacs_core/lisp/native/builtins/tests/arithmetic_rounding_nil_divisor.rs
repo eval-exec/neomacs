@@ -166,3 +166,67 @@ fn cl_truncate_single_arg() {
         "OK (3 0.7000000000000002)"
     );
 }
+
+// -----------------------------------------------------------------------
+// GNU `rounding_driver` returns an integer numerator ITSELF for a nil or
+// omitted divisor (`return FLOATP (n) ? ... : n;`), and the four functions
+// are fixed 1..2-argument subrs.
+// -----------------------------------------------------------------------
+
+#[test]
+fn integer_numerator_with_no_divisor_is_returned_itself() {
+    // GNU 31.1 `--batch` answers `(t t t t nil)` and 5 (the negated bignum
+    // is a fresh object, so the last `eq` is nil there too).
+    assert_eq!(
+        eval_one(
+            "(let ((b (* most-positive-fixnum 4)))
+               (list (eq (truncate b) b) (eq (floor b nil) b)
+                     (eq (ceiling b) b) (eq (round b nil) b)
+                     (eq (truncate (- b)) (- b))))"
+        ),
+        "OK (t t t t nil)"
+    );
+    assert_eq!(eval_one("(round 5)"), "OK 5");
+}
+
+/// Every expected value below is GNU 31.1's `--batch` answer for the same
+/// form.
+#[test]
+fn rounding_functions_are_fixed_one_or_two_argument_subrs() {
+    for name in ["truncate", "floor", "ceiling", "round"] {
+        assert_eq!(eval_one(&format!("(func-arity '{name})")), "OK (1 . 2)");
+        assert_eq!(
+            eval_one(&format!("(condition-case e ({name}) (error (car e)))")),
+            "OK wrong-number-of-arguments",
+            "{name}"
+        );
+        assert_eq!(
+            eval_one(&format!(
+                "(condition-case e ({name} 1 2 3) (error (car e)))"
+            )),
+            "OK wrong-number-of-arguments",
+            "{name}"
+        );
+        assert_eq!(
+            eval_one(&format!("(condition-case e ({name} 'x) (error e))")),
+            "OK (wrong-type-argument numberp x)",
+            "{name}"
+        );
+    }
+    assert_eq!(
+        eval_one("(list (truncate 7 2) (floor -7 2) (ceiling -7 2) (round 5 2) (round 7 2))"),
+        "OK (3 -4 -3 2 4)"
+    );
+    assert_eq!(
+        eval_one("(list (truncate 7.5) (floor -7.5) (ceiling 7.2) (round 2.5) (round -2.5))"),
+        "OK (7 -8 8 2 -2)"
+    );
+    assert_eq!(
+        eval_one("(condition-case e (truncate 1.0e+INF) (error (car e)))"),
+        "OK overflow-error"
+    );
+    assert_eq!(
+        eval_one("(condition-case e (floor 5 0) (error (car e)))"),
+        "OK arith-error"
+    );
+}
