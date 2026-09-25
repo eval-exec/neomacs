@@ -41,6 +41,7 @@
 //! | `NEOVM_JIT_INLINE_TYPE_OF` | on | Answer a record's `type-of`/`cl-type-of` inline at an armed JIT site; `=off` calls `neovm_jit_pred_spec` everywhere (single-build A/B). |
 //! | `NEOVM_JIT_INLINE_AREF` | on | Inline slot reads at JIT `aref` sites on plain vectors and records; `=off` calls `neovm_jit_aref` everywhere (single-build A/B). |
 //! | `NEOVM_JIT_FLONUM` | `resident` | Unboxed float results at `Float`-feedback arithmetic sites (`compile::FlonumMode`): `off` boxes every result at its site (the prior lowering, CLIF-identical); `local` keeps a result unboxed while float arithmetic/compares, stack shuffles and variable reads consume it; `resident` also keeps it across audited ops (calls, `aref`, `aset`, ...) that box only their own operands. Single-build A/B of all three. |
+//! | `NEOVM_JIT_EQ_PREFILTER` | on | Answer native `eq`/`symbolp` inline unless an operand is a veclike (a symbol-with-pos is one); `=off` calls `neovm_jit_eq_slow`/`neovm_jit_symbolp_slow` for every mismatch/non-symbol (single-build A/B). |
 //! | `NEOVM_JIT_GATE_RELAX` | `=on` | Relax the calls ≤ arith profit gate. Default-on was tried and REVERTED (regressed byte-compile 21%) — measure byte-compile before ever re-flipping. |
 //!
 //! ## Measurement / bisection

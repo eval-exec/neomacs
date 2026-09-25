@@ -581,3 +581,39 @@ fn make_byte_code_decodes_lazily_at_first_execution() {
     );
     assert_eq!(full() - full0, 2, "refusal must not decode either");
 }
+
+/// `NEOVM_MAKE_BYTE_CODE_VALIDATE_ONLY=off` (the A/B baseline) decodes in
+/// full at construction and discards the result: still lazy at the first
+/// call, with the same verdicts.
+#[test]
+fn make_byte_code_full_decode_baseline_still_defers() {
+    crate::test_utils::init_test_tracing();
+    if crate::emacs_core::bytecode::chunk::eager_gnu_bytecode() {
+        return;
+    }
+    crate::emacs_core::builtins::symbols::force_make_byte_code_validate_only_for_test(false);
+    let mut eval = crate::emacs_core::eval::Context::new();
+    let full = super::full_decode_count_for_test;
+    let lazy = crate::emacs_core::bytecode::chunk::lazy_gnu_decode_count_for_test;
+    let (full0, lazy0) = (full(), lazy());
+    let made = eval
+        .eval_str("(setq mbc-full (make-byte-code 0 \"\\300\\207\" [mbc-ran] 1))")
+        .expect("make-byte-code");
+    crate::emacs_core::eval::push_scratch_gc_root(made);
+    assert_eq!((full() - full0, lazy() - lazy0), (1, 0));
+    assert!(made.get_bytecode_data().unwrap().ops.is_empty());
+    assert_eq!(
+        eval.eval_str("(funcall mbc-full)").unwrap(),
+        Value::symbol("mbc-ran")
+    );
+    assert_eq!((full() - full0, lazy() - lazy0), (2, 1));
+    let refused = eval.eval_str(
+        "(condition-case err (make-byte-code 0 \"\\202\\011\\000\\207\" [] 1)
+           (error err))",
+    );
+    assert_eq!(
+        crate::emacs_core::error::format_eval_result(&refused),
+        "OK (error \"bytecode decode error: jump target byte offset 9 not found \
+         (from instruction at byte 0)\")"
+    );
+}

@@ -355,3 +355,71 @@ fn make_closure_instances_share_the_prototype_bytes() {
         eval(&mut ctx, "'(t nil \"\\300\\207\")")
     );
 }
+
+/// `NEOVM_MAKE_CLOSURE_IN_PLACE=off` (the A/B baseline: clone, patch, move)
+/// builds the same instance as the in-place writer.
+#[test]
+fn make_closure_by_clone_and_in_place_build_the_same_instance() {
+    let mut ctx = Context::new();
+    let proto = eval(
+        &mut ctx,
+        "(make-byte-code 0 \"\\300\\301\\302E\\207\" [V0 V1 mci-tail] 3 \
+         \"Doc.\" \"p\" 'mci-x1)",
+    );
+    let mut built = Vec::new();
+    for in_place in [true, false] {
+        super::symbols::force_make_closure_in_place_for_test(in_place);
+        let v = make_closure(proto, &[Value::fixnum(1), Value::symbol("one")]);
+        let (i, p) = (data(v), data(proto));
+        assert_ne!(v.bits(), proto.bits());
+        assert_eq!(
+            i.constants.as_slice(),
+            &[
+                Value::fixnum(1),
+                Value::symbol("one"),
+                Value::symbol("mci-tail")
+            ]
+        );
+        assert!(
+            i.gnu_bytecode_bytes
+                .as_ref()
+                .unwrap()
+                .shares_storage_with(p.gnu_bytecode_bytes.as_ref().unwrap())
+        );
+        #[cfg(feature = "jit")]
+        assert!(std::ptr::eq(&**i.jit_runtime(), &**p.jit_runtime()));
+        assert_eq!(i.extra_slots, p.extra_slots);
+        assert_eq!(i.closure_slot_count, p.closure_slot_count);
+        assert_eq!(i.interactive, p.interactive);
+        let err = match super::symbols::builtin_make_closure(&[
+            proto,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+            Value::NIL,
+        ]) {
+            Err(crate::emacs_core::error::Flow::Signal(sig)) => format!(
+                "{} {}",
+                sig.symbol_name(),
+                sig.data
+                    .iter()
+                    .map(crate::emacs_core::print::print_value)
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ),
+            other => panic!("expected a signal: {other:?}"),
+        };
+        assert_eq!(err, "error \"Closure vars do not fit in constvec\"");
+        built.push((v, err));
+    }
+    assert_eq!(built[0].1, built[1].1);
+    ctx.set_variable("mci-in-place", built[0].0);
+    ctx.set_variable("mci-by-clone", built[1].0);
+    assert_eq!(
+        eval(
+            &mut ctx,
+            "(list (equal mci-in-place mci-by-clone) (funcall mci-by-clone))"
+        ),
+        eval(&mut ctx, "'(t (1 one mci-tail))")
+    );
+}

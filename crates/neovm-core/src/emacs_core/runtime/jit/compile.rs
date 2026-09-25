@@ -638,6 +638,37 @@ pub(crate) fn jit_flonum_mode() -> FlonumMode {
 
 #[cfg(test)]
 std::thread_local! {
+    static EQ_PREFILTER_TEST_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// Force the `eq`/`symbolp` prefilter on/off on the current thread (tests only).
+#[cfg(test)]
+pub(crate) fn force_eq_prefilter_for_test(on: bool) {
+    EQ_PREFILTER_TEST_OVERRIDE.with(|c| c.set(Some(on)));
+}
+
+/// Answer native `eq`/`symbolp` inline unless an operand is a veclike (the
+/// only kind a symbol-with-pos can be), calling the slow-path shim for
+/// veclikes only. Default on; `NEOVM_JIT_EQ_PREFILTER=off` calls the shim
+/// for every mismatching `eq` and every non-symbol `symbolp` — the
+/// single-build A/B. Read at compile time only.
+pub(crate) fn jit_eq_prefilter_on() -> bool {
+    #[cfg(test)]
+    if let Some(o) = EQ_PREFILTER_TEST_OVERRIDE.with(|c| c.get()) {
+        return o;
+    }
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("NEOVM_JIT_EQ_PREFILTER").ok().as_deref(),
+            Some("0" | "off" | "false" | "no")
+        )
+    })
+}
+
+#[cfg(test)]
+std::thread_local! {
     static INLINE_ARITH_TEST_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 

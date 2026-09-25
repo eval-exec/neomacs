@@ -5948,16 +5948,18 @@ fn lower_simple_op_arms(
             // operand carries the veclike tag the answer is nil right here.
             // Only a veclike operand reaches the read-only slow-path shim
             // (cold), which tests `symbols-with-pos-enabled`.
+            // `NEOVM_JIT_EQ_PREFILTER=off` emits the former shape (every
+            // mismatch calls the shim) for a single-build A/B.
             let rt = rt.ok_or(CompileError::UnsupportedOp("eq"))?;
             let b = stack.pop().ok_or(CompileError::StackUnderflow)?;
             let a = stack.pop().ok_or(CompileError::StackUnderflow)?;
             let res = fb.declare_var(types::I64);
             let fast = fb.create_block();
-            let check = fb.create_block();
             let slow = fb.create_block();
             let merge = fb.create_block();
+            let check = super::jit_eq_prefilter_on().then(|| fb.create_block());
             let same = fb.ins().icmp(IntCC::Equal, a, b);
-            fb.ins().brif(same, fast, &[], check, &[]);
+            fb.ins().brif(same, fast, &[], check.unwrap_or(slow), &[]);
 
             fb.switch_to_block(fast);
             fb.seal_block(fast);
@@ -5965,18 +5967,22 @@ fn lower_simple_op_arms(
             fb.def_var(res, t);
             fb.ins().jump(merge, &[]);
 
-            fb.switch_to_block(check);
-            fb.seal_block(check);
-            let nil = fb.ins().iconst(types::I64, Value::NIL.bits() as i64);
-            fb.def_var(res, nil);
-            let a_veclike = has_veclike_tag(fb, a);
-            let b_veclike = has_veclike_tag(fb, b);
-            let either_veclike = fb.ins().bor(a_veclike, b_veclike);
-            fb.ins().brif(either_veclike, slow, &[], merge, &[]);
+            if let Some(check) = check {
+                fb.switch_to_block(check);
+                fb.seal_block(check);
+                let nil = fb.ins().iconst(types::I64, Value::NIL.bits() as i64);
+                fb.def_var(res, nil);
+                let a_veclike = has_veclike_tag(fb, a);
+                let b_veclike = has_veclike_tag(fb, b);
+                let either_veclike = fb.ins().bor(a_veclike, b_veclike);
+                fb.ins().brif(either_veclike, slow, &[], merge, &[]);
+            }
 
             fb.switch_to_block(slow);
             fb.seal_block(slow);
-            fb.set_cold_block(slow);
+            if check.is_some() {
+                fb.set_cold_block(slow);
+            }
             let vmctx = fb.use_var(rt.vmctx_var);
             let call = fb.ins().call(rt.refs.eq_slow, &[vmctx, a, b]);
             let slow_res = fb.inst_results(call)[0];
@@ -5992,16 +5998,17 @@ fn lower_simple_op_arms(
             // other tag but veclike is nil natively; a veclike reaches the
             // read-only slow-path shim (cold), which answers t only for a
             // symbol-with-pos while `symbols-with-pos-enabled`.
+            // `NEOVM_JIT_EQ_PREFILTER=off`: every non-symbol calls the shim.
             let rt = rt.ok_or(CompileError::UnsupportedOp("symbolp"))?;
             let a = stack.pop().ok_or(CompileError::StackUnderflow)?;
             let res = fb.declare_var(types::I64);
             let fast = fb.create_block();
-            let check = fb.create_block();
             let slow = fb.create_block();
             let merge = fb.create_block();
+            let check = super::jit_eq_prefilter_on().then(|| fb.create_block());
             let tag = band_imm_p(fb, a, TAG_MASK as i64);
             let is_sym = icmp_imm_p(fb, IntCC::Equal, tag, TAG_SYMBOL as i64);
-            fb.ins().brif(is_sym, fast, &[], check, &[]);
+            fb.ins().brif(is_sym, fast, &[], check.unwrap_or(slow), &[]);
 
             fb.switch_to_block(fast);
             fb.seal_block(fast);
@@ -6009,21 +6016,25 @@ fn lower_simple_op_arms(
             fb.def_var(res, t);
             fb.ins().jump(merge, &[]);
 
-            fb.switch_to_block(check);
-            fb.seal_block(check);
-            let nil = fb.ins().iconst(types::I64, Value::NIL.bits() as i64);
-            fb.def_var(res, nil);
-            let is_veclike = icmp_imm_p(
-                fb,
-                IntCC::Equal,
-                tag,
-                crate::tagged::value::TAG_VECLIKE as i64,
-            );
-            fb.ins().brif(is_veclike, slow, &[], merge, &[]);
+            if let Some(check) = check {
+                fb.switch_to_block(check);
+                fb.seal_block(check);
+                let nil = fb.ins().iconst(types::I64, Value::NIL.bits() as i64);
+                fb.def_var(res, nil);
+                let is_veclike = icmp_imm_p(
+                    fb,
+                    IntCC::Equal,
+                    tag,
+                    crate::tagged::value::TAG_VECLIKE as i64,
+                );
+                fb.ins().brif(is_veclike, slow, &[], merge, &[]);
+            }
 
             fb.switch_to_block(slow);
             fb.seal_block(slow);
-            fb.set_cold_block(slow);
+            if check.is_some() {
+                fb.set_cold_block(slow);
+            }
             let vmctx = fb.use_var(rt.vmctx_var);
             let call = fb.ins().call(rt.refs.symbolp_slow, &[vmctx, a]);
             let slow_res = fb.inst_results(call)[0];

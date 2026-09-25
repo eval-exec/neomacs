@@ -5946,8 +5946,10 @@ fn make_byte_code_from_parts_with_slots(
     // divergence). Under the default lazy policy the instructions are
     // decoded at first execution (`defer_gnu_decode` below), so only
     // validate: the decoder's own walk and jump checks, the same errors,
-    // no instructions built. The eager policy keeps them resident.
-    let (ops, gnu_byte_offset_map) = if eager_gnu_bytecode() {
+    // no instructions built. The eager policy keeps them resident;
+    // `NEOVM_MAKE_BYTE_CODE_VALIDATE_ONLY=off` decodes in full and lets
+    // `defer_gnu_decode` drop the result, the former behavior (A/B).
+    let (ops, gnu_byte_offset_map) = if eager_gnu_bytecode() || !make_byte_code_validates_only() {
         decode_gnu_bytecode_with_offset_map(&raw_bytes, &mut constants)
             .map(|(ops, offset_map)| (ops, Some(offset_map)))
     } else {
@@ -6028,6 +6030,40 @@ fn make_byte_code_from_parts_with_slots(
     }
 
     Ok(Value::make_bytecode(bc))
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static MAKE_BYTE_CODE_VALIDATE_ONLY_TEST_OVERRIDE: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Force `make-byte-code`'s validate-only check on/off on the current
+/// thread (tests only).
+#[cfg(test)]
+pub(crate) fn force_make_byte_code_validate_only_for_test(on: bool) {
+    MAKE_BYTE_CODE_VALIDATE_ONLY_TEST_OVERRIDE.with(|c| c.set(Some(on)));
+}
+
+/// Whether `make-byte-code` only validates GNU bytecode under the lazy
+/// decode policy (the default). `NEOVM_MAKE_BYTE_CODE_VALIDATE_ONLY=off`
+/// decodes in full and discards the instructions, as before — the
+/// single-build A/B.
+fn make_byte_code_validates_only() -> bool {
+    #[cfg(test)]
+    if let Some(on) = MAKE_BYTE_CODE_VALIDATE_ONLY_TEST_OVERRIDE.with(|c| c.get()) {
+        return on;
+    }
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("NEOVM_MAKE_BYTE_CODE_VALIDATE_ONLY")
+                .ok()
+                .as_deref(),
+            Some("0" | "off" | "false" | "no")
+        )
+    })
 }
 
 pub(crate) fn make_interpreted_closure_from_parts(
@@ -6311,6 +6347,9 @@ pub(crate) fn builtin_make_closure(args: &[Value]) -> EvalResult {
         new_bc.env = Some(replace_env_alist_values(env_val, closure_vars));
         return Ok(Value::make_bytecode(new_bc));
     }
+    if !make_closure_in_place() {
+        return make_closure_by_clone(proto, closure_vars);
+    }
 
     // GNU .elc: a fresh constant vector (GNU copies it per call too — the
     // captured prefix is per instance), built in one pass: the captured
@@ -6336,6 +6375,78 @@ pub(crate) fn builtin_make_closure(args: &[Value]) -> EvalResult {
     }
 
     Ok(Value::make_bytecode_instance(proto, constants.into()))
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static MAKE_CLOSURE_IN_PLACE_TEST_OVERRIDE: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Force `make-closure`'s in-place construction on/off on the current
+/// thread (tests only).
+#[cfg(test)]
+pub(crate) fn force_make_closure_in_place_for_test(on: bool) {
+    MAKE_CLOSURE_IN_PLACE_TEST_OVERRIDE.with(|c| c.set(Some(on)));
+}
+
+/// Whether `make-closure` builds a GNU instance in place with a one-pass
+/// constant pool (the default). `NEOVM_MAKE_CLOSURE_IN_PLACE=off` takes
+/// the former path instead ([`make_closure_by_clone`]) — the single-build
+/// A/B. Read once; a relaxed byte load per call afterwards.
+#[inline(always)]
+fn make_closure_in_place() -> bool {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    // The knob's cached state, in one byte.
+    const UNREAD: u8 = 0;
+    const OFF: u8 = 1;
+    const ON: u8 = 2;
+    static STATE: AtomicU8 = AtomicU8::new(UNREAD);
+    #[cold]
+    #[inline(never)]
+    fn read_knob() -> bool {
+        let on = !matches!(
+            std::env::var("NEOVM_MAKE_CLOSURE_IN_PLACE").ok().as_deref(),
+            Some("0" | "off" | "false" | "no")
+        );
+        STATE.store(if on { ON } else { OFF }, Ordering::Relaxed);
+        on
+    }
+    #[cfg(test)]
+    if let Some(on) = MAKE_CLOSURE_IN_PLACE_TEST_OVERRIDE.with(|c| c.get()) {
+        return on;
+    }
+    match STATE.load(Ordering::Relaxed) {
+        OFF => false,
+        ON => true,
+        _ => read_knob(),
+    }
+}
+
+/// `make-closure` of a GNU prototype the former way, kept for the
+/// `NEOVM_MAKE_CLOSURE_IN_PLACE=off` A/B: clone the whole prototype (its
+/// constant pool included), patch the captured prefix in the copy, and
+/// move the copy into the heap.
+#[inline(never)]
+fn make_closure_by_clone(
+    proto: &crate::emacs_core::bytecode::ByteCodeFunction,
+    closure_vars: &[Value],
+) -> EvalResult {
+    let mut new_bc = proto.clone();
+    if closure_vars.len() > new_bc.constants.len() {
+        return Err(signal(
+            "error",
+            vec![Value::string("Closure vars do not fit in constvec")],
+        ));
+    }
+    for (i, var) in closure_vars.iter().enumerate() {
+        new_bc.constants[i] = *var;
+    }
+    #[cfg(feature = "jit")]
+    if let Some(id) = new_bc.jit_runtime().note_patched_prefix(closure_vars.len()) {
+        crate::emacs_core::jit::cache::evict_compiled(id);
+    }
+    Ok(Value::make_bytecode(new_bc))
 }
 
 /// Replace the first N values in a cons alist with closure_vars.

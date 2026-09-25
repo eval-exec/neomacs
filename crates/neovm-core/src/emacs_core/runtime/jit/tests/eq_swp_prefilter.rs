@@ -256,3 +256,35 @@ fn eq_prefilter_feeds_branches() {
         }
     }
 }
+
+/// `NEOVM_JIT_EQ_PREFILTER=off` (the A/B baseline) compiles the former
+/// shape: every mismatching `eq` and every non-symbol `symbolp` calls the
+/// shim, with the same answers.
+#[test]
+fn eq_prefilter_off_calls_the_shim_for_every_mismatch() {
+    force_profit_gate_for_test(false);
+    force_eq_prefilter_for_test(false);
+    let mut eval = Context::new();
+    let ctx_ptr = &mut eval as *mut Context as *mut u8;
+    let eq = eq_body(Shape::RequiredOnly);
+    let eq_leaf = compile_bytecode_function(&eq).expect("compiles");
+    let symbolp = symbolp_body();
+    let symbolp_leaf = compile_bytecode_function(&symbolp).expect("compiles");
+    let values = matrix(&mut eval);
+    for on in [false, true] {
+        set_symbols_with_pos(&mut eval, on);
+        for &(an, a) in &values {
+            for &(bn, b) in &values {
+                let want = interpret(&mut eval, &eq, &[a, b]);
+                let (got, calls, _) = native(ctx_ptr, &eq_leaf, &[a, b]);
+                assert_eq!(print_value(&got), print_value(&want), "(eq {an} {bn})");
+                assert_eq!(calls, usize::from(a.bits() != b.bits()), "(eq {an} {bn})");
+            }
+            let want = interpret(&mut eval, &symbolp, &[a]);
+            let (got, _, calls) = native(ctx_ptr, &symbolp_leaf, &[a]);
+            assert_eq!(print_value(&got), print_value(&want), "(symbolp {an})");
+            assert_eq!(calls, usize::from(!a.is_symbol()), "(symbolp {an})");
+        }
+    }
+    force_eq_prefilter_for_test(true);
+}
