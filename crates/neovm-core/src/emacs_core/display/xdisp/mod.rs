@@ -5585,7 +5585,50 @@ struct ApproxWindowDisplayContext {
     char_height: i64,
     window_start: LispCharPos1,
     window_point: LispCharPos1,
+    /// The buffer text from char `text_start` (the window start) on -- as much
+    /// as the window's rows can show plus slack, or the rest of the buffer
+    /// when that is shorter (`ApproxWindowText::bounded`). Copying the whole
+    /// buffer made every `posn-at-point` O(Z): the company/corfu cliff.
+    text: ApproxWindowText,
+    /// The buffer's character count (`Z - 1`).
+    total_chars: usize,
+    /// The start of the window's last visible line (0-based char index),
+    /// found by scanning the buffer's newlines in place, so a line longer
+    /// than `text` still resolves exactly.
+    last_visible_row_start: usize,
+}
+
+/// A window of buffer text, indexed by absolute 0-based char position.
+#[derive(Clone)]
+struct ApproxWindowText {
+    start: usize,
     chars: Vec<char>,
+    /// Whether `chars` runs to the end of the buffer.
+    reaches_end: bool,
+}
+
+impl ApproxWindowText {
+    /// The char at absolute position `index`, if this window holds it.
+    fn get(&self, index: usize) -> Option<char> {
+        index
+            .checked_sub(self.start)
+            .and_then(|offset| self.chars.get(offset).copied())
+    }
+
+    /// One past the last absolute position held.
+    fn end(&self) -> usize {
+        self.start + self.chars.len()
+    }
+
+    /// The first `\n` at or after absolute `from` within this window.
+    fn find_newline(&self, from: usize) -> Option<usize> {
+        let offset = from.checked_sub(self.start)?;
+        self.chars
+            .get(offset..)?
+            .iter()
+            .position(|ch| *ch == '\n')
+            .map(|found| from + found)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -5757,12 +5800,37 @@ fn live_window_display_context_for(
     let body_height = (body_bottom - body_top).max(1);
     let body_lines = ((body_height + char_height - 1) / char_height).max(1);
     let body_cols = ((bounds.width.max(1.0) as i64 + char_width - 1) / char_width).max(1);
-    let chars = buffer.full_text_string().chars().collect::<Vec<_>>();
     let window_point = if frame.selected_window == wid {
         buffer.point_char_pos().to_lisp()
     } else {
         (*point).max(LispCharPos1::ONE)
     };
+    let total_chars = buffer.total_char_len().get();
+    let text_start = window_start
+        .to_one_based_usize()
+        .saturating_sub(1)
+        .min(total_chars);
+    // Every visual row the approximations count consumes at most
+    // `wrap_cols + 1` characters (a wrapped segment or a line and its
+    // newline), so this many characters from the window start cover every
+    // row the window shows with two rows to spare; see
+    // `approximate_point_at_coords` for why the spare rows are needed.
+    let wrap_cols = body_cols.saturating_sub(1).max(1) as usize;
+    let budget = if bounded_window_text_enabled() {
+        (body_lines as usize)
+            .saturating_add(2)
+            .saturating_mul(wrap_cols + 1)
+            .saturating_add(1)
+    } else {
+        usize::MAX
+    };
+    let text = approx_window_text(buffer, text_start, text_start.saturating_add(budget));
+    let last_visible_row_start = nth_line_start_in_buffer(
+        buffer,
+        text_start,
+        body_lines.saturating_sub(1),
+        total_chars,
+    );
 
     Ok(Some(ApproxWindowDisplayContext {
         body_height,
@@ -5772,8 +5840,115 @@ fn live_window_display_context_for(
         char_height,
         window_start: *window_start,
         window_point,
-        chars,
+        text,
+        total_chars,
+        last_visible_row_start,
     }))
+}
+
+#[cfg(test)]
+thread_local! {
+    static BOUNDED_WINDOW_TEXT_OVERRIDE: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Force `NEOMACS_POSN_BOUNDED_TEXT` on this thread (tests only).
+#[cfg(test)]
+pub(crate) fn set_bounded_window_text_for_test(enabled: Option<bool>) {
+    BOUNDED_WINDOW_TEXT_OVERRIDE.with(|cell| cell.set(enabled));
+}
+
+/// `NEOMACS_POSN_BOUNDED_TEXT=on` (P3.5 H): the approximate window geometry
+/// behind `posn-at-point`, `pos-visible-in-window-p` and `posn-at-x-y` reads
+/// only the text the window can show. Off, it reads to the end of the
+/// buffer, which is O(Z) per call. Read once; default off.
+fn bounded_window_text_enabled() -> bool {
+    #[cfg(test)]
+    if let Some(enabled) = BOUNDED_WINDOW_TEXT_OVERRIDE.with(std::cell::Cell::get) {
+        return enabled;
+    }
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        matches!(
+            std::env::var("NEOMACS_POSN_BOUNDED_TEXT")
+                .ok()
+                .map(|value| value.trim().to_ascii_lowercase())
+                .as_deref(),
+            Some("on" | "1" | "true" | "yes")
+        )
+    })
+}
+
+/// [`live_window_display_context_for`] holding the rest of the buffer from
+/// the window start: for a coordinate below every row the window shows.
+fn live_window_display_context_with_all_text(
+    frames: &crate::window::FrameManager,
+    buffers: &crate::buffer::BufferManager,
+    fid: FrameId,
+    wid: WindowId,
+) -> Result<Option<ApproxWindowDisplayContext>, Flow> {
+    let Some(mut ctx) = live_window_display_context_for(frames, buffers, fid, wid)? else {
+        return Ok(None);
+    };
+    let Some(buffer) = frames
+        .get(fid)
+        .and_then(|frame| frame.find_window(wid))
+        .and_then(|window| window.buffer_id())
+        .and_then(|buffer_id| buffers.get(buffer_id))
+    else {
+        return Ok(None);
+    };
+    ctx.text = approx_window_text(buffer, ctx.text.start, ctx.total_chars);
+    Ok(Some(ctx))
+}
+
+/// The buffer's characters in `[start, end)` (0-based, clamped to Z).
+fn approx_window_text(
+    buffer: &crate::buffer::Buffer,
+    start: usize,
+    end: usize,
+) -> ApproxWindowText {
+    let total_chars = buffer.total_char_len().get();
+    let end = end.min(total_chars);
+    let start = start.min(end);
+    let byte = |char_pos: usize| {
+        buffer.char_pos_to_emacs_byte_pos_clamped(crate::buffer::CharPos0::new(char_pos))
+    };
+    let chars = buffer
+        .buffer_substring_range(crate::buffer::EmacsByteRange::new(byte(start), byte(end)))
+        .chars()
+        .collect();
+    ApproxWindowText {
+        start,
+        chars,
+        reaches_end: end == total_chars,
+    }
+}
+
+/// The char position past the `lines`-th newline at or after `start`, or Z
+/// when the buffer has fewer: `nth_visible_row_start_char` over the whole
+/// buffer, scanned in place.
+fn nth_line_start_in_buffer(
+    buffer: &crate::buffer::Buffer,
+    start: usize,
+    lines: i64,
+    total_chars: usize,
+) -> usize {
+    let start = start.min(total_chars);
+    let Ok(lines) = usize::try_from(lines) else {
+        return start;
+    };
+    if lines == 0 {
+        return start;
+    }
+    let from = buffer.char_pos_to_emacs_byte_pos_clamped(crate::buffer::CharPos0::new(start));
+    let limit =
+        buffer.char_pos_to_emacs_byte_pos_clamped(crate::buffer::CharPos0::new(total_chars));
+    let (past, crossed) = buffer.nth_newline_emacs_byte(from, limit, lines);
+    if crossed < lines {
+        return total_chars;
+    }
+    buffer.emacs_byte_pos_to_char_pos_clamped(past).get()
 }
 
 fn approx_wrap_cols(ctx: &ApproxWindowDisplayContext) -> i64 {
@@ -5830,7 +6005,7 @@ fn resolve_pos_visible_target_lisp_pos(
             expect_integer_or_marker(value)?;
             let lisp_pos = value.as_int().unwrap_or(0).max(1) as usize;
             Ok(Some(LispCharPos1::from_one_based_usize(
-                lisp_pos.min(ctx.chars.len().saturating_add(1)),
+                lisp_pos.min(ctx.total_chars.saturating_add(1)),
             )))
         }
         _ => Ok(Some(current_window_point_lisp(ctx))),
@@ -5841,51 +6016,41 @@ fn current_window_point_lisp(ctx: &ApproxWindowDisplayContext) -> LispCharPos1 {
     LispCharPos1::from_one_based_usize(
         ctx.window_point
             .to_one_based_usize()
-            .min(ctx.chars.len().saturating_add(1)),
+            .min(ctx.total_chars.saturating_add(1)),
     )
 }
 
 fn last_visible_row_start_lisp_pos(ctx: &ApproxWindowDisplayContext) -> LispCharPos1 {
-    let row_start = nth_visible_row_start_char(
-        &ctx.chars,
-        ctx.window_start.to_one_based_usize().saturating_sub(1),
-        ctx.body_lines.saturating_sub(1),
-    );
     LispCharPos1::from_one_based_usize(
-        row_start
+        ctx.last_visible_row_start
             .saturating_add(1)
-            .min(ctx.chars.len().saturating_add(1)),
+            .min(ctx.total_chars.saturating_add(1)),
     )
 }
 
-fn nth_visible_row_start_char(chars: &[char], mut start_char: usize, rows: i64) -> usize {
-    start_char = start_char.min(chars.len());
-    for _ in 0..rows.max(0) {
-        if start_char >= chars.len() {
-            return chars.len();
-        }
-        match chars[start_char..].iter().position(|ch| *ch == '\n') {
-            Some(offset) => start_char += offset + 1,
-            None => return chars.len(),
-        }
-    }
-    start_char
-}
-
+/// The visual row and column of `lisp_pos` counted from `start_char`.
+///
+/// When the scan runs past the context's text it has already counted more
+/// rows than the window shows (the text covers them all), so the position is
+/// reported on the row reached, which every caller treats as not visible.
 fn row_col_for_lisp_pos(
-    chars: &[char],
+    ctx: &ApproxWindowDisplayContext,
     start_char: usize,
     lisp_pos: LispCharPos1,
     wrap_cols: i64,
 ) -> Option<(i64, i64)> {
     let lisp_pos = usize::try_from(lisp_pos.as_i64().max(1)).ok()?;
-    let target = lisp_pos.saturating_sub(1).min(chars.len());
+    let target = lisp_pos.saturating_sub(1).min(ctx.total_chars);
     let mut row = 0_i64;
     let mut col = 0_i64;
     let wrap_cols = wrap_cols.max(1);
-    let mut idx = start_char.min(chars.len());
+    let mut idx = start_char.min(ctx.total_chars);
     while idx < target {
-        if chars[idx] == '\n' {
+        let Some(ch) = ctx.text.get(idx) else {
+            debug_assert!(row >= ctx.body_lines, "the text covers every visible row");
+            return Some((row.max(ctx.body_lines), col));
+        };
+        if ch == '\n' {
             row += 1;
             col = 0;
         } else {
@@ -5910,7 +6075,7 @@ fn approximate_pos_visible_metrics(
     let start_char = usize::try_from(ctx.window_start.as_i64().max(1))
         .ok()?
         .saturating_sub(1);
-    let (row, col) = row_col_for_lisp_pos(&ctx.chars, start_char, pos_lisp, approx_wrap_cols(ctx))?;
+    let (row, col) = row_col_for_lisp_pos(ctx, start_char, pos_lisp, approx_wrap_cols(ctx))?;
     if row < 0 || row >= ctx.body_lines {
         return None;
     }
@@ -6140,18 +6305,27 @@ fn exact_metrics_from_redisplay_point(
     }
 }
 
+/// What `approximate_point_at_coords` found.
+enum ApproxPointAtCoords {
+    Point(ExactVisibleMetrics),
+    /// The coordinates lie below the rows the context's text covers: only the
+    /// whole buffer's text answers them (`live_window_display_context_with_all_text`).
+    NeedsAllText,
+}
+
 fn approximate_point_at_coords(
     ctx: &ApproxWindowDisplayContext,
     x: i64,
     y: i64,
-) -> Option<ExactVisibleMetrics> {
+) -> Option<ApproxPointAtCoords> {
     if x < 0 || y < 0 {
         return None;
     }
+    let total = ctx.total_chars;
     let start = usize::try_from(ctx.window_start.as_i64().max(1))
         .ok()?
         .saturating_sub(1)
-        .min(ctx.chars.len());
+        .min(total);
     let char_width = ctx.char_width.max(1);
     let char_height = ctx.char_height.max(1);
     let query_row = (y / char_height).max(0);
@@ -6161,10 +6335,41 @@ fn approximate_point_at_coords(
     let mut row = 0_i64;
     let mut line_start = start;
     loop {
-        let line_end = ctx.chars[line_start..]
-            .iter()
-            .position(|ch| *ch == '\n')
-            .map_or(ctx.chars.len(), |offset| line_start + offset);
+        let line_end = match ctx.text.find_newline(line_start) {
+            Some(line_end) => line_end,
+            None if ctx.text.reaches_end => total,
+            None => {
+                // This line runs past the text. Its segments that lie wholly
+                // inside the text are exact; the text covers two rows more
+                // than the window shows, so any row the window shows is one
+                // of them.
+                let held = ctx.text.end().saturating_sub(line_start);
+                let whole_rows = i64::try_from(held).ok()? / wrap_cols;
+                if query_row < row + whole_rows {
+                    let visual_row = query_row - row;
+                    let segment_start = line_start.saturating_add(
+                        usize::try_from(visual_row.saturating_mul(wrap_cols)).ok()?,
+                    );
+                    let chosen_col = query_col.min(wrap_cols);
+                    let point = segment_start
+                        .saturating_add(usize::try_from(chosen_col).ok()?)
+                        .saturating_add(1)
+                        .min(total.saturating_add(1));
+                    return Some(ApproxPointAtCoords::Point(ExactVisibleMetrics {
+                        point: LispCharPos1::from_one_based_usize(point),
+                        x,
+                        y,
+                        dx: x - chosen_col.saturating_mul(char_width),
+                        dy: y - query_row.saturating_mul(char_height),
+                        width: 0,
+                        height: 0,
+                        row: query_row,
+                        col: query_col,
+                    }));
+                }
+                return Some(ApproxPointAtCoords::NeedsAllText);
+            }
+        };
         let line_len = i64::try_from(line_end.saturating_sub(line_start)).ok()?;
         let visual_rows = ((line_len + wrap_cols - 1) / wrap_cols).max(1);
 
@@ -6177,9 +6382,9 @@ fn approximate_point_at_coords(
             let point = segment_start
                 .saturating_add(usize::try_from(chosen_col).ok()?)
                 .saturating_add(1)
-                .min(ctx.chars.len().saturating_add(1));
+                .min(total.saturating_add(1));
 
-            return Some(ExactVisibleMetrics {
+            return Some(ApproxPointAtCoords::Point(ExactVisibleMetrics {
                 point: LispCharPos1::from_one_based_usize(point),
                 x,
                 y,
@@ -6189,18 +6394,18 @@ fn approximate_point_at_coords(
                 height: 0,
                 row: query_row,
                 col: query_col,
-            });
+            }));
         }
 
-        if line_end >= ctx.chars.len() {
+        if line_end >= total {
             break;
         }
         row += visual_rows;
         line_start = line_end + 1;
     }
 
-    Some(ExactVisibleMetrics {
-        point: LispCharPos1::from_one_based_usize(ctx.chars.len().saturating_add(1)),
+    Some(ApproxPointAtCoords::Point(ExactVisibleMetrics {
+        point: LispCharPos1::from_one_based_usize(total.saturating_add(1)),
         x,
         y,
         dx: x,
@@ -6209,7 +6414,7 @@ fn approximate_point_at_coords(
         height: 0,
         row: query_row,
         col: query_col,
-    })
+    }))
 }
 
 /// Result of asking an immutable GUI presentation for one buffer position.
@@ -7240,9 +7445,20 @@ fn posn_at_x_y_impl(
             let Some(ctx) = live_window_display_context_for(frames, buffers, fid, wid)? else {
                 return Ok(Value::NIL);
             };
-            let Some(metrics) = approximate_point_at_coords(&ctx, at.text_area_x(), at.window_y())
-            else {
-                return Ok(Value::NIL);
+            let metrics = match approximate_point_at_coords(&ctx, at.text_area_x(), at.window_y()) {
+                Some(ApproxPointAtCoords::Point(metrics)) => metrics,
+                Some(ApproxPointAtCoords::NeedsAllText) => {
+                    let Some(ctx) =
+                        live_window_display_context_with_all_text(frames, buffers, fid, wid)?
+                    else {
+                        return Ok(Value::NIL);
+                    };
+                    match approximate_point_at_coords(&ctx, at.text_area_x(), at.window_y()) {
+                        Some(ApproxPointAtCoords::Point(metrics)) => metrics,
+                        _ => return Ok(Value::NIL),
+                    }
+                }
+                None => return Ok(Value::NIL),
             };
             Ok(make_window_part_position(
                 hit.window,

@@ -9,6 +9,8 @@ use crate::emacs_core::value::{
 };
 use malachite::Integer;
 
+mod approx_window_text_test;
+
 fn interactive_context() -> Context {
     let mut eval = Context::new();
     eval.set_variable("noninteractive", Value::NIL);
