@@ -937,3 +937,325 @@ fn a_full_cache_is_cleared_and_relearned() {
     assert!(dfa.counters.clears > 0, "{:?}", dfa.counters);
     assert_eq!(dfa.gave_up(), None);
 }
+
+// ---------------------------------------------------------------------------
+// The candidate filter in `re_search` (C5)
+// ---------------------------------------------------------------------------
+
+use crate::emacs_core::regex_emacs::{matcher_entry_count, re_search};
+
+type SearchResult = Option<(usize, Vec<i64>, Vec<i64>)>;
+
+fn search(
+    compiled: &CompiledPattern,
+    text: &[u8],
+    start: usize,
+    range: isize,
+    syntax: &dyn SyntaxLookup,
+    point: usize,
+) -> (SearchResult, bool) {
+    let _ = take_matcher_overflow();
+    let found = re_search(compiled, text, start, range, syntax, point)
+        .map(|(at, regs)| (at, regs.start.to_vec(), regs.end.to_vec()));
+    (found, take_matcher_overflow())
+}
+
+#[test]
+fn the_knob_reads_off_on_and_verify() {
+    assert_eq!(DfaMode::parse(None), DfaMode::Off);
+    assert_eq!(DfaMode::parse(Some("off")), DfaMode::Off);
+    assert_eq!(DfaMode::parse(Some("0")), DfaMode::Off);
+    assert_eq!(DfaMode::parse(Some("bogus")), DfaMode::Off);
+    assert_eq!(DfaMode::parse(Some("on")), DfaMode::On);
+    assert_eq!(DfaMode::parse(Some(" 1 ")), DfaMode::On);
+    assert_eq!(DfaMode::parse(Some("ON")), DfaMode::On);
+    assert_eq!(DfaMode::parse(Some("verify")), DfaMode::Verify);
+}
+
+/// Off: the slot is never touched.  On: after 16 failed entries the DFA is
+/// built, then skips candidates; the results are those of the matcher alone.
+#[test]
+fn searches_skip_rejected_candidates_once_the_dfa_is_built() {
+    let syntax = DefaultSyntaxLookup;
+    let compiled = regex_compile("\\(?:foo\\|bar\\)[0-9]+;", false, false).unwrap();
+    let text = b"foo bar fo1 foox barbar1 foo2 bar33x foo9; tail bar7 end";
+    with_dfa_mode(DfaMode::Off, || {
+        for start in 0..text.len() {
+            let _ = search(
+                &compiled,
+                text,
+                start,
+                (text.len() - start) as isize,
+                &syntax,
+                0,
+            );
+        }
+    });
+    assert!(matches!(*compiled.dfa.slot(), DfaSlot::Cold { failed: 0 }));
+    let reference: Vec<_> = (0..=text.len())
+        .map(|start| {
+            with_dfa_mode(DfaMode::Off, || {
+                search(
+                    &compiled,
+                    text,
+                    start,
+                    (text.len() - start) as isize,
+                    &syntax,
+                    0,
+                )
+            })
+        })
+        .collect();
+    reset_dfa_stats();
+    let entries_before = matcher_entry_count();
+    for _ in 0..3 {
+        for start in 0..=text.len() {
+            let got = with_dfa_mode(DfaMode::On, || {
+                search(
+                    &compiled,
+                    text,
+                    start,
+                    (text.len() - start) as isize,
+                    &syntax,
+                    0,
+                )
+            });
+            assert_eq!(got, reference[start], "from {start}");
+        }
+    }
+    let entries = matcher_entry_count() - entries_before;
+    assert!(matches!(*compiled.dfa.slot(), DfaSlot::Live(_)));
+    let stats = dfa_stats();
+    assert_eq!(stats.builds, 1);
+    assert!(stats.skipped > 100, "{stats:?}");
+    assert!(entries < 3 * reference.len() as u64 * 4, "{entries}");
+}
+
+/// Verify mode runs the matcher on every candidate and finds no verdict it
+/// contradicts, over forward, backward, bounded and POSIX searches.
+#[test]
+fn verify_mode_finds_no_mismatch_on_random_searches() {
+    let mut rng = DfaRng(0x5EA7_C4ED);
+    reset_dfa_stats();
+    for _ in 0..800 {
+        let source = gen_pattern(&mut rng, 2);
+        let posix = rng.below(5) == 0;
+        let Ok(mut compiled) = regex_compile(&source, posix, rng.below(3) == 0) else {
+            continue;
+        };
+        compiled.target_multibyte = true;
+        let lookup: &dyn SyntaxLookup = if rng.below(2) == 0 {
+            &DefaultSyntaxLookup
+        } else {
+            &CustomTableLookup
+        };
+        for _ in 0..4 {
+            // Short texts: the reference searches run the unbudgeted
+            // backtracker on POSIX and capture-in-empty-loop patterns.
+            let text = gen_text(&mut rng, 12);
+            let boundaries = char_boundaries(&text, true);
+            let start = boundaries[rng.below(boundaries.len())];
+            let point = boundaries[rng.below(boundaries.len())];
+            for range in [
+                (text.len() - start) as isize,
+                -(start as isize),
+                ((text.len() - start) / 2) as isize,
+            ] {
+                let want = with_dfa_mode(DfaMode::Off, || {
+                    search(&compiled, &text, start, range, lookup, point)
+                });
+                let verified = with_dfa_mode(DfaMode::Verify, || {
+                    search(&compiled, &text, start, range, lookup, point)
+                });
+                let on = with_dfa_mode(DfaMode::On, || {
+                    search(&compiled, &text, start, range, lookup, point)
+                });
+                assert_eq!(verified, want, "{source:?} from {start} range {range}");
+                assert_eq!(on, want, "{source:?} from {start} range {range}");
+            }
+        }
+    }
+    let stats = dfa_stats();
+    tracing::info!(?stats, "verify-mode soak");
+    assert_eq!(stats.verify_bad_no, 0, "{stats:?}");
+    assert_eq!(stats.verify_bad_yes, 0, "{stats:?}");
+    assert!(
+        stats.builds > 100 && stats.no > 1_000 && stats.skipped > 1_000,
+        "{stats:?}"
+    );
+}
+
+/// A lookup where `syntax-table` properties may apply leaves a
+/// syntax-reading pattern to the matcher; so does a frontier inside the
+/// positions the search can read.
+#[test]
+fn positional_syntax_and_the_propertize_frontier_turn_the_filter_off() {
+    struct Positional;
+    impl SyntaxLookup for Positional {
+        fn char_syntax(&self, c: char) -> SyntaxClass {
+            DefaultSyntaxLookup.char_syntax(c)
+        }
+        fn char_has_category(&self, c: char, cat: u8) -> bool {
+            DefaultSyntaxLookup.char_has_category(c, cat)
+        }
+        fn cache_key(&self) -> SyntaxCacheKey {
+            SyntaxCacheKey::Standard
+        }
+        fn class_cache_key(&self) -> Option<LookupClassKey> {
+            Some(LookupClassKey::Standard)
+        }
+    }
+    struct Frontier(usize);
+    impl SyntaxLookup for Frontier {
+        fn char_syntax(&self, c: char) -> SyntaxClass {
+            DefaultSyntaxLookup.char_syntax(c)
+        }
+        fn char_has_category(&self, c: char, cat: u8) -> bool {
+            DefaultSyntaxLookup.char_has_category(c, cat)
+        }
+        fn cache_key(&self) -> SyntaxCacheKey {
+            SyntaxCacheKey::Standard
+        }
+        fn class_cache_key(&self) -> Option<LookupClassKey> {
+            Some(LookupClassKey::Standard)
+        }
+        fn position_dependent(&self) -> bool {
+            false
+        }
+        fn syntax_read_limit(&self) -> usize {
+            self.0
+        }
+    }
+    let text = b"one two three four five";
+    let reads_syntax = regex_compile("\\_<zz", false, false).unwrap();
+    let plain = regex_compile("zz", false, false).unwrap();
+    reset_dfa_stats();
+    with_dfa_mode(DfaMode::On, || {
+        let _ = search(&reads_syntax, text, 0, text.len() as isize, &Positional, 0);
+        let _ = search(&plain, text, 0, text.len() as isize, &Positional, 0);
+        let _ = search(&reads_syntax, text, 0, 10, &Frontier(10), 0);
+        let _ = search(&reads_syntax, text, 0, 10, &Frontier(11), 0);
+    });
+    let stats = dfa_stats();
+    assert_eq!(stats.positional_off, 1, "{stats:?}");
+    assert_eq!(stats.frontier_off, 1, "{stats:?}");
+    // The plain pattern and the search short of the frontier took leases.
+    assert_eq!(stats.searches, 2, "{stats:?}");
+}
+
+/// A rejection whose consumed span could have filled GNU's fail stack runs
+/// the matcher, which signals the overflow as GNU does.
+#[test]
+fn a_rejection_that_could_overflow_runs_the_matcher() {
+    let syntax = DefaultSyntaxLookup;
+    let compiled = regex_compile("x\\(?:a\\|b\\)*c", false, false).unwrap();
+    let short = b"xab xba xabab xb xa xx xab xb xa xabb xa xbb xa xb xab xba xab xa";
+    let long = [&b"x"[..], &b"ab".repeat(100_000)].concat();
+    reset_dfa_stats();
+    with_dfa_mode(DfaMode::On, || {
+        // Warm the slot: 16 failed entries build the DFA.
+        for _ in 0..3 {
+            let _ = search(&compiled, short, 0, short.len() as isize, &syntax, 0);
+        }
+        assert!(matches!(*compiled.dfa.slot(), DfaSlot::Live(_)));
+        let (found, overflow) = search(&compiled, &long, 0, long.len() as isize, &syntax, 0);
+        assert_eq!(found, None);
+        assert!(overflow, "GNU's fail-stack overflow");
+    });
+    assert!(dfa_stats().overflow_guarded >= 1);
+}
+
+/// A pattern whose candidates mostly match goes on holiday.
+#[test]
+fn mostly_matching_candidates_send_the_pattern_on_holiday() {
+    let syntax = DefaultSyntaxLookup;
+    let compiled = regex_compile("[a-z]+", false, false).unwrap();
+    let failing = b"1234567890 1234567890 12345";
+    let matching = b"ab cd ef gh ij kl";
+    reset_dfa_stats();
+    with_dfa_mode(DfaMode::On, || {
+        // Build it on failures (the fastmap admits no digit, so fail with a
+        // pattern-shaped text: every candidate fails at its second char).
+        let failing_pattern = regex_compile("[a-z][0-9]", false, false).unwrap();
+        for _ in 0..2 {
+            let _ = search(
+                &failing_pattern,
+                failing,
+                0,
+                failing.len() as isize,
+                &syntax,
+                0,
+            );
+        }
+        let _ = failing_pattern;
+        // `[a-z]+` searched from each letter: every candidate matches.
+        for _ in 0..10 {
+            for start in 0..matching.len() {
+                let _ = search(
+                    &compiled,
+                    matching,
+                    start,
+                    (matching.len() - start) as isize,
+                    &syntax,
+                    0,
+                );
+            }
+        }
+    });
+    // `[a-z]+` never fails, so it never builds: no holiday needed.
+    assert!(matches!(*compiled.dfa.slot(), DfaSlot::Cold { failed: 0 }));
+    // A pattern that fails enough to build, then matches: holiday.
+    let compiled = regex_compile("[a-z]+;", false, false).unwrap();
+    let mixed_fail = b"ab cd ef gh ij kl mn op qr st uv wx yz";
+    let mixed_match = b"a; b; c; d; e; f; g; h; i; j; k; l; m;";
+    with_dfa_mode(DfaMode::On, || {
+        let _ = search(
+            &compiled,
+            mixed_fail,
+            0,
+            mixed_fail.len() as isize,
+            &syntax,
+            0,
+        );
+        assert!(matches!(*compiled.dfa.slot(), DfaSlot::Live(_)));
+        for _ in 0..8 {
+            for start in (0..mixed_match.len()).step_by(3) {
+                let _ = search(
+                    &compiled,
+                    mixed_match,
+                    start,
+                    (mixed_match.len() - start) as isize,
+                    &syntax,
+                    0,
+                );
+            }
+        }
+    });
+    assert!(dfa_stats().holiday_off > 0, "{:?}", dfa_stats());
+}
+
+/// A pending quit leaves the candidate to the matcher, which quits.
+#[test]
+fn a_pending_quit_leaves_the_candidate_undecided() {
+    let compiled = regex_compile("zq", false, false).unwrap();
+    let nfa = Nfa::build(&compiled).unwrap();
+    let mut dfa = ExistenceDfa::new(nfa);
+    let context = ClassContext::of_search(&compiled, dfa.nfa(), &DefaultSyntaxLookup).unwrap();
+    dfa.classes_mut().sync(context);
+    // A long text of `z`s: the DFA keeps walking until a poll.
+    let text = vec![b'z'; 200_000];
+    let flag = crate::emacs_core::eval::install_quit_requested_for_test(true);
+    let verdict = dfa.anchored_exists(&compiled, &text, 0, text.len(), 0, &DefaultSyntaxLookup);
+    crate::emacs_core::eval::clear_quit_requested_for_test();
+    drop(flag);
+    // `zq` dies at the second `z`: decided before any poll.
+    assert!(matches!(verdict, Exists::No { .. }));
+    let compiled = regex_compile("z+q", false, false).unwrap();
+    let nfa = Nfa::build(&compiled).unwrap();
+    let mut dfa = ExistenceDfa::new(nfa);
+    dfa.classes_mut().sync(context);
+    let _flag = crate::emacs_core::eval::install_quit_requested_for_test(true);
+    let verdict = dfa.anchored_exists(&compiled, &text, 0, text.len(), 0, &DefaultSyntaxLookup);
+    crate::emacs_core::eval::clear_quit_requested_for_test();
+    assert_eq!(verdict, Exists::Unknown);
+}

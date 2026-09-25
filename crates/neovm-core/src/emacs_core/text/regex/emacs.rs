@@ -386,6 +386,10 @@ pub(crate) struct CompiledPattern {
     /// opcode shows (`\(?:^a\|^b\)`).  Computed only under
     /// `NEOVM_REGEX_ANCHOR_ALT` ([`anchor_alt_enabled`]); `None` otherwise.
     pub start_anchor: StartAnchor,
+
+    /// The existence DFA's slot (`NEOVM_REGEX_DFA`, [`dfa::DfaCell`]): built
+    /// lazily by the searches that use it; a clone starts cold.
+    pub(crate) dfa: dfa::DfaCell,
 }
 
 /// Bytes of text below which a forward search does not build a pattern's
@@ -831,6 +835,7 @@ impl CompiledPattern {
             rewind: RewindView::Buffer,
             prefilter: std::cell::OnceCell::new(),
             start_anchor: StartAnchor::None,
+            dfa: dfa::DfaCell::default(),
         }
     }
 
@@ -5268,10 +5273,16 @@ fn fail_stack_push_sites(bytecode: &[u8]) -> usize {
 /// visit.  A path's stack holds only its own live pushes, so it stays below
 /// `(consumed + 1) * 2 * sites` entries.
 pub(crate) fn fail_stack_may_overflow(bytecode: &[u8], consumed: usize) -> bool {
+    fail_stack_may_overflow_with(fail_stack_push_sites(bytecode), consumed)
+}
+
+/// [`fail_stack_may_overflow`] with the push sites already counted.
+#[inline]
+pub(crate) fn fail_stack_may_overflow_with(push_sites: usize, consumed: usize) -> bool {
     consumed
         .saturating_add(1)
         .saturating_mul(2)
-        .saturating_mul(fail_stack_push_sites(bytecode))
+        .saturating_mul(push_sites)
         >= FAIL_STACK_ENTRY_LIMIT
 }
 
@@ -9089,13 +9100,34 @@ pub(crate) fn re_search(
     // The registers of the one match this search returns: every candidate
     // fills them only on success, so a failed candidate moves nothing.
     let mut regs = MatchRegisters::default();
+    // `NEOVM_REGEX_DFA`: the existence DFA filters the candidates, when on
+    // and usable for this search (see `dfa::DfaLease::acquire`).  Every
+    // candidate of a search has a stop at most `max_stop`.
+    let max_stop = if range >= 0 {
+        start.saturating_add(range as usize).min(text_len)
+    } else {
+        start
+    };
+    let mut dfa_lease = if dfa::dfa_mode() == dfa::DfaMode::Off || fastmap_force_disabled() {
+        None
+    } else {
+        dfa::DfaLease::acquire(pattern, syntax, max_stop)
+    };
     macro_rules! try_candidate {
         ($pos:expr, $stop:expr) => {{
-            #[cfg(test)]
-            MATCHER_ENTRY_COUNT.with(|c| c.set(c.get() + 1));
-            match re_match_candidate_in(
-                scratch, pattern, text, $pos, $stop, syntax, point, &mut regs,
-            ) {
+            let found = match dfa_lease.as_mut() {
+                None => {
+                    #[cfg(test)]
+                    MATCHER_ENTRY_COUNT.with(|c| c.set(c.get() + 1));
+                    re_match_candidate_in(
+                        scratch, pattern, text, $pos, $stop, syntax, point, &mut regs,
+                    )
+                }
+                Some(lease) => lease.candidate(
+                    scratch, pattern, text, $pos, $stop, syntax, point, &mut regs,
+                ),
+            };
+            match found {
                 Some(end) => Some((end, std::mem::take(&mut regs))),
                 None => {
                     if matcher_overflow_pending() {

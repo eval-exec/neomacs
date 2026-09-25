@@ -19,21 +19,30 @@
 //! * the lazy DFA: states are (NFA kernel, facts about the previous
 //!   character), transitions are cached by (state, class).
 //!
+//! * the candidate filter ([`DfaLease`]): `re_search` asks the DFA at each
+//!   candidate; a rejection skips the matcher unless the fail-stack bound
+//!   says the backtracker could have overflowed there.
+//!
 //! No Lisp `Value` is stored here: only ids, byte tables and identity bits.
-
-// Built up over P3.3 C2-C4 and unused by the search until C5 wires it in.
-#![cfg_attr(not(test), allow(dead_code))]
+//!
+//! # Knobs (read once per process)
+//!
+//! * `NEOVM_REGEX_DFA`: `off` (default), `on`, `verify` ([`DfaMode`]).
+//! * `NEOVM_REGEX_DFA_STATS=1`: with the filter on, print this thread's
+//!   [`DfaStats`] as one `[neovm-regex-dfa]` line on stderr at exit.
 
 use super::{
-    CompiledPattern, LookupClassKey, RegexOp, SyntaxAssertion, SyntaxCacheKey, SyntaxLookup,
-    evaluate_syntax_assertion, extract_number, extract_number_u16, match_anychar_at,
-    match_categoryspec_at, match_charset_at, match_exactn_char_at, match_syntaxspec_at,
-    match_syntaxspecset_at, opcode_len, re_text_char, regex_syntax_char,
+    CompiledPattern, LookupClassKey, MatchRegisters, MatchScratch, RegexOp, SyntaxAssertion,
+    SyntaxCacheKey, SyntaxLookup, evaluate_syntax_assertion, extract_number, extract_number_u16,
+    fail_stack_may_overflow_with, match_anychar_at, match_categoryspec_at, match_charset_at,
+    match_exactn_char_at, match_syntaxspec_at, match_syntaxspecset_at, matcher_overflow_pending,
+    opcode_len, re_match_candidate_in, re_text_char, regex_syntax_char,
 };
 use crate::emacs_core::emacs_char;
 use crate::emacs_core::syntax::SyntaxClass;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
+use std::cell::{Cell, RefCell, RefMut};
 
 // ---------------------------------------------------------------------------
 // The NFA over the rewind view (C2)
@@ -1100,6 +1109,7 @@ impl ExistenceDfa {
         &self.nfa
     }
 
+    #[cfg(test)]
     pub(crate) fn classes_mut(&mut self) -> &mut CharClasses {
         &mut self.classes
     }
@@ -1354,14 +1364,15 @@ impl ExistenceDfa {
         let mut polled = 0usize;
         loop {
             // The cached loop: single-byte characters with a known class and
-            // a cached live transition.
+            // a cached live transition, in chunks between quit polls.
             let limit = stop.min(special);
+            let chunk = limit.min(d.saturating_add(QUIT_POLL_BYTES));
             let start = d;
             {
                 let byte_class = &self.classes.byte_class;
                 let trans = &self.trans;
                 let stride = 1u32 << self.stride_shift;
-                while d < limit {
+                while d < chunk {
                     let class = byte_class[text[d] as usize];
                     if class == UNKNOWN_CLASS {
                         break;
@@ -1375,6 +1386,12 @@ impl ExistenceDfa {
                 }
             }
             polled += d - start;
+            if polled >= QUIT_POLL_BYTES {
+                polled = 0;
+                if crate::emacs_core::eval::tls_quit_pending() {
+                    return Exists::Unknown;
+                }
+            }
             if d >= stop {
                 self.counters.bytes += (d - p) as u64;
                 return if self.accepts_at(row, &place(d)) {
@@ -1383,11 +1400,8 @@ impl ExistenceDfa {
                     Exists::No { consumed: d - p }
                 };
             }
-            if polled >= QUIT_POLL_BYTES {
-                polled = 0;
-                if crate::emacs_core::eval::tls_quit_pending() {
-                    return Exists::Unknown;
-                }
+            if d == chunk && d < limit {
+                continue;
             }
             // One character the cached loop could not take.
             let row_index = self.index_of(row);
@@ -1435,6 +1449,436 @@ impl ExistenceDfa {
             if self.memory > MEMORY_HARD_CAP {
                 return Exists::Unknown;
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The candidate filter in `re_search` (C5)
+// ---------------------------------------------------------------------------
+
+/// `NEOVM_REGEX_DFA`: whether `re_search` filters candidates through the
+/// existence DFA.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DfaMode {
+    /// The default: no DFA; the search path is unchanged but for one branch
+    /// per search and per candidate.
+    Off,
+    /// A candidate the DFA rejects is skipped.
+    On,
+    /// Every candidate runs the matcher too, and a verdict the matcher
+    /// contradicts is reported (`tracing::error!`, and the stats' mismatch
+    /// counts).  For tests and soaks.
+    Verify,
+}
+
+impl DfaMode {
+    /// The mode a value of `NEOVM_REGEX_DFA` selects: `on`/`1`/`true`/`yes`,
+    /// `verify`, anything else (or unset) off.
+    pub(crate) fn parse(value: Option<&str>) -> Self {
+        match value.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+            Some("verify") => Self::Verify,
+            Some("1" | "on" | "true" | "yes") => Self::On,
+            _ => Self::Off,
+        }
+    }
+}
+
+#[cfg(any(test, feature = "fuzzing"))]
+thread_local! {
+    static DFA_MODE_OVERRIDE: Cell<Option<DfaMode>> = const { Cell::new(None) };
+}
+
+/// Run `f` with `NEOVM_REGEX_DFA` forced to `mode` on this thread.
+#[cfg(any(test, feature = "fuzzing"))]
+pub(crate) fn with_dfa_mode<R>(mode: DfaMode, f: impl FnOnce() -> R) -> R {
+    struct Guard(Option<DfaMode>);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            DFA_MODE_OVERRIDE.with(|slot| slot.set(self.0));
+        }
+    }
+    let _guard = Guard(DFA_MODE_OVERRIDE.with(|slot| slot.replace(Some(mode))));
+    f()
+}
+
+/// The `NEOVM_REGEX_DFA` mode, read once per process.
+#[inline]
+pub(crate) fn dfa_mode() -> DfaMode {
+    #[cfg(any(test, feature = "fuzzing"))]
+    if let Some(mode) = DFA_MODE_OVERRIDE.with(|slot| slot.get()) {
+        return mode;
+    }
+    static MODE: std::sync::OnceLock<DfaMode> = std::sync::OnceLock::new();
+    *MODE.get_or_init(read_dfa_mode)
+}
+
+#[cold]
+fn read_dfa_mode() -> DfaMode {
+    let mode = DfaMode::parse(std::env::var("NEOVM_REGEX_DFA").ok().as_deref());
+    tracing::debug!(target: "neovm::regex", ?mode, "NEOVM_REGEX_DFA");
+    if mode != DfaMode::Off
+        && super::regex_knob_on(std::env::var("NEOVM_REGEX_DFA_STATS").ok().as_deref())
+    {
+        register_stats_report();
+    }
+    mode
+}
+
+/// Counters of the candidate filter on this thread (the regexp engine runs
+/// on the Lisp thread), reported at exit under `NEOVM_REGEX_DFA_STATS=1`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct DfaStats {
+    /// Searches that used a lease.
+    pub(crate) searches: u64,
+    /// Searches left without one because the pattern reads syntax where a
+    /// `syntax-table` property may apply, or past the syntax-propertize
+    /// frontier.
+    pub(crate) positional_off: u64,
+    pub(crate) frontier_off: u64,
+    /// Searches in an adaptive-bypass holiday.
+    pub(crate) holiday_off: u64,
+    pub(crate) builds: u64,
+    pub(crate) ineligible: u64,
+    pub(crate) gave_up: u64,
+    pub(crate) yes: u64,
+    pub(crate) no: u64,
+    pub(crate) unknown: u64,
+    /// Rejections the fail-stack bound refused to act on.
+    pub(crate) overflow_guarded: u64,
+    /// Candidates skipped: matcher entries saved.
+    pub(crate) skipped: u64,
+    pub(crate) context_resets: u64,
+    pub(crate) states: u64,
+    pub(crate) clears: u64,
+    pub(crate) slow_transitions: u64,
+    pub(crate) bytes: u64,
+    /// Verify mode: a rejection the matcher contradicted (a missed match).
+    pub(crate) verify_bad_no: u64,
+    /// Verify mode: an acceptance the matcher contradicted.
+    pub(crate) verify_bad_yes: u64,
+}
+
+thread_local! {
+    static STATS: Cell<DfaStats> = const {
+        Cell::new(DfaStats {
+            searches: 0,
+            positional_off: 0,
+            frontier_off: 0,
+            holiday_off: 0,
+            builds: 0,
+            ineligible: 0,
+            gave_up: 0,
+            yes: 0,
+            no: 0,
+            unknown: 0,
+            overflow_guarded: 0,
+            skipped: 0,
+            context_resets: 0,
+            states: 0,
+            clears: 0,
+            slow_transitions: 0,
+            bytes: 0,
+            verify_bad_no: 0,
+            verify_bad_yes: 0,
+        })
+    };
+}
+
+#[inline]
+fn stat(update: impl FnOnce(&mut DfaStats)) {
+    STATS.with(|cell| {
+        let mut stats = cell.get();
+        update(&mut stats);
+        cell.set(stats);
+    });
+}
+
+/// This thread's filter counters.
+#[cfg(any(test, feature = "fuzzing"))]
+pub(crate) fn dfa_stats() -> DfaStats {
+    STATS.with(Cell::get)
+}
+
+/// Reset this thread's filter counters (tests).
+#[cfg(test)]
+pub(crate) fn reset_dfa_stats() {
+    STATS.with(|cell| cell.set(DfaStats::default()));
+}
+
+fn register_stats_report() {
+    extern "C" fn report() {
+        let stats = STATS.try_with(Cell::get).unwrap_or_default();
+        let line = format!("[neovm-regex-dfa] {stats:?}\n");
+        let _ = std::io::Write::write_all(&mut std::io::stderr().lock(), line.as_bytes());
+    }
+    // SAFETY: `report` is an `extern "C" fn()` that only reads this
+    // thread's counters and writes one line to stderr.
+    unsafe {
+        libc::atexit(report);
+    }
+}
+
+/// Failed matcher entries a pattern's search sees before it builds a DFA.
+const COLD_THRESHOLD: u32 = 16;
+/// Decisions per adaptive-bypass window.
+const BYPASS_WINDOW: u32 = 64;
+/// A window in which more than this share (percent) of the verdicts are
+/// "yes" sends the pattern on holiday: the DFA saves nothing there.
+const BYPASS_YES_PERCENT: u32 = 60;
+/// Searches a holiday lasts before the DFA is probed again.
+const BYPASS_HOLIDAY: u32 = 256;
+
+/// A pattern's DFA, with its adaptive-bypass window.
+pub(crate) struct LiveDfa {
+    pub(crate) dfa: ExistenceDfa,
+    decisions: u32,
+    yes: u32,
+    holiday: u32,
+}
+
+/// The state of a pattern's existence DFA.
+pub(crate) enum DfaSlot {
+    /// Not built yet: failed matcher entries seen so far.
+    Cold {
+        failed: u32,
+    },
+    Live(Box<LiveDfa>),
+    /// The reasons are kept for tests and debugging.
+    Ineligible(#[allow(dead_code)] DfaIneligible),
+    Disabled(#[allow(dead_code)] DfaGaveUp),
+}
+
+/// `CompiledPattern`'s DFA slot.  A clone starts cold: the DFA's caches
+/// belong to one pattern object.
+pub(crate) struct DfaCell(RefCell<DfaSlot>);
+
+impl Default for DfaCell {
+    fn default() -> Self {
+        Self(RefCell::new(DfaSlot::Cold { failed: 0 }))
+    }
+}
+
+impl Clone for DfaCell {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl DfaCell {
+    /// The slot, for tests.
+    #[cfg(test)]
+    pub(crate) fn slot(&self) -> std::cell::Ref<'_, DfaSlot> {
+        self.0.borrow()
+    }
+}
+
+/// One search's hold on its pattern's DFA slot.
+pub(crate) struct DfaLease<'p> {
+    slot: RefMut<'p, DfaSlot>,
+    mode: DfaMode,
+}
+
+impl<'p> DfaLease<'p> {
+    /// The lease for a search of `pattern` whose candidates all stop by
+    /// `max_stop`, or `None` when the DFA cannot serve it:
+    ///
+    /// * the pattern reads syntax and the lookup is position-dependent
+    ///   (classes are computed from the base table), or the lazy
+    ///   `syntax-propertize` frontier lies within the positions the search
+    ///   can read (the matcher must record its reads there, so the builtin
+    ///   propertizes as GNU would);
+    /// * the lookup has no table identity to key the classes by;
+    /// * the pattern is ineligible, gave up, or is on holiday;
+    /// * a re-entrant search holds the slot.
+    #[inline(never)]
+    pub(crate) fn acquire(
+        pattern: &'p CompiledPattern,
+        syntax: &dyn SyntaxLookup,
+        max_stop: usize,
+    ) -> Option<Self> {
+        let mode = dfa_mode();
+        if pattern.uses_syntax {
+            if syntax.position_dependent() {
+                stat(|s| s.positional_off += 1);
+                return None;
+            }
+            if syntax.syntax_read_limit() <= max_stop {
+                stat(|s| s.frontier_off += 1);
+                return None;
+            }
+        }
+        let mut slot = pattern.dfa.0.try_borrow_mut().ok()?;
+        match &mut *slot {
+            // A lookup with no table identity could not key the classes the
+            // build would need (see `ClassContext::of_search`).
+            DfaSlot::Cold { .. } => {
+                syntax.class_cache_key()?;
+            }
+            DfaSlot::Live(live) => {
+                if live.holiday > 0 {
+                    live.holiday -= 1;
+                    stat(|s| s.holiday_off += 1);
+                    return None;
+                }
+                let context = ClassContext::of_search(pattern, live.dfa.nfa(), syntax)?;
+                let resets = live.dfa.classes.resets;
+                live.dfa.classes.sync(context);
+                if live.dfa.classes.resets != resets {
+                    stat(|s| s.context_resets += 1);
+                }
+                live.dfa.begin_search();
+            }
+            DfaSlot::Ineligible(_) | DfaSlot::Disabled(_) => return None,
+        }
+        stat(|s| s.searches += 1);
+        Some(Self { slot, mode })
+    }
+
+    /// Decide one candidate: the DFA's verdict, then the matcher unless the
+    /// verdict is a rejection the fail-stack bound allows acting on.
+    /// Returns what `re_match_candidate_in` would, with its side effects.
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn candidate(
+        &mut self,
+        scratch: &mut MatchScratch,
+        pattern: &CompiledPattern,
+        text: &[u8],
+        pos: usize,
+        stop: usize,
+        syntax: &dyn SyntaxLookup,
+        point: usize,
+        regs: &mut MatchRegisters,
+    ) -> Option<usize> {
+        let classic = |scratch: &mut MatchScratch, regs: &mut MatchRegisters| {
+            #[cfg(test)]
+            super::MATCHER_ENTRY_COUNT.with(|c| c.set(c.get() + 1));
+            re_match_candidate_in(scratch, pattern, text, pos, stop, syntax, point, regs)
+        };
+        let live = match &mut *self.slot {
+            DfaSlot::Live(live) => live,
+            DfaSlot::Cold { failed } => {
+                let found = classic(scratch, regs);
+                if found.is_none() && !matcher_overflow_pending() {
+                    *failed += 1;
+                    if *failed >= COLD_THRESHOLD {
+                        self.build(pattern, syntax);
+                    }
+                }
+                return found;
+            }
+            DfaSlot::Ineligible(_) | DfaSlot::Disabled(_) => return classic(scratch, regs),
+        };
+        let before = live.dfa.counters;
+        let verdict = live
+            .dfa
+            .anchored_exists(pattern, text, pos, stop, point, syntax);
+        let after = live.dfa.counters;
+        stat(|s| {
+            s.states += after.states - before.states;
+            s.clears += after.clears - before.clears;
+            s.slow_transitions += after.slow_transitions - before.slow_transitions;
+            s.bytes += after.bytes - before.bytes;
+            match verdict {
+                Exists::Yes => s.yes += 1,
+                Exists::No { .. } => s.no += 1,
+                Exists::Unknown => s.unknown += 1,
+            }
+        });
+        live.note(verdict);
+        if let Some(why) = live.dfa.gave_up() {
+            stat(|s| s.gave_up += 1);
+            *self.slot = DfaSlot::Disabled(why);
+            tracing::debug!(target: "neovm::regex", ?why, "existence DFA gave up");
+            return classic(scratch, regs);
+        }
+        let push_sites = match &*self.slot {
+            DfaSlot::Live(live) => live.dfa.nfa().push_sites,
+            _ => unreachable!("the slot is live"),
+        };
+        match (self.mode, verdict) {
+            (DfaMode::Verify, verdict) => {
+                let found = classic(scratch, regs);
+                let overflow = matcher_overflow_pending();
+                match verdict {
+                    Exists::No { .. } if found.is_some() => {
+                        stat(|s| s.verify_bad_no += 1);
+                        tracing::error!(
+                            target: "neovm::regex",
+                            pos,
+                            stop,
+                            "existence DFA rejected a candidate the matcher matched"
+                        );
+                    }
+                    Exists::Yes if found.is_none() && !overflow => {
+                        stat(|s| s.verify_bad_yes += 1);
+                        tracing::error!(
+                            target: "neovm::regex",
+                            pos,
+                            stop,
+                            "existence DFA accepted a candidate the matcher failed"
+                        );
+                    }
+                    _ => {}
+                }
+                found
+            }
+            (_, Exists::No { consumed }) => {
+                if fail_stack_may_overflow_with(push_sites, consumed) {
+                    stat(|s| s.overflow_guarded += 1);
+                    classic(scratch, regs)
+                } else {
+                    stat(|s| s.skipped += 1);
+                    None
+                }
+            }
+            _ => classic(scratch, regs),
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn build(&mut self, pattern: &CompiledPattern, syntax: &dyn SyntaxLookup) {
+        match Nfa::build(pattern) {
+            Ok(nfa) => {
+                let mut dfa = ExistenceDfa::new(nfa);
+                let Some(context) = ClassContext::of_search(pattern, dfa.nfa(), syntax) else {
+                    return;
+                };
+                dfa.classes.sync(context);
+                dfa.begin_search();
+                stat(|s| s.builds += 1);
+                *self.slot = DfaSlot::Live(Box::new(LiveDfa {
+                    dfa,
+                    decisions: 0,
+                    yes: 0,
+                    holiday: 0,
+                }));
+            }
+            Err(why) => {
+                stat(|s| s.ineligible += 1);
+                tracing::debug!(target: "neovm::regex", ?why, "no existence DFA");
+                *self.slot = DfaSlot::Ineligible(why);
+            }
+        }
+    }
+}
+
+impl LiveDfa {
+    /// Count a verdict toward the adaptive bypass: a window of mostly "yes"
+    /// sends the pattern on holiday.
+    fn note(&mut self, verdict: Exists) {
+        self.decisions += 1;
+        if verdict == Exists::Yes {
+            self.yes += 1;
+        }
+        if self.decisions >= BYPASS_WINDOW {
+            if self.yes * 100 > BYPASS_YES_PERCENT * self.decisions {
+                self.holiday = BYPASS_HOLIDAY;
+            }
+            self.decisions = 0;
+            self.yes = 0;
         }
     }
 }
