@@ -316,8 +316,8 @@ pub(crate) struct LeafKnob {
     pub(crate) string: bool,
     /// The variable leaves (default off): `Op::SymbolValue` sites call the
     /// `symbol-value` leaf's bare trampoline, and `Op::Call` sites on
-    /// `buffer-local-value` its armed one; both read through P1.4 Stage A's
-    /// cached tiers.
+    /// `buffer-local-value` its armed one (which reads through P1.4 Stage
+    /// A's `read_var_cached`).
     pub(crate) vars: bool,
     /// The first leaf batch (default off): `Op::Call` sites on `assoc`,
     /// `rassq`, `delq`, `copy-sequence`, `symbol-name`, `boundp` and

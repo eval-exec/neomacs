@@ -236,8 +236,9 @@ pub(crate) enum LeafId {
     StringEqual,
     StringLessp,
     /// `symbol-value` (`Op::SymbolValue`) and `buffer-local-value` (Bcall):
-    /// the variable leaves, whose bodies read through P1.4 Stage A's
-    /// `Context::read_var_cached` (p1-0-integration §2 P1.2 correction 4).
+    /// the variable leaves, deferred until P1.4 Stage A landed
+    /// (p1-0-integration §2 P1.2 correction 4); `buffer-local-value` reads
+    /// through its `Context::read_var_cached`.
     SymbolValue,
     BufferLocalValue,
     /// The first leaf batch (P1.2 commit 12, `NEOVM_JIT_LEAF=batch`): Bcall

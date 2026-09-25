@@ -14,10 +14,12 @@
 //!   audited walk in [`fast`].
 //!
 //! The variable leaves -- `symbol-value` (opcode) and `buffer-local-value`
-//! (Bcall), `NEOVM_JIT_LEAF=vars` -- read a buffer-local or forwarded
-//! variable through P1.4 Stage A's cached tiers (`Context::read_var_cached`)
-//! rather than a second copy of them, and everything else through their
-//! reference's own body.
+//! (Bcall), `NEOVM_JIT_LEAF=vars` -- are their references' own bodies, which
+//! read a buffer-local variable's loaded binding through the same BLV cache
+//! P1.4 Stage A's tiers use; `buffer-local-value` also answers its current-
+//! buffer, loaded-binding shape through `Context::read_var_cached` itself,
+//! skipping the alias resolution and the buffer lookup (never a second copy
+//! of the read tiers).
 
 // Only compiled code calls leaves: without the JIT they are declarations.
 #![cfg_attr(not(feature = "jit"), allow(dead_code))]
@@ -297,11 +299,13 @@ pub(crate) fn keywordp(ctx: &Context, object: Value) -> LeafResult {
 
 /// `Bsymbol_value` (`Op::SymbolValue`): `builtin_symbol_value_1`'s body --
 /// the argument checked as a symbol (a symbol with position when
-/// `symbols-with-pos-enabled`), its value, `void-variable` with the
-/// argument as given -- after P1.4 Stage A's cached tiers, which answer a
-/// buffer-local variable loaded for the current buffer or a forwarded one
-/// exactly as the reference's first arms do (and refuse anything else,
-/// including a void value, which the reference then signals).
+/// `symbols-with-pos-enabled`), its value through
+/// `visible_runtime_variable_value_by_id`, `void-variable` with the
+/// argument as given. That body already reads a buffer-local variable's
+/// loaded binding through the BLV cache P1.4 Stage A's `read_var_cached`
+/// consults, so the leaf does not call `read_var_cached` first: measured
+/// on the p12x probes, the extra obarray probe cost 12-13 instructions a
+/// call on plain and buffer-local variables alike and saved nothing.
 pub(crate) static SYMBOL_VALUE: LeafSpec = LeafSpec::new(
     LeafId::SymbolValue,
     "symbol-value",
@@ -316,20 +320,7 @@ pub(crate) static SYMBOL_VALUE: LeafSpec = LeafSpec::new(
 );
 
 pub(crate) fn symbol_value(ctx: &Context, symbol_value: Value) -> LeafResult {
-    use crate::emacs_core::symbol::SymbolRedirect;
     let symbol = expect_symbol_id_checked(&symbol_value, ctx.symbols_with_pos_enabled)?;
-    // Only a buffer-local or forwarded variable has a cached tier: a plain
-    // one (the common case) goes straight to the reference, which reads its
-    // cell (`read_var_cached`'s own refusal costs ~35 instructions a call).
-    if ctx.obarray.get_by_id(symbol).is_some_and(|s| {
-        matches!(
-            s.redirect(),
-            SymbolRedirect::Localized | SymbolRedirect::Forwarded
-        )
-    }) && let Some(value) = ctx.read_var_cached(symbol)
-    {
-        return Ok(value);
-    }
     match ctx.visible_runtime_variable_value_by_id(symbol)? {
         Some(value) => Ok(value),
         None => Err(signal(LispCondition::VoidVariable, vec![symbol_value]).into()),

@@ -514,8 +514,8 @@ fn variable_setup(ctx: &mut Context) {
     .expect("variable setup");
 }
 
-/// `symbol-value` over every variable shape, current buffer `a` (the
-/// cached tiers hit) and `b` (they refuse), against `Op::SymbolValue`.
+/// `symbol-value` over every variable shape, current buffer `a` (whose
+/// buffer-local bindings are loaded) and `b`, against `Op::SymbolValue`.
 #[test]
 fn symbol_value_leaf_matches_its_opcode_arm_on_every_variable_shape() {
     use crate::emacs_core::eval::{VarCacheEvent, var_cache_event_count};
@@ -537,10 +537,12 @@ fn symbol_value_leaf_matches_its_opcode_arm_on_every_variable_shape() {
         }
     }
     set_swp(&mut ctx, false);
+    // The leaf is the reference's own body: it never reaches the cached
+    // tiers (their census stays put).
     let hits = var_cache_event_count(VarCacheEvent::ReadLocalized)
         + var_cache_event_count(VarCacheEvent::ReadBufferSlot)
         + var_cache_event_count(VarCacheEvent::ReadForwarded);
-    assert!(hits > hits0, "the leaf's cached tiers answered some reads");
+    assert_eq!(hits, hits0);
 }
 
 /// `buffer-local-value` over variable × buffer, from buffers `a` and `b`,
