@@ -2710,8 +2710,7 @@ fn satb_barrier_on_growing_hash_table_is_linear_not_quadratic() {
     // Arm the SATB barrier exactly as `launch_concurrent_mark` does, but
     // WITHOUT the GC thread, so `satb_shared` is never drained and its length
     // measures the cumulative SATB push volume deterministically.
-    heap.concurrent_mark_running = true;
-    TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(true));
+    heap.set_concurrent_active_for_test(true);
 
     const N: i64 = 50_000;
     for i in 0..N {
@@ -2728,8 +2727,7 @@ fn satb_barrier_on_growing_hash_table_is_linear_not_quadratic() {
     let satb_len = heap.satb_shared.lock().unwrap().len();
 
     // Disarm before dropping the heap so no later mutation hits the barrier.
-    heap.concurrent_mark_running = false;
-    TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(false));
+    heap.set_concurrent_active_for_test(false);
 
     // O(n) bound. The full pre-image is snapshotted at most a small constant
     // number of times across the whole cycle (ideally once), so the
@@ -3092,8 +3090,7 @@ fn write_barrier_caches_skip_only_writes_with_nothing_to_record() {
     // Concurrent mark: an owner's first write logs its pre-image, the rest
     // of the cycle's writes by it have nothing to add.
     let arm = |heap: &mut TaggedHeap, on: bool| {
-        heap.concurrent_mark_running = on;
-        TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(on));
+        heap.set_concurrent_active_for_test(on);
     };
     arm(&mut heap, true);
     let before = calls();
@@ -3149,8 +3146,7 @@ fn a_plain_variable_store_logs_its_pre_image_only_while_marking() {
         "no mark, no log"
     );
 
-    heap.concurrent_mark_running = true;
-    TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(true));
+    heap.set_concurrent_active_for_test(true);
     let stored = ob.set_plain_untrapped_value_id(sym, TaggedValue::fixnum(3));
     let logged: Vec<usize> = heap
         .satb_shared
@@ -3159,8 +3155,7 @@ fn a_plain_variable_store_logs_its_pre_image_only_while_marking() {
         .iter()
         .map(|v| v.bits())
         .collect();
-    heap.concurrent_mark_running = false;
-    TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(false));
+    heap.set_concurrent_active_for_test(false);
 
     assert!(stored);
     assert_eq!(logged, vec![second.bits()], "the overwritten value");
@@ -3194,8 +3189,7 @@ fn a_specbind_swap_logs_its_pre_image_only_while_marking() {
         "no mark, no log"
     );
 
-    heap.concurrent_mark_running = true;
-    TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(true));
+    heap.set_concurrent_active_for_test(true);
     let old = ob.swap_plain_untrapped_value_id(sym, TaggedValue::fixnum(3));
     let logged: Vec<usize> = heap
         .satb_shared
@@ -3204,8 +3198,7 @@ fn a_specbind_swap_logs_its_pre_image_only_while_marking() {
         .iter()
         .map(|v| v.bits())
         .collect();
-    heap.concurrent_mark_running = false;
-    TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(false));
+    heap.set_concurrent_active_for_test(false);
 
     assert_eq!(old.map(|v| v.bits()), Some(second.bits()));
     assert_eq!(logged, vec![second.bits()], "the overwritten value");

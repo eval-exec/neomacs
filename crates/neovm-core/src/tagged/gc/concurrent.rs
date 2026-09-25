@@ -338,8 +338,10 @@ impl TaggedHeap {
         self.gc_exited = Some(exited_rx);
         self.concurrent_mark_running = true;
         // Keep the write-barrier fast path reaching `record_heap_write` so the
-        // SATB log fires even with owner-tracking Disabled / no partition.
+        // SATB log fires even with owner-tracking Disabled / no partition:
+        // the window becomes ALL.
         TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(true));
+        self.publish_barrier_window();
         let job = ConcurrentMarkJob {
             gray,
             owned_bases: std::sync::Arc::new(owned),
@@ -404,6 +406,7 @@ impl TaggedHeap {
         }
         self.concurrent_mark_running = false;
         TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(false));
+        self.publish_barrier_window();
         // Residual SATB (children overwritten after the GC's last drain) +
         // deferred (every non-cons + non-owned cons the GC parked) become gray;
         // the caller reseeds roots, then drains to a fixpoint stop-the-world.

@@ -1001,6 +1001,9 @@ pub fn set_tagged_heap(heap: &mut TaggedHeap) {
     TAGGED_HEAP_PARTITION_ACTIVE.with(|p| p.set(heap.partition_dump));
     TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(heap.concurrent_mark_running));
     TAGGED_HEAP_DUMP_SPAN.with(|s| s.set((heap.dump_addr_lo, heap.dump_addr_hi)));
+    // The barrier window is re-derived, not restored: this is its
+    // panic-recovery point, as for the concurrent flag above.
+    TAGGED_HEAP_BARRIER_WINDOW.with(|w| w.set(heap.barrier_window()));
     // Owner bits are heap-specific: a different heap invalidates the caches.
     clear_barrier_cache(&TAGGED_HEAP_REMEMBERED_CACHE);
     clear_barrier_cache(&TAGGED_HEAP_SATB_CACHE);
@@ -1029,6 +1032,7 @@ pub fn clear_tagged_heap_if_installed(heap: &TaggedHeap) {
             TAGGED_HEAP_PARTITION_ACTIVE.with(|p| p.set(false));
             TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.set(false));
             TAGGED_HEAP_DUMP_SPAN.with(|s| s.set((usize::MAX, 0)));
+            TAGGED_HEAP_BARRIER_WINDOW.with(|w| w.set(BarrierWindow::NONE));
             clear_barrier_cache(&TAGGED_HEAP_REMEMBERED_CACHE);
             clear_barrier_cache(&TAGGED_HEAP_SATB_CACHE);
         }
@@ -1085,86 +1089,85 @@ pub fn with_tagged_heap<R>(f: impl FnOnce(&mut TaggedHeap) -> R) -> R {
 }
 
 /// Central mutation hook for bulk writes to the tagged heap.
-#[inline]
+///
+/// `#[inline(always)]`, like the whole inline half of the barrier: this is
+/// inlined into every heap store (`set_cons_car`, `set_vector_slot`, ...),
+/// and when the barrier's outlined rejects lived inline it grew past LLVM's
+/// threshold and every `setcar` made a call (elb inclist +9% instructions).
+/// The `HeapWriteRecord` is built only on the cold path, never before the
+/// gate.
+#[inline(always)]
 pub fn note_heap_write(owner: TaggedValue, kind: HeapWriteKind) {
-    note_heap_write_record(HeapWriteRecord::bulk(owner, kind));
+    if barrier_gate(owner) {
+        note_heap_write_slow(owner, kind, None, None);
+    }
 }
 
 /// Central mutation hook for slot writes to the tagged heap.
-#[inline]
+#[inline(always)]
 pub fn note_heap_slot_write(
     owner: TaggedValue,
     kind: HeapWriteKind,
     slot: usize,
     value: TaggedValue,
 ) {
-    note_heap_write_record(HeapWriteRecord::slot(owner, kind, slot, value));
+    if barrier_gate(owner) {
+        note_heap_write_slow(owner, kind, Some(slot), Some(value));
+    }
 }
 
-/// The barrier's inline part: the rejects that decide most writes — no
-/// barrier needed at all, or a cons owner outside the dump span, which is
-/// every `setcar`/`setcdr` of a list loop — before a call.
+/// The barrier's inline part: does a write by `owner` need the out-of-line
+/// barrier at all?
 ///
-/// `#[inline(always)]` is load-bearing: this body is inlined into every heap
-/// store (`set_cons_car`, `set_vector_slot`, ...), and when the outlined
-/// rejects below lived here it grew past LLVM's threshold and every `setcar`
-/// made a call (elb inclist +9% instructions).
+/// Inside the published window (`barrier_window.rs`: ALL during a concurrent
+/// mark or owner tracking, the dump span when only the partition is active,
+/// empty otherwise) it does. Outside it a cons never does — a cons is never
+/// tenured, so the only thing the partition-only barrier could record for it
+/// is a mapped (in-span) owner — and any other heap value points at a
+/// `GcHeader` whose `tenured` byte is what `value_is_tenured` reads, so only
+/// a tenured owner can have something to record.
+///
+/// Case by case against the gate this replaced (three thread-local flags, a
+/// span test for conses, then the outlined `barrier_needs_heap`): a
+/// non-heap owner returns in both; with the window empty no heap state is
+/// set, so neither records anything (a non-cons reads `tenured == false`:
+/// only the partition's first cycle ever tenures); a partition-only cons
+/// outside the span returns in both; inside the window both take the
+/// outlined `barrier_needs_heap`, unchanged.
 #[inline(always)]
-pub(super) fn note_heap_write_record(record: HeapWriteRecord) {
-    if !record.owner.is_heap_object() {
-        return;
+fn barrier_gate(owner: TaggedValue) -> bool {
+    if !owner.is_heap_object() {
+        return false;
     }
-    let disabled =
-        TAGGED_HEAP_WRITE_TRACKING_MODE.with(|mode| mode.get()) == WriteTrackingMode::Disabled;
-    // The dump partition needs the barrier even when owner-tracking is off, to
-    // record mutations of dumped objects into the remembered set.
-    let partition = TAGGED_HEAP_PARTITION_ACTIVE.with(|p| p.get());
-    // The concurrent collector needs the barrier (its SATB log) regardless of
-    // owner-tracking / partition state.
-    let concurrent = TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.get());
-    if disabled && !partition && !concurrent {
-        return;
+    let addr = owner.bits() & !crate::tagged::value::TAG_MASK;
+    if TAGGED_HEAP_BARRIER_WINDOW.with(|w| w.get()).covers(addr) {
+        return true;
     }
-    if disabled && !concurrent && record.owner.is_cons() {
-        // Partition-only path: a cons is never tenured, so outside the dump
-        // span it is never inserted into the remembered set (see below).
-        let addr = record.owner.bits() & !crate::tagged::value::TAG_MASK;
-        let (lo, hi) = TAGGED_HEAP_DUMP_SPAN.with(|s| s.get());
-        if addr < lo || addr >= hi {
-            return;
-        }
-    }
-    note_heap_write_record_slow(record, disabled, concurrent);
+    // SAFETY: a non-cons heap value points at a live `GcHeader`-prefixed
+    // object (arena, boxed, leaked static or mapped); only its `tenured`
+    // byte is read, which nothing writes outside the stop-the-world
+    // promotion.
+    !owner.is_cons() && unsafe { (*(addr as *const GcHeader)).tenured }
 }
 
+/// The barrier's outlined part: build the record and ask the heap.
+#[cold]
 #[inline(never)]
-fn note_heap_write_record_slow(record: HeapWriteRecord, disabled: bool, concurrent: bool) {
-    if barrier_needs_heap(record, disabled, concurrent) {
-        with_tagged_heap(|heap| heap.record_heap_write(record));
-    }
-}
-
-/// The whole barrier inline, for a store site hot enough to want it (the
-/// JIT's `aset`): the rejects [`note_heap_write_record`] makes inline and
-/// the ones it leaves to its outlined part, then the heap.
-#[inline(always)]
-pub(crate) fn note_heap_slot_write_inline(
+fn note_heap_write_slow(
     owner: TaggedValue,
     kind: HeapWriteKind,
-    slot: usize,
-    value: TaggedValue,
+    slot: Option<usize>,
+    value: Option<TaggedValue>,
 ) {
-    if !owner.is_heap_object() {
-        return;
-    }
+    let record = HeapWriteRecord {
+        owner,
+        kind,
+        slot,
+        value,
+    };
     let disabled =
         TAGGED_HEAP_WRITE_TRACKING_MODE.with(|mode| mode.get()) == WriteTrackingMode::Disabled;
-    let partition = TAGGED_HEAP_PARTITION_ACTIVE.with(|p| p.get());
     let concurrent = TAGGED_HEAP_CONCURRENT_ACTIVE.with(|c| c.get());
-    if disabled && !partition && !concurrent {
-        return;
-    }
-    let record = HeapWriteRecord::slot(owner, kind, slot, value);
     if barrier_needs_heap(record, disabled, concurrent) {
         with_tagged_heap(|heap| heap.record_heap_write(record));
     }
@@ -1172,7 +1175,11 @@ pub(crate) fn note_heap_slot_write_inline(
 
 /// Whether a write that passed the flag test must reach `record_heap_write`.
 #[inline(always)]
-fn barrier_needs_heap(record: HeapWriteRecord, disabled: bool, concurrent: bool) -> bool {
+pub(super) fn barrier_needs_heap(
+    record: HeapWriteRecord,
+    disabled: bool,
+    concurrent: bool,
+) -> bool {
     let bits = record.owner.bits();
     if disabled && !concurrent {
         // Partition-only path: the barrier's sole job is the append-only dump

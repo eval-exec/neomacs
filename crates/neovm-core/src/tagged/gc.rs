@@ -183,6 +183,14 @@ thread_local! {
     /// barrier's partition-only path can span-test a cons owner without
     /// dereferencing the heap. `(usize::MAX, 0)` = empty span.
     static TAGGED_HEAP_DUMP_SPAN: Cell<(usize, usize)> = const { Cell::new((usize::MAX, 0)) };
+    /// The write barrier's owner window (`barrier_window.rs`): every owner
+    /// it covers takes the out-of-line barrier, every other store is plain
+    /// unless its owner is a tenured non-cons the remembered set has not
+    /// recorded. The one gate the Rust stores test; published by
+    /// `TaggedHeap::publish_barrier_window` at every writer of its inputs
+    /// and re-derived whenever a heap is (re)installed.
+    static TAGGED_HEAP_BARRIER_WINDOW: Cell<BarrierWindow> =
+        const { Cell::new(BarrierWindow::NONE) };
     /// Owners already inserted into `mapped_remembered`, direct-mapped by
     /// [`barrier_cache_slot`]. That set is append-only for the life of the heap
     /// ("permanent root") and its owners (mapped or tenured) are never freed,
@@ -1072,6 +1080,7 @@ impl TaggedHeap {
     pub fn set_write_tracking_mode(&mut self, mode: WriteTrackingMode) {
         self.write_tracking_mode = mode;
         TAGGED_HEAP_WRITE_TRACKING_MODE.with(|current| current.set(mode));
+        self.publish_barrier_window();
         if mode == WriteTrackingMode::Disabled {
             self.clear_dirty_owners();
             self.clear_dirty_writes();
@@ -1515,6 +1524,7 @@ impl TaggedHeap {
             // remembered set starts being maintained immediately.
             TAGGED_HEAP_PARTITION_ACTIVE.with(|p| p.set(true));
         }
+        self.publish_barrier_window();
     }
 
     /// True when a registered mapped span (a loaded pdump) has activated the
@@ -2386,6 +2396,16 @@ pub(crate) use arena_pages::*;
 
 mod gc_thread;
 pub use gc_thread::*;
+
+mod barrier_window;
+pub(crate) use barrier_window::BarrierWindow;
+#[cfg(test)]
+pub(crate) use barrier_window::published_barrier_window;
+/// The write barrier's owner window against the gate it replaced, state by
+/// state and owner by owner, and its republication at every input writer.
+#[cfg(test)]
+#[path = "gc/tests/barrier_window_tests.rs"]
+mod barrier_window_tests;
 /// BIGNUM ARENA test suite (lever P0.11): the 64B payload-bearing class
 /// (1024 slots/page, own arena). Covers the slot fit, page-span oracle
 /// exactness, the registry-untouched claim, two-cycle parity survival and
