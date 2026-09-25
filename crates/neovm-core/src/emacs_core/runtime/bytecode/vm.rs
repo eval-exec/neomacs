@@ -7167,12 +7167,13 @@ impl<'a> Vm<'a> {
 
     /// V3 + native-to-native speculated direct call: the caller's spec site is
     /// armed, so `callee` is the compile-time bytecode object the symbol
-    /// `called` still names, and `args_ptr` addresses `nargs` pre-marshaled
-    /// argument words (the caller's native call-args slot). The callee's
-    /// backtrace frame records `called`, as GNU's `Bcall` does. Resolve and cache the callee's compiled
-    /// leaf in `leaf_slot`, then run it DIRECTLY under the recursion-depth
-    /// guard — skipping the `funcall_general` dispatch and the compiled-cache
-    /// hash lookup that `call_for_jit_stack` would pay.
+    /// `called` (a symbol `Value`) still names, and `args_ptr` addresses
+    /// `nargs` pre-marshaled argument words (the caller's native call-args
+    /// slot). The callee's backtrace frame records `called`, as GNU's
+    /// `Bcall` does. Resolve and cache the callee's compiled leaf in
+    /// `leaf_slot`, then run it DIRECTLY under the recursion-depth guard —
+    /// skipping the `funcall_general` dispatch and the compiled-cache hash
+    /// lookup that `call_for_jit_stack` would pay.
     ///
     /// When the callee is a pure pass-through for this argument count (simple
     /// fixed arity, no `&optional` nil-pad / `&rest` list), the args go
@@ -7206,7 +7207,7 @@ impl<'a> Vm<'a> {
     /// defensive deopt fallback below builds a `Vm`.
     pub(crate) fn call_armed_callee_native(
         ctx: &mut crate::emacs_core::eval::Context,
-        called: SymId,
+        called: Value,
         callee: Value,
         slot: &crate::emacs_core::jit::compile::SpecSlot,
         args_ptr: *const i64,
@@ -7286,7 +7287,7 @@ impl<'a> Vm<'a> {
         }
         Self::run_leaf_native_to_native(
             ctx,
-            Value::from_sym_id(called),
+            called,
             callee,
             bc,
             leaf,
@@ -7725,6 +7726,62 @@ impl<'a> Vm<'a> {
         )
     }
 
+    /// The bytecode arm of [`Self::call_function_from_stack_args`]: run the
+    /// resolved bytecode object `callee` on the argument span, under a
+    /// backtrace frame recording `frame_function` -- what the call named,
+    /// the symbol of a named call (GNU `Bcall`'s `call_fun`).
+    #[inline(always)]
+    fn call_bytecode_from_stack_args(
+        &mut self,
+        frame_function: Value,
+        callee: Value,
+        args_start: usize,
+        nargs: usize,
+    ) -> EvalResult {
+        let backtrace =
+            self.ctx
+                .push_backtrace_frame_from_bc_stack(frame_function, args_start, nargs);
+        let bc_data = callee
+            .get_bytecode_data()
+            .expect("resolved bytecode target must remain bytecode");
+        let result = self
+            .ctx
+            .execute_bytecode_call_from_stack(bc_data, args_start, nargs, callee);
+        let result = self.ctx.dispatch_signal_result_if_needed(result);
+        self.ctx
+            .pop_bytecode_backtrace_token_fast_or_slow(backtrace, result)
+    }
+
+    /// [`Self::call_for_jit_stack`] of a speculated call whose callee is
+    /// already resolved: the spec shim's armed site proves (the function
+    /// epoch) that the symbol `called` names the bytecode object `callee`,
+    /// so `callee` runs with no second resolution of the symbol, under a
+    /// frame recording `called`, as GNU's `Bcall` records `call_fun`
+    /// (src/bytecode.c:792-796). The rest is `call_for_jit_stack`'s
+    /// protocol: the entry debugger on `called`, one depth level. (Its
+    /// aset/fillarray first-argument writeback concerns subr callees; a
+    /// bytecode callee takes none, as before the frame named the symbol.)
+    #[cfg(feature = "jit")]
+    pub(crate) fn call_resolved_bytecode_for_jit_stack(
+        &mut self,
+        called: Value,
+        callee: Value,
+        args_start: usize,
+        nargs: usize,
+    ) -> EvalResult {
+        debug_assert!(callee.is_bytecode(), "a resolved spec callee is bytecode");
+        if self.ctx.debug_on_next_call_is_armed() {
+            let args: LispArgVec = self.ctx.bc_buf[args_start..args_start + nargs]
+                .iter()
+                .copied()
+                .collect();
+            return self.with_bytecode_call_depth(|vm| vm.call_function_debugged(called, args));
+        }
+        self.with_bytecode_call_depth(|vm| {
+            vm.call_bytecode_from_stack_args(called, callee, args_start, nargs)
+        })
+    }
+
     fn call_function_from_stack_args(
         &mut self,
         func_val: Value,
@@ -7740,20 +7797,12 @@ impl<'a> Vm<'a> {
                     );
                 }
                 ResolvedStackCallTarget::ByteCode { callee } => {
-                    let callee = callee.value();
-                    let backtrace = self
-                        .ctx
-                        .push_backtrace_frame_from_bc_stack(func_val, args_start, nargs);
-                    let bc_data = callee
-                        .get_bytecode_data()
-                        .expect("resolved bytecode target must remain bytecode");
-                    let result = self
-                        .ctx
-                        .execute_bytecode_call_from_stack(bc_data, args_start, nargs, callee);
-                    let result = self.ctx.dispatch_signal_result_if_needed(result);
-                    return self
-                        .ctx
-                        .pop_bytecode_backtrace_token_fast_or_slow(backtrace, result);
+                    return self.call_bytecode_from_stack_args(
+                        func_val,
+                        callee.value(),
+                        args_start,
+                        nargs,
+                    );
                 }
                 ResolvedStackCallTarget::Interpreter { .. } => {
                     unreachable!(

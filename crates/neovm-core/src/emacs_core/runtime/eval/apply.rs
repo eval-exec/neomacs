@@ -196,14 +196,18 @@ impl Context {
         // Joining the variants into a local before reserving made LLVM build
         // a 32-byte stack temporary even with ptr::write below. Its wide copy
         // loads stalled on the preceding narrow stores in native call shims.
+        // A full specpdl takes the whole push out of line, so no argument of
+        // this one has to survive a call on the way to the write.
         let len = self.specpdl.len();
         if len == self.specpdl.capacity() {
-            self.specpdl.reserve(1);
+            // SAFETY: forwarded from this function's contract.
+            return unsafe {
+                self.push_backtrace_frame_from_native_args_grow(function, args_ptr, nargs)
+            };
         }
-        // SAFETY: capacity for one more entry was just ensured; the slot at
-        // `len` is uninitialised spare capacity, written before the length
-        // grows to cover it. The caller's native argument buffer remains
-        // valid across the Rust allocation and throughout the frame's life.
+        // SAFETY: the slot at `len` is uninitialised spare capacity (checked
+        // above), written before the length grows to cover it. The caller's
+        // native argument buffer remains valid throughout the frame's life.
         unsafe {
             let slot = self.specpdl.as_mut_ptr().add(len);
             let read = |i: usize| Value::from_bits(*args_ptr.add(i) as usize);
@@ -240,6 +244,28 @@ impl Context {
             }
             self.specpdl.set_len(len + 1);
         }
+    }
+
+    /// [`Self::push_backtrace_frame_from_native_args`] on a full specpdl:
+    /// grow it, then push. The whole push is out of line so that on the hot
+    /// path nothing is live across a call before the entry is written: a
+    /// speculated call's frame word, its symbol, is dead after the push, and
+    /// keeping it across an inline `reserve` cost the spec shim a register
+    /// move on every call.
+    ///
+    /// # Safety
+    /// As [`Self::push_backtrace_frame_from_native_args`].
+    #[cold]
+    #[inline(never)]
+    unsafe fn push_backtrace_frame_from_native_args_grow(
+        &mut self,
+        function: Value,
+        args_ptr: *const i64,
+        nargs: usize,
+    ) {
+        self.specpdl.reserve(1);
+        // SAFETY: forwarded; the push now finds spare capacity.
+        unsafe { self.push_backtrace_frame_from_native_args(function, args_ptr, nargs) }
     }
 
     /// Make every `BacktraceNative` entry that reads the argument slot at

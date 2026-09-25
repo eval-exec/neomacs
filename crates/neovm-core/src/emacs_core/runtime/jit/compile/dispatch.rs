@@ -944,22 +944,61 @@ pub(crate) const SPEC_EPOCH_DISARMED: u64 = u64::MAX;
 /// like the generic shim, so a compiled callee reaches the leaf-slot entry
 /// and an interpreted one enters the interpreter without a second copy.
 /// `target` is scratch-rooted across the call; the args are rooted by the
-/// operand stack.
+/// operand stack. Out of line, as both strict calls: inlined, they cost the
+/// shim's slow half its frame size and register assignment.
 #[cfg(feature = "jit")]
+#[inline(never)]
 fn call_for_jit_from_native(
     ctx: &mut Context,
     target: Value,
     args_ptr: *const i64,
     nargs: usize,
 ) -> crate::emacs_core::error::EvalResult {
+    stack_call_from_native(ctx, target, args_ptr, nargs, |vm, args_start| {
+        vm.call_for_jit_stack(target, args_start, nargs)
+    })
+}
+
+/// [`call_for_jit_from_native`] for an armed spec site whose callee the leaf
+/// fast path declined (not compiled, or an arity the strict path signals):
+/// the epoch proof says the symbol `called` names the bytecode object
+/// `callee`, so the stack call runs `callee` without resolving the symbol
+/// again (`Vm::call_resolved_bytecode_for_jit_stack`), and its frame records
+/// `called`, as GNU's `Bcall` does.
+#[cfg(feature = "jit")]
+#[inline(never)]
+fn call_resolved_for_jit_from_native(
+    ctx: &mut Context,
+    called: Value,
+    callee: Value,
+    args_ptr: *const i64,
+    nargs: usize,
+) -> crate::emacs_core::error::EvalResult {
+    stack_call_from_native(ctx, callee, args_ptr, nargs, |vm, args_start| {
+        vm.call_resolved_bytecode_for_jit_stack(called, callee, args_start, nargs)
+    })
+}
+
+/// The operand-stack setup of the strict calls above: `root` scratch-rooted
+/// and the caller's `nargs` argument words pushed onto `bc_buf` (GC-traced)
+/// for the duration of `call`, which gets their start index.
+#[cfg(feature = "jit")]
+#[inline(always)]
+fn stack_call_from_native(
+    ctx: &mut Context,
+    root: Value,
+    args_ptr: *const i64,
+    nargs: usize,
+    call: impl FnOnce(&mut Vm<'_>, usize) -> crate::emacs_core::error::EvalResult,
+) -> crate::emacs_core::error::EvalResult {
     let saved = save_scratch_gc_roots();
-    push_scratch_gc_root(target);
+    push_scratch_gc_root(root);
     let args_start = ctx.bc_buf.len();
     // SAFETY: the generated code stored exactly `nargs` argument words at
     // `args_ptr` (its call-args slot) immediately before this call.
     ctx.bc_buf
         .extend((0..nargs).map(|i| Value::from_bits(unsafe { *args_ptr.add(i) } as usize)));
-    let res = Vm::from_context(ctx).call_for_jit_stack(target, args_start, nargs);
+    let res = call(&mut Vm::from_context(ctx), args_start);
     ctx.bc_buf.truncate(args_start);
     restore_scratch_gc_roots(saved);
     res
@@ -1268,12 +1307,16 @@ fn call_spec_slow(
     nargs: usize,
     out: *mut i64,
 ) -> i64 {
-    // The site passes the called symbol as its tagged bits (what the
-    // callee's frame records).
-    let sym = Value::from_bits(sym_bits as usize)
-        .as_symbol_id()
-        .expect("a speculated call site's callee is a symbol")
-        .0 as i64;
+    // The site passes the called symbol as its tagged bits: what the
+    // callee's frame records, handed down as they are. Its id is only for
+    // the obarray reads below (the lowering bakes a symbol here; a tag test
+    // and a panic path on every slow call were measured, so debug-only).
+    let called = Value::from_bits(sym_bits as usize);
+    debug_assert!(
+        called.is_symbol(),
+        "a speculated call site's callee is a symbol"
+    );
+    let sym = called.xsymbol_id();
     jit_shim_contain!(detach args_ptr, ctx, STATUS_SIGNAL, {
         // Build a rooted LispArgVec from the caller's call-args slot — used only by
         // the strict-call fallback paths (call_for_jit), inside their own
@@ -1311,7 +1354,7 @@ fn call_spec_slow(
                         use crate::emacs_core::jit::stats::epoch::{
                             SpecRevalidation, note_spec_revalidation,
                         };
-                        let cur = ctx.obarray.symbol_function_id(SymId(sym as u32));
+                        let cur = ctx.obarray.symbol_function_id(sym);
                         if cur.is_some_and(|v| v.bits() as i64 == expected) {
                             note_spec_revalidation(SpecRevalidation::Rearmed);
                             // Equal bits re-arm the site, but they do not
@@ -1355,9 +1398,7 @@ fn call_spec_slow(
                     // the leaf's perf-map label. Naming-only, cold.
                     if slot.leaf_ptr().is_null() && crate::emacs_core::jit::stats::naming_enabled()
                     {
-                        crate::emacs_core::jit::stats::perf_map::set_pending_callee(SymId(
-                            sym as u32,
-                        ));
+                        crate::emacs_core::jit::stats::perf_map::set_pending_callee(sym);
                     }
                     // No scratch rooting and no Vm construction on the armed
                     // fast path: the target is the symbol's function (the
@@ -1366,25 +1407,20 @@ fn call_spec_slow(
                     // does (`cache::pin_redefined_function`) -- and
                     // `Vm::from_context`'s eager cache zero-fill was a
                     // measured per-call tax.
-                    let called = SymId(sym as u32);
                     match Vm::call_armed_callee_native(ctx, called, target, slot, args_ptr, nargs)
                     {
                         Some(o) => o,
-                        // The strict call goes through the SYMBOL, like the
-                        // unarmed one below: GNU's frame records the symbol,
-                        // and the epoch proof says it names `target`, which
-                        // the interpreter frame then roots.
-                        None => NativeCallOutcome::from_result(call_for_jit_from_native(
-                            ctx,
-                            Value::from_sym_id(called),
-                            args_ptr,
-                            nargs,
+                        // The strict call runs `target`, which the epoch
+                        // proof says the symbol names, so it resolves
+                        // nothing again; its frame records the SYMBOL, as
+                        // GNU's `Bcall` does and as the unarmed call below.
+                        None => NativeCallOutcome::from_result(call_resolved_for_jit_from_native(
+                            ctx, called, target, args_ptr, nargs,
                         )),
                     }
                 } else {
-                    let target = Value::from_sym_id(SymId(sym as u32));
                     NativeCallOutcome::from_result(call_for_jit_from_native(
-                        ctx, target, args_ptr, nargs,
+                        ctx, called, args_ptr, nargs,
                     ))
                 };
                 match outcome {

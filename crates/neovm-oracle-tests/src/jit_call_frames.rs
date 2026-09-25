@@ -113,3 +113,37 @@ fn oracle_jit_running_function_survives_its_redefinition_and_a_collection() {
     let expect = expect_test::expect![[r#""OK (3 1)""#]];
     crate::common::assert_oracle_parity_with_env_expect(form, JIT_ENV, expect);
 }
+
+/// O8: a speculated call its callee's arity rejects signals GNU's
+/// `wrong-number-of-arguments` with the callee's frame already recorded --
+/// the called symbol and the call's arguments -- as `Bcall` records it
+/// before `setup_frame` checks the arity (src/bytecode.c:795, :539).
+#[test]
+fn oracle_jit_speculated_call_with_a_rejected_arity_frames_the_symbol() {
+    return_if_neovm_enable_oracle_proptest_not_set!();
+    let form = r#"(progn
+  (defvar neovm--o8-seen nil)
+  (defalias 'neovm--o8-one (byte-compile (lambda (x) (if x x 0))))
+  (defalias 'neovm--o8-caller
+    (byte-compile
+     (lambda (x y) (if y (with-no-warnings (neovm--o8-one x y)) (neovm--o8-one x)))))
+  (dotimes (i 6000) (neovm--o8-caller i nil))
+  (list (condition-case err
+            (handler-bind
+                ((wrong-number-of-arguments
+                  (lambda (_err)
+                    (let (fs)
+                      (mapbacktrace
+                       (lambda (_evald f args _flags)
+                         (when (and (symbolp f)
+                                    (string-prefix-p "neovm--o8-" (symbol-name f)))
+                           (push (list f args) fs))))
+                      (setq neovm--o8-seen (nreverse fs))))))
+              (neovm--o8-caller 1 2))
+          (error err))
+        neovm--o8-seen))"#;
+    let expect = expect_test::expect![[
+        r#""OK ((wrong-number-of-arguments (1 . 1) 2) ((neovm--o8-one (1 2)) (neovm--o8-caller (1 2))))""#
+    ]];
+    crate::common::assert_oracle_parity_with_env_expect(form, JIT_ENV, expect);
+}

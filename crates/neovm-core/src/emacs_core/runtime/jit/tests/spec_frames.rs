@@ -133,3 +133,54 @@ fn a_running_function_outlives_its_redefinition_and_a_collection() {
         "and its pin is gone"
     );
 }
+
+/// An armed site whose callee's leaf declines the call -- here an arity the
+/// callee rejects -- runs the armed callee through the strict path without
+/// resolving the symbol again, and the frame it signals from records the
+/// called symbol with the call's arguments: GNU's `Bcall` records it before
+/// `setup_frame` checks the arity (src/bytecode.c:795, :539).
+#[test]
+fn an_armed_call_the_leaf_declines_records_the_symbol_in_its_frame() {
+    crate::test_utils::init_test_tracing();
+    force_profit_gate_for_test(false);
+    let mut ev = crate::test_utils::runtime_startup_context();
+    ev.eval_str(
+        r#"(progn
+  (defvar neovm--decl-seen nil)
+  (defun neovm--decl-one (x) (if x x 0))
+  (defun neovm--decl-caller (x y)
+    (if y (with-no-warnings (neovm--decl-one x y)) (neovm--decl-one x)))
+  (byte-compile 'neovm--decl-one)
+  (byte-compile 'neovm--decl-caller)
+  (dotimes (i 6000) (neovm--decl-caller i nil)))"#,
+    )
+    .expect("defined and warmed");
+    let spec_calls = SPEC_CALL_COUNT.load(Ordering::Relaxed);
+    let result = ev
+        .eval_str(
+            r#"(condition-case err
+       (handler-bind
+           ((wrong-number-of-arguments
+             (lambda (_err)
+               (let (fs)
+                 (mapbacktrace
+                  (lambda (_evald f args _flags)
+                    (when (and (symbolp f)
+                               (string-prefix-p "neovm--decl-" (symbol-name f)))
+                      (push (list f args) fs))))
+                 (setq neovm--decl-seen (nreverse fs))))))
+         (neovm--decl-caller 1 2))
+     (error (car err)))"#,
+        )
+        .expect("runs");
+    assert!(
+        SPEC_CALL_COUNT.load(Ordering::Relaxed) > spec_calls,
+        "the call ran through the speculated site"
+    );
+    assert_eq!(print_value(&result), "wrong-number-of-arguments");
+    let seen = ev.eval_str("neovm--decl-seen").expect("recorded");
+    assert_eq!(
+        print_value(&seen),
+        "((neovm--decl-one (1 2)) (neovm--decl-caller (1 2)))"
+    );
+}
