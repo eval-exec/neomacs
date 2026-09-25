@@ -2341,6 +2341,7 @@ impl TaggedHeap {
     fn link_veclike(&mut self, header: *mut VecLikeHeader) {
         unsafe {
             (*header).gc.next = self.all_objects;
+            (*header).gc.flags = (*header).gc.flags.with_boxed();
             // BORN-AT-PARITY, unconditionally (see `link_object`): during a
             // concurrent mark this is allocate-black; otherwise it pre-arms
             // the bit so the next begin_collection flip reads it as white.

@@ -197,8 +197,10 @@ pub struct GcHeader {
     pub remembered: AtomicBool,
     /// Byte 4, reserved for P3.2 L2's `type_tag` (P3.0 §3.1); always 0.
     reserved_type_tag: u8,
-    /// Byte 5, reserved for P3.2 L2's flags (P3.0 §3.1); always 0.
-    reserved_flags: u8,
+    /// Byte 5: object flags ([`HeaderFlags`], P3.0 §3.1's `flags` byte;
+    /// P3.2 L2 adds its layout flags here). Written only before the object
+    /// is published.
+    pub flags: HeaderFlags,
     /// Byte 6: the generation byte ([`GenBits`], P3.0's `gen`). Written only at a
     /// world-stopped promotion, like `tenured`, so the GC thread reads it
     /// without a race.
@@ -207,6 +209,41 @@ pub struct GcHeader {
     reserved_class: u8,
     /// Intrusive linked list of all GC-managed objects (for sweep).
     pub next: *mut GcHeader,
+}
+
+/// The flags byte of a [`GcHeader`] (byte 5; P3.0 §3.1).
+///
+/// - bit 0 `boxed`: a residual `Box` veclike this heap linked
+///   (`TaggedHeap::link_veclike`): on no block or page, owned through the
+///   heap's `non_cons_object_addrs`. Set once, before publication, and gone
+///   with the object. It lets a marker that holds a LIVE object answer
+///   "owned boxed object" from the header instead of the addr-set probe; the
+///   ownership oracles for arbitrary addresses still ask the set, which is
+///   exact even for a dangling one.
+///
+/// The pdump image writes this byte as 0; mapped and static headers never
+/// have `boxed`.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HeaderFlags(u8);
+
+impl HeaderFlags {
+    const BOXED: u8 = 1 << 0;
+
+    /// No flags.
+    pub const NONE: Self = Self(0);
+
+    /// Is the object a boxed object linked by its heap?
+    #[inline(always)]
+    pub fn boxed(self) -> bool {
+        self.0 & Self::BOXED != 0
+    }
+
+    /// These flags with `boxed` set.
+    #[inline]
+    pub fn with_boxed(self) -> Self {
+        Self(self.0 | Self::BOXED)
+    }
 }
 
 /// A cycle's mark parity: the value a mark byte holds when its object is
@@ -297,7 +334,7 @@ const _: () = assert!(std::mem::offset_of!(GcHeader, kind) == 1);
 const _: () = assert!(std::mem::offset_of!(GcHeader, tenured) == 2);
 const _: () = assert!(std::mem::offset_of!(GcHeader, remembered) == 3);
 const _: () = assert!(std::mem::offset_of!(GcHeader, reserved_type_tag) == 4);
-const _: () = assert!(std::mem::offset_of!(GcHeader, reserved_flags) == 5);
+const _: () = assert!(std::mem::offset_of!(GcHeader, flags) == 5);
 const _: () = assert!(std::mem::offset_of!(GcHeader, generation) == 6);
 const _: () = assert!(std::mem::offset_of!(GcHeader, reserved_class) == 7);
 const _: () = assert!(std::mem::offset_of!(GcHeader, next) == 8);
@@ -320,7 +357,7 @@ impl GcHeader {
             tenured: false,
             remembered: AtomicBool::new(false),
             reserved_type_tag: 0,
-            reserved_flags: 0,
+            flags: HeaderFlags::NONE,
             generation: GenBits::NONE,
             reserved_class: 0,
             next: std::ptr::null_mut(),

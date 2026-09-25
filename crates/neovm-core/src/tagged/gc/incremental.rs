@@ -601,7 +601,7 @@ impl TaggedHeap {
             // first-cycle window of the type sim) before being classified.
             let addr = ptr as usize;
             if (addr >= self.dump_addr_lo && addr < self.dump_addr_hi)
-                || !self.owns_veclike_object(ptr as *const u8)
+                || !self.owns_live_veclike_object(ptr as *const u8)
             {
                 if self.mark_mapped_veclike(ptr) {
                     #[cfg(test)]
@@ -1566,6 +1566,35 @@ impl TaggedHeap {
             ChunkClass::None => self.owns_boxed_object(addr),
             ChunkClass::Cons | ChunkClass::Float | ChunkClass::String => false,
         }
+    }
+
+    /// [`Self::owns_veclike_object`] for a LIVE object: one `mark_value`
+    /// reached from a root or from a live object's slot, so its header is
+    /// readable. With the chunk map, an address on no block or page answers
+    /// from the header's `boxed` flag (`HeaderFlags`, set by `link_veclike`
+    /// exactly for the addr-set's members) instead of the addr-set probe:
+    /// hash tables, char-tables and the other boxed kinds were the last
+    /// ownership test that still hashed (P5: 0.9% of instructions). The
+    /// general oracle keeps the probe, which is exact even for a dangling
+    /// address.
+    #[inline(always)]
+    pub(super) fn owns_live_veclike_object(&self, ptr: *const u8) -> bool {
+        let Some(map) = self.chunk_map.as_ref() else {
+            return self.owns_veclike_object_by_registry(ptr);
+        };
+        let addr = ptr as usize;
+        if map.get(addr) != ChunkEntry::NONE {
+            return self.owns_veclike_object_by_chunk(map, ptr);
+        }
+        debug_assert!(!ptr.is_null(), "mark_value of a null veclike");
+        // SAFETY: a live veclike begins with its `GcHeader`.
+        let boxed = unsafe { (*(ptr as *const GcHeader)).flags.boxed() };
+        debug_assert_eq!(
+            boxed,
+            self.non_cons_object_addrs.contains(&addr),
+            "a live veclike's boxed flag disagrees with the addr-set"
+        );
+        boxed
     }
 
     /// The residual `Box` addr-set's answer for an address on no heap block
