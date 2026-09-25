@@ -131,3 +131,110 @@ fn lazy_prewarm_serves_a_marked_member_from_the_preload() {
     super::super::cache::clear();
     test_support::reset();
 }
+
+/// The lazy-prewarm battery (P4.2 A7): a corpus of loadup-shaped members
+/// (arithmetic, comparison, branches, and symbol, string and fixnum
+/// constants), each marked from the manifest and served from the preload on
+/// its first call, must answer exactly as a copy pinned to the Tier-0
+/// interpreter, over a spread of arguments. The battery is only meaningful
+/// if AOT really served: it requires one AOT load per member and no JIT
+/// compile (the pre-A1 path passed every answer check while serving none).
+#[cfg(target_os = "linux")]
+#[test]
+fn lazy_prewarm_battery_matches_the_interpreter_and_serves_every_member() {
+    let mut ev = Context::new_minimal_vm_harness();
+    let members = [
+        Member {
+            name: "lazy-battery-add5",
+            ops: vec![Op::Constant(0), Op::Add, Op::Return],
+            constants: vec![Value::make_int(5)],
+        },
+        Member {
+            name: "lazy-battery-sub1",
+            ops: vec![Op::Constant(0), Op::Sub, Op::Return],
+            constants: vec![Value::make_int(1)],
+        },
+        Member {
+            name: "lazy-battery-square",
+            ops: vec![Op::StackRef(0), Op::Mul, Op::Return],
+            constants: vec![],
+        },
+        Member {
+            name: "lazy-battery-inc",
+            ops: vec![Op::Add1, Op::Return],
+            constants: vec![],
+        },
+        Member {
+            name: "lazy-battery-negp",
+            ops: vec![Op::Constant(0), Op::Lss, Op::Return],
+            constants: vec![Value::make_int(0)],
+        },
+        Member {
+            name: "lazy-battery-sign",
+            ops: vec![
+                Op::Dup,
+                Op::Constant(0),
+                Op::Lss,
+                Op::GotoIfNil(6),
+                Op::Constant(1),
+                Op::Return,
+                Op::Constant(2),
+                Op::Return,
+            ],
+            constants: vec![
+                Value::make_int(0),
+                Value::symbol("lazy-battery-negative"),
+                Value::symbol("lazy-battery-non-negative"),
+            ],
+        },
+        Member {
+            name: "lazy-battery-label",
+            ops: vec![Op::Constant(0), Op::Return],
+            constants: vec![Value::string("lazy-battery label")],
+        },
+    ];
+    let _dir = install_lazy_preload(&mut ev, &members);
+    assert_eq!(
+        mark_preload_members_prewarmed(&ev),
+        (members.len(), members.len())
+    );
+
+    super::super::stats::reset_compile_stats();
+    for member in &members {
+        let served = function_of(&ev, member.name);
+        let reference = Value::make_bytecode(member.function());
+        reference
+            .get_bytecode_data()
+            .unwrap()
+            .jit_runtime()
+            .set_cold_for_test();
+        crate::emacs_core::eval::push_scratch_gc_root(reference);
+        for arg in [0i64, 1, 2, 7, -3, 42, 1000, -1000, (1 << 40) - 1] {
+            let arg = Value::make_int(arg);
+            let got = ev.apply1(served, arg).expect("served call");
+            let want = ev.apply1(reference, arg).expect("interpreted call");
+            assert_eq!(
+                crate::emacs_core::print::print_value(&got),
+                crate::emacs_core::print::print_value(&want),
+                "{} {arg:?}",
+                member.name
+            );
+        }
+        let id = served
+            .get_bytecode_data()
+            .and_then(|bc| bc.jit_runtime().compiled_id())
+            .expect("marked");
+        assert_eq!(
+            super::super::cache::cached_leaf_is_aot_for_test(id),
+            Some(true),
+            "{} must be served from the preload",
+            member.name
+        );
+    }
+    let stats = super::super::stats::compile_stats_snapshot();
+    assert_eq!(stats.aot_loads, members.len() as u64, "{stats:?}");
+    assert_eq!(stats.total_compiles, 0, "{stats:?}");
+
+    super::super::cache::clear();
+    test_support::reset();
+}

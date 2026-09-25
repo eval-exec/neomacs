@@ -1126,6 +1126,105 @@ pub(crate) fn assert_oracle_parity_under_envs_expect(
     }
 }
 
+/// Whether the AOT battery runs: `NEOVM_ORACLE_AOT=1`, set when the Neomacs
+/// binary under test (`NEOVM_BINARY_PATH`) was built with its dump-time
+/// preload (`cargo xtask fresh-build --aot-preload`). Without a preload there
+/// is nothing AOT could serve, so the battery would pass vacuously; it stays
+/// off unless asked for, and once asked for it refuses to be vacuous.
+pub(crate) fn aot_battery_enabled() -> bool {
+    matches!(
+        std::env::var("NEOVM_ORACLE_AOT").as_deref(),
+        Ok("1" | "on" | "yes")
+    )
+}
+
+/// The knob matrix the AOT battery runs Neomacs under (P4.2 A7): AOT alone,
+/// AOT with every compilable function tiered at once, and AOT with every JIT
+/// speculation guard failing (the forced-deopt soak).
+const AOT_BATTERY_ENVS: &[&[(&str, &str)]] = &[
+    &[("NEOVM_AOT", "1")],
+    &[("NEOVM_AOT", "1"), ("NEOVM_JIT_THRESHOLD", "1")],
+    &[("NEOVM_AOT", "1"), ("NEOVM_JIT_FORCE_DEOPT", "1")],
+];
+
+/// `aot_loads=N` from the last `[neovm-jit-final]` line of a JIT stats file.
+fn final_aot_loads(stats: &str) -> Option<u64> {
+    stats
+        .lines()
+        .rev()
+        .find(|line| line.starts_with("[neovm-jit-final]"))?
+        .split_whitespace()
+        .find_map(|field| field.strip_prefix("aot_loads="))?
+        .parse()
+        .ok()
+}
+
+/// [`assert_oracle_parity_under_envs_expect`] over [`AOT_BATTERY_ENVS`], which
+/// also requires that AOT really served: each Neomacs run reports its JIT
+/// statistics (`NEOVM_JIT_STATS_FILE`) and must show `aot_loads > 0`. The AOT
+/// batteries once passed with no AOT leaf ever served (the first-call consult
+/// never reached the preload, P4.2 B2); this makes that a failure.
+pub(crate) fn assert_oracle_parity_under_aot_expect(form: &str, expected: expect_test::Expect) {
+    ensure_nonempty_form(form).expect("form should not be empty");
+    let eval_program = EvalProgram::Normalized;
+    let mode = OracleMode::from_env();
+    // Refreshing the GNU expectation needs no Neomacs binary.
+    if mode != OracleMode::Refresh {
+        if !aot_battery_enabled() {
+            tracing::info!(
+                "skipping AOT battery form: set NEOVM_ORACLE_AOT=1 (needs a preload build)"
+            );
+            return;
+        }
+        let binary = PathBuf::from(neomacs_binary_path());
+        let preload = binary.with_file_name("libneomacs-preload.so");
+        assert!(
+            preload.exists(),
+            "NEOVM_ORACLE_AOT=1 but {} has no preload beside it ({}): build it with \
+             `cargo xtask fresh-build --aot-preload`",
+            binary.display(),
+            preload.display()
+        );
+    }
+    let oracle = match mode {
+        OracleMode::Snapshot => None,
+        OracleMode::Verify | OracleMode::Refresh | OracleMode::Live => Some(
+            run_oracle_eval_with_sandbox(
+                &oracle_sandbox(form, &[], &project_lisp_dir()),
+                eval_program,
+            )
+            .expect("oracle eval should run"),
+        ),
+    };
+    if let (OracleMode::Verify | OracleMode::Refresh, Some(oracle)) = (mode, &oracle) {
+        expected.assert_eq(&inline_expect_payload(oracle));
+    }
+    if mode == OracleMode::Refresh {
+        return;
+    }
+    for knobs in AOT_BATTERY_ENVS {
+        let stats_dir = tempfile::tempdir().expect("stats tempdir");
+        let stats_path = stats_dir.path().join("jit-stats.txt");
+        let stats_file = stats_path.to_string_lossy().into_owned();
+        let mut env: Vec<(&str, &str)> = knobs.to_vec();
+        env.push(("NEOVM_JIT_STATS_FILE", stats_file.as_str()));
+        let sandbox = oracle_sandbox(form, &[], &project_lisp_dir()).with_extra_env(&env);
+        let neovm = run_neomacs_binary_eval_with_sandbox(&sandbox, eval_program)
+            .unwrap_or_else(|e| panic!("neomacs binary eval should run under {knobs:?}: {e}"));
+        match &oracle {
+            None => expected.assert_eq(&inline_expect_payload(&neovm)),
+            Some(oracle) => assert_neovm_oracle_parity(&neovm, oracle, form),
+        }
+        let stats = std::fs::read_to_string(&stats_path).unwrap_or_default();
+        let aot_loads = final_aot_loads(&stats);
+        assert!(
+            aot_loads.is_some_and(|n| n > 0),
+            "AOT served nothing under {knobs:?} (aot_loads={aot_loads:?}): the battery \
+             would be vacuous. JIT stats:\n{stats}"
+        );
+    }
+}
+
 pub(crate) fn assert_oracle_parity_with_env_expect(
     form: &str,
     extra_env: &[(&str, &str)],

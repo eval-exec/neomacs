@@ -11,6 +11,7 @@ mod add;
 mod advice;
 mod alist;
 mod and;
+mod aot_battery;
 mod append_nconc_semantics;
 mod apply;
 mod aref_aset;
