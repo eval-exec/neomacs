@@ -7737,6 +7737,54 @@ fn regalloc_knob_maps_spellings_to_allocators() {
     assert_eq!(parse_regalloc_choice(None), None);
 }
 
+/// A body that calls its own symbol is recursion, unbounded work per entry
+/// like a loop, so it gets the full allocator's smaller frame. The check is
+/// by object identity: another function with the same code, a non-calling
+/// self-reference, and a caller with no obarray all keep the plain shape rule.
+#[test]
+fn a_body_that_calls_itself_is_classified_by_identity() {
+    let mut ev = Context::new();
+    let self_sym = Value::symbol("jit-self-recursive");
+    let other_sym = Value::symbol("jit-other-callee");
+    let mk = |ops: Vec<Op>, callee: Value| {
+        let mut f = ByteCodeFunction::new(LambdaParams {
+            required: vec![SymId(1)],
+            optional: Vec::new(),
+            rest: None,
+        });
+        f.lexical = true;
+        f.ops = ops;
+        f.constants = vec![callee].into();
+        f.max_stack = 16;
+        f
+    };
+    let calls = || vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return];
+    let self_val = Value::make_bytecode(mk(calls(), self_sym));
+    ev.obarray
+        .set_symbol_function_id(self_sym.as_symbol_id().unwrap(), self_val);
+    let other_val = Value::make_bytecode(mk(calls(), self_sym));
+    ev.obarray
+        .set_symbol_function_id(other_sym.as_symbol_id().unwrap(), other_val);
+    let no_call_val = Value::make_bytecode(mk(vec![Op::Constant(0), Op::Return], self_sym));
+
+    let self_data = self_val.get_bytecode_data().unwrap();
+    assert!(body_calls_itself(self_data, Some(&ev.obarray)));
+    assert!(
+        !body_calls_itself(self_data, None),
+        "no obarray, no verdict"
+    );
+    // Same code and constants, but the symbol's cell holds a different object.
+    assert!(!body_calls_itself(
+        other_val.get_bytecode_data().unwrap(),
+        Some(&ev.obarray)
+    ));
+    // A self-reference without a call is not recursion.
+    assert!(!body_calls_itself(
+        no_call_val.get_bytecode_data().unwrap(),
+        Some(&ev.obarray)
+    ));
+}
+
 /// The allocator policy: forced wins; otherwise loops and `Full` requests get
 /// the full allocator, straight-line entry compiles the fast one.
 #[test]

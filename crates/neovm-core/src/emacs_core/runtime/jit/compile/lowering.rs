@@ -2535,8 +2535,9 @@ pub(crate) fn parse_regalloc_choice(value: Option<&str>) -> Option<RegallocChoic
 }
 
 /// The allocator policy: a forced choice wins; otherwise the full allocator
-/// for a `Full` policy or a body with a back-edge (a loop can run unboundedly
-/// per entry, so its code quality is worth the compile), and the fast one for
+/// for a `Full` policy or a body that can run unboundedly per entry -- a back
+/// edge, or a self-recursive call (see `regalloc_for_shape`) -- so its code
+/// quality is worth the compile, and the fast one for
 /// a straight-line or branchy body (bounded work per entry — and it re-tiers
 /// to `Full` if the interpreter keeps entering it; see `retier_heat`).
 pub(crate) fn choose_regalloc(

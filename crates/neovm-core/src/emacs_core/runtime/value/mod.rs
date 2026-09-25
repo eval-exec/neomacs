@@ -2974,6 +2974,20 @@ impl TaggedValue {
         }
     }
 
+    /// Whether `self` is the byte-code object whose data is `f`: an address
+    /// comparison that, unlike [`Self::get_bytecode_data`], never materializes
+    /// a lazy pdump stub (a compile asking "is this function cell me?" must
+    /// not build every stub it merely looks at).
+    pub(crate) fn is_bytecode_object_of(self, f: &super::bytecode::ByteCodeFunction) -> bool {
+        if self.veclike_type() != Some(VecLikeType::ByteCode) {
+            return false;
+        }
+        let ptr = self.as_veclike_ptr().unwrap() as *const ByteCodeObj;
+        // SAFETY: `ptr` addresses a live byte-code object (the type test
+        // above); `addr_of!` forms the field address without reading it.
+        std::ptr::eq(unsafe { std::ptr::addr_of!((*ptr).data) }, f)
+    }
+
     /// [`Self::get_bytecode_data`] for callers that ALREADY proved the
     /// veclike type — the VM's resolved-callee token proves it at mint, and
     /// re-checking on every `code()` projection measured +7.3 Ir/call on the

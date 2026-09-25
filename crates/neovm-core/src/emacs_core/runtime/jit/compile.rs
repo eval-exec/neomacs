@@ -1007,6 +1007,7 @@ pub fn compile_bytecode_function_requested(
         request.regalloc,
         f.executable_ops(),
         call_heavy,
+        body_calls_itself(f, obarray),
     ));
     let outer = (
         BYPASS_PROFIT_GATE.with(|b| b.replace(request.bypass_profit_gate)),
@@ -1050,21 +1051,51 @@ pub(crate) fn regalloc_for(
     ops: &[Op],
     constants: &[Value],
 ) -> lowering::RegallocChoice {
-    regalloc_for_shape(policy, ops, body_is_call_heavy(ops, constants))
+    regalloc_for_shape(policy, ops, body_is_call_heavy(ops, constants), false)
 }
 
-/// [`regalloc_for`] with the call-heavy verdict already known.
+/// [`regalloc_for`] with the call-heavy and self-recursion verdicts already
+/// known. A self-recursive body counts as unbounded work per entry, like a
+/// loop: recursion runs as long as a loop does, and the full allocator's
+/// smaller frame is what keeps a deep recursion in L2 (a 2-argument
+/// self-recursive leaf: 480 -> 352 bytes of native stack per Lisp level;
+/// listlen-tc -10.5% cycles, fibn -2.5%). Without this such a leaf stays on
+/// the fast allocator for good: its self-calls run native-to-native, so the
+/// interpreter's heat never reaches the full-allocator re-tier.
 fn regalloc_for_shape(
     policy: lowering::RegallocPolicy,
     ops: &[Op],
     call_heavy: bool,
+    self_recursive: bool,
 ) -> lowering::RegallocChoice {
     lowering::choose_regalloc(
         lowering::forced_regalloc(),
         policy,
-        has_back_edge(ops),
+        has_back_edge(ops) || self_recursive,
         call_heavy && !callheavy_uses_full_allocator(),
     )
+}
+
+/// Whether `f` names itself as a callee: some symbol constant's function cell
+/// is `f`'s own byte-code object and the body makes a call (a `defun` that
+/// recurses by name). Conservative both ways: a self-reference that is not a
+/// call only costs the full allocator's compile time.
+fn body_calls_itself(f: &ByteCodeFunction, obarray: Option<&Obarray>) -> bool {
+    let Some(obarray) = obarray else {
+        return false;
+    };
+    if !f
+        .executable_ops()
+        .iter()
+        .any(|op| matches!(op, Op::Call(_)))
+    {
+        return false;
+    }
+    f.constants.iter().any(|c| {
+        c.as_symbol_id()
+            .and_then(|id| obarray.symbol_function_id(id))
+            .is_some_and(|binding| binding.is_bytecode_object_of(f))
+    })
 }
 
 /// `NEOVM_JIT_REGALLOC_CALLHEAVY=full`: give call-heavy bodies the full
