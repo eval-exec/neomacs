@@ -1,6 +1,6 @@
 //! The text line index inside `BufferText` (`NEOVM_TEXT_LINE_INDEX`): every
 //! edit path keeps it equal to a recount, every query answers what a scan
-//! answers, and it builds safely under a held borrow.
+//! answers, snapshots share it, and it builds safely under a held borrow.
 
 use super::*;
 use crate::buffer::text::TextReplacement;
@@ -9,6 +9,7 @@ use crate::buffer::text_index::{
     TextLineIndexConfig, TextLineIndexMode, with_text_line_index_config,
 };
 use crate::buffer::text_props::TextPropertyTable;
+use crate::buffer::text_snapshot::{TextSnapshotMode, set_text_snapshot_mode_override};
 
 use super::super::LineEnd;
 
@@ -323,6 +324,82 @@ fn an_edit_larger_than_a_quarter_of_the_text_drops_the_index() {
         // 300 KB: dropped.
         insert_storage_string(&mut text, emacs_byte_pos(5), &"y\n".repeat(150_000));
         assert!(!text.has_line_index_for_test());
+    });
+}
+
+/// A layout snapshot shares the index: no copy per layout, a copy only if
+/// the live text is edited while the snapshot still holds it, and each then
+/// describes its own text.
+#[test]
+fn snapshots_share_the_index_and_an_edit_copies_it_only_while_shared() {
+    crate::test_utils::init_test_tracing();
+    for mode in [TextSnapshotMode::Copy, TextSnapshotMode::Share] {
+        set_text_snapshot_mode_override(Some(mode));
+        with_text_line_index_config(eager_verify(), || {
+            let mut text = BufferText::from_str(&"abc\n".repeat(100));
+            let end = text.emacs_byte_end_pos();
+            assert_eq!(text.count_newlines_emacs_byte(EmacsBytePos::ZERO, end), 100);
+            let snapshot = text.clone();
+            assert!(snapshot.shares_line_index_with_for_test(&text), "{mode:?}");
+            assert_eq!(
+                snapshot.indexed_newline_count(EmacsBytePos::ZERO, end),
+                Some(100),
+                "{mode:?}: the snapshot's count uses the shared index"
+            );
+            // Edit the live text while the snapshot lives: one copy.
+            insert_storage_string(&mut text, EmacsBytePos::ZERO, "\n\n");
+            assert!(!snapshot.shares_line_index_with_for_test(&text));
+            assert_eq!(
+                snapshot.indexed_newline_count(EmacsBytePos::ZERO, end),
+                Some(100)
+            );
+            assert_eq!(
+                text.indexed_newline_count(EmacsBytePos::ZERO, text.emacs_byte_end_pos()),
+                Some(102)
+            );
+            drop(snapshot);
+            // Snapshot, drop, edit: the live text owns its index again.
+            let snapshot = text.clone();
+            drop(snapshot);
+            insert_storage_string(&mut text, EmacsBytePos::ZERO, "\n");
+            text.check_line_index_for_test().unwrap();
+        });
+        set_text_snapshot_mode_override(None);
+    }
+}
+
+/// A snapshot never builds; its query asks the live text to, and the next
+/// snapshot shares what the live text built.
+#[test]
+fn a_snapshot_query_makes_the_live_text_build_at_the_next_snapshot() {
+    crate::test_utils::init_test_tracing();
+    with_text_line_index_config(eager_verify(), || {
+        let text = BufferText::from_str(&"abc\n".repeat(100));
+        let end = text.emacs_byte_end_pos();
+        let first = text.clone();
+        assert_eq!(first.indexed_newline_count(EmacsBytePos::ZERO, end), None);
+        assert_eq!(
+            first.count_newlines_emacs_byte(EmacsBytePos::ZERO, end),
+            100
+        );
+        assert!(
+            !first.has_line_index_for_test(),
+            "a snapshot does not build"
+        );
+        assert!(!text.has_line_index_for_test());
+        let second = text.clone();
+        assert!(
+            text.has_line_index_for_test(),
+            "the live text built at the snapshot"
+        );
+        assert!(second.shares_line_index_with_for_test(&text));
+        assert_eq!(
+            second.indexed_newline_count(EmacsBytePos::ZERO, end),
+            Some(100)
+        );
+        // No further demand: the next snapshot just shares.
+        let third = text.clone();
+        assert!(third.shares_line_index_with_for_test(&text));
     });
 }
 

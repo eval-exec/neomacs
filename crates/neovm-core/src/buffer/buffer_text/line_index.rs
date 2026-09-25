@@ -3,16 +3,22 @@
 //! maintenance on every edit.
 //!
 //! - **Where.** `BufferTextStorage::text_index`, outside the shared text
-//!   bytes (P3.0 §3.9); a layout snapshot starts without one.
-//! - **When.** On the first query the index would serve, once the text
-//!   reaches `min_buffer_bytes`. The build borrows only the index slot,
-//!   never the storage mutably, so it is safe under a read borrow redisplay
-//!   holds (the trap of the ASCII-prefix attempt).
+//!   bytes (P3.0 §3.9). A layout snapshot shares the `Rc` instead of copying
+//!   the index, so the gutter count of the snapshot can use it. The live
+//!   text's next edit goes through `Rc::make_mut`, which copies only while a
+//!   snapshot still holds the index (`TextLineIndexEvent::CowCopy`).
+//! - **When.** Only live text builds, on the first query the index would
+//!   serve, once the text reaches `min_buffer_bytes`. The build borrows only
+//!   the index slot, never the storage mutably, so it is safe under a read
+//!   borrow redisplay holds (the trap of the ASCII-prefix attempt). A
+//!   snapshot that would have used an index sets the shared demand flag
+//!   instead, and the live text builds at the next snapshot.
 //! - **Edits.** The four measured mutators update the index: a deletion
 //!   before the backend loses the bytes (they are counted), an insertion
 //!   after. An edit larger than `max(256 KiB, text / 4)` and every wholesale
 //!   mutator drop it.
 
+use std::cell::{Cell, OnceCell, RefCell};
 use std::rc::Rc;
 
 use super::{BufferText, BufferTextStorage, LineEnd};
@@ -22,6 +28,14 @@ use crate::buffer::text_index::{
     report_mismatch, text_line_index_config,
 };
 
+/// Which text a storage holds: a buffer's own, or a layout snapshot of it.
+/// Only live text builds an index.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum LineIndexRole {
+    Live,
+    Snapshot,
+}
+
 /// An edit of more bytes than this, and than a quarter of the text, drops
 /// the index instead of updating it (an `erase-buffer`, a restore).
 const DROP_EDIT_BYTES: usize = 256 * 1024;
@@ -30,7 +44,7 @@ fn edit_drops_index(edit_bytes: usize, text_bytes: usize) -> bool {
     edit_bytes > DROP_EDIT_BYTES.max(text_bytes / 4)
 }
 
-/// The index for an edit (copied first if anything else still shares it).
+/// The index for an edit: copied first if a snapshot still shares it.
 fn index_for_edit(
     shared: &mut Rc<TextLineIndex>,
     config: TextLineIndexConfig,
@@ -42,8 +56,8 @@ fn index_for_edit(
 }
 
 impl BufferTextStorage {
-    /// The index, built now if the text is large enough for one. `None`:
-    /// the caller scans.
+    /// The index, built now if this is live text large enough for one.
+    /// `None`: the caller scans.
     fn line_index(&self, config: TextLineIndexConfig) -> Option<Rc<TextLineIndex>> {
         if let Some(index) = self.text_index.try_borrow().ok()?.as_ref() {
             return Some(Rc::clone(index));
@@ -51,7 +65,15 @@ impl BufferTextStorage {
         if self.metrics.emacs_byte_len().get() < config.min_buffer_bytes {
             return None;
         }
-        self.build_line_index(config)
+        match self.line_index_role {
+            LineIndexRole::Live => self.build_line_index(config),
+            LineIndexRole::Snapshot => {
+                if let Some(demand) = self.text_index_demand.get() {
+                    demand.set(true);
+                }
+                None
+            }
+        }
     }
 
     #[cold]
@@ -68,6 +90,31 @@ impl BufferTextStorage {
             "built a text line index"
         );
         Some(index)
+    }
+
+    /// The index slot and demand flag of a clone of this storage. The clone
+    /// shares the index; live text first builds one if a snapshot asked.
+    pub(super) fn line_index_for_clone(
+        &self,
+    ) -> (RefCell<Option<Rc<TextLineIndex>>>, OnceCell<Rc<Cell<bool>>>) {
+        let config = text_line_index_config();
+        if !config.enabled() {
+            return (RefCell::new(None), OnceCell::new());
+        }
+        let demand = Rc::clone(
+            self.text_index_demand
+                .get_or_init(|| Rc::new(Cell::new(false))),
+        );
+        if demand.get() && self.line_index_role == LineIndexRole::Live {
+            demand.set(false);
+            let _ = self.line_index(config);
+        }
+        let index = self
+            .text_index
+            .try_borrow()
+            .ok()
+            .and_then(|slot| slot.clone());
+        (RefCell::new(index), OnceCell::from(demand))
     }
 
     /// Forget the index (a wholesale mutation).
@@ -218,6 +265,24 @@ impl BufferText {
         Some(count)
     }
 
+    /// `\n`s in `[from, limit)` from the index, or `None` when the index
+    /// does not serve this count (the knob is off, the range is short, the
+    /// text is small, or this snapshot has no index yet) and the caller
+    /// scans. For the layout engine's line-number gutter.
+    pub(crate) fn indexed_newline_count(
+        &self,
+        from: EmacsBytePos,
+        limit: EmacsBytePos,
+    ) -> Option<usize> {
+        let total = self.emacs_byte_end_pos();
+        let from = from.min(total);
+        let limit = limit.min(total);
+        if from >= limit {
+            return None;
+        }
+        self.line_index_count(from, limit, LineEnd::Newline)
+    }
+
     /// `nth_newline_emacs_byte` from the index for the clamped, non-empty
     /// `[from, limit)` and `n >= 1`, or `None` to scan.
     #[inline]
@@ -365,6 +430,14 @@ impl BufferText {
     #[cfg(test)]
     pub(crate) fn has_line_index_for_test(&self) -> bool {
         self.storage.borrow().text_index.borrow().is_some()
+    }
+
+    /// Whether this text and OTHER share one index (tests).
+    #[cfg(test)]
+    pub(crate) fn shares_line_index_with_for_test(&self, other: &Self) -> bool {
+        let a = self.storage.borrow().text_index.borrow().clone();
+        let b = other.storage.borrow().text_index.borrow().clone();
+        matches!((a, b), (Some(a), Some(b)) if Rc::ptr_eq(&a, &b))
     }
 
     /// Recount the whole index against the text (tests).

@@ -125,6 +125,11 @@ pub(crate) trait LayoutBufferView {
         f: impl FnMut(&[u8]) -> Result<(), E>,
     ) -> Result<(), E>;
     fn layout_emacs_byte_at_pos(&self, pos: EmacsBytePos) -> Option<u8>;
+    /// `\n`s in RANGE from the buffer's text line index, or `None` when the
+    /// index does not serve this count and the caller scans.
+    fn layout_indexed_newline_count(&self, _range: EmacsByteRange) -> Option<usize> {
+        None
+    }
     fn layout_text_prop_at_emacs_byte_pos(&self, pos: EmacsBytePos, name: Value) -> Option<Value>;
     /// Return PROPERTY from CATEGORY's symbol plist as captured for this
     /// immutable layout view. Live-buffer test adapters have no evaluator
@@ -635,6 +640,10 @@ impl LayoutBufferView for Buffer {
         self.emacs_byte_at_pos(pos)
     }
 
+    fn layout_indexed_newline_count(&self, range: EmacsByteRange) -> Option<usize> {
+        self.indexed_newline_count(range)
+    }
+
     fn layout_text_prop_at_emacs_byte_pos(&self, pos: EmacsBytePos, name: Value) -> Option<Value> {
         self.text_props_get_property_at_emacs_byte_pos(pos, name)
     }
@@ -737,6 +746,10 @@ impl LayoutBufferView for LayoutBufferSnapshot {
 
     fn layout_emacs_byte_at_pos(&self, pos: EmacsBytePos) -> Option<u8> {
         self.text_snapshot.emacs_byte_at_pos(pos)
+    }
+
+    fn layout_indexed_newline_count(&self, range: EmacsByteRange) -> Option<usize> {
+        self.text_snapshot.indexed_newline_count(range)
     }
 
     fn layout_text_prop_at_emacs_byte_pos(&self, pos: EmacsBytePos, name: Value) -> Option<Value> {
@@ -2492,6 +2505,9 @@ impl<'a, B: LayoutBufferView> RustBufferAccess<'a, B> {
         let Some(range) = clamped_layout_emacs_byte_range(self.buffer, byte_from, byte_to) else {
             return 0;
         };
+        if let Some(count) = self.buffer.layout_indexed_newline_count(range) {
+            return count as i64;
+        }
         let mut count: i64 = 0;
         self.buffer
             .layout_try_for_each_emacs_byte_range_chunk(range, |chunk| {

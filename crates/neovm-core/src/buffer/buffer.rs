@@ -2022,6 +2022,13 @@ impl BufferTextSnapshot {
         self.text.emacs_byte_at_pos(pos)
     }
 
+    /// `\n`s in RANGE from the text line index the snapshot shares with its
+    /// buffer, or `None` when the index does not serve this count and the
+    /// caller scans.  See [`BufferText::indexed_newline_count`].
+    pub fn indexed_newline_count(&self, range: EmacsByteRange) -> Option<usize> {
+        self.text.indexed_newline_count(range.start(), range.end())
+    }
+
     pub fn text_prop_at_emacs_byte_pos(&self, pos: EmacsBytePos, name: Value) -> Option<Value> {
         self.text
             .text_props_get_property_at_emacs_byte_pos(pos, name)
@@ -3677,6 +3684,13 @@ impl Buffer {
         n: usize,
     ) -> Option<(EmacsBytePos, usize)> {
         self.text.lines_backward_emacs_byte(from, floor, n)
+    }
+
+    /// `\n`s in RANGE from the text line index, or `None` when the index
+    /// does not serve this count and the caller scans.  See
+    /// [`BufferText::indexed_newline_count`].
+    pub fn indexed_newline_count(&self, range: EmacsByteRange) -> Option<usize> {
+        self.text.indexed_newline_count(range.start(), range.end())
     }
 
     /// Last `\n` in logical emacs-byte range `[floor, from)`, scanned in

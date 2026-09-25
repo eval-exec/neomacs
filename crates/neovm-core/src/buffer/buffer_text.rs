@@ -5,7 +5,7 @@
 //! Lisp-visible text semantics while the concrete byte storage backend remains
 //! hidden behind a private enum.
 
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
@@ -45,6 +45,7 @@ use super::text_index::TextLineIndex;
 use super::text_props::{ObjectIntervalRun, PropertyInterval, TextPropertyTable};
 
 mod line_index;
+use line_index::LineIndexRole;
 
 #[cfg(test)]
 static CHAR_POS_TO_EMACS_BYTE_POS_CALLS: std::sync::atomic::AtomicUsize =
@@ -304,9 +305,14 @@ struct BufferTextStorage {
     /// and `buffer-swap-text` carries it with the text it describes.
     syntax_safe_positions: RefCell<SyntaxSafePositions>,
     /// The text line index (`NEOVM_TEXT_LINE_INDEX`, see `line_index`):
-    /// `None` until a line query on large enough text builds it. Outside the
-    /// shared `backend`; a snapshot starts without one.
+    /// `None` until a line query on large enough live text builds it.
+    /// Outside the shared `backend`; a snapshot shares the `Rc`.
     text_index: RefCell<Option<Rc<TextLineIndex>>>,
+    /// Set by a snapshot that would have used an index this live text did
+    /// not have; the live text builds one at its next snapshot. Shared by a
+    /// live text and its snapshots; created only while the knob is on.
+    text_index_demand: OnceCell<Rc<Cell<bool>>>,
+    line_index_role: LineIndexRole,
 }
 
 /// Validity key of a [`SyntaxSafePositions`] index: everything a forward
@@ -432,6 +438,7 @@ impl Clone for BufferTextStorage {
         // the scan-anchor ring. `share` bumps the bytes' `Rc` and starts the
         // snapshot with an empty ring (up to 4,096 anchors, rebuilt on demand
         // like `syntax_safe_positions`); `pos_cache` still seeds it.
+        let (text_index, text_index_demand) = self.line_index_for_clone();
         let (backend, anchor_cache, anchor_cache_key, anchor_cache_cursor) = if share {
             (Rc::clone(&self.backend), Vec::new(), 0, 0)
         } else {
@@ -471,8 +478,9 @@ impl Clone for BufferTextStorage {
             syntax_char_run_memo_cursor: self.syntax_char_run_memo_cursor.clone(),
             // A snapshot starts without the index; it is rebuilt on demand.
             syntax_safe_positions: RefCell::new(SyntaxSafePositions::default()),
-            // Likewise the line index (P3.0 §3.9).
-            text_index: RefCell::new(None),
+            text_index,
+            text_index_demand,
+            line_index_role: LineIndexRole::Snapshot,
         }
     }
 }
@@ -545,6 +553,8 @@ impl BufferText {
                 syntax_char_run_memo_cursor: Cell::new(0),
                 syntax_safe_positions: RefCell::new(SyntaxSafePositions::default()),
                 text_index: RefCell::new(None),
+                text_index_demand: OnceCell::new(),
+                line_index_role: LineIndexRole::Live,
             })),
         }
     }
