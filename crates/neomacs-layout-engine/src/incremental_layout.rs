@@ -1308,9 +1308,25 @@ impl RetainedWindowMatrix {
         // prevents a verbatim predecessor row from retaining stale Right/open
         // ownership after a face-property edit.
         let topology_dirty_start = dirty_start.saturating_sub(1);
-        let damage_first_by_charpos = body
-            .iter()
-            .position(|(_, row)| row.end_charpos as i64 >= dirty_start)?;
+        // A row's `end_charpos` is where its last GLYPH came from, which is
+        // short of where the row really ends when it closes with text a
+        // `display` string replaces (or invisible text): the string's glyphs
+        // carry its start. GNU's MATRIX_ROW_END_CHARPOS is the iterator
+        // position instead. The next row's start is that position, so a row
+        // reaches at least up to it: an edit just past a line-final display
+        // string otherwise left the string's row "clean", reused it verbatim
+        // and walked the next row from the wrong matrix index.
+        let row_extent_end = |index: usize| -> i64 {
+            let end = body[index].1.end_charpos as i64;
+            match body.get(index + 1) {
+                Some((_, next)) if next.start_charpos > body[index].1.start_charpos => {
+                    end.max(next.start_charpos as i64 - 1)
+                }
+                _ => end,
+            }
+        };
+        let damage_first_by_charpos =
+            (0..body.len()).position(|index| row_extent_end(index) >= dirty_start)?;
         // First dirty row = first body row whose OLD extent reaches the widened
         // source dependency. Rows above it have unchanged positions and box
         // terminals.
@@ -1318,9 +1334,8 @@ impl RetainedWindowMatrix {
         // the rows below still reuse shifted (GNU `try_window_id` regenerates
         // from the first row and syncs up with the rest the same way); only
         // the above-only fallback at the end has nothing to offer then.
-        let first_dirty_by_charpos = body
-            .iter()
-            .position(|(_, row)| row.end_charpos as i64 >= topology_dirty_start)?;
+        let first_dirty_by_charpos =
+            (0..body.len()).position(|index| row_extent_end(index) >= topology_dirty_start)?;
         // A row's CHARPOS is unchanged above the edit, but its pointer
         // identities (mouse-face source ranges, display-replacement anchors)
         // carry the RANGE's positions, and a range reaching the edit point is
@@ -1491,8 +1506,8 @@ impl RetainedWindowMatrix {
             // against 1 under font-lock); a newline-join delete makes 0
             // against 1 — all structure changes fall to above-only here, with
             // the post-walk validation as the backstop for anything subtler.
-            let old_span_newlines = damage_rows()
-                .filter(|row| (row.end_charpos as i64) < dirty_end_old)
+            let old_span_newlines = (damage_first_by_charpos..=damage_span_last)
+                .filter(|&index| row_extent_end(index) < dirty_end_old)
                 .count();
             let line_structure_preserved = span_newlines == old_span_newlines;
             if !pointer_shrunk_prefix

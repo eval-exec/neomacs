@@ -33,6 +33,7 @@ mod line_spacing;
 #[path = "../../engine_display_motion_test.rs"]
 mod display_motion;
 
+mod edit_replay_row_extent_test;
 #[path = "../../engine_layout_validity_test.rs"]
 mod layout_validity;
 mod mini_window_still_test;
