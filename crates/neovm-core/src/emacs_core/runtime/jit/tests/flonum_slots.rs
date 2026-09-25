@@ -839,3 +839,100 @@ fn a_variable_read_keeps_flonums_unboxed_and_its_handler_boxes_them() {
         assert_eq!(ev.jit_root_stack_top, 0);
     }
 }
+
+#[test]
+fn a_fused_region_entry_boxes_flonums_before_its_framestate() {
+    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+    crate::emacs_core::jit::inline::force_inline_for_test(Some(true));
+    let mut ev = Context::new();
+    // (lambda (x) x), spliced into the caller.
+    let mut callee = ByteCodeFunction::new(LambdaParams {
+        required: vec![crate::emacs_core::intern::SymId(1)],
+        optional: Vec::new(),
+        rest: None,
+    });
+    callee.lexical = true;
+    callee.ops = vec![Op::StackRef(0), Op::Return];
+    callee.max_stack = 4;
+    callee.jit_runtime().set_hot_for_test();
+    let callee_value = Value::make_bytecode(callee);
+    crate::emacs_core::eval::push_scratch_gc_root(callee_value);
+    // (lambda (a b) (let ((p (* a b))) (eq (id p) p))): the region starts
+    // with the product in two slots, its let slot and the call's argument.
+    let f = float_fn(
+        2,
+        vec![
+            Op::StackRef(1),
+            Op::StackRef(1),
+            Op::Mul,
+            Op::Constant(0),
+            Op::StackRef(1),
+            Op::Call(1),
+            Op::StackRef(1),
+            Op::Eq,
+            Op::Return,
+        ],
+        vec![callee_value],
+        &[2],
+    );
+    let args = [Value::make_float(1.5), Value::make_float(2.0)];
+    for mode in [FlonumMode::OpLocal, FlonumMode::Resident] {
+        force_flonum_mode_for_test(Some(mode));
+        let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
+        let census = lowering::flonum_census();
+        assert_eq!(
+            (census.results, census.escape_boxes),
+            (1, 1),
+            "{mode:?}: one box, at the region's entry"
+        );
+        let before = ev.tagged_heap.allocated_count;
+        assert_eq!(
+            leaf.call(&mut ev as *mut Context as *mut u8, &args),
+            NativeRun::Ok(Value::T.bits()),
+            "{mode:?}: (eq (id p) p)"
+        );
+        assert_eq!(ev.tagged_heap.allocated_count - before, 1, "{mode:?}");
+        // A failed region guard replays the call from the framestate taken
+        // at the region's entry: already boxed, and aliases shared. (Only a
+        // spliced call has a guard here: unfused, the body would run to the
+        // end even with every guard forced to fail.)
+        force_deopt_for_test(true);
+        let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
+        force_deopt_for_test(false);
+        let run = leaf.call(&mut ev as *mut Context as *mut u8, &args);
+        let NativeRun::DeoptAt(resume) = run else {
+            panic!("{mode:?}: a forced region guard must deopt precisely, got {run:?}")
+        };
+        assert_eq!(resume.pc, 5, "the region deopts to its call");
+        assert_eq!(resume.stack.len(), 5);
+        assert_eq!(float_of(resume.stack[2]), 3.0);
+        assert_eq!(resume.stack[2].bits(), resume.stack[4].bits());
+        let DeoptResume {
+            pc,
+            stack,
+            handlers,
+            binds,
+            spec_base,
+            cond_base,
+        } = *resume;
+        let value = Vm::from_context(&mut ev)
+            .run_resumed_frame(
+                &f,
+                Value::NIL,
+                pc,
+                &stack,
+                handlers,
+                &binds,
+                spec_base,
+                cond_base,
+            )
+            .expect("resume");
+        assert_eq!(
+            value,
+            Value::T,
+            "{mode:?}: the replayed call returns the same box"
+        );
+    }
+    force_flonum_mode_for_test(None);
+    crate::emacs_core::jit::inline::force_inline_for_test(None);
+}
