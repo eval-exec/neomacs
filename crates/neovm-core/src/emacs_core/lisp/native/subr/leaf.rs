@@ -346,6 +346,197 @@ pub(crate) fn subr_leaf(sym: SymId) -> Option<&'static LeafSpec> {
     LEAF_BY_SUBR.with(|table| table.borrow().get(sym.0 as usize).copied().flatten())
 }
 
+// ---------------------------------------------------------------------------
+// The debug leaf guard (design §6.2, §6.3).
+//
+// The type proof has two holes a comment cannot close: a thread-local or raw
+// pointer route to `&mut Context` (the dynamic-module `MODULE_CTX`), and
+// interior mutability. So in debug builds every leaf call runs under a
+// `LeafActive` marker, the evaluator's GC safe points, Lisp entries and
+// binding pushes assert that no marker is live, and the marker checks on
+// exit that the leaf left the evaluator's shared state where it found it.
+// Release builds compile all of it away.
+// ---------------------------------------------------------------------------
+
+#[cfg(debug_assertions)]
+thread_local! {
+    /// How many leaf bodies are running on this thread.
+    static LEAF_ACTIVE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Debug builds: panic when a leaf body is running. `site` names a GC safe
+/// point, a Lisp entry or a binding push -- a place the leaf contract says
+/// no leaf can reach.
+#[cfg(debug_assertions)]
+#[track_caller]
+pub(crate) fn assert_no_leaf_active(site: &'static str) {
+    let active = LEAF_ACTIVE.with(std::cell::Cell::get);
+    assert!(
+        active == 0,
+        "{site} reached from inside a leaf builtin: the leaf contract \
+         (no GC, no Lisp, no bindings) is broken"
+    );
+}
+
+/// `debug_assert_no_leaf_active!("site")`: [`assert_no_leaf_active`] in
+/// debug builds, nothing in release builds.
+macro_rules! debug_assert_no_leaf_active {
+    ($site:literal) => {
+        #[cfg(debug_assertions)]
+        $crate::emacs_core::subr::leaf::assert_no_leaf_active($site);
+    };
+}
+pub(crate) use debug_assert_no_leaf_active;
+
+/// How a leaf call ended, for [`LeafActive::exit`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LeafOutcome {
+    Value,
+    Signal,
+    Generic,
+}
+
+impl LeafOutcome {
+    pub(crate) fn of(result: &LeafResult) -> Self {
+        match result {
+            Ok(_) => LeafOutcome::Value,
+            Err(LeafExit::Signal(_)) => LeafOutcome::Signal,
+            Err(LeafExit::Generic) => LeafOutcome::Generic,
+        }
+    }
+}
+
+/// Evaluator state a leaf may not change (design §6.3): always the control
+/// stacks, the depth and the function epoch; the current buffer's identity,
+/// point, narrowing and modification tick unless the leaf declares
+/// WRITE_BUFFER; the heap's allocation count on a value unless it declares
+/// ALLOCATES (an error path allocates its signal data).
+#[cfg(debug_assertions)]
+#[derive(Debug, PartialEq, Eq)]
+struct LeafWitness {
+    specpdl: usize,
+    conditions: usize,
+    bc_buf: usize,
+    depth: usize,
+    function_epoch: u64,
+    buffer: Option<(
+        crate::buffer::BufferId,
+        crate::buffer::CharPos0,
+        crate::buffer::CharPos0,
+        crate::buffer::CharPos0,
+        i64,
+    )>,
+    allocated: usize,
+}
+
+#[cfg(debug_assertions)]
+impl LeafWitness {
+    fn take(ctx: &Context) -> Self {
+        Self {
+            specpdl: ctx.specpdl.len(),
+            conditions: ctx.condition_stack.len(),
+            bc_buf: ctx.bc_buf.len(),
+            depth: ctx.depth,
+            function_epoch: ctx.obarray.function_epoch(),
+            buffer: ctx.buffers.current_buffer().map(|buf| {
+                (
+                    buf.id(),
+                    buf.point_char_pos(),
+                    buf.point_min_char_pos(),
+                    buf.point_max_char_pos(),
+                    buf.modified_tick(),
+                )
+            }),
+            allocated: ctx.tagged_heap.allocated_count(),
+        }
+    }
+}
+
+/// Debug-build marker that a leaf body is running (see the section
+/// comment). Construct it with [`LeafActive::enter`] around exactly one leaf
+/// body and end it with [`LeafActive::exit`]; the count drops on unwind too.
+/// In release builds it is a zero-sized no-op.
+pub(crate) struct LeafActive {
+    #[cfg(debug_assertions)]
+    spec: &'static LeafSpec,
+    #[cfg(debug_assertions)]
+    before: LeafWitness,
+}
+
+impl LeafActive {
+    #[inline(always)]
+    pub(crate) fn enter(spec: &'static LeafSpec, ctx: &Context) -> Self {
+        #[cfg(debug_assertions)]
+        {
+            LEAF_ACTIVE.with(|c| c.set(c.get() + 1));
+            Self {
+                spec,
+                before: LeafWitness::take(ctx),
+            }
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            let _ = (spec, ctx);
+            Self {}
+        }
+    }
+
+    /// Check the witnesses against how the call ended (debug builds).
+    #[inline(always)]
+    pub(crate) fn exit(self, ctx: &Context, outcome: LeafOutcome) {
+        #[cfg(debug_assertions)]
+        {
+            let mut after = LeafWitness::take(ctx);
+            let before = &self.before;
+            let effects = self.spec.effects;
+            if effects.contains(Effects::WRITE_BUFFER) && outcome != LeafOutcome::Generic {
+                after.buffer = before.buffer;
+            }
+            let may_allocate = match outcome {
+                LeafOutcome::Value => effects.contains(Effects::ALLOCATES),
+                LeafOutcome::Signal => true,
+                LeafOutcome::Generic => false,
+            };
+            if may_allocate {
+                after.allocated = before.allocated;
+            }
+            assert_eq!(
+                &after, before,
+                "leaf `{}` ({outcome:?}) changed evaluator state it does not declare",
+                self.spec.name
+            );
+            if outcome == LeafOutcome::Generic {
+                assert!(
+                    !self.spec.generic_when.is_empty(),
+                    "leaf `{}` bounced but declares no bounce shape",
+                    self.spec.name
+                );
+            }
+        }
+        #[cfg(not(debug_assertions))]
+        let _ = (ctx, outcome);
+    }
+}
+
+impl Drop for LeafActive {
+    #[inline(always)]
+    fn drop(&mut self) {
+        #[cfg(debug_assertions)]
+        LEAF_ACTIVE.with(|c| c.set(c.get() - 1));
+    }
+}
+
+/// Run a leaf body as compiled code does in a debug build: under
+/// [`LeafActive`], witnesses checked on the way out. The harnesses call
+/// leaves through this.
+#[cfg(test)]
+pub(crate) fn call_checked(spec: &'static LeafSpec, ctx: &Context, args: &[Value]) -> LeafResult {
+    let active = LeafActive::enter(spec, ctx);
+    let result = spec.entry.call(ctx, args);
+    active.exit(ctx, LeafOutcome::of(&result));
+    result
+}
+
 #[cfg(test)]
 #[path = "tests/leaf_contract.rs"]
 mod leaf_contract_tests;

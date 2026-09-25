@@ -3951,6 +3951,7 @@ impl Obarray {
     /// signal, which JIT call speculation relies on for validity. `why` is
     /// observability only (the JIT's epoch report counts per reason).
     pub(crate) fn bump_function_epoch(&mut self, why: FunctionEpochBump) {
+        crate::emacs_core::subr::leaf::debug_assert_no_leaf_active!("a function-epoch bump");
         self.advance_function_epoch();
         #[cfg(feature = "jit")]
         crate::emacs_core::jit::stats::note_function_epoch_bump(why, None);

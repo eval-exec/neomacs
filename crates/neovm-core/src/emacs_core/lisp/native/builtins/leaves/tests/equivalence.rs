@@ -118,8 +118,8 @@ fn outcome_of_flow(flow: Flow) -> Outcome {
     }
 }
 
-fn run_leaf(ctx: &Context, spec: &LeafSpec, args: &[Value]) -> Outcome {
-    match spec.entry.call(ctx, args) {
+fn run_leaf(ctx: &Context, spec: &'static LeafSpec, args: &[Value]) -> Outcome {
+    match crate::emacs_core::subr::leaf::call_checked(spec, ctx, args) {
         Ok(v) => Outcome::Value(v),
         Err(LeafExit::Signal(flow)) => outcome_of_flow(flow),
         Err(LeafExit::Generic) => Outcome::Generic,
@@ -173,7 +173,13 @@ fn describe(outcome: &Outcome) -> String {
 
 /// Run one case; `bounce` says whether its arguments are a declared bounce
 /// shape. Returns whether the leaf bounced.
-fn check(ctx: &mut Context, spec: &LeafSpec, args: &[Value], bounce: bool, what: &str) -> bool {
+fn check(
+    ctx: &mut Context,
+    spec: &'static LeafSpec,
+    args: &[Value],
+    bounce: bool,
+    what: &str,
+) -> bool {
     let got = run_leaf(ctx, spec, args);
     if let Outcome::Generic = got {
         assert!(
@@ -236,7 +242,7 @@ fn opcode_leaves_match_their_opcode_arm() {
     let mut checked = 0usize;
     for on in [false, true] {
         set_swp(&mut ctx, on);
-        for spec in LEAVES.iter().filter(|s| s.shape == LeafShape::Opcode) {
+        for &spec in LEAVES.iter().filter(|s| s.shape == LeafShape::Opcode) {
             match spec.entry.slots() {
                 1 => {
                     for (i, &a) in values.iter().enumerate() {

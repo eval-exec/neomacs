@@ -64,6 +64,7 @@ impl Context {
     /// 2. Non-cons → self-evaluating (return as-is)
     /// 3. Cons → special form / macro / function call
     pub fn eval_sub(&mut self, form: Value) -> EvalResult {
+        crate::emacs_core::subr::leaf::debug_assert_no_leaf_active!("eval");
         // 1. Symbol → variable lookup (GNU eval.c:2554-2562)
         // Also unwrap symbol-with-pos when symbols-with-pos-enabled is true.
         let form_unwrapped = self.unwrap_symbol(form);

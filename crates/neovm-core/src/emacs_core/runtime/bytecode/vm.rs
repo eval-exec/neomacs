@@ -3631,6 +3631,7 @@ impl<'a> Vm<'a> {
     ) -> EvalResult {
         #[cfg(test)]
         let _run_loop_depth = RunLoopDepthGuard::enter();
+        crate::emacs_core::subr::leaf::debug_assert_no_leaf_active!("the bytecode interpreter");
 
         // Sealed-dispatch safety gate. The driver fetches instructions without
         // a per-op bound check, which is sound only for `seal_ops`-normalized

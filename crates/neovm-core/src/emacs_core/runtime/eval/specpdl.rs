@@ -54,6 +54,7 @@ impl Context {
     /// [`push_specpdl_entry_with`] on this context's specpdl.
     #[inline(always)]
     pub(crate) fn push_specpdl_with(&mut self, make: impl FnOnce() -> SpecBinding) {
+        crate::emacs_core::subr::leaf::debug_assert_no_leaf_active!("a specpdl push");
         push_specpdl_entry_with(&mut self.specpdl, make);
     }
 

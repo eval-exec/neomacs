@@ -1793,6 +1793,7 @@ impl Context {
         // cursor holds an unpublished length would mark a stale bc_buf prefix.
         #[cfg(debug_assertions)]
         crate::emacs_core::bytecode::vm::debug_assert_no_live_stack_cursor();
+        crate::emacs_core::subr::leaf::debug_assert_no_leaf_active!("a collection");
         // Inline set/restore, NOT a Drop guard (see the `gc_driver_active`
         // field doc): the body is infallible, so the trailing restore runs on
         // every normal exit (including the body's early `return`s), while a
@@ -2440,6 +2441,7 @@ impl Context {
 
     /// Trigger a safe-point collection using only explicit evaluator roots.
     pub(crate) fn gc_safe_point_exact(&mut self) {
+        crate::emacs_core::subr::leaf::debug_assert_no_leaf_active!("a GC safe point");
         if self.gc_safe_point_exact_should_collect() {
             self.gc_collect_from_current_roots();
         }
@@ -2607,6 +2609,7 @@ impl Context {
 
     #[cold]
     pub(super) fn maybe_quit_slow(&mut self) -> Result<(), Flow> {
+        crate::emacs_core::subr::leaf::debug_assert_no_leaf_active!("a quit poll");
         // Profiler sampling rides the quit poll (GNU samples in a SIGPROF
         // handler; SIGPROF belongs to the native profiler here, so the Lisp
         // profiler's watchdog raises `AsyncSource::ProfilerTick`, which sends

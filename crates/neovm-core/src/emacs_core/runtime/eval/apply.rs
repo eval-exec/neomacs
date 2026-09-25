@@ -1827,6 +1827,7 @@ impl Context {
         args: LispArgVec,
         record_backtrace: bool,
     ) -> EvalResult {
+        crate::emacs_core::subr::leaf::debug_assert_no_leaf_active!("apply");
         self.maybe_quit_before_gc()?;
         self.enter_interpreted_eval_depth()?;
         let bt_count = self.specpdl.len();
@@ -1974,6 +1975,7 @@ impl Context {
     where
         A: Into<LispArgVec>,
     {
+        crate::emacs_core::subr::leaf::debug_assert_no_leaf_active!("funcall");
         let args = args.into();
         let bt_count = self.specpdl.len();
         self.push_backtrace_frame(function, &args);
