@@ -2280,6 +2280,8 @@ impl Context {
             jit_root_stack_ptr: std::ptr::null_mut(),
             jit_root_stack_top: 0,
             jit_root_stack_cap: 0,
+            jit_stack_limit: 0,
+            jit_stack_scratch: [0; 3],
             bc_frames: Vec::new(),
             condition_stack: Vec::new(),
             next_resume_id: 1,

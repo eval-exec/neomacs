@@ -3396,6 +3396,14 @@ pub struct Context {
     /// growth; generated code compares `top + N` against it and calls the
     /// grow shim on overflow.
     pub(crate) jit_root_stack_cap: usize,
+    /// The native-stack guard of compiled leaves (`native_stack`): the lowest
+    /// address a leaf's caller-owned result slot may sit at when a leaf that
+    /// can re-enter Lisp is entered, or 0 for no guard. Read by generated
+    /// code via a compile-time field offset.
+    pub(crate) jit_stack_limit: usize,
+    /// Where that guard's cold side parks a leaf's `args`, `out` and
+    /// `sidecar` entry parameters across its measuring call.
+    pub(crate) jit_stack_scratch: [usize; 3],
     /// Frame metadata for each active bytecode invocation.
     /// Each entry records where the frame's stack region starts in bc_buf
     /// and the function object (so GC can trace its constants).
@@ -4263,14 +4271,26 @@ impl Context {
         {
             return callback(self);
         }
-        stacker::maybe_grow(EVAL_STACK_RED_ZONE, EVAL_STACK_SEGMENT, || callback(self))
+        native_stack::maybe_grow_tracking_jit_limit(
+            self,
+            Self::jit_stack_limit_mut,
+            EVAL_STACK_RED_ZONE,
+            EVAL_STACK_SEGMENT,
+            callback,
+        )
     }
 
     /// [`Self::maybe_grow_eval_stack`] without its depth sampling, for a cold
     /// path that nests a Rust frame per occurrence whatever the Lisp depth.
     #[cfg(feature = "jit")]
     pub(crate) fn grow_eval_stack<R>(&mut self, callback: impl FnOnce(&mut Self) -> R) -> R {
-        stacker::maybe_grow(EVAL_STACK_RED_ZONE, EVAL_STACK_SEGMENT, || callback(self))
+        native_stack::maybe_grow_tracking_jit_limit(
+            self,
+            Self::jit_stack_limit_mut,
+            EVAL_STACK_RED_ZONE,
+            EVAL_STACK_SEGMENT,
+            callback,
+        )
     }
 
     /// Whether lexical-binding is currently enabled.
@@ -7342,6 +7362,7 @@ mod builtin_vars;
 pub(crate) use builtin_vars::builtin_frontend_on;
 #[cfg(test)]
 pub(crate) use builtin_vars::{parse_builtin_frontend_knob, set_builtin_frontend_for_test};
+pub(crate) mod native_stack;
 
 mod var_fast;
 

@@ -4013,13 +4013,26 @@ fn build_leaf_fn<S: LeafSink>(
             debug_assert!(!aot, "AOT code never counts entries");
             lowering::emit_entry_count(&mut fb, ptr_ty, counter);
         }
-        let vmctx_param = fb.block_params(entry)[0];
-        let args_ptr = fb.block_params(entry)[1];
-        let out_ptr = fb.block_params(entry)[2];
+        let entry_params = {
+            let p = fb.block_params(entry);
+            [p[0], p[1], p[2], p[3]]
+        };
+        // A function entry that can re-enter Lisp signals "Bytecode stack
+        // overflow" before the native stack runs out (`stack_guard`); the
+        // rest of the entry code then runs in the block after the guard, on
+        // its parameters. An OSR entry is not a recursion level: the
+        // interpreter frame it continues was entered through a probed path.
+        let entry_params = match rt.as_ref() {
+            Some(rt) if osr_pc.is_none() && stack_guard::body_may_reenter_lisp(ops) => {
+                stack_guard::emit_entry_stack_guard(&mut fb, rt, entry_params)
+            }
+            _ => entry_params,
+        };
+        let [vmctx_param, args_ptr, out_ptr, fourth_param] = entry_params;
         // R2-E: the 4th entry param (the per-thread `*const LeafSidecar`). Read only
         // in AOT mode; JIT ignores it. The entry block dominates every block, so a
         // base materialized here is valid in any (incl. cold deopt) block.
-        let sidecar_param = aot.then(|| fb.block_params(entry)[3]);
+        let sidecar_param = aot.then_some(fourth_param);
         // JIT leaf of a `make-closure`-patched source: the same 4th entry param is
         // the EXECUTING CALLEE's constant base (`CompiledLeaf::call_consts`); the
         // patched slots load off it (`lower_simple_op` `Op::Constant`). Bound in
@@ -4028,7 +4041,7 @@ fn build_leaf_fn<S: LeafSink>(
             !(aot && dynamic_prefix > 0),
             "AOT never targets a patched source"
         );
-        let consts_base = (!aot && dynamic_prefix > 0).then(|| fb.block_params(entry)[3]);
+        let consts_base = (!aot && dynamic_prefix > 0).then_some(fourth_param);
         // R1a: base address of the heap-constant reloc vector, materialized once in
         // entry (dominates all blocks); the baseline Op::Constant loads off it by
         // index. JIT bakes the Box address as `iconst`; AOT loads it from the
@@ -4785,6 +4798,8 @@ pub(crate) mod shared;
 mod dispatch;
 pub use dispatch::*;
 
+pub(crate) mod stack_guard;
+
 #[cfg(test)]
 #[path = "tests/arith_generic_integer.rs"]
 mod arith_generic_integer_tests;
@@ -4861,6 +4876,9 @@ mod predicate_branch_tests;
 #[cfg(test)]
 #[path = "tests/spec_gate.rs"]
 mod spec_gate_tests;
+#[cfg(test)]
+#[path = "tests/stack_guard.rs"]
+mod stack_guard_tests;
 #[cfg(test)]
 #[path = "tests/switch_dispatch.rs"]
 mod switch_dispatch_tests;

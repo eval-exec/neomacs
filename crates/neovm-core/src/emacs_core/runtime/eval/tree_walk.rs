@@ -30,9 +30,13 @@ impl Context {
     #[cold]
     #[inline(never)]
     fn eval_lambda_body_value_probing(&mut self, body: Value) -> EvalResult {
-        stacker::maybe_grow(EVAL_STACK_RED_ZONE, EVAL_STACK_SEGMENT, || {
-            self.eval_lambda_body_forms(body)
-        })
+        super::native_stack::maybe_grow_tracking_jit_limit(
+            self,
+            Context::jit_stack_limit_mut,
+            EVAL_STACK_RED_ZONE,
+            EVAL_STACK_SEGMENT,
+            |ctx| ctx.eval_lambda_body_forms(body),
+        )
     }
 
     #[inline(always)]

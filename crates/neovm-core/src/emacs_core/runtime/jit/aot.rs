@@ -86,7 +86,11 @@ pub(crate) const ABI_TAG: u32 = compute_abi_tag();
 /// `Context`/`Obarray`/`LispSymbol` layout offsets salted below.
 /// v9: `Op::Setcar` and `Op::Setcdr` call `neovm_jit_setcar` /
 /// `neovm_jit_setcdr`.
-const ABI_TAG_VERSION: u32 = 9;
+/// v10: the entry of a leaf that can re-enter Lisp compares its `out` pointer
+/// with `Context::jit_stack_limit` and below it parks its parameters in
+/// `Context::jit_stack_scratch` and calls `neovm_jit_stack_check`
+/// (`compile::stack_guard`).
+const ABI_TAG_VERSION: u32 = 10;
 
 /// Format version of the AOT descriptor spec-section + the runtime spec ABI
 /// (`SpecSlot`/`spec_expected` sidecar bases, the loader re-classify+arm protocol).
@@ -138,6 +142,10 @@ const fn compute_abi_tag() -> u32 {
     mix_u64!(crate::emacs_core::symbol::LISP_SYMBOL_SIZE as u64);
     mix_u64!(crate::emacs_core::symbol::LISP_SYMBOL_FLAGS_OFFSET as u64);
     mix_u64!(crate::emacs_core::symbol::LISP_SYMBOL_VAL_OFFSET as u64);
+    // The entry stack guard (v10) reads the limit and parks its entry
+    // parameters in the scratch words.
+    mix_u64!(core::mem::offset_of!(crate::emacs_core::eval::Context, jit_stack_limit) as u64);
+    mix_u64!(core::mem::offset_of!(crate::emacs_core::eval::Context, jit_stack_scratch) as u64);
     // STATUS_* codes (the loader + code agree on these). STATUS_NEED_GENERIC
     // never crosses the leaf entry ABI (it is consumed inside a leaf's OWN
     // generated code by the fast-shim -> generic-fallback branch — this now

@@ -107,6 +107,33 @@ pub extern "C" fn neovm_jit_rootwin_grow(ctx: *mut u8, need: i64) {
     ctx.jit_root_stack_grow(need as usize);
 }
 
+/// Cold side of a compiled leaf's entry stack guard (`compile::stack_guard`):
+/// the leaf's caller-owned result slot sits below `Context::jit_stack_limit`.
+/// Measure the real stack: exhausted, stash GNU's `setup_frame` error
+/// (src/bytecode.c:514-515, raised with the callee's frame already recorded,
+/// as here) and answer null, so the leaf returns [`STATUS_SIGNAL`];
+/// otherwise the limit names another stack segment than the one running (or
+/// the slot is not on this stack) and the answer is `ctx` itself, with which
+/// the leaf resumes (it parked its other entry parameters in the Context).
+///
+/// Runs no Lisp and no compiled code: only a heap string and a signal are
+/// allocated, which cannot collect.
+///
+/// SAFETY: vmctx contract (see `neovm_jit_call`).
+#[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
+#[unsafe(no_mangle)]
+#[cold]
+pub extern "C" fn neovm_jit_stack_check(ctx: *mut u8) -> i64 {
+    if !crate::emacs_core::eval::native_stack::native_stack_exhausted() {
+        return ctx as i64;
+    }
+    stash_pending_flow(signal(
+        "error",
+        vec![Value::string("Bytecode stack overflow")],
+    ));
+    0
+}
+
 std::thread_local! {
     /// The non-local `Flow` (signal/throw/...) raised inside a runtime call made
     /// by JIT code. The call shim stashes it and returns [`STATUS_SIGNAL`]; the
@@ -780,7 +807,7 @@ pub(crate) struct ShimAddr(*const ());
 unsafe impl Sync for ShimAddr {}
 
 #[used]
-pub(crate) static JIT_SHIM_TABLE: [(&str, ShimAddr); 51] = [
+pub(crate) static JIT_SHIM_TABLE: [(&str, ShimAddr); 52] = [
     ("neovm_jit_apply", ShimAddr(neovm_jit_apply as *const ())),
     ("neovm_jit_aref", ShimAddr(neovm_jit_aref as *const ())),
     ("neovm_jit_aset", ShimAddr(neovm_jit_aset as *const ())),
@@ -923,6 +950,10 @@ pub(crate) static JIT_SHIM_TABLE: [(&str, ShimAddr); 51] = [
     (
         "neovm_jit_switch_stale",
         ShimAddr(neovm_jit_switch_stale as *const ()),
+    ),
+    (
+        "neovm_jit_stack_check",
+        ShimAddr(neovm_jit_stack_check as *const ()),
     ),
     (
         "neovm_jit_symbolp_slow",

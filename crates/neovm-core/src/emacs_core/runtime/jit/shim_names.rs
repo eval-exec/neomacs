@@ -76,6 +76,9 @@ const NEOVM_JIT_SHIM_NAMES: &[&str] = &[
     "neovm_jit_save_excursion",
     "neovm_jit_save_restriction",
     "neovm_jit_save_window_excursion",
+    // The cold side of the entry stack guard of a leaf that can re-enter
+    // Lisp (`compile::stack_guard`), baseline and MIR, JIT and AOT.
+    "neovm_jit_stack_check",
     "neovm_jit_switch",
     "neovm_jit_switch_stale",
     "neovm_jit_symbolp_slow",

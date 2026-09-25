@@ -2340,6 +2340,9 @@ pub(crate) struct MirLeafPlan {
     /// inline allocation reads the heap through the vmctx
     /// (`heap_inline::emit_inline_cons`; `CompiledLeaf::needs_vmctx`).
     pub(crate) rooting_sites: usize,
+    /// An `Opaque` op that can run Lisp: the entry gets the native-stack
+    /// guard (`compile::stack_guard`).
+    pub(crate) stack_guard: bool,
 }
 
 /// Which `Op::Call`/`Apply`/`CallBuiltinSym` a body still has after inlining
@@ -2530,6 +2533,9 @@ fn plan_mir_leaf_with_spec(
     let rooting_sites = insts()
         .filter(|i| matches!(&i.op, MirOp::Opaque { op, .. } if super::is_rooting_site_op(op)))
         .count();
+    let stack_guard = insts().any(|i| {
+        matches!(&i.op, MirOp::Opaque { op, .. } if super::stack_guard::op_may_reenter_lisp(op))
+    });
     MirLeafPlan {
         #[cfg(test)]
         has_opaque,
@@ -2545,6 +2551,7 @@ fn plan_mir_leaf_with_spec(
         max_call_args,
         max_depth,
         rooting_sites,
+        stack_guard,
     }
 }
 
@@ -3172,7 +3179,20 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
             debug_assert!(!aot, "AOT code never counts entries");
             emit_entry_count(&mut fb, ptr_ty, counter);
         }
-        let vmctx_param = fb.block_params(entry)[0];
+        let entry_params = {
+            let p = fb.block_params(entry);
+            [p[0], p[1], p[2], p[3]]
+        };
+        // A body that can re-enter Lisp guards the native stack at entry
+        // (`stack_guard`); the rest of the entry code then runs in the block
+        // after the guard, on its parameters.
+        let entry_params = match rt.as_ref() {
+            Some(rt) if plan.stack_guard => {
+                super::stack_guard::emit_entry_stack_guard(&mut fb, rt, entry_params)
+            }
+            _ => entry_params,
+        };
+        let [vmctx_param, args_ptr, out_ptr, fourth_param] = entry_params;
         if let Some(slot) = backedge_counter {
             let one = fb.ins().iconst(types::I64, 1);
             fb.ins().stack_store(ptr_ty, one, slot, 0);
@@ -3193,12 +3213,10 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
                 emit_hoisted_root_window_prologue(&mut fb, rt, vmctx_param, plan.max_depth);
             }
         }
-        let args_ptr = fb.block_params(entry)[1];
-        let out_ptr = fb.block_params(entry)[2];
         // R1c-sidecar: the 4th entry param (the per-thread `*const LeafSidecar`).
         // Read only in AOT mode; JIT ignores it. The entry block dominates every
         // block, so a base materialized here is valid in any (incl. cold) block.
-        let sidecar_param = aot.then(|| fb.block_params(entry)[3]);
+        let sidecar_param = aot.then_some(fourth_param);
         // R1a: base address of the heap-constant reloc vector, materialized once
         // near entry. JIT bakes the Box address as `iconst`; AOT loads it from the
         // sidecar (session-specific). `None` when the body references no heap

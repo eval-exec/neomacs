@@ -2419,9 +2419,13 @@ pub(crate) fn load_file_with_requested_and_found_options(
     eval.try_specbind_or_unwind_to(spec_entry, intern("load-in-progress"), Value::T)
         .map_err(map_flow)?;
 
-    let result = stacker::maybe_grow(128 * 1024, 2 * 1024 * 1024, || {
-        load_file_body(eval, path, requested, found, options)
-    });
+    let result = super::eval::native_stack::maybe_grow_tracking_jit_limit(
+        eval,
+        super::eval::Context::jit_stack_limit_mut,
+        128 * 1024,
+        2 * 1024 * 1024,
+        |eval| load_file_body(eval, path, requested, found, options),
+    );
 
     eval.unbind_to_with_result(
         spec_entry,
@@ -6128,7 +6132,7 @@ pub fn create_bootstrap_evaluator_for_loadup(
         lisp_dir.display()
     );
     refuse_stale_lisp_bytecode(&lisp_dir);
-    stacker::maybe_grow(128 * 1024, 2 * 1024 * 1024, || {
+    let built = stacker::maybe_grow(128 * 1024, 2 * 1024 * 1024, || {
         maybe_trace_bootstrap_step("create_bootstrap_evaluator_with_features: enter");
         let mut eval = super::eval::Context::new();
         maybe_trace_bootstrap_step("create_bootstrap_evaluator_with_features: evaluator-new");
@@ -6317,6 +6321,12 @@ pub fn create_bootstrap_evaluator_for_loadup(
         clear_runtime_loader_state(&mut eval);
 
         Ok(eval)
+    });
+    // The evaluator may have been built on a stacker segment that is gone
+    // now: its compiled leaves guard the caller's stack from here on.
+    built.map(|mut eval| {
+        eval.refresh_jit_stack_limit();
+        eval
     })
 }
 

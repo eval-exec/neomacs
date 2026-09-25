@@ -426,6 +426,8 @@ impl Context {
         QUIT_REQUESTED_TLS.with(|cell| {
             *cell.borrow_mut() = Some(self.quit_requested.clone());
         });
+        // Compiled leaves guard this thread's stack from now on.
+        self.refresh_jit_stack_limit();
     }
 
     pub(super) fn finish_runtime_activation(&mut self, sync_keyboard: bool) {

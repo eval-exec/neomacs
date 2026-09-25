@@ -100,6 +100,8 @@ pub(crate) enum Shim {
     NamedBuiltin,
     SaveWindowExcursion,
     CallSpec,
+    /// The cold side of the entry stack guard (`compile::stack_guard`).
+    StackCheck,
     /// The subr-speculation shims (Gap 1): declared only when the body has
     /// subr-kind spec sites, and so never for an AOT object (its baseline
     /// emit classifies only CallBuiltinSym sites; these names are
@@ -169,6 +171,7 @@ impl Shim {
             Shim::NamedBuiltin => "neovm_jit_named_builtin",
             Shim::SaveWindowExcursion => "neovm_jit_save_window_excursion",
             Shim::CallSpec => "neovm_jit_call_spec",
+            Shim::StackCheck => "neovm_jit_stack_check",
             Shim::CallSubrSpec => "neovm_jit_call_subr_spec",
             Shim::PredSpec => "neovm_jit_pred_spec",
             Shim::EqInclPropsSpec => "neovm_jit_eq_incl_props_spec",
@@ -225,7 +228,8 @@ impl Shim {
             | Shim::BuiltinSlice
             | Shim::NamedBuiltin
             | Shim::SaveWindowExcursion
-            | Shim::CallSpec => ShimGroup::Base,
+            | Shim::CallSpec
+            | Shim::StackCheck => ShimGroup::Base,
         }
     }
 
@@ -256,8 +260,8 @@ impl Shim {
             Shim::Varset | Shim::Varbind => (&[Ptr, I64, I64], true),
             // (vmctx, n) -> status
             Shim::Unbind => (&[Ptr, I64], true),
-            // (vmctx) -> status
-            Shim::Backedge => (&[Ptr], true),
+            // (vmctx) -> status; (vmctx) -> vmctx or null
+            Shim::Backedge | Shim::StackCheck => (&[Ptr], true),
             // (vmctx) -> (): the infallible Save* records and pop-handler
             Shim::SaveCurrentBuffer
             | Shim::SaveExcursion
