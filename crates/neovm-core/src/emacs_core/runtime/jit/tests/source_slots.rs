@@ -194,8 +194,8 @@ fn other_callees_miss_to_the_generic_call() {
         .site_at(2)
         .unwrap();
     assert!(
-        matches!(site.target(), CallTarget::Mega),
-        "the generic call recorded its misses"
+        matches!(site.target(), CallTarget::Sources(ref s) if s.len() == 1),
+        "under `use` compiled sites do not record: the lattice is the interpreter's"
     );
     off();
 }

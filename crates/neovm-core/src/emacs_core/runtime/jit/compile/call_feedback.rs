@@ -116,9 +116,13 @@ fn original_pc(pc: usize) -> Option<usize> {
     }
 }
 
-/// The recording site of the call at lowered pc `pc`, when the compiling
-/// source records and has one there. Keeps the source alive for the leaf.
+/// The recording site of the call at lowered pc `pc`, when compiled sites
+/// record (`record`, `census`) and the compiling source has one there.
+/// Keeps the source alive for the leaf.
 pub(crate) fn recording_site_at(pc: usize) -> Option<*const CallSiteFeedback> {
+    if !crate::emacs_core::jit::feedback::feedback_mode().records_compiled() {
+        return None;
+    }
     let pc = original_pc(pc)?;
     ACTIVE_CALL_SOURCE.with(|s| {
         let source = s.borrow();

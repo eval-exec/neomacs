@@ -234,6 +234,9 @@ fn the_knob_parses_its_three_values() {
     assert_eq!(FeedbackMode::parse("census"), Some(FeedbackMode::Census));
     assert!(FeedbackMode::Census.records() && !FeedbackMode::Census.uses());
     assert!(!FeedbackMode::Census.windowed() && FeedbackMode::Record.windowed());
+    // Compiled sites record only in the recording modes, not under `use`.
+    assert!(FeedbackMode::Record.records_compiled() && FeedbackMode::Census.records_compiled());
+    assert!(!FeedbackMode::Use.records_compiled() && !FeedbackMode::Off.records_compiled());
     assert_eq!(FeedbackMode::parse("bogus"), None);
     assert!(!FeedbackMode::Off.records());
     assert!(FeedbackMode::Record.records() && !FeedbackMode::Record.uses());

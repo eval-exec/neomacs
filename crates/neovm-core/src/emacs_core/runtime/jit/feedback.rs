@@ -61,8 +61,12 @@ pub enum FeedbackMode {
     /// so the census sees transitions after the window (F-1's stability
     /// premise). A measurement mode.
     Census,
-    /// [`Self::Record`], and compiles read the targets through their
-    /// snapshot: the input of `NEOVM_JIT_SPEC_SOURCES` (which implies it).
+    /// The interpreter records (as [`Self::Record`]) and compiles read the
+    /// targets through their snapshot: the input of
+    /// `NEOVM_JIT_SPEC_SOURCES` (which implies it). Compiled sites do not
+    /// record: until a later tier recompiles from their feedback, nothing
+    /// would read it (and it was most of `record`'s cost on the rows,
+    /// F-1 R1).
     Use,
 }
 
@@ -87,6 +91,12 @@ impl FeedbackMode {
     #[inline(always)]
     pub fn uses(self) -> bool {
         matches!(self, FeedbackMode::Use)
+    }
+
+    /// Whether compiled sites record (through the recording call shims).
+    #[inline(always)]
+    pub fn records_compiled(self) -> bool {
+        matches!(self, FeedbackMode::Record | FeedbackMode::Census)
     }
 
     /// Whether compiled code records only inside a site's profiling window.
