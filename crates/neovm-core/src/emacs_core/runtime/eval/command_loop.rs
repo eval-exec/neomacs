@@ -2043,6 +2043,11 @@ impl Context {
         let mut groups = groups.into_inner();
         let heap_identity = unsafe { (*heap_ptr).identity() };
         let mut thread_local_roots = Vec::new();
+        // A JIT leaf may keep addresses inside the obarray it was compiled
+        // against; drop the cache before its roots are walked if this
+        // Context's obarray is not that one (P1.4 §3.6).
+        #[cfg(feature = "jit")]
+        crate::emacs_core::jit::cache::sync_cache_to_obarray(self.obarray.generation());
         collect_thread_local_gc_roots(&mut thread_local_roots, heap_identity, &mut groups);
         let tl_seed_t0 = std::time::Instant::now();
         let tl_seed_count = thread_local_roots.len();

@@ -283,6 +283,13 @@ thread_local! {
     /// and is adopted, never cleared on.
     static COMPILED_HEAP: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
 
+    /// The [`Obarray::generation`] the cached leaves were compiled against,
+    /// pinned by the first compile that had an obarray (like `COMPILED_HEAP`,
+    /// `None` means no leaf was built against one yet). A leaf may keep
+    /// obarray-internal addresses; `sync_cache_to_obarray` drops the whole
+    /// cache if the obarray it runs against is not this one.
+    static COMPILED_OBARRAY: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+
     /// OSR (on-stack replacement) leaves, keyed by `(compiled_id, osr_pc)`. The
     /// value is `Some(OsrEntry)` when the function is OSR-eligible +
     /// compiled at that loop header, `None` when it is ineligible/uncompilable (a
@@ -372,6 +379,7 @@ fn compile_osr_leaf(
     id: u64,
     name_hint: Option<SymId>,
 ) -> Option<OsrEntry> {
+    record_compiled_obarray(Some(obarray));
     let dbg = std::env::var_os("NEOMACS_OSR_DEBUG").is_some();
     if !func.lexical || osr_body_has_unsupported_state(func) {
         if dbg {
@@ -637,6 +645,7 @@ fn compile_cache_entry(
     name_hint: Option<SymId>,
 ) -> CacheEntry {
     numeric_feedback_trace(id, func);
+    record_compiled_obarray(obarray);
     // Per-function entry names (perf map, CLIF/asm dumps), only when asked.
     let _label = stats::naming_enabled()
         .then(|| stats::perf_map::LeafLabelScope::enter(id, name_hint, func));
@@ -933,6 +942,34 @@ fn record_compiled_heap() {
     });
 }
 
+/// Pin the obarray the cache's leaves are built against, at compile time
+/// (first compile wins, as `record_compiled_heap` pins the heap).
+fn record_compiled_obarray(obarray: Option<&Obarray>) {
+    if let Some(obarray) = obarray {
+        COMPILED_OBARRAY.with(|g| {
+            if g.get().is_none() {
+                g.set(Some(obarray.generation()));
+            }
+        });
+    }
+}
+
+/// Clear the cache if its leaves were compiled against another obarray than
+/// the one of GENERATION, the running Context's (`Obarray::generation`).
+///
+/// `ctx.obarray` is assigned only by the Context constructors, and a new
+/// Context comes with a new heap, which `sync_cache_to_current_heap` already
+/// catches -- so this is the belt to that brace, for the leaves that keep
+/// obarray-internal addresses (symbol cells, BLV records, forwarder
+/// descriptors). One thread-local compare per GC root walk; nothing per call.
+pub(crate) fn sync_cache_to_obarray(generation: u64) {
+    let changed = COMPILED_OBARRAY.with(|g| g.get().is_some_and(|prev| prev != generation));
+    if changed {
+        clear();
+        COMPILED_OBARRAY.with(|g| g.set(Some(generation)));
+    }
+}
+
 pub(crate) fn collect_jit_reloc_gc_roots(roots: &mut Vec<Value>) {
     sync_cache_to_current_heap();
     COMPILED.with(|c| {
@@ -1061,6 +1098,8 @@ pub(crate) fn clear() {
     });
     // Every remembered NotCompilable verdict is now as stale as the cache.
     REJECTION_EPOCH.fetch_add(1, Ordering::Relaxed);
+    // No leaf is left to be bound to an obarray.
+    COMPILED_OBARRAY.with(|g| g.set(None));
 }
 
 /// Tier-up entry point: run `func`'s body as native code if possible.

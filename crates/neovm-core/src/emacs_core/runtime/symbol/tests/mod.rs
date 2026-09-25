@@ -104,6 +104,47 @@ fn symbol_interned_codes_match_gnu_symbol_interned() {
     assert_eq!(SymbolInterned::from_gnu_code(3), None);
 }
 
+/// Every constructor draws a fresh generation (P1.4 §3.6): an address kept
+/// inside one obarray can never be mistaken for one inside another.
+#[test]
+fn every_obarray_has_its_own_generation() {
+    let a = Obarray::new();
+    let b = Obarray::new();
+    let c = a.clone();
+    assert_ne!(a.generation(), b.generation());
+    assert_ne!(a.generation(), c.generation());
+    assert_ne!(b.generation(), c.generation());
+    let dumped = Obarray::from_dump(Vec::new(), Vec::new(), Vec::new(), 0);
+    assert!(![a.generation(), b.generation(), c.generation()].contains(&dumped.generation()));
+}
+
+/// The bytes a symbol-cell write tests share one aligned word, flags first
+/// and `interned_global` right after (the 16-bit write window).
+#[test]
+fn symbol_write_window_holds_flags_then_interned_global() {
+    let mut ob = Obarray::new();
+    let id = intern("sym-write-window");
+    ob.ensure_interned_global_id(id);
+    let sym = ob.get_by_id(id).expect("interned");
+    let base = sym as *const LispSymbol as *const u8;
+    // SAFETY: both offsets are inside the 32-byte symbol (const-asserted).
+    let (flags, interned) = unsafe {
+        (
+            *base.add(LISP_SYMBOL_FLAGS_OFFSET),
+            *base.add(LISP_SYMBOL_INTERNED_GLOBAL_OFFSET),
+        )
+    };
+    assert_eq!(flags, sym.flags.0);
+    assert_eq!(
+        interned, 1,
+        "an interned symbol reads 1 in the window's high byte"
+    );
+    assert_eq!(
+        LISP_SYMBOL_WRITE_WINDOW_OFFSET,
+        LISP_SYMBOL_INTERNED_GLOBAL_OFFSET & !3
+    );
+}
+
 #[test]
 fn intern_creates_symbol() {
     crate::test_utils::init_test_tracing();

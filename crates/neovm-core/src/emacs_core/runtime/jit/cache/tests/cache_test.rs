@@ -531,3 +531,27 @@ fn jit_obs_name_hint_rejects_mismatched_frame() {
     assert_eq!(callee_name_hint(ctx, id), None, "the pending hint is taken");
     assert_eq!(callee_name_hint(std::ptr::null(), id), None);
 }
+
+/// Leaves are bound to the obarray they were compiled against (P1.4 §3.6): a
+/// GC root walk under another obarray's generation drops them, one under the
+/// same generation keeps them.
+#[test]
+fn a_different_obarray_generation_clears_the_cache() {
+    let obarray = Obarray::new();
+    let c = Value::make_int(7);
+    let f = nullary_fn(vec![Op::Constant(0), Op::Return], vec![c]);
+    let id = compile_and_cache_jit_leaf(&f, Some(&obarray)).expect("compiles");
+    sync_cache_to_obarray(obarray.generation());
+    assert!(is_compiled_for_test(id), "same obarray: the leaf stays");
+    let other = Obarray::new();
+    assert_ne!(other.generation(), obarray.generation());
+    sync_cache_to_obarray(other.generation());
+    assert!(
+        !is_compiled_for_test(id),
+        "another obarray: the cache is dropped"
+    );
+    // The next compile pins the new obarray.
+    let id = compile_and_cache_jit_leaf(&f, Some(&other)).expect("compiles");
+    sync_cache_to_obarray(other.generation());
+    assert!(is_compiled_for_test(id));
+}

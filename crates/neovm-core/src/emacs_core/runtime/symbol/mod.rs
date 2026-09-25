@@ -982,6 +982,23 @@ pub struct Obarray {
     /// for an answer that is "no" in practice. Sticky: once set it only sends
     /// that guard down its exact slow path.
     pub(crate) max_lisp_eval_depth_localized: bool,
+    /// Process-unique identity of this obarray's symbol storage, drawn from
+    /// [`next_obarray_generation`] by every constructor (`new`, `clone`,
+    /// `from_dump`). A consumer that keeps an address inside this obarray --
+    /// a symbol cell, a BLV record, a forwarder descriptor -- records the
+    /// generation beside it and compares before trusting the address, so a
+    /// replaced obarray is detected instead of dereferenced. `ctx.obarray` is
+    /// assigned only by the Context constructors, so in practice this moves
+    /// only with the heap; the JIT cache checks it anyway on every GC root
+    /// walk (`jit::cache::sync_cache_to_obarray`).
+    generation: u64,
+}
+
+/// The next [`Obarray::generation`]: one process-global counter, so no two
+/// obarrays alive at once (or ever) share a generation.
+fn next_obarray_generation() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// One logical read of a symbol's complete function-cell state.
@@ -1090,6 +1107,23 @@ pub(crate) const LISP_SYMBOL_FLAGS_OFFSET: usize = std::mem::offset_of!(LispSymb
 pub(crate) const LISP_SYMBOL_VAL_OFFSET: usize = std::mem::offset_of!(LispSymbol, val);
 /// Mask of the redirect bits in the flags byte; `Plainval` is zero.
 pub(crate) const SYMBOL_FLAGS_REDIRECT_MASK: u8 = SymbolFlags::REDIRECT_MASK;
+/// Byte offset of a symbol's `interned_global` flag: the byte right after the
+/// flags byte (const-asserted below), so compiled code and the cached
+/// variable tiers read `flags | interned_global << 8` as one 16-bit window.
+pub(crate) const LISP_SYMBOL_INTERNED_GLOBAL_OFFSET: usize =
+    std::mem::offset_of!(LispSymbol, interned_global);
+/// The aligned 4-byte word of a symbol that holds its write-relevant bytes:
+/// the flags byte and `interned_global` today, and the watch byte P1.3 plans.
+/// One aligned word, so a JIT guard reads them all with one load and a
+/// concurrent reader never sees two of them torn across words.
+pub(crate) const LISP_SYMBOL_WRITE_WINDOW_OFFSET: usize = LISP_SYMBOL_FLAGS_OFFSET & !3;
+
+const _: () = {
+    assert!(std::mem::size_of::<bool>() == 1);
+    assert!(LISP_SYMBOL_INTERNED_GLOBAL_OFFSET == LISP_SYMBOL_FLAGS_OFFSET + 1);
+    assert!(LISP_SYMBOL_INTERNED_GLOBAL_OFFSET & !3 == LISP_SYMBOL_WRITE_WINDOW_OFFSET);
+    assert!(LISP_SYMBOL_WRITE_WINDOW_OFFSET + 4 <= LISP_SYMBOL_SIZE);
+};
 
 const _: () = {
     assert!(OBARRAY_CHUNK == 1 << OBARRAY_CHUNK_BITS);
@@ -1536,6 +1570,8 @@ impl Clone for Obarray {
             // unresolved.
             debug_on_next_call_fwd: std::sync::atomic::AtomicPtr::new(std::ptr::null_mut()),
             max_lisp_eval_depth_localized: self.max_lisp_eval_depth_localized,
+            // A deep copy is new storage: every address it holds is new.
+            generation: next_obarray_generation(),
         }
     }
 }
@@ -1805,6 +1841,7 @@ impl Obarray {
             value_fwds: Vec::new(),
             debug_on_next_call_fwd: std::sync::atomic::AtomicPtr::new(std::ptr::null_mut()),
             max_lisp_eval_depth_localized: false,
+            generation: next_obarray_generation(),
         };
 
         // Pre-intern fundamental symbols. Both `t` and `nil` are
@@ -4534,6 +4571,12 @@ impl Obarray {
     /// value, so it is "monotonic" only modulo 2^64. A wrap could falsely
     /// validate a stale baked call, but at ~1e7 fsets/s that is ~58,000 years
     /// away — physically unreachable; widen to u128 if that ever stops holding.
+    /// See the `generation` field.
+    #[inline]
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+
     pub fn function_epoch(&self) -> u64 {
         self.function_epoch
     }
@@ -4641,6 +4684,7 @@ impl Obarray {
             // Set by `load_obarray`'s second pass, which re-localizes every
             // dumped Localized symbol through `make_symbol_localized`.
             max_lisp_eval_depth_localized: false,
+            generation: next_obarray_generation(),
         };
         for (id, mut sym) in symbols {
             sym.interned_global = false;
