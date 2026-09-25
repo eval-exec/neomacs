@@ -495,6 +495,13 @@ pub struct CompiledLeaf {
     pub(crate) dynamic_prefix: u32,
     /// Release-build deopt/signal counters (see [`LeafObs`]).
     pub(crate) obs: Box<LeafObs>,
+    /// Set once the cache RETIRED this leaf (`DenseCache::remove`, an OSR
+    /// leaf dropped by an invalidation): it is no longer the leaf any cache
+    /// entry names, but it stays allocated — a spec slot or an outer native
+    /// frame may still reach it — and its reloc constants stay rooted
+    /// (`cache::collect_jit_reloc_gc_roots` walks the retired list).
+    /// Never cleared: a retired leaf is never cached again.
+    pub(crate) retired: Cell<bool>,
     // Field order matters for drop: `entry` points into `_backing`'s memory (the
     // JITModule's executable pages or the loaded `.so`'s code); keep `_backing`
     // alive — and dropped AFTER `entry` — as long as the handle exists.
@@ -727,6 +734,7 @@ impl CompiledLeaf {
             dynamic_prefix: 0,
             // AOT code never carries the entry counter.
             obs: LeafObs::new(false),
+            retired: Cell::new(false),
             entry,
             _backing: LeafBacking::Aot(backing),
         }

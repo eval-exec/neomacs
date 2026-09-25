@@ -3786,6 +3786,7 @@ pub fn lower_leaf_full_osr(
         sidecar: None,
         dynamic_prefix: u32::try_from(dynamic_prefix).expect("patched prefix fits u32"),
         obs,
+        retired: core::cell::Cell::new(false),
         entry,
         _backing: LeafBacking::Jit(module),
     })

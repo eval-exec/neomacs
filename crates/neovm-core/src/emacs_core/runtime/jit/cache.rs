@@ -83,12 +83,19 @@ impl DenseCache {
             // rare (inlined re-JITs on redefinition). `clear()` still drops
             // everything - a heap swap invalidates slots and leaves together.
             if let CacheEntry::Compiled(leaf) = entry {
-                self.retired.push(leaf);
+                self.retire(leaf);
             }
             // Every armed leaf slot (RuntimeState::leaf_slot) re-resolves:
             // a retired leaf stays ALLOCATED but is never CALLED again.
             bump_leaf_slot_epoch();
         }
+    }
+
+    /// Keep `leaf` allocated (and its reloc constants rooted) after it left
+    /// its cache entry, marked [`CompiledLeaf::retired`].
+    fn retire(&mut self, leaf: Rc<CompiledLeaf>) {
+        leaf.retired.set(true);
+        self.retired.push(leaf);
     }
 
     fn insert(&mut self, id: u64, entry: CacheEntry) {
@@ -923,7 +930,8 @@ pub(crate) fn compile_and_cache_jit_leaf(
 /// leaf loads through its reloc vector (R1a). Generated code holds NO heap-pointer
 /// immediate — only an index into the leaf's `reloc_data` — so without this a
 /// constant referenced solely by live native code could be swept. Walking COMPILED
-/// keeps it precise: an evicted leaf drops out automatically (no stale roots).
+/// (its entries AND its retired leaves, which can still run) keeps it precise: a
+/// leaf the cache dropped (`clear`, an OSR eviction) drops out with it.
 /// Clear the cache if the thread's tagged heap was replaced since the cache was
 /// built (a pdump load / in-process image reload / cache-replay test): the cached
 /// leaves' reloc vectors + baked addresses point into the now-gone heap, so they
@@ -1002,10 +1010,24 @@ pub(crate) fn sync_cache_to_obarray(generation: u64) {
 pub(crate) fn collect_jit_reloc_gc_roots(roots: &mut Vec<Value>) {
     sync_cache_to_current_heap();
     COMPILED.with(|c| {
-        for entry in c.borrow().values() {
+        let cache = c.borrow();
+        for entry in cache.values() {
             if let CacheEntry::Compiled(leaf) = entry {
                 roots.extend_from_slice(leaf.reloc_values());
             }
+        }
+        // RETIRED leaves too. A retired leaf stays allocated because an
+        // outer native frame (recursion, a callee that redefined its caller)
+        // or a caller's spec slot may still run it, and running it loads its
+        // constants from `reloc_data`. Its source function keeps the body's
+        // own constants alive, but not those of a callee the MIR tier inlined
+        // and that has since been redefined, nor any constant once the source
+        // itself is gone. Extra roots only mark more (SATB and
+        // allocate-black alike), and `reloc_data` is immutable after the
+        // compile, so no barrier is involved. Bounded: retiring is rare
+        // (re-tier, stale inline, patched prefix, deopt invalidation).
+        for leaf in &cache.retired {
+            roots.extend_from_slice(leaf.reloc_values());
         }
     });
     // OSR leaves also bake heap-constant reloc vectors — root them too, else a GC
@@ -1017,20 +1039,22 @@ pub(crate) fn collect_jit_reloc_gc_roots(roots: &mut Vec<Value>) {
     });
 }
 
-/// GC handshake size probe: `(total COMPILED cache entries, total reloc slots
-/// the root walk visits)` — the O() inputs of `collect_jit_reloc_gc_roots`.
-/// Read-only; called once per handshake OUTSIDE the timed pause window.
+/// GC handshake size probe: `(total COMPILED cache entries plus retired
+/// leaves, total reloc slots the root walk visits)` — the O() inputs of
+/// `collect_jit_reloc_gc_roots`. Read-only; called once per handshake
+/// OUTSIDE the timed pause window.
 pub(crate) fn compiled_cache_probe() -> (usize, usize) {
     COMPILED.with(|c| {
         let cache = c.borrow();
-        let slots = cache
+        let live: usize = cache
             .values()
             .map(|entry| match entry {
                 CacheEntry::Compiled(leaf) => leaf.reloc_values().len(),
                 _ => 0,
             })
             .sum();
-        (cache.len(), slots)
+        let retired: usize = cache.retired.iter().map(|l| l.reloc_values().len()).sum();
+        (cache.len() + cache.retired.len(), live + retired)
     })
 }
 

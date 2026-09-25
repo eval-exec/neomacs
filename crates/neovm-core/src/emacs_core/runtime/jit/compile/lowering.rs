@@ -2456,6 +2456,7 @@ pub(super) fn lower_mir_with_plan(
         // compile_bytecode_function_inner).
         dynamic_prefix: 0,
         obs,
+        retired: core::cell::Cell::new(false),
         entry,
         _backing: LeafBacking::Jit(module),
     })

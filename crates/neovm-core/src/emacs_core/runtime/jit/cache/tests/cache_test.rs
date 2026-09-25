@@ -555,3 +555,46 @@ fn a_different_obarray_generation_clears_the_cache() {
     sync_cache_to_obarray(other.generation());
     assert!(is_compiled_for_test(id));
 }
+
+/// A leaf the cache retires (here: evicted by a widened `make-closure`
+/// prefix) is marked retired, stays allocated, and keeps its reloc constants
+/// among the GC roots: an outer native frame or a spec slot may still run it.
+#[test]
+fn retired_leaf_is_marked_and_its_constants_stay_rooted() {
+    // An exact native result: immune to a NEOVM_JIT_FORCE_DEOPT=1 suite run.
+    crate::emacs_core::jit::compile::force_deopt_for_test(false);
+    // (lambda () (car '("reloc-root-probe")))  -- a heap constant in reloc_data
+    let payload = Value::list(vec![Value::string("reloc-root-probe")]);
+    let f = nullary_fn(vec![Op::Constant(0), Op::Car, Op::Return], vec![payload]);
+    let f_val = Value::make_bytecode(f.clone());
+    f.jit_runtime().set_hot_for_test();
+    let got = try_run_compiled(std::ptr::null_mut(), &f, f_val, &[]).expect("runs");
+    let id = f.jit_runtime().compiled_id().expect("compiled");
+    assert!(is_compiled_for_test(id), "the body compiles");
+    assert!(got.is_some_and(|bits| Value::from_bits(bits).is_string()));
+    let leaf = compiled_leaf_ptr_for_test(id).expect("cached");
+    // SAFETY: the cache holds the leaf (and, after the eviction, its retired list).
+    let leaf = unsafe { &*leaf };
+    assert!(!leaf.retired.get(), "a live leaf is not retired");
+    let reloc: Vec<usize> = leaf.reloc_values().iter().map(|v| v.bits()).collect();
+    assert!(
+        reloc.contains(&payload.bits()),
+        "the constant is in reloc_data"
+    );
+    let (entries_before, slots_before) = compiled_cache_probe();
+
+    evict_compiled(id);
+    assert_eq!(cache_entry_kind_for_test(id), "none");
+    assert!(leaf.retired.get(), "eviction retires the leaf");
+    let mut roots = Vec::new();
+    collect_jit_reloc_gc_roots(&mut roots);
+    assert!(
+        roots.iter().any(|v| v.bits() == payload.bits()),
+        "a retired leaf's reloc constants stay rooted"
+    );
+    assert_eq!(
+        compiled_cache_probe(),
+        (entries_before, slots_before),
+        "the probe counts the retired leaf where it counted the live one"
+    );
+}
