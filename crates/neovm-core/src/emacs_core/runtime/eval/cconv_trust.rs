@@ -205,7 +205,6 @@ impl TrustedSet {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn empty_env(&self) -> Value {
         self.empty_env
     }

@@ -670,3 +670,389 @@ fn trusted_set_refuses_source_loaded_cconv() {
         Some(&TrustRefusal::NotCompiled("caar"))
     );
 }
+
+// ---------------------------------------------------------------------------
+// S0.5: the memo
+// ---------------------------------------------------------------------------
+
+/// Closure creations covering the shapes cconv.el trims: captured and
+/// uncaptured variables, shadowed duplicates, dynamic variables in the
+/// environment, nothing captured (the `(t)` constant), docstrings, nested
+/// lambdas, let/let*/cond/condition-case/setq bodies.
+const CORPUS: &[&str] = &[
+    "(let ((a 1) (b 2)) (lambda (c) (list a c)))",
+    "(let ((a 1) (a 2)) (lambda () a))",
+    "(let ((a 1)) (let ((a 2) (b 3)) (lambda () (list a b))))",
+    "(let ((a 1) (b 2)) (lambda () 'nothing))",
+    "(let ((a 1)) (lambda (x) \"doc\" (+ a x)))",
+    "(let ((a 1) (b 2)) (lambda () (mapcar #'(lambda (x) (list x b)) '(1 2))))",
+    "(let ((a 1) (b 2)) (lambda () (let* ((c a) (d c)) (list c d))))",
+    "(let ((a 1) (b 2)) (lambda (x) (cond ((eq x 1) a) (t b))))",
+    "(let ((a 1)) (lambda () (condition-case err (car a) (error (list err a)))))",
+    "(let ((a 1) (b 2)) (lambda () (setq a (1+ b))))",
+    "(let ((a 1)) (defvar cm-dyn-var) (let ((cm-dyn-var 2)) (lambda () (list a cm-dyn-var))))",
+    "(let ((a 1)) (lambda (&optional x &rest y) (list a x y)))",
+];
+
+/// Every corpus closure, created twice in a row by one function (the same
+/// body object), printed, with its environment cells' identity checked.
+fn corpus_transcript(mode: CconvMemoMode) -> (Vec<String>, Context) {
+    let mut eval = startup(mode);
+    let mut out = Vec::new();
+    for (i, form) in CORPUS.iter().enumerate() {
+        eval_ok(&mut eval, &format!("(defun cm-corpus-{i} () {form})"));
+        for _ in 0..3 {
+            out.push(printed(&mut eval, &format!("(cm-corpus-{i})")));
+        }
+        // The closure body is the source body, and every environment cell
+        // is the live environment's own cell.
+        let check = format!(
+            "(let* ((f (cm-corpus-{i}))
+                    (env (aref f 2)))
+               (list (eq (aref f 1) (aref (cm-corpus-{i}) 1))
+                     (or (equal env '(t))
+                         (let ((ok t))
+                           (dolist (cell env ok)
+                             (when (and (consp cell) (not (eq (cdr cell) (cdr cell))))
+                               (setq ok nil)))))))"
+        );
+        out.push(printed(&mut eval, &check));
+    }
+    (out, eval)
+}
+
+#[test]
+fn on_mode_builds_what_the_lisp_builds() {
+    crate::test_utils::init_test_tracing();
+    let (off, _) = corpus_transcript(CconvMemoMode::Off);
+    let (on, eval) = corpus_transcript(CconvMemoMode::On);
+    assert_eq!(on, off);
+    let recorded = count(&eval, CconvMemoEvent::Recorded);
+    let served = count(&eval, CconvMemoEvent::Served);
+    assert!(
+        recorded >= CORPUS.len() as u64 - 1,
+        "{}",
+        eval.cconv_memo_report()
+    );
+    assert!(served >= 2 * recorded, "{}", eval.cconv_memo_report());
+    assert_eq!(count(&eval, CconvMemoEvent::VerifyMismatch), 0);
+}
+
+#[test]
+fn verify_mode_matches_on_the_corpus() {
+    crate::test_utils::init_test_tracing();
+    let (off, _) = corpus_transcript(CconvMemoMode::Off);
+    let (verify, eval) = corpus_transcript(CconvMemoMode::Verify);
+    assert_eq!(verify, off);
+    assert!(
+        count(&eval, CconvMemoEvent::VerifyMatch) > 0,
+        "{}",
+        eval.cconv_memo_report()
+    );
+    assert_eq!(count(&eval, CconvMemoEvent::VerifyMismatch), 0);
+    assert_eq!(count(&eval, CconvMemoEvent::Served), 0);
+}
+
+/// The environment cells of a served closure are `eq` to the creating
+/// environment's (a `setq` through one is seen by the other), the body is
+/// `eq` to the source, and `(t)` is cconv's shared constant.
+#[test]
+fn served_closures_share_cells_body_and_the_empty_env_constant() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = startup(CconvMemoMode::On);
+    eval_ok(
+        &mut eval,
+        "(defun cm-share (v) (let ((a v) (b 2)) (list (lambda () a) (lambda (x) (setq a x)))))",
+    );
+    for _ in 0..3 {
+        let result = printed(
+            &mut eval,
+            "(let* ((pair (cm-share 5)) (get (car pair)) (set (cadr pair)))
+               (funcall set 9)
+               (list (funcall get) (eq (car (aref get 2)) (car (aref set 2)))))",
+        );
+        assert_eq!(result, "(9 t)");
+    }
+    eval_ok(&mut eval, "(defun cm-empty () (let ((a 1)) (lambda () 3)))");
+    assert_eq!(
+        printed(
+            &mut eval,
+            "(list (eq (aref (cm-empty) 2) (aref (cm-empty) 2)) (aref (cm-empty) 2))"
+        ),
+        "(t (t))"
+    );
+    assert!(
+        count(&eval, CconvMemoEvent::Served) >= 4,
+        "{}",
+        eval.cconv_memo_report()
+    );
+}
+
+/// T0.3: a change between two creations that changes the analysis misses.
+#[test]
+fn facts_changes_between_creations_miss() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = startup(CconvMemoMode::On);
+    eval_ok(
+        &mut eval,
+        "(defun cm-facts () (let ((a 1)) (lambda () (let ((cm-later-special 2)) (cm-f2 a cm-later-special)))))",
+    );
+    let first = printed(&mut eval, "(cm-facts)");
+    // The first run may intern the symbols' global membership (an effect,
+    // so it is not recorded); by the third creation it is served.
+    printed(&mut eval, "(cm-facts)");
+    printed(&mut eval, "(cm-facts)");
+    assert!(
+        count(&eval, CconvMemoEvent::Served) >= 1,
+        "{}",
+        eval.cconv_memo_report()
+    );
+    // A defvar makes the let binder dynamic: the closure no longer needs...
+    // whatever it needs, it must be recomputed.
+    eval_ok(&mut eval, "(defvar cm-later-special 0)");
+    let misses = count(&eval, CconvMemoEvent::MissFacts);
+    let after_defvar = printed(&mut eval, "(cm-facts)");
+    assert_eq!(count(&eval, CconvMemoEvent::MissFacts), misses + 1);
+    let mut off = startup(CconvMemoMode::Off);
+    eval_ok(
+        &mut off,
+        "(defun cm-facts () (let ((a 1)) (lambda () (let ((cm-later-special 2)) (cm-f2 a cm-later-special)))))",
+    );
+    assert_eq!(first, printed(&mut off, "(cm-facts)"));
+    eval_ok(&mut off, "(defvar cm-later-special 0)");
+    assert_eq!(after_defvar, printed(&mut off, "(cm-facts)"));
+
+    // A head that becomes a macro, a compiler macro, or an autoloaded macro.
+    for (change, undo) in [
+        (
+            "(defmacro cm-f2 (&rest args) `(list ,@args))",
+            "(fmakunbound 'cm-f2)",
+        ),
+        (
+            "(put 'cm-f2 'compiler-macro (lambda (form &rest _) form))",
+            "(put 'cm-f2 'compiler-macro nil)",
+        ),
+        (
+            "(autoload 'cm-f2 \"cm-nowhere\" nil nil 'macro)",
+            "(fmakunbound 'cm-f2)",
+        ),
+    ] {
+        printed(&mut eval, "(cm-facts)");
+        eval_ok(&mut eval, change);
+        let misses = count(&eval, CconvMemoEvent::MissFacts);
+        let refused = count(&eval, CconvMemoEvent::RefuseMacroHead)
+            + count(&eval, CconvMemoEvent::RefuseCompilerMacroHead);
+        let _ = eval.eval_str("(cm-facts)");
+        assert_eq!(
+            count(&eval, CconvMemoEvent::MissFacts),
+            misses + 1,
+            "{change}"
+        );
+        assert_eq!(
+            count(&eval, CconvMemoEvent::RefuseMacroHead)
+                + count(&eval, CconvMemoEvent::RefuseCompilerMacroHead),
+            refused + 1,
+            "{change}"
+        );
+        eval_ok(&mut eval, undo);
+    }
+}
+
+/// T0.4: advice on the filter or on the expander runs on every creation.
+#[test]
+fn advice_on_trusted_functions_runs_every_time() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = startup(CconvMemoMode::On);
+    eval_ok(
+        &mut eval,
+        "(progn (defvar cm-advice-calls 0)
+                (defun cm-count (f &rest args) (setq cm-advice-calls (1+ cm-advice-calls)) (apply f args))
+                (defun cm-adv () (let ((a 1)) (lambda () a))))",
+    );
+    printed(&mut eval, "(cm-adv)");
+    printed(&mut eval, "(cm-adv)");
+    for target in ["cconv-make-interpreted-closure", "macroexp--expand-all"] {
+        eval_ok(&mut eval, &format!("(setq cm-advice-calls 0)"));
+        eval_ok(
+            &mut eval,
+            &format!("(advice-add '{target} :around #'cm-count)"),
+        );
+        for _ in 0..3 {
+            printed(&mut eval, "(cm-adv)");
+        }
+        assert!(
+            eval_ok(&mut eval, "cm-advice-calls")
+                .as_fixnum()
+                .unwrap_or(0)
+                >= 3,
+            "{target}"
+        );
+        eval_ok(&mut eval, &format!("(advice-remove '{target} #'cm-count)"));
+    }
+    let served = count(&eval, CconvMemoEvent::Served);
+    printed(&mut eval, "(cm-adv)");
+    assert_eq!(
+        count(&eval, CconvMemoEvent::Served),
+        served + 1,
+        "served again"
+    );
+}
+
+/// T0.5: `lexical-binding` nil in the current buffer changes the analysis
+/// (cconv--not-lexical-var-p), so it is part of the key.
+#[test]
+fn lexical_binding_of_the_current_buffer_is_part_of_the_key() {
+    crate::test_utils::init_test_tracing();
+    let form = "(defun cm-lb () (let ((a 1)) (lambda () (let ((b 2)) (list a b)))))";
+    let probe = "(list (cm-lb) (with-temp-buffer (setq lexical-binding nil) (cm-lb)) (cm-lb)
+                       (with-temp-buffer (setq lexical-binding nil) (cm-lb)))";
+    let mut off = startup(CconvMemoMode::Off);
+    eval_ok(&mut off, form);
+    let expected = printed(&mut off, probe);
+    let mut on = startup(CconvMemoMode::On);
+    eval_ok(&mut on, form);
+    assert_eq!(printed(&mut on, probe), expected);
+    assert_eq!(printed(&mut on, probe), expected);
+    assert!(
+        count(&on, CconvMemoEvent::Served) >= 4,
+        "{}",
+        on.cconv_memo_report()
+    );
+}
+
+/// T0.6 and T0.7: `:closure-dont-trim-context`, interactive lambdas and
+/// non-identity bodies are never served; a mutated body is re-analysed.
+#[test]
+fn unmemoizable_and_mutated_bodies() {
+    crate::test_utils::init_test_tracing();
+    let forms = [
+        "(defun cm-u1 () (let ((a 1)) (lambda () :closure-dont-trim-context a)))",
+        "(defun cm-u2 () (let ((a 1)) (lambda () (interactive) a)))",
+        "(defun cm-u3 () (let ((a 1)) (lambda () (funcall #'(lambda (x) x) a))))",
+        "(defun cm-u4 () (let ((a 1) (b 2)) (lambda () (list a))))",
+    ];
+    let probe = "(list (cm-u1) (cm-u1) (cm-u2) (cm-u2) (cm-u3) (cm-u3)
+                       (cm-u4)
+                       (progn (setcar (cdr (car (aref (cm-u4) 1))) 'b) (cm-u4))
+                       (cm-u4))";
+    let mut off = startup(CconvMemoMode::Off);
+    let mut on = startup(CconvMemoMode::On);
+    for form in forms {
+        eval_ok(&mut off, form);
+        eval_ok(&mut on, form);
+    }
+    let expected = printed(&mut off, probe);
+    assert_eq!(printed(&mut on, probe), expected);
+    assert!(
+        count(&on, CconvMemoEvent::MissShape) >= 1,
+        "{}",
+        on.cconv_memo_report()
+    );
+}
+
+/// T0.12: verify detects a wrong analysis (injected), counts it, and
+/// returns the Lisp's closure.
+#[test]
+fn verify_detects_an_injected_wrong_analysis() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = startup(CconvMemoMode::Verify);
+    eval.cconv_memo.set_strict(false);
+    eval_ok(
+        &mut eval,
+        "(defun cm-inj () (let ((a 1) (b 2)) (lambda () (list a))))",
+    );
+    let lisp = printed(&mut eval, "(cm-inj)");
+    assert!(
+        eval.cconv_memo.inject_wrong_analysis_for_test(),
+        "an entry to corrupt"
+    );
+    assert_eq!(
+        printed(&mut eval, "(cm-inj)"),
+        lisp,
+        "the Lisp's closure is returned"
+    );
+    assert_eq!(count(&eval, CconvMemoEvent::VerifyMismatch), 1);
+}
+
+/// T0.8/T0.9: near `max-lisp-eval-depth` the memo runs the Lisp, so every
+/// depth succeeds or signals exactly as without the memo.
+#[test]
+fn creation_near_the_depth_limit_matches_the_lisp() {
+    crate::test_utils::init_test_tracing();
+    let setup = "(progn
+       (defun cm-deep (n)
+         (if (> n 0) (cm-deep (1- n))
+           (let ((a 1)) (lambda () (list (list (list (list a))))))))
+       (defun cm-try (n)
+         (condition-case err (progn (cm-deep n) 'ok)
+           (error (car err)))))";
+    let probe = "(let ((max-lisp-eval-depth 400) (out nil))
+                   (dotimes (i 140) (push (cm-try (+ 60 i)) out))
+                   (nreverse out))";
+    let mut off = startup(CconvMemoMode::Off);
+    eval_ok(&mut off, setup);
+    let expected = printed(&mut off, probe);
+    assert!(
+        expected.contains("ok") && expected.contains("excessive-lisp-nesting"),
+        "{expected}"
+    );
+    let mut on = startup(CconvMemoMode::On);
+    eval_ok(&mut on, setup);
+    eval_ok(&mut on, "(cm-deep 0)");
+    assert_eq!(printed(&mut on, probe), expected);
+    assert!(
+        count(&on, CconvMemoEvent::Served) > 0,
+        "{}",
+        on.cconv_memo_report()
+    );
+    assert!(
+        count(&on, CconvMemoEvent::MissDepth) > 0,
+        "{}",
+        on.cconv_memo_report()
+    );
+}
+
+/// T0.13: entries survive collections; recycled or mutated bodies are
+/// caught by the shape compare.
+#[test]
+fn memo_survives_garbage_collection() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = startup(CconvMemoMode::On);
+    let mut off = startup(CconvMemoMode::Off);
+    for ctx in [&mut eval, &mut off] {
+        eval_ok(
+            ctx,
+            "(defun cm-gc (v) (let ((a v) (b 2)) (lambda () (list a))))",
+        );
+    }
+    let probe = "(let (out) (dotimes (i 20) (push (cm-gc i) out) (garbage-collect)) out)";
+    assert_eq!(printed(&mut eval, probe), printed(&mut off, probe));
+    // Fresh bodies each time (read anew), created and dropped under GC.
+    let fresh = "(let (out) (dotimes (i 20)
+                   (push (funcall (eval (read \"(lambda (v) (let ((a v) (b 2)) (lambda () (list a b))))\") t) i) out)
+                   (garbage-collect)) out)";
+    assert_eq!(printed(&mut eval, fresh), printed(&mut off, fresh));
+    assert!(
+        count(&eval, CconvMemoEvent::Served) >= 19,
+        "{}",
+        eval.cconv_memo_report()
+    );
+}
+
+#[test]
+fn bypasses() {
+    crate::test_utils::init_test_tracing();
+    let mut eval = startup(CconvMemoMode::On);
+    eval_ok(&mut eval, "(defun cm-by () (let ((a 1)) (lambda () a)))");
+    printed(&mut eval, "(cm-by)");
+    let before = count(&eval, CconvMemoEvent::BypassCompileEnv);
+    printed(
+        &mut eval,
+        "(let ((macroexp-inhibit-compiler-macros t)) (cm-by))",
+    );
+    printed(
+        &mut eval,
+        "(let ((overriding-plist-environment '((x a 1)))) (cm-by))",
+    );
+    assert_eq!(count(&eval, CconvMemoEvent::BypassCompileEnv), before + 2);
+}

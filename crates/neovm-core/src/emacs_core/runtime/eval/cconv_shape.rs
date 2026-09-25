@@ -121,7 +121,6 @@ impl ClosureShape {
 
     /// Whether the live `(ARGS . BODY)` has exactly these tokens.  Reads at
     /// most `toks.len()` nodes, so a cyclic or grown body just mismatches.
-    #[cfg(test)]
     pub(crate) fn matches(&self, args: Value, body: Value) -> bool {
         let mut next = 0usize;
         let mut stack: SmallVec<[Value; 32]> = SmallVec::new();
