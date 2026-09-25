@@ -1053,6 +1053,20 @@ impl CompiledLeaf {
             !(self.needs_vmctx && vmctx.is_null()),
             "a body with inline heap sites reads the heap through its vmctx"
         );
+        // One heap: inline sites allocate into and test the barrier window of
+        // the vmctx's heap, while the shims they fall back to use the
+        // thread's installed one.
+        #[cfg(debug_assertions)]
+        if self.needs_vmctx && !vmctx.is_null() {
+            // SAFETY: the vmctx contract (a live Context); an identity read.
+            let heap = unsafe { (*(vmctx as *const Context)).tagged_heap.identity() };
+            debug_assert_eq!(
+                crate::tagged::gc::current_tagged_heap_identity(),
+                Some(heap),
+                "a leaf with inline heap sites entered with a Context whose heap is not \
+                 the installed one"
+            );
+        }
         let cond_base = if self.has_handlers {
             debug_assert!(!vmctx.is_null(), "handler bodies require a Context");
             // SAFETY: as above — only a length read.
