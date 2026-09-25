@@ -3457,6 +3457,7 @@ pub(crate) fn builtin_make_bool_vector(args: Vec<Value>) -> EvalResult {
         Value::fixnum(0)
     };
     let len = length as usize;
+    note_tagged_vector_created();
     let mut vec = Vec::with_capacity(2 + len);
     vec.push(Value::symbol(BOOL_VECTOR_TAG));
     vec.push(Value::fixnum(length));
@@ -3516,9 +3517,19 @@ fn extract_bv_bits(value: &Value) -> Result<(Vec<bool>, i64), Flow> {
     Ok((bits, len))
 }
 
+/// A tagged vector (a bool-vector) is being created: the JIT's measurement
+/// knob `NEOVM_JIT_AREF_SKIP_SLOT0` counts it (its inline `aref`/`aset` no
+/// longer tell tagged vectors apart).
+#[inline]
+pub(crate) fn note_tagged_vector_created() {
+    #[cfg(feature = "jit")]
+    crate::emacs_core::jit::compile::note_tagged_vector_under_skip_slot0();
+}
+
 /// Build a bool-vector `Value` from a slice of bools.
 pub(crate) fn bool_vector_from_bits(bits: &[bool]) -> Value {
     let len = bits.len();
+    note_tagged_vector_created();
     let mut vec = Vec::with_capacity(2 + len);
     vec.push(Value::symbol(BOOL_VECTOR_TAG));
     vec.push(Value::fixnum(len as i64));

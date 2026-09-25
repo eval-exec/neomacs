@@ -173,6 +173,7 @@ fn category_set_bits(category_set: &Value) -> Option<u128> {
 }
 
 fn make_category_set_from_bits(bits: u128) -> Value {
+    crate::emacs_core::chartable::note_tagged_vector_created();
     let mut values = Vec::with_capacity(130);
     values.push(Value::symbol("--bool-vector--"));
     values.push(Value::fixnum(128));
@@ -545,6 +546,7 @@ pub(crate) fn builtin_make_category_set(args: Vec<Value>) -> EvalResult {
         bits[category as usize] = Value::fixnum(1);
     }
 
+    crate::emacs_core::chartable::note_tagged_vector_created();
     let mut vec = Vec::with_capacity(130);
     vec.push(Value::symbol("--bool-vector--"));
     vec.push(Value::fixnum(128));

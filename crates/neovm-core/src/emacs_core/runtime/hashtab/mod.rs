@@ -80,6 +80,7 @@ pub(crate) fn hash_key_to_value(key: &HashKey) -> Value {
         HashKey::Marker(_) | HashKey::Overlay(_) => Value::NIL,
         HashKey::BoolVec(parts) => {
             let (len, bits) = **parts;
+            crate::emacs_core::chartable::note_tagged_vector_created();
             let mut vals = Vec::with_capacity(len + 2);
             vals.push(Value::symbol("--bool-vector--"));
             vals.push(Value::fixnum(len as i64));

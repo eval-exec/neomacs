@@ -567,10 +567,7 @@ fn aset_fast(array: Value, index: Value, value: Value) -> bool {
             return false;
         }
         let items = data.as_slice();
-        if idx >= items.len()
-            || crate::emacs_core::chartable::classify_vector_slots(items, false)
-                != crate::emacs_core::chartable::VectorTag::Plain
-        {
+        if idx >= items.len() || !aset_fast_plain_slots(items, false) {
             return false;
         }
         crate::tagged::gc::note_heap_slot_write(
@@ -594,10 +591,7 @@ fn aset_fast(array: Value, index: Value, value: Value) -> bool {
             },
             _ => return false,
         };
-        if idx >= items.len()
-            || crate::emacs_core::chartable::classify_vector_slots(items, record)
-                != crate::emacs_core::chartable::VectorTag::Plain
-        {
+        if idx >= items.len() || !aset_fast_plain_slots(items, record) {
             return false;
         }
         // Both setters run the heap write barrier.
@@ -622,6 +616,18 @@ fn aset_fast(array: Value, index: Value, value: Value) -> bool {
         return fits && array.set_string_byte_same_char_count(idx, code as u8);
     }
     false
+}
+
+/// Whether `aset_fast` may store into these slots: a plain vector or record,
+/// not a tagged char-table or bool-vector — or, under the measurement knob
+/// `NEOVM_JIT_AREF_SKIP_SLOT0` (falsifier F-G (b)), unconditionally.
+#[inline(always)]
+fn aset_fast_plain_slots(items: &[Value], record: bool) -> bool {
+    if jit_aref_skip_slot0_on() {
+        return true;
+    }
+    crate::emacs_core::chartable::classify_vector_slots(items, record)
+        == crate::emacs_core::chartable::VectorTag::Plain
 }
 
 /// `Op::Aset` (GNU `Baset`) from compiled code: VALUE's bits, or one of the

@@ -926,6 +926,14 @@ pub(crate) fn emit_plain_slot_address(
     fb.ins().brif(in_range, plain, &[], slow, &[]);
     fb.switch_to_block(plain);
     fb.seal_block(plain);
+    if jit_aref_skip_slot0_on() {
+        // Falsifier F-G (b) only: no slot-0 test, as if no tagged vector
+        // could exist (P3.2 L0). Wrong on a bool-vector or a legacy
+        // char-table; the knob's doc says when a run is valid.
+        let byte_off = ishl_imm_p(fb, i, 3);
+        let slot = fb.ins().iadd(slots, byte_off);
+        return Some(PlainSlot { object, slot });
+    }
     // `classify_vector_slots`: a vector of two or more slots whose slot 0 is
     // the bool-vector tag, or of `char_table_min_len` or more whose slot 0 is
     // the char-table tag (vectors only), is not plain. `i < len` put slot 0
