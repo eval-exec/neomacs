@@ -720,11 +720,11 @@ pub struct HashTableEntry {
 
 /// Compact backing store for a Lisp hash table.
 ///
-/// The hash index owns each (potentially structural) [`HashKey`] exactly once.
-/// Its value is a stable slot number; slot order provides GNU-compatible
-/// iteration while storing only the original Lisp key and value. This keeps
-/// indexing, key snapshots, insertion order, deletion holes, and slot reuse
-/// behind one interface instead of mirroring every key across five containers.
+/// The hash index files each entry under the hash computed when it was made
+/// (GNU `h->hash[i]`), beside the key as then materialized and a stable slot
+/// number; slot order provides GNU-compatible iteration while storing only
+/// the original Lisp key and value. See [`hash_index`] for how an `equal`
+/// table finds a key.
 #[derive(Clone, Debug, Default)]
 pub struct HashTableStorage {
     index: HashIndex,
@@ -755,8 +755,8 @@ pub struct HashTableStorage {
     /// unhashed key and make that comparison read "complete" when it is not --
     /// a lookup would then answer the default for a key that is present. So
     /// every removal path drops the memo: `remove`, `remove_by_value`,
-    /// `clear`, and `retain_entries` (the weak-table sweep, which frees slots
-    /// itself and is the one that would otherwise be missed).
+    /// `clear`, `retain` and `retain_entries` (the weak-table sweep, which
+    /// frees slots itself and is the one that would otherwise be missed).
     user_buckets: rustc_hash::FxHashMap<i64, smallvec::SmallVec<[HashKey; 1]>>,
     /// Dump entries not yet hydrated into `index`/`slots` (GNU pdumper's
     /// hash_rehash_needed, lazily: most loaded tables are never touched at
@@ -784,8 +784,17 @@ pub struct HashTableStorage {
 /// (hash key, value, key snapshot when the key object differs).
 type PendingHashEntries = Vec<(HashKey, Value, Option<Value>)>;
 
+/// Where `puthash` puts a key: the slot of the entry it already has, or --
+/// when it has none -- the hash a new entry for it is filed under, so the
+/// insertion does not hash the key a second time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HashProbe {
+    Found(usize),
+    Absent(u64),
+}
+
 pub struct HashTableIter<'a> {
-    index: hashbrown::hash_map::Iter<'a, HashKey, usize>,
+    index: hashbrown::hash_table::Iter<'a, hash_index::IndexEntry>,
     slots: &'a [Option<HashTableEntry>],
 }
 
@@ -793,9 +802,9 @@ impl<'a> Iterator for HashTableIter<'a> {
     type Item = (&'a HashKey, &'a Value);
 
     fn next(&mut self) -> Option<Self::Item> {
-        for (key, &slot) in self.index.by_ref() {
-            if let Some(entry) = self.slots.get(slot).and_then(Option::as_ref) {
-                return Some((key, &entry.value));
+        for entry in self.index.by_ref() {
+            if let Some(slot) = self.slots.get(entry.slot).and_then(Option::as_ref) {
+                return Some((&entry.key, &slot.value));
             }
         }
         None
@@ -822,7 +831,7 @@ impl std::ops::Index<&HashKey> for HashTableStorage {
 impl HashTableStorage {
     fn with_capacity(capacity: usize) -> Self {
         Self {
-            index: HashIndex::with_capacity_and_hasher(capacity, Default::default()),
+            index: HashIndex::with_capacity(capacity),
             slots: Vec::with_capacity(capacity),
             free_slots: Vec::new(),
             user_hashes: rustc_hash::FxHashMap::default(),
@@ -861,20 +870,37 @@ impl HashTableStorage {
         self.index.capacity()
     }
 
+    /// Whether an entry's materialized key is `key`. A structural `equal`
+    /// key is found by a scan here; look those up by value instead.
     pub fn contains_key(&self, key: &HashKey) -> bool {
-        self.index.contains_key(key)
+        self.index.find_key(key).is_some()
     }
 
     pub fn get(&self, key: &HashKey) -> Option<&Value> {
-        let slot = *self.index.get(key)?;
+        let slot = self.index.find_key(key)?.slot;
+        self.slot_value(slot)
+    }
+
+    #[inline(always)]
+    fn slot_value(&self, slot: usize) -> Option<&Value> {
         self.slots
             .get(slot)
             .and_then(Option::as_ref)
             .map(|entry| &entry.value)
     }
 
-    /// `get` for a Lisp key: probe in place when the key's shape allows it
-    /// (GNU `hash_lookup`), otherwise materialize the [`HashKey`].
+    /// The value of the entry in `slot`, for a [`HashProbe::Found`] answer.
+    #[inline]
+    pub fn slot_value_mut(&mut self, slot: usize) -> Option<&mut Value> {
+        self.slots
+            .get_mut(slot)
+            .and_then(Option::as_mut)
+            .map(|entry| &mut entry.value)
+    }
+
+    /// `get` for a Lisp key: GNU `hash_lookup`, probing by the key object's
+    /// own hash. An `equal` comparison that signals (GNU "Stack overflow in
+    /// equal") counts as a miss here; [`Self::try_lookup`] propagates it.
     pub fn get_by_value(
         &self,
         value: Value,
@@ -882,15 +908,10 @@ impl HashTableStorage {
         symbols_with_pos_enabled: bool,
     ) -> Option<&Value> {
         let slot = self.slot_by_value(value, test, symbols_with_pos_enabled)?;
-        self.slots
-            .get(slot)
-            .and_then(Option::as_ref)
-            .map(|entry| &entry.value)
+        self.slot_value(slot)
     }
 
-    /// The index slot `value`'s key maps to: probed in place by the value's
-    /// own hash when [`probe_hasher`] admits it, otherwise by the
-    /// materialized [`HashKey`].
+    /// The slot `value`'s entry occupies.
     #[inline]
     fn slot_by_value(
         &self,
@@ -898,16 +919,91 @@ impl HashTableStorage {
         test: HashTableTest,
         symbols_with_pos_enabled: bool,
     ) -> Option<usize> {
-        match probe_hasher(value, test, symbols_with_pos_enabled) {
-            Some(hasher) => self
-                .index
-                .raw_entry()
-                .from_hash(hasher.finish(), |key| value_matches(value, test, key))
-                .map(|(_, &slot)| slot),
+        match test {
+            HashTableTest::Equal => self
+                .equal_entry_by_value(value, equal_value_hash(value), symbols_with_pos_enabled)
+                .ok()
+                .flatten()
+                .map(|(_, slot)| slot),
+            HashTableTest::Eq | HashTableTest::Eql => self
+                .identity_entry_by_value(value, test, symbols_with_pos_enabled)
+                .map(|(_, slot)| slot),
+        }
+    }
+
+    /// `(hash, slot)` of `value`'s entry in an `eq`/`eql` table: probed in
+    /// place by the value's own hash when [`probe_hasher`] admits it,
+    /// otherwise by the materialized [`HashKey`].
+    #[inline]
+    fn identity_entry_by_value(
+        &self,
+        value: Value,
+        test: HashTableTest,
+        symbols_with_pos_enabled: bool,
+    ) -> Option<(u64, usize)> {
+        let entry = match probe_hasher(value, test, symbols_with_pos_enabled) {
+            Some(hasher) => self.index.find(hasher.finish(), |entry| {
+                value_matches(value, test, &entry.key)
+            }),
             None => self
                 .index
-                .get(&value.to_hash_key_swp(&test, symbols_with_pos_enabled))
-                .copied(),
+                .find_key(&value.to_hash_key_swp(&test, symbols_with_pos_enabled)),
+        }?;
+        Some((entry.hash, entry.slot))
+    }
+
+    /// `(hash, slot)` of `value`'s entry in an `equal` table, `value`
+    /// hashing to `hash` ([`equal_value_hash`]): GNU `hash_find_with_hash`,
+    /// which takes a stored key that is `eq` to `value` at once and compares
+    /// the others that hash alike with `equal` against the LIVE key object.
+    /// `Err` is the `equal` comparison signalling.
+    fn equal_entry_by_value(
+        &self,
+        value: Value,
+        hash: u64,
+        symbols_with_pos_enabled: bool,
+    ) -> Result<Option<(u64, usize)>, Flow> {
+        let slots = &self.slots;
+        let mut failure = None;
+        let found = self.index.find(hash, |entry| {
+            let Some(stored) = slots.get(entry.slot).and_then(Option::as_ref) else {
+                return false;
+            };
+            if stored.key.bits() == value.bits() {
+                return true;
+            }
+            if entry.hash != hash || failure.is_some() {
+                return false;
+            }
+            match try_equal_value_swp(&value, &stored.key, 0, symbols_with_pos_enabled) {
+                Ok(equal) => equal,
+                Err(flow) => {
+                    failure = Some(flow);
+                    false
+                }
+            }
+        });
+        match failure {
+            Some(flow) => Err(flow),
+            None => Ok(found.map(|entry| (entry.hash, entry.slot))),
+        }
+    }
+
+    /// `(hash, slot)` of `value`'s entry under `test`; `Err` is an `equal`
+    /// comparison signalling.
+    fn try_entry_by_value(
+        &self,
+        value: Value,
+        test: HashTableTest,
+        symbols_with_pos_enabled: bool,
+    ) -> Result<Option<(u64, usize)>, Flow> {
+        match test {
+            HashTableTest::Equal => {
+                self.equal_entry_by_value(value, equal_value_hash(value), symbols_with_pos_enabled)
+            }
+            HashTableTest::Eq | HashTableTest::Eql => {
+                Ok(self.identity_entry_by_value(value, test, symbols_with_pos_enabled))
+            }
         }
     }
 
@@ -926,6 +1022,26 @@ impl HashTableStorage {
             return self.get_by_value(value, test, symbols_with_pos_enabled);
         }
         self.get_by_identity_value(value, test, symbols_with_pos_enabled)
+    }
+
+    /// [`Self::lookup`] for `gethash`, which signals what the `equal`
+    /// comparison signals, as GNU `Fgethash` does.
+    #[inline]
+    pub fn try_lookup(
+        &self,
+        value: Value,
+        test: HashTableTest,
+        symbols_with_pos_enabled: bool,
+    ) -> Result<Option<&Value>, Flow> {
+        if matches!(test, HashTableTest::Equal) {
+            let found = self.equal_entry_by_value(
+                value,
+                equal_value_hash(value),
+                symbols_with_pos_enabled,
+            )?;
+            return Ok(found.and_then(|(_, slot)| self.slot_value(slot)));
+        }
+        Ok(self.get_by_identity_value(value, test, symbols_with_pos_enabled))
     }
 
     #[inline(never)]
@@ -972,6 +1088,61 @@ impl HashTableStorage {
         )
     }
 
+    /// `puthash`'s probe: where `value`'s entry is, or the hash a new entry
+    /// for it is filed under ([`Self::insert_absent`]).
+    pub fn try_probe_for_insert(
+        &self,
+        value: Value,
+        test: HashTableTest,
+        symbols_with_pos_enabled: bool,
+    ) -> Result<HashProbe, Flow> {
+        match test {
+            HashTableTest::Equal => {
+                let hash = equal_value_hash(value);
+                Ok(
+                    match self.equal_entry_by_value(value, hash, symbols_with_pos_enabled)? {
+                        Some((_, slot)) => HashProbe::Found(slot),
+                        None => HashProbe::Absent(hash),
+                    },
+                )
+            }
+            HashTableTest::Eq | HashTableTest::Eql => {
+                Ok(match probe_hasher(value, test, symbols_with_pos_enabled) {
+                    Some(hasher) => {
+                        let hash = hasher.finish();
+                        match self
+                            .index
+                            .find(hash, |entry| value_matches(value, test, &entry.key))
+                        {
+                            Some(entry) => HashProbe::Found(entry.slot),
+                            None => HashProbe::Absent(hash),
+                        }
+                    }
+                    None => {
+                        let key = value.to_hash_key_swp(&test, symbols_with_pos_enabled);
+                        match self.index.find_key(&key) {
+                            Some(entry) => HashProbe::Found(entry.slot),
+                            None => HashProbe::Absent(fx_hash_key(&key)),
+                        }
+                    }
+                })
+            }
+        }
+    }
+
+    /// File a new entry for a key [`Self::try_probe_for_insert`] found
+    /// absent under `hash`. `hash_key` is the key materialized under the
+    /// table's test and `key` the key object.
+    pub fn insert_absent(&mut self, hash: u64, hash_key: HashKey, key: Value, value: Value) {
+        debug_assert_eq!(
+            hash,
+            stored_hash(&hash_key, key),
+            "a probe hashed {key:?} differently from the entry it files"
+        );
+        let slot = self.alloc_slot(key, value);
+        self.index.insert_new(hash, hash_key, slot);
+    }
+
     /// `get_mut` counterpart of [`Self::get_by_value`].
     pub fn get_mut_by_value(
         &mut self,
@@ -980,11 +1151,9 @@ impl HashTableStorage {
         symbols_with_pos_enabled: bool,
     ) -> Option<&mut Value> {
         let slot = self.slot_by_value(value, test, symbols_with_pos_enabled)?;
-        self.slots
-            .get_mut(slot)
-            .and_then(Option::as_mut)
-            .map(|entry| &mut entry.value)
+        self.slot_value_mut(slot)
     }
+
     /// `remove` counterpart of [`Self::get_by_value`].
     pub fn remove_by_value(
         &mut self,
@@ -992,34 +1161,55 @@ impl HashTableStorage {
         test: HashTableTest,
         symbols_with_pos_enabled: bool,
     ) -> Option<Value> {
-        // `remove_entry` rather than `remove`: the owned key is what
-        // `forget_user_hash` needs to keep the memo maps from going stale.
-        let (removed_key, slot) = match probe_hasher(value, test, symbols_with_pos_enabled) {
-            Some(hasher) => match self
-                .index
-                .raw_entry_mut()
-                .from_hash(hasher.finish(), |key| value_matches(value, test, key))
-            {
-                hashbrown::hash_map::RawEntryMut::Occupied(entry) => entry.remove_entry(),
-                hashbrown::hash_map::RawEntryMut::Vacant(_) => return None,
-            },
-            None => self
-                .index
-                .remove_entry(&value.to_hash_key_swp(&test, symbols_with_pos_enabled))?,
-        };
-        self.forget_user_hash(&removed_key);
-        self.remove_slot(slot)
+        self.try_remove_by_value(value, test, symbols_with_pos_enabled)
+            .ok()
+            .flatten()
     }
+
+    /// [`Self::remove_by_value`] for `remhash`, which signals what the
+    /// `equal` comparison signals.
+    pub fn try_remove_by_value(
+        &mut self,
+        value: Value,
+        test: HashTableTest,
+        symbols_with_pos_enabled: bool,
+    ) -> Result<Option<Value>, Flow> {
+        let Some((hash, slot)) = self.try_entry_by_value(value, test, symbols_with_pos_enabled)?
+        else {
+            return Ok(None);
+        };
+        let removed = self
+            .index
+            .remove_matching(hash, |entry| entry.slot == slot)
+            .expect("the entry just found is in the index");
+        // The removed key is what `forget_user_hash` needs to keep the memo
+        // maps from going stale.
+        self.forget_user_hash(&removed.key);
+        Ok(self.remove_slot(slot))
+    }
+
     pub fn get_mut(&mut self, key: &HashKey) -> Option<&mut Value> {
-        let slot = *self.index.get(key)?;
-        self.slots
-            .get_mut(slot)
-            .and_then(Option::as_mut)
-            .map(|entry| &mut entry.value)
+        let slot = self.index.find_key(key)?.slot;
+        self.slot_value_mut(slot)
     }
 
     pub fn key_snapshot(&self, key: &HashKey) -> Option<&Value> {
-        let slot = *self.index.get(key)?;
+        let slot = self.index.find_key(key)?.slot;
+        self.slots
+            .get(slot)
+            .and_then(Option::as_ref)
+            .map(|entry| &entry.key)
+    }
+
+    /// The key object of `value`'s entry, found as [`Self::get_by_value`]
+    /// finds it.
+    pub fn key_by_value(
+        &self,
+        value: Value,
+        test: HashTableTest,
+        symbols_with_pos_enabled: bool,
+    ) -> Option<&Value> {
+        let slot = self.slot_by_value(value, test, symbols_with_pos_enabled)?;
         self.slots
             .get(slot)
             .and_then(Option::as_ref)
@@ -1027,7 +1217,7 @@ impl HashTableStorage {
     }
 
     pub fn replace_key_snapshot(&mut self, key: &HashKey, key_value: Value) {
-        let Some(&slot) = self.index.get(key) else {
+        let Some(slot) = self.index.find_key(key).map(|entry| entry.slot) else {
             return;
         };
         self.slots[slot]
@@ -1036,15 +1226,17 @@ impl HashTableStorage {
             .key = key_value;
     }
 
-    pub fn insert(&mut self, hash_key: HashKey, key: Value, value: Value) -> Option<Value> {
-        if let Some(&slot) = self.index.get(&hash_key) {
-            let entry = self.slots[slot]
-                .as_mut()
-                .expect("hash index points to an empty entry slot");
-            return Some(std::mem::replace(&mut entry.value, value));
-        }
+    /// The slot of the entry whose materialized key is `hash_key`, the key
+    /// object being `key`: found under the hash an entry for `key` would be
+    /// filed under.
+    fn slot_of_new_key(&self, hash: u64, hash_key: &HashKey) -> Option<usize> {
+        self.index
+            .find(hash, |entry| entry.key == *hash_key)
+            .map(|entry| entry.slot)
+    }
 
-        let slot = if let Some(slot) = self.free_slots.pop() {
+    fn alloc_slot(&mut self, key: Value, value: Value) -> usize {
+        if let Some(slot) = self.free_slots.pop() {
             debug_assert!(self.slots[slot].is_none());
             self.slots[slot] = Some(HashTableEntry { key, value });
             slot
@@ -1052,8 +1244,19 @@ impl HashTableStorage {
             let slot = self.slots.len();
             self.slots.push(Some(HashTableEntry { key, value }));
             slot
-        };
-        self.index.insert(hash_key, slot);
+        }
+    }
+
+    pub fn insert(&mut self, hash_key: HashKey, key: Value, value: Value) -> Option<Value> {
+        let hash = stored_hash(&hash_key, key);
+        if let Some(slot) = self.slot_of_new_key(hash, &hash_key) {
+            let entry = self.slots[slot]
+                .as_mut()
+                .expect("hash index points to an empty entry slot");
+            return Some(std::mem::replace(&mut entry.value, value));
+        }
+        let slot = self.alloc_slot(key, value);
+        self.index.insert_new(hash, hash_key, slot);
         None
     }
 
@@ -1063,20 +1266,23 @@ impl HashTableStorage {
         key: Value,
         value: Value,
     ) -> Option<Value> {
-        if let Some(&slot) = self.index.get(&hash_key) {
+        let hash = stored_hash(&hash_key, key);
+        if let Some(slot) = self.slot_of_new_key(hash, &hash_key) {
             let entry = self.slots[slot]
                 .as_mut()
                 .expect("hash index points to an empty entry slot");
             entry.key = key;
             return Some(std::mem::replace(&mut entry.value, value));
         }
-        self.insert(hash_key, key, value)
+        let slot = self.alloc_slot(key, value);
+        self.index.insert_new(hash, hash_key, slot);
+        None
     }
 
     pub fn remove(&mut self, key: &HashKey) -> Option<Value> {
-        let slot = self.index.remove(key)?;
+        let removed = self.index.remove_key(key)?;
         self.forget_user_hash(key);
-        self.remove_slot(slot)
+        self.remove_slot(removed.slot)
     }
     /// Free the entry at `slot` (already unlinked from the index) and hand
     /// its value back; the slot joins the free list for reuse.
@@ -1139,9 +1345,7 @@ impl HashTableStorage {
 
     /// Forget `key`'s remembered hash, keeping both maps in step.
     fn forget_user_hash(&mut self, key: &HashKey) {
-        if let Some(hash) = self.user_hashes.remove(key) {
-            self.drop_from_user_bucket(hash, key);
-        }
+        forget_user_hash_in(&mut self.user_hashes, &mut self.user_buckets, key);
     }
 
     fn drop_from_user_bucket(&mut self, hash: i64, key: &HashKey) {
@@ -1205,13 +1409,23 @@ impl HashTableStorage {
     }
 
     pub fn live_hash_keys_in_slot_order(&self) -> Vec<&HashKey> {
-        let mut keys = vec![None; self.slots.len()];
-        for (key, &slot) in &self.index {
-            if self.slots.get(slot).is_some_and(Option::is_some) {
-                keys[slot] = Some(key);
+        self.keyed_entries_in_slot_order()
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect()
+    }
+
+    /// Every live entry with its materialized key, in slot (insertion)
+    /// order: what a walk of [`Self::live_hash_keys_in_slot_order`] followed
+    /// by a [`Self::get`] per key reads, without looking any key up.
+    pub fn keyed_entries_in_slot_order(&self) -> Vec<(&HashKey, &HashTableEntry)> {
+        let mut keyed = vec![None; self.slots.len()];
+        for entry in self.index.iter() {
+            if let Some(stored) = self.slots.get(entry.slot).and_then(Option::as_ref) {
+                keyed[entry.slot] = Some((&entry.key, stored));
             }
         }
-        keys.into_iter().flatten().collect()
+        keyed.into_iter().flatten().collect()
     }
 
     /// Remove every entry `keep(key, value)` rejects, in index order (the
@@ -1229,41 +1443,42 @@ impl HashTableStorage {
         // skews `user_hash_incomplete` and can make a present key look absent.
         let user_hashes = &mut self.user_hashes;
         let user_buckets = &mut self.user_buckets;
-        self.index.retain(|key, &mut slot| {
-            let entry = slots[slot]
+        self.index.retain(|entry| {
+            let slot = entry.slot;
+            let stored = slots[slot]
                 .as_ref()
                 .expect("hash index points to an empty entry slot");
-            if keep(entry.key, entry.value) {
+            if keep(stored.key, stored.value) {
                 return true;
             }
-            if let Some(hash) = user_hashes.remove(key)
-                && let Some(bucket) = user_buckets.get_mut(&hash)
-            {
-                bucket.retain(|stored| stored != key);
-                if bucket.is_empty() {
-                    user_buckets.remove(&hash);
-                }
-            }
+            forget_user_hash_in(user_hashes, user_buckets, &entry.key);
             slots[slot] = None;
             free_slots.push(slot);
             false
         });
     }
 
+    /// Remove every entry `keep(key, value)` rejects, in index order, as
+    /// [`Self::retain_entries`] does.
     pub fn retain(&mut self, mut keep: impl FnMut(&HashKey, &mut Value) -> bool) {
         self.switch_plan.invalidate();
-        let mut removed = Vec::new();
-        for (key, &slot) in &self.index {
-            let entry = self.slots[slot]
+        let slots = &mut self.slots;
+        let free_slots = &mut self.free_slots;
+        let user_hashes = &mut self.user_hashes;
+        let user_buckets = &mut self.user_buckets;
+        self.index.retain(|entry| {
+            let slot = entry.slot;
+            let stored = slots[slot]
                 .as_mut()
                 .expect("hash index points to an empty entry slot");
-            if !keep(key, &mut entry.value) {
-                removed.push(key.clone());
+            if keep(&entry.key, &mut stored.value) {
+                return true;
             }
-        }
-        for key in removed {
-            let _ = self.remove(&key);
-        }
+            forget_user_hash_in(user_hashes, user_buckets, &entry.key);
+            slots[slot] = None;
+            free_slots.push(slot);
+            false
+        });
     }
 
     pub fn replace_pointer_key(&mut self, old_ptr: usize, new_ptr: usize, new_key: Value) {
@@ -1276,12 +1491,12 @@ impl HashTableStorage {
             self.user_hashes.is_empty(),
             "replace_pointer_key on a table carrying user hashes would strand a bucket entry"
         );
-        let old = HashKey::Ptr(old_ptr);
-        let Some(slot) = self.index.remove(&old) else {
+        let Some(removed) = self.index.remove_key(&HashKey::Ptr(old_ptr)) else {
             return;
         };
-        self.index.insert(HashKey::Ptr(new_ptr), slot);
-        self.slots[slot]
+        let key = HashKey::Ptr(new_ptr);
+        self.index.insert_new(fx_hash_key(&key), key, removed.slot);
+        self.slots[removed.slot]
             .as_mut()
             .expect("hash index points to an empty entry slot")
             .key = new_key;
@@ -1290,7 +1505,7 @@ impl HashTableStorage {
     pub(crate) fn known_storage_bytes(&self) -> usize {
         self.index
             .capacity()
-            .saturating_mul(size_of::<(HashKey, usize)>())
+            .saturating_mul(size_of::<hash_index::IndexEntry>())
             .saturating_add(
                 self.pending
                     .as_deref()
@@ -1307,6 +1522,22 @@ impl HashTableStorage {
                     .capacity()
                     .saturating_mul(size_of::<usize>()),
             )
+    }
+}
+
+/// Forget `key`'s remembered user hash in both memo maps.
+fn forget_user_hash_in(
+    user_hashes: &mut rustc_hash::FxHashMap<HashKey, i64>,
+    user_buckets: &mut rustc_hash::FxHashMap<i64, smallvec::SmallVec<[HashKey; 1]>>,
+    key: &HashKey,
+) {
+    if let Some(hash) = user_hashes.remove(key)
+        && let Some(bucket) = user_buckets.get_mut(&hash)
+    {
+        bucket.retain(|stored| stored != key);
+        if bucket.is_empty() {
+            user_buckets.remove(&hash);
+        }
     }
 }
 
@@ -1521,81 +1752,31 @@ pub enum HashKey {
     StringContent(Box<(Box<[u8]>, usize)>),
 }
 
-/// Hash index of a Lisp hash table: materialized [`HashKey`] → entry slot.
-/// hashbrown rather than std so a lookup can probe by a hash computed from
-/// the Lisp value itself (`raw_entry().from_hash`) and compare candidates
-/// against that value -- see [`probe_hasher`].
-type HashIndex =
-    hashbrown::HashMap<HashKey, usize, std::hash::BuildHasherDefault<rustc_hash::FxHasher>>;
-
-/// Depth beyond which `to_equal_key_depth_swp` degrades to identity keys;
-/// the probe declines such structures rather than mirror that switch.
-const FAST_PROBE_MAX_DEPTH: usize = 200;
-/// Total conses a probe may visit; shared substructure can otherwise make
-/// an `equal` walk exponential, and a cyclic list would never terminate.
-const FAST_PROBE_NODE_BUDGET: usize = 4096;
-
-/// Hash a [`Value`] in place, the way GNU `hash_lookup` runs `hashfn` over
-/// the object (fns.c) -- instead of first materializing a [`HashKey`], which
-/// for an `equal` table costs an allocation per cons/string plus a `seen`
-/// vector and a drop on every `gethash`.
+/// Hash a [`Value`] in place for an `eq` or `eql` table, the way GNU
+/// `hash_lookup` runs `hashfn` over the object (fns.c) -- instead of first
+/// materializing a [`HashKey`].
 ///
 /// `Some(hasher)` has been fed exactly the writes `HashKey::hash` feeds for
 /// `to_hash_key_swp(value, test, swp)`, so its `finish()` is the hash the
-/// index stored for that key (hashbrown hashes a key with
-/// `BuildHasher::hash_one`): the stored hashes and the index's iteration
-/// order are the materialized key's. The caller probes with it and compares
-/// candidates with [`value_matches`].
+/// index filed that key under ([`hash_index::stored_hash`]). The caller
+/// probes with it and compares candidates with [`value_matches`].
 ///
-/// `None` for the shapes whose key only the materializing path reproduces: a
-/// cons at depth 200 or past 4096 conses under `equal` (deep, cyclic or
-/// exponentially shared lists), any pseudovector under `equal` (vectors,
-/// markers, overlays, closures, bignums, positioned symbols), a bignum under
-/// `eql`, and a positioned symbol while `symbols-with-pos-enabled`.
-///
-/// One walk both admits and hashes. It follows a list's cdr iteratively and
-/// recurses only into a car that is itself a cons, and the hasher travels by
-/// value, so it stays in a register instead of being stored and reloaded
-/// around every write.
+/// `None` for a bignum under `eql` and a positioned symbol while
+/// `symbols-with-pos-enabled`: their keys only the materializing path
+/// reproduces. An `equal` table hashes with [`equal_value_hash`] instead.
 #[inline]
 fn probe_hasher(value: Value, test: HashTableTest, swp: bool) -> Option<FxHasher> {
-    if test != HashTableTest::Equal || !value.is_cons() {
-        return probe_leaf(value, test, swp, FxHasher::default());
-    }
-    let mut budget = FAST_PROBE_NODE_BUDGET;
-    probe_equal_cons(value, swp, FxHasher::default(), 0, &mut budget)
+    debug_assert!(
+        test != HashTableTest::Equal,
+        "an equal table hashes with equal_value_hash"
+    );
+    probe_leaf(value, test, swp, FxHasher::default())
 }
 
-/// [`probe_hasher`] from a cons under `equal`, reached at `depth` (the depth
-/// `to_equal_key_depth_swp` reaches it at: a car and a cdr both count).
-fn probe_equal_cons(
-    mut value: Value,
-    swp: bool,
-    mut hasher: FxHasher,
-    mut depth: usize,
-    budget: &mut usize,
-) -> Option<FxHasher> {
-    while value.is_cons() {
-        if depth >= FAST_PROBE_MAX_DEPTH || *budget == 0 {
-            return None;
-        }
-        *budget -= 1;
-        12u8.hash(&mut hasher);
-        let car = value.cons_car();
-        hasher = if car.is_cons() {
-            probe_equal_cons(car, swp, hasher, depth + 1, budget)?
-        } else {
-            probe_leaf(car, HashTableTest::Equal, swp, hasher)?
-        };
-        value = value.cons_cdr();
-        depth += 1;
-    }
-    probe_leaf(value, HashTableTest::Equal, swp, hasher)
-}
-
-/// [`probe_hasher`] for anything but a cons walked under `equal`: the value's
-/// `HashKey::hash` writes, or `None` when the probe declines it. Mirrors the
-/// arms of `to_eq_key` / `to_eql_key` / `to_equal_key_depth_swp`.
+/// The value's `HashKey::hash` writes for a leaf key, or `None` when only
+/// the materialized key reproduces them. Mirrors the leaf arms of
+/// `to_eq_key` / `to_eql_key` / `to_equal_key_depth_swp`; the `equal` hash
+/// walker ([`equal_value_hash`]) writes every leaf through it.
 #[inline(always)]
 fn probe_leaf(
     value: Value,
@@ -1975,7 +2156,15 @@ impl LispHashTable {
         self.data.clear();
         self.data.reserve(entries.len());
         for (hash_key, value, snapshot) in entries {
-            let key = snapshot.unwrap_or(value);
+            // An `equal` table files a structural key under the hash of its
+            // key OBJECT, so one must stand in for a missing snapshot.
+            let key = match snapshot {
+                Some(snapshot) => snapshot,
+                None if hash_key.is_structural() => {
+                    crate::emacs_core::hashtab::hash_key_to_value(&hash_key)
+                }
+                None => value,
+            };
             self.insert(hash_key, key, value);
         }
     }
@@ -5153,7 +5342,11 @@ macro_rules! assert_val_eq {
     }};
 }
 
+mod hash_index;
 pub(crate) mod switch_plan;
+
+pub(crate) use hash_index::equal_value_hash;
+use hash_index::{HashIndex, fx_hash_key, stored_hash};
 
 // ---------------------------------------------------------------------------
 // Tests

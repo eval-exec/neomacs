@@ -395,6 +395,12 @@ pub(crate) struct TaggedLoadState<'a> {
     /// tagged heap during `preload_tagged_heap` and reachable via the
     /// load-side `Value` cache, so the GC will not free it underneath us.
     pub(crate) markers_by_id: FxHashMap<u64, *mut crate::tagged::header::MarkerObj>,
+    /// Weak hash tables whose entries stay parked until every object is
+    /// populated. An `equal` table files a structural key under the hash of
+    /// its key OBJECT, which the populate pass may not have filled in yet
+    /// when it reaches the table; [`LoadDecoder::hydrate_parked_weak_tables`]
+    /// hydrates them once the pass is over, before anything can sweep them.
+    weak_tables: Vec<Value>,
 }
 
 impl<'a> TaggedLoadState<'a> {
@@ -417,6 +423,7 @@ impl<'a> TaggedLoadState<'a> {
             frames: FxHashMap::default(),
             timers: FxHashMap::default(),
             markers_by_id: FxHashMap::default(),
+            weak_tables: Vec::new(),
         }
     }
 
@@ -441,6 +448,7 @@ impl<'a> TaggedLoadState<'a> {
             frames: FxHashMap::default(),
             timers: FxHashMap::default(),
             markers_by_id: FxHashMap::default(),
+            weak_tables: Vec::new(),
         }
     }
 
@@ -543,7 +551,19 @@ impl<'a> LoadDecoder<'a> {
                 index: index as u32,
             })?;
         }
+        self.hydrate_parked_weak_tables();
         Ok(())
+    }
+
+    /// Hydrate the weak tables the populate pass parked: every object their
+    /// keys reach is populated now. Weak tables are hydrated at load rather
+    /// than on first access so the GC's weak sweep never meets a pending
+    /// table.
+    fn hydrate_parked_weak_tables(&mut self) {
+        for table in std::mem::take(&mut self.state.weak_tables) {
+            // `as_hash_table` hydrates a pending table.
+            let _ = table.as_hash_table();
+        }
     }
 
     pub(crate) fn discard_restored_file_object_descriptors(&mut self) {
@@ -2159,6 +2179,7 @@ impl<'a> LoadDecoder<'a> {
                         )
                     })
                     .collect();
+                let weak = weakness.is_some();
                 let _ = value.with_hash_table_mut(|table| {
                     table.test = load_hash_table_test(&test);
                     table.test_name = test_name.map(|s| load_sym_id(&s));
@@ -2166,17 +2187,17 @@ impl<'a> LoadDecoder<'a> {
                     table.weakness = weakness.as_ref().map(load_hash_table_weakness);
                     table.rehash_size = rehash_size;
                     table.rehash_threshold = rehash_threshold;
-                    if table.weakness.is_some() {
-                        // The weak sweep enumerates and removes entries through
-                        // the hydrated index; keep weak tables eager.
-                        table.rebuild_from_ordered_entries(entries);
-                    } else {
-                        // GNU pdumper's hash_rehash_needed, lazily: park the
-                        // decoded entries; the first accessor hydrates. Most
-                        // loaded tables are never touched at startup.
-                        table.set_pending_dump_entries(entries);
-                    }
+                    // GNU pdumper's hash_rehash_needed, lazily: park the
+                    // decoded entries; the first accessor hydrates. Most
+                    // loaded tables are never touched at startup. The weak
+                    // sweep enumerates and removes entries through the
+                    // hydrated index, so a weak table is hydrated when this
+                    // pass ends (`hydrate_parked_weak_tables`).
+                    table.set_pending_dump_entries(entries);
                 });
+                if weak {
+                    self.state.weak_tables.push(value);
+                }
             }
             DumpHeapObject::Obarray { buckets, count } => {
                 let buckets: Vec<_> = buckets
@@ -2937,19 +2958,16 @@ pub(crate) fn dump_hash_table(encoder: &mut DumpEncoder, ht: &LispHashTable) -> 
                 })
                 .collect()
         } else {
-            ht.live_hash_keys_in_slot_order()
+            ht.data
+                .keyed_entries_in_slot_order()
                 .into_iter()
-                .filter_map(|key| {
-                    let value = ht.data.get(key).copied()?;
-                    let snapshot = ht
-                        .key_snapshot(key)
-                        .copied()
-                        .map(|snap| encoder.dump_value(&snap));
-                    Some((
+                .map(|(key, entry)| {
+                    let snapshot = Some(encoder.dump_value(&entry.key));
+                    (
                         dump_hash_key(encoder, key),
-                        encoder.dump_value(&value),
+                        encoder.dump_value(&entry.value),
                         snapshot,
-                    ))
+                    )
                 })
                 .collect()
         },

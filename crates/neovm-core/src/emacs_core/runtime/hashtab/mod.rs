@@ -51,7 +51,7 @@ fn is_global_obarray_proxy_in_state(
 }
 
 /// Convert a `HashKey` back into a `Value`.
-fn hash_key_to_value(key: &HashKey) -> Value {
+pub(crate) fn hash_key_to_value(key: &HashKey) -> Value {
     match key {
         HashKey::Nil => Value::NIL,
         HashKey::True => Value::T,
@@ -594,12 +594,10 @@ fn internal_hash_table_nonempty_buckets(table: &LispHashTable) -> Vec<Vec<(Value
     let index_bits = bucket_count.trailing_zeros();
     let test = table.test;
     let mut buckets: Vec<Vec<(Value, i64)>> = vec![Vec::new(); bucket_count];
-    for key in table.live_hash_keys_in_slot_order() {
-        if table.data.contains_key(key) {
-            let hash = internal_hash_table_diagnostic_hash(key, test);
-            let index = knuth_hash_index(hash, index_bits);
-            buckets[index].push((hash_key_to_visible_value(table, key), hash as i64));
-        }
+    for (key, entry) in table.data.keyed_entries_in_slot_order() {
+        let hash = internal_hash_table_diagnostic_hash(key, test);
+        let index = knuth_hash_index(hash, index_bits);
+        buckets[index].push((entry.key, hash as i64));
     }
     for bucket in &mut buckets {
         bucket.sort_by_key(|(key, hash)| (print_value(key), *hash));
@@ -719,10 +717,10 @@ pub(crate) fn builtin_hash_table_keys(args: Vec<Value>) -> EvalResult {
         ValueKind::Veclike(VecLikeType::HashTable) => {
             let table = args[0].as_hash_table().unwrap().clone();
             let keys: Vec<Value> = table
-                .live_hash_keys_in_slot_order()
+                .data
+                .keyed_entries_in_slot_order()
                 .into_iter()
-                .filter(|k| table.data.contains_key(k))
-                .map(|key| hash_key_to_visible_value(&table, key))
+                .map(|(_, entry)| entry.key)
                 .collect();
             Ok(Value::list(keys))
         }
@@ -741,9 +739,10 @@ pub(crate) fn builtin_hash_table_values(args: Vec<Value>) -> EvalResult {
         ValueKind::Veclike(VecLikeType::HashTable) => {
             let table = args[0].as_hash_table().unwrap().clone();
             let values: Vec<Value> = table
-                .live_hash_keys_in_slot_order()
+                .data
+                .keyed_entries_in_slot_order()
                 .into_iter()
-                .filter_map(|k| table.data.get(k).cloned())
+                .map(|(_, entry)| entry.value)
                 .collect();
             Ok(Value::list(values))
         }

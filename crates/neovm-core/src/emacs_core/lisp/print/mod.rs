@@ -539,12 +539,9 @@ fn print_preprocess(value: &Value, state: &mut PrintCircleState, options: PrintO
             }
             ValueKind::Veclike(VecLikeType::HashTable) => {
                 let table = obj.as_hash_table().unwrap().clone();
-                for key_hk in table.live_hash_keys_in_slot_order().into_iter().rev() {
-                    if let Some(val) = table.data.get(key_hk) {
-                        stack.push(*val);
-                        let key_val = super::hashtab::hash_key_to_visible_value(&table, key_hk);
-                        stack.push(key_val);
-                    }
+                for (_, entry) in table.data.keyed_entries_in_slot_order().into_iter().rev() {
+                    stack.push(entry.value);
+                    stack.push(entry.key);
                 }
             }
             ValueKind::Veclike(VecLikeType::Obarray) => {
@@ -638,12 +635,9 @@ fn print_preprocess_external_with_t_removal(
             }
             ValueKind::Veclike(VecLikeType::HashTable) => {
                 let table = obj.as_hash_table().unwrap().clone();
-                for key_hk in table.live_hash_keys_in_slot_order().into_iter().rev() {
-                    if let Some(val) = table.data.get(key_hk) {
-                        stack.push(*val);
-                        let key_val = super::hashtab::hash_key_to_visible_value(&table, key_hk);
-                        stack.push(key_val);
-                    }
+                for (_, entry) in table.data.keyed_entries_in_slot_order().into_iter().rev() {
+                    stack.push(entry.value);
+                    stack.push(entry.key);
                 }
             }
             ValueKind::Veclike(VecLikeType::Obarray) => {
@@ -1582,8 +1576,9 @@ fn write_hash_table_stateful(value: &Value, out: &mut StatefulPrintOutput, state
         out.push_str(" data (");
         let mut first = true;
         let mut count: i64 = 0;
-        for key in table.live_hash_keys_in_slot_order() {
-            if let Some(val) = table.data.get(key) {
+        for (_, entry) in table.data.keyed_entries_in_slot_order() {
+            let val = &entry.value;
+            {
                 if let Some(length) = state.options.print_length
                     && count >= length
                 {
@@ -1596,8 +1591,7 @@ fn write_hash_table_stateful(value: &Value, out: &mut StatefulPrintOutput, state
                 if !first {
                     out.push(' ');
                 }
-                let key_val = super::hashtab::hash_key_to_visible_value(&table, key);
-                write_value_stateful(&key_val, out, state);
+                write_value_stateful(&entry.key, out, state);
                 out.push(' ');
                 write_value_stateful(val, out, state);
                 first = false;
@@ -2805,17 +2799,14 @@ fn append_hash_table_bytes(value: &Value, out: &mut Vec<u8>, options: PrintOptio
     if !table.data.is_empty() {
         out.extend_from_slice(b" data (");
         let mut first = true;
-        for key in table.live_hash_keys_in_slot_order() {
-            if let Some(val) = table.data.get(key) {
-                if !first {
-                    out.push(b' ');
-                }
-                let key_val = super::hashtab::hash_key_to_visible_value(&table, key);
-                append_print_value_bytes(&key_val, out, options);
+        for (_, entry) in table.data.keyed_entries_in_slot_order() {
+            if !first {
                 out.push(b' ');
-                append_print_value_bytes(val, out, options);
-                first = false;
             }
+            append_print_value_bytes(&entry.key, out, options);
+            out.push(b' ');
+            append_print_value_bytes(&entry.value, out, options);
+            first = false;
         }
         out.push(b')');
     }

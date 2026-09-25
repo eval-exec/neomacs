@@ -249,14 +249,13 @@ fn jump_table_lookup_matches_the_materialized_key() {
     assert!(checked >= 20_000, "checked {checked}");
 }
 
-/// The index holds a SNAPSHOT of each key, so a key cons mutated after
-/// insertion still answers for its old shape and not for its new one.
-///
-/// GNU compares against the live key object instead (`hash_find`,
-/// src/fns.c), so this is a known divergence; it is pinned here so that a
-/// faster jump-table lookup cannot change it silently.
+/// A key cons mutated after insertion answers for neither shape, as in GNU:
+/// the entry stays filed under the hash of the key as it was (`h->hash[i]`),
+/// and a candidate is compared with `equal` against the LIVE key object
+/// (`hash_find_with_hash`, src/fns.c). So the old shape hashes alike but is
+/// no longer `equal`, and the new shape hashes elsewhere.
 #[test]
-fn a_key_mutated_after_insertion_answers_from_its_snapshot() {
+fn a_key_mutated_after_insertion_answers_like_gnu() {
     let (a, b, z) = (sym("a"), sym("b"), sym("z"));
     let key = list(&[a, b]);
     let mut table = LispHashTable::new(HashTableTest::Equal);
@@ -267,7 +266,10 @@ fn a_key_mutated_after_insertion_answers_from_its_snapshot() {
     );
     key.set_car(z);
     let answer = |probe: Value| bits(table.data.lookup(probe, HashTableTest::Equal, false));
-    assert_eq!(answer(list(&[a, b])), Some(Value::fixnum(8).bits()));
-    assert_eq!(answer(key), None, "the key object now reads (z b)");
-    assert_eq!(answer(list(&[z, b])), None);
+    assert_eq!(
+        answer(list(&[a, b])),
+        None,
+        "the key object now reads (z b)"
+    );
+    assert_eq!(answer(list(&[z, b])), None, "filed under the hash of (a b)");
 }

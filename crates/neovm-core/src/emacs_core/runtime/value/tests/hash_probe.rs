@@ -65,7 +65,7 @@ const TESTS: [HashTableTest; 3] = [HashTableTest::Eq, HashTableTest::Eql, HashTa
 #[test]
 fn probe_hash_and_equivalence_match_the_materialized_key() {
     let values = corpus();
-    for test in TESTS {
+    for test in [HashTableTest::Eq, HashTableTest::Eql] {
         let keys: Vec<HashKey> = values
             .iter()
             .map(|v| v.to_hash_key_swp(&test, false))
@@ -91,58 +91,92 @@ fn probe_hash_and_equivalence_match_the_materialized_key() {
     }
 }
 
+/// An `equal` table files every key under [`equal_value_hash`] of its key
+/// object, and a leaf key under exactly its materialized key's hash, so a
+/// lookup by key and a lookup by value agree on the leaves; and two `equal`
+/// objects hash alike, so a lookup finds every `equal` key.
 #[test]
-fn probe_admits_structural_shapes_and_declines_the_rest() {
+fn equal_hash_files_leaves_as_their_keys_and_equal_objects_alike() {
     let values = corpus();
-    let supported = |v: &Value, test| probe_hasher(*v, test, false).is_some();
-    // Everything keys by identity under `eq`, so every value is admitted.
-    assert!(values.iter().all(|v| supported(v, HashTableTest::Eq)));
-    // Under `equal`, vectors and 250-deep lists take the materializing path.
-    assert!(!supported(&values[values.len() - 1], HashTableTest::Equal));
-    assert!(!supported(
-        &Value::vector(vec![Value::fixnum(1)]),
-        HashTableTest::Equal
-    ));
-    assert!(!supported(
-        &Value::cons(Value::vector(vec![]), Value::NIL),
-        HashTableTest::Equal
-    ));
-    let wide = list(&vec![Value::fixnum(7); FAST_PROBE_NODE_BUDGET + 1]);
-    assert!(!supported(&wide, HashTableTest::Equal));
-    assert!(supported(
-        &list(&[Value::fixnum(1), Value::string("s")]),
-        HashTableTest::Equal
-    ));
-    assert!(supported(&Value::string("s"), HashTableTest::Equal));
+    for value in &values {
+        let key = value.to_hash_key_swp(&HashTableTest::Equal, false);
+        assert_eq!(
+            stored_hash(&key, *value),
+            equal_value_hash(*value),
+            "{value:?} is filed under a hash its lookup does not compute"
+        );
+        if !key.is_structural() {
+            assert_eq!(equal_value_hash(*value), fx_hash(&key), "{value:?}");
+        }
+        for other in &values {
+            if equal_value(value, other, 0) {
+                assert_eq!(
+                    equal_value_hash(*value),
+                    equal_value_hash(*other),
+                    "{value:?} and {other:?} are equal but hash apart"
+                );
+            }
+        }
+    }
 }
 
-/// The probe follows a list's cdr in a loop, not a call per element: the
-/// longest list the probe admits (200 conses; one more and a cons would sit
-/// at depth 200, where the probe declines) hashes and matches on a thread
-/// whose stack would not hold a frame per cons, and a 4,000-element list is
-/// declined there without walking past depth 200.
+/// GNU `sxhash_obj` looks at `SXHASH_MAX_LEN` (7) elements per level and
+/// `SXHASH_MAX_DEPTH` (3) levels: whatever lies beyond cannot move the hash,
+/// which is what keeps a lookup's hash bounded however large the key.
 #[test]
-fn a_long_list_probe_does_not_recurse_per_cdr() {
-    let longest = list(&vec![Value::fixnum(7); FAST_PROBE_MAX_DEPTH]);
-    let too_long = list(&vec![Value::fixnum(7); 4_000]);
+fn equal_hash_looks_no_further_than_gnu_sxhash() {
+    let big = |at: usize| {
+        let mut items = vec![Value::fixnum(0); 100_000];
+        items[at] = Value::fixnum(1);
+        Value::vector(items)
+    };
+    assert_eq!(equal_value_hash(big(50_000)), equal_value_hash(big(99_999)));
+    assert_ne!(equal_value_hash(big(3)), equal_value_hash(big(4)));
+
+    let long = |at: usize| {
+        let mut items = vec![Value::fixnum(0); 10_000];
+        items[at] = Value::fixnum(1);
+        list(&items)
+    };
+    // The first 7 elements at level 0, the next 7 as the tail at level 1,
+    // the next 7 at level 2; the tail left at level 3 is not looked into.
+    assert_ne!(equal_value_hash(long(20)), equal_value_hash(long(9_000)));
+    assert_eq!(equal_value_hash(long(21)), equal_value_hash(long(9_000)));
+
+    let mut nested = Value::fixnum(1);
+    let mut other = Value::fixnum(2);
+    for _ in 0..5 {
+        nested = list(&[nested]);
+        other = list(&[other]);
+    }
+    assert_eq!(equal_value_hash(nested), equal_value_hash(other));
+
+    // A circular list hashes (and terminates) like GNU's bounded walk.
+    let cycle = list(&[Value::fixnum(1), Value::fixnum(2)]);
+    cycle.cons_cdr().set_cdr(cycle);
+    let _ = equal_value_hash(cycle);
+}
+
+/// A lookup follows a list's cdr in a loop, not a call per element: an
+/// `equal` copy of a 4,000-element list is found on a thread whose stack
+/// would not hold a frame per cons.
+#[test]
+fn a_long_list_lookup_does_not_recurse_per_cdr() {
+    let items = vec![Value::fixnum(7); 4_000];
+    let stored = list(&items);
+    let copy = list(&items);
     let test = HashTableTest::Equal;
-    let key = longest.to_hash_key_swp(&test, false);
-    let expected = fx_hash(&key);
-    let probe = std::thread::scope(|scope| {
+    let mut storage = HashTableStorage::default();
+    storage.insert(stored.to_hash_key_swp(&test, false), stored, Value::T);
+    let found = std::thread::scope(|scope| {
         std::thread::Builder::new()
-            .stack_size(16 * 1024)
-            .spawn_scoped(scope, || {
-                (
-                    probe_hasher(longest, test, false).map(|hasher| hasher.finish()),
-                    value_matches(longest, test, &key),
-                    probe_hasher(too_long, test, false).is_none(),
-                )
-            })
+            .stack_size(32 * 1024)
+            .spawn_scoped(scope, || storage.lookup(copy, test, false).copied())
             .expect("spawn a small-stack thread")
             .join()
-            .expect("the probe fits a 16 KiB stack")
+            .expect("the lookup fits a 32 KiB stack")
     });
-    assert_eq!(probe, (Some(expected), true, true));
+    assert_eq!(found.map(Value::bits), Some(Value::T.bits()));
 }
 
 #[test]

@@ -151,10 +151,13 @@ fn intern_category_set(table: Value, category_set: Value) -> EvalResult {
             vec![Value::symbol("hash-table-p"), hash],
         ));
     };
-    let key = category_set.to_hash_key(&hash_ref.test);
-    if let Some(existing) = hash_ref.key_snapshot(&key) {
+    if let Some(existing) = hash_ref
+        .data
+        .key_by_value(category_set, hash_ref.test, false)
+    {
         return Ok(*existing);
     }
+    let key = category_set.to_hash_key(&hash_ref.test);
 
     let _ = hash.with_hash_table_mut(|hash_table| {
         hash_table.insert(key, category_set, Value::NIL);

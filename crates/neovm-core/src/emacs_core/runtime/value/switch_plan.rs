@@ -22,10 +22,13 @@
 //!   hashed lookup.
 //!
 //! The answer is, by construction, exactly [`HashTableStorage::lookup`]'s:
-//! the plan is compiled from the index's own [`HashKey`] snapshots (what the
-//! lookup compares against) and declines, to the hashed lookup, every key
-//! shape and table it cannot reproduce. Debug builds check that on every
-//! dispatch.
+//! the plan is compiled from the index's own [`HashKey`] snapshots, planned
+//! only while every key object still materializes to its snapshot (an
+//! `equal` lookup compares the live key object), and declines, to the hashed
+//! lookup, every key shape and table it cannot reproduce. A jump table's keys
+//! are byte-code constants; a key object mutated in place AFTER the plan is
+//! built is the one case the plan does not follow. Debug builds check the
+//! answer on every dispatch.
 //!
 //! The plan holds no traced `Value`: targets are fixnums, keys are raw bits
 //! that are only compared (a heap key's object stays alive through the
@@ -294,18 +297,37 @@ impl LispHashTable {
     #[cold]
     #[inline(never)]
     fn check_switch_target(&self, value: Value, swp: bool, answer: Option<Value>) {
-        assert_eq!(
-            answer.map(Value::bits),
-            self.data
-                .lookup(value, self.test, swp)
-                .map(|target| target.bits()),
+        let lookup = self
+            .data
+            .lookup(value, self.test, swp)
+            .map(|target| target.bits());
+        if answer.map(Value::bits) == lookup || self.a_planned_key_was_mutated() {
+            return;
+        }
+        panic!(
             "switch plan ({:?}) diverged from the hashed lookup for a {:?} dispatch value \
-             ({:#x}) under {:?}, symbols-with-pos-enabled {swp}",
+             ({:#x}) under {:?}, symbols-with-pos-enabled {swp}: plan {:?}, lookup {:?}",
             self.data.switch_plan.shape(),
             value.kind(),
             value.bits(),
             self.test,
+            answer.map(Value::bits),
+            lookup,
         );
+    }
+
+    /// Whether a key OBJECT of this planned table was mutated in place after
+    /// the plan was built: the plan answers from the keys as they were, the
+    /// `equal` lookup from the live objects (the module doc's one exception).
+    #[cfg(debug_assertions)]
+    fn a_planned_key_was_mutated(&self) -> bool {
+        self.data.switch_plan.shape().is_some()
+            && self
+                .data
+                .index
+                .iter()
+                .filter_map(|entry| Some((entry, self.data.entry_at(entry.slot)?)))
+                .any(|(entry, stored)| stored.key.to_hash_key(&self.test) != entry.key)
     }
 
     /// The table has no plan yet: the first dispatch only notes that it
@@ -474,8 +496,9 @@ impl PlanSlot {
         let mut strings: Vec<StringKey> = Vec::new();
         // Compile the INDEX's key snapshots, not the key objects: the
         // snapshots are what the hashed lookup compares against.
-        for (hash_key, &slot) in &data.index {
-            let Some(entry) = data.slots.get(slot).and_then(Option::as_ref) else {
+        for index_entry in data.index.iter() {
+            let hash_key = &index_entry.key;
+            let Some(entry) = data.slots.get(index_entry.slot).and_then(Option::as_ref) else {
                 return PlanSlot::Generic;
             };
             // Anything but a byte offset keeps each tier's own handling of
@@ -488,7 +511,11 @@ impl PlanSlot {
             // index key. The two agree only while the object is the one the
             // index key was made from; a table whose key objects were swapped
             // or positioned under `symbols-with-pos-enabled` is not planned.
-            if test != HashTableTest::Equal && entry.key.to_hash_key(&test) != *hash_key {
+            //
+            // An `equal` table compares the LIVE key object (GNU
+            // `hash_find_with_hash`), so a key object mutated since it was
+            // stored no longer matches its snapshot either: not planned.
+            if entry.key.to_hash_key(&test) != *hash_key {
                 return PlanSlot::Generic;
             }
             let start = nodes.len();

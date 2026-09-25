@@ -18,7 +18,6 @@ use crate::buffer::{
 use crate::heap_types::LispString;
 
 use super::error::{EvalResult, Flow, signal};
-use super::hashtab::hash_key_to_visible_value;
 use super::intern::{NIL_SYM_ID, SymId, T_SYM_ID, resolve_sym};
 use super::reader::KeyboardInputRuntime;
 use super::symbol::Obarray;
@@ -2611,11 +2610,9 @@ fn direct_hash_completion_candidate(
 fn completion_candidates_from_hash_table(collection: Value) -> Vec<CompletionCandidate> {
     let table = collection.as_hash_table().unwrap().clone();
     let mut candidates = Vec::new();
-    for key in table.live_hash_keys_in_slot_order() {
-        let Some(value) = table.data.get(key).copied() else {
-            continue;
-        };
-        let visible_key = hash_key_to_visible_value(&table, key);
+    for (_, entry) in table.data.keyed_entries_in_slot_order() {
+        let value = entry.value;
+        let visible_key = entry.key;
         if let Some(completion) = completion_text_from_value(&visible_key) {
             candidates.push(CompletionCandidate {
                 completion,

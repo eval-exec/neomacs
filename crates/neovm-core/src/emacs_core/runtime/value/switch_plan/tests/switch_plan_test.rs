@@ -526,29 +526,28 @@ fn a_table_mutated_between_dispatches_stops_replanning() {
     }
 }
 
-/// `setcar` on a key cons changes neither the index's snapshot nor the plan:
-/// both still answer for the key's old shape (a known GNU divergence, pinned
-/// by `jump_table_lookup` too).
+/// `setcar` on a key cons AFTER the plan is built: the plan still answers for
+/// the key's old shape, while the hashed lookup compares the live key object
+/// as GNU does (`hash_find_with_hash`, src/fns.c) and no longer matches it.
+/// A jump table's keys are byte-code constants, so this is the plan's one
+/// documented exception; the untouched key still answers alike.
 #[test]
-fn a_key_mutated_after_insertion_answers_like_the_index() {
+fn a_key_mutated_after_planning_answers_from_the_plan() {
     let (a, b, z) = (sym("a"), sym("b"), sym("z"));
     let key = list(&[a, b]);
     let table = table_of(HashTableTest::Equal, &[key, list(&[z])]);
     assert_eq!(planned(&table), Some(PlanShape::Nodes));
     key.set_car(z);
-    let probes = [
-        key,
-        list(&[a, b]),
-        list(&[z, b]),
-        fresh_copy(key),
-        list(&[z]),
-    ];
-    assert_answers_like_lookup(&table, &probes, "mutated key");
     assert_eq!(
         bits(table.switch_target(list(&[a, b]), false)),
         Some(Value::fixnum(8).bits())
     );
-    assert_eq!(table.switch_target(key, false), None);
+    assert_eq!(
+        bits(table.data.lookup(list(&[a, b]), table.test, false).copied()),
+        None
+    );
+    assert_eq!(table.switch_target(list(&[z, b]), false), None);
+    assert_answers_like_lookup(&table, &[list(&[z])], "the untouched key");
 }
 
 #[test]

@@ -4,7 +4,7 @@ use crate::emacs_core::error::{
 };
 use crate::emacs_core::eval::LispArgVec;
 use crate::emacs_core::hashtab::hash_key_to_visible_value;
-use crate::emacs_core::value::{HashTableMakeKeyword, ValueKind, VecLikeType};
+use crate::emacs_core::value::{HashProbe, HashTableMakeKeyword, ValueKind, VecLikeType};
 
 // ===========================================================================
 // Vector operations
@@ -831,7 +831,7 @@ pub(crate) fn builtin_gethash_values(
             let ht = table.as_hash_table().unwrap();
             Ok(ht
                 .data
-                .lookup(key_value, ht.test, symbols_with_pos_enabled)
+                .try_lookup(key_value, ht.test, symbols_with_pos_enabled)?
                 .cloned()
                 .unwrap_or(default))
         }
@@ -975,18 +975,26 @@ fn builtin_puthash_values(
         ValueKind::Veclike(VecLikeType::HashTable) => {
             check_mutable_hash_table(table)?;
             let test = table.as_hash_table().unwrap().test;
-            let _ = table.with_hash_table_mut(|ht| {
-                if let Some(slot) =
-                    ht.data
-                        .get_mut_by_value(key_value, test, symbols_with_pos_enabled)
-                {
-                    *slot = value;
-                } else {
-                    maybe_resize_hash_table_for_insert(ht, true);
-                    let key = key_value.to_hash_key_swp(&test, symbols_with_pos_enabled);
-                    ht.insert(key, key_value, value);
-                }
-            });
+            table
+                .with_hash_table_mut(|ht| -> Result<(), Flow> {
+                    match ht
+                        .data
+                        .try_probe_for_insert(key_value, test, symbols_with_pos_enabled)?
+                    {
+                        HashProbe::Found(slot) => {
+                            if let Some(stored) = ht.data.slot_value_mut(slot) {
+                                *stored = value;
+                            }
+                        }
+                        HashProbe::Absent(hash) => {
+                            maybe_resize_hash_table_for_insert(ht, true);
+                            let key = key_value.to_hash_key_swp(&test, symbols_with_pos_enabled);
+                            ht.data.insert_absent(hash, key, key_value, value);
+                        }
+                    }
+                    Ok(())
+                })
+                .unwrap_or(Ok(()))?;
             Ok(value)
         }
         _ => Err(signal(
@@ -1113,11 +1121,13 @@ pub(crate) fn builtin_remhash_values(
         ValueKind::Veclike(VecLikeType::HashTable) => {
             check_mutable_hash_table(table)?;
             let test = table.as_hash_table().unwrap().test;
-            let _ = table.with_hash_table_mut(|ht| {
-                let _ = ht
-                    .data
-                    .remove_by_value(key_value, test, symbols_with_pos_enabled);
-            });
+            table
+                .with_hash_table_mut(|ht| {
+                    ht.data
+                        .try_remove_by_value(key_value, test, symbols_with_pos_enabled)
+                        .map(|_| ())
+                })
+                .unwrap_or(Ok(()))?;
             Ok(Value::NIL)
         }
         _ => Err(signal(

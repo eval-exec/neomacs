@@ -1,5 +1,6 @@
 //! Hash oracle parity tests.
 
+mod equal_lookup_bounded_semantics;
 mod table;
 mod table_advanced;
 mod table_comprehensive_patterns;
