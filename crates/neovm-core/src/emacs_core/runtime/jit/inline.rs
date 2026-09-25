@@ -378,6 +378,13 @@ pub(crate) fn fuse_calls(
                 && let Some(bc) = callee.get_bytecode_data()
                 && caller_depth[i] > nargs
             {
+                // A deopt showed this site must stay a call (`jit::reopt`).
+                // `i` is an original pc: no fused scope is active yet.
+                if !super::compile::call_site_inlinable_at(i) {
+                    super::stats::record_inline("reject:reopt");
+                    super::compile::spec_tag_transfer(op, constants, &mut tags);
+                    continue;
+                }
                 match site_verdict(bc, nargs, pool_len) {
                     Ok(depths) => {
                         pool_len += bc.constants.len();

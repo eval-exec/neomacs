@@ -388,3 +388,274 @@ fn reopt_inert_under_force_deopt_unless_stressed() {
     );
     force_reopt_for_test(None);
 }
+
+// --- Compiles honour the reoptimization ceiling (`ReoptLevel`). ---
+
+use crate::emacs_core::jit::ReoptLevel;
+use crate::emacs_core::jit::compile::{LeafTier, NativeRun, compile_bytecode_function_with};
+
+/// `(lambda (a b) (+ a b))`
+fn add2() -> ByteCodeFunction {
+    function(
+        vec![Op::StackRef(1), Op::StackRef(1), Op::Add, Op::Return],
+        vec![],
+        2,
+    )
+}
+
+/// At `BaselineOnly` the MIR tier is skipped (and the funnel says why).
+#[test]
+fn ceiling_baseline_only_skips_the_mir_tier() {
+    force_deopt_for_test(false);
+    let ev = Context::new();
+    let f = add2();
+    let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
+    assert_eq!(leaf.tier(), LeafTier::Mir, "a pure body takes the MIR tier");
+    let gated = stats::compile_stats_snapshot().mir_gate_reopt;
+    f.jit_runtime()
+        .set_reopt_level_for_test(ReoptLevel::BaselineOnly);
+    let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
+    assert_eq!(leaf.tier(), LeafTier::Baseline);
+    assert_eq!(stats::compile_stats_snapshot().mir_gate_reopt, gated + 1);
+}
+
+/// At `Generic` every arithmetic site takes the fixnum-or-builtin fallback:
+/// floats and bignums run natively, with no deopt at all.
+#[test]
+fn ceiling_generic_takes_the_fallback_and_never_deopts() {
+    force_deopt_for_test(false);
+    let mut ev = Context::new();
+    let f = add2();
+    f.jit_runtime()
+        .set_reopt_level_for_test(ReoptLevel::Generic);
+    let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
+    assert_eq!(leaf.tier(), LeafTier::Baseline);
+    let ctx = &mut ev as *mut Context as *mut u8;
+    assert_eq!(
+        leaf.call(ctx, &[Value::make_int(2), Value::make_int(3)]),
+        NativeRun::Ok(Value::make_int(5).bits())
+    );
+    match leaf.call(ctx, &[Value::make_float(1.5), Value::make_int(2)]) {
+        NativeRun::Ok(bits) => assert_eq!(Value::from_bits(bits).as_float(), Some(3.5)),
+        other => panic!("the generic fallback runs floats natively: {other:?}"),
+    }
+    let big = bignum();
+    match leaf.call(ctx, &[big, Value::make_int(1)]) {
+        NativeRun::Ok(bits) => assert!(!Value::from_bits(bits).is_fixnum()),
+        other => panic!("the generic fallback runs bignums natively: {other:?}"),
+    }
+    match leaf.call(
+        ctx,
+        &[
+            Value::make_int(Value::MOST_POSITIVE_FIXNUM),
+            Value::make_int(1),
+        ],
+    ) {
+        NativeRun::Ok(bits) => assert!(!Value::from_bits(bits).is_fixnum(), "promoted"),
+        other => panic!("an overflow takes the fallback, not a deopt: {other:?}"),
+    }
+    assert_eq!(leaf.obs.deopt_at.get() + leaf.obs.deopt_rerun.get(), 0);
+}
+
+/// At `Interpreter` neither the entry nor an OSR compile happens, and the
+/// verdict is remembered where the dispatcher sees it.
+#[test]
+fn ceiling_interpreter_refuses_entry_and_osr_compiles() {
+    force_deopt_for_test(false);
+    let mut ev = Context::new();
+    let ctx = &mut ev as *mut Context;
+    let f = add2();
+    let f_val = Value::make_bytecode(f.clone());
+    let rt = f.jit_runtime();
+    rt.set_reopt_level_for_test(ReoptLevel::Interpreter);
+    rt.set_hot_for_test();
+    let got = crate::emacs_core::jit::try_run_compiled(
+        ctx,
+        &f,
+        f_val,
+        &[Value::make_int(1), Value::make_int(2)],
+    )
+    .expect("no signal");
+    assert_eq!(got, None, "interpreted");
+    let id = rt.compiled_id().expect("probed");
+    assert_eq!(
+        crate::emacs_core::jit::cache::cache_entry_kind_for_test(id),
+        "not-compilable"
+    );
+    assert!(matches!(
+        rt.dispatch_sized(f.executable_ops().len()),
+        crate::emacs_core::jit::Plan::Interpret
+    ));
+    // An OSR-eligible loop: (lambda (n) (let ((i 0)) (while (< i n) (setq i (1+ i))) i))
+    let lp = function(
+        vec![
+            Op::Constant(0),
+            Op::StackRef(0), // 1: header
+            Op::StackRef(2),
+            Op::Lss,
+            Op::GotoIfNil(9),
+            Op::StackRef(0),
+            Op::Add1,
+            Op::StackSet(1),
+            Op::Goto(1),
+            Op::Return,
+        ],
+        vec![Value::make_int(0)],
+        1,
+    );
+    lp.jit_runtime()
+        .set_reopt_level_for_test(ReoptLevel::Interpreter);
+    let snapshot = [Value::make_int(10), Value::make_int(0)];
+    assert!(
+        crate::emacs_core::jit::cache::try_run_osr(ctx, &lp, 1, &snapshot, &[]).is_none(),
+        "no OSR leaf at Interpreter"
+    );
+    lp.jit_runtime()
+        .set_reopt_level_for_test(ReoptLevel::Speculative);
+    let lp2 = function(lp.ops.clone(), vec![Value::make_int(0)], 1);
+    assert!(
+        crate::emacs_core::jit::cache::try_run_osr(ctx, &lp2, 1, &snapshot, &[]).is_some(),
+        "the same loop transfers below Interpreter"
+    );
+}
+
+/// A no-inline bit at a call site keeps the fuser from splicing it.
+#[test]
+fn no_inline_bit_skips_the_fuser() {
+    force_deopt_for_test(false);
+    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+    stats::force_observe_for_test(stats::ObserveOverride {
+        stats: true,
+        ..Default::default()
+    });
+    let ev = Context::new();
+    // The callee: a constant bytecode object, (lambda (x) (1+ x)).
+    let callee = Value::make_bytecode(function(
+        vec![Op::StackRef(0), Op::Add1, Op::Return],
+        vec![],
+        1,
+    ));
+    // The fuser trusts only a callee that has run (its feedback).
+    callee
+        .get_bytecode_data()
+        .expect("bytecode")
+        .jit_runtime()
+        .set_hot_for_test();
+    // (lambda (x) (funcall <callee> x)) with the callee a constant.
+    let f = function(
+        vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return],
+        vec![callee],
+        1,
+    );
+    let census = |key: &str| {
+        stats::inline_census_summary(64)
+            .split(',')
+            .find_map(|kv| kv.strip_prefix(&format!("{key}=")).map(|n| n.to_string()))
+            .and_then(|n| n.parse::<u64>().ok())
+            .unwrap_or(0)
+    };
+    let (fused0, rej0) = (census("fused"), census("reject:reopt"));
+    let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
+    assert_eq!(
+        census("fused"),
+        fused0 + 1,
+        "spliced: tier {:?} census {} bails {}",
+        leaf.tier(),
+        stats::inline_census_summary(64),
+        stats::mir_bail_summary(64)
+    );
+    f.jit_runtime()
+        .mark_call_site_no_inline(2, f.executable_ops().len());
+    compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
+    assert_eq!(census("fused"), fused0 + 1, "not spliced again");
+    assert_eq!(census("reject:reopt"), rej0 + 1);
+    // `NoInline` bars every site.
+    let g = function(f.ops.clone(), vec![callee], 1);
+    g.jit_runtime()
+        .set_reopt_level_for_test(ReoptLevel::NoInline);
+    compile_bytecode_function_with(&g, Some(&ev.obarray)).expect("compiles");
+    assert_eq!(census("reject:reopt"), rej0 + 2);
+}
+
+/// A no-inline bit at a call site keeps the MIR inliner from inlining it.
+#[test]
+fn no_inline_bit_skips_the_mir_inliner() {
+    force_deopt_for_test(false);
+    // Without the inline the body is call-dominated.
+    crate::emacs_core::jit::compile::force_profit_gate_for_test(false);
+    let mut ev = Context::new();
+    // (defun reopt-sq (x) (* x x))
+    let sq = Value::symbol("reopt-sq");
+    ev.obarray.set_symbol_function_id(
+        sq.as_symbol_id().unwrap(),
+        Value::make_bytecode(function(
+            vec![Op::StackRef(0), Op::Dup, Op::Mul, Op::Return],
+            vec![],
+            1,
+        )),
+    );
+    // (lambda (x) (reopt-sq x))
+    let mk = || {
+        function(
+            vec![Op::Constant(0), Op::StackRef(1), Op::Call(1), Op::Return],
+            vec![sq],
+            1,
+        )
+    };
+    let f = mk();
+    let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
+    assert_eq!(leaf.inline_deps(), &[sq.as_symbol_id().unwrap()], "inlined");
+    let g = mk();
+    g.jit_runtime()
+        .mark_call_site_no_inline(2, g.executable_ops().len());
+    let leaf = compile_bytecode_function_with(&g, Some(&ev.obarray)).expect("compiles");
+    assert!(leaf.inline_deps().is_empty(), "the call stays a call");
+    let ctx = &mut ev as *mut Context as *mut u8;
+    assert_eq!(
+        leaf.call(ctx, &[Value::make_int(7)]),
+        NativeRun::Ok(Value::make_int(49).bits())
+    );
+}
+
+/// A no-inline bit at a bit-op call site keeps LEVEL-B's inline native op
+/// (which deopts on a non-fixnum) off it: the site keeps the shim.
+#[test]
+fn no_inline_bit_skips_the_inline_bit_op() {
+    force_deopt_for_test(false);
+    crate::emacs_core::jit::compile::force_inline_arith_for_test(true);
+    let mut ev = Context::new();
+    // (lambda (a b) (logand a b))
+    let mk = || {
+        function(
+            vec![
+                Op::Constant(0),
+                Op::StackRef(2),
+                Op::StackRef(2),
+                Op::Call(2),
+                Op::Return,
+            ],
+            vec![Value::symbol("logand")],
+            2,
+        )
+    };
+    let f = mk();
+    let leaf = compile_bytecode_function_with(&f, Some(&ev.obarray)).expect("compiles");
+    assert!(!leaf.inline_deps().is_empty(), "inline native logand");
+    let g = mk();
+    g.jit_runtime()
+        .mark_call_site_no_inline(3, g.executable_ops().len());
+    let leaf = compile_bytecode_function_with(&g, Some(&ev.obarray)).expect("compiles");
+    assert!(
+        leaf.inline_deps().is_empty(),
+        "the shim, no inline dependency"
+    );
+    let ctx = &mut ev as *mut Context as *mut u8;
+    assert_eq!(
+        leaf.call(ctx, &[Value::make_int(12), Value::make_int(10)]),
+        NativeRun::Ok(Value::make_int(8).bits())
+    );
+    // A non-fixnum bounces to the generic call inside the shim: no deopt.
+    let _ = leaf.call(ctx, &[bignum(), Value::make_int(5)]);
+    assert_eq!(leaf.obs.deopt_at.get() + leaf.obs.deopt_rerun.get(), 0);
+    crate::emacs_core::jit::compile::force_inline_arith_for_test(false);
+}

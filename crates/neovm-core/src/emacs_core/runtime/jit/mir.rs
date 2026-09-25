@@ -1044,7 +1044,8 @@ fn callee_inlinable(c: &MirFunction, max_insts: usize) -> bool {
 /// call; pure bodies rely on the cache's entry validation.
 pub fn inline_pure_single_block_callees(
     m: &mut MirFunction,
-    resolve: &impl Fn(Value) -> Option<MirFunction>,
+    // The call site's pc (a deopt may have barred it) and the callee symbol.
+    resolve: &impl Fn(usize, Value) -> Option<MirFunction>,
     max_insts: usize,
     // Out: the SymId of each callee actually inlined (for the precise
     // dependency/invalidation map — redefining one of these must re-JIT this caller).
@@ -1076,7 +1077,7 @@ pub fn inline_pure_single_block_callees(
                 } if args.len() == *n as usize + 1 => consts
                     .get(&args[0])
                     .and_then(|sym| sym.as_symbol_id().map(|id| (*sym, id)))
-                    .and_then(|(sym, id)| resolve(sym).map(|c| (c, id)))
+                    .and_then(|(sym, id)| resolve(inst.pc, sym).map(|c| (c, id)))
                     .filter(|(c, _)| c.arity == *n as usize && callee_inlinable(c, max_insts))
                     .map(|(c, id)| (c, args[1..].to_vec(), id)),
                 _ => None,

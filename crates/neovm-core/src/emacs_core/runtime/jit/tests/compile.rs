@@ -934,7 +934,7 @@ fn mir_rooting_skip_on_an_inferred_fixnum_param_across_an_allocating_call() {
     let sq_mir = mir::build_mir(&[Op::Dup, Op::Mul, Op::Return], &[], 1).expect("sq builds");
     let n = mir::inline_pure_single_block_callees(
         &mut mir,
-        &|v| (v.bits() == sq_sym.bits()).then(|| sq_mir.clone()),
+        &|_, v| (v.bits() == sq_sym.bits()).then(|| sq_mir.clone()),
         8,
         &mut Vec::new(),
     );
@@ -1042,7 +1042,7 @@ fn inline_pure_callee_lowers_and_runs() {
     let mut m = mir::build_mir(&caller_ops, &caller_consts, 1).expect("caller MIR builds");
     let n = mir::inline_pure_single_block_callees(
         &mut m,
-        &|v| {
+        &|_, v| {
             (v.bits() == sq_sym.bits()).then(|| mir::build_mir(&sq_ops, &[], 1).expect("sq builds"))
         },
         16,

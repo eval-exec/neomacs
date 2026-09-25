@@ -2457,6 +2457,7 @@ pub(super) fn lower_mir_with_plan(
         // compile_bytecode_function_inner).
         dynamic_prefix: 0,
         obs,
+        compiled_level: crate::emacs_core::jit::ReoptLevel::Speculative,
         retired: core::cell::Cell::new(false),
         spec_slot_kinds,
         entry,
@@ -6449,6 +6450,7 @@ fn lower_simple_op_arms(
                 && !aot
                 && let Some((_, _, _, _, SpecCalleeKind::ArithIntrinsic { op })) = spec
                 && arith_op_inlines(op)
+                && super::call_site_inlinable_at(pc)
             {
                 let dsite = deopt_site(fb, pc, handlers.len(), stack, reps, deopt_sites);
                 let sp = stack.len();

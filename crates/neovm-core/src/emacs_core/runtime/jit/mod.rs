@@ -1327,6 +1327,12 @@ impl RuntimeState {
         }
     }
 
+    /// Test-only: set the reoptimization ceiling outright.
+    #[cfg(test)]
+    pub(crate) fn set_reopt_level_for_test(&self, level: ReoptLevel) {
+        self.reopt_level.store(level as u8, Ordering::Relaxed);
+    }
+
     /// Whether a deopt forbade inlining the call site at `pc`.
     #[inline]
     pub(crate) fn call_site_no_inline(&self, pc: usize) -> bool {

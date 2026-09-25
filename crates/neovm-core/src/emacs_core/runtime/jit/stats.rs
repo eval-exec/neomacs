@@ -81,6 +81,9 @@ pub(crate) struct CompileStats {
     pub mir_gate_optional: u64,
     pub mir_gate_rest: u64,
     pub mir_gate_prefix: u64,
+    /// Kept off the MIR tier by deopt reoptimization (`ReoptLevel` at or
+    /// above `BaselineOnly`).
+    pub mir_gate_reopt: u64,
     /// Passed the gates but `build_mir` bailed (unmodelled op, odd CFG).
     pub mir_build_failed: u64,
     /// Passed the tier gate, but `lower_mir_pure` bailed.
@@ -132,6 +135,7 @@ impl CompileStats {
             mir_gate_optional: d(self.mir_gate_optional, base.mir_gate_optional),
             mir_gate_rest: d(self.mir_gate_rest, base.mir_gate_rest),
             mir_gate_prefix: d(self.mir_gate_prefix, base.mir_gate_prefix),
+            mir_gate_reopt: d(self.mir_gate_reopt, base.mir_gate_reopt),
             mir_build_failed: d(self.mir_build_failed, base.mir_build_failed),
             mir_lower_failed: d(self.mir_lower_failed, base.mir_lower_failed),
             mir_tier_rejected: d(self.mir_tier_rejected, base.mir_tier_rejected),
@@ -216,6 +220,7 @@ pub(crate) enum MirFunnel {
     GateOptional,
     GateRest,
     GatePrefix,
+    GateReopt,
     BuildFailed,
     LowerFailed,
     TierRejected,
@@ -232,6 +237,7 @@ pub(crate) fn record_mir(stage: MirFunnel) {
             MirFunnel::GateOptional => s.mir_gate_optional += 1,
             MirFunnel::GateRest => s.mir_gate_rest += 1,
             MirFunnel::GatePrefix => s.mir_gate_prefix += 1,
+            MirFunnel::GateReopt => s.mir_gate_reopt += 1,
             MirFunnel::BuildFailed => s.mir_build_failed += 1,
             MirFunnel::LowerFailed => s.mir_lower_failed += 1,
             MirFunnel::TierRejected => s.mir_tier_rejected += 1,
@@ -497,7 +503,7 @@ pub(crate) fn format_summary(s: &CompileStats) -> String {
     format!(
         "compiles={} ok={} native_entries={} dispatch={}/{} not_profitable={} not_compilable={} aot_loads={} retiers={} \
          total_us={} mean_us={mean_us} max_us={} max_fn_len={} \
-         mir[taken={} tier_rej={} lower_fail={} build_fail={} gate_opt={} gate_rest={} gate_prefix={} inlined={}] \
+         mir[taken={} tier_rej={} lower_fail={} build_fail={} gate_opt={} gate_rest={} gate_prefix={} gate_reopt={} inlined={}] \
          hist[<100us,<250us,<500us,<1ms,<2.5ms,<5ms,<10ms,>=10ms]={:?} \
          deopts[total={} osr={}{}{}]",
         s.total_compiles,
@@ -519,6 +525,7 @@ pub(crate) fn format_summary(s: &CompileStats) -> String {
         s.mir_gate_optional,
         s.mir_gate_rest,
         s.mir_gate_prefix,
+        s.mir_gate_reopt,
         s.mir_inlined_callees,
         s.histogram_us,
         s.deopts(),

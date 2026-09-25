@@ -24,6 +24,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
+use super::ReoptLevel;
 use super::compile::{
     CompiledLeaf, LeafObsSnapshot, LeafTier, LeafTotals, NativeRun, stash_pending_flow,
     take_pending_flow,
@@ -389,6 +390,13 @@ fn compile_osr_leaf(
 ) -> Option<OsrEntry> {
     record_compiled_obarray(Some(obarray));
     let dbg = std::env::var_os("NEOMACS_OSR_DEBUG").is_some();
+    // Deopt reoptimization gave up on this source: no native code at all.
+    if func.jit_runtime().reopt_level() == ReoptLevel::Interpreter {
+        if dbg {
+            eprintln!("OSR_DEBUG reject: reopt level interpreter");
+        }
+        return None;
+    }
     if !func.lexical || osr_body_has_unsupported_state(func) {
         if dbg {
             eprintln!(
@@ -462,6 +470,7 @@ fn compile_osr_leaf(
     }
     leaf.obs.id = id;
     leaf.obs.osr_pc = u32::try_from(osr_pc).ok();
+    leaf.compiled_level = func.jit_runtime().reopt_level();
     Some(OsrEntry {
         leaf: Rc::new(leaf),
         stack_depth: entry_depth,
@@ -680,6 +689,14 @@ fn compile_cache_entry(
     request: CompileRequest,
     name_hint: Option<SymId>,
 ) -> CacheEntry {
+    // Deopt reoptimization gave up on this source (`ReoptLevel::Interpreter`):
+    // remember the verdict like any rejected body. Also re-applies the level
+    // after a `clear()` forgot the entry.
+    let rt = func.jit_runtime();
+    if rt.reopt_level() == ReoptLevel::Interpreter {
+        rt.mark_native_rejected(rejection_epoch());
+        return CacheEntry::NotCompilable;
+    }
     numeric_feedback_trace(id, func);
     record_compiled_obarray(obarray);
     // Per-function entry names (perf map, CLIF/asm dumps), only when asked.
@@ -691,6 +708,7 @@ fn compile_cache_entry(
     match result {
         Ok(mut leaf) => {
             leaf.obs.id = id;
+            leaf.compiled_level = rt.reopt_level();
             register_inline_deps(id, &leaf);
             CacheEntry::Compiled(Rc::new(leaf))
         }

@@ -881,10 +881,12 @@ fn inline_arith_callee_syms(
     ops: &[Op],
     constants: &[Value],
 ) -> Vec<crate::emacs_core::intern::SymId> {
+    // A site a deopt barred from inlining keeps the shim (the LEVEL-B
+    // lowering reads the same predicate), so it is not a dependency.
     let mut syms: Vec<crate::emacs_core::intern::SymId> =
         arith_intrinsic_call_sites(ops, constants)
             .into_iter()
-            .filter(|&(_, _, op)| arith_op_inlines(op))
+            .filter(|&(pc, _, op)| arith_op_inlines(op) && call_site_inlinable_at(pc))
             .map(|(_, sym, _)| sym)
             .collect();
     syms.sort_by_key(|s| s.0);
@@ -1065,6 +1067,32 @@ thread_local! {
     /// carries the call site's pc, which would index the wrong body.
     static ACTIVE_NUMERIC_FEEDBACK: std::cell::RefCell<Vec<crate::emacs_core::jit::NumericFeedback>> =
         const { std::cell::RefCell::new(Vec::new()) };
+
+    /// Per ORIGINAL-body pc of the body being compiled: `true` where a deopt
+    /// barred the call site from being spliced (the fuser), MIR-inlined or
+    /// intrinsified inline (LEVEL-B) — `RuntimeState::call_site_no_inline`,
+    /// or every site once the source's `ReoptLevel` reached `NoInline`.
+    /// Published with the numeric feedback, by the same scope; empty (every
+    /// site inlinable) outside a compile. Read through
+    /// [`call_site_inlinable_at`].
+    static ACTIVE_NO_INLINE_CALL_SITES: std::cell::RefCell<Vec<bool>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Whether the call site at `pc` of the body being compiled may be spliced,
+/// MIR-inlined or intrinsified inline — the one predicate every inliner
+/// reads (see `ACTIVE_NO_INLINE_CALL_SITES`). `pc` indexes the ops being
+/// LOWERED: under a fused scope it is mapped back to the original body's pc,
+/// where the deopt that set the bit resumed.
+pub(crate) fn call_site_inlinable_at(pc: usize) -> bool {
+    let pc = match inline::active_fused() {
+        Some(fused) => match fused.caller_pc(pc) {
+            Some(caller) => caller,
+            None => return true,
+        },
+        None => pc,
+    };
+    ACTIVE_NO_INLINE_CALL_SITES.with(|v| !v.borrow().get(pc).copied().unwrap_or(false))
 }
 
 /// Operand-type feedback recorded for the arithmetic site at `pc` of the body
@@ -1124,35 +1152,74 @@ pub(crate) fn arith_site_takes_generic(op: &Op, pc: usize) -> bool {
     }
 }
 
-pub(crate) struct NumericFeedbackScope(Option<Vec<crate::emacs_core::jit::NumericFeedback>>);
+/// Restores the numeric feedback (and, for a whole-body publish, the
+/// no-inline call sites) the compile inside it replaced.
+pub(crate) struct NumericFeedbackScope(
+    Option<Vec<crate::emacs_core::jit::NumericFeedback>>,
+    Option<Vec<bool>>,
+);
 
 impl Drop for NumericFeedbackScope {
     fn drop(&mut self) {
         if let Some(prev) = self.0.take() {
             ACTIVE_NUMERIC_FEEDBACK.with(|v| *v.borrow_mut() = prev);
         }
+        if let Some(prev) = self.1.take() {
+            ACTIVE_NO_INLINE_CALL_SITES.with(|v| *v.borrow_mut() = prev);
+        }
     }
 }
 
 /// [`publish_numeric_feedback`] for a vector built elsewhere — the fused
-/// body's, whose spliced slots carry the CALLEE's feedback.
+/// body's, whose spliced slots carry the CALLEE's feedback. The no-inline
+/// call sites stay as published for the original body: they are keyed by
+/// original pc, which [`call_site_inlinable_at`] maps a fused pc back to.
 pub(crate) fn publish_numeric_feedback_vec(
     seen: Vec<crate::emacs_core::jit::NumericFeedback>,
 ) -> NumericFeedbackScope {
-    NumericFeedbackScope(Some(
-        ACTIVE_NUMERIC_FEEDBACK.with(|v| std::mem::replace(&mut *v.borrow_mut(), seen)),
-    ))
+    NumericFeedbackScope(
+        Some(ACTIVE_NUMERIC_FEEDBACK.with(|v| std::mem::replace(&mut *v.borrow_mut(), seen))),
+        None,
+    )
 }
 
+/// Publish `f`'s per-site numeric feedback and no-inline call sites for the
+/// compile in progress, under the ceiling of its `ReoptLevel` (`jit::reopt`):
+/// at `Generic` every arithmetic site reads `Other`, so it takes the
+/// generic fallback, which never deopts; at `NoInline` and above no call
+/// site is inlined.
 pub(crate) fn publish_numeric_feedback(f: &ByteCodeFunction) -> NumericFeedbackScope {
+    use crate::emacs_core::jit::{NumericFeedback, ReoptLevel};
     let rt = f.jit_runtime();
-    let seen: Vec<_> = (0..f.executable_ops().len())
-        .map(|pc| rt.numeric_feedback(pc))
+    let ops = f.executable_ops();
+    let level = rt.reopt_level();
+    let generic = level >= ReoptLevel::Generic;
+    let seen: Vec<_> = ops
+        .iter()
+        .enumerate()
+        .map(|(pc, op)| {
+            if generic && Vm::arith_generic_kind(op).is_some() {
+                NumericFeedback::Other
+            } else {
+                rt.numeric_feedback(pc)
+            }
+        })
         .collect();
+    let no_inline: Vec<bool> = if level >= ReoptLevel::NoInline {
+        vec![true; ops.len()]
+    } else {
+        (0..ops.len())
+            .map(|pc| rt.call_site_no_inline(pc))
+            .collect()
+    };
     rt.note_numeric_feedback_consumed();
-    NumericFeedbackScope(Some(
-        ACTIVE_NUMERIC_FEEDBACK.with(|v| std::mem::replace(&mut *v.borrow_mut(), seen)),
-    ))
+    NumericFeedbackScope(
+        Some(ACTIVE_NUMERIC_FEEDBACK.with(|v| std::mem::replace(&mut *v.borrow_mut(), seen))),
+        Some(
+            ACTIVE_NO_INLINE_CALL_SITES
+                .with(|v| std::mem::replace(&mut *v.borrow_mut(), no_inline)),
+        ),
+    )
 }
 
 /// [`compile_bytecode_function_tiered`] with the full [`CompileRequest`].
@@ -1161,6 +1228,9 @@ pub fn compile_bytecode_function_requested(
     obarray: Option<&Obarray>,
     request: CompileRequest,
 ) -> Result<CompiledLeaf, CompileError> {
+    // Publish this body's per-site operand types and no-inline call sites
+    // for the whole compile, before anything below reads them.
+    let _numeric = publish_numeric_feedback(f);
     let call_heavy = body_is_call_heavy(f.executable_ops(), &f.constants);
     let _scope = lowering::RegallocScope::enter(regalloc_for_shape(
         request.regalloc,
@@ -1172,8 +1242,6 @@ pub fn compile_bytecode_function_requested(
         BYPASS_PROFIT_GATE.with(|b| b.replace(request.bypass_profit_gate)),
         ACTIVE_CALL_HEAVY.with(|b| b.replace(call_heavy)),
     );
-    // Publish this body's per-site operand types for the arithmetic lowering.
-    let _numeric = publish_numeric_feedback(f);
     struct Restore((bool, bool));
     impl Drop for Restore {
         fn drop(&mut self) {
@@ -1370,9 +1438,17 @@ fn compile_bytecode_function_inner(
     if dynamic_prefix > 0 {
         super::stats::record_mir(super::stats::MirFunnel::GatePrefix);
     }
-    let mir_built = (!has_rest && f.params.optional.is_empty() && dynamic_prefix == 0).then(|| {
-        mir::build_mir_with_feedback(ops, constants, native_arity, &active_numeric_feedback)
-    });
+    // Deopt reoptimization backed this source off the MIR tier: every guard
+    // left is then a precise baseline deopt, attributable to a pc.
+    let reopt_gate =
+        f.jit_runtime().reopt_level() >= crate::emacs_core::jit::ReoptLevel::BaselineOnly;
+    if reopt_gate {
+        super::stats::record_mir(super::stats::MirFunnel::GateReopt);
+    }
+    let mir_built =
+        (!has_rest && f.params.optional.is_empty() && dynamic_prefix == 0 && !reopt_gate).then(
+            || mir::build_mir_with_feedback(ops, constants, native_arity, &active_numeric_feedback),
+        );
     if let Some(built) = mir_built
         && let Ok(mut mir) = built.inspect_err(|e| {
             super::stats::record_mir(super::stats::MirFunnel::BuildFailed);
@@ -1411,7 +1487,11 @@ fn compile_bytecode_function_inner(
             let armed = ob.function_epoch();
             let n = mir::inline_pure_single_block_callees(
                 &mut mir,
-                &|sym| resolve_inline_callee(ob, sym),
+                &|pc, sym| {
+                    call_site_inlinable_at(pc)
+                        .then(|| resolve_inline_callee(ob, sym))
+                        .flatten()
+                },
                 MAX_INLINE_INSTS,
                 &mut inlined_syms,
             );
@@ -3822,6 +3902,7 @@ pub fn lower_leaf_full_osr(
         sidecar: None,
         dynamic_prefix: u32::try_from(dynamic_prefix).expect("patched prefix fits u32"),
         obs,
+        compiled_level: crate::emacs_core::jit::ReoptLevel::Speculative,
         retired: core::cell::Cell::new(false),
         spec_slot_kinds,
         entry,

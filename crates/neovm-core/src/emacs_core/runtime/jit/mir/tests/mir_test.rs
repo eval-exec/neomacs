@@ -203,7 +203,7 @@ fn inline_composes_substitutions_for_returned_params() {
     let mut m = build_mir(&caller_ops, &constants, 1).expect("caller builds");
     let n = inline_pure_single_block_callees(
         &mut m,
-        &|v| (v.bits() == id_sym.bits()).then(|| build_mir(&id_ops, &[], 1).expect("id builds")),
+        &|_, v| (v.bits() == id_sym.bits()).then(|| build_mir(&id_ops, &[], 1).expect("id builds")),
         8,
         &mut Vec::new(),
     );
@@ -560,7 +560,7 @@ fn inlined_callee_result_flows_fixnum_into_header() {
     );
     let n = inline_pure_single_block_callees(
         &mut m,
-        &|v| (v.bits() == sq_sym.bits()).then(|| build_mir(&sq_ops, &[], 1).expect("sq builds")),
+        &|_, v| (v.bits() == sq_sym.bits()).then(|| build_mir(&sq_ops, &[], 1).expect("sq builds")),
         8,
         &mut Vec::new(),
     );

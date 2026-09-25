@@ -501,6 +501,9 @@ pub struct CompiledLeaf {
     pub(crate) dynamic_prefix: u32,
     /// Release-build deopt/signal counters (see [`LeafObs`]).
     pub(crate) obs: Box<LeafObs>,
+    /// The `ReoptLevel` this leaf was compiled under (stamped by the cache;
+    /// `Speculative` for leaves built outside it).
+    pub(crate) compiled_level: crate::emacs_core::jit::ReoptLevel,
     /// Set once the cache RETIRED this leaf (`DenseCache::remove`, an OSR
     /// leaf dropped by an invalidation): it is no longer the leaf any cache
     /// entry names, but it stays allocated — a spec slot or an outer native
@@ -749,6 +752,7 @@ impl CompiledLeaf {
             dynamic_prefix: 0,
             // AOT code never carries the entry counter.
             obs: LeafObs::new(false),
+            compiled_level: crate::emacs_core::jit::ReoptLevel::Speculative,
             retired: Cell::new(false),
             spec_slot_kinds,
             entry,
