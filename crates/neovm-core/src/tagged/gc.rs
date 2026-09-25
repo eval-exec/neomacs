@@ -2500,6 +2500,7 @@ use alloc_region::{CONS_REGION_MAX_CELLS, ConsRegionSource, FLOAT_REGION_MAX_SLO
 use alloc_region::{RegionBook, RegionStats};
 #[cfg(test)]
 pub(crate) use barrier_window::published_barrier_window;
+#[cfg_attr(not(feature = "jit"), allow(unused_imports))]
 pub(crate) use jit_state::{
     FLOAT_SLOT_BYTES, HEAP_JIT_BARRIER_LEN, HEAP_JIT_BARRIER_LO, HEAP_JIT_CONS_CUR,
     HEAP_JIT_CONS_LIM, HEAP_JIT_FLOAT_CUR, HEAP_JIT_FLOAT_LIM, JitHeapState,

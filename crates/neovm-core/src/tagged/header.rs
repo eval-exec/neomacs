@@ -196,6 +196,7 @@ pub struct GcHeader {
 
 /// `tenured` and `remembered` are adjacent bytes: compiled code tests both
 /// with one 16-bit load (see [`GcHeader::NEEDS_REMEMBERING_U16`]).
+#[cfg_attr(not(feature = "jit"), allow(dead_code))]
 pub(crate) const GC_HEADER_TENURED_OFFSET: usize = std::mem::offset_of!(GcHeader, tenured);
 const _: () = assert!(std::mem::offset_of!(GcHeader, remembered) == GC_HEADER_TENURED_OFFSET + 1);
 const _: () = assert!(std::mem::size_of::<GcHeader>() == 16);
@@ -220,6 +221,7 @@ impl GcHeader {
     /// The `(tenured, remembered)` byte pair of a header whose owner still
     /// needs the write barrier outside its window — tenured, not yet
     /// remembered — read as one native-endian `u16`.
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
     pub(crate) const NEEDS_REMEMBERING_U16: u16 = u16::from_ne_bytes([1, 0]);
 
     /// Whether a write by the (non-cons, outside-the-window) owner whose
@@ -751,6 +753,7 @@ impl LispValueVec {
     /// measured here rather than assumed: owned storage of several
     /// capacities (empty, exact, spare) against mapped storage of two
     /// different pointers and lengths.
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
     pub(crate) fn jit_owned_probe() -> Option<(usize, usize)> {
         static PROBE: std::sync::OnceLock<Option<(usize, usize)>> = std::sync::OnceLock::new();
         *PROBE.get_or_init(|| {

@@ -73,24 +73,31 @@ impl JitHeapState {
 }
 
 /// Byte offset, from a `*const TaggedHeap`, of the open cons region's cursor.
+#[cfg_attr(not(feature = "jit"), allow(dead_code))]
 pub(crate) const HEAP_JIT_CONS_CUR: usize =
     std::mem::offset_of!(TaggedHeap, jit) + std::mem::offset_of!(JitHeapState, cons_cur);
 /// Byte offset, from a `*const TaggedHeap`, of the open cons region's limit.
+#[cfg_attr(not(feature = "jit"), allow(dead_code))]
 pub(crate) const HEAP_JIT_CONS_LIM: usize =
     std::mem::offset_of!(TaggedHeap, jit) + std::mem::offset_of!(JitHeapState, cons_lim);
 /// Byte offset, from a `*const TaggedHeap`, of the open float region's
 /// cursor.
+#[cfg_attr(not(feature = "jit"), allow(dead_code))]
 pub(crate) const HEAP_JIT_FLOAT_CUR: usize =
     std::mem::offset_of!(TaggedHeap, jit) + std::mem::offset_of!(JitHeapState, float_cur);
 /// Byte offset, from a `*const TaggedHeap`, of the open float region's
 /// limit.
+#[cfg_attr(not(feature = "jit"), allow(dead_code))]
 pub(crate) const HEAP_JIT_FLOAT_LIM: usize =
     std::mem::offset_of!(TaggedHeap, jit) + std::mem::offset_of!(JitHeapState, float_lim);
 /// A float slot's stride, what compiled code bumps the float cursor by.
+#[cfg_attr(not(feature = "jit"), allow(dead_code))]
 pub(crate) const FLOAT_SLOT_BYTES: usize = <FloatObj as PagedObject>::SLOT_BYTES;
 /// Byte offset, from a `*const TaggedHeap`, of the barrier window's `lo`.
+#[cfg_attr(not(feature = "jit"), allow(dead_code))]
 pub(crate) const HEAP_JIT_BARRIER_LO: usize =
     std::mem::offset_of!(TaggedHeap, jit) + std::mem::offset_of!(JitHeapState, barrier_lo);
 /// Byte offset, from a `*const TaggedHeap`, of the barrier window's `len`.
+#[cfg_attr(not(feature = "jit"), allow(dead_code))]
 pub(crate) const HEAP_JIT_BARRIER_LEN: usize =
     std::mem::offset_of!(TaggedHeap, jit) + std::mem::offset_of!(JitHeapState, barrier_len);
