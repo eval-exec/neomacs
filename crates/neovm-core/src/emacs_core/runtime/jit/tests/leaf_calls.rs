@@ -208,7 +208,7 @@ fn leaf_only_filter_restricts_the_sites() {
 
 #[test]
 fn leaf_knob_parses() {
-    assert_eq!(LeafKnob::parse(None), LeafKnob::OFF);
+    assert_eq!(LeafKnob::parse(None), LeafKnob::ALL);
     for off in ["", "0", "off", "false", "no"] {
         assert_eq!(LeafKnob::parse(Some(off)), LeafKnob::OFF, "{off}");
     }

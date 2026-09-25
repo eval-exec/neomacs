@@ -286,11 +286,12 @@ impl LeafKnob {
         string: true,
     };
 
-    /// `off`/`0`/unset: nothing; `on`/`1`/`all`: everything; otherwise a
-    /// comma list of `opcode`, `bcall`, `string`.
+    /// Unset/`on`/`1`/`all`: everything (the default since the F-B and
+    /// board measurements); `off`/`0`: nothing, the former code exactly;
+    /// otherwise a comma list of `opcode`, `bcall`, `string`.
     pub(crate) fn parse(value: Option<&str>) -> Self {
         let Some(value) = value.map(str::trim) else {
-            return Self::OFF;
+            return Self::ALL;
         };
         match value {
             "" | "0" | "off" | "false" | "no" => return Self::OFF,
