@@ -885,3 +885,80 @@ fn faces_alike_on_a_terminal_resolve_to_the_same_cell_attrs() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// B3: cached row signatures
+// ---------------------------------------------------------------------------
+
+/// Scroll detection over cached signatures decides exactly what it decides
+/// over freshly hashed rows.
+#[test]
+fn cached_signatures_give_the_same_scroll_decisions() {
+    let row_text = |seed: usize, row: usize| -> String {
+        match (seed + row) % 5 {
+            0 => String::new(),
+            n => format!("row {row} content {}", "x".repeat(n * 3)),
+        }
+    };
+    let grid = |seed: usize, shift: usize| {
+        let mut grid = TtyGrid::new(30, 12);
+        for row in 0..12 {
+            for (col, ch) in row_text(seed, row + shift).chars().enumerate() {
+                grid.set(row, col, ch, CellAttrs::default(), false);
+            }
+        }
+        grid
+    };
+    let mut signatures = RowSignatures::default();
+    for seed in 0..5 {
+        for shift in 0..4 {
+            let current = grid(seed, 0);
+            let desired = grid(seed, shift);
+            for hint in [None, Some(shift as isize), Some(1)] {
+                let fresh = detect_scroll(&current, &desired, hint, None)
+                    .map(|found| (found.top, found.bottom, found.delta));
+                // Twice: the second call reuses the screen-model signatures.
+                for _ in 0..2 {
+                    let cached = detect_scroll(&current, &desired, hint, Some(&mut signatures))
+                        .map(|found| (found.top, found.bottom, found.delta));
+                    assert_eq!(cached, fresh, "seed {seed} shift {shift} hint {hint:?}");
+                }
+                signatures.clear();
+            }
+        }
+    }
+}
+
+/// A run of one-line scrolls (layout scroll hints) renders byte-identically
+/// with and without cached signatures, and reuses them.
+#[test]
+fn scrolling_reuses_row_signatures_and_matches_the_full_path() {
+    let lines: Vec<String> = (0..40).map(|i| format!("(scroll line {i})")).collect();
+    let mut scene = Scene::new(30, 16);
+    let visible: Vec<&str> = lines[..14].iter().map(String::as_str).collect();
+    scene
+        .windows
+        .push(SceneWindow::new(1, 0, 0, 30, &visible, true));
+    let mut diff = Differential::new(&scene, true);
+    diff.frame(&scene, "first");
+    let mut reused = 0;
+    for top in 1..8 {
+        scene.next_frame();
+        let window = scene.window(1);
+        window.rows.remove(0);
+        window.damage.remove(0);
+        window
+            .rows
+            .insert(13, text_row(GlyphRowRole::Text, &lines[top + 13], 0));
+        window.damage.insert(13, RowDamage::New);
+        for idx in 0..13 {
+            window.damage[idx] = RowDamage::ReusedShifted { dvpos: Px(-1.0) };
+        }
+        diff.frame(&scene, &format!("scroll to {top}"));
+        let stats = diff.damage.frame_stats();
+        assert_eq!(stats.full_reason, Some(TtyFullFrameReason::LayoutScroll));
+        assert_eq!(stats.scroll_ops, 1, "scroll to {top}: {stats:?}");
+        reused += stats.row_signatures_reused;
+    }
+    assert!(reused > 0, "the screen model's signatures were reused");
+}

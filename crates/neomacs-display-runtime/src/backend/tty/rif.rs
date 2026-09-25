@@ -837,6 +837,8 @@ pub struct TtyFrameStats {
     pub rows_repainted: u32,
     /// Why the frame was full under `NEOMACS_TTY_DAMAGE=on`/`verify`.
     pub full_reason: Option<damage::TtyFullFrameReason>,
+    /// Scroll detection reused this many screen-model row signatures (B3).
+    pub row_signatures_reused: u32,
     /// `NEOMACS_TTY_DAMAGE=verify`: this frame's comparison (`frames` is 1
     /// when the frame was verified).
     pub verify: damage::TtyDamageVerifyTotals,
@@ -895,6 +897,7 @@ impl TtyRif {
         self.desired = TtyGrid::new(width, height);
         self.force_full_render = true;
         self.damage.forget_terminal();
+        self.damage.forget_painters();
     }
 
     /// Force the next [`diff_and_render`](Self::diff_and_render) call to emit
@@ -1444,7 +1447,7 @@ impl TtyRif {
         } else {
             self.plan_frame()
         };
-        if self.verifying() {
+        if self.damage.mode != damage::TtyDamageMode::Off {
             self.note_op_rows(&ops);
         }
 
@@ -1546,7 +1549,9 @@ impl TtyRif {
         if let Some(method) = self.caps.scroll_region
             && !self.force_full_render
             && let Some(scroll) = {
-                let scroll = detect_scroll(&self.current, &self.desired, seed);
+                let signatures = (self.damage.mode != damage::TtyDamageMode::Off)
+                    .then_some(&mut self.damage.signatures);
+                let scroll = detect_scroll(&self.current, &self.desired, seed, signatures);
                 // Seed disposition is observable: a stale or conflicting
                 // layout hint must show up as rejected, not silently ride
                 // the voting fallback.
@@ -2646,6 +2651,7 @@ fn detect_scroll(
     current: &TtyGrid,
     desired: &TtyGrid,
     seed: Option<isize>,
+    signatures: Option<&mut damage::RowSignatures>,
 ) -> Option<DetectedScroll> {
     const MIN_RUN: usize = 4;
     let (w, h) = (desired.width, desired.height);
@@ -2660,8 +2666,10 @@ fn detect_scroll(
     // makes us scroll where GNU's cost model chooses a repaint. Row-unique
     // sentinels keep both kinds stationary (old == new at r) while never
     // matching across rows.
-    const CARRIED_SENTINEL: u64 = 1 << 63;
-    const DEFAULT_BLANK_SENTINEL: u64 = 1 << 62;
+    if let Some(signatures) = signatures {
+        let (old_hash, new_hash) = signatures.scroll_hashes(current, desired);
+        return detect_scroll_from_hashes(current, desired, seed, &old_hash, &new_hash);
+    }
     let carried_sentinel = |r: usize| desired.row_provably_unchanged(r).then_some(r as u64);
     let default_blank_sentinel = |grid: &TtyGrid, r: usize| {
         let row = &grid.cells[r * w..(r + 1) * w];
@@ -2685,7 +2693,25 @@ fn detect_scroll(
                 .unwrap_or_else(|| row_hash(&desired.cells[r * w..(r + 1) * w]))
         })
         .collect();
+    detect_scroll_from_hashes(current, desired, seed, &old_hash, &new_hash)
+}
 
+/// Row-identity sentinels of [`detect_scroll`]: a carried, unwritten desired
+/// row and a default blank row stay stationary (old == new at r) and never
+/// match across rows.
+pub(super) const CARRIED_SENTINEL: u64 = 1 << 63;
+pub(super) const DEFAULT_BLANK_SENTINEL: u64 = 1 << 62;
+
+/// The rest of [`detect_scroll`], given both grids' row hashes.
+fn detect_scroll_from_hashes(
+    current: &TtyGrid,
+    desired: &TtyGrid,
+    seed: Option<isize>,
+    old_hash: &[u64],
+    new_hash: &[u64],
+) -> Option<DetectedScroll> {
+    const MIN_RUN: usize = 4;
+    let h = desired.height;
     // Changed band: rows outside it already match in place.
     let top = (0..h).find(|&r| old_hash[r] != new_hash[r])?;
     let bottom = (0..h).rfind(|&r| old_hash[r] != new_hash[r])?;
@@ -2695,8 +2721,7 @@ fn detect_scroll(
     // A wrong or stale seed simply fails verification and costs nothing.
     if let Some(delta) = seed
         && delta != 0
-        && let Some(found) =
-            verify_delta(current, desired, &old_hash, &new_hash, top, bottom, delta)
+        && let Some(found) = verify_delta(current, desired, old_hash, new_hash, top, bottom, delta)
     {
         return Some(found);
     }
@@ -2720,7 +2745,7 @@ fn detect_scroll(
     if n < MIN_RUN || delta == 0 {
         return None;
     }
-    verify_delta(current, desired, &old_hash, &new_hash, top, bottom, delta)
+    verify_delta(current, desired, old_hash, new_hash, top, bottom, delta)
 }
 
 /// Verify a candidate scroll delta: find the longest contiguous run where

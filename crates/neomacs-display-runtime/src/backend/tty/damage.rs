@@ -26,6 +26,14 @@
 //!   reused; `verify`'s full side keeps that behaviour, so such a frame shows
 //!   up as a screen difference, not a false negative.)
 //!
+//!   Under `on` and `verify`, a full frame's scroll detection also reuses
+//!   the screen model's row signatures (**B3**, [`RowSignatures`]): a row's
+//!   hash and default-blank test are computed once when the row is planned
+//!   and kept until an operation or a damage frame rewrites it, instead of
+//!   rehashing every row of both grids each frame. Hashes only route scroll
+//!   candidates (`verify_delta` compares the cells), so a stale signature
+//!   could only cost a missed scroll, never a wrong screen.
+//!
 //!   `verify` runs the full path (whose output reaches the terminal) and
 //!   the damage path on a copy of the renderer, and compares the screen
 //!   models they leave: a row the damage path skipped whose content (cells
@@ -250,6 +258,83 @@ pub struct TtyDamageVerifyTotals {
     pub byte_diff_frames: u64,
 }
 
+/// B3: what scroll detection needs of one row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct RowSignature {
+    hash: u64,
+    default_blank: bool,
+}
+
+impl RowSignature {
+    fn of(row: &[TtyCell]) -> Self {
+        Self {
+            hash: row_hash(row),
+            default_blank: row.iter().all(|cell| cell == &TtyCell::default()),
+        }
+    }
+
+    /// The value `detect_scroll` votes with for row ROW.
+    fn scroll_hash(self, row: usize) -> u64 {
+        if self.default_blank {
+            DEFAULT_BLANK_SENTINEL | row as u64
+        } else {
+            self.hash
+        }
+    }
+}
+
+/// B3: row signatures of the screen model, and of the desired rows this
+/// frame's scroll detection computed (promoted when the frame commits).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RowSignatures {
+    current: Vec<Option<RowSignature>>,
+    desired: Vec<Option<RowSignature>>,
+    /// Screen-model signatures reused rather than recomputed this frame.
+    pub(super) reused: u32,
+}
+
+impl RowSignatures {
+    /// `detect_scroll`'s per-row hashes of both grids, reusing the screen
+    /// model's signatures where known.
+    pub(super) fn scroll_hashes(
+        &mut self,
+        current: &TtyGrid,
+        desired: &TtyGrid,
+    ) -> (Vec<u64>, Vec<u64>) {
+        let height = desired.height;
+        self.reused = 0;
+        self.current.resize(height, None);
+        self.desired.clear();
+        self.desired.resize(height, None);
+        let mut old = Vec::with_capacity(height);
+        let mut new = Vec::with_capacity(height);
+        for row in 0..height {
+            if desired.row_provably_unchanged(row) {
+                old.push(CARRIED_SENTINEL | row as u64);
+                new.push(CARRIED_SENTINEL | row as u64);
+                continue;
+            }
+            let before = match self.current[row] {
+                Some(known) => {
+                    self.reused += 1;
+                    known
+                }
+                None => *self.current[row].insert(RowSignature::of(current.row(row))),
+            };
+            old.push(before.scroll_hash(row));
+            let now = RowSignature::of(desired.row(row));
+            self.desired[row] = Some(now);
+            new.push(now.scroll_hash(row));
+        }
+        (old, new)
+    }
+
+    fn clear(&mut self) {
+        self.current.clear();
+        self.desired.clear();
+    }
+}
+
 /// Per-[`TtyRif`] state of the stage-B knobs.
 #[derive(Clone)]
 pub(super) struct DamageState {
@@ -287,8 +372,11 @@ pub(super) struct DamageState {
     pub(super) faces_generation: u64,
     /// The damage path's renderer beside this one, under `verify`.
     shadow: Option<Box<TtyRif>>,
-    /// Rows the last full-path plan wrote to (`verify` only).
+    /// Rows this frame's plan writes to (`on` and `verify`).
     op_rows: Vec<bool>,
+    op_rows_valid: bool,
+    /// B3 row signatures.
+    pub(super) signatures: RowSignatures,
     verify: TtyDamageVerifyTotals,
 }
 
@@ -312,6 +400,8 @@ impl DamageState {
             faces_generation: 0,
             shadow: None,
             op_rows: Vec::new(),
+            op_rows_valid: false,
+            signatures: RowSignatures::default(),
             verify: TtyDamageVerifyTotals::default(),
         }
     }
@@ -323,10 +413,11 @@ impl DamageState {
     }
 
     /// Forget what painted the screen model: the next frame is a full one.
-    fn forget_painters(&mut self) {
+    pub(super) fn forget_painters(&mut self) {
         self.rows = None;
         self.frame_key = None;
         self.retained.clear();
+        self.signatures.clear();
     }
 }
 
@@ -802,6 +893,7 @@ impl TtyRif {
     /// frame, copy the touched rows after a damage frame. The frame's
     /// painter keys become those of the screen model.
     pub(super) fn commit_frame(&mut self) {
+        self.promote_row_signatures();
         match self.damage.frame {
             FrameKind::Full => std::mem::swap(&mut self.current, &mut self.desired),
             FrameKind::Damage => {
@@ -839,18 +931,48 @@ impl TtyRif {
         }
     }
 
+    /// B3: after the frame, a row's signature stays known unless an
+    /// operation or a damage frame rewrites it; an unplanned frame (the
+    /// painter path) forgets them all.
+    fn promote_row_signatures(&mut self) {
+        let op_rows_valid = std::mem::take(&mut self.damage.op_rows_valid);
+        self.frame_stats.row_signatures_reused = std::mem::take(&mut self.damage.signatures.reused);
+        if self.damage.mode == TtyDamageMode::Off {
+            return;
+        }
+        let height = self.desired.height;
+        let damage = &mut self.damage;
+        damage.signatures.current.resize(height, None);
+        match damage.frame {
+            FrameKind::Full => {
+                for row in 0..height {
+                    let written =
+                        !op_rows_valid || damage.op_rows.get(row).copied().unwrap_or(true);
+                    damage.signatures.current[row] = if written {
+                        None
+                    } else {
+                        damage.signatures.desired.get(row).copied().flatten()
+                    };
+                }
+            }
+            FrameKind::Damage => {
+                for (row, touched) in damage.touched.iter().enumerate() {
+                    if *touched && row < height {
+                        damage.signatures.current[row] = None;
+                    }
+                }
+            }
+        }
+        damage.signatures.desired.clear();
+    }
+
     // -----------------------------------------------------------------------
     // B2: verify
     // -----------------------------------------------------------------------
 
-    /// Whether this frame is verified: the full path renders it and the
-    /// shadow renders the damage path beside it.
-    pub(super) fn verifying(&self) -> bool {
-        self.damage.shadow.is_some()
-    }
-
-    /// Record which rows the full path's plan writes (`verify` only).
+    /// Record which rows this frame's plan writes (`on` and `verify`).
     pub(super) fn note_op_rows(&mut self, ops: &[TermOp]) {
+        self.damage.op_rows_valid = true;
         let height = self.desired.height;
         let rows = &mut self.damage.op_rows;
         rows.clear();
