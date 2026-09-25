@@ -10,7 +10,12 @@
 //! environment: about 113K instructions per closure, against 6.9K for the
 //! rest of a typical creation.
 //!
-//! This module observes those calls without changing them.
+//! This module observes those calls without changing them.  A trimming call
+//! is *eligible* when the memo could serve it: a well-formed environment, a
+//! source whose [`ClosureShape`] and [`ClosureFacts`] exist, no interactive
+//! form, and every head [`HeadVerdict::Plain`] -- no macro, autoloaded macro
+//! or compiler macro, as `macroexpand-1` (macroexp.el:225-247) and
+//! `function-get` (subr.el:4836-4854) would see it.
 //!
 //! # Knob
 //!
@@ -29,6 +34,7 @@
 //! the match data.  Taken before and after a run, a difference means the run
 //! had an effect.
 
+use super::cconv_shape::{ClosureFacts, ClosureShape, EnvSummary, FactsRefusal};
 use super::*;
 use std::sync::atomic::{AtomicU8, Ordering};
 use strum::{EnumCount, IntoEnumIterator};
@@ -99,6 +105,22 @@ pub(crate) enum CconvMemoEvent {
     NoLexvars,
     /// The environment binds lexical variables: the trimming path.
     Trim,
+    /// A trimming call whose inputs the memo could serve (S0.3's checks).
+    Eligible,
+    /// The environment is not a proper list of `(SYMBOL . VALUE)` and bare
+    /// symbol entries.
+    RefuseEnv,
+    /// The source is too large or cyclic, or holds a symbol with position.
+    RefuseShape,
+    /// An interactive form: `cconv-analyze-form` may write
+    /// `cconv--interactive-form-funs` (cconv.el:776).
+    RefuseInteractive,
+    /// A `_` variable is used (see `FactsRefusal::UnderscoreUse`).
+    RefuseUnderscore,
+    /// A head is a macro, an autoloaded macro, or an unresolvable alias.
+    RefuseMacroHead,
+    /// A head has a compiler macro.
+    RefuseCompilerMacroHead,
     /// A trimming run signalled or threw.
     RunError,
     /// A trimming run returned a closure whose args and body are `eq` to the
@@ -219,6 +241,51 @@ cached_symbol_id!(
     "cconv-make-interpreted-closure"
 );
 cached_symbol_id!(gensym_counter_symbol, "gensym-counter");
+cached_symbol_id!(compiler_macro_symbol, "compiler-macro");
+cached_symbol_id!(autoload_cell_symbol, "autoload");
+cached_symbol_id!(macro_cell_symbol, "macro");
+
+/// Longest alias chain [`Context::cconv_head_verdict`] follows.
+const ALIAS_HOP_CAP: usize = 100;
+
+/// What `macroexp--expand-all` would do with a form headed by a symbol, as
+/// far as the memo cares (see the module docs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HeadVerdict {
+    /// Not a macro, not an autoloaded macro, no compiler macro: the form is
+    /// left as it is.
+    Plain,
+    /// A macro, directly or through an alias.
+    Macro,
+    /// An autoload of type `macro` or `t`: `macroexpand-1` would load it.
+    AutoloadMacro,
+    /// `(function-get SYM 'compiler-macro)` is non-nil.
+    CompilerMacro,
+    /// An alias chain longer than [`ALIAS_HOP_CAP`] (or cyclic).
+    Unresolvable,
+}
+
+/// Whether DEF is an autoload whose TYPE (element 4) is `macro` or `t`:
+/// `autoload-do-load` with MACRO-ONLY `macro` would load it
+/// (src/eval.c `Fautoload_do_load`).
+fn autoload_of_macro(def: Value) -> bool {
+    if !def.is_cons() || def.cons_car().as_symbol_id() != Some(autoload_cell_symbol()) {
+        return false;
+    }
+    let mut tail = def;
+    for _ in 0..4 {
+        tail = tail.cons_cdr();
+        if !tail.is_cons() {
+            return false;
+        }
+    }
+    let kind = tail.cons_car();
+    kind.is_t() || kind.as_symbol_id() == Some(macro_cell_symbol())
+}
+
+fn is_macro_cell(def: Value) -> bool {
+    def.is_cons() && def.cons_car().as_symbol_id() == Some(macro_cell_symbol())
+}
 
 /// Whether ENV binds a lexical variable the way cconv.el:931 sees it:
 /// `(delq nil (mapcar #'car-safe env))` is non-empty.
@@ -275,6 +342,107 @@ impl Context {
         self.cconv_memo.stats.report()
     }
 
+    /// The symbol's function cell as `fboundp` sees it.
+    fn cconv_fbound_cell(&self, id: SymId) -> Option<Value> {
+        self.obarray
+            .symbol_function_id(id)
+            .filter(|cell| !cell.is_nil())
+    }
+
+    /// GNU `macrop` (subr.el:4793-4799) of a function cell that is a symbol:
+    /// follow the aliases, then a `(macro ...)` or an autoloaded macro.
+    fn cconv_symbol_macrop(&self, mut id: SymId) -> Option<bool> {
+        for _ in 0..ALIAS_HOP_CAP {
+            let Some(def) = self.cconv_fbound_cell(id) else {
+                return Some(false);
+            };
+            match def.as_symbol_id() {
+                Some(next) if !def.is_nil() => id = next,
+                _ => return Some(is_macro_cell(def) || autoload_of_macro(def)),
+            }
+        }
+        None
+    }
+
+    /// [`HeadVerdict`] for a form headed by ID, mirroring `macroexpand-1`
+    /// with a nil environment and then `function-get` of `compiler-macro`
+    /// with AUTOLOAD nil.  Reads only the function cells and plists; the
+    /// memo refuses to run when `overriding-plist-environment` could make
+    /// `get` answer otherwise.
+    pub(crate) fn cconv_head_verdict(&self, id: SymId) -> HeadVerdict {
+        if let Some(def) = self.cconv_fbound_cell(id) {
+            if autoload_of_macro(def) {
+                return HeadVerdict::AutoloadMacro;
+            }
+            if is_macro_cell(def) {
+                return HeadVerdict::Macro;
+            }
+            if let Some(alias) = def.as_symbol_id() {
+                match self.cconv_symbol_macrop(alias) {
+                    Some(true) => return HeadVerdict::Macro,
+                    Some(false) => {}
+                    None => return HeadVerdict::Unresolvable,
+                }
+            }
+        }
+        let mut f = id;
+        for _ in 0..ALIAS_HOP_CAP {
+            if self
+                .obarray
+                .get_property_id(f, compiler_macro_symbol())
+                .is_some_and(|handler| !handler.is_nil())
+            {
+                return HeadVerdict::CompilerMacro;
+            }
+            let Some(cell) = self.cconv_fbound_cell(f) else {
+                return HeadVerdict::Plain;
+            };
+            match cell.as_symbol_id() {
+                Some(next) => f = next,
+                None => return HeadVerdict::Plain,
+            }
+        }
+        HeadVerdict::Unresolvable
+    }
+
+    /// Classify a trimming call's inputs: [`CconvMemoEvent::Eligible`] or
+    /// the first refusal.
+    fn cconv_eligibility(
+        &self,
+        params: Value,
+        body: Value,
+        env: Value,
+        iform: Value,
+    ) -> CconvMemoEvent {
+        if EnvSummary::of(env).is_none() {
+            return CconvMemoEvent::RefuseEnv;
+        }
+        if !iform.is_nil() {
+            return CconvMemoEvent::RefuseInteractive;
+        }
+        let Ok(shape) = ClosureShape::of(params, body) else {
+            return CconvMemoEvent::RefuseShape;
+        };
+        if shape.mentions_interactive {
+            return CconvMemoEvent::RefuseInteractive;
+        }
+        let facts = match ClosureFacts::of(params, body) {
+            Ok(facts) => facts,
+            Err(FactsRefusal::TooLarge) => return CconvMemoEvent::RefuseShape,
+            Err(FactsRefusal::UnderscoreUse) => return CconvMemoEvent::RefuseUnderscore,
+        };
+        for role in facts.symbols.iter().filter(|role| role.head) {
+            match self.cconv_head_verdict(role.id) {
+                HeadVerdict::Plain => {}
+                HeadVerdict::CompilerMacro => return CconvMemoEvent::RefuseCompilerMacroHead,
+                HeadVerdict::Macro | HeadVerdict::AutoloadMacro | HeadVerdict::Unresolvable => {
+                    return CconvMemoEvent::RefuseMacroHead;
+                }
+            }
+        }
+        CconvMemoEvent::Eligible
+    }
+
     /// Whether this hook call goes through [`Self::cconv_filter_call`]: the
     /// knob is on and the filter is `cconv-make-interpreted-closure` itself.
     #[inline]
@@ -301,6 +469,8 @@ impl Context {
             return self.apply(closure_hook, vec![params, body, env, docstring, iform]);
         }
         self.cconv_memo.note(CconvMemoEvent::Trim);
+        let eligibility = self.cconv_eligibility(params, body, env, iform);
+        self.cconv_memo.note(eligibility);
         let before = self.cconv_effect_snapshot();
         let result = self.apply(closure_hook, vec![params, body, env, docstring, iform]);
         match &result {

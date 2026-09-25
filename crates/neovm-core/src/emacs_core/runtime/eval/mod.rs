@@ -7346,8 +7346,13 @@ pub(crate) use builtin_vars::{parse_builtin_frontend_knob, set_builtin_frontend_
 mod var_fast;
 
 mod cconv_memo;
+mod cconv_shape;
 #[cfg(test)]
-pub(crate) use cconv_memo::{CconvMemoEvent, CconvMemoMode, parse_cconv_memo_knob};
+pub(crate) use cconv_memo::{CconvMemoEvent, CconvMemoMode, HeadVerdict, parse_cconv_memo_knob};
+#[cfg(test)]
+pub(crate) use cconv_shape::{
+    ClosureFacts, ClosureShape, EnvSummary, FactsRefusal, SHAPE_NODE_CAP, ShapeRefusal, ShapeTok,
+};
 #[cfg(test)]
 pub(crate) use var_fast::{
     VarCacheEvent, VarCacheTier, parse_var_cache_knob, reset_var_cache_events,
