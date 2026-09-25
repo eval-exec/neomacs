@@ -990,11 +990,16 @@ pub(crate) enum SpecBinding {
     /// frame — GNU `specbinding.bt` exactly (`Lisp_Object *args` +
     /// nargs pointing at the caller's stack). Pushed only by
     /// `push_backtrace_frame_from_native_args` for arities the inline
-    /// variants can't hold; the args span outlives the entry (the frame
-    /// is popped before the native caller's call-args slot dies), and
-    /// the stop-the-world root snapshot may read through the pointer.
-    /// Like the other inline variants, `debug_on_exit` is structurally
-    /// false.
+    /// variants can't hold. Like the other inline variants,
+    /// `debug_on_exit` is structurally false.
+    ///
+    /// Contract: `args_ptr` always addresses the call-args slot of a LIVE
+    /// JIT frame, never a Rust local (a spread buffer is recorded by copy,
+    /// `CalleeFrameArgs::Local`). A pusher pops its entry before returning
+    /// to that frame, or, when it leaves the entry behind on a
+    /// contained-panic path, first detaches it while the slot is still live
+    /// (`Context::detach_native_frames_into`). So the stop-the-world root
+    /// snapshot and backtrace walks may always read through the pointer.
     BacktraceNative {
         function: Value,
         args_ptr: *const i64,
@@ -4055,6 +4060,11 @@ impl Context {
         // the panic destroyed. Drop them BEFORE running cleanups so a signal
         // raised inside a cleanup can never select a dead resume target.
         self.condition_stack.truncate(snap.condition_len);
+        // Defense in depth for the `BacktraceNative` contract: a native frame
+        // above the boundary may name a call-args slot of a frame the panic
+        // destroyed, and the cleanups below run Lisp (and GC). Keep each one's
+        // function and drop its words, reading nothing.
+        self.forget_native_frame_args_above(snap.spec_depth);
         // `unbind_to_result` returns early (Err) when an unwind-protect
         // cleanup itself signals; the failing entry was already popped, so
         // looping makes progress and terminates. The cleanup's signal has no
@@ -4091,6 +4101,24 @@ impl Context {
         self.macro_expansion_scope_depth = snap.macro_expansion_scope_depth;
         self.lexenv_assq_cache.clear();
         self.lexenv_special_cache.clear();
+    }
+
+    /// Rewrite every `BacktraceNative` entry above DEPTH to its
+    /// function-only form, without reading its argument words (see
+    /// [`Self::restore_module_boundary`]).
+    #[cold]
+    #[inline(never)]
+    fn forget_native_frame_args_above(&mut self, depth: usize) {
+        let from = depth.min(self.specpdl.len());
+        for entry in &mut self.specpdl[from..] {
+            if let SpecBinding::BacktraceNative { function, .. } = *entry {
+                *entry = SpecBinding::Backtrace {
+                    function,
+                    args: BacktraceArgs::evaluated0(),
+                    debug_on_exit: false,
+                };
+            }
+        }
     }
 
     /// Heal the evaluator after a panic was contained at a JIT-SHIM boundary

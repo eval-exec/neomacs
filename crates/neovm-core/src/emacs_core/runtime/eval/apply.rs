@@ -231,6 +231,86 @@ impl Context {
         }
     }
 
+    /// Make every `BacktraceNative` entry that reads the argument slot at
+    /// ARGS_PTR self-contained, while that slot is still live.
+    ///
+    /// Called only on contained-panic paths, where the entry would otherwise
+    /// outlive the slot: a pusher that returns to its JIT caller with the
+    /// panic marker set leaves its frame for the caller leaf's healing exit,
+    /// and the caller's call-args slot dies when that leaf exits -- before the
+    /// deferred unwind that retires the frame, while a GC (the panic
+    /// message's allocation, an `unwind-protect` cleanup) or `backtrace` can
+    /// still read through the pointer. GNU never has this state:
+    /// `unwind_to_catch` unbinds before it longjmps (eval.c:1449, :1461).
+    ///
+    /// One or two arguments keep their exact values in the compact shapes.
+    /// Any other count keeps the function (the frame still counts, and roots
+    /// its function) and drops the words: the owned side stack is no home,
+    /// because the caller leaf's heal truncates it to the leaf's entry
+    /// length (`restore_jit_shim_boundary`). Panic recovery only.
+    ///
+    /// # Safety
+    /// ARGS_PTR's words must still be readable (the frame that owns the slot
+    /// is live), for as many words as any matching entry records.
+    #[cold]
+    #[inline(never)]
+    pub(crate) unsafe fn detach_native_frames_into(&mut self, args_ptr: *const i64) {
+        for index in (0..self.specpdl.len()).rev() {
+            let SpecBinding::BacktraceNative {
+                function,
+                args_ptr: frame_args,
+                nargs,
+            } = self.specpdl[index]
+            else {
+                continue;
+            };
+            if frame_args != args_ptr {
+                continue;
+            }
+            // SAFETY: the slot is live (this function's contract) and holds
+            // the `nargs` words the entry recorded.
+            let read = |i: usize| Value::from_bits(unsafe { *frame_args.add(i) } as usize);
+            self.specpdl[index] = match NativeFrameArity::of(nargs) {
+                NativeFrameArity::One => SpecBinding::Backtrace1 {
+                    function,
+                    arg: read(0),
+                    debug_on_exit: false,
+                },
+                NativeFrameArity::Two => SpecBinding::Backtrace2 {
+                    function,
+                    arg0: read(0),
+                    arg1: read(1),
+                },
+                NativeFrameArity::Zero | NativeFrameArity::Many => SpecBinding::Backtrace {
+                    function,
+                    args: BacktraceArgs::evaluated0(),
+                    debug_on_exit: false,
+                },
+            };
+            tracing::debug!(
+                target: "neovm::backtrace",
+                nargs,
+                "contained panic: native frame detached from its argument slot"
+            );
+        }
+    }
+
+    /// A native pusher's contained-panic exit: pop its own frame when it is
+    /// still the balanced top, and otherwise detach whatever entries still
+    /// read the caller's slot at ARGS_PTR, which dies when the caller leaf
+    /// exits (see [`Self::detach_native_frames_into`]).
+    ///
+    /// # Safety
+    /// As [`Self::detach_native_frames_into`].
+    #[cold]
+    #[inline(never)]
+    pub(crate) unsafe fn pop_or_detach_native_frame(&mut self, count: usize, args_ptr: *const i64) {
+        if !self.pop_native_backtrace_frame(count) {
+            // SAFETY: forwarded from the caller.
+            unsafe { self.detach_native_frames_into(args_ptr) };
+        }
+    }
+
     #[allow(dead_code)] // grandfathered when dead_code lint was enabled; delete or wire up
     pub(crate) fn push_backtrace_frame_owned(&mut self, function: Value, args: LispArgVec) {
         match args.as_slice() {
@@ -3631,4 +3711,25 @@ fn bind_lexical_formals(
         Ok(())
     })?;
     Ok(lexenv)
+}
+
+/// How many argument words a `BacktraceNative` entry records, as the shapes
+/// that can hold them ([`Context::detach_native_frames_into`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NativeFrameArity {
+    Zero,
+    One,
+    Two,
+    Many,
+}
+
+impl NativeFrameArity {
+    fn of(nargs: u32) -> Self {
+        match nargs {
+            0 => Self::Zero,
+            1 => Self::One,
+            2 => Self::Two,
+            _ => Self::Many,
+        }
+    }
 }

@@ -4826,6 +4826,9 @@ mod osr_entry_guard_tests;
 mod osr_raw_tests;
 
 #[cfg(test)]
+#[path = "tests/native_frame_detach.rs"]
+mod native_frame_detach_tests;
+#[cfg(test)]
 #[path = "tests/osr_poll.rs"]
 mod osr_poll_tests;
 #[cfg(test)]

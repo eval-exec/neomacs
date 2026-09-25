@@ -1086,7 +1086,13 @@ pub extern "C" fn neovm_jit_call_spec(
                 // as the single-frame containment did. Folding it here
                 // would consume the marker before `cold_frame_exit` or the
                 // match shim could restore the caller's boundary.
-                NativeRun::Signal if shim_panic_pending() => return STATUS_SIGNAL,
+                // The residue keeps this frame, but not its reads of the
+                // caller's slot, which dies when the caller leaf exits.
+                NativeRun::Signal if shim_panic_pending() => {
+                    // SAFETY: `args_ptr` is the caller's live call-args slot.
+                    unsafe { ctx_ref.detach_native_frames_into(args_ptr) };
+                    return STATUS_SIGNAL;
+                }
                 other => FastRun::Framed(other),
             }
         };
@@ -1145,7 +1151,7 @@ fn call_spec_finish(
     bt_count: usize,
     run: FastRun,
 ) -> i64 {
-    jit_shim_contain!(ctx, STATUS_SIGNAL, {
+    jit_shim_contain!(detach args_ptr, ctx, STATUS_SIGNAL, {
         use crate::emacs_core::jit::cache::{self, NativeCallOutcome};
         let ctx_ptr = ctx as *mut Context;
         // SAFETY: the dormant seam Context (the shim contract).
@@ -1174,7 +1180,8 @@ fn call_spec_finish(
         // the residue and the marker are the caller's healing exit's; the
         // general unwinder below would fold the marker first.
         if shim_panic_pending() {
-            ctx.pop_native_backtrace_frame(bt_count);
+            // SAFETY: `args_ptr` is this shim's caller's live call-args slot.
+            unsafe { ctx.pop_or_detach_native_frame(bt_count, args_ptr) };
             return STATUS_SIGNAL;
         }
         let outcome = if ctx.pop_native_backtrace_frame(bt_count) {
@@ -1221,7 +1228,7 @@ fn call_spec_slow(
     nargs: usize,
     out: *mut i64,
 ) -> i64 {
-    jit_shim_contain!(ctx, STATUS_SIGNAL, {
+    jit_shim_contain!(detach args_ptr, ctx, STATUS_SIGNAL, {
         // Build a rooted LispArgVec from the caller's call-args slot — used only by
         // the strict-call fallback paths (call_for_jit), inside their own
         // scratch-root scope. The native-to-native fast path passes `args_ptr`
@@ -1636,7 +1643,7 @@ pub extern "C" fn neovm_jit_call_subr_spec(
     nargs: i64,
     out: *mut i64,
 ) -> i64 {
-    jit_shim_contain!(ctx, STATUS_SIGNAL, {
+    jit_shim_contain!(detach args_ptr, ctx, STATUS_SIGNAL, {
         #[cfg(debug_assertions)]
         SUBR_SPEC_COUNT.fetch_add(1, Ordering::Relaxed);
         let nargs = nargs as usize;

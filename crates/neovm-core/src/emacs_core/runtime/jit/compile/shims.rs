@@ -445,6 +445,34 @@ pub(crate) fn heal_shim_panic_residue_before_match(ctx: &mut Context, ours: usiz
 /// coherent; a contained panic never resumes the broken computation (the
 /// sentinel routes generated code to its signal exit).
 macro_rules! jit_shim_contain {
+    // The shims whose bodies record native backtrace frames over their
+    // caller's call-args slot (`push_backtrace_frame_from_native_args`, via
+    // `call_fixed_builtin_from_native`, `run_leaf_native_to_native` or
+    // `call_apply_native`): a panic that unwinds through such a pusher
+    // leaves its frame on the specpdl, and the slot dies when the caller leaf
+    // exits. Detach it here, while the slot is still live (the shim's JIT
+    // caller is still on the stack; Rust panics cannot cross JIT frames).
+    // Literal-`detach` arm first for the same reason as `no_ctx`.
+    (detach $args_ptr:expr, $ctx:expr, $sentinel:expr, $body:expr) => {{
+        let ctx_raw: *mut u8 = $ctx;
+        let args_raw: *const i64 = $args_ptr;
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| $body)) {
+            Ok(v) => v,
+            Err(payload) => match contain_jit_shim_panic(ctx_raw, payload) {
+                Ok(()) => {
+                    // SAFETY: the seam-provided dormant Context (the shim's
+                    // vmctx contract), and `args_raw` is the shim's own
+                    // call-args slot, live until it returns.
+                    unsafe {
+                        (*(ctx_raw as *mut crate::emacs_core::eval::Context))
+                            .detach_native_frames_into(args_raw)
+                    };
+                    $sentinel
+                }
+                Err(payload) => std::panic::resume_unwind(payload),
+            },
+        }
+    }};
     // Literal-`no_ctx` arm FIRST: `no_ctx` would also parse as an `expr`, so
     // ordering is what keeps it from being captured by the ctx arm below.
     (no_ctx, $sentinel:expr, $body:expr) => {{
@@ -499,7 +527,7 @@ pub extern "C" fn neovm_jit_call(
     nargs: i64,
     out: *mut i64,
 ) -> i64 {
-    jit_shim_contain!(ctx, STATUS_SIGNAL, {
+    jit_shim_contain!(detach args_ptr, ctx, STATUS_SIGNAL, {
         let func_val = Value::from_bits(func_bits as usize);
         let nargs = nargs as usize;
         // NATIVE-TO-NATIVE: the callee is already a bytecode object — what

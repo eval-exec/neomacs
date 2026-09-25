@@ -2125,6 +2125,26 @@ static APPLY_ID: std::sync::OnceLock<SymId> = std::sync::OnceLock::new(); // 'ap
 thread_local! {
     /// `apply` calls `Vm::call_apply_native` ran natively.
     pub(crate) static APPLY_NATIVE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Whether the last callee frame `call_apply_native` recorded read its
+    /// arguments through a pointer (`BacktraceNative`) -- which must never
+    /// name its Rust-local spread buffer.
+    pub(crate) static APPLY_CALLEE_FRAME_BORROWS: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Where a native callee's backtrace frame finds its arguments
+/// ([`Vm::run_leaf_native_to_native`]).
+#[cfg(feature = "jit")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CalleeFrameArgs {
+    /// The words are the JIT caller's call-args slot, live for the whole
+    /// call and until the caller leaf exits: the frame may record a pointer
+    /// to them (`BacktraceNative`, GNU's `record_in_backtrace` shape).
+    CallerSlot,
+    /// The words are a Rust local of the pusher (`call_apply_native`'s
+    /// spread), which a contained panic unwinding through the pusher frees
+    /// while the frame survives as residue: the frame records a copy.
+    Local,
 }
 
 /// Whether an opcode may run builtin `id` inline: no compiler function
@@ -7230,7 +7250,15 @@ impl<'a> Vm<'a> {
             crate::emacs_core::jit::compile::SPEC_FAST_CALL_COUNT
                 .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         }
-        Self::run_leaf_native_to_native(ctx, callee, bc, leaf, args_ptr, nargs)
+        Self::run_leaf_native_to_native(
+            ctx,
+            callee,
+            bc,
+            leaf,
+            args_ptr,
+            nargs,
+            CalleeFrameArgs::CallerSlot,
+        )
     }
 
     /// Native-to-native call of a callee that is ALREADY a bytecode value —
@@ -7279,7 +7307,15 @@ impl<'a> Vm<'a> {
         // SAFETY: `armed_leaf_for_native_call` returns a leaf armed under the
         // current `leaf_slot_epoch` — see its own contract.
         let leaf = unsafe { &*ptr };
-        Self::run_leaf_native_to_native(ctx, callee, bc, leaf, args_ptr, nargs)
+        Self::run_leaf_native_to_native(
+            ctx,
+            callee,
+            bc,
+            leaf,
+            args_ptr,
+            nargs,
+            CalleeFrameArgs::CallerSlot,
+        )
     }
 
     /// `(apply F ARG... LIST)` from compiled code where F is a bytecode object
@@ -7366,8 +7402,19 @@ impl<'a> Vm<'a> {
         unsafe {
             ctx.push_backtrace_frame_from_native_args(apply, args_ptr, nargs);
         }
-        let outcome = Self::run_leaf_native_to_native(ctx, function, bc, leaf, spread_ptr, count)
-            .expect("an accepted arity runs");
+        // The spread is this frame's local: the callee's frame records a copy
+        // of it, so a contained panic that unwinds through here cannot leave
+        // a frame reading a freed buffer.
+        let outcome = Self::run_leaf_native_to_native(
+            ctx,
+            function,
+            bc,
+            leaf,
+            spread_ptr,
+            count,
+            CalleeFrameArgs::Local,
+        )
+        .expect("an accepted arity runs");
         if ctx.pop_native_backtrace_frame(bt_count) {
             return Some(outcome);
         }
@@ -7418,6 +7465,7 @@ impl<'a> Vm<'a> {
         leaf: &crate::emacs_core::jit::compile::CompiledLeaf,
         args_ptr: *const i64,
         nargs: usize,
+        frame_args: CalleeFrameArgs,
     ) -> Option<crate::emacs_core::jit::cache::NativeCallOutcome> {
         // An exact fixed-arity match is accepted by construction (required
         // <= arity == nargs), so the common case answers with one compare;
@@ -7442,8 +7490,26 @@ impl<'a> Vm<'a> {
         // push also ROOTS `callee` (the frame's function field is GC-traced)
         // for the whole native run — the shim's separate scratch-root push
         // became redundant with it.
-        unsafe {
-            ctx.push_backtrace_frame_from_native_args(callee, args_ptr, nargs);
+        // `frame_args` is a literal at each call site, so this folds to one arm
+        // per instantiation (the hot `CallerSlot` one is unchanged).
+        match frame_args {
+            CalleeFrameArgs::CallerSlot => unsafe {
+                ctx.push_backtrace_frame_from_native_args(callee, args_ptr, nargs);
+            },
+            CalleeFrameArgs::Local => {
+                // SAFETY: as above; `Value` is `#[repr(transparent)]` over the
+                // word. The frame copies the words (`Backtrace1`/`Backtrace2`,
+                // or the owned side stack).
+                let args = unsafe { core::slice::from_raw_parts(args_ptr as *const Value, nargs) };
+                ctx.push_backtrace_frame(callee, args);
+                #[cfg(test)]
+                APPLY_CALLEE_FRAME_BORROWS.with(|c| {
+                    c.set(Some(matches!(
+                        ctx.specpdl.last(),
+                        Some(crate::emacs_core::eval::SpecBinding::BacktraceNative { .. })
+                    )))
+                });
+            }
         }
         // Inline `with_bytecode_call_depth` at the ctx level (GNU's Bcall
         // depth protocol, floor-raise included) — the Vm wrapper exists only
@@ -7557,7 +7623,10 @@ impl<'a> Vm<'a> {
         // which the general unwinder below would pre-empt by folding the
         // marker into a signal.
         if crate::emacs_core::jit::compile::shim_panic_pending() {
-            ctx.pop_native_backtrace_frame(bt_count);
+            // Its reads of the caller's slot go too: the slot dies when the
+            // caller leaf exits, before the deferred unwind retires the frame.
+            // SAFETY: `args_ptr` is still live here (this function's contract).
+            unsafe { ctx.pop_or_detach_native_frame(bt_count, args_ptr) };
             return Some(outcome);
         }
         // Pop the callee's backtrace frame (balanced single-entry pop; falls back

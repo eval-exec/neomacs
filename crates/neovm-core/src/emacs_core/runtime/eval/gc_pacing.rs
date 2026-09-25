@@ -127,10 +127,13 @@ impl Context {
                     nargs,
                 } => {
                     visit(*function);
-                    // SAFETY: the variant's contract — the caller's
-                    // call-args slot stays alive (and unmutated) while
-                    // this entry exists, and root seeding runs with the
-                    // mutator stopped.
+                    // SAFETY: the variant's contract — `args_ptr` names
+                    // the call-args slot of a live JIT frame (unmutated
+                    // while this entry exists): a pusher pops its entry
+                    // before that frame resumes, or detaches it on a
+                    // contained-panic path while the slot is still live
+                    // (`detach_native_frames_into`) -- and root seeding
+                    // runs with the mutator stopped.
                     for i in 0..*nargs as usize {
                         visit(Value::from_bits(unsafe { *args_ptr.add(i) } as usize));
                     }
