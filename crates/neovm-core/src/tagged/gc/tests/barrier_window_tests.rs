@@ -5,8 +5,8 @@
 //! remembered, whose heap call was a no-op insert — and leaves the
 //! remembered set exactly as the old one did.
 
+use super::fake_image::FakeImage;
 use super::*;
-use crate::tagged::header::{ConsCdrOrNext, LispValueVec, VecLikeHeader, VecLikeType, VectorObj};
 
 /// The gate this lever replaced, kept verbatim as the reference model: its
 /// three thread-local flags, the partition-only cons span test, then the
@@ -64,31 +64,6 @@ fn remembered_outside_window(heap: &TaggedHeap, owner: TaggedValue) -> bool {
         && heap.mapped_remembered.contains(&owner.bits())
 }
 
-/// A fake image cons, registered the way the pdump loader registers one
-/// (extends the dump span and turns the partition on).
-fn mapped_cons(heap: &mut TaggedHeap) -> TaggedValue {
-    let cell = Box::into_raw(Box::new([ConsCell {
-        car: TaggedValue::fixnum(1),
-        cdr_or_next: ConsCdrOrNext {
-            cdr: TaggedValue::NIL,
-        },
-    }])) as *mut ConsCell;
-    unsafe { heap.register_mapped_cons_range(cell, 1) };
-    unsafe { TaggedValue::from_cons_ptr(cell) }
-}
-
-/// A fake image vector (owned slots, so a store needs no copy).
-fn mapped_vector(heap: &mut TaggedHeap) -> TaggedValue {
-    let obj = Box::into_raw(Box::new(VectorObj {
-        header: VecLikeHeader::new(VecLikeType::Vector),
-        data: LispValueVec::owned(vec![TaggedValue::NIL; 2]),
-    }));
-    unsafe {
-        heap.register_mapped_veclike_object(obj as *mut VecLikeHeader, size_of::<VectorObj>())
-    };
-    unsafe { TaggedValue::from_veclike_ptr(obj as *const VecLikeHeader) }
-}
-
 /// Store a fresh young cons into `owner` through the mutation wrapper its
 /// kind uses, asserting the wrapper accepted it.
 fn store_into(heap: &mut TaggedHeap, owner: TaggedValue) {
@@ -134,8 +109,9 @@ struct Owners {
 }
 
 fn partitioned_heap_owners(heap: &mut TaggedHeap) -> Owners {
-    let image_cons = mapped_cons(heap);
-    let image_vector = mapped_vector(heap);
+    let image = FakeImage::leak(false);
+    let image_cons = image.register_cons(heap);
+    let image_vector = image.register_vector(heap);
     let tenured_vector = heap.alloc_vector(vec![TaggedValue::NIL; 2]);
     let remembered_vector = heap.alloc_vector(vec![TaggedValue::NIL; 2]);
     let root = heap.alloc_cons(tenured_vector, TaggedValue::NIL);
@@ -282,11 +258,12 @@ fn the_window_is_republished_at_every_writer_of_its_inputs() {
     set_tagged_heap(&mut heap);
     assert_eq!(published_barrier_window(), BarrierWindow::NONE);
 
-    let image = mapped_cons(&mut heap);
+    let fake = FakeImage::leak(false);
+    let image = fake.register_cons(&mut heap);
     let span = BarrierWindow::span(heap.dump_addr_lo, heap.dump_addr_hi);
     assert!(span.covers(image.bits() & !7));
     assert_eq!(published_barrier_window(), span, "extend_dump_span");
-    let second = mapped_vector(&mut heap);
+    let second = fake.register_vector(&mut heap);
     let wider = BarrierWindow::span(heap.dump_addr_lo, heap.dump_addr_hi);
     assert!(wider.covers(image.bits() & !7) && wider.covers(second.bits() & !7));
     assert_eq!(published_barrier_window(), wider, "a second image object");
@@ -365,7 +342,7 @@ fn the_remembered_bit_is_set_exactly_when_the_owner_is_remembered() {
     crate::test_utils::init_test_tracing();
     let mut heap = TaggedHeap::new();
     set_tagged_heap(&mut heap);
-    let image = mapped_vector(&mut heap);
+    let image = FakeImage::leak(false).register_vector(&mut heap);
     let quiet = heap.alloc_vector(vec![TaggedValue::NIL; 2]);
     let young_child = heap.alloc_cons(TaggedValue::fixnum(1), TaggedValue::NIL);
     let parent = heap.alloc_vector(vec![young_child, TaggedValue::NIL]);
@@ -441,7 +418,7 @@ fn compiled_code_and_rust_stores_see_the_same_window() {
         );
     };
     same(&heap, "new heap");
-    let _image = mapped_cons(&mut heap);
+    let _image = FakeImage::leak(false).register_cons(&mut heap);
     same(&heap, "dump span");
     heap.set_write_tracking_mode(WriteTrackingMode::OwnersAndRecords);
     same(&heap, "tracking on");

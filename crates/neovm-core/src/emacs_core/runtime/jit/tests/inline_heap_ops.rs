@@ -189,16 +189,11 @@ fn a_store_during_a_concurrent_mark_logs_its_pre_image() {
 /// barrier, which remembers it; a heap cons beside it is stored inline.
 #[test]
 fn an_image_owner_is_remembered_and_a_heap_owner_is_not() {
-    use crate::tagged::header::{ConsCdrOrNext, ConsCell};
     let mut eval = Context::new();
     let ctx_ptr = &mut eval as *mut Context as *mut u8;
     let leaf = compile_bytecode_function(&store_fn(Op::Setcdr)).expect("compiles");
-    let image_cell = Box::into_raw(Box::new([ConsCell {
-        car: Value::make_int(1),
-        cdr_or_next: ConsCdrOrNext { cdr: Value::NIL },
-    }])) as *mut ConsCell;
-    unsafe { eval.tagged_heap.register_mapped_cons_range(image_cell, 1) };
-    let image = unsafe { Value::from_cons_ptr(image_cell) };
+    let image =
+        crate::tagged::gc::fake_image::FakeImage::leak(false).register_cons(&mut eval.tagged_heap);
     let args = keep(&mut eval, &["(cons 1 nil)", "(list 'young)"]);
     let (heap_cell, child) = (args[0], args[1]);
 
@@ -315,4 +310,333 @@ fn the_inline_heap_write_knob_turns_the_inline_stores_off() {
     let before = shim_calls();
     assert_eq!(native(ctx_ptr, &leaf, &[cell, Value::T], "knob off"), "t");
     assert_eq!(shim_calls() - before, 1);
+}
+
+// ---- `aset` of a plain vector or record ----
+
+/// `(lambda (a i v) (aset a i v))`
+fn aset_fn() -> ByteCodeFunction {
+    lexical_fn(
+        3,
+        vec![
+            Op::StackRef(2),
+            Op::StackRef(2),
+            Op::StackRef(2),
+            Op::Aset,
+            Op::Return,
+        ],
+        vec![],
+    )
+}
+
+fn aset_shim_calls() -> usize {
+    super::dispatch::ASET_SHIM_CALLS.with(|c| c.get())
+}
+
+/// The storage probe finds the owned/mapped discriminant on this toolchain:
+/// if a compiler change moves it, inline `aset` silently stays off, and this
+/// is what notices.
+#[test]
+fn the_owned_storage_probe_answers_on_this_toolchain() {
+    use crate::tagged::header::LispValueVec;
+    assert!(LispValueVec::jit_slice_offsets().is_some());
+    let (offset, word) = LispValueVec::jit_owned_probe().expect("the niche is found");
+    assert_eq!(offset % std::mem::size_of::<usize>(), 0);
+    let backing = [Value::T; 3];
+    let mapped = unsafe { LispValueVec::mapped(backing.as_ptr(), 3) };
+    let owned = LispValueVec::owned(vec![Value::NIL; 4]);
+    let read = |v: &LispValueVec| unsafe {
+        (v as *const LispValueVec as *const u8)
+            .add(offset)
+            .cast::<usize>()
+            .read_unaligned()
+    };
+    assert_eq!(read(&mapped), word);
+    assert_ne!(read(&owned), word);
+}
+
+/// The shapes `aset` stores inline never reach the shim; everything the
+/// shim must decide — strings, bool-vectors, tagged char-table vectors,
+/// out-of-range or non-fixnum indices, non-arrays — still does, with the
+/// interpreter's answer (the full shape matrix is `array_shims`'
+/// `array_sites_match_the_interpreter_natively`, run with this inline path).
+#[test]
+fn plain_vector_and_record_stores_stay_inline() {
+    let mut eval = Context::new();
+    let ctx_ptr = &mut eval as *mut Context as *mut u8;
+    let f = aset_fn();
+    // Without the string intrinsic (`NEOVM_JIT_LEAF=string`), whatever the
+    // environment says: a string store here must reach the shim.
+    force_leaf_knob_for_test(Some(LeafKnob::OFF));
+    let leaf = compile_bytecode_function(&f).expect("aset compiles");
+    force_leaf_knob_for_test(None);
+    assert!(leaf.needs_vmctx);
+    let cases: &[(&str, &str, &str, bool)] = &[
+        ("(vector 1 2 3)", "2", "'z", true),
+        ("(vector 1 2 3)", "0", "(cons 1 2)", true),
+        ("(record 'foo 1 2)", "1", "\"s\"", true),
+        ("(record 'foo 1 2)", "0", "'bar", true),
+        ("(make-vector 1 nil)", "0", "1.5", true),
+        ("(vector 1 2 3)", "3", "'z", false),
+        ("(vector 1 2 3)", "-1", "'z", false),
+        ("(vector 1 2 3)", "'x", "'z", false),
+        ("(vector)", "0", "'z", false),
+        ("(make-bool-vector 5 nil)", "1", "t", false),
+        ("(make-char-table 'foo 7)", "1", "'z", false),
+        (
+            "(let ((v (make-vector 80 nil))) (aset v 0 '--char-table--) v)",
+            "3",
+            "'d",
+            false,
+        ),
+        ("(make-string 3 ?a)", "1", "98", false),
+        ("(cons 1 2)", "0", "'z", false),
+        ("nil", "0", "'z", false),
+    ];
+    // The first call arms the context's `aset` epoch cell through the shim.
+    let warm = keep(&mut eval, &["(vector 0)"])[0];
+    native(
+        ctx_ptr,
+        &leaf,
+        &[warm, Value::make_int(0), Value::T],
+        "warm",
+    );
+    for (array_src, index_src, value_src, inline) in cases {
+        let what = format!("(aset {array_src} {index_src} {value_src})");
+        let fresh = |eval: &mut Context| keep(eval, &[array_src, index_src, value_src]);
+        let args = fresh(&mut eval);
+        let array = args[0];
+        let want = interpret(&mut eval, &f, args);
+        let want_array = print_value(&array);
+        let args = fresh(&mut eval);
+        let array = args[0];
+        let before = aset_shim_calls();
+        let got = native(ctx_ptr, &leaf, &args, &what);
+        assert_eq!(got, want, "{what}");
+        assert_eq!(
+            print_value(&array),
+            want_array,
+            "{what}: the array afterwards"
+        );
+        assert_eq!(
+            aset_shim_calls() - before,
+            usize::from(!inline),
+            "{what}: inline={inline}"
+        );
+    }
+}
+
+/// With the string intrinsic on (`NEOVM_JIT_LEAF=string`, I2) an `aset`
+/// site tries the inline vector store first, the inline string store on
+/// its miss path, then the shim: a vector or record store stays inline, a
+/// same-width string store is still answered inline by the string store,
+/// and everything else reaches the shim, all as the interpreter answers.
+#[test]
+fn a_string_store_still_reaches_the_string_inline_behind_the_vector_store() {
+    #[cfg(debug_assertions)]
+    use std::sync::atomic::Ordering;
+    let mut eval = Context::new();
+    let ctx_ptr = &mut eval as *mut Context as *mut u8;
+    let f = aset_fn();
+    #[cfg(debug_assertions)]
+    let (heap0, string0) = (
+        super::heap_inline::INLINE_HEAP_STORES_EMITTED.load(Ordering::Relaxed),
+        super::lowering::STRING_ASET_INLINE_EMITTED.load(Ordering::Relaxed),
+    );
+    force_leaf_knob_for_test(Some(LeafKnob {
+        string: true,
+        ..LeafKnob::OFF
+    }));
+    let leaf = compile_bytecode_function(&f).expect("aset compiles");
+    force_leaf_knob_for_test(None);
+    #[cfg(debug_assertions)]
+    {
+        assert!(
+            super::heap_inline::INLINE_HEAP_STORES_EMITTED.load(Ordering::Relaxed) > heap0,
+            "the vector store was emitted"
+        );
+        assert!(
+            super::lowering::STRING_ASET_INLINE_EMITTED.load(Ordering::Relaxed) > string0,
+            "the string store was emitted"
+        );
+    }
+    let cases: &[(&str, &str, &str, bool)] = &[
+        ("(vector 1 2 3)", "2", "'z", true),
+        ("(record 'foo 1 2)", "1", "\"s\"", true),
+        ("(make-string 3 ?a)", "1", "98", true),
+        ("(string-to-multibyte (make-string 3 ?a))", "2", "127", true),
+        // A width change, a non-array, a bad index: the shim.
+        (
+            "(string-to-multibyte (make-string 3 ?a))",
+            "1",
+            "200",
+            false,
+        ),
+        ("(cons 1 2)", "0", "'z", false),
+        ("(vector 1 2 3)", "3", "'z", false),
+    ];
+    // The first call arms the context's `aset` epoch cell through the shim.
+    let warm = keep(&mut eval, &["(vector 0)"])[0];
+    native(
+        ctx_ptr,
+        &leaf,
+        &[warm, Value::make_int(0), Value::T],
+        "warm",
+    );
+    for (array_src, index_src, value_src, inline) in cases {
+        let what = format!("(aset {array_src} {index_src} {value_src})");
+        let fresh = |eval: &mut Context| keep(eval, &[array_src, index_src, value_src]);
+        let args = fresh(&mut eval);
+        let array = args[0];
+        let want = interpret(&mut eval, &f, args);
+        let want_array = print_value(&array);
+        let args = fresh(&mut eval);
+        let array = args[0];
+        let before = aset_shim_calls();
+        let got = native(ctx_ptr, &leaf, &args, &what);
+        assert_eq!(got, want, "{what}");
+        assert_eq!(
+            print_value(&array),
+            want_array,
+            "{what}: the array afterwards"
+        );
+        assert_eq!(
+            aset_shim_calls() - before,
+            usize::from(!inline),
+            "{what}: inline={inline}"
+        );
+    }
+}
+
+/// A stale `aset` epoch (a function-cell write since the cell was armed)
+/// sends the next store to the shim, which re-arms the cell; the store
+/// after it is inline again. A redefined `aset` keeps every store in the
+/// shim, which answers the general call.
+#[test]
+fn a_function_cell_write_sends_the_next_aset_to_the_shim() {
+    let mut eval = Context::new();
+    let ctx_ptr = &mut eval as *mut Context as *mut u8;
+    let leaf = compile_bytecode_function(&aset_fn()).expect("aset compiles");
+    let v = eval
+        .eval_str("(setq aset-epoch-vector (vector 0 0))")
+        .expect("v");
+    let store = |eval: &mut Context, n: i64| {
+        let _ = eval;
+        native(
+            ctx_ptr,
+            &leaf,
+            &[v, Value::make_int(1), Value::make_int(n)],
+            "aset",
+        )
+    };
+    store(&mut eval, 1);
+    let before = aset_shim_calls();
+    store(&mut eval, 2);
+    assert_eq!(aset_shim_calls(), before, "an armed cell stores inline");
+
+    eval.eval_str("(fset 'aset-epoch-mover (lambda () nil))")
+        .expect("fset");
+    let before = aset_shim_calls();
+    store(&mut eval, 3);
+    assert_eq!(aset_shim_calls() - before, 1, "a moved epoch re-validates");
+    let before = aset_shim_calls();
+    store(&mut eval, 4);
+    assert_eq!(aset_shim_calls(), before, "re-armed");
+    assert_eq!(print_value(&v), "[0 4]");
+
+    eval.eval_str(
+        "(progn (defvar aset-orig (symbol-function 'aset))
+                (fset 'aset (lambda (a i v) (funcall aset-orig a i (list v)))))",
+    )
+    .expect("redefine");
+    for n in 5..8 {
+        let before = aset_shim_calls();
+        store(&mut eval, n);
+        assert_eq!(
+            aset_shim_calls() - before,
+            1,
+            "a redefined aset never inlines"
+        );
+    }
+    assert_eq!(print_value(&v), "[0 (7)]");
+    eval.eval_str("(fset 'aset aset-orig)").expect("restore");
+}
+
+/// Tenured owners (a partitioned heap after its first cycle): an owner the
+/// remembered set lacks goes to the shim once, whose barrier remembers it;
+/// from then on its stores are inline. An image vector (in the window, and
+/// mapped storage a store must copy) always goes to the shim.
+#[test]
+fn tenured_owners_store_inline_once_remembered() {
+    let mut eval = Context::new();
+    let ctx_ptr = &mut eval as *mut Context as *mut u8;
+    let leaf = compile_bytecode_function(&aset_fn()).expect("aset compiles");
+    // A fake image turns the dump partition on; the next collection is its
+    // first cycle and tenures every survivor. Its vector's slots are mapped
+    // storage.
+    let image = crate::tagged::gc::fake_image::FakeImage::leak(true);
+    image.register_cons(&mut eval.tagged_heap);
+    let image_vector = image.register_vector(&mut eval.tagged_heap);
+    eval.eval_str("(setq aset-old-a (vector 1 2 3) aset-old-b (record 'r 1 2))")
+        .expect("owners");
+    eval.eval_str("(garbage-collect)")
+        .expect("first partition cycle");
+    let a = eval.eval_str("aset-old-a").expect("a");
+    let b = eval.eval_str("aset-old-b").expect("b");
+    assert!(eval.tagged_heap.is_tenured_for_test(a));
+    assert!(eval.tagged_heap.is_tenured_for_test(b));
+    // Arm the context's `aset` epoch cell.
+    let young = keep(&mut eval, &["(vector 0)"])[0];
+    native(
+        ctx_ptr,
+        &leaf,
+        &[young, Value::make_int(0), Value::T],
+        "arm",
+    );
+
+    for owner in [a, b] {
+        assert!(!eval.tagged_heap.is_remembered_for_test(owner));
+        let child = keep(&mut eval, &["(list 'young-child)"])[0];
+        let before = aset_shim_calls();
+        native(ctx_ptr, &leaf, &[owner, Value::make_int(1), child], "first");
+        assert_eq!(
+            aset_shim_calls() - before,
+            1,
+            "{owner:?}: the barrier remembers it"
+        );
+        assert!(eval.tagged_heap.is_remembered_for_test(owner));
+        let before = aset_shim_calls();
+        for n in 0..4 {
+            let child = keep(&mut eval, &["(list 'another)"])[0];
+            native(ctx_ptr, &leaf, &[owner, Value::make_int(2), child], "again");
+            let _ = n;
+        }
+        assert_eq!(
+            aset_shim_calls(),
+            before,
+            "{owner:?}: remembered owners store inline"
+        );
+    }
+    // The young children stored into the old owners survive a collection
+    // (the remembered set re-seeds them).
+    eval.eval_str("(garbage-collect)").expect("second cycle");
+    assert_eq!(print_value(&a), "[1 (young-child) (another)]");
+    assert_eq!(print_value(&b), "#s(r (young-child) (another))");
+
+    let before = aset_shim_calls();
+    assert_eq!(
+        native(
+            ctx_ptr,
+            &leaf,
+            &[image_vector, Value::make_int(0), Value::T],
+            "image"
+        ),
+        "t"
+    );
+    assert_eq!(
+        aset_shim_calls() - before,
+        1,
+        "an image vector takes the shim"
+    );
+    assert_eq!(print_value(&image_vector), "[t 9 9]");
 }

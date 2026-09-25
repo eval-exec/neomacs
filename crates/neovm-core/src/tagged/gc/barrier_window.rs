@@ -122,6 +122,11 @@ impl TaggedHeap {
         self.mapped_remembered.contains(&owner.bits())
     }
 
+    /// Test hook: is `value` a tenured (old-generation) heap object?
+    pub(crate) fn is_tenured_for_test(&self, value: TaggedValue) -> bool {
+        self.value_is_tenured(value)
+    }
+
     /// Test hook: the window compiled code tests (`JitHeapState`).
     pub(crate) fn jit_barrier_window_for_test(&self) -> BarrierWindow {
         self.jit.barrier_window()

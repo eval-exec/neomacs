@@ -194,6 +194,10 @@ pub struct GcHeader {
     pub next: *mut GcHeader,
 }
 
+/// `tenured` and `remembered` are adjacent bytes: compiled code tests both
+/// with one 16-bit load (see [`GcHeader::NEEDS_REMEMBERING_U16`]).
+pub(crate) const GC_HEADER_TENURED_OFFSET: usize = std::mem::offset_of!(GcHeader, tenured);
+const _: () = assert!(std::mem::offset_of!(GcHeader, remembered) == GC_HEADER_TENURED_OFFSET + 1);
 const _: () = assert!(std::mem::size_of::<GcHeader>() == 16);
 
 impl GcHeader {
@@ -212,6 +216,11 @@ impl GcHeader {
             next: std::ptr::null_mut(),
         }
     }
+
+    /// The `(tenured, remembered)` byte pair of a header whose owner still
+    /// needs the write barrier outside its window — tenured, not yet
+    /// remembered — read as one native-endian `u16`.
+    pub(crate) const NEEDS_REMEMBERING_U16: u16 = u16::from_ne_bytes([1, 0]);
 
     /// Whether a write by the (non-cons, outside-the-window) owner whose
     /// header is at `header` must reach the heap: it is tenured and the
@@ -731,6 +740,55 @@ impl LispValueVec {
             let mapped_ptr = find(&mapped_words, backing.as_ptr() as usize)?;
             let mapped_len = find(&mapped_words, 5)?;
             (owned_ptr == mapped_ptr && owned_len == mapped_len).then_some((owned_ptr, owned_len))
+        })
+    }
+
+    /// Where, within a `LispValueVec`, compiled code can tell mapped
+    /// storage from owned: `(byte offset, word)` such that every `Mapped`
+    /// value holds `word` at that offset and no `Owned` value does — the
+    /// storage enum's niche discriminant. `None` when no single word
+    /// separates them. The enum's layout is the compiler's choice, so it is
+    /// measured here rather than assumed: owned storage of several
+    /// capacities (empty, exact, spare) against mapped storage of two
+    /// different pointers and lengths.
+    pub(crate) fn jit_owned_probe() -> Option<(usize, usize)> {
+        static PROBE: std::sync::OnceLock<Option<(usize, usize)>> = std::sync::OnceLock::new();
+        *PROBE.get_or_init(|| {
+            const WORD: usize = std::mem::size_of::<usize>();
+            let words = std::mem::size_of::<LispValueVec>() / WORD;
+            let read = |v: &LispValueVec| -> Vec<usize> {
+                let base = v as *const LispValueVec as *const usize;
+                // SAFETY: reads `words` whole words inside the value.
+                (0..words)
+                    .map(|i| unsafe { base.add(i).read_unaligned() })
+                    .collect()
+            };
+            let mut spare = Vec::with_capacity(1000);
+            spare.extend([TaggedValue::T; 7]);
+            let owned = [
+                LispValueVec::owned(Vec::new()),
+                LispValueVec::owned(vec![TaggedValue::NIL; 3]),
+                LispValueVec::owned(spare),
+            ];
+            let backing_a = [TaggedValue::T; 5];
+            let backing_b = [TaggedValue::NIL; 2];
+            // SAFETY: both backings outlive their views, never mutated.
+            let mapped = unsafe {
+                [
+                    LispValueVec::mapped(backing_a.as_ptr(), 5),
+                    LispValueVec::mapped(backing_b.as_ptr(), 2),
+                ]
+            };
+            let owned_words: Vec<Vec<usize>> = owned.iter().map(read).collect();
+            let mapped_words: Vec<Vec<usize>> = mapped.iter().map(read).collect();
+            let mut hits = (0..words).filter_map(|i| {
+                let word = mapped_words[0][i];
+                (mapped_words.iter().all(|w| w[i] == word)
+                    && owned_words.iter().all(|w| w[i] != word))
+                .then_some((i * WORD, word))
+            });
+            let hit = hits.next()?;
+            hits.next().is_none().then_some(hit)
         })
     }
 

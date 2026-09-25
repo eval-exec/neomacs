@@ -828,28 +828,35 @@ pub(crate) fn lower_car_cdr(
     fb.use_var(res)
 }
 
-/// `aref` of a plain vector or record, read inline — GNU `Baref`'s
-/// in-bytecode path. Emits the checks `neovm_jit_aref`'s fast path makes
-/// (a vector or record, a fixnum index in range, not a tagged char-table or
-/// bool-vector vector), branching to `slow` when any fails; on success defines
-/// `res` as the slot and jumps to `merge`. The shim was ~60 instructions per
-/// `aref` with the call: 63M arefs in elb nbody.
+/// A plain vector or record slot, located inline: what `aref` reads and
+/// `aset` stores.
+pub(crate) struct PlainSlot {
+    /// The untagged object (its `VecLikeHeader`/`GcHeader` address).
+    pub(crate) object: ClifValue,
+    /// The slot's address.
+    pub(crate) slot: ClifValue,
+}
+
+/// The checks `aref` and `aset` share, emitted inline — the fast path of
+/// `neovm_jit_aref`/`_aset`: a vector or record, a fixnum index in range,
+/// not a tagged char-table or bool-vector vector. With `owned_probe` (the
+/// `LispValueVec::jit_owned_probe` answer) it also refuses mapped storage,
+/// which a store must copy first. Branches to `slow` when any check fails
+/// and leaves the builder in a fresh sealed block with every check passed.
 ///
-/// Returns `false`, emitting nothing, when this build's vector storage does
+/// Returns `None`, emitting nothing, when this build's vector storage does
 /// not keep its element pointer and length at offsets every storage kind
-/// shares (`LispValueVec::jit_slice_offsets`).
-fn emit_inline_aref(
+/// shares (`LispValueVec::jit_slice_offsets`). The two ops share this one
+/// emitter so their shape tests cannot drift apart.
+pub(crate) fn emit_plain_slot_address(
     fb: &mut FunctionBuilder,
     array: ClifValue,
     index: ClifValue,
     slow: Block,
-    res: Variable,
-    merge: Block,
-) -> bool {
+    owned_probe: Option<(usize, usize)>,
+) -> Option<PlainSlot> {
     use crate::tagged::header::{LispValueVec, VecLikeHeader, VecLikeType, VectorObj};
-    let Some((ptr_off, len_off)) = LispValueVec::jit_slice_offsets() else {
-        return false;
-    };
+    let (ptr_off, len_off) = LispValueVec::jit_slice_offsets()?;
     const_assert_vector_record_share_layout();
     let data_off = core::mem::offset_of!(VectorObj, data);
     let type_off = core::mem::offset_of!(VecLikeHeader, type_tag);
@@ -885,6 +892,21 @@ fn emit_inline_aref(
     fb.ins().brif(either, ranged, &[], slow, &[]);
     fb.switch_to_block(ranged);
     fb.seal_block(ranged);
+    if let Some((disc_off, mapped_word)) = owned_probe {
+        // Mapped (image) storage: the store must copy it first (the shim's
+        // `ensure_owned`).
+        let disc = fb.ins().load(
+            types::I64,
+            MemFlagsData::trusted(),
+            object,
+            (data_off + disc_off) as i32,
+        );
+        let mapped = fb.ins().icmp_imm_u(IntCC::Equal, disc, mapped_word as i64);
+        let owned = fb.create_block();
+        fb.ins().brif(mapped, slow, &[], owned, &[]);
+        fb.switch_to_block(owned);
+        fb.seal_block(owned);
+    }
     let len = fb.ins().load(
         types::I64,
         MemFlagsData::trusted(),
@@ -922,12 +944,33 @@ fn emit_inline_aref(
     let tagged = fb.ins().bor(is_bool_vector, char_table);
     let two_or_more = icmp_imm_p(fb, IntCC::UnsignedGreaterThanOrEqual, len, 2);
     let not_plain = fb.ins().band(tagged, two_or_more);
-    let load = fb.create_block();
-    fb.ins().brif(not_plain, slow, &[], load, &[]);
-    fb.switch_to_block(load);
-    fb.seal_block(load);
+    let located = fb.create_block();
+    fb.ins().brif(not_plain, slow, &[], located, &[]);
+    fb.switch_to_block(located);
+    fb.seal_block(located);
     let byte_off = ishl_imm_p(fb, i, 3);
     let slot = fb.ins().iadd(slots, byte_off);
+    Some(PlainSlot { object, slot })
+}
+
+/// `aref` of a plain vector or record, read inline — GNU `Baref`'s
+/// in-bytecode path. Emits the checks `neovm_jit_aref`'s fast path makes
+/// ([`emit_plain_slot_address`]), branching to `slow` when any fails; on
+/// success defines `res` as the slot and jumps to `merge`. The shim was ~60
+/// instructions per `aref` with the call: 63M arefs in elb nbody.
+///
+/// Returns `false`, emitting nothing, when the layout probes fail.
+fn emit_inline_aref(
+    fb: &mut FunctionBuilder,
+    array: ClifValue,
+    index: ClifValue,
+    slow: Block,
+    res: Variable,
+    merge: Block,
+) -> bool {
+    let Some(PlainSlot { slot, .. }) = emit_plain_slot_address(fb, array, index, slow, None) else {
+        return false;
+    };
     let element = fb.ins().load(types::I64, MemFlagsData::trusted(), slot, 0);
     fb.def_var(res, element);
     fb.ins().jump(merge, &[]);
@@ -7072,20 +7115,56 @@ fn lower_simple_op_arms(
             let operands = [stack[at], stack[at + 1], stack[at + 2]];
             stack.truncate(at);
             let res = fb.declare_var(types::I64);
+            // JIT `aset` of a plain vector or record whose owner the barrier
+            // need not see stores inline (`heap_inline::emit_inline_aset`)
+            // and jumps to `cont`, created here for it (else below, where
+            // the shim-only lowering creates it: the same CLIF with the knob
+            // off). The inline path stores nothing in the root window, so
+            // the general call's carry meet below stays exact.
+            let early_cont = (!aot && jit_inline_heap_write_on()).then(|| fb.create_block());
+            let inline_vector_slow = if let Some(cont) = early_cont {
+                let slow = fb.create_block();
+                super::heap_inline::emit_inline_aset(
+                    fb,
+                    rt,
+                    operands[0],
+                    operands[1],
+                    operands[2],
+                    slow,
+                    res,
+                    cont,
+                )
+                .then(|| {
+                    fb.switch_to_block(slow);
+                    fb.seal_block(slow);
+                    slow
+                })
+            } else {
+                None
+            };
             // `NEOVM_JIT_LEAF=string` (I2): a same-width byte store into a
             // string's owned storage, inline, behind the shim's own `aset`
-            // redefinition gate; everything else calls the shim.
+            // redefinition gate; everything else calls the shim. It runs
+            // where the vector store declined, so a vector store never pays
+            // its string test.
             let inline_string = if !aot && super::jit_leaf_knob().string {
                 let merge = fb.create_block();
                 let slow = fb.create_block();
                 emit_inline_string_aset(fb, rt, operands, slow, res, merge).then(|| {
                     fb.switch_to_block(slow);
                     fb.seal_block(slow);
-                    merge
+                    (merge, slow)
                 })
             } else {
                 None
             };
+            // Behind an inline vector store the shim is the cold path: the
+            // block that calls it is the string store's miss when one
+            // follows (the string test itself stays in line), else the
+            // vector store's.
+            if let Some(vector_slow) = inline_vector_slow {
+                fb.set_cold_block(inline_string.map_or(vector_slow, |(_, slow)| slow));
+            }
             let vmctx = fb.use_var(rt.vmctx_var);
             let aset = rt.refs.get(fb.func, Shim::Aset);
             let call = fb
@@ -7093,7 +7172,7 @@ fn lower_simple_op_arms(
                 .call(aset, &[vmctx, operands[0], operands[1], operands[2]]);
             let word = fb.inst_results(call)[0];
             fb.def_var(res, word);
-            let cont = fb.create_block();
+            let cont = early_cont.unwrap_or_else(|| fb.create_block());
             let sentinel = fb.create_block();
             let tag = band_imm_p(fb, word, TAG_MASK as i64);
             let is_sentinel = icmp_imm_p(
@@ -7153,7 +7232,7 @@ fn lower_simple_op_arms(
 
             fb.switch_to_block(cont);
             fb.seal_block(cont);
-            if let Some(merge) = inline_string {
+            if let Some((merge, _)) = inline_string {
                 // The inline store stored nothing the root window tracks
                 // and started no activation: the continuation keeps the
                 // shim path's store record.

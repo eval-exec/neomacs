@@ -2472,6 +2472,10 @@ mod barrier_window_tests;
 mod bignum_arena_tests;
 #[cfg(test)]
 mod cons_alloc_tests;
+/// A fake pdump image in one allocation (see the module doc for why one).
+#[cfg(test)]
+#[path = "gc/tests/fake_image.rs"]
+pub(crate) mod fake_image;
 #[cfg(test)]
 mod marker_arena_tests;
 #[cfg(test)]

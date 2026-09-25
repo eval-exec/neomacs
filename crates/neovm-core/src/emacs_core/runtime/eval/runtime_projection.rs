@@ -27,6 +27,12 @@ pub(crate) const CONTEXT_TAGGED_HEAP_OFFSET: usize = std::mem::offset_of!(Contex
 const _: () = assert!(
     std::mem::size_of::<Box<crate::tagged::gc::TaggedHeap>>() == std::mem::size_of::<usize>()
 );
+/// Where compiled code reads `Context::aset_fast_path_epoch` (a `Cell<u64>`,
+/// laid out as the `u64`): the function epoch at which `aset` was last found
+/// to be the builtin (`neovm_jit_aset`'s gate, inlined at JIT `aset` sites).
+pub(crate) const CONTEXT_ASET_EPOCH_OFFSET: usize =
+    std::mem::offset_of!(Context, aset_fast_path_epoch);
+const _: () = assert!(std::mem::size_of::<std::cell::Cell<u64>>() == std::mem::size_of::<u64>());
 /// The gate's membership as one bit per symbol id, resolved against the
 /// current obarray (after any dump remap): the Context mirrors passed in by
 /// `install_core_eval_symbols`, the keyboard maps, the GC settings the

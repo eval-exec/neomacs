@@ -1,5 +1,6 @@
-//! Heap writes inline in JIT code (lever P0.7): the stores `setcar` and
-//! `setcdr` make, done in place instead of in `neovm_jit_setcar`/`_setcdr`.
+//! Heap writes inline in JIT code (lever P0.7): the stores `setcar`,
+//! `setcdr` and `aset` (of a plain vector or record) make, done in place
+//! instead of in `neovm_jit_setcar`/`_setcdr`/`_aset`.
 //!
 //! The write barrier's whole inline decision is one owner-address window
 //! (`tagged::gc::BarrierWindow`), which the heap publishes into its
@@ -144,6 +145,94 @@ pub(crate) fn emit_inline_cons_store(
     INLINE_HEAP_STORES_EMITTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// `aset` of a plain vector or record, inline — GNU `Baset`'s in-bytecode
+/// `ASET`: owned storage, an in-range fixnum index, not a tagged char-table
+/// or bool-vector, an owner outside the barrier window that is not a
+/// tenured owner the remembered set still lacks. On success stores `value`,
+/// defines `res` as it and jumps to `cont`; anything else branches to
+/// `slow`, where the caller emits the unchanged shim call (strings, signals,
+/// mapped storage, the barrier's slow path).
+///
+/// neomacs's `Op::Aset` honours a redefined or advised `aset` (GNU `Baset`
+/// never reads the function cell; a pre-existing deviation kept for tier
+/// parity), so the site first compares the context's `aset` epoch cell with
+/// the obarray's function epoch — the shim's own test, bit for bit — and a
+/// mismatch takes the shim, which re-validates and re-arms the cell.
+///
+/// Returns `false`, emitting nothing, when a layout probe fails
+/// (`LispValueVec::jit_slice_offsets` / `jit_owned_probe`).
+pub(crate) fn emit_inline_aset(
+    fb: &mut FunctionBuilder,
+    rt: &RtCtx,
+    array: ClifValue,
+    index: ClifValue,
+    value: ClifValue,
+    slow: Block,
+    res: Variable,
+    cont: Block,
+) -> bool {
+    use crate::emacs_core::eval::runtime_projection::CONTEXT_ASET_EPOCH_OFFSET;
+    use crate::emacs_core::symbol::OBARRAY_FUNCTION_EPOCH_OFFSET;
+    use crate::tagged::header::{GC_HEADER_TENURED_OFFSET, GcHeader, LispValueVec};
+    if LispValueVec::jit_slice_offsets().is_none() {
+        return false;
+    }
+    let Some(owned_probe) = LispValueVec::jit_owned_probe() else {
+        return false;
+    };
+    let vmctx = fb.use_var(rt.vmctx_var);
+    let armed = fb.ins().load(
+        types::I64,
+        MemFlagsData::trusted(),
+        vmctx,
+        CONTEXT_ASET_EPOCH_OFFSET as i32,
+    );
+    let epoch = fb.ins().load(
+        types::I64,
+        MemFlagsData::trusted(),
+        vmctx,
+        (core::mem::offset_of!(Context, obarray) + OBARRAY_FUNCTION_EPOCH_OFFSET) as i32,
+    );
+    let stale = fb.ins().icmp(IntCC::NotEqual, armed, epoch);
+    let armed_block = fb.create_block();
+    fb.ins().brif(stale, slow, &[], armed_block, &[]);
+    fb.switch_to_block(armed_block);
+    fb.seal_block(armed_block);
+    let Some(super::lowering::PlainSlot { object, slot }) =
+        emit_plain_slot_address(fb, array, index, slow, Some(owned_probe))
+    else {
+        unreachable!("the slice offsets were probed above");
+    };
+    let heap = heap_ptr(fb, rt);
+    emit_barrier_window_check(fb, heap, object, slow);
+    // Outside the window only a tenured owner the remembered set lacks
+    // needs the barrier: `tenured` and `remembered` are adjacent header
+    // bytes, tested as one `u16`.
+    let pair = fb.ins().uload16(
+        types::I64,
+        MemFlagsData::trusted(),
+        object,
+        GC_HEADER_TENURED_OFFSET as i32,
+    );
+    let needs_remembering = icmp_imm_p(
+        fb,
+        IntCC::Equal,
+        pair,
+        GcHeader::NEEDS_REMEMBERING_U16 as i64,
+    );
+    let store = fb.create_block();
+    fb.ins().brif(needs_remembering, slow, &[], store, &[]);
+    fb.switch_to_block(store);
+    fb.seal_block(store);
+    fb.ins().store(MemFlagsData::trusted(), value, slot, 0);
+    fb.def_var(res, value);
+    fb.ins().jump(cont, &[]);
+    note_inline_site();
+    #[cfg(debug_assertions)]
+    INLINE_HEAP_STORES_EMITTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    true
+}
+
 /// Whether a baseline body's inline heap sites justify loading the heap
 /// pointer once at entry: two sites, or one inside a loop (the root-window
 /// hoisting rule).
@@ -154,5 +243,5 @@ pub(crate) fn hoist_heap_ptr(ops: &[Op], has_back_edge: bool) -> bool {
 
 /// Whether the baseline lowers `op` with an inline heap site (JIT only).
 fn op_is_inline_heap_site(op: &Op) -> bool {
-    matches!(op, Op::Setcar | Op::Setcdr) && jit_inline_heap_write_on()
+    matches!(op, Op::Setcar | Op::Setcdr | Op::Aset) && jit_inline_heap_write_on()
 }
