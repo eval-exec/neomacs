@@ -2205,6 +2205,14 @@ impl VmProcessKnobs {
 }
 
 impl<'a> Vm<'a> {
+    /// Transitional adapter for the P0.4 deopt-reoptimization series, which
+    /// was written against the pre-`ArithGenericKind` helper: the generic
+    /// kind's discriminant and operand count. Removed at the end of that
+    /// series in favour of [`ArithGenericKind::from_op`].
+    pub(crate) fn arith_generic_kind(op: &Op) -> Option<(i64, usize)> {
+        ArithGenericKind::from_op(op).map(|kind| (kind as i64, kind.arity()))
+    }
+
     pub(crate) fn from_context(ctx: &'a mut crate::emacs_core::eval::Context) -> Self {
         #[cfg(feature = "jit")]
         let knobs = VmProcessKnobs::get();
