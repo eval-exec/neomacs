@@ -96,6 +96,9 @@ fn operands(ev: &mut Context, sources: &[&str]) -> Vec<Value> {
     crate::emacs_core::value::list_to_vec(&list).expect("proper")
 }
 
+/// Both miss paths an opcode site may have.
+const LEAF_KNOBS: [LeafKnob; 2] = [LeafKnob::DEFAULT, LeafKnob::OFF];
+
 #[test]
 fn intrinsic_knob_parses() {
     assert_eq!(IntrinsicKnob::parse(None), IntrinsicKnob::OFF);
@@ -106,8 +109,9 @@ fn intrinsic_knob_parses() {
         assert_eq!(IntrinsicKnob::parse(Some(on)), IntrinsicKnob::ALL, "{on}");
     }
     assert_eq!(
-        IntrinsicKnob::parse(Some("symbol-value,bogus")),
+        IntrinsicKnob::parse(Some("length, symbol-value,bogus")),
         IntrinsicKnob {
+            length: true,
             symbol_value: true,
             ..IntrinsicKnob::OFF
         }
@@ -121,7 +125,7 @@ fn knob_off_emits_no_intrinsic() {
         .iter()
         .map(|&w| intrinsic_sites_for_test(w))
         .collect();
-    for (op, nargs) in [(Op::SymbolValue, 1)] {
+    for (op, nargs) in [(Op::Length, 1), (Op::SymbolValue, 1)] {
         compile_with(&opcode_fn(op, nargs), LeafKnob::DEFAULT, IntrinsicKnob::OFF);
     }
     let after: Vec<u64> = Intrinsic::ALL
@@ -129,6 +133,71 @@ fn knob_off_emits_no_intrinsic() {
         .map(|&w| intrinsic_sites_for_test(w))
         .collect();
     assert_eq!(before, after);
+}
+
+// ---------------------------------------------------------------------------
+// I3: length.
+// ---------------------------------------------------------------------------
+
+/// `length` over every sequence shape, natively against `Blength`; the
+/// inline path answers nil, proper lists up to 64 conses, strings and plain
+/// vectors and records (the leaf trampoline does not run), and leaves the
+/// rest -- longer, improper and circular lists, bool-vectors, char-tables,
+/// closures and non-sequences -- to the call.
+#[test]
+fn length_intrinsic_matches_blength() {
+    let mut ev = Context::new();
+    let ctx_ptr = &mut ev as *mut Context as *mut u8;
+    // (source, answered inline)
+    let cases: &[(&str, bool)] = &[
+        ("nil", true),
+        ("'(a)", true),
+        ("'(a b c)", true),
+        ("(make-list 63 'x)", true),
+        ("(make-list 64 'x)", true),
+        ("(make-list 65 'x)", false),
+        ("(make-list 200 'x)", false),
+        ("'(a . b)", false),
+        ("'(a b . c)", false),
+        ("(let ((l (list 1 2 3))) (setcdr (cdr (cdr l)) l) l)", false),
+        ("\"\"", true),
+        ("\"abc\"", true),
+        ("\"a\u{3b2}c\"", true),
+        ("(string-to-unibyte \"a\\377c\")", true),
+        ("[]", true),
+        ("[1]", true),
+        ("[1 2 3]", true),
+        ("(record 'foo 1 2)", true),
+        ("(make-bool-vector 3 t)", false),
+        ("(make-bool-vector 70 nil)", false),
+        ("(make-char-table 'foo)", false),
+        ("(symbol-function 'car)", false),
+        ("5", false),
+        ("'a", false),
+        ("1.5", false),
+        ("t", false),
+    ];
+    let sources: Vec<&str> = cases.iter().map(|(s, _)| *s).collect();
+    let values = operands(&mut ev, &sources);
+    let f = opcode_fn(Op::Length, 1);
+    for leaf_knob in LEAF_KNOBS {
+        let sites0 = intrinsic_sites_for_test(Intrinsic::Length);
+        let leaf = compile_with(&f, leaf_knob, IntrinsicKnob::ALL);
+        assert_eq!(intrinsic_sites_for_test(Intrinsic::Length), sites0 + 1);
+        for (&v, (src, inline)) in values.iter().zip(cases) {
+            let what = format!("(length {src}) {leaf_knob:?}");
+            let want = interpret(&mut ev, &f, vec![v]);
+            let calls0 = leaf_trampoline_calls(LeafId::Length);
+            assert_eq!(native(ctx_ptr, &leaf, &[v], &what), want, "{what}");
+            if leaf_knob.opcode {
+                assert_eq!(
+                    leaf_trampoline_calls(LeafId::Length) - calls0,
+                    u64::from(!inline),
+                    "{what}: answered inline = {inline}"
+                );
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

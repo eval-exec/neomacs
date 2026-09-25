@@ -380,18 +380,25 @@ impl LeafKnob {
 /// time only, and off emits exactly the former code (single-build A/B).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub(crate) struct IntrinsicKnob {
+    /// I3: `Op::Length` of nil, a short proper list, a string, a plain
+    /// vector or record.
+    pub(crate) length: bool,
     /// I6: `Op::SymbolValue` of a bare symbol with a plain, bound cell.
     pub(crate) symbol_value: bool,
 }
 
 impl IntrinsicKnob {
     pub(crate) const OFF: Self = Self {
+        length: false,
         symbol_value: false,
     };
-    pub(crate) const ALL: Self = Self { symbol_value: true };
+    pub(crate) const ALL: Self = Self {
+        length: true,
+        symbol_value: true,
+    };
 
     /// Unset/`off`/`0`: nothing; `on`/`1`/`all`: every intrinsic; otherwise
-    /// a comma list of `symbol-value`.
+    /// a comma list of `length`, `symbol-value`.
     pub(crate) fn parse(value: Option<&str>) -> Self {
         let Some(value) = value.map(str::trim) else {
             return Self::OFF;
@@ -404,12 +411,13 @@ impl IntrinsicKnob {
         let mut knob = Self::OFF;
         for part in value.split(',').map(str::trim) {
             match part {
+                "length" => knob.length = true,
                 "symbol-value" => knob.symbol_value = true,
                 other => tracing::warn!(
                     target: "neovm_jit",
                     part = other,
                     "NEOVM_JIT_INTRINSICS: unknown part ignored \
-                     (expected symbol-value)"
+                     (expected length, symbol-value)"
                 ),
             }
         }

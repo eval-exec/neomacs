@@ -1,5 +1,5 @@
 //! CLIF intrinsics for leaf builtins (design `p1-2-builtin-intrinsics` §2.7):
-//! I6 `symbol-value`.
+//! I3 `length`, I6 `symbol-value`.
 //!
 //! Each is a PREFIX of its opcode site: the common shape is answered inline,
 //! and every other shape falls through -- never to a deopt -- into the code
@@ -18,8 +18,8 @@
 //! nothing was emitted.
 
 use super::lowering::{
-    RtCtx, band_imm_p, binary_value_and_iconst, icmp_imm_p, iconst_bits, ishl_imm_p,
-    rootwin_carry_meet, rootwin_carry_snapshot, ushr_imm_p,
+    RtCtx, band_imm_p, binary_value_and_iconst, bor_imm_p, iadd_imm_p, icmp_imm_p, iconst_bits,
+    ishl_imm_p, rootwin_carry_meet, rootwin_carry_snapshot, ushr_imm_p,
 };
 use super::*;
 use cranelift_codegen::ir::{Block, InstBuilder, MemFlagsData, types};
@@ -28,16 +28,20 @@ use cranelift_codegen::ir::{Block, InstBuilder, MemFlagsData, types};
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Intrinsic {
+    /// I3: `Op::Length`.
+    Length,
     /// I6: `Op::SymbolValue`.
     SymbolValue,
 }
 
 impl Intrinsic {
     pub(crate) const COUNT: usize = Intrinsic::SymbolValue as usize + 1;
-    pub(crate) const ALL: [Intrinsic; Intrinsic::COUNT] = [Intrinsic::SymbolValue];
+    pub(crate) const ALL: [Intrinsic; Intrinsic::COUNT] =
+        [Intrinsic::Length, Intrinsic::SymbolValue];
 
     pub(crate) const fn name(self) -> &'static str {
         match self {
+            Intrinsic::Length => "length",
             Intrinsic::SymbolValue => "symbol-value",
         }
     }
@@ -45,14 +49,18 @@ impl Intrinsic {
     /// The intrinsic an opcode site may emit.
     pub(crate) fn of(op: &Op) -> Option<Intrinsic> {
         Some(match op {
+            Op::Length => Intrinsic::Length,
             Op::SymbolValue => Intrinsic::SymbolValue,
             _ => return None,
         })
     }
 
-    /// Whether `knob` turns this intrinsic on.
+    /// Whether `knob` turns this intrinsic on: the knob's parts group them
+    /// as the design numbers them (I3 `length`, I4 `nth`, I5 `memq`, I6
+    /// `symbol-value`).
     pub(crate) const fn enabled(self, knob: super::IntrinsicKnob) -> bool {
         match self {
+            Intrinsic::Length => knob.length,
             Intrinsic::SymbolValue => knob.symbol_value,
         }
     }
@@ -95,6 +103,11 @@ pub(crate) fn render_intrinsic_stats() -> Vec<String> {
         .collect()
 }
 
+/// How many conses I3's walk counts before handing a longer list to the
+/// site's call (which walks it from the start, with its cycle check). A
+/// circular list never ends the walk, so it always reaches the call.
+pub(crate) const LENGTH_INLINE_STEPS: i64 = 64;
+
 /// An emitted prefix: its hits define `res` and jump to `merge`; the builder
 /// is left in the (sealed) miss block, where the site's call follows and
 /// hands its result to [`finish`].
@@ -127,6 +140,7 @@ pub(crate) fn emit_prefix(
     let res = fb.declare_var(types::I64);
     let miss = fb.create_block();
     let emitted = match which {
+        Intrinsic::Length => emit_length(fb, operands[0], res, merge, miss),
         Intrinsic::SymbolValue => emit_symbol_value(fb, rt, operands[0], res, merge, miss),
     };
     if !emitted {
@@ -177,15 +191,214 @@ fn constant_bits(fb: &FunctionBuilder, v: ClifValue) -> Option<i64> {
     Some(Value::fixnum(iconst_bits(fb, raw)?).bits() as i64)
 }
 
+fn trusted() -> MemFlagsData {
+    MemFlagsData::trusted()
+}
+
 /// `x & TAG_MASK == tag`.
 fn has_tag(fb: &mut FunctionBuilder, x: ClifValue, tag: usize) -> ClifValue {
     let t = band_imm_p(fb, x, TAG_MASK as i64);
     icmp_imm_p(fb, IntCC::Equal, t, tag as i64)
 }
 
+/// A cons's car or cdr: one load, the tag folded into the offset.
+fn cons_field(fb: &mut FunctionBuilder, cons: ClifValue, cdr: bool) -> ClifValue {
+    let off = if cdr {
+        core::mem::offset_of!(ConsCell, cdr_or_next)
+    } else {
+        core::mem::offset_of!(ConsCell, car)
+    } as i64
+        - TAG_CONS as i64;
+    fb.ins().load(types::I64, trusted(), cons, off as i32)
+}
+
+/// `(n << 2) | 2`: a raw count as a fixnum.
+fn fixnum_of(fb: &mut FunctionBuilder, n: ClifValue) -> ClifValue {
+    let shifted = ishl_imm_p(fb, n, FIXNUM_SHIFT as i64);
+    bor_imm_p(fb, shifted, FIXNUM_CHECK_VALUE as i64)
+}
+
 fn hit(fb: &mut FunctionBuilder, res: Variable, merge: Block, value: ClifValue) {
     fb.def_var(res, value);
     fb.ins().jump(merge, &[]);
+}
+
+// ---------------------------------------------------------------------------
+// I3: length.
+// ---------------------------------------------------------------------------
+
+/// `Blength` (`builtin_length_value`) on the shapes it answers without a
+/// cycle check: nil (0), a proper list of at most [`LENGTH_INLINE_STEPS`]
+/// conses (a bounded walk), a string (its character count) and a plain
+/// vector or record (its slot count: slot 0 is not a bool-vector's or a
+/// char-table's tag, the classification `emit_plain_slot_address` makes).
+/// An improper or longer list, a bool-vector, a char-table, a closure and
+/// every non-sequence go to `miss`, where the call answers or signals.
+fn emit_length(
+    fb: &mut FunctionBuilder,
+    x: ClifValue,
+    res: Variable,
+    merge: Block,
+    miss: Block,
+) -> bool {
+    let nil = Value::NIL.bits() as i64;
+    let walk = fb.create_block();
+    fb.append_block_param(walk, types::I64); // a cons
+    fb.append_block_param(walk, types::I64); // conses counted, it included
+    let step = fb.create_block();
+    let done = fb.create_block();
+    fb.append_block_param(done, types::I64); // count
+    let not_cons = fb.create_block();
+    let not_nil = fb.create_block();
+    let not_string = fb.create_block();
+    let string = fb.create_block();
+
+    // Dispatch on the tag: a cons first (the common case).
+    let is_cons = has_tag(fb, x, TAG_CONS);
+    let one = fb.ins().iconst(types::I64, 1);
+    fb.ins().brif(
+        is_cons,
+        walk,
+        &[BlockArg::Value(x), BlockArg::Value(one)],
+        not_cons,
+        &[],
+    );
+
+    // The walk: count each cdr that is a cons; stop at the bound.
+    fb.switch_to_block(walk);
+    let t = fb.block_params(walk)[0];
+    let n = fb.block_params(walk)[1];
+    let d = cons_field(fb, t, true);
+    let d_cons = has_tag(fb, d, TAG_CONS);
+    fb.ins()
+        .brif(d_cons, step, &[], done, &[BlockArg::Value(n)]);
+    fb.switch_to_block(step);
+    fb.seal_block(step);
+    let n2 = iadd_imm_p(fb, n, 1);
+    let within = icmp_imm_p(fb, IntCC::SignedLessThanOrEqual, n2, LENGTH_INLINE_STEPS);
+    fb.ins().brif(
+        within,
+        walk,
+        &[BlockArg::Value(d), BlockArg::Value(n2)],
+        miss,
+        &[],
+    );
+    fb.seal_block(walk);
+    // The last cdr: nil ends a proper list; anything else is improper.
+    fb.switch_to_block(done);
+    fb.seal_block(done);
+    let count = fb.block_params(done)[0];
+    let proper = icmp_imm_p(fb, IntCC::Equal, d, nil);
+    let answer = fb.create_block();
+    fb.ins().brif(proper, answer, &[], miss, &[]);
+    fb.switch_to_block(answer);
+    fb.seal_block(answer);
+    let v = fixnum_of(fb, count);
+    hit(fb, res, merge, v);
+
+    // nil.
+    fb.switch_to_block(not_cons);
+    fb.seal_block(not_cons);
+    let is_nil = icmp_imm_p(fb, IntCC::Equal, x, nil);
+    let zero = fb.create_block();
+    fb.ins().brif(is_nil, zero, &[], not_nil, &[]);
+    fb.switch_to_block(zero);
+    fb.seal_block(zero);
+    let z = fb.ins().iconst(types::I64, Value::fixnum(0).bits() as i64);
+    hit(fb, res, merge, z);
+
+    // A string: its character count.
+    fb.switch_to_block(not_nil);
+    fb.seal_block(not_nil);
+    let is_string = has_tag(fb, x, TAG_STRING);
+    fb.ins().brif(is_string, string, &[], not_string, &[]);
+    fb.switch_to_block(string);
+    fb.seal_block(string);
+    let size_off = core::mem::offset_of!(crate::tagged::header::StringObj, data)
+        + crate::heap_types::LispString::JIT_SIZE_OFFSET;
+    let size = fb.ins().load(
+        types::I64,
+        trusted(),
+        x,
+        (size_off as i64 - TAG_STRING as i64) as i32,
+    );
+    let v = fixnum_of(fb, size);
+    hit(fb, res, merge, v);
+
+    // A plain vector or record.
+    fb.switch_to_block(not_string);
+    fb.seal_block(not_string);
+    match plain_vector_len(fb, x, miss) {
+        Some(len) => {
+            let v = fixnum_of(fb, len);
+            hit(fb, res, merge, v);
+        }
+        None => {
+            fb.ins().jump(miss, &[]);
+        }
+    }
+    true
+}
+
+/// The slot count of a plain vector or record, emitted inline: branches to
+/// `miss` for any other value (including a bool-vector or a char-table,
+/// which are `Vector` objects tagged in slot 0) and leaves the builder in a
+/// fresh sealed block. `None`, emitting nothing, when this build's vector
+/// storage does not keep its length at an offset every storage kind shares.
+fn plain_vector_len(fb: &mut FunctionBuilder, x: ClifValue, miss: Block) -> Option<ClifValue> {
+    use crate::tagged::header::{VecLikeHeader, VecLikeType, VectorObj};
+    let (ptr_off, len_off) = super::jit_layout::heap::value_vec_slice_offsets()?;
+    let data_off = core::mem::offset_of!(VectorObj, data);
+    let type_off = core::mem::offset_of!(VecLikeHeader, type_tag);
+    let (char_table_tag, bool_vector_tag, char_table_min_len) =
+        crate::emacs_core::chartable::inline_vector_tag_shape();
+    let veclike = has_tag(fb, x, crate::tagged::value::TAG_VECLIKE);
+    let typed = fb.create_block();
+    fb.ins().brif(veclike, typed, &[], miss, &[]);
+    fb.switch_to_block(typed);
+    fb.seal_block(typed);
+    let object = band_imm_p(fb, x, !(TAG_MASK as i64));
+    let type_tag = fb.ins().load(types::I8, trusted(), object, type_off as i32);
+    let is_vector = fb
+        .ins()
+        .icmp_imm_u(IntCC::Equal, type_tag, VecLikeType::Vector as u8 as i64);
+    let is_record = fb
+        .ins()
+        .icmp_imm_u(IntCC::Equal, type_tag, VecLikeType::Record as u8 as i64);
+    let either = fb.ins().bor(is_vector, is_record);
+    let sized = fb.create_block();
+    fb.ins().brif(either, sized, &[], miss, &[]);
+    fb.switch_to_block(sized);
+    fb.seal_block(sized);
+    let len = fb
+        .ins()
+        .load(types::I64, trusted(), object, (data_off + len_off) as i32);
+    // Slot 0 decides only for two or more slots (`classify_vector_slots`).
+    let two_or_more = icmp_imm_p(fb, IntCC::UnsignedGreaterThanOrEqual, len, 2);
+    let classify = fb.create_block();
+    let plain = fb.create_block();
+    fb.ins().brif(two_or_more, classify, &[], plain, &[]);
+    fb.switch_to_block(classify);
+    fb.seal_block(classify);
+    let slots = fb
+        .ins()
+        .load(types::I64, trusted(), object, (data_off + ptr_off) as i32);
+    let first = fb.ins().load(types::I64, trusted(), slots, 0);
+    let is_bool_vector = icmp_imm_p(fb, IntCC::Equal, first, bool_vector_tag as i64);
+    let is_char_table_tag = icmp_imm_p(fb, IntCC::Equal, first, char_table_tag as i64);
+    let long_enough = icmp_imm_p(
+        fb,
+        IntCC::UnsignedGreaterThanOrEqual,
+        len,
+        char_table_min_len as i64,
+    );
+    let char_table = fb.ins().band(is_char_table_tag, long_enough);
+    let char_table = fb.ins().band(char_table, is_vector);
+    let tagged = fb.ins().bor(is_bool_vector, char_table);
+    fb.ins().brif(tagged, miss, &[], plain, &[]);
+    fb.switch_to_block(plain);
+    fb.seal_block(plain);
+    Some(len)
 }
 
 // ---------------------------------------------------------------------------
