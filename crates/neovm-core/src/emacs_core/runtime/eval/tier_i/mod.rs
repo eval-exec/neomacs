@@ -1,45 +1,86 @@
-//! Tier-I (P4.2 Part A, row U3.9), stages T0 and T4: the census of
-//! interpreted closure calls, and the analyzer that compiles a hot lambda
-//! body into a tree of [`compile::Node`]s mirroring its source conses.  The
-//! executor that runs the tree comes with fallback B.
+//! Tier-I, fallback B (P4.2 Part A, row U3.9): hot interpreted closures run
+//! through a *closure-compiled* interpreter instead of the tree walker.
 //!
-//! # The census (T0)
+//! # What it is
 //!
-//! Every interpreted closure body that starts (through `apply_lambda` or the
-//! interpreter's own closure call) is counted by the address of its body
-//! cons; all closures cconv makes from one `lambda` share it.  At
-//! `kill-emacs` the hottest bodies are reported by *work*, calls times the
-//! body's cons forms, with the names of the functions whose cells hold them
-//! (F-T1: ranking by calls alone picks the wrong functions).
+//! A lambda body that has been called [`TierI::threshold`] times is compiled
+//! once into a tree of [`compile::Node`]s that mirrors its source conses.  The
+//! executor (`exec.rs`) then evaluates the body by walking the *live* conses
+//! exactly as `eval_sub` and the special forms do -- the same frames, depth,
+//! polls, specpdl entries, temp roots, error data and `ThreadBlocked`
+//! continuations, through the same helper functions -- with three things
+//! taken from the compiled tree instead of re-derived per evaluation:
 //!
-//! # The analyzer (T4)
+//! 1. **The head's class.**  Each form node caches its head's
+//!    [`FormHead`] against the obarray's function epoch (the tree walker
+//!    probes the shared [`FormHeadCache`] for it), and knows which special
+//!    form it was compiled as.
+//! 2. **The subform to evaluate next.**  A special form or call node holds one
+//!    child node per argument position.  A child is used only when the live
+//!    cons at that position still holds *the very object* the child was
+//!    compiled from (`eq`); anything else is evaluated with `eval_sub`, which
+//!    is the tree walker itself.  A child re-validates its own conses the same
+//!    way, so mutated code (`setcar` on a body cons) behaves exactly as the
+//!    tree walker behaves: every cons is read when the tree walker would read
+//!    it.
+//! 3. **Lexical variables.**  Every binder in the body (the formals, `let`,
+//!    `let*`) owns a slot in a per-activation array.  When a binder binds its
+//!    symbol lexically it conses the `(SYM . VAL)` cell onto the alist exactly
+//!    as the tree walker does and also records that cell in its slot.  A
+//!    variable reference or `setq` whose innermost enclosing binders are
+//!    known reads the first filled slot instead of running `assq` over the
+//!    environment: that cell is the one `assq` would find, because nothing but
+//!    those binders pushes `(SYM . VAL)` cells onto an activation's
+//!    environment (callees and islands restore `self.lexenv` through the
+//!    specpdl; a bare `defvar` pushes a symbol, which `assq` skips).  A binder
+//!    whose live shape differs from the compiled one marks the whole
+//!    activation *untrusted*, and every later reference in it takes the tree
+//!    walker's lookup.
+//! 4. **What the captured environment holds.**  Scanned once per activation:
+//!    when it holds no `(SYM . VAL)` cell, a symbol no enclosing binder bound
+//!    lexically has no lexical cell at all, so its reference and `setq` go
+//!    straight to the dynamic value (the tree walker's second stage); when it
+//!    holds no special declaration (a bare symbol) and no `defvar` or island
+//!    has run at the activation's level, a `let` skips the declaration walk.
 //!
-//! A body called [`TierI::threshold`] times is compiled: its forms, the
-//! special forms the executor will mirror, the calls, the forms left to the
-//! tree walker whole (islands: macros, literal heads, malformed special
-//! forms, symbols with position), and a slot per binder with each variable
-//! reference's candidate binders.  The `analyze` report adds the coverage and
-//! the trees of the hottest bodies.
+//! Everything that is not one of the mirrored special forms or a call of a
+//! subr, byte-code object or interpreted closure -- macros, autoloads,
+//! aliases, `function`, `defvar`, literal `lambda` heads, symbols with
+//! position -- is an *island*: the tree walker's own `eval_sub_cons_dispatch`
+//! or `eval_sub` runs it.  Exactness is therefore by construction; there is
+//! no deoptimization and no guard that could be stale.  GNU-observable
+//! behaviour is the tree walker's.  The only differences are in caches
+//! nobody can observe (the form-head cache and the lexical lookup caches are
+//! not consulted for compiled forms) and allocation of Rust-side memory.
 //!
-//! # Lifetime
+//! # Heat and lifetime
 //!
-//! The entry of a compiled body roots every heap value its nodes hold (the
-//! body, the arglist and every form and constant) through
-//! [`TierI::trace_roots`], so a compiled key can never be recycled and a
-//! node's identity compare can never match a new object at a reused address.
-//! Compiled entries are never dropped; past [`MAX_COMPILED_BODIES`] nothing
-//! more is compiled.  Entries that only count heat are not rooted: their key
-//! is a number that is never dereferenced, so a recycled address only moves a
-//! count.
+//! [`TierI`] maps a body's address to a [`TierEntry`].  Calls are counted per
+//! body (all closures cconv makes from one `lambda` share the body cons); the
+//! entry of a compiled body roots every heap value its nodes hold (the body,
+//! the arglist and every form and constant) through [`TierI::trace_roots`], so
+//! a compiled key can never be recycled and a node's identity compare can
+//! never match a new object at a reused address.  Compiled entries are never
+//! dropped; past [`MAX_COMPILED_BODIES`] nothing more is compiled.  Entries
+//! that only count heat are not rooted: their key is a number that is never
+//! dereferenced, so a recycled address only moves a heat count.
+//!
+//! No tiered code runs once any thread other than the main one exists: the
+//! cooperative-thread continuations (`Flow::ThreadBlocked`) are mirrored, but
+//! the design keeps them out of scope.
 //!
 //! # Knobs (read once per process)
 //!
 //! `NEOVM_TIER_I`:
 //! - unset, `off`: nothing (the call hook is one byte test);
 //! - `census`: count calls per body and report the hottest bodies by work
-//!   at `kill-emacs` (T0);
+//!   (calls x cons forms) at `kill-emacs` (T0);
 //! - `analyze`: `census`, and compile at the threshold, reporting how much of
-//!   each body the compiler covers natively (T4).
+//!   each body the compiler covers natively; compiled code never runs (T4);
+//! - `on`: compile at the threshold and run the compiled code;
+//! - `verify`: `on`, plus a check after every compiled form that the
+//!   evaluation depth, the specpdl, the operand stack and the lexical
+//!   environment are balanced as the tree walker leaves them.
 //!
 //! `NEOVM_TIER_I_THRESHOLD` (default 2): the call count at which a body is
 //! compiled.  `NEOVM_TIER_I_REPORT=<path>`: also write the report there.
@@ -51,6 +92,7 @@ use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 use strum::{EnumCount, IntoEnumIterator};
 
 mod compile;
+mod exec;
 
 pub(crate) use compile::CompileSummary;
 use compile::{TierCode, compile_body};
@@ -109,8 +151,12 @@ pub(crate) enum TierIMode {
     Off = 0,
     /// Count calls per body; report at `kill-emacs`.
     Census = 1,
-    /// `Census`, and compile at the threshold.
+    /// `Census`, and compile at the threshold; never run compiled code.
     Analyze = 2,
+    /// Compile at the threshold and run compiled code.
+    On = 3,
+    /// `On`, with balance checks after every compiled form.
+    Verify = 4,
 }
 
 impl TierIMode {
@@ -122,7 +168,12 @@ impl TierIMode {
 
     /// Whether bodies are compiled at the threshold.
     pub(crate) fn compiles(self) -> bool {
-        self == TierIMode::Analyze
+        matches!(self, TierIMode::Analyze | TierIMode::On | TierIMode::Verify)
+    }
+
+    /// Whether compiled code runs.
+    pub(crate) fn runs(self) -> bool {
+        matches!(self, TierIMode::On | TierIMode::Verify)
     }
 }
 
@@ -140,6 +191,8 @@ pub(crate) fn parse_tier_i_knob(value: Option<&str>) -> TierIMode {
         "" | "0" | "off" | "false" | "no" => TierIMode::Off,
         "census" => TierIMode::Census,
         "analyze" => TierIMode::Analyze,
+        "1" | "on" | "true" | "yes" => TierIMode::On,
+        "verify" => TierIMode::Verify,
         other => {
             tracing::warn!(value = other, "NEOVM_TIER_I: unknown mode, using off");
             TierIMode::Off
@@ -171,6 +224,8 @@ fn tier_i_mode_from_env() -> TierIMode {
         }
         1 => TierIMode::Census,
         2 => TierIMode::Analyze,
+        3 => TierIMode::On,
+        4 => TierIMode::Verify,
         _ => TierIMode::Off,
     }
 }
@@ -204,6 +259,21 @@ pub(crate) enum TierIEvent {
     CompileRefused,
     /// The compiled-body cap was reached; the body stays interpreted.
     CompileCapped,
+    /// A compiled body ran.
+    Run,
+    /// A compiled body was not run: a thread other than the main one exists.
+    RefuseThreads,
+    /// A compiled body was not run: the closure's arglist is not the one the
+    /// body was compiled with.
+    RefuseArglist,
+    /// A compiled body was not run: the formals' binding cells are not the
+    /// compiled formals (a mutated arglist).
+    RefuseFormals,
+    /// A binder's live shape differed from the compiled one; the rest of the
+    /// activation takes the tree walker's variable lookups.
+    Untrusted,
+    /// A compiled form was dispatched by the tree walker (an island).
+    Island,
     /// The heat-only entries were forgotten at their cap.
     HeatCleared,
 }
@@ -221,7 +291,7 @@ impl TierIStats {
     }
 
     #[inline(always)]
-    fn note(&mut self, event: TierIEvent) {
+    pub(super) fn note(&mut self, event: TierIEvent) {
         self.counts[event as usize] = self.counts[event as usize].wrapping_add(1);
     }
 
@@ -264,6 +334,11 @@ pub(crate) struct TierI {
     /// Body address -> entry.
     entries: FxHashMap<usize, TierEntry>,
     compiled: usize,
+    /// The per-activation slot stack: each running compiled body owns
+    /// `slots[base..base + code.nslots]`.  Holds lexical binding cells only
+    /// while they are reachable from the environment (module docs), so it is
+    /// not traced.
+    pub(super) slots: Vec<Value>,
 }
 
 impl TierI {
@@ -274,6 +349,7 @@ impl TierI {
             stats: TierIStats::default(),
             entries: FxHashMap::default(),
             compiled: 0,
+            slots: Vec::new(),
         }
     }
 
@@ -285,6 +361,10 @@ impl TierI {
     #[inline(always)]
     pub(crate) fn engaged(&self) -> bool {
         self.mode.engaged()
+    }
+
+    pub(crate) fn mode(&self) -> TierIMode {
+        self.mode
     }
 
     #[cfg(test)]
@@ -321,8 +401,9 @@ impl TierI {
         }
     }
 
-    /// Count a call of BODY, and compile it at the threshold.
-    fn enter(&mut self, obarray: &Obarray, arglist: Value, body: Value) {
+    /// Count a call of BODY and return its compiled code when it should run.
+    /// Compiles at the threshold.
+    fn enter(&mut self, obarray: &Obarray, arglist: Value, body: Value) -> Option<Rc<TierCode>> {
         self.stats.note(TierIEvent::Call);
         let key = body.bits();
         if self.entries.len() >= MAX_HEAT_ENTRIES && !self.entries.contains_key(&key) {
@@ -341,28 +422,30 @@ impl TierI {
             refused: false,
         });
         entry.calls = entry.calls.saturating_add(1);
-        if entry.code.is_some()
-            || entry.refused
-            || !mode.compiles()
-            || entry.calls < u64::from(self.threshold)
-        {
-            return;
+        if let Some(code) = &entry.code {
+            return mode.runs().then(|| Rc::clone(code));
+        }
+        if entry.refused || !mode.compiles() || entry.calls < u64::from(self.threshold) {
+            return None;
         }
         if self.compiled >= MAX_COMPILED_BODIES {
             entry.refused = true;
             self.stats.note(TierIEvent::CompileCapped);
-            return;
+            return None;
         }
         match compile_body(obarray, arglist, body) {
             Some(code) => {
+                let code = Rc::new(code);
                 entry.forms = code.summary().forms;
-                entry.code = Some(Rc::new(code));
+                entry.code = Some(Rc::clone(&code));
                 self.compiled += 1;
                 self.stats.note(TierIEvent::Compiled);
+                mode.runs().then_some(code)
             }
             None => {
                 entry.refused = true;
                 self.stats.note(TierIEvent::CompileRefused);
+                None
             }
         }
     }
@@ -427,7 +510,8 @@ impl TierI {
 
 impl Context {
     /// A lexical closure's BODY, whose formals are already consed onto
-    /// NEW_ENV: [`Self::run_lexical_closure_body`] with the Tier-I hook.
+    /// NEW_ENV: GNU `funcall_lambda`'s `specbind` of the environment, then the
+    /// body -- [`Self::run_lexical_closure_body`] with the Tier-I hook.
     #[inline(never)]
     pub(super) fn tier_i_run_lexical_body(
         &mut self,
@@ -435,16 +519,25 @@ impl Context {
         new_env: Value,
         body: Value,
     ) -> EvalResult {
-        self.tier_i.enter(&self.obarray, arglist, body);
-        self.run_lexical_closure_body(new_env, body)
+        let Some(code) = self.tier_i.enter(&self.obarray, arglist, body) else {
+            return self.run_lexical_closure_body(new_env, body);
+        };
+        let count = self.specpdl.len();
+        let old_lexenv = std::mem::replace(&mut self.lexenv, new_env);
+        self.push_specpdl_with(|| SpecBinding::LexicalEnv { old_lexenv });
+        let result = self.tier_i_run_code(&code, arglist, body, new_env);
+        let result = self.rewrap_thread_blocked_in_lexenv(result);
+        self.unbind_lexenv_frame(count, result)
     }
 
     /// A dynamic closure's BODY after `begin_lambda_call` bound its formals:
     /// [`Self::eval_lambda_body_value`] with the Tier-I hook.
     #[inline(never)]
     pub(super) fn tier_i_run_dynamic_body(&mut self, arglist: Value, body: Value) -> EvalResult {
-        self.tier_i.enter(&self.obarray, arglist, body);
-        self.eval_lambda_body_value(body)
+        match self.tier_i.enter(&self.obarray, arglist, body) {
+            Some(code) => self.tier_i_run_code(&code, arglist, body, Value::NIL),
+            None => self.eval_lambda_body_value(body),
+        }
     }
 
     /// The final report lines, with function names resolved (a walk of the

@@ -11,6 +11,10 @@ fn mode_values() {
     }
     assert_eq!(parse_tier_i_knob(Some("census")), TierIMode::Census);
     assert_eq!(parse_tier_i_knob(Some(" Analyze ")), TierIMode::Analyze);
+    for on in ["1", "on", "yes", "true"] {
+        assert_eq!(parse_tier_i_knob(Some(on)), TierIMode::On, "{on}");
+    }
+    assert_eq!(parse_tier_i_knob(Some("verify")), TierIMode::Verify);
 }
 
 #[test]

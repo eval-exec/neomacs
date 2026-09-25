@@ -1,5 +1,5 @@
 //! T4: the analyzer's compiled trees (golden) and its coverage report; the
-//! `analyze` mode compiles.
+//! `analyze` mode never runs compiled code.
 
 use crate::emacs_core::eval::{Context, TierIEvent, TierIMode};
 
@@ -53,6 +53,7 @@ fn golden_scopes_slots_and_islands() {
          (call ti-a-undefined a@4.0))"
     );
     let stats = eval.tier_i.stats();
+    assert_eq!(stats.count(TierIEvent::Run), 0, "analyze never runs code");
     assert!(stats.count(TierIEvent::Compiled) >= 1, "{}", stats.report());
 }
 

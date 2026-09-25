@@ -10,9 +10,6 @@
 //! which subform comes next, and which binders a variable reference may
 //! resolve to (its candidate slots, innermost first).
 
-// The executor (fallback B) reads the fields the analyzer's report does not.
-#![allow(dead_code)]
-
 use super::super::*;
 use std::fmt;
 
