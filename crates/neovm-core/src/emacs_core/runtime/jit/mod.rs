@@ -162,6 +162,10 @@ pub mod reopt;
 /// built: `RuntimeState` holds the table.
 pub(crate) mod retreat;
 
+/// Per-source feedback (`SourceFeedback`). Always built: `RuntimeState`
+/// holds it.
+pub(crate) mod feedback;
+
 /// Always-on metering of the synchronous compile stalls the cache-miss path
 /// pays on the eval thread — the evidence base for background compilation.
 /// Only built with the `jit` feature. See `jit/stats.rs`.
@@ -503,9 +507,10 @@ pub struct RuntimeState {
     /// hot_threshold()` lets long sessions win without taxing short ones.
     /// The dispatcher answers `Interpret` without a cache probe until then.
     profit_deferred_heat: AtomicU32,
-    /// Per-call-site type/target feedback (Phase 1). The optimizing tier reads
-    /// this to speculate direct/inlined calls.
-    feedback: FeedbackVec,
+    /// Everything the interpreter observed about this source
+    /// ([`feedback::SourceFeedback`]); compiles read it through their
+    /// snapshot.
+    feedback: feedback::SourceFeedback,
     /// Process-unique identity assigned on first JIT compilation attempt (0 =
     /// unassigned). Keys this function's entry in the per-thread compiled-code
     /// cache ([`cache`]). Monotonic and never reused, so a freed function's
@@ -840,7 +845,7 @@ impl RuntimeState {
             heat: AtomicU32::new(0),
             native_rejected_epoch: AtomicU64::new(0),
             profit_deferred_heat: AtomicU32::new(0),
-            feedback: FeedbackVec::new(),
+            feedback: feedback::SourceFeedback::new(),
             compiled_id: AtomicU64::new(0),
             aot_prewarmed: std::sync::atomic::AtomicBool::new(false),
             numeric_feedback_consumed: std::sync::atomic::AtomicBool::new(false),

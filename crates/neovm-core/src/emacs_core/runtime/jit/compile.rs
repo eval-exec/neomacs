@@ -822,176 +822,6 @@ pub(crate) fn profit_gate_bypassed_now() -> bool {
     BYPASS_PROFIT_GATE.with(|b| b.get())
 }
 
-thread_local! {
-    /// Per-pc operand-type feedback for the body being compiled.
-    ///
-    /// A thread-local for the same reason `ACTIVE_CALL_HEAVY` is one: the
-    /// compile is synchronous on the eval thread, and the alternative is
-    /// threading a slice through four signatures (`compile_bytecode_function_inner`
-    /// -> the emit fn -> `build_leaf_fn` -> `lower_simple_op`) for a value the
-    /// whole lowering treats as ambient.
-    ///
-    /// Read by the baseline lowering and by `build_mir_with_feedback` at MIR
-    /// BUILD time — the only point where a MIR inst's pc indexes this body.
-    /// The MIR LOWERING never reads it: after inlining, a spliced callee inst
-    /// carries the call site's pc, which would index the wrong body.
-    static ACTIVE_NUMERIC_FEEDBACK: std::cell::RefCell<Vec<crate::emacs_core::jit::NumericFeedback>> =
-        const { std::cell::RefCell::new(Vec::new()) };
-
-    /// Per ORIGINAL-body pc of the body being compiled: `true` where a deopt
-    /// barred the call site from being spliced (the fuser), MIR-inlined or
-    /// intrinsified inline (LEVEL-B) — `RuntimeState::call_site_no_inline`,
-    /// or every site once the source's `ReoptLevel` reached `NoInline`.
-    /// Published with the numeric feedback, by the same scope; empty (every
-    /// site inlinable) outside a compile. Read through
-    /// [`call_site_inlinable_at`].
-    static ACTIVE_NO_INLINE_CALL_SITES: std::cell::RefCell<Vec<bool>> =
-        const { std::cell::RefCell::new(Vec::new()) };
-}
-
-/// Whether the call site at `pc` of the body being compiled may be spliced,
-/// MIR-inlined or intrinsified inline — the one predicate every inliner
-/// reads (see `ACTIVE_NO_INLINE_CALL_SITES`). `pc` indexes the ops being
-/// LOWERED: under a fused scope it is mapped back to the original body's pc,
-/// where the deopt that set the bit resumed.
-pub(crate) fn call_site_inlinable_at(pc: usize) -> bool {
-    let pc = match inline::active_fused() {
-        Some(fused) => match fused.caller_pc(pc) {
-            Some(caller) => caller,
-            None => return true,
-        },
-        None => pc,
-    };
-    ACTIVE_NO_INLINE_CALL_SITES.with(|v| !v.borrow().get(pc).copied().unwrap_or(false))
-}
-
-/// Operand-type feedback recorded for the arithmetic site at `pc` of the body
-/// currently being compiled.
-pub(crate) fn active_numeric_feedback(pc: usize) -> crate::emacs_core::jit::NumericFeedback {
-    ACTIVE_NUMERIC_FEEDBACK.with(|v| {
-        v.borrow()
-            .get(pc)
-            .copied()
-            .unwrap_or(crate::emacs_core::jit::NumericFeedback::FixnumOnly)
-    })
-}
-
-/// Publishes `f`'s per-site numeric feedback for the compile in progress
-/// and restores the previous snapshot on drop. Every lowering that reads
-/// `active_numeric_feedback` — the tier-up path AND the OSR path — must run
-/// inside one of these: `compile_osr_leaf` lowered outside it, so an OSR-
-/// entered float loop read `FixnumOnly` at every site, failed its fixnum
-/// guards, set `OSR_TRIED_FLAG`, and stayed interpreted for good (a fixnum
-/// loop OSR'd 2.8x faster; the same loop on floats got nothing).
-///
-/// Reading the snapshot marks the body's feedback CONSUMED: from here the
-/// interpreter stops recording for it.
-/// Whether the arithmetic/comparison site `op` at `pc` of the body being
-/// compiled is lowered with a GENERIC fallback — an inline fixnum fast path
-/// whose miss (a non-fixnum operand, an overflow, a zero divisor) calls the
-/// interpreter's own builtin through `neovm_jit_arith_generic` — instead of
-/// deopting.
-///
-/// That is the lowering for a site whose feedback says the fixnum guard
-/// fails there: `Other` (bignums, markers, overflow) at `+ - * / = < > <= >=`,
-/// which have a float lowering for `Float`; and any non-`FixnumOnly` site at
-/// `% max min 1+ 1- -`, which have none. Deopting was a round trip to the
-/// interpreter per call: `pidigits` deopted 4,298 times per repeat, and the
-/// JIT made it 3.7% SLOWER than no JIT at all.
-///
-/// ONE predicate for every reader, as the float lowering learned the hard
-/// way: the lowering, the known-fixnum analysis (such a site's result is not a
-/// fixnum), `baseline_needs_rt` (the fallback calls a shim) and the MIR tier
-/// gate (MIR guards fixnum and would rerun-from-start).
-pub(crate) fn arith_site_takes_generic(op: &Op, pc: usize) -> bool {
-    use crate::emacs_core::jit::NumericFeedback;
-    match op {
-        Op::Add
-        | Op::Sub
-        | Op::Mul
-        | Op::Div
-        | Op::Eqlsign
-        | Op::Lss
-        | Op::Gtr
-        | Op::Leq
-        | Op::Geq => active_numeric_feedback(pc) == NumericFeedback::Other,
-        Op::Rem | Op::Max | Op::Min | Op::Add1 | Op::Sub1 | Op::Negate => {
-            active_numeric_feedback(pc) != NumericFeedback::FixnumOnly
-        }
-        _ => false,
-    }
-}
-
-/// Restores the numeric feedback (and, for a whole-body publish, the
-/// no-inline call sites) the compile inside it replaced.
-pub(crate) struct NumericFeedbackScope(
-    Option<Vec<crate::emacs_core::jit::NumericFeedback>>,
-    Option<Vec<bool>>,
-);
-
-impl Drop for NumericFeedbackScope {
-    fn drop(&mut self) {
-        if let Some(prev) = self.0.take() {
-            ACTIVE_NUMERIC_FEEDBACK.with(|v| *v.borrow_mut() = prev);
-        }
-        if let Some(prev) = self.1.take() {
-            ACTIVE_NO_INLINE_CALL_SITES.with(|v| *v.borrow_mut() = prev);
-        }
-    }
-}
-
-/// [`publish_numeric_feedback`] for a vector built elsewhere — the fused
-/// body's, whose spliced slots carry the CALLEE's feedback. The no-inline
-/// call sites stay as published for the original body: they are keyed by
-/// original pc, which [`call_site_inlinable_at`] maps a fused pc back to.
-pub(crate) fn publish_numeric_feedback_vec(
-    seen: Vec<crate::emacs_core::jit::NumericFeedback>,
-) -> NumericFeedbackScope {
-    NumericFeedbackScope(
-        Some(ACTIVE_NUMERIC_FEEDBACK.with(|v| std::mem::replace(&mut *v.borrow_mut(), seen))),
-        None,
-    )
-}
-
-/// Publish `f`'s per-site numeric feedback and no-inline call sites for the
-/// compile in progress, under the ceiling of its `ReoptLevel` (`jit::reopt`):
-/// at `Generic` every arithmetic site reads `Other`, so it takes the
-/// generic fallback, which never deopts; at `NoInline` and above no call
-/// site is inlined.
-pub(crate) fn publish_numeric_feedback(f: &ByteCodeFunction) -> NumericFeedbackScope {
-    use crate::emacs_core::jit::{NumericFeedback, ReoptLevel};
-    let rt = f.jit_runtime();
-    let ops = f.executable_ops();
-    let level = rt.reopt_level();
-    let generic = level >= ReoptLevel::Generic;
-    let seen: Vec<_> = ops
-        .iter()
-        .enumerate()
-        .map(|(pc, op)| {
-            if generic && ArithGenericKind::from_op(op).is_some() {
-                NumericFeedback::Other
-            } else {
-                rt.numeric_feedback(pc)
-            }
-        })
-        .collect();
-    let no_inline: Vec<bool> = if level >= ReoptLevel::NoInline {
-        vec![true; ops.len()]
-    } else {
-        (0..ops.len())
-            .map(|pc| rt.call_site_no_inline(pc))
-            .collect()
-    };
-    rt.note_numeric_feedback_consumed();
-    NumericFeedbackScope(
-        Some(ACTIVE_NUMERIC_FEEDBACK.with(|v| std::mem::replace(&mut *v.borrow_mut(), seen))),
-        Some(
-            ACTIVE_NO_INLINE_CALL_SITES
-                .with(|v| std::mem::replace(&mut *v.borrow_mut(), no_inline)),
-        ),
-    )
-}
-
 /// [`compile_bytecode_function_tiered`] with the full [`CompileRequest`].
 pub fn compile_bytecode_function_requested(
     f: &ByteCodeFunction,
@@ -4694,6 +4524,11 @@ pub(crate) mod direct_call;
 pub(crate) mod jit_layout;
 pub(crate) mod reg_abi;
 pub(crate) use reg_abi::LeafAbi;
+pub(crate) mod snapshot;
+pub(crate) use snapshot::{
+    active_numeric_feedback, arith_site_takes_generic, call_site_inlinable_at,
+    publish_numeric_feedback, publish_numeric_feedback_vec,
+};
 pub(crate) mod spec_slot;
 pub(crate) use spec_slot::{
     FAST_PATH_MAX_ARITY, SpecSlot, SpecSlotKind, arm_direct_entry_if_eligible, spec_slot_kinds_of,
