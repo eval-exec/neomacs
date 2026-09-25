@@ -95,3 +95,67 @@ fn the_first_partition_cycle_makes_survivors_permanent() {
     }
     assert!(heap.is_value_marked(young));
 }
+
+/// The tri-state mark byte (P3.1 C2.2): 0 is unmarked at rest under both
+/// parities; a parity value is marked only at that parity; a claim moves
+/// the byte to the claiming parity from rest or from the other parity, once.
+#[test]
+fn the_mark_byte_is_tri_state() {
+    let header = GcHeader::new(HeapObjectKind::VecLike);
+    assert_eq!(header.raw_mark(), UNMARKED_AT_REST);
+    assert!(!header.is_marked());
+    for parity in [MarkParity::One, MarkParity::Two] {
+        assert!(
+            !header.is_marked_at(parity),
+            "at rest is white at {parity:?}"
+        );
+    }
+    assert!(header.mark_claim_at(MarkParity::One), "claim from rest");
+    assert!(
+        !header.mark_claim_at(MarkParity::One),
+        "a second claim loses"
+    );
+    assert!(header.is_marked_at(MarkParity::One));
+    assert!(!header.is_marked_at(MarkParity::Two));
+    assert!(
+        header.mark_claim_at(MarkParity::Two),
+        "claim from the other parity"
+    );
+    assert_eq!(header.raw_mark(), MarkParity::Two.byte());
+    let born = GcHeader::new_marked(HeapObjectKind::Float, MarkParity::One);
+    assert!(born.is_marked_at(MarkParity::One));
+    assert!(!born.is_marked_at(MarkParity::Two));
+    assert_eq!(MarkParity::One.flip(), MarkParity::Two);
+    assert_eq!(MarkParity::Two.flip(), MarkParity::One);
+}
+
+/// The heap's parity starts at `Two` so the bootstrap cycle runs at `One`,
+/// alternates every collection, and objects born between collections are
+/// white at the next one; a mark byte reset to rest reads white across two
+/// consecutive collections of different parities (the property P3.1's
+/// old objects rest on, GEN-3).
+#[test]
+fn parity_alternates_and_rest_is_white_under_both() {
+    let mut heap = TaggedHeap::new();
+    set_tagged_heap(&mut heap);
+    assert_eq!(heap.mark_parity, MarkParity::Two);
+    let v = heap.alloc_vector(vec![TaggedValue::NIL]);
+    let header = unsafe { &*header_of(v) };
+    assert_eq!(header.raw_mark(), MarkParity::Two.byte(), "born at parity");
+    heap.collect_exact(std::iter::once(v));
+    assert_eq!(heap.mark_parity, MarkParity::One);
+    assert!(
+        header.is_marked_at(MarkParity::One),
+        "traced at the new parity"
+    );
+    heap.collect_exact(std::iter::once(v));
+    assert_eq!(heap.mark_parity, MarkParity::Two);
+    assert!(header.is_marked_at(MarkParity::Two));
+    // At rest, the object reads white under the next two parities in turn.
+    header.marked.store(UNMARKED_AT_REST, Ordering::Relaxed);
+    for parity in [heap.mark_parity.flip(), heap.mark_parity] {
+        assert!(!header.is_marked_at(parity));
+    }
+    heap.collect_exact(std::iter::once(v));
+    assert!(heap.is_value_marked(v), "traced again from rest");
+}

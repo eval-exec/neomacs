@@ -667,25 +667,28 @@ pub struct TaggedHeap {
     /// shape as the dump path; see `should_run_concurrent`.
     bootstrap_collected: bool,
 
-    // --- Young non-cons PARITY MARK BITS (task #7 stage 2b). "Marked this
-    // cycle" for a YOUNG non-cons `GcHeader` ≡ (raw bit == `mark_parity`).
+    // --- Young non-cons PARITY MARKS (task #7 stage 2b; tri-state since
+    // P3.1 C2.2). "Marked this cycle" for a YOUNG non-cons `GcHeader` ≡
+    // (mark byte == `mark_parity`), the parity alternating `One ↔ Two`.
     // `begin_collection` flips the parity instead of pointer-chasing
-    // `all_objects` to clear bits (the walk measured ~98% of the clear phase).
-    // Cons block bitmaps keep their memset clear (their `fetch_or` marking is
-    // set-only and `count_marked` popcounts 1-bits, so parity is structurally
-    // impossible there); mapped (pdump) side-table mark state is untouched;
-    // tenured objects freeze their bit at promotion, and every reader that can
-    // see a tenured object short-circuits on `tenured` BEFORE interpreting the
-    // bit (mark_value owned arms, is_value_marked, unchain_dead_markers,
-    // doomed-finalizer scan). Mapped (image) objects never read their header
-    // bit at all: their mark is the side table's, and `unchain_dead_markers`,
-    // which walks header bits, tests the dump span first.
-    /// Current cycle's mark parity. INIT `false` so the FIRST
-    /// `begin_collection` flip yields `true` — opposite the zeroed/`false`
-    /// bits of freshly created and pdump-loaded headers (`GcHeader::new`) —
-    /// otherwise the bootstrap cycle would read everything as marked and
-    /// trace nothing.
-    mark_parity: bool,
+    // `all_objects` to clear marks (the walk measured ~98% of the clear
+    // phase). A byte of 0 is unmarked at rest under either parity (new,
+    // mapped and static headers). Cons block bitmaps keep their memset
+    // clear (their `fetch_or` marking is set-only and `count_marked`
+    // popcounts 1-bits, so parity is structurally impossible there); mapped
+    // (pdump) side-table mark state is untouched; tenured objects freeze
+    // their byte at promotion, and every reader that can see one asks
+    // `GcHeader::black_by_generation` BEFORE interpreting the byte
+    // (mark_value owned arms, is_value_marked, unchain_dead_markers,
+    // doomed-finalizer scan, the sweep). Mapped (image) objects never read
+    // their header mark at all: their mark is the side table's, and
+    // `unchain_dead_markers`, which walks header marks, tests the dump span
+    // first.
+    /// Current cycle's mark parity. INIT `Two` so the FIRST
+    /// `begin_collection` flip yields `One`: objects born before any
+    /// collection (at `Two`) and headers at rest (0) both read unmarked in
+    /// the bootstrap cycle, which must trace everything.
+    mark_parity: MarkParity,
 
     // --- Incremental marking state (step 7). Active on every partitioned cycle
     // (after the first-cycle promotion); the first cycle and no-dump heaps stay
@@ -1019,9 +1022,9 @@ impl TaggedHeap {
             dump_blackened: false,
             bootstrap_collected: false,
             mapped_remembered: FxHashSet::default(),
-            // Parity invariant: must start `false` (see the field doc) so the
-            // first flip reads pre-existing `false` bits as unmarked.
-            mark_parity: false,
+            // Parity invariant: must start `Two` (see the field doc) so the
+            // first flip reads pre-existing marks as unmarked.
+            mark_parity: MarkParity::Two,
             mark_in_progress: false,
             incremental_mark_us: 0,
             concurrent_mark_running: false,

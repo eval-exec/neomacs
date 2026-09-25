@@ -1931,7 +1931,11 @@ fn parity_allocate_black_object_survives_two_cycles() {
     }
     heap.collect_exact(std::iter::once(spine));
     assert!(heap.should_run_concurrent());
-    assert!(heap.mark_parity, "bootstrap flip must yield parity=true");
+    assert_eq!(
+        heap.mark_parity,
+        MarkParity::One,
+        "bootstrap flip must yield parity One"
+    );
 
     // Cycle 2 (flip #2: parity true -> false): allocate non-cons objects
     // MID-MARK. They are reachable only from Rust locals (not seeded), so
@@ -1939,7 +1943,11 @@ fn parity_allocate_black_object_survives_two_cycles() {
     heap.concurrent_begin();
     heap.seed_root(spine);
     heap.launch_concurrent_mark();
-    assert!(!heap.mark_parity, "second flip must yield parity=false");
+    assert_eq!(
+        heap.mark_parity,
+        MarkParity::Two,
+        "second flip must yield parity Two"
+    );
     let v = heap.alloc_vector(vec![TaggedValue::fixnum(77)]);
     let s = heap.alloc_string(crate::heap_types::LispString::from_utf8("mid-mark"));
     let v_ptr = v.as_veclike_ptr().unwrap() as *const u8;
@@ -2071,7 +2079,7 @@ fn parity_tenured_objects_stay_frozen_across_cycles_under_verifier() {
         unsafe { (*t_header).gc.tenured },
         "the surviving record must have been promoted to the old generation",
     );
-    let frozen_bit = unsafe { (*t_header).gc.is_marked() };
+    let frozen_bit = unsafe { (*t_header).gc.raw_mark() };
 
     // Two concurrent cycles — parities false then true — with the
     // verifiers armed at each termination.
@@ -2082,7 +2090,7 @@ fn parity_tenured_objects_stay_frozen_across_cycles_under_verifier() {
             "tenured record swept on post-promotion cycle {cycle}",
         );
         assert_eq!(
-            unsafe { (*t_header).gc.is_marked() },
+            unsafe { (*t_header).gc.raw_mark() },
             frozen_bit,
             "tenured mark bit re-written on post-promotion cycle {cycle} \
              (a parity-blind re-trace stored into the frozen bit)",

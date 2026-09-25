@@ -85,7 +85,7 @@ impl TaggedHeap {
         // A region never outlives the phase it was granted in (I1): close
         // before the flip that ends it.
         self.close_alloc_regions();
-        self.mark_parity = !self.mark_parity;
+        self.mark_parity = self.mark_parity.flip();
         self.image_premarked = false;
 
         let clear_t0 = std::time::Instant::now();

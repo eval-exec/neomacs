@@ -91,7 +91,7 @@ pub(super) struct ConcurrentClaimJob {
     /// == parity); the heap cannot flip mid-cycle (`begin_collection` is the
     /// only flip point and the next one cannot run before this mark joins),
     /// so the captured value is valid for the job's whole lifetime.
-    pub(super) parity: bool,
+    pub(super) parity: MarkParity,
     /// OWNERSHIP SNAPSHOT (`chunk_map::PageSnapshot`): the cons blocks and
     /// the STRING, FLOAT, VECTOR and BYTECODE arena pages that existed at the
     /// world-stopped start handshake (retired pages included — their tenured
@@ -282,7 +282,7 @@ pub(super) unsafe fn atomic_mark_owned_cons_ptr(ptr: *const ConsCell) -> bool {
 pub(super) fn concurrent_try_mark_string(
     val: TaggedValue,
     pages: &PageSnapshot,
-    parity: bool,
+    parity: MarkParity,
     str_claimed: &AtomicUsize,
 ) -> bool {
     debug_assert!(val.is_string());

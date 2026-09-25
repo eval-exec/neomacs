@@ -385,7 +385,7 @@ fn concurrent_claim_arm_defers_mid_cycle_float_pages() {
     // launching, so claim at the flipped value exactly like the job
     // a launch would carry.
     let job = ConcurrentClaimJob {
-        parity: !heap.mark_parity,
+        parity: heap.mark_parity.flip(),
         pages: PageSnapshot::BaseSets {
             cons: rustc_hash::FxHashSet::default(),
             string: rustc_hash::FxHashSet::default(),
@@ -412,7 +412,7 @@ fn concurrent_claim_arm_defers_mid_cycle_float_pages() {
     assert!(unsafe {
         (*f_old.as_float_ptr().unwrap())
             .header
-            .is_marked_at(!heap.mark_parity)
+            .is_marked_at(heap.mark_parity.flip())
     });
     assert!(
         !concurrent_try_mark_owned(f_new, &job, &mut gray),
@@ -428,7 +428,7 @@ fn concurrent_claim_arm_defers_mid_cycle_float_pages() {
     assert!(unsafe {
         !(*f_new.as_float_ptr().unwrap())
             .header
-            .is_marked_at(!heap.mark_parity)
+            .is_marked_at(heap.mark_parity.flip())
     });
 }
 
@@ -454,7 +454,7 @@ fn concurrent_tenured_float_dropped_not_claimed() {
         unsafe { (*f_ptr).header.tenured },
         "the first partitioned cycle must promote the surviving float",
     );
-    let frozen_bit = unsafe { (*f_ptr).header.is_marked() };
+    let frozen_bit = unsafe { (*f_ptr).header.raw_mark() };
 
     // One full concurrent cycle with F reachable via the rooted cons:
     // the GC thread discovers F, page-hits (retired/tenured pages stay
@@ -470,7 +470,7 @@ fn concurrent_tenured_float_dropped_not_claimed() {
         "tenured floats are dropped, not parked",
     );
     assert_eq!(
-        unsafe { (*f_ptr).header.is_marked() },
+        unsafe { (*f_ptr).header.raw_mark() },
         frozen_bit,
         "the frozen tenured mark bit must not be scribbled",
     );

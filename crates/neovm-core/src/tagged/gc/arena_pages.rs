@@ -989,7 +989,7 @@ impl<T: PagedObject> ObjectArena<T> {
         &mut self,
         start: usize,
         end: usize,
-        parity: bool,
+        parity: MarkParity,
         scope: CollectionScope,
         mut on_free: impl FnMut(usize),
     ) -> (usize, usize) {

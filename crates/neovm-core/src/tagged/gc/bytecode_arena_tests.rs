@@ -446,7 +446,7 @@ fn concurrent_claim_arm_defers_mid_cycle_bytecode_pages() {
     // heap parity; a real cycle flips parity at `begin_collection`
     // before launching, so claim at the flipped value).
     let job = ConcurrentClaimJob {
-        parity: !heap.mark_parity,
+        parity: heap.mark_parity.flip(),
         pages: PageSnapshot::BaseSets {
             cons: rustc_hash::FxHashSet::default(),
             string: rustc_hash::FxHashSet::default(),
@@ -472,7 +472,7 @@ fn concurrent_claim_arm_defers_mid_cycle_bytecode_pages() {
     assert!(unsafe {
         (*b_old.as_veclike_ptr().unwrap())
             .gc
-            .is_marked_at(!heap.mark_parity)
+            .is_marked_at(heap.mark_parity.flip())
     });
     // The fresh claim gray-pushed exactly the HEAP children: the one
     // constants cons (the fixnum constant and the NIL arglist are not
@@ -512,7 +512,7 @@ fn concurrent_claim_arm_defers_mid_cycle_bytecode_pages() {
     assert!(unsafe {
         !(*b_new.as_veclike_ptr().unwrap())
             .gc
-            .is_marked_at(!heap.mark_parity)
+            .is_marked_at(heap.mark_parity.flip())
     });
 }
 
@@ -542,7 +542,7 @@ fn concurrent_tenured_bytecode_dropped_not_claimed() {
         unsafe { (*b_hdr).gc.tenured },
         "the first partitioned cycle must promote the surviving bytecode",
     );
-    let frozen_bit = unsafe { (*b_hdr).gc.is_marked() };
+    let frozen_bit = unsafe { (*b_hdr).gc.raw_mark() };
 
     // One full concurrent cycle with B reachable via the rooted cons:
     // the GC thread discovers B, page-hits, sees `tenured`, and drops.
@@ -557,7 +557,7 @@ fn concurrent_tenured_bytecode_dropped_not_claimed() {
         "tenured bytecode is dropped, not parked",
     );
     assert_eq!(
-        unsafe { (*b_hdr).gc.is_marked() },
+        unsafe { (*b_hdr).gc.raw_mark() },
         frozen_bit,
         "the frozen tenured mark bit must not be scribbled",
     );

@@ -1654,7 +1654,7 @@ impl TaggedHeap {
         fn verify_arena_slots<T: PagedObject>(
             arena: &ObjectArena<T>,
             non_cons_object_addrs: &FxHashSet<usize>,
-            parity: bool,
+            parity: MarkParity,
             scope: CollectionScope,
             total_marked: &mut usize,
             problems: &mut usize,

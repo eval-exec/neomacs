@@ -15,7 +15,7 @@ use super::value::TaggedValue;
 use malachite::integer::Integer;
 use neomacs_display_protocol::{VideoId, WebViewId};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 
 // ---------------------------------------------------------------------------
 // ConsCell — no header, minimal size
@@ -159,18 +159,22 @@ pub enum HeapObjectKind {
 
 #[repr(C)]
 pub struct GcHeader {
-    /// RAW mark-parity bit. For YOUNG (non-tenured, heap-owned) non-cons
-    /// objects, "marked this cycle" ≡ `bit == TaggedHeap::mark_parity`; the
-    /// heap flips its parity at `begin_collection` instead of walking
-    /// `all_objects` to clear bits, so the raw value alone is meaningless —
-    /// interpret it via `is_marked_at`/`mark_claim_at` with the owning heap's
-    /// parity. Tenured objects freeze this bit at promotion and every reader
-    /// short-circuits on `tenured` first; mapped (pdump) objects mark via the
-    /// heap's side tables and never interpret this bit at all. Accessed via
+    /// The TRI-STATE mark byte (P3.1 C2.2): `0` is unmarked at rest; `1` and
+    /// `2` are "marked at [`MarkParity::One`] / [`MarkParity::Two`]". For
+    /// YOUNG (not black-by-generation, heap-owned) non-cons objects, "marked
+    /// this cycle" ≡ `byte == TaggedHeap::mark_parity`; the heap alternates
+    /// its parity at `begin_collection` instead of walking `all_objects` to
+    /// clear marks, so a raw nonzero byte alone means nothing — interpret it
+    /// via `is_marked_at`/`mark_claim_at` with the owning heap's parity. `0`
+    /// reads white under BOTH parities, which is what lets a future old
+    /// object rest unmarked across majors of either parity (P3.1 GEN-3) and
+    /// what new, mapped and static headers hold. Tenured objects freeze the
+    /// byte at promotion and every reader asks
+    /// `GcHeader::black_by_generation` first; mapped (pdump) objects mark
+    /// via the heap's side tables and never interpret it. Accessed via
     /// relaxed atomics so the concurrent GC thread can claim it while the
-    /// mutator allocate-blacks / reads it without a data race; `AtomicBool`
-    /// has the same size/layout as `bool`.
-    pub marked: AtomicBool,
+    /// mutator allocate-blacks / reads it without a data race.
+    pub marked: AtomicU8,
     /// Exact object category for typed sweep/deallocation.
     pub kind: HeapObjectKind,
     /// Tenured: an OLD or PERMANENT heap object (sticky once set). Today
@@ -204,6 +208,38 @@ pub struct GcHeader {
     /// Intrusive linked list of all GC-managed objects (for sweep).
     pub next: *mut GcHeader,
 }
+
+/// A cycle's mark parity: the value a mark byte holds when its object is
+/// marked in that cycle ([`GcHeader::marked`]). The heap alternates
+/// `One ↔ Two` at every collection start; `0` (neither) is unmarked under
+/// both.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, IntoPrimitive)]
+pub enum MarkParity {
+    One = 1,
+    Two = 2,
+}
+
+impl MarkParity {
+    /// The next cycle's parity.
+    #[inline(always)]
+    pub fn flip(self) -> Self {
+        match self {
+            MarkParity::One => MarkParity::Two,
+            MarkParity::Two => MarkParity::One,
+        }
+    }
+
+    /// The mark byte this parity stores.
+    #[inline(always)]
+    pub fn byte(self) -> u8 {
+        self as u8
+    }
+}
+
+/// The mark byte of an object marked in no cycle: white under both
+/// parities.
+pub const UNMARKED_AT_REST: u8 = 0;
 
 /// The generation byte of a [`GcHeader`] (byte 6; P3.0 §3.1, P3.1 §3.2).
 ///
@@ -276,13 +312,10 @@ const _: () = assert!(std::mem::size_of::<GcHeader>() == 16);
 impl GcHeader {
     pub fn new(kind: HeapObjectKind) -> Self {
         Self {
-            // `false` pairs with `TaggedHeap::mark_parity` starting `false`:
-            // objects created before the first collection read as unmarked
-            // once the first `begin_collection` flips the parity to `true`
-            // (see the parity invariant comment on `TaggedHeap::mark_parity`).
-            // Heap allocation paths overwrite this at the link seams
-            // (born-at-parity); this default is what mapped/static headers keep.
-            marked: AtomicBool::new(false),
+            // Unmarked at rest: white under both parities. Heap allocation
+            // paths overwrite this at the link seams (born-at-parity); this
+            // default is what mapped/static headers keep.
+            marked: AtomicU8::new(UNMARKED_AT_REST),
             kind,
             tenured: false,
             remembered: AtomicBool::new(false),
@@ -294,11 +327,11 @@ impl GcHeader {
         }
     }
 
-    /// A header of `kind` whose raw mark is `marked` (born at a parity).
+    /// A header of `kind` born marked at `parity`.
     #[inline]
-    pub fn new_marked(kind: HeapObjectKind, marked: bool) -> Self {
+    pub fn new_marked(kind: HeapObjectKind, parity: MarkParity) -> Self {
         let header = Self::new(kind);
-        header.marked.store(marked, Ordering::Relaxed);
+        header.marked.store(parity.byte(), Ordering::Relaxed);
         header
     }
 
@@ -343,38 +376,45 @@ impl GcHeader {
         unsafe { (*header).tenured && !(*header).remembered.load(Ordering::Relaxed) }
     }
 
-    /// Read the RAW mark-parity bit (relaxed). Only meaningful compared
-    /// against the owning heap's parity — use `is_marked_at` unless you are
-    /// asserting the raw bit itself (e.g. "never touched").
+    /// Read the RAW mark byte (relaxed). Only meaningful compared against
+    /// the owning heap's parity — use `is_marked_at` unless you are
+    /// asserting the raw byte itself (e.g. "never touched", or frozen).
     #[inline]
-    pub fn is_marked(&self) -> bool {
+    pub fn raw_mark(&self) -> u8 {
         self.marked.load(Ordering::Relaxed)
     }
 
-    /// Store the RAW mark-parity bit (relaxed). Call sites pass the owning
-    /// heap's current parity to mark ("this cycle" black), which is also the
+    /// Whether the raw mark byte is set at either parity (not at rest).
+    #[inline]
+    pub fn is_marked(&self) -> bool {
+        self.raw_mark() != UNMARKED_AT_REST
+    }
+
+    /// Store the mark byte (relaxed). Call sites pass the owning heap's
+    /// current parity to mark ("this cycle" black), which is also the
     /// correct born-at-parity value at the allocation link seams.
     #[inline]
-    pub fn set_marked(&self, value: bool) {
-        self.marked.store(value, Ordering::Relaxed);
+    pub fn set_marked(&self, parity: MarkParity) {
+        self.marked.store(parity.byte(), Ordering::Relaxed);
     }
 
     /// Is this young object marked for the cycle whose parity is `parity`?
     #[inline]
-    pub fn is_marked_at(&self, parity: bool) -> bool {
-        self.marked.load(Ordering::Relaxed) == parity
+    pub fn is_marked_at(&self, parity: MarkParity) -> bool {
+        self.marked.load(Ordering::Relaxed) == parity.byte()
     }
 
-    /// Atomically CLAIM the mark bit for the cycle whose parity is `parity`:
-    /// set it and return `true` iff this call is the one that flipped it from
-    /// unmarked (`!= parity`) → marked (`== parity`). Used by the concurrent GC
+    /// Atomically CLAIM the mark byte for the cycle whose parity is `parity`:
+    /// set it and return `true` iff this call is the one that changed it from
+    /// unmarked (`!= parity`: at rest, or the other parity) → marked
+    /// (`== parity`). Used by the concurrent GC
     /// thread to mark a heap object exactly once with no `&mut TaggedHeap`, the
     /// non-cons analogue of `atomic_mark_owned_cons_ptr`. `swap` is atomic, so
     /// two threads racing to claim the same object cannot both observe `true`;
     /// a lost race is benign (the object ends up `== parity` either way).
     #[inline]
-    pub fn mark_claim_at(&self, parity: bool) -> bool {
-        self.marked.swap(parity, Ordering::Relaxed) != parity
+    pub fn mark_claim_at(&self, parity: MarkParity) -> bool {
+        self.marked.swap(parity.byte(), Ordering::Relaxed) != parity.byte()
     }
 }
 
