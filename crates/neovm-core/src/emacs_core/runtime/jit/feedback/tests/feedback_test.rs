@@ -231,6 +231,9 @@ fn the_knob_parses_its_three_values() {
     assert_eq!(FeedbackMode::parse("off"), Some(FeedbackMode::Off));
     assert_eq!(FeedbackMode::parse("record"), Some(FeedbackMode::Record));
     assert_eq!(FeedbackMode::parse("use"), Some(FeedbackMode::Use));
+    assert_eq!(FeedbackMode::parse("census"), Some(FeedbackMode::Census));
+    assert!(FeedbackMode::Census.records() && !FeedbackMode::Census.uses());
+    assert!(!FeedbackMode::Census.windowed() && FeedbackMode::Record.windowed());
     assert_eq!(FeedbackMode::parse("bogus"), None);
     assert!(!FeedbackMode::Off.records());
     assert!(FeedbackMode::Record.records() && !FeedbackMode::Record.uses());

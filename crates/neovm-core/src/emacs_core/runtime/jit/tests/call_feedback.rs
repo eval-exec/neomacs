@@ -197,3 +197,56 @@ fn with_the_knob_off_nothing_records() {
     assert!(leaf.feedback_holds.is_empty());
     force_feedback_mode_for_test(None);
 }
+
+/// `record` stops recording at a compiled site after its profiling window
+/// (the count saturates there and a later target is not seen); `census`
+/// records every call, and a transition after the window counts as late.
+#[test]
+fn compiled_sites_record_inside_their_window_unless_census() {
+    use crate::emacs_core::jit::feedback::STABLE_WINDOW;
+    for mode in [FeedbackMode::Record, FeedbackMode::Census] {
+        force_feedback_mode_for_test(Some(mode));
+        let mut ev = Context::new();
+        let caller = lexical_fn(
+            2,
+            vec![Op::StackRef(1), Op::StackRef(1), Op::Call(1), Op::Return],
+            Vec::new(),
+        );
+        let leaf = compile(&ev, &caller);
+        let proto = add1();
+        let f = Value::make_bytecode(proto.clone());
+        run(&mut ev, &leaf, &[f, Value::make_int(1)]);
+        let site = caller
+            .jit_runtime()
+            .call_sites()
+            .unwrap()
+            .site_at(2)
+            .unwrap();
+        site.set_count_for_test(STABLE_WINDOW - 1);
+        run(&mut ev, &leaf, &[f, Value::make_int(1)]);
+        assert_eq!(
+            site.count(),
+            STABLE_WINDOW,
+            "{mode:?}: the last call in the window"
+        );
+        // After the window: another source.
+        run(
+            &mut ev,
+            &leaf,
+            &[Value::make_bytecode(add1()), Value::make_int(1)],
+        );
+        match mode {
+            FeedbackMode::Record => {
+                assert_eq!(site.count(), STABLE_WINDOW, "the window closed");
+                assert_eq!(sources(site.target()).len(), 1, "not seen");
+                assert_eq!(site.late(), 0);
+            }
+            _ => {
+                assert_eq!(site.count(), STABLE_WINDOW + 1);
+                assert_eq!(sources(site.target()).len(), 2, "seen");
+                assert_eq!(site.late(), 1, "a late transition");
+            }
+        }
+    }
+    force_feedback_mode_for_test(None);
+}

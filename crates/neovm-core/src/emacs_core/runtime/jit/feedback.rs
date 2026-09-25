@@ -46,15 +46,21 @@ use crate::emacs_core::value::Value;
 
 /// `NEOVM_JIT_FEEDBACK`: whether call targets are recorded, and whether
 /// compiles may read them.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FeedbackMode {
     /// Nothing recorded (the default: today's code, CLIF-identical).
     Off,
     /// The interpreter records the call targets of its non-constant call
-    /// sites, compiled code records them through the recording call shims,
-    /// and the exit report carries the census (`[neovm-jit-final-calls]`).
-    /// No compile reads them.
+    /// sites, compiled code records them through the recording call shims
+    /// for a site's first [`STABLE_WINDOW`] executions (its profiling
+    /// window: after it a site pays one count test), and the exit report
+    /// carries the census (`[neovm-jit-final-calls]`). No compile reads
+    /// them.
     Record,
+    /// [`Self::Record`] with no window: compiled code records every call,
+    /// so the census sees transitions after the window (F-1's stability
+    /// premise). A measurement mode.
+    Census,
     /// [`Self::Record`], and compiles read the targets through their
     /// snapshot: the input of `NEOVM_JIT_SPEC_SOURCES` (which implies it).
     Use,
@@ -64,7 +70,8 @@ impl FeedbackMode {
     fn parse(raw: &str) -> Option<Self> {
         match raw {
             "off" | "0" | "no" | "false" => Some(FeedbackMode::Off),
-            "record" | "on" | "1" | "census" => Some(FeedbackMode::Record),
+            "record" | "on" | "1" => Some(FeedbackMode::Record),
+            "census" => Some(FeedbackMode::Census),
             "use" => Some(FeedbackMode::Use),
             _ => None,
         }
@@ -73,13 +80,19 @@ impl FeedbackMode {
     /// Whether call targets are recorded.
     #[inline(always)]
     pub fn records(self) -> bool {
-        self >= FeedbackMode::Record
+        !matches!(self, FeedbackMode::Off)
     }
 
     /// Whether compiles read the recorded targets.
     #[inline(always)]
     pub fn uses(self) -> bool {
-        self >= FeedbackMode::Use
+        matches!(self, FeedbackMode::Use)
+    }
+
+    /// Whether compiled code records only inside a site's profiling window.
+    #[inline(always)]
+    pub fn windowed(self) -> bool {
+        !matches!(self, FeedbackMode::Census)
     }
 
     /// The knob's spelling.
@@ -87,6 +100,7 @@ impl FeedbackMode {
         match self {
             FeedbackMode::Off => "off",
             FeedbackMode::Record => "record",
+            FeedbackMode::Census => "census",
             FeedbackMode::Use => "use",
         }
     }
@@ -130,7 +144,7 @@ fn feedback_mode_from_env() -> FeedbackMode {
     let raw = std::env::var("NEOVM_JIT_FEEDBACK").ok();
     let parsed = raw.as_deref().and_then(FeedbackMode::parse);
     if let (Some(raw), None) = (&raw, parsed) {
-        tracing::warn!(target: "neovm_jit", raw, "NEOVM_JIT_FEEDBACK: expected off|record|use; off");
+        tracing::warn!(target: "neovm_jit", raw, "NEOVM_JIT_FEEDBACK: expected off|record|census|use; off");
     }
     #[allow(unused_mut)]
     let mut mode = parsed.unwrap_or_else(|| {
@@ -142,7 +156,7 @@ fn feedback_mode_from_env() -> FeedbackMode {
     });
     // The source-slot consumer needs its input.
     #[cfg(feature = "jit")]
-    if super::compile::jit_spec_sources_on() && mode < FeedbackMode::Use {
+    if super::compile::jit_spec_sources_on() && !mode.uses() {
         mode = FeedbackMode::Use;
     }
     if mode != FeedbackMode::Off {
@@ -450,6 +464,19 @@ impl CallSiteFeedback {
             return;
         }
         self.transition(state, key, target);
+    }
+
+    /// Whether the site is still inside its profiling window (fewer than
+    /// [`STABLE_WINDOW`] counted executions).
+    #[inline(always)]
+    pub(crate) fn window_open(&self) -> bool {
+        self.count.load(Ordering::Relaxed) < STABLE_WINDOW
+    }
+
+    /// Test-only: set the counted executions outright.
+    #[cfg(test)]
+    pub(crate) fn set_count_for_test(&self, count: u32) {
+        self.count.store(count, Ordering::Relaxed);
     }
 
     /// Count one execution, then [`Self::observe`] (the recording call

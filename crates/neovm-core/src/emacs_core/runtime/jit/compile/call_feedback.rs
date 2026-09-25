@@ -150,9 +150,11 @@ pub(crate) fn recorded_target_at(pc: usize) -> Option<(CallTarget, SiteShape)> {
 /// [`neovm_jit_call`] at a recording site: count the execution, join its
 /// target into the site's lattice, then make the call. Same contract as
 /// `neovm_jit_call`, plus `site`, a pointer into the calling leaf's source's
-/// call-site table (kept alive by the leaf).
+/// call-site table (kept alive by the leaf). `WINDOWED` (every mode but
+/// `census`): only inside the site's profiling window; after it the shim
+/// is a count test and a tail call.
 #[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
-pub(crate) extern "C" fn neovm_jit_call_prof(
+pub(crate) extern "C" fn neovm_jit_call_prof<const WINDOWED: bool>(
     ctx: *mut u8,
     func_bits: i64,
     args_ptr: *const i64,
@@ -160,13 +162,16 @@ pub(crate) extern "C" fn neovm_jit_call_prof(
     out: *mut i64,
     site: *const CallSiteFeedback,
 ) -> i64 {
-    record_at(site, func_bits, args_ptr, nargs);
+    // SAFETY: the calling leaf keeps its source's table alive.
+    if !WINDOWED || unsafe { &*site }.window_open() {
+        record_at(site, func_bits, args_ptr, nargs);
+    }
     neovm_jit_call(ctx, func_bits, args_ptr, nargs, out)
 }
 
 /// [`neovm_jit_apply`] at a recording site (see [`neovm_jit_call_prof`]).
 #[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
-pub(crate) extern "C" fn neovm_jit_apply_prof(
+pub(crate) extern "C" fn neovm_jit_apply_prof<const WINDOWED: bool>(
     ctx: *mut u8,
     func_bits: i64,
     args_ptr: *const i64,
@@ -174,23 +179,33 @@ pub(crate) extern "C" fn neovm_jit_apply_prof(
     out: *mut i64,
     site: *const CallSiteFeedback,
 ) -> i64 {
-    record_at(site, func_bits, args_ptr, nargs);
+    // SAFETY: as above.
+    if !WINDOWED || unsafe { &*site }.window_open() {
+        record_at(site, func_bits, args_ptr, nargs);
+    }
     neovm_jit_apply(ctx, func_bits, args_ptr, nargs, out)
 }
 
 /// Record `target` at `site` (a speculated mapping-builtin call, whose
-/// callback is its argument 0), counting the execution.
+/// callback is its argument 0), counting the execution (see
+/// [`neovm_jit_call_prof`] for `WINDOWED`).
 #[allow(clippy::not_unsafe_ptr_arg_deref)] // C-ABI shim: raw ptrs per documented SAFETY contract; only ever called from generated code.
-pub(crate) extern "C" fn neovm_jit_record_call_target(site: *const CallSiteFeedback, target: i64) {
+pub(crate) extern "C" fn neovm_jit_record_call_target<const WINDOWED: bool>(
+    site: *const CallSiteFeedback,
+    target: i64,
+) {
     // SAFETY: the calling leaf keeps its source's table alive.
     let site = unsafe { &*site };
-    site.observe_counted(Value::from_bits(target as usize));
+    if !WINDOWED || site.window_open() {
+        site.observe_counted(Value::from_bits(target as usize));
+    }
 }
 
-/// The recording half of the `_prof` shims. Touches only the site's
-/// atomics and, on a transition, Rust-heap `Weak`s: no Lisp allocation, no
+/// The recording half of the `_prof` shims, out of line so the shims' fast
+/// path (after the window) needs no frame. Touches only the site's atomics
+/// and, on a transition, Rust-heap `Weak`s: no Lisp allocation, no
 /// safepoint, no unwind.
-#[inline(always)]
+#[inline(never)]
 fn record_at(site: *const CallSiteFeedback, func_bits: i64, args_ptr: *const i64, nargs: i64) {
     // SAFETY: the calling leaf keeps its source's table alive.
     let site = unsafe { &*site };
@@ -229,10 +244,12 @@ pub(crate) fn emit_prof_call(
     out_addr: ClifValue,
 ) -> cranelift_codegen::ir::Inst {
     let sig = fb.import_signature(prof_call_signature(rt.refs.call_conv, rt.ptr_ty));
-    let shim = if apply {
-        neovm_jit_apply_prof as *const () as usize
-    } else {
-        neovm_jit_call_prof as *const () as usize
+    let windowed = crate::emacs_core::jit::feedback::feedback_mode().windowed();
+    let shim = match (apply, windowed) {
+        (true, true) => neovm_jit_apply_prof::<true> as *const () as usize,
+        (true, false) => neovm_jit_apply_prof::<false> as *const () as usize,
+        (false, true) => neovm_jit_call_prof::<true> as *const () as usize,
+        (false, false) => neovm_jit_call_prof::<false> as *const () as usize,
     };
     let callee = fb.ins().iconst(rt.ptr_ty, shim as i64);
     let site_v = fb.ins().iconst(rt.ptr_ty, site as usize as i64);
@@ -255,10 +272,12 @@ pub(crate) fn emit_record_call_target(
     sig.params.push(AbiParam::new(rt.ptr_ty));
     sig.params.push(AbiParam::new(types::I64));
     let sig = fb.import_signature(sig);
-    let callee = fb.ins().iconst(
-        rt.ptr_ty,
-        neovm_jit_record_call_target as *const () as usize as i64,
-    );
+    let shim = if crate::emacs_core::jit::feedback::feedback_mode().windowed() {
+        neovm_jit_record_call_target::<true> as *const () as usize
+    } else {
+        neovm_jit_record_call_target::<false> as *const () as usize
+    };
+    let callee = fb.ins().iconst(rt.ptr_ty, shim as i64);
     let site_v = fb.ins().iconst(rt.ptr_ty, site as usize as i64);
     fb.ins().call_indirect(sig, callee, &[site_v, target]);
 }
