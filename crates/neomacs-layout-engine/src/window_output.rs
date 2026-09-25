@@ -1993,6 +1993,11 @@ impl WindowOutputEmitter {
         self.phys_cursor = Some(cursor);
     }
 
+    /// The physical cursor published for this window so far, if any.
+    pub(crate) fn phys_cursor(&self) -> Option<&WindowCursorSnapshot> {
+        self.phys_cursor.as_ref()
+    }
+
     pub(crate) fn finish_snapshot_with_geometry(
         mut self,
         evaluator: &mut Context,

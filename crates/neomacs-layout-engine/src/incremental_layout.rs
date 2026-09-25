@@ -652,6 +652,8 @@ pub struct ScrollReplay {
     /// checks for optimization 1). The render drops the chrome and evaluates
     /// the mode line when the walk breaks it. `None` = no post-walk check.
     pub(crate) one_line_contract: Option<mode_line_gate::OneLineContract>,
+    /// An edit replay (window-start kept), as opposed to a scroll.
+    pub(crate) edit: bool,
     /// Sealed frame-face generation that owns every ID in `reused_rows`.
     pub(crate) face_generation: FrameFaceGeneration,
 }
@@ -1249,6 +1251,7 @@ impl RetainedWindowMatrix {
             expected_walk: None,
             chrome: None,
             one_line_contract: None,
+            edit: false,
             face_generation: self.face_generation,
         })
     }
@@ -1626,6 +1629,7 @@ impl RetainedWindowMatrix {
                     }),
                     chrome: None,
                     one_line_contract: None,
+                    edit: true,
                     face_generation: self.face_generation,
                 });
             }
@@ -1651,6 +1655,7 @@ impl RetainedWindowMatrix {
             expected_walk: None,
             chrome: None,
             one_line_contract: None,
+            edit: true,
             face_generation: self.face_generation,
         })
     }

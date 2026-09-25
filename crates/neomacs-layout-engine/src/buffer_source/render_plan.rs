@@ -1070,6 +1070,44 @@ impl BufferSourceOutputSetup {
                     .builder()
                     .install_finalized_output_row(*idx, row.clone());
             }
+            // An edit replay keeps window-start: it never scrolls. Point must
+            // end up on a row wholly on screen, and when the walk did not place
+            // the cursor itself, on a reused row the cursor can be put back on.
+            // Otherwise the edit carried point below the window or onto the
+            // partly visible last row, or onto a row the cursor cannot be put
+            // back on from its glyphs (the end of a line, an empty line), and a
+            // full layout is what places it -- GNU's try_window_id likewise
+            // gives up when it cannot find the cursor (xdisp.c:23077-23110).
+            if scroll.edit {
+                use crate::display_text_window_row_lifecycle::TextWindowCursorPublishStatus;
+                let point = scroll.new_point.max(0) as usize;
+                let visible_bottom = geometry.visibility_bottom_y - params.bounds.y;
+                let point_row_on_screen = match post_loop.cursor_publish_status {
+                    // The cursor snapshot is text-area relative.
+                    TextWindowCursorPublishStatus::Published => {
+                        output_emitter.phys_cursor().is_some_and(|cursor| {
+                            (cursor.y + cursor.height) as f32 <= geometry.text_height + 0.5
+                        })
+                    }
+                    TextWindowCursorPublishStatus::NoWindowCursor => output
+                        .builder()
+                        .current_window_shows_charpos(point, visible_bottom),
+                    TextWindowCursorPublishStatus::Clipped => false,
+                    TextWindowCursorPublishStatus::NotRequested
+                    | TextWindowCursorPublishStatus::MissingCapture => output
+                        .builder()
+                        .find_current_window_cursor_row(point)
+                        .and_then(|row| output.builder().current_window_row(row))
+                        .is_some_and(|row| row.pixel_y + row.height_px <= visible_bottom + 0.5),
+                };
+                if !point_row_on_screen {
+                    crate::window_output::restore_text_window_retry_checkpoint(
+                        output.reborrow(),
+                        retry_checkpoint,
+                    );
+                    return BufferSourceRenderAttemptOutcome::ReplayMispredicted;
+                }
+            }
             output_emitter.push_reused_body(scroll.reused_row_snapshots, scroll.reused_points);
             output_emitter.normalize_body_start_cols();
 

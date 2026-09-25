@@ -249,6 +249,20 @@ impl OutputWindowBuildState {
             .find_cursor_row_for_charpos(charpos)
     }
 
+    /// Whether an enabled text row of the current window grid covers
+    /// `charpos` and lies wholly above the window-relative `bottom_y`.
+    pub(crate) fn current_window_shows_charpos(&self, charpos: usize, bottom_y: f32) -> bool {
+        self.current_row_grid.as_ref().is_some_and(|grid| {
+            grid.matrix.rows.iter().any(|row| {
+                row.enabled
+                    && row.role == GlyphRowRole::Text
+                    && row.start_charpos <= charpos
+                    && charpos <= row.end_charpos
+                    && row.pixel_y + row.height_px <= bottom_y + 0.5
+            })
+        })
+    }
+
     /// Read a row from the current window grid.
     pub(crate) fn current_window_row(&self, row: usize) -> Option<&GlyphRow> {
         self.current_row_grid.as_ref()?.row(row)

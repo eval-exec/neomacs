@@ -243,6 +243,13 @@ impl DisplayOutputBuilder {
         self.window_state.find_current_window_cursor_row(charpos)
     }
 
+    /// Whether an enabled text row of the window being built covers
+    /// `charpos` and lies wholly above the window-relative `bottom_y`.
+    pub(crate) fn current_window_shows_charpos(&self, charpos: usize, bottom_y: f32) -> bool {
+        self.window_state
+            .current_window_shows_charpos(charpos, bottom_y)
+    }
+
     /// Read a row from the current window grid.
     pub(crate) fn current_window_row(&self, row: usize) -> Option<&GlyphRow> {
         self.window_state.current_window_row(row)
