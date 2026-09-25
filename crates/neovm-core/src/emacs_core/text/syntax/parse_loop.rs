@@ -52,7 +52,7 @@ pub(super) struct LoopState {
 /// Where a scan starts.
 // Resumes have no production caller until `parse-partial-sexp` pauses for
 // `syntax-propertize` and caches runs; the resume self-test drives them.
-#[allow(dead_code)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) enum Entry<'s> {
     /// GNU `scan_sexps_forward` from `from_char` (absolute, 0-based), with
     /// `oldstate` internalized as `internalize_parse_state` does.
@@ -73,7 +73,7 @@ pub(super) enum Entry<'s> {
 }
 
 /// How a scan ended.
-#[allow(dead_code)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) enum ScanEnd {
     Finished(ScanFinish),
     /// The mode asked to pause at this loop top.
@@ -81,7 +81,7 @@ pub(super) enum ScanEnd {
 }
 
 /// A finished scan: the finalized state and where the scan stopped.
-#[allow(dead_code)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) struct ScanFinish {
     pub(super) state: PartialParseState,
     /// The Lisp position the scan stopped at (point after `parse-partial-sexp`).
@@ -89,7 +89,7 @@ pub(super) struct ScanFinish {
 }
 
 /// A loop top as a [`ScanMode`] sees it.
-#[allow(dead_code)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) struct LoopTop<'a> {
     pub(super) char_pos: usize,
     pub(super) byte_pos: EmacsBytePos,
@@ -99,7 +99,7 @@ pub(super) struct LoopTop<'a> {
 
 impl LoopTop<'_> {
     /// The state here, for a mode that keeps it.
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn to_state(&self) -> LoopState {
         LoopState {
             char_pos: self.char_pos,
@@ -112,7 +112,7 @@ impl LoopTop<'_> {
 }
 
 /// What the loop does after a mode's loop-top hook.
-#[allow(dead_code)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) enum TopAction {
     /// Keep scanning; call the hook again at the first loop top at or after
     /// this absolute position.
@@ -803,3 +803,7 @@ pub(super) fn run_parse_loop<M: ScanMode>(
         stop: char_pos_to_lisp_i64(from_char + idx),
     })
 }
+
+#[cfg(test)]
+#[path = "tests/parse_loop_resume.rs"]
+mod resume_tests;
