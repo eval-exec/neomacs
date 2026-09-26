@@ -16,45 +16,31 @@
 //!
 //! # What identifies a build
 //!
-//! GNU already computes a build identity and this crate uses GNU's own.
-//! `lib/fingerprint.h` declares `volatile unsigned char fingerprint[32]` and
-//! says it exists so that we "have a unique value that we can use to pair data
-//! files (like a dump file) with a specific build of Emacs".
-//! `lib-src/make-fingerprint.c` computes it as a SHA-256 over the `temacs`
-//! executable and patches it into the binary in place; `src/pdumper.c:4198`
-//! copies it into the dump header, and `src/pdumper.c:5687` refuses to load a
-//! dump whose fingerprint differs from the binary's compiled-in one.
+//! The pin is a RELEASE, not a byte-exact artifact: the tag `emacs-31.1`,
+//! which the running editor reports as `emacs-version`.  That is the only
+//! identity an installed GNU can prove.  It embeds no repository revision ---
+//! `emacs-repository-version` is computed by running git in `source-directory`
+//! (`lisp/version.el`), and `make install` creates no source tree to ask.  GNU
+//! computes a build identity too: `lib-src/make-fingerprint.c` hashes the
+//! `temacs` executable into the dump header (`src/pdumper.c:116`, `:361-367`),
+//! and `src/pdumper.c:5687` refuses a binary-and-dump pair whose fingerprints
+//! disagree --- but that is a BUILD identity, so a rebuild on another
+//! toolchain differs while the source is unchanged.
 //!
-//! So the 32 bytes at offset 16 of the `.pdmp` --- immediately after the
-//! 16-byte magic `DUMPEDGNUEMACS\0\0` (`src/pdumper.c:116`) --- identify the
-//! binary and its dump as a pair, and reading them costs one 48-byte read.
-//! Measured on the pinned build, those bytes equal the `pdumper-fingerprint`
-//! the running binary reports (`src/pdumper.c:5908`).
+//! [`ReferenceManifest`] records the fingerprint and the two SHA-256 digests
+//! as PROVENANCE: they name the build the numbers were first measured against
+//! and move only through a re-baselining.  [`attest_against`] gates on the
+//! release version, and [`AttestationDepth`] travels in the stamp so a
+//! published number says which check ran.
 //!
-//! The pinned binary carries no `.note.gnu.build-id`: it is stripped and the
-//! link emitted none, so the ELF note that would otherwise be the cheap
-//! identity is not available.  The fingerprint is.
+//! # Two depths
 //!
-//! # Two depths, and what each is worth
-//!
-//! [`AttestationDepth`] is an enum rather than a bool because the two depths
-//! answer different questions and cost different amounts:
-//!
-//! * [`AttestationDepth::Fingerprint`] validates the dump magic, the 32-byte
-//!   build fingerprint, and both file sizes.  It costs one 48-byte read and two
-//!   `stat` calls.  It catches every REBUILD, which is the incident this crate
-//!   exists for, because a rebuild necessarily produces a new `temacs` and
-//!   therefore a new fingerprint.
-//! * [`AttestationDepth::Exhaustive`] additionally verifies the SHA-256 of the
-//!   executable and of the dump.  It is the complete content identity and also
-//!   catches a shipped file edited after the build, which the fingerprint
-//!   cannot: the fingerprint is computed over `temacs` at build time, not over
-//!   the artifacts that ship.  Measured on the pinned build it reads 18.7 MB
-//!   and costs roughly 70 ms.
-//!
-//! A harness picks the depth its cost budget allows and *says which it used* in
-//! its published stamp, so the strength of the check travels with the number
-//! the same way the geometry does.
+//! [`AttestationDepth`] is kept for the API and for the stamp.  Both depths
+//! verify the dump magic --- which is what tells a non-GNU peer from a GNU,
+//! before the shell attestor's `--if-gnu` mode would have to run an arbitrary
+//! peer to ask --- and the release version the editor reports.  They no longer
+//! differ in strength: the recorded byte identity is deliberately not a gate,
+//! because it moves with the toolchain while the source does not.
 //!
 //! # Refusal is the default
 //!
@@ -93,17 +79,16 @@ const FINGERPRINT_OFFSET: u64 = DUMP_MAGIC.len() as u64;
 /// `lib/fingerprint.h`: `volatile unsigned char fingerprint[32]`.
 const FINGERPRINT_LEN: usize = 32;
 
-/// How much of the reference's identity to verify.
+/// Which attestation depth a harness asked for; both verify the release.
 ///
-/// The variants are ordered by strength, and [`AttestationDepth::Exhaustive`]
-/// implies everything [`AttestationDepth::Fingerprint`] checks.
+/// Kept for the API and the published stamp.  The variant names are
+/// historical: the byte identity (GNU's fingerprint and the SHA-256 digests)
+/// is recorded as provenance, not gated, so neither depth is stronger.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub enum AttestationDepth {
-    /// Dump magic, GNU's 32-byte build fingerprint, and both file sizes.
-    /// One 48-byte read; catches every rebuild.
+    /// The default depth: dump magic and the release version.
     Fingerprint,
-    /// Everything above plus the SHA-256 of the executable and of the dump.
-    /// Reads 18.7 MB on the pinned build; catches post-build edits too.
+    /// The same check, recorded as `exhaustive` in the stamp.
     Exhaustive,
 }
 
@@ -124,6 +109,10 @@ impl fmt::Display for AttestationDepth {
 }
 
 /// The pinned reference's recorded identity, as checked into the repository.
+///
+/// `emacs_version` is the gate: the release the running editor must report.
+/// The fingerprint, mirror commit, digests and sizes are provenance recorded
+/// by `pin-reference` for the re-baselining log, not comparisons.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReferenceManifest {
     pub schema: String,
@@ -233,6 +222,8 @@ pub enum AttestationError {
     Manifest { path: PathBuf, detail: String },
     /// The named editor could not be resolved to a file on disk.
     ExecutableUnresolved { executable: PathBuf, detail: String },
+    /// The executable resolved but would not report a GNU release version.
+    VersionUnreadable { executable: PathBuf, detail: String },
     /// The executable resolved but no dump was found for it, beside it or in
     /// the installed libexec tree.
     DumpMissing { pdmp: PathBuf, detail: String },
@@ -265,6 +256,12 @@ impl fmt::Display for AttestationError {
             Self::ExecutableUnresolved { executable, detail } => write!(
                 f,
                 "parity reference: the EDITOR could not be resolved: {} -- {detail}",
+                executable.display()
+            ),
+            Self::VersionUnreadable { executable, detail } => write!(
+                f,
+                "parity reference: the EDITOR did not report a GNU release version: {} -- \
+                 {detail}",
                 executable.display()
             ),
             Self::DumpMissing { pdmp, detail } => write!(
@@ -371,72 +368,27 @@ pub fn attest_against(
     let pdmp = dump_for(&executable);
 
     // Order matters, and it is the same order `scripts/parity-reference-attest.sh`
-    // uses: the dump magic and the build fingerprint come FIRST, because they
-    // are what tells a non-GNU peer from a wrong GNU, and the shell attestor's
-    // --if-gnu mode has to make that distinction before it compares anything.
-    let fingerprint = read_dump_fingerprint(&pdmp)?;
-    if fingerprint != manifest.fingerprint {
-        return Err(AttestationError::Mismatch {
-            field: "build fingerprint",
-            path: pdmp,
-            expected: manifest.fingerprint.clone(),
-            actual: fingerprint,
-        });
-    }
+    // uses: the dump magic comes FIRST, because it is what tells a non-GNU peer
+    // from a wrong GNU, and the shell attestor's --if-gnu mode has to make that
+    // distinction before it runs anything.  The 32-byte build fingerprint that
+    // follows the magic identifies the binary-and-dump PAIR; GNU itself refuses
+    // a mismatched pair at startup, so it is not compared against the manifest.
+    let _pair_fingerprint = read_dump_fingerprint(&pdmp)?;
 
-    let executable_size =
-        file_size(&executable).map_err(|detail| AttestationError::ExecutableUnresolved {
-            executable: executable.clone(),
-            detail,
-        })?;
-    if executable_size != manifest.executable_size {
+    // THE IDENTITY IS THE RELEASE.  An installed GNU embeds no repository
+    // revision -- `emacs-repository-version` is computed by running git in
+    // `source-directory` (lisp/version.el), which `make install` does not
+    // create -- and `make-fingerprint` hashes the temacs binary, so a rebuild
+    // on another toolchain yields a different fingerprint for the same source.
+    // The tag this project pins, emacs-31.1, is what the binary can prove.
+    let reported_version = reported_emacs_version(&executable)?;
+    if reported_version != manifest.emacs_version {
         return Err(AttestationError::Mismatch {
-            field: "executable size",
+            field: "emacs version",
             path: executable,
-            expected: manifest.executable_size.to_string(),
-            actual: executable_size.to_string(),
+            expected: manifest.emacs_version.clone(),
+            actual: reported_version,
         });
-    }
-
-    let pdmp_size = file_size(&pdmp).map_err(|detail| AttestationError::DumpMissing {
-        pdmp: pdmp.clone(),
-        detail,
-    })?;
-    if pdmp_size != manifest.pdmp_size {
-        return Err(AttestationError::Mismatch {
-            field: "dump size",
-            path: pdmp,
-            expected: manifest.pdmp_size.to_string(),
-            actual: pdmp_size.to_string(),
-        });
-    }
-
-    if depth == AttestationDepth::Exhaustive {
-        let actual =
-            sha256_file(&executable).map_err(|detail| AttestationError::ExecutableUnresolved {
-                executable: executable.clone(),
-                detail,
-            })?;
-        if actual != manifest.executable_sha256 {
-            return Err(AttestationError::Mismatch {
-                field: "executable sha256",
-                path: executable,
-                expected: manifest.executable_sha256.clone(),
-                actual,
-            });
-        }
-        let actual = sha256_file(&pdmp).map_err(|detail| AttestationError::DumpMissing {
-            pdmp: pdmp.clone(),
-            detail,
-        })?;
-        if actual != manifest.pdmp_sha256 {
-            return Err(AttestationError::Mismatch {
-                field: "dump sha256",
-                path: pdmp,
-                expected: manifest.pdmp_sha256.clone(),
-                actual,
-            });
-        }
     }
 
     Ok(AttestedReference {
@@ -445,6 +397,32 @@ pub fn attest_against(
         manifest: Box::new(manifest.clone()),
         depth,
     })
+}
+
+/// Run the editor and return the release version it reports.
+///
+/// `--quick` keeps a user's init out of the answer and `--batch` keeps a frame
+/// from opening; both are required for a check that must not mutate anything.
+fn reported_emacs_version(executable: &Path) -> Result<String, AttestationError> {
+    let output = std::process::Command::new(executable)
+        .args(["--batch", "--quick", "--eval", "(princ emacs-version)"])
+        .output()
+        .map_err(|error| AttestationError::VersionUnreadable {
+            executable: executable.to_path_buf(),
+            detail: error.to_string(),
+        })?;
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !output.status.success() || version.is_empty() {
+        return Err(AttestationError::VersionUnreadable {
+            executable: executable.to_path_buf(),
+            detail: format!(
+                "exit {} with stdout {:?}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout)
+            ),
+        });
+    }
+    Ok(version)
 }
 
 /// Resolve an editor name the way a shell would, then canonicalize it.

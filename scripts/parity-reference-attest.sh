@@ -305,35 +305,23 @@ mismatch() {
 # struct dump_header: char magic[16] then unsigned char fingerprint[32]
 # (src/pdumper.c:361-367); the magic itself is src/pdumper.c:116.  The magic is
 # checked FIRST so that --if-gnu can tell a non-GNU peer from a wrong GNU
-# before any size is compared.
+# before anything is run.
 magic="$(head -c 14 -- "$pdmp")"
 [ "$magic" = DUMPEDGNUEMACS ] ||
   not_the_reference "$pdmp is not a GNU dump file: magic is '$magic', expected 'DUMPEDGNUEMACS'"
 
-actual_fingerprint="$(od -An -tx1 -j16 -N32 -- "$pdmp" | tr -d ' \n')"
-[ "${#actual_fingerprint}" -eq 64 ] ||
-  refuse "$pdmp: cannot read the 32-byte build fingerprint from the dump header"
-[ "$actual_fingerprint" = "$m_fingerprint" ] ||
-  mismatch "build fingerprint" "$pdmp" "$m_fingerprint" "$actual_fingerprint"
-
-actual_size="$(stat -c %s -- "$resolved")" || refuse "cannot stat $resolved"
-[ "$actual_size" = "$m_executable_size" ] ||
-  mismatch "executable size" "$resolved" "$m_executable_size" "$actual_size"
-
-actual_size="$(stat -c %s -- "$pdmp")" || refuse "cannot stat $pdmp"
-[ "$actual_size" = "$m_pdmp_size" ] ||
-  mismatch "dump size" "$pdmp" "$m_pdmp_size" "$actual_size"
-
-if [ "$depth" = exhaustive ]; then
-  actual="$(sha256sum -- "$resolved")" || refuse "cannot hash $resolved"
-  actual="${actual%% *}"
-  [ "$actual" = "$m_executable_sha256" ] ||
-    mismatch "executable sha256" "$resolved" "$m_executable_sha256" "$actual"
-  actual="$(sha256sum -- "$pdmp")" || refuse "cannot hash $pdmp"
-  actual="${actual%% *}"
-  [ "$actual" = "$m_pdmp_sha256" ] ||
-    mismatch "dump sha256" "$pdmp" "$m_pdmp_sha256" "$actual"
-fi
+# THE IDENTITY IS THE RELEASE.  An installed GNU embeds no repository revision
+# -- `emacs-repository-version` computes one by running git in
+# `source-directory` (lisp/version.el), which `make install` does not create --
+# and make-fingerprint hashes the temacs binary, so a rebuild on another
+# toolchain changes the fingerprint without the source moving.  The pin is the
+# tagged release (emacs-31.1), and that is what the editor reports; the
+# manifest's fingerprint and SHA-256 fields are provenance, recorded by
+# pin-reference, not gates.
+editor_version="$("$resolved" --batch --quick --eval '(princ emacs-version)' 2> /dev/null)" ||
+  refuse "the editor resolved but did not run: $resolved"
+[ "$editor_version" = "$m_emacs_version" ] ||
+  mismatch "emacs version" "$resolved" "$m_emacs_version" "$editor_version"
 
 # The stamp.  Ledger 210 made every count carry the geometry it was measured
 # in; this is the same rule applied to the reference.

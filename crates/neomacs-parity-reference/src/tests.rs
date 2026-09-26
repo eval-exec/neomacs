@@ -6,12 +6,22 @@
 //! stop anyone rebuilding.  Synthetic dumps carry a real `struct dump_header`
 //! prefix, so they travel the same code path the real one does.
 
+#![cfg(unix)]
+
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use super::*;
 
-/// A synthetic editor: a file plus the dump GNU would load beside it.
+/// A synthetic editor: a script that reports a release version, plus the dump
+/// GNU would load beside it.
+///
+/// The version is what the running editor answers for `emacs-version`, the one
+/// identity an installed GNU can prove: the repository revision is computed
+/// from a source checkout at runtime (`lisp/version.el`) and `make install`
+/// leaves none, while the binary fingerprint is a build identity that changes
+/// with the toolchain while the source stays put.
 struct Fixture {
     _dir: tempfile::TempDir,
     executable: PathBuf,
@@ -19,18 +29,17 @@ struct Fixture {
 }
 
 impl Fixture {
-    /// `body` is the executable's content; `fingerprint` the 32 bytes the dump
-    /// header carries at offset 16.
-    fn new(body: &[u8], fingerprint: [u8; FINGERPRINT_LEN]) -> Self {
+    /// `version` is what the script reports; `fingerprint` the 32 bytes the
+    /// dump header carries at offset 16.
+    fn new(version: &str, fingerprint: [u8; FINGERPRINT_LEN]) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         let executable = dir.path().join("emacs");
         let pdmp = dir.path().join("emacs.pdmp");
-        fs::write(&executable, body).expect("write executable");
-        let mut dump = Vec::new();
-        dump.extend_from_slice(DUMP_MAGIC);
-        dump.extend_from_slice(&fingerprint);
-        dump.extend_from_slice(&[0x5a; 128]);
-        fs::write(&pdmp, &dump).expect("write dump");
+        fs::write(&executable, format!("#!/bin/sh\nprintf '%s' '{version}'\n"))
+            .expect("write executable");
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755))
+            .expect("make the fixture executable");
+        fs::write(&pdmp, dump_bytes(fingerprint)).expect("write dump");
         Self {
             _dir: dir,
             executable,
@@ -43,7 +52,19 @@ impl Fixture {
     }
 }
 
-/// The manifest a synthetic editor would be pinned by.
+/// A `struct dump_header` prefix: the magic, the 32-byte build fingerprint,
+/// then filler.
+fn dump_bytes(fingerprint: [u8; FINGERPRINT_LEN]) -> Vec<u8> {
+    let mut dump = Vec::new();
+    dump.extend_from_slice(DUMP_MAGIC);
+    dump.extend_from_slice(&fingerprint);
+    dump.extend_from_slice(&[0x5a; 128]);
+    dump
+}
+
+/// The manifest a synthetic editor would be pinned by.  `emacs_version` is the
+/// release the default fixture reports, so a fixture made with another version
+/// is the planted mismatch.
 fn manifest_of(executable: &Path) -> ReferenceManifest {
     let observed = observe(executable).expect("observe the fixture");
     ReferenceManifest {
@@ -61,8 +82,7 @@ fn manifest_of(executable: &Path) -> ReferenceManifest {
 
 /// A synthetic `make install`ed GNU: the executable under `bin/`, the dump
 /// where `Makefile.in:628-630` actually puts it -- in libexec, named for the
-/// build fingerprint, nowhere near the executable.  The probe the harnesses
-/// use must find it without running the editor (`--if-gnu` cannot afford to).
+/// build fingerprint, nowhere near the executable.
 struct InstalledFixture {
     _dir: tempfile::TempDir,
     executable: PathBuf,
@@ -70,22 +90,21 @@ struct InstalledFixture {
 }
 
 impl InstalledFixture {
-    fn new(body: &[u8], fingerprint: [u8; FINGERPRINT_LEN]) -> Self {
+    fn new(version: &str, fingerprint: [u8; FINGERPRINT_LEN]) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         let bin = dir.path().join("bin");
         fs::create_dir_all(&bin).expect("bin dir");
         let versioned = bin.join("emacs-31.1.1");
-        fs::write(&versioned, body).expect("write executable");
+        fs::write(&versioned, format!("#!/bin/sh\nprintf '%s' '{version}'\n"))
+            .expect("write executable");
+        fs::set_permissions(&versioned, fs::Permissions::from_mode(0o755))
+            .expect("make the fixture executable");
         // `make install` links the unversioned name to the versioned one.
         fs::copy(&versioned, bin.join("emacs")).expect("install symlink stand-in");
         let libexec = dir.path().join("libexec/emacs/31.1.1/x86_64-pc-linux-gnu");
         fs::create_dir_all(&libexec).expect("libexec dir");
         let pdmp = libexec.join(format!("emacs-{}.pdmp", hex(&fingerprint)));
-        let mut dump = Vec::new();
-        dump.extend_from_slice(DUMP_MAGIC);
-        dump.extend_from_slice(&fingerprint);
-        dump.extend_from_slice(&[0x5a; 128]);
-        fs::write(&pdmp, &dump).expect("write dump");
+        fs::write(&pdmp, dump_bytes(fingerprint)).expect("write dump");
         Self {
             _dir: dir,
             executable: bin.join("emacs"),
@@ -112,7 +131,7 @@ fn pinned_fingerprint() -> [u8; FINGERPRINT_LEN] {
 
 #[test]
 fn a_matching_editor_attests_at_both_depths() {
-    let fixture = Fixture::new(b"pinned emacs", pinned_fingerprint());
+    let fixture = Fixture::new("31.0.90", pinned_fingerprint());
     let manifest = fixture.manifest();
     for depth in [AttestationDepth::Fingerprint, AttestationDepth::Exhaustive] {
         let attested = attest_against(&fixture.executable, depth, &manifest)
@@ -135,7 +154,7 @@ fn a_matching_editor_attests_at_both_depths() {
 
 #[test]
 fn the_stamp_carries_the_reference_and_the_depth() {
-    let fixture = Fixture::new(b"pinned emacs", pinned_fingerprint());
+    let fixture = Fixture::new("31.0.90", pinned_fingerprint());
     let manifest = fixture.manifest();
     let attested = attest_against(
         &fixture.executable,
@@ -164,22 +183,19 @@ fn the_stamp_carries_the_reference_and_the_depth() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn a_rebuilt_reference_is_refused_by_its_fingerprint() {
-    // The incident this crate exists for: same path, same sizes, different
-    // build.  A rebuild produces a new `temacs` and therefore a new
-    // fingerprint, so the cheap depth alone must catch it.
-    let manifest = Fixture::new(b"pinned emacs", pinned_fingerprint()).manifest();
-
-    let mut rebuilt_fingerprint = pinned_fingerprint();
-    rebuilt_fingerprint[0] ^= 0xff;
-    let rebuilt = Fixture::new(b"pinned emacs", rebuilt_fingerprint);
+fn a_different_release_is_refused_by_its_version() {
+    // The incident this crate exists for: same path, another GNU.  An
+    // installed build cannot prove its source commit, so the release version
+    // is the identity, and the cheap depth's whole job is to check it.
+    let manifest = Fixture::new("31.0.90", pinned_fingerprint()).manifest();
+    let rebuilt = Fixture::new("30.2", pinned_fingerprint());
 
     let error = attest_against(
         &rebuilt.executable,
         AttestationDepth::Fingerprint,
         &manifest,
     )
-    .expect_err("a different build must be refused");
+    .expect_err("a different release must be refused");
     match &error {
         AttestationError::Mismatch {
             field,
@@ -187,15 +203,15 @@ fn a_rebuilt_reference_is_refused_by_its_fingerprint() {
             actual,
             ..
         } => {
-            assert_eq!(*field, "build fingerprint");
-            assert!(expected.starts_with("000102"), "expected: {expected}");
-            assert!(actual.starts_with("ff0102"), "actual: {actual}");
+            assert_eq!(*field, "emacs version");
+            assert_eq!(expected, "31.0.90");
+            assert_eq!(actual, "30.2");
         }
-        other => panic!("expected a fingerprint mismatch, got {other:?}"),
+        other => panic!("expected a version mismatch, got {other:?}"),
     }
     let rendered = error.to_string();
     assert!(
-        rendered.contains("parity reference MISMATCH on build fingerprint"),
+        rendered.contains("parity reference MISMATCH on emacs version"),
         "message must name the refusal: {rendered}"
     );
     assert!(
@@ -209,85 +225,33 @@ fn a_rebuilt_reference_is_refused_by_its_fingerprint() {
 }
 
 #[test]
-fn a_resized_executable_is_refused_without_hashing_it() {
-    let manifest = Fixture::new(b"pinned emacs", pinned_fingerprint()).manifest();
-    let longer = Fixture::new(b"pinned emacs and one more byte", pinned_fingerprint());
-    let error = attest_against(&longer.executable, AttestationDepth::Fingerprint, &manifest)
-        .expect_err("a different size must be refused");
-    assert!(
-        matches!(
-            &error,
-            AttestationError::Mismatch {
-                field: "executable size",
-                ..
-            }
-        ),
-        "got {error:?}"
-    );
-}
+fn byte_provenance_does_not_gate_the_release() {
+    // The manifest still RECORDS the executable and dump bytes (observe and
+    // pin-reference write them), but the identity is the release, so a
+    // same-version build with different bytes -- another toolchain's rebuild,
+    // or a shipped file edited afterwards -- attests at both depths.  The
+    // fingerprint's own job is pairing a binary with its dump, which GNU
+    // enforces itself when the editor runs.
+    let manifest = Fixture::new("31.0.90", pinned_fingerprint()).manifest();
+    let changed = Fixture::new("31.0.90", pinned_fingerprint());
 
-#[test]
-fn only_the_exhaustive_depth_catches_an_edit_that_preserves_size_and_fingerprint() {
-    // This is the whole reason `AttestationDepth` is an enum and not a bool.
-    // The fingerprint is computed over `temacs` at BUILD time, so a shipped
-    // file edited afterwards keeps it.  The cheap depth is honest about not
-    // seeing that; the exhaustive one does.
-    let pinned = Fixture::new(b"pinned emacs", pinned_fingerprint());
-    let manifest = pinned.manifest();
-    let edited = Fixture::new(b"patchd emacs", pinned_fingerprint());
-    assert_eq!(
-        manifest.executable_size,
-        observe(&edited.executable)
-            .expect("observe")
-            .executable_size,
-        "the fixture must isolate content from size",
-    );
-
-    attest_against(&edited.executable, AttestationDepth::Fingerprint, &manifest)
-        .expect("the cheap depth cannot see a post-build edit, and must not pretend to");
-
-    let error = attest_against(&edited.executable, AttestationDepth::Exhaustive, &manifest)
-        .expect_err("the exhaustive depth must see it");
-    assert!(
-        matches!(
-            &error,
-            AttestationError::Mismatch {
-                field: "executable sha256",
-                ..
-            }
-        ),
-        "got {error:?}"
-    );
-}
-
-#[test]
-fn an_edited_dump_is_refused_by_the_exhaustive_depth() {
-    let pinned = Fixture::new(b"pinned emacs", pinned_fingerprint());
-    let manifest = pinned.manifest();
-    let mut dump = fs::read(&pinned.pdmp).expect("read dump");
+    let mut script = fs::read(&changed.executable).expect("read executable");
+    script.extend_from_slice(b"# a post-build edit that keeps the release\n");
+    fs::write(&changed.executable, &script).expect("rewrite executable");
+    let mut dump = fs::read(&changed.pdmp).expect("read dump");
     let last = dump.len() - 1;
     dump[last] ^= 0xff;
-    fs::write(&pinned.pdmp, &dump).expect("rewrite dump");
+    fs::write(&changed.pdmp, &dump).expect("rewrite dump");
 
-    attest_against(&pinned.executable, AttestationDepth::Fingerprint, &manifest)
-        .expect("the header is untouched, so the cheap depth passes");
-    let error = attest_against(&pinned.executable, AttestationDepth::Exhaustive, &manifest)
-        .expect_err("the dump content changed");
-    assert!(
-        matches!(
-            &error,
-            AttestationError::Mismatch {
-                field: "dump sha256",
-                ..
-            }
-        ),
-        "got {error:?}"
-    );
+    for depth in [AttestationDepth::Fingerprint, AttestationDepth::Exhaustive] {
+        attest_against(&changed.executable, depth, &manifest)
+            .unwrap_or_else(|error| panic!("{depth} must not gate on bytes: {error}"));
+    }
 }
 
 #[test]
 fn a_missing_dump_is_refused_and_named_as_the_dump() {
-    let fixture = Fixture::new(b"pinned emacs", pinned_fingerprint());
+    let fixture = Fixture::new("31.0.90", pinned_fingerprint());
     let manifest = fixture.manifest();
     fs::remove_file(&fixture.pdmp).expect("remove dump");
     let error = attest_against(
@@ -304,8 +268,8 @@ fn a_missing_dump_is_refused_and_named_as_the_dump() {
 
 #[test]
 fn a_file_that_is_not_a_dump_is_named_as_such_rather_than_misread() {
-    let fixture = Fixture::new(b"pinned emacs", pinned_fingerprint());
-    let mut manifest = fixture.manifest();
+    let fixture = Fixture::new("31.0.90", pinned_fingerprint());
+    let manifest = fixture.manifest();
     // Long enough to reach the magic check: a shorter file is refused earlier,
     // as a header that could not be READ, which is a different fact.
     fs::write(
@@ -313,8 +277,6 @@ fn a_file_that_is_not_a_dump_is_named_as_such_rather_than_misread() {
         b"this is not a dump file at all, not one single bit of one",
     )
     .expect("overwrite");
-    let observed_size = fs::metadata(&fixture.pdmp).expect("metadata").len();
-    manifest.pdmp_size = observed_size;
     let error = attest_against(
         &fixture.executable,
         AttestationDepth::Fingerprint,
@@ -331,7 +293,6 @@ fn a_file_that_is_not_a_dump_is_named_as_such_rather_than_misread() {
     // A file too short to hold a header is refused as a header that could not
     // be read, not as a bad magic: the two are different facts about the dump.
     fs::write(&fixture.pdmp, b"short").expect("truncate");
-    manifest.pdmp_size = fs::metadata(&fixture.pdmp).expect("metadata").len();
     let error = attest_against(
         &fixture.executable,
         AttestationDepth::Fingerprint,
@@ -349,7 +310,7 @@ fn a_missing_editor_is_refused_as_the_editor() {
     let error = attest_against(
         Path::new("/nonexistent/definitely-not-an-editor"),
         AttestationDepth::Fingerprint,
-        &Fixture::new(b"x", pinned_fingerprint()).manifest(),
+        &Fixture::new("31.0.90", pinned_fingerprint()).manifest(),
     )
     .expect_err("a missing editor must be refused");
     assert!(
@@ -508,7 +469,7 @@ fn shell_attest(executable: &Path, depth: AttestationDepth, manifest: &Path) -> 
 
 #[test]
 fn both_readers_agree_on_a_matching_reference() {
-    let fixture = Fixture::new(b"pinned emacs", pinned_fingerprint());
+    let fixture = Fixture::new("31.0.90", pinned_fingerprint());
     let manifest = fixture.manifest();
     let manifest_path = write_manifest(fixture._dir.path(), &manifest);
 
@@ -528,7 +489,7 @@ fn both_readers_agree_on_a_matching_reference() {
 
 #[test]
 fn both_readers_attest_an_installed_layout_reference() {
-    let fixture = InstalledFixture::new(b"pinned emacs", pinned_fingerprint());
+    let fixture = InstalledFixture::new("31.0.90", pinned_fingerprint());
     let manifest = fixture.manifest();
     let manifest_path = write_manifest(fixture._dir.path(), &manifest);
 
@@ -557,28 +518,20 @@ fn both_readers_attest_an_installed_layout_reference() {
 
 #[test]
 fn both_readers_refuse_the_same_planted_references() {
-    let pinned = Fixture::new(b"pinned emacs", pinned_fingerprint());
+    let pinned = Fixture::new("31.0.90", pinned_fingerprint());
     let manifest = pinned.manifest();
     let manifest_path = write_manifest(pinned._dir.path(), &manifest);
-
-    let mut rebuilt_fingerprint = pinned_fingerprint();
-    rebuilt_fingerprint[7] ^= 0xff;
 
     // (what was planted, the editor, the depth that must refuse it)
     let planted: Vec<(&str, Fixture, AttestationDepth)> = vec![
         (
-            "a rebuild: a new fingerprint at the same sizes",
-            Fixture::new(b"pinned emacs", rebuilt_fingerprint),
+            "another release: same request, a different GNU",
+            Fixture::new("30.2", pinned_fingerprint()),
             AttestationDepth::Fingerprint,
         ),
         (
-            "a resized executable",
-            Fixture::new(b"pinned emacs, longer", pinned_fingerprint()),
-            AttestationDepth::Fingerprint,
-        ),
-        (
-            "a post-build edit that keeps the size and the fingerprint",
-            Fixture::new(b"patchd emacs", pinned_fingerprint()),
+            "another release at the exhaustive depth",
+            Fixture::new("30.2", pinned_fingerprint()),
             AttestationDepth::Exhaustive,
         ),
     ];
@@ -596,7 +549,7 @@ fn both_readers_refuse_the_same_planted_references() {
 
     // A missing dump is a refusal for both, and is not the same fact as a
     // mismatch: ledger 211 section 10.1 bought that distinction, keep it.
-    let orphan = Fixture::new(b"pinned emacs", pinned_fingerprint());
+    let orphan = Fixture::new("31.0.90", pinned_fingerprint());
     fs::remove_file(&orphan.pdmp).expect("remove dump");
     assert!(
         attest_against(&orphan.executable, AttestationDepth::Fingerprint, &manifest).is_err(),
@@ -618,7 +571,7 @@ fn both_readers_refuse_the_same_malformed_pins() {
     // The parsers are the part most likely to drift apart, and a parser that
     // shrugs is how a pin silently stops being checked.  Every corruption here
     // must stop BOTH readers.
-    let fixture = Fixture::new(b"pinned emacs", pinned_fingerprint());
+    let fixture = Fixture::new("31.0.90", pinned_fingerprint());
     let base = render_manifest_keys(&fixture.manifest());
 
     let corruptions: [(&str, String); 7] = [
@@ -664,7 +617,7 @@ fn both_readers_refuse_the_same_malformed_pins() {
 
 #[test]
 fn both_readers_treat_the_opt_out_as_exact() {
-    let fixture = Fixture::new(b"pinned emacs", pinned_fingerprint());
+    let fixture = Fixture::new("31.0.90", pinned_fingerprint());
     let manifest_path = write_manifest(fixture._dir.path(), &fixture.manifest());
     let run = |value: &str| {
         let output = std::process::Command::new("bash")
