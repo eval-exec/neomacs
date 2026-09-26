@@ -27,7 +27,7 @@ const ALLOCATORS: [&str; 3] = [
 ];
 
 fn crate_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    neomacs_infra::crate_root!()
 }
 
 /// Production `.rs` files under `src/render_thread`, relative to the crate

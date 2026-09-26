@@ -10,7 +10,7 @@ use crate::common::return_if_neovm_enable_oracle_proptest_not_set;
 use std::path::PathBuf;
 
 fn autoload_fixture_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/autoload")
+    neomacs_infra::crate_root!().join("fixtures/autoload")
 }
 
 #[test]

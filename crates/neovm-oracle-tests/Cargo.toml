@@ -11,6 +11,7 @@ description = "Oracle-backed Elisp parity tests for NeoVM"
 colored.workspace = true
 expect-test.workspace = true
 libc.workspace = true
+neomacs-infra.workspace = true
 neomacs-parity-reference.workspace = true
 neomacs-test-oracle.workspace = true
 proptest.workspace = true

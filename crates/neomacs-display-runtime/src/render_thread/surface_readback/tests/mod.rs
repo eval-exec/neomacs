@@ -3,7 +3,7 @@ use std::io::BufReader;
 
 #[test]
 fn published_readback_remains_complete_while_next_capture_replaces_it() {
-    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tmp");
+    let root = neomacs_infra::crate_root!().join("../../tmp");
     std::fs::create_dir_all(&root).unwrap();
     let directory = tempfile::tempdir_in(root).unwrap();
     let path = directory.path().join("readback.png");

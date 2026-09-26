@@ -20,7 +20,7 @@ use std::{fs, path::PathBuf, time::Duration};
 
 #[test]
 fn minibuffer_line_renders_in_the_graphical_miniwindow() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = neomacs_infra::crate_root!().join("../..");
     let backend = if cfg!(target_os = "macos") {
         GuiBackend::Macos
     } else {

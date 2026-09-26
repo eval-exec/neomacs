@@ -46,7 +46,7 @@ fn launcher_child_probe() {
 
 #[test]
 fn launcher_preserves_arguments_and_hides_child_console() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tmp");
+    let root = neomacs_infra::crate_root!().join("../../tmp");
     fs::create_dir_all(&root).unwrap();
     let directory = tempfile::Builder::new()
         .prefix("launcher 中文 ")
@@ -132,7 +132,7 @@ fn missing_editor_shows_an_error_dialog_and_returns_failure() {
             1
         }
     }
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tmp");
+    let root = neomacs_infra::crate_root!().join("../../tmp");
     fs::create_dir_all(&root).unwrap();
     let directory = tempfile::Builder::new()
         .prefix("missing-editor-")

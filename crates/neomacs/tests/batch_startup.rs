@@ -3,7 +3,7 @@ use std::{path::PathBuf, process::Command};
 #[test]
 #[ignore = "requires release executable with matching pdump"]
 fn batch_error_exits_nonzero_and_reports_only_to_stderr() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = neomacs_infra::crate_root!().join("../..");
     let binary = std::env::var_os("NEOMACS_GUI_TEST_BINARY")
         .map(PathBuf::from)
         .unwrap_or_else(|| root.join("target/release/neomacs"));

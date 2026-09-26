@@ -32,6 +32,7 @@ gstreamer = { workspace = true, features = ["v1_20"], optional = true }
 gstreamer-pbutils = { workspace = true, features = ["v1_20"], optional = true }
 
 [dev-dependencies]
+neomacs-infra.workspace = true
 tempfile.workspace = true
 
 [lints]

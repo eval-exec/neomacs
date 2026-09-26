@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 fn crate_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    neomacs_infra::crate_root!()
 }
 
 fn count_lines(relative: &str) -> usize {

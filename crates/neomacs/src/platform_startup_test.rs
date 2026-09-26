@@ -54,7 +54,7 @@ fn cocoa_named_fixed_pitch_default_uses_twelve_points() {
 
 fn check_in_isolated_catalog(case: CatalogCase) {
     let artifact_root =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/neomacs-test-font-catalogs");
+        neomacs_infra::crate_root!().join("../../target/neomacs-test-font-catalogs");
     fs::create_dir_all(&artifact_root).unwrap();
     let directory = tempfile::Builder::new()
         .prefix(case.as_ref())

@@ -10,7 +10,7 @@ use std::{path::PathBuf, time::Duration};
 // Prerequisites: fresh binary/runtime, Weston, DejaVu Sans Mono, and
 // `bash scripts/ci/setup-gui-test-packages.sh` (or explicit SVG directory overrides).
 fn svg_tag_box_follows_remapped_window_font_without_scaling_its_text_font() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = neomacs_infra::crate_root!().join("../..");
     let binary = std::env::var_os("NEOMACS_GUI_TEST_BINARY")
         .map(PathBuf::from)
         .unwrap_or_else(|| root.join("target/release/neomacs"));

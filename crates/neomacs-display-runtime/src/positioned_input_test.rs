@@ -13,8 +13,6 @@
 //! was not already wrong. This test is what stops the next variant from
 //! quietly acquiring a bare pair.
 
-use std::path::PathBuf;
-
 /// Every `InputEvent` variant with a raw coordinate pair and no presentation,
 /// as `variant` -> why the pair is interpretable without one.
 ///
@@ -26,7 +24,7 @@ fn allowlist() -> &'static [(&'static str, &'static str)] {
 }
 
 fn input_event_source() -> String {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/thread_comm.rs");
+    let path = neomacs_infra::crate_root!().join("src/thread_comm.rs");
     std::fs::read_to_string(path).expect("thread_comm.rs is part of this crate")
 }
 

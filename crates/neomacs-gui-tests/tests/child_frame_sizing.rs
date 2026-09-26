@@ -14,7 +14,7 @@ fn fitting_chromeless_child_before_redisplay_keeps_one_text_line() {
         Ok("windows") => GuiBackend::Windows,
         _ => panic!("set NEOMACS_GUI_TEST_BACKEND"),
     };
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let root = neomacs_infra::crate_root!().join("../..");
     let binary = std::env::var_os("NEOMACS_GUI_TEST_BINARY")
         .map(PathBuf::from)
         .unwrap_or_else(|| root.join("target/release/neomacs"));

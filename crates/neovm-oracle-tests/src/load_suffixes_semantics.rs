@@ -8,7 +8,7 @@ use crate::common::{assert_oracle_parity, return_if_neovm_enable_oracle_proptest
 use std::path::PathBuf;
 
 fn load_suffix_fixture_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/load-suffixes")
+    neomacs_infra::crate_root!().join("fixtures/load-suffixes")
 }
 
 #[test]
