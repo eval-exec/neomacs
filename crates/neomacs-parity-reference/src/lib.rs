@@ -157,7 +157,8 @@ impl AttestedReference {
         &self.executable
     }
 
-    /// The dump this executable loads, beside it (`src/emacs.c:1104-1120`).
+    /// The dump this executable loads — beside it in a build tree, or in the
+    /// installed libexec tree (`src/emacs.c:1027-1120`).
     pub fn pdmp(&self) -> &Path {
         &self.pdmp
     }
@@ -232,7 +233,8 @@ pub enum AttestationError {
     Manifest { path: PathBuf, detail: String },
     /// The named editor could not be resolved to a file on disk.
     ExecutableUnresolved { executable: PathBuf, detail: String },
-    /// The executable resolved but its dump is missing beside it.
+    /// The executable resolved but no dump was found for it, beside it or in
+    /// the installed libexec tree.
     DumpMissing { pdmp: PathBuf, detail: String },
     /// The file beside the executable is not a GNU dump at all.
     DumpMagic { pdmp: PathBuf, found: String },
@@ -366,7 +368,7 @@ pub fn attest_against(
     manifest: &ReferenceManifest,
 ) -> Result<AttestedReference, AttestationError> {
     let executable = resolve_executable(executable)?;
-    let pdmp = dump_beside(&executable);
+    let pdmp = dump_for(&executable);
 
     // Order matters, and it is the same order `scripts/parity-reference-attest.sh`
     // uses: the dump magic and the build fingerprint come FIRST, because they
@@ -483,6 +485,58 @@ fn dump_beside(executable: &Path) -> PathBuf {
     let mut name = executable.as_os_str().to_os_string();
     name.push(".pdmp");
     PathBuf::from(name)
+}
+
+/// The dump GNU loads for `executable`, following `load_pdump`
+/// (`src/emacs.c:1027-1120`): beside the canonical executable first (the
+/// build tree), then the installed libexec tree that `Makefile.in:628-630`
+/// fills with `emacs-<fingerprint>.pdmp`.  The compiled-in `PATH_EXEC` is not
+/// knowable without running the editor -- and `--if-gnu` must classify a peer
+/// without running it -- so the installed half is recognised relative to the
+/// binary's prefix (`<prefix>/bin/emacs`), which also covers the
+/// `libexecdir=lib` distro spelling.
+///
+/// When nothing is found the beside-path is returned, so `DumpMissing` keeps
+/// naming the place a build-tree user would look.
+fn dump_for(executable: &Path) -> PathBuf {
+    let beside = dump_beside(executable);
+    if beside.is_file() {
+        return beside;
+    }
+    if let Some(prefix) = executable.parent().and_then(Path::parent) {
+        let mut candidates = Vec::new();
+        for root in [prefix.join("libexec/emacs"), prefix.join("lib/emacs")] {
+            collect_installed_dumps(&root, &mut candidates);
+        }
+        // Byte-order, so this and the shell reader (LC_ALL=C sort) pick the
+        // same candidate when a prefix holds more than one.
+        candidates.sort_by(|a, b| a.as_os_str().cmp(b.as_os_str()));
+        if let Some(found) = candidates.into_iter().next() {
+            return found;
+        }
+    }
+    beside
+}
+
+/// Collect the dump names GNU installs (`Makefile.in:628-630`): the
+/// fingerprinted `emacs-*.pdmp`, plus the `emacs.pdmp`/`Emacs.pdmp`
+/// spellings older installs and `HAVE_BE_APP` builds use.
+fn collect_installed_dumps(directory: &Path, found: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_installed_dumps(&path, found);
+        } else if let Some(name) = path.file_name().and_then(|name| name.to_str())
+            && (name == "emacs.pdmp"
+                || name == "Emacs.pdmp"
+                || (name.starts_with("emacs-") && name.ends_with(".pdmp")))
+        {
+            found.push(path);
+        }
+    }
 }
 
 fn file_size(path: &Path) -> Result<u64, String> {
@@ -681,7 +735,7 @@ pub fn render_manifest_keys(manifest: &ReferenceManifest) -> String {
 /// This is what `pin-reference` records and what a mismatch report shows.
 pub fn observe(executable: &Path) -> Result<ObservedReference, AttestationError> {
     let executable = resolve_executable(executable)?;
-    let pdmp = dump_beside(&executable);
+    let pdmp = dump_for(&executable);
     let executable_size =
         file_size(&executable).map_err(|detail| AttestationError::ExecutableUnresolved {
             executable: executable.clone(),

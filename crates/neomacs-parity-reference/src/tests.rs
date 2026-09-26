@@ -39,18 +39,62 @@ impl Fixture {
     }
 
     fn manifest(&self) -> ReferenceManifest {
-        let observed = observe(&self.executable).expect("observe the fixture");
-        ReferenceManifest {
-            schema: "1".to_string(),
-            emacs_version: "31.0.90".to_string(),
-            mirror_commit: "0".repeat(40),
-            build_time: "2026-06-10T02:39:56-04:00".to_string(),
-            fingerprint: observed.fingerprint,
-            executable_sha256: observed.executable_sha256,
-            executable_size: observed.executable_size,
-            pdmp_sha256: observed.pdmp_sha256,
-            pdmp_size: observed.pdmp_size,
+        manifest_of(&self.executable)
+    }
+}
+
+/// The manifest a synthetic editor would be pinned by.
+fn manifest_of(executable: &Path) -> ReferenceManifest {
+    let observed = observe(executable).expect("observe the fixture");
+    ReferenceManifest {
+        schema: "1".to_string(),
+        emacs_version: "31.0.90".to_string(),
+        mirror_commit: "0".repeat(40),
+        build_time: "2026-06-10T02:39:56-04:00".to_string(),
+        fingerprint: observed.fingerprint,
+        executable_sha256: observed.executable_sha256,
+        executable_size: observed.executable_size,
+        pdmp_sha256: observed.pdmp_sha256,
+        pdmp_size: observed.pdmp_size,
+    }
+}
+
+/// A synthetic `make install`ed GNU: the executable under `bin/`, the dump
+/// where `Makefile.in:628-630` actually puts it -- in libexec, named for the
+/// build fingerprint, nowhere near the executable.  The probe the harnesses
+/// use must find it without running the editor (`--if-gnu` cannot afford to).
+struct InstalledFixture {
+    _dir: tempfile::TempDir,
+    executable: PathBuf,
+    pdmp: PathBuf,
+}
+
+impl InstalledFixture {
+    fn new(body: &[u8], fingerprint: [u8; FINGERPRINT_LEN]) -> Self {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bin = dir.path().join("bin");
+        fs::create_dir_all(&bin).expect("bin dir");
+        let versioned = bin.join("emacs-31.1.1");
+        fs::write(&versioned, body).expect("write executable");
+        // `make install` links the unversioned name to the versioned one.
+        fs::copy(&versioned, bin.join("emacs")).expect("install symlink stand-in");
+        let libexec = dir.path().join("libexec/emacs/31.1.1/x86_64-pc-linux-gnu");
+        fs::create_dir_all(&libexec).expect("libexec dir");
+        let pdmp = libexec.join(format!("emacs-{}.pdmp", hex(&fingerprint)));
+        let mut dump = Vec::new();
+        dump.extend_from_slice(DUMP_MAGIC);
+        dump.extend_from_slice(&fingerprint);
+        dump.extend_from_slice(&[0x5a; 128]);
+        fs::write(&pdmp, &dump).expect("write dump");
+        Self {
+            _dir: dir,
+            executable: bin.join("emacs"),
+            pdmp,
         }
+    }
+
+    fn manifest(&self) -> ReferenceManifest {
+        manifest_of(&self.executable)
     }
 }
 
@@ -478,6 +522,35 @@ fn both_readers_agree_on_a_matching_reference() {
             stamp,
             rust.stamp(),
             "the two readers must publish the same stamp at {depth}"
+        );
+    }
+}
+
+#[test]
+fn both_readers_attest_an_installed_layout_reference() {
+    let fixture = InstalledFixture::new(b"pinned emacs", pinned_fingerprint());
+    let manifest = fixture.manifest();
+    let manifest_path = write_manifest(fixture._dir.path(), &manifest);
+
+    for depth in [AttestationDepth::Fingerprint, AttestationDepth::Exhaustive] {
+        let rust = attest_against(&fixture.executable, depth, &manifest)
+            .unwrap_or_else(|error| panic!("{depth} attestation should pass: {error}"));
+        assert_eq!(
+            rust.pdmp(),
+            fs::canonicalize(&fixture.pdmp)
+                .expect("canonicalize")
+                .as_path(),
+            "the attested dump must be the installed libexec one"
+        );
+        let (code, stamp) = shell_attest(&fixture.executable, depth, &manifest_path);
+        assert_eq!(
+            code, 0,
+            "the shell attestor must accept an installed layout at {depth}"
+        );
+        assert_eq!(
+            stamp,
+            ReferenceUse::Attested(rust).stamp(),
+            "the two readers must publish the same stamp for an installed layout at {depth}"
         );
     }
 }

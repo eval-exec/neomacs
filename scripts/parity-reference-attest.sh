@@ -256,11 +256,34 @@ resolved="$(readlink -f -- "$candidate" 2> /dev/null)" || resolved=
 [ -n "$resolved" ] && [ -f "$resolved" ] ||
   not_the_reference "the EDITOR could not be resolved: $candidate -- not found, not a file, or a broken symlink"
 
-# src/emacs.c:1104-1120 falls back to basename(argv0) + ".pdmp"; an strace of
-# the pinned build confirms it opens exactly <canonical executable>.pdmp.
-pdmp="$resolved.pdmp"
-[ -f "$pdmp" ] ||
-  not_the_reference "the editor resolved but its dump is missing at $pdmp"
+# GNU's dump search (src/emacs.c:1027-1120): beside the canonical executable
+# first (the build tree), then the installed libexec tree, which
+# Makefile.in:628-630 fills with emacs-<fingerprint>.pdmp.  PATH_EXEC is
+# compiled in and not knowable without running the editor -- and --if-gnu
+# must classify a peer without running it -- so the installed half is
+# recognised relative to the binary's prefix, including the libexecdir=lib
+# distro spelling.  LC_ALL=C keeps the choice byte-ordered, agreeing with the
+# Rust reader (neomacs-parity-reference `dump_for`) when a prefix holds more
+# than one dump.
+locate_dump() {
+  local beside="$1.pdmp"
+  if [ -f "$beside" ]; then
+    printf '%s\n' "$beside"
+    return 0
+  fi
+  local prefix found
+  prefix=$(dirname -- "$(dirname -- "$1")")
+  found=$(
+    find "$prefix/libexec/emacs" "$prefix/lib/emacs" -type f \
+      \( -name 'emacs-*.pdmp' -o -name 'emacs.pdmp' -o -name 'Emacs.pdmp' \) \
+      2> /dev/null | LC_ALL=C sort | head -n 1
+  )
+  [ -n "$found" ] || return 1
+  printf '%s\n' "$found"
+}
+
+pdmp=$(locate_dump "$resolved") ||
+  not_the_reference "the editor resolved but its dump is missing at $resolved.pdmp"
 
 mismatch() {
   # $1 = field, $2 = path, $3 = pinned, $4 = found
