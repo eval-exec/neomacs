@@ -155,6 +155,14 @@ Prefer system packages? Download them from
 | **macOS** *(experimental)* | `.dmg` · `.zip` · `.tar.gz` (Apple Silicon) |
 | **Windows** *(experimental)* | installer `.exe` · portable `.zip` (x86_64, aarch64) |
 
+On macOS, Homebrew users can install and upgrade from the project tap; the
+cask selects the Apple Silicon or Intel build automatically and puts
+`neomacs` and `neomacsclient` on the `PATH`:
+
+```bash
+brew install --cask neomacs-core/tap/neomacs
+```
+
 On Windows, launch `runneomacs.exe` for the GUI without a console window.
 Installer shortcuts use this launcher. Use `neomacs.exe` from a terminal for
 `-nw`, `--batch`, redirected output, and shell exit status.

@@ -218,7 +218,11 @@ write_installation_methods() {
       <td><a href="$release_base/$linux_arm_rpm"><code>$linux_arm_rpm</code></a></td>
     </tr>
     <tr>
-      <td rowspan="6"><img src="https://cdn.simpleicons.org/apple/808080" width="32" height="32" alt="Apple logo"><br><strong>macOS</strong></td>
+      <td rowspan="7"><img src="https://cdn.simpleicons.org/apple/808080" width="32" height="32" alt="Apple logo"><br><strong>macOS</strong></td>
+      <td colspan="2"><img src="https://cdn.simpleicons.org/homebrew" width="28" height="28" alt="Homebrew logo"> <strong>Homebrew</strong><br>Apple Silicon + Intel</td>
+      <td><code>brew install --cask neomacs-core/tap/neomacs</code></td>
+    </tr>
+    <tr>
       <td rowspan="3" colspan="2">Apple Silicon<br><code>aarch64</code></td>
       <td><a href="$release_base/$macos_arm_dmg"><code>$macos_arm_dmg</code></a></td>
     </tr>
