@@ -1,6 +1,5 @@
 //! `infra` — materialize and inspect shared test environment fixtures.
 
-use std::path::Path;
 use std::process::exit;
 
 fn main() {
@@ -230,7 +229,7 @@ fn pin_packages(name: &str, note: Option<String>) -> Result<String, String> {
     let digest = neomacs_infra::config_env::package_state::digest(&identity.to_record());
     let note = note.unwrap_or_else(|| "pinned from the sealed fixture".to_owned());
     neomacs_infra::config_env::common::Spec::pin_packages(
-        Path::new(env!("CARGO_MANIFEST_DIR")),
+        &neomacs_infra::crate_root!(),
         name,
         &digest,
         &note,

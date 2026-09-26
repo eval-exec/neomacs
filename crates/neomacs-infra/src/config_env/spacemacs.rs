@@ -95,7 +95,7 @@ impl SpacemacsEnvironment {
         // bootstrap overlay mirrors the session layout so the bootstrap
         // sees exactly what sessions see.
         fs::copy(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/spacemacs-dotfile.el"),
+            crate::crate_root!().join("fixtures/spacemacs-dotfile.el"),
             home.join(".spacemacs"),
         )
         .map_err(|error| format!("install fixture dotfile: {error}"))?;

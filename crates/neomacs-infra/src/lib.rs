@@ -54,3 +54,23 @@ pub fn nextest_workspace_root() -> Option<PathBuf> {
 pub fn workspace_root() -> PathBuf {
     nextest_workspace_root().unwrap_or_else(cargo_workspace_root)
 }
+
+/// The invoking crate's root directory, resolved on the machine *running*
+/// the code.
+///
+/// `env!("CARGO_MANIFEST_DIR")` is the build machine's absolute path, and an
+/// archive-shipped test binary runs where that path does not exist (nextest
+/// `--workspace-remap`).  The compile-time manifest directory is folded into
+/// its workspace-relative path and joined onto [`workspace_root`], so a test
+/// in one crate can read another crate's fixtures without depending on the
+/// running process's own `CARGO_MANIFEST_DIR`.
+#[macro_export]
+macro_rules! crate_root {
+    () => {{
+        let compiled = ::std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        match compiled.strip_prefix($crate::cargo_workspace_root()) {
+            Ok(relative) => $crate::workspace_root().join(relative),
+            Err(_) => compiled.to_path_buf(),
+        }
+    }};
+}

@@ -152,9 +152,9 @@ pub fn start_weston_with_desktop(
     let mut command = Command::new("weston");
     match desktop {
         WestonDesktop::Solid => {
-            command.arg("--config").arg(
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/weston-headless.ini"),
-            );
+            command
+                .arg("--config")
+                .arg(crate::crate_root!().join("fixtures/weston-headless.ini"));
         }
         WestonDesktop::DefaultPattern => {
             command.arg("--no-config");
