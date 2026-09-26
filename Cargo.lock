@@ -3762,6 +3762,7 @@ name = "neomacs-display-protocol"
 version = "0.0.19"
 dependencies = [
  "bitflags 2.13.1",
+ "neomacs-infra",
  "num_enum",
  "proptest",
  "rustc-hash 2.1.3",
@@ -3949,6 +3950,7 @@ dependencies = [
  "gstreamer",
  "gstreamer-pbutils",
  "linux-perf-data",
+ "neomacs-infra",
  "neomacs-melpa-test-support",
  "rustix 1.1.4",
  "serde",
@@ -3995,6 +3997,7 @@ dependencies = [
 name = "neomacs-terminfo"
 version = "0.0.19"
 dependencies = [
+ "neomacs-infra",
  "pkg-config",
  "regex",
  "rustix 1.1.4",
@@ -4138,6 +4141,7 @@ dependencies = [
  "memchr",
  "memmap2",
  "neomacs-display-protocol",
+ "neomacs-infra",
  "neomacs-video-model",
  "neovm-host-abi",
  "network-interface",
@@ -4196,6 +4200,7 @@ dependencies = [
  "colored",
  "expect-test",
  "libc",
+ "neomacs-infra",
  "neomacs-parity-reference",
  "neomacs-test-oracle",
  "proptest",

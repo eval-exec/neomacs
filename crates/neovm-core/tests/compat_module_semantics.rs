@@ -25,7 +25,7 @@ use neovm_core::emacs_core::load::{
 /// argument form of the same setting and takes precedence over the variable,
 /// so the build and the search cannot disagree.
 fn build_test_module() -> PathBuf {
-    let module_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/test-module");
+    let module_dir = neomacs_infra::crate_root!().join("tests/test-module");
     let target_dir = module_dir.join("target");
     let status = Command::new("cargo")
         .args(["build", "--release", "--target-dir"])

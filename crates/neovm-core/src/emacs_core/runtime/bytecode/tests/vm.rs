@@ -7,7 +7,7 @@ use crate::emacs_core::value::HashTableTest;
 use crate::window::{SplitDirection, SplitPlacement};
 use std::cell::RefCell;
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::rc::Rc;
 
 fn new_vm(eval: &mut Context) -> Vm<'_> {
@@ -595,7 +595,7 @@ fn quoted_dispatch_names(source: &str, predicate: impl Fn(&str) -> bool) -> BTre
 #[test]
 fn vm_direct_dispatch_covers_all_dispatch_builtin_names() {
     crate::test_utils::init_test_tracing();
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let manifest = neomacs_infra::crate_root!();
     let builtins_mod =
         std::fs::read_to_string(manifest.join("src/emacs_core/lisp/native/builtins/mod.rs"))
             .expect("read builtins/mod.rs");
@@ -620,7 +620,7 @@ fn vm_direct_dispatch_covers_all_dispatch_builtin_names() {
 #[test]
 fn vm_raw_parent_bridge_helper_is_gone() {
     crate::test_utils::init_test_tracing();
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let manifest = neomacs_infra::crate_root!();
     let root = manifest.join("src/emacs_core");
     let mut pending = vec![root.clone()];
     let mut unexpected = Vec::new();
@@ -663,7 +663,7 @@ fn vm_raw_parent_bridge_helper_is_gone() {
 #[test]
 fn vm_parent_evaluator_bridge_is_limited_to_semantic_boundaries() {
     crate::test_utils::init_test_tracing();
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let manifest = neomacs_infra::crate_root!();
     let root = manifest.join("src/emacs_core");
     let mut pending = vec![root.clone()];
     let mut unexpected = Vec::new();
