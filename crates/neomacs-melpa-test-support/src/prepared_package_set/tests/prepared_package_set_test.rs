@@ -50,3 +50,46 @@ fn prepared_package_set_writes_the_same_startup_contract_for_pty_launches() {
         prepared.startup_elisp()
     );
 }
+
+/// An installed GNU ships its Lisp compressed (`pcase.el.gz`): `make install`
+/// runs the sources through `GZIP_PROG`, while a build tree keeps them plain.
+/// Restricting `load-suffixes` to `.el` before compression support is loaded
+/// makes the first `require` of an editor library load `jka-compr.el.gz` so it
+/// can decompress itself, and GNU signals `Recursive load` -- every batch in
+/// the suite dies during `RestartProbe`.  The handler has to be in place first;
+/// it loads through the default suffixes, from `jka-compr.elc` when installed.
+#[test]
+fn source_load_suffixes_preload_jka_compr_before_restricting() {
+    let (root, package_dir) = fixture();
+    let prepared =
+        PreparedPackageSet::from_package_dir(("example", "1.2.3"), "example.el", package_dir)
+            .expect("describe prepared package")
+            .with_load_suffixes(LoadSuffixes::Source);
+    let _keep_tempdir_alive = root;
+
+    let startup = prepared.startup_elisp();
+    let preload = startup
+        .find("(require 'jka-compr)")
+        .unwrap_or_else(|| panic!("the source policy must preload jka-compr:\n{startup}"));
+    let restrict = startup
+        .find("load-suffixes '(\".el\")")
+        .unwrap_or_else(|| panic!("the source policy must restrict suffixes:\n{startup}"));
+    assert!(
+        preload < restrict,
+        "jka-compr must be loaded before the suffixes are restricted:\n{startup}"
+    );
+}
+
+#[test]
+fn emacs_default_suffixes_leave_jka_compr_alone() {
+    let (root, package_dir) = fixture();
+    let prepared =
+        PreparedPackageSet::from_package_dir(("example", "1.2.3"), "example.el", package_dir)
+            .expect("describe prepared package")
+            .with_load_suffixes(LoadSuffixes::EmacsDefault);
+    let _keep_tempdir_alive = root;
+
+    let startup = prepared.startup_elisp();
+    assert!(!startup.contains("jka-compr"), "{startup}");
+    assert!(!startup.contains("load-suffixes"), "{startup}");
+}
