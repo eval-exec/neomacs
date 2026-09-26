@@ -255,12 +255,18 @@ cat >"$app_bundle/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-if [[ -f assets/logo-128.png ]]; then
-  mkdir -p "$app_bundle/Contents/Resources"
-  sips -s format icns assets/logo-128.png \
-    --out "$app_bundle/Contents/Resources/neomacs.icns" \
-    2>/dev/null || true
-fi
+# The app icon is the canonical runtime window icon: the same SVG
+# `neomacs-display-runtime` embeds, rasterized by the same `resvg` path (see
+# `cargo xtask render-window-icon`) and assembled into an `.icns` with
+# `iconutil`.  macOS has no SVG icon format and `sips` cannot read SVG, so a
+# silent `|| true` here is what once shipped DMGs whose .app had no icon at
+# all while Info.plist named `neomacs.icns`.  Every step is fatal.
+echo "rendering neomacs.icns from the canonical window icon..."
+iconset="$app_bundle/Contents/Resources/neomacs.iconset"
+rm -rf "$iconset"
+cargo xtask render-window-icon --out-dir "$iconset"
+iconutil -c icns "$iconset" -o "$app_bundle/Contents/Resources/neomacs.icns"
+rm -rf "$iconset"
 
 install -m 0644 README.md "$app_bundle/Contents/Resources/README.md"
 install -m 0644 COPYING "$app_bundle/Contents/Resources/COPYING"
@@ -414,15 +420,37 @@ ln -sf /Applications "$dmg_staging/Applications"
 # busy" on CI runners (a leftover mount of the same volume, or Spotlight/mds
 # indexing the source folder while it is read). Detach any stale volume and
 # retry a few times before giving up.
+# hdiutil has no volume-icon option on current macOS (there is no
+# `-volicon`), so the shipped DMG gets its icon the supported way: create a
+# writable image, mount it, add `.VolumeIcon.icns` and set the
+# kHasCustomIcon flag (`SetFile -a C` -- part of the same Command Line Tools
+# that make `cargo` runnable), then convert to the shipped UDZO format.
+# Without the flag Finder shows the generic disk-image icon even though the
+# `.VolumeIcon.icns` file is present.
 create_dmg() {
   local vol="/Volumes/$app_bundle_name"
+  # `hdiutil create` appends `.dmg` to any path that lacks the suffix, so the
+  # writable intermediate carries it explicitly: `$dmg.rw` would be written
+  # as `$dmg.rw.dmg` and the later `hdiutil attach "$rw"` would miss.
+  local rw="${dmg%.dmg}.rw.dmg"
   [[ -d "$vol" ]] && hdiutil detach "$vol" -force >/dev/null 2>&1 || true
+  rm -f "$rw" "$dmg"
   hdiutil create \
     -volname "$app_bundle_name" \
     -srcfolder "$dmg_staging" \
     -ov \
-    -format UDZO \
-    "$dmg"
+    -format UDRW \
+    "$rw" || return 1
+  hdiutil attach "$rw" -nobrowse -mountpoint "$vol" >/dev/null || return 1
+  local icon_stamped=0
+  if cp "$app_bundle/Contents/Resources/neomacs.icns" "$vol/.VolumeIcon.icns" \
+    && SetFile -a C "$vol"; then
+    icon_stamped=1
+  fi
+  hdiutil detach "$vol" >/dev/null 2>&1 || true
+  ((icon_stamped == 1)) || return 1
+  hdiutil convert "$rw" -format UDZO -o "$dmg" -ov >/dev/null || return 1
+  rm -f "$rw"
 }
 
 dmg_attempts=5

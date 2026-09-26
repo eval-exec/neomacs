@@ -1,6 +1,7 @@
 mod dependency_coherence;
 mod gc_stress;
 mod production_capabilities;
+mod window_icon;
 
 // SINGLE SOURCE OF TRUTH (ledger 206): the recipe for every Lisp file this
 // build generates by running one of GNU's own awk scripts.  The same file is
@@ -458,6 +459,17 @@ fn run_xtask(repo_root: PathBuf, args: impl IntoIterator<Item = OsString>) -> Re
     ) {
         args.next();
         return run_workspace_cli("neomacs-parity-reference", &[], args);
+    }
+    // The macOS app/DMG icon pipeline.  macOS has no SVG icon format, and
+    // `sips` cannot read SVG, so the packaging script renders the canonical
+    // runtime window icon with this command and assembles the `.icns` with
+    // `iconutil`.  See `window_icon` for why this is not a `sips` one-liner.
+    if matches!(
+        args.peek().and_then(|arg| arg.to_str()),
+        Some("render-window-icon")
+    ) {
+        args.next();
+        return window_icon::run(&repo_root, args);
     }
     // Shared editor-config fixtures (Doom today, Spacemacs and friends
     // later).  Materialization is an explicit step so a test run never
@@ -4591,6 +4603,7 @@ fn usage_text() -> &'static str {
     "\
 Usage: cargo xtask [fresh-build] (--release | --profile NAME) [--bin-dir DIR] [--runtime-root DIR] [--dry-run] [--low-memory|--jobs N] [--native-comp|--no-native-comp] [--skip-build] [--no-byte-compile] [--aot-preload]
        cargo xtask check-dependency-coherence
+       cargo xtask render-window-icon --out-dir DIR [--source PATH]
        cargo xtask perf list
        cargo xtask perf run SCENARIO [--editor PATH] [--iterations N] [--frontend batch|tui|gui]
        cargo xtask perf compare SCENARIO --baseline-editor PATH --candidate-editor PATH [--samples N>=3]

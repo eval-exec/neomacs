@@ -9069,6 +9069,7 @@ version = "0.0.19"
 dependencies = [
  "flate2",
  "rayon",
+ "resvg",
  "serde",
  "serde_json",
  "sha2",
