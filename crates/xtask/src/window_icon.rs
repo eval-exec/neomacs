@@ -36,7 +36,10 @@ const ICONSET: &[(&str, u32)] = &[
     ("icon_512x512@2x.png", 1024),
 ];
 
-pub(crate) fn run(repo_root: &Path, args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<()> {
+pub(crate) fn run(
+    repo_root: &Path,
+    args: impl IntoIterator<Item = std::ffi::OsString>,
+) -> Result<()> {
     let mut out_dir: Option<PathBuf> = None;
     let mut source: Option<PathBuf> = None;
     let mut args = args.into_iter();
@@ -99,7 +102,12 @@ mod tests {
     /// Which pixel sizes the PNG at PATH declares, from its IHDR chunk.
     fn png_dimensions(path: &Path) -> (u32, u32) {
         let bytes = fs::read(path).expect("rendered PNG");
-        assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n", "{}: PNG magic", path.display());
+        assert_eq!(
+            &bytes[..8],
+            b"\x89PNG\r\n\x1a\n",
+            "{}: PNG magic",
+            path.display()
+        );
         assert_eq!(&bytes[12..16], b"IHDR", "{}: IHDR first", path.display());
         (
             u32::from_be_bytes(bytes[16..20].try_into().expect("width bytes")),
@@ -127,7 +135,13 @@ mod tests {
         // exactly the table above.
         let entries: Vec<String> = fs::read_dir(out_dir.path())
             .expect("read iconset")
-            .map(|entry| entry.expect("dir entry").file_name().to_string_lossy().into_owned())
+            .map(|entry| {
+                entry
+                    .expect("dir entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
             .collect();
         assert_eq!(entries.len(), ICONSET.len());
     }
@@ -138,8 +152,8 @@ mod tests {
         let error = run(&repo_root, [std::ffi::OsString::from("--nope")])
             .expect_err("unknown argument must be refused");
         assert!(error.to_string().contains("--nope"), "{error}");
-        let error = run(&repo_root, std::iter::empty())
-            .expect_err("missing --out-dir must be refused");
+        let error =
+            run(&repo_root, std::iter::empty()).expect_err("missing --out-dir must be refused");
         assert!(error.to_string().contains("--out-dir"), "{error}");
     }
 }
