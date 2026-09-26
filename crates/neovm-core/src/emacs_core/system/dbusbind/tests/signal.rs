@@ -1,8 +1,9 @@
-//! Signal and method-call dispatch — GNU `xd_read_message_1`'s
-//! `(:signal ...)` / `(:method ...)` arms.
+//! Signal, method-call and reply dispatch — GNU `xd_read_message_1`'s
+//! `(:signal ...)`, `(:method ...)` and `(:serial ...)` arms.
 //!
-//! `unregistered_signal_stores_no_event` and
-//! `registered_signal_fills_the_handler_slot` need no bus: they exercise
+//! `unregistered_signal_stores_no_event`,
+//! `registered_signal_fills_the_handler_slot` and
+//! `error_reply_fills_the_error_name_slot` need no bus: they exercise
 //! `dbus-registered-objects-table` and the input queue, both of which exist at
 //! startup.  The end-to-end tests need the session bus and are skipped without
 //! one, like `call.rs`.
@@ -20,14 +21,19 @@ fn signal_message(path: &str, interface: &str, member: &str) -> dbus::Message {
     dbus::Message::new_signal(path, interface, member).expect("signal message")
 }
 
-/// The event's HANDLER slot: nine fields precede it
-/// (`BUS TYPE SERIAL SERVICE DESTINATION PATH INTERFACE MEMBER`).
-fn handler_slot(queued: Value) -> Value {
+/// Field N of a queued `dbus-event` list.
+fn nth_field(queued: Value, n: usize) -> Value {
     let mut rest = queued;
-    for _ in 0..9 {
+    for _ in 0..n {
         rest = rest.cons_cdr();
     }
     rest.cons_car()
+}
+
+/// The event's HANDLER slot: nine fields precede it
+/// (`BUS TYPE SERIAL SERVICE DESTINATION PATH INTERFACE MEMBER`).
+fn handler_slot(queued: Value) -> Value {
+    nth_field(queued, 9)
 }
 
 fn load_dbus(eval: &mut Context) -> bool {
@@ -203,6 +209,79 @@ fn directed_method_call_reaches_its_handler() {
     assert!(
         text.starts_with("calls=(nil)"),
         "the handler registered for the method should have been called: {text}"
+    );
+    super::super::reset_thread_locals();
+}
+
+/// An error reply names the error in the MEMBER slot.
+///
+/// GNU reads `dbus_message_get_error_name` for `DBUS_MESSAGE_TYPE_ERROR`
+/// (`src/dbusbind.c:1810-1812`).  An error message has no MEMBER header
+/// field, so reading `Message::member` left the slot nil, and
+/// `dbus-check-event` rejected every error reply as "Not a valid D-Bus
+/// event" -- a peer's "no such method", a rejected call, a timeout.
+#[test]
+fn error_reply_fills_the_error_name_slot() {
+    crate::test_utils::init_test_tracing();
+    super::super::reset_thread_locals();
+    let mut eval = crate::test_utils::runtime_startup_context();
+
+    // The reply dispatches through the `(:serial BUS SERIAL)` registration
+    // `dbus-message-internal` leaves behind.
+    eval.eval_str(
+        r#"(progn
+             (defun neomacs-error-test-handler (&rest _) t)
+             (puthash '(:serial :session 42) 'neomacs-error-test-handler
+                      dbus-registered-objects-table)
+             t)"#,
+    )
+    .expect("registering the serial handler should work");
+
+    let mut call = dbus::Message::new_method_call(
+        "org.neomacs.Test",
+        "/neomacs/test",
+        "org.neomacs.Test",
+        "Call",
+    )
+    .expect("method call message");
+    call.set_serial(42);
+    let error_name: dbus::strings::ErrorName = "org.neomacs.Test.NoSuchMethod".into();
+    let error = call.error(&error_name, c"no such method");
+
+    event::queue_events(&mut eval, session(), error).expect("dispatch should not fail");
+
+    let queued = eval
+        .command_loop
+        .keyboard
+        .kboard
+        .unread_events
+        .pop_front()
+        .expect("an error reply queues one dbus-event");
+    assert_eq!(
+        nth_field(queued, 2),
+        Value::fixnum(3),
+        "the event type is `error`"
+    );
+    assert_eq!(
+        nth_field(queued, 3),
+        Value::fixnum(42),
+        "the serial is the reply serial"
+    );
+    assert_eq!(
+        nth_field(queued, 8).as_utf8_str(),
+        Some("org.neomacs.Test.NoSuchMethod"),
+        "MEMBER must hold the error name, not the empty MEMBER header field"
+    );
+    let registered = eval
+        .eval_str("'neomacs-error-test-handler")
+        .expect("handler symbol");
+    assert!(
+        eq_value(&handler_slot(queued), &registered),
+        "handler slot should hold the registered handler"
+    );
+    assert!(
+        eval.command_loop.keyboard.kboard.unread_events.is_empty(),
+        "one error reply queues one event"
     );
     super::super::reset_thread_locals();
 }
