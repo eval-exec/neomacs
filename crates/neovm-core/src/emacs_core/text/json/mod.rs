@@ -372,15 +372,21 @@ fn serialize_into(
 
         ValueKind::Veclike(VecLikeType::HashTable) => {
             let table = value.as_hash_table().unwrap().clone();
+            // GNU's `json_out_object_hash` walks the table with `DOHASH`
+            // (src/json.c), i.e. the slot order `maphash` visits.  The
+            // storage's hash index is in hash order, and iterating it made a
+            // two-member object serialize "s" before "k" where GNU preserved
+            // the parse order (`json_roundtrip` in the oracle suite).
+            let entries = table.data.keyed_entries_in_slot_order();
             out.push('{');
-            for (index, (key, val)) in table.data.iter().enumerate() {
+            for (index, (key, entry)) in entries.iter().enumerate() {
                 if index > 0 {
                     out.push(',');
                 }
                 let key_str = hash_key_to_string(key)?;
                 json_encode_string_into(out, &key_str);
                 out.push(':');
-                serialize_into(out, val, opts, depth + 1)?;
+                serialize_into(out, &entry.value, opts, depth + 1)?;
             }
             out.push('}');
             Ok(())
