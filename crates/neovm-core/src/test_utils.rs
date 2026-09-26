@@ -12,6 +12,7 @@ use crate::emacs_core::load::{
 };
 use crate::emacs_core::value::Value;
 use crate::emacs_core::{Context, format_eval_result};
+use crate::heap_types::LispString;
 use std::path::PathBuf;
 
 /// Initialize the tracing subscriber for test output.
@@ -44,12 +45,30 @@ pub fn workspace_root() -> PathBuf {
     nextest_workspace_root().unwrap_or_else(cargo_workspace_root)
 }
 
+/// Find a GNU Lisp file on `load_path`, naming the workspace root and which
+/// variable chose it when the file is missing.  The bare "cannot find
+/// emacs-lisp/debug-early" this replaces cost a full triage: the archived
+/// shard's baked root was a path that did not exist on its runner.
+fn find_required_lisp_file(name: &str, load_path: &[LispString]) -> PathBuf {
+    find_file_in_load_path(name, load_path).unwrap_or_else(|| {
+        let origin = if nextest_workspace_root().is_some() {
+            "NEXTEST_WORKSPACE_ROOT"
+        } else {
+            "compile-time CARGO_WORKSPACE_DIR"
+        };
+        panic!(
+            "cannot find {name}: workspace root {} ({origin}) has no such file",
+            workspace_root().display()
+        )
+    })
+}
+
 /// Load a small GNU Lisp runtime that is sufficient for tests that need
 /// `byte-run`, backquote expansion, and the basic `subr.el` support layer,
 /// without paying for full `loadup.el` startup.
 pub fn load_minimal_gnu_backquote_runtime(eval: &mut Context) {
     eval.set_lexical_binding(true);
-    let project_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = workspace_root();
     let lisp_dir = project_root.join("lisp");
     eval.set_variable(
         "load-path",
@@ -62,8 +81,7 @@ pub fn load_minimal_gnu_backquote_runtime(eval: &mut Context) {
         "emacs-lisp/backquote",
         "subr",
     ] {
-        let path = find_file_in_load_path(name, &load_path)
-            .unwrap_or_else(|| panic!("cannot find {name}"));
+        let path = find_required_lisp_file(name, &load_path);
         load_file(eval, &path).unwrap_or_else(|err| panic!("load {name}: {err:?}"));
     }
 }
@@ -76,8 +94,7 @@ pub fn load_gnu_macroexp_runtime(eval: &mut Context) {
     }
     let load_path = get_load_path(eval.obarray(), eval.buffers.current_buffer());
     for name in &["emacs-lisp/macroexp", "emacs-lisp/pcase"] {
-        let path = find_file_in_load_path(name, &load_path)
-            .unwrap_or_else(|| panic!("cannot find {name}"));
+        let path = find_required_lisp_file(name, &load_path);
         load_file(eval, &path).unwrap_or_else(|err| panic!("load {name}: {err:?}"));
     }
 }
@@ -103,7 +120,7 @@ pub fn load_gnu_undo_auto_runtime(eval: &mut Context) {
     }
     load_gnu_macroexp_runtime(eval);
 
-    let project_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = workspace_root();
     let simple_path = project_root.join("lisp/simple.el");
     let simple_source =
         std::fs::read_to_string(&simple_path).unwrap_or_else(|err| panic!("read simple.el: {err}"));
@@ -152,7 +169,7 @@ pub fn load_gnu_special_mode_runtime(eval: &mut Context) {
         return;
     }
 
-    let project_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = workspace_root();
     let simple_path = project_root.join("lisp/simple.el");
     let simple_source =
         std::fs::read_to_string(&simple_path).unwrap_or_else(|err| panic!("read simple.el: {err}"));
@@ -191,7 +208,7 @@ pub fn load_gnu_display_graphic_runtime(eval: &mut Context) {
         return;
     }
 
-    let project_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = workspace_root();
     let frame_path = project_root.join("lisp/frame.el");
     let frame_source =
         std::fs::read_to_string(&frame_path).unwrap_or_else(|err| panic!("read frame.el: {err}"));
@@ -234,7 +251,7 @@ pub fn load_gnu_window_alias_runtime(eval: &mut Context) {
         return;
     }
 
-    let project_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = workspace_root();
     let window_path = project_root.join("lisp/window.el");
     let window_source =
         std::fs::read_to_string(&window_path).unwrap_or_else(|err| panic!("read window.el: {err}"));
@@ -273,7 +290,7 @@ pub fn load_gnu_separator_line_runtime(eval: &mut Context) {
         return;
     }
 
-    let project_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = workspace_root();
     let simple_path = project_root.join("lisp/simple.el");
     let simple_source =
         std::fs::read_to_string(&simple_path).unwrap_or_else(|err| panic!("read simple.el: {err}"));
@@ -312,7 +329,7 @@ pub fn load_gnu_elisp_syntax_table_runtime(eval: &mut Context) {
         return;
     }
 
-    let project_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = workspace_root();
     let elisp_mode_path = project_root.join("lisp/progmodes/elisp-mode.el");
     let elisp_mode_source = std::fs::read_to_string(&elisp_mode_path)
         .unwrap_or_else(|err| panic!("read elisp-mode.el: {err}"));
@@ -352,8 +369,7 @@ pub fn load_minimal_gnu_help_runtime(eval: &mut Context) {
         "emacs-lisp/pcase",
         "emacs-lisp/gv",
     ] {
-        let path = find_file_in_load_path(name, &load_path)
-            .unwrap_or_else(|| panic!("cannot find {name}"));
+        let path = find_required_lisp_file(name, &load_path);
         load_file(eval, &path).unwrap_or_else(|err| panic!("load {name}: {err:?}"));
     }
     apply_ldefs_boot_autoloads_for_names(
@@ -381,8 +397,7 @@ pub fn load_minimal_gnu_help_runtime(eval: &mut Context) {
         "button",
         "help-macro",
     ] {
-        let path = find_file_in_load_path(name, &load_path)
-            .unwrap_or_else(|| panic!("cannot find {name}"));
+        let path = find_required_lisp_file(name, &load_path);
         load_file(eval, &path).unwrap_or_else(|err| panic!("load {name}: {err:?}"));
     }
     load_gnu_special_mode_runtime(eval);
@@ -390,8 +405,7 @@ pub fn load_minimal_gnu_help_runtime(eval: &mut Context) {
     load_gnu_window_alias_runtime(eval);
     load_gnu_separator_line_runtime(eval);
     for name in &["progmodes/prog-mode", "emacs-lisp/lisp-mode", "tool-bar"] {
-        let path = find_file_in_load_path(name, &load_path)
-            .unwrap_or_else(|| panic!("cannot find {name}"));
+        let path = find_required_lisp_file(name, &load_path);
         load_file(eval, &path).unwrap_or_else(|err| panic!("load {name}: {err:?}"));
     }
     load_gnu_elisp_syntax_table_runtime(eval);
@@ -400,7 +414,7 @@ pub fn load_minimal_gnu_help_runtime(eval: &mut Context) {
     // mis-parses .elc binary data and emits `(nil . OFFSET)` doc
     // refs that downstream `defface` rejects. Passing "help.el"
     // explicitly bypasses the suffix preference loop.
-    let help_path = find_file_in_load_path("help.el", &load_path).expect("cannot find help.el");
+    let help_path = find_required_lisp_file("help.el", &load_path);
     let help_source =
         std::fs::read_to_string(&help_path).unwrap_or_else(|err| panic!("read help.el: {err}"));
     let help_forms =
@@ -461,7 +475,7 @@ fn is_named_defun_value(form: &Value, name: &str) -> bool {
 /// for the named symbols and a bootstrap-compatible `load-path`.
 pub fn eval_with_ldefs_boot_autoloads(names: &[&str]) -> Context {
     let mut eval = Context::new();
-    let project_root = PathBuf::from(env!("CARGO_WORKSPACE_DIR"));
+    let project_root = workspace_root();
     let lisp_dir = project_root.join("lisp");
     eval.set_variable(
         "load-path",
@@ -540,4 +554,64 @@ pub fn runtime_startup_eval_one(src: &str) -> String {
     let mut eval = runtime_startup_context();
     let result = eval.eval_str(src);
     format_eval_result(&result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The GNU-source helpers must resolve the workspace of the machine
+    /// *running* the test, not the one that compiled it.
+    ///
+    /// `cargo nextest archive` bakes the build runner's absolute
+    /// `CARGO_WORKSPACE_DIR` into every binary, but an archived suite runs on
+    /// a different job -- and a different runner pool -- so the compile-time
+    /// path is gone and the helpers panicked with "cannot find
+    /// emacs-lisp/debug-early" on every shard.  Nextest exports the live root
+    /// as `NEXTEST_WORKSPACE_ROOT` (its `--workspace-remap`); the probe tree
+    /// here carries a marker the real checkout does not, so loading from the
+    /// baked constant instead of the live root is visible.
+    #[test]
+    fn early_runtime_helpers_follow_the_nextest_workspace_root() {
+        crate::test_utils::init_test_tracing();
+        let probe = tempfile::tempdir().expect("probe workspace");
+        let lisp = probe.path().join("lisp");
+        std::fs::create_dir_all(lisp.join("emacs-lisp")).expect("probe lisp tree");
+        for file in [
+            "emacs-lisp/debug-early.el",
+            "emacs-lisp/byte-run.el",
+            "emacs-lisp/backquote.el",
+            "subr.el",
+        ] {
+            std::fs::write(
+                lisp.join(file),
+                "(setq neomacs-test-workspace-probe 'from-nextest-remap)\n",
+            )
+            .expect("probe lisp file");
+        }
+
+        let previous = nextest_workspace_root();
+        // SAFETY: nextest runs each test in its own process, so this
+        // process-global mutation cannot race another test.  Restored below
+        // before the assertions so a failure cannot leak the probe into the
+        // rest of the run.
+        unsafe { std::env::set_var("NEXTEST_WORKSPACE_ROOT", probe.path()) };
+
+        let mut eval = Context::new();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            load_minimal_gnu_backquote_runtime(&mut eval);
+        }));
+        match previous {
+            Some(value) => unsafe { std::env::set_var("NEXTEST_WORKSPACE_ROOT", value) },
+            None => unsafe { std::env::remove_var("NEXTEST_WORKSPACE_ROOT") },
+        }
+
+        result.expect("the probe tree should load as an early runtime");
+        assert_eq!(
+            eval.obarray().symbol_value("neomacs-test-workspace-probe"),
+            Some(&Value::symbol("from-nextest-remap")),
+            "load_minimal_gnu_backquote_runtime must load from NEXTEST_WORKSPACE_ROOT, \
+             not the compile-time CARGO_WORKSPACE_DIR"
+        );
+    }
 }
