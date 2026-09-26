@@ -3938,6 +3938,7 @@ dependencies = [
 name = "neomacs-parity-reference"
 version = "0.0.19"
 dependencies = [
+ "neomacs-infra",
  "sha2",
  "tempfile",
 ]

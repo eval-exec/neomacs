@@ -308,7 +308,7 @@ pub fn manifest_path() -> PathBuf {
     if let Some(path) = std::env::var_os(MANIFEST_VAR) {
         return PathBuf::from(path);
     }
-    Path::new(env!("CARGO_WORKSPACE_DIR")).join("parity-reference.toml")
+    neomacs_infra::workspace_root().join("parity-reference.toml")
 }
 
 /// Read and parse the checked-in manifest.

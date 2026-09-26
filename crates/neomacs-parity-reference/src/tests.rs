@@ -430,7 +430,7 @@ fn a_missing_key_is_named() {
 // the same verdict --- and, when they pass, to print the same stamp.
 
 fn attestor_script() -> PathBuf {
-    Path::new(env!("CARGO_WORKSPACE_DIR")).join("scripts/parity-reference-attest.sh")
+    neomacs_infra::workspace_root().join("scripts/parity-reference-attest.sh")
 }
 
 /// Write `manifest` to a file the shell attestor can read, comments and all.
@@ -699,7 +699,7 @@ fn port_attest(binary: &Path) -> (i32, String) {
 fn head_revision() -> String {
     let output = std::process::Command::new("git")
         .arg("-C")
-        .arg(Path::new(env!("CARGO_WORKSPACE_DIR")))
+        .arg(neomacs_infra::workspace_root())
         .args(["rev-parse", "HEAD"])
         .output()
         .expect("git rev-parse");
