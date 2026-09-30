@@ -3952,6 +3952,7 @@ dependencies = [
  "flate2",
  "image",
  "imagesize 0.15.0",
+ "jpeg-encoder",
  "neomacs-display-protocol",
  "neomacs-infra",
  "png",
@@ -3959,6 +3960,7 @@ dependencies = [
  "simplecss",
  "svgtypes",
  "tracing",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -4077,7 +4079,6 @@ dependencies = [
  "fontdb",
  "image",
  "imagesize 0.15.0",
- "jpeg-encoder",
  "libc",
  "naga",
  "neomacs-display-protocol",
@@ -4097,7 +4098,6 @@ dependencies = [
  "tracing-test",
  "wgpu",
  "wgpu-hal",
- "zune-jpeg",
 ]
 
 [[package]]

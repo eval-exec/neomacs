@@ -554,6 +554,135 @@ fn the_band_plan_scales_source_rows_to_display_rows() {
     );
 }
 
+/// A baseline JPEG bands, and what it bands into is `image`'s own decode of the
+/// same file.
+///
+/// Realized at its own size, so the filter is the identity and "the same
+/// pixels" is a byte comparison rather than a tolerance: the two paths decode
+/// the same columns through the same `zune-jpeg`, and this is what says the
+/// row-wise one has not lost a row, doubled one, or started somewhere else.
+#[test]
+fn a_baseline_jpeg_bands_the_image_the_whole_path_decodes() {
+    // Sizes chosen so the band plan has something to do: 4:2:0 means one MCU
+    // row is sixteen output rows, so the first is 17 rows and the rest are
+    // a row each.
+    for (width, height) in [(140_u32, 409_u32), (333, 64), (64, 64), (1, 130), (130, 1)] {
+        let data = varying_jpeg(width, height);
+        let (whole_width, whole_height, whole) = whole_image_pixels(&data);
+        assert_eq!((whole_width, whole_height), (width, height));
+
+        let BandSource::Banded(source) = open_banded_at(&data, width, height) else {
+            panic!("a baseline JPEG has a row-wise decoder");
+        };
+        let (bands, raster) = drain(source);
+
+        let mut expected_start = 0;
+        for band in &bands {
+            assert_eq!(
+                band.source().start(),
+                expected_start,
+                "bands tile the source"
+            );
+            assert_eq!(band.source().end(), band.placed().placement().rows().end());
+            expected_start = band.source().end();
+        }
+        assert_eq!(expected_start, height, "the bands cover every row");
+
+        let raster = raster.expect("a completed source");
+        assert_eq!(raster.native().dimensions(), (width, height));
+        assert_eq!(raster.raster().dimensions(), (width, height));
+        assert_eq!(
+            raster.into_rgba(),
+            whole,
+            "a {width}x{height} baseline JPEG decoded in bands is not its whole decode"
+        );
+    }
+}
+
+/// A progressive JPEG has no bands and says so, because its scans each carry
+/// part of every block: the pixels a scan has produced so far are not early
+/// pixels, they are wrong ones, and a band taken from them would be a picture
+/// the file never contained.
+#[test]
+fn a_progressive_jpeg_has_no_bands_and_is_read_whole() {
+    let (width, height) = (140, 409);
+    let data = varying_progressive_jpeg(width, height);
+    assert!(
+        matches!(open_banded(&data), BandSource::Whole),
+        "a progressive JPEG must route to the whole-image path"
+    );
+
+    // The control: the same picture, encoded as a baseline frame, does band.
+    assert!(
+        matches!(
+            open_banded(&varying_jpeg(width, height)),
+            BandSource::Banded(_)
+        ),
+        "the baseline encoding of the same pixels bands"
+    );
+}
+
+/// More than half the pixels of a progressive frame differ from the same
+/// picture's baseline encoding, which is why the two cannot be told apart by
+/// eye and why routing one to the other path would not have shown up as a
+/// difference in size or shape — the reason the refusal above has to be
+/// explicit rather than left to the reader to be careful about.
+#[test]
+fn a_progressive_frame_is_not_the_same_file_as_a_baseline_one() {
+    let (width, height) = (140, 409);
+    let baseline = varying_jpeg(width, height);
+    let progressive = varying_progressive_jpeg(width, height);
+    assert_ne!(baseline, progressive, "the two encodings differ on disk");
+    assert_eq!(
+        image::load_from_memory(&baseline)
+            .expect("baseline decodes")
+            .to_rgba8()
+            .dimensions(),
+        image::load_from_memory(&progressive)
+            .expect("progressive decodes")
+            .to_rgba8()
+            .dimensions(),
+        "and agree on what they are, which is what makes the route invisible"
+    );
+}
+
+/// A JPEG that runs out mid-stream fails rather than reporting the rows it read
+/// as the image, the same contract the truncated PNG has.
+#[test]
+fn a_truncated_jpeg_fails_mid_stream_and_yields_no_image() {
+    let (width, height) = (64, 600);
+    let data = varying_jpeg(width, height);
+    let truncated = &data[..data.len() / 2];
+
+    let BandSource::Banded(mut source) = open_banded(truncated) else {
+        panic!("the header of a truncated JPEG still parses");
+    };
+    let mut bands = 0_u32;
+    let mut covered = 0;
+    loop {
+        match source.next_band() {
+            BandStep::Band(band) => {
+                bands += 1;
+                covered = band.source().end();
+            }
+            BandStep::Done => break,
+            BandStep::Failed => {
+                assert!(bands > 0, "the failure is mid-stream");
+                assert!(
+                    source.into_raster().is_none(),
+                    "an unfinished decode must not hand back a prefix as the image"
+                );
+                return;
+            }
+        }
+    }
+    // A truncated stream whose remaining rows the decoder can fill with grey
+    // ends the image instead of failing it, which is what a whole-image decode
+    // of the same bytes does; either ending is honest, and both must cover
+    // exactly the source.
+    assert_eq!(covered, height, "the bands cover the source either way");
+}
+
 /// A paletted PNG of `index(x, y) = x + y` over a two-colour palette, with an
 /// optional per-entry alpha channel.
 fn png_paletted(width: u32, height: u32, palette: Vec<u8>, trns: Option<Vec<u8>>) -> Vec<u8> {
@@ -614,6 +743,45 @@ fn png_from(image: image::DynamicImage) -> Vec<u8> {
         .write_to(&mut bytes, image::ImageFormat::Png)
         .expect("PNG is encodable");
     bytes.into_inner()
+}
+
+/// A JPEG of `width` x `height` carrying `pixels` as RGB.
+///
+/// `image` 0.25's `jpeg` feature decodes only, so the tests bring their own
+/// encoder; `progressive` is what separates the frames that have bands from the
+/// ones that do not. Quality 85 is below the encoder's 90, which selects 2x2
+/// chroma subsampling — the 4:2:0 shape, where one MCU row is sixteen output
+/// rows and a band can never be a single row.
+fn jpeg_of(width: u32, height: u32, pixels: Vec<u8>, progressive: bool) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    let mut encoder = jpeg_encoder::Encoder::new(&mut bytes, 85);
+    encoder.set_progressive(progressive);
+    encoder
+        .encode(
+            &pixels,
+            width as u16,
+            height as u16,
+            jpeg_encoder::ColorType::Rgb,
+        )
+        .expect("JPEG is encodable");
+    bytes
+}
+
+/// The RGB an RGBA buffer carries, for a JPEG encoder that takes three channels.
+fn as_rgb(rgba: &[u8]) -> Vec<u8> {
+    rgba.chunks_exact(4)
+        .flat_map(|texel| [texel[0], texel[1], texel[2]])
+        .collect()
+}
+
+/// A baseline JPEG of `width` x `height` with a distinct colour per pixel.
+fn varying_jpeg(width: u32, height: u32) -> Vec<u8> {
+    jpeg_of(width, height, as_rgb(&varying_pixels(width, height)), false)
+}
+
+/// A progressive JPEG of `width` x `height` with a distinct colour per pixel.
+fn varying_progressive_jpeg(width: u32, height: u32) -> Vec<u8> {
+    jpeg_of(width, height, as_rgb(&varying_pixels(width, height)), true)
 }
 
 /// CRC-32/ISO-HDLC, for the one hand-edited chunk above.
