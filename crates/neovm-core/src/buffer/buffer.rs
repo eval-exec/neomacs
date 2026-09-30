@@ -5218,7 +5218,8 @@ pub(crate) mod jit_layout {
         std::mem::size_of::<Option<Box<Buffer>>>() == std::mem::size_of::<usize>(),
         "a slot must be one pointer word for the null test to mean `empty`"
     );
-    const _: () = assert!(std::mem::size_of::<Option<BufferId>>() == 2 * WORD);
+    const _: () =
+        assert!(std::mem::size_of::<Option<BufferId>>() == 2 * std::mem::size_of::<u64>());
 
     const WORD: usize = std::mem::size_of::<usize>();
 
@@ -5295,7 +5296,11 @@ pub(crate) mod jit_layout {
             let tag = 1 - payload;
             // The tag has to actually distinguish the two, or a null current
             // buffer would read as present.
-            (none[tag] != some[tag]).then_some((tag * WORD, payload * WORD, none[tag]))
+            (none[tag] != some[tag]).then_some((
+                tag * std::mem::size_of::<u64>(),
+                payload * std::mem::size_of::<u64>(),
+                none[tag],
+            ))
         })
     }
 

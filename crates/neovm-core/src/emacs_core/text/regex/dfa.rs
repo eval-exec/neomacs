@@ -2248,6 +2248,10 @@ pub(crate) fn reset_dfa_stats() {
     STATS.with(|cell| *cell.borrow_mut() = DfaStats::default());
 }
 
+#[cfg(target_family = "wasm")]
+fn register_stats_report() {}
+
+#[cfg(not(target_family = "wasm"))]
 fn register_stats_report() {
     extern "C" fn report() {
         let stats = STATS

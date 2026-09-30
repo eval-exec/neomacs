@@ -115,6 +115,11 @@ impl EditorPresentationRuntime {
         self.runtime.enable_cosmic_metrics();
     }
 
+    /// Layout statistics from the last accepted frame.
+    pub fn last_layout_stats(&self) -> neomacs_layout_engine::incremental_layout::LayoutStats {
+        self.runtime.last_layout_stats()
+    }
+
     /// Produce one frame through the canonical retained layout engine.
     pub fn prepare_frame(
         &self,

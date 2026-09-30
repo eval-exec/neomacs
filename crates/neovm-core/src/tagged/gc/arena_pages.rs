@@ -84,13 +84,13 @@ pub(super) trait PagedObject: Sized {
 // const assert below is the compile-time proof) → shares the 64B class, link
 // in bytes 56..64.
 const _: () = assert!(
-    size_of::<GcHeader>() == 2 * size_of::<usize>(),
-    "GcHeader must stay two words"
+    size_of::<GcHeader>() == 8 + size_of::<usize>(),
+    "GcHeader must keep its eight flag bytes and one link word"
 );
 const _: () = assert!(
     size_of::<FloatObj>()
         == size_of::<GcHeader>().next_multiple_of(std::mem::align_of::<f64>()) + size_of::<f64>(),
-    "FloatObj must stay GcHeader + f64 (24 bytes on 64-bit, 16 on wasm32)"
+    "FloatObj must stay aligned GcHeader + f64"
 );
 const _: () = assert!(
     size_of::<StringObj>() <= 56,

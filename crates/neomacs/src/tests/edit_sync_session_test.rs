@@ -13,9 +13,9 @@
 
 use super::super::frame_layout::{REDISPLAY_RUNTIME, current_layout_frame_id, run_tty_layout_tree};
 use super::super::{Interactivity, bootstrap_buffers, bootstrap_tty_display_config};
+use neomacs_app::presentation::{EditorPresentationRuntime, FrameLayoutPurpose};
 use neomacs_display_runtime::backend::tty::rif::TtyRif;
 use neomacs_display_runtime::backend::tty::rif::damage::{ScreenMatch, TtyDamageMode};
-use neomacs_display_runtime::redisplay::{FrameLayoutPurpose, RedisplayRuntime};
 use neomacs_layout_engine::incremental_layout::LayoutStats;
 use neovm_core::emacs_core::Context;
 use neovm_core::emacs_core::load::create_bootstrap_evaluator_cached_with_features;
@@ -67,7 +67,7 @@ impl Session {
             ROWS as u32,
             bootstrap_tty_display_config(Interactivity::Interactive),
         );
-        REDISPLAY_RUNTIME.with(RedisplayRuntime::disable_cosmic_metrics);
+        REDISPLAY_RUNTIME.with(EditorPresentationRuntime::use_cell_grid);
         let mut damage = TtyRif::new(COLS, ROWS);
         damage.set_damage_mode(TtyDamageMode::Verify);
         let mut session = Self {
@@ -83,7 +83,7 @@ impl Session {
     /// with a fresh runtime's full layout of the same state.
     pub(super) fn frame(&mut self, label: &str) -> LayoutStats {
         let (root, children) = run_tty_layout_tree(&mut self.eval).expect("a TTY presentation");
-        let stats = REDISPLAY_RUNTIME.with(RedisplayRuntime::last_layout_stats);
+        let stats = REDISPLAY_RUNTIME.with(EditorPresentationRuntime::last_layout_stats);
         for rif in [&mut self.incremental, &mut self.damage] {
             rif.rasterize_presentations(&root, &children);
             rif.diff_and_render();
@@ -99,8 +99,10 @@ impl Session {
             "{label}: the TTY damage path's screen differs"
         );
 
-        let reference_runtime = RedisplayRuntime::new_without_font_metrics();
-        reference_runtime.disable_cosmic_metrics();
+        let reference_runtime = EditorPresentationRuntime::new(
+            neomacs_app::presentation::PresentationMetrics::CellGrid,
+        );
+        reference_runtime.use_cell_grid();
         let frame_id = current_layout_frame_id(&self.eval).expect("a selected frame");
         let reference = reference_runtime
             .prepare_frame(&mut self.eval, frame_id, FrameLayoutPurpose::Redisplay)

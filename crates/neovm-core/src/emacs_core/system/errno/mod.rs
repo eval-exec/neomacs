@@ -29,7 +29,9 @@
 //! each used to duplicate by hand (`system/fileio`, `system/process`, and
 //! `lisp/native/fns`, whose copy was a live defect rather than a duplicate).
 
+#[cfg(not(target_family = "wasm"))]
 use std::ffi::CStr;
+use std::ffi::c_int;
 
 /// An errno, rendered the way GNU's Lisp boundary renders one.
 ///
@@ -37,10 +39,10 @@ use std::ffi::CStr;
 /// an `Errno` is expected, so Rust's `"... (os error N)"` cannot reach Lisp
 /// through any error path that takes one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Errno(libc::c_int);
+pub struct Errno(c_int);
 
 impl Errno {
-    pub const fn new(errno: libc::c_int) -> Self {
+    pub const fn new(errno: c_int) -> Self {
         Self(errno)
     }
 
@@ -52,10 +54,14 @@ impl Errno {
     /// `errno_for_kind` is the existing one, and it deliberately differs from a
     /// naive map, so it is not folded in here.
     pub fn from_io(error: &std::io::Error) -> Self {
-        Self(error.raw_os_error().unwrap_or(libc::EIO))
+        #[cfg(not(target_family = "wasm"))]
+        let fallback = libc::EIO;
+        #[cfg(target_family = "wasm")]
+        let fallback = -1; // Browser storage failures have no CRT errno.
+        Self(error.raw_os_error().unwrap_or(fallback))
     }
 
-    pub const fn get(self) -> libc::c_int {
+    pub const fn get(self) -> c_int {
         self.0
     }
 
@@ -77,9 +83,9 @@ impl std::fmt::Display for Errno {
 /// Rust's `io::Error::to_string()` appends "(os error N)", which GNU never
 /// emits, so go through libc directly.
 ///
-/// One implementation for every platform, as in GNU: `libc::strerror` is the
-/// CRT's on Windows just as GNU's `WINDOWSNT` build calls the same function.
-pub fn emacs_strerror(errno: libc::c_int) -> String {
+/// Native hosts use `libc::strerror`, including the Windows CRT.
+#[cfg(not(target_family = "wasm"))]
+pub fn emacs_strerror(errno: c_int) -> String {
     // SAFETY: `strerror` returns a pointer to a static (per-thread) C string,
     // valid until the next `strerror` call on this thread; the `CStr` borrow
     // and the `to_string_lossy().into_owned()` copy both end before that.
@@ -93,6 +99,12 @@ pub fn emacs_strerror(errno: libc::c_int) -> String {
     }
 }
 
-#[cfg(test)]
+/// Browser hosts have no C runtime errno vocabulary.
+#[cfg(target_family = "wasm")]
+pub fn emacs_strerror(errno: c_int) -> String {
+    format!("Unknown error {errno}")
+}
+
+#[cfg(all(test, not(target_family = "wasm")))]
 #[path = "tests/errno_test.rs"]
 mod tests;

@@ -3953,6 +3953,7 @@ dependencies = [
  "image",
  "imagesize 0.15.0",
  "neomacs-display-protocol",
+ "neomacs-infra",
  "png",
  "resvg",
  "simplecss",

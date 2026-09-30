@@ -190,8 +190,11 @@ fn environment_name_key(name: &OsStr) -> Vec<u8> {
         windows => {
             name.to_string_lossy().to_ascii_uppercase().into_bytes()
         }
-        _ => {
+        unix => {
             std::os::unix::ffi::OsStrExt::as_bytes(name).to_vec()
+        }
+        _ => {
+            name.as_encoded_bytes().to_vec()
         }
     }
 }

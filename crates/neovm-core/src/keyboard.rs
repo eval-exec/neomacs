@@ -5942,7 +5942,7 @@ impl crate::emacs_core::eval::Context {
         &mut self,
         command_input: bool,
         timed_read: bool,
-    ) -> Result<Option<std::time::Instant>, crate::emacs_core::error::Flow> {
+    ) -> Result<Option<neomacs_host_runtime::time::Instant>, crate::emacs_core::error::Flow> {
         if !command_input
             || timed_read
             || self.command_loop.keyboard.has_pending_low_level_input()
@@ -5962,7 +5962,7 @@ impl crate::emacs_core::eval::Context {
             self.invalidate_redisplay();
             self.redisplay()?;
         }
-        Ok(next.and_then(|delay| std::time::Instant::now().checked_add(delay)))
+        Ok(next.and_then(|delay| neomacs_host_runtime::time::Instant::now().checked_add(delay)))
     }
 
     /// GNU's buffer-size-scaled delay for `auto-save-timeout`.

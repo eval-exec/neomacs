@@ -27,8 +27,10 @@ const TAG_CONS: u64 = 0b011;
 const TAG_STRING: u64 = 0b100;
 const TAG_VECLIKE: u64 = 0b101;
 const TAG_FLOAT: u64 = 0b111;
-const GC_HEADER_PADDING: usize = std::mem::size_of::<usize>() - 2;
+const GC_HEADER_PADDING: usize = 6;
+const FLOAT_VALUE_PADDING: usize = (8 - std::mem::size_of::<GcHeader>() % 8) % 8;
 const VECLIKE_HEADER_PADDING: usize = std::mem::size_of::<usize>() - 1;
+const STRING_HEADER_PADDING: usize = (8 - std::mem::size_of::<GcHeader>() % 8) % 8;
 const STRING_I64_PADDING: usize = 8 - std::mem::size_of::<usize>();
 const STRING_TRAILING_PADDING: usize = 8 - std::mem::size_of::<usize>();
 
@@ -52,6 +54,7 @@ struct RawGcHeader {
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct RawFloatObj {
     header: RawGcHeader,
+    value_padding: [u8; FLOAT_VALUE_PADDING],
     value: f64,
 }
 
@@ -67,6 +70,7 @@ struct RawVecLikeHeader {
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct RawStringObj {
     header: RawGcHeader,
+    header_padding: [u8; STRING_HEADER_PADDING],
     size: usize,
     size_padding: [u8; STRING_I64_PADDING],
     size_byte: i64,
@@ -1617,6 +1621,7 @@ impl MappedHeapBuilder {
                 padding: [0; GC_HEADER_PADDING],
                 next: 0,
             },
+            value_padding: [0; FLOAT_VALUE_PADDING],
             value,
         };
         self.write_bytes(offset, bytemuck::bytes_of(&raw));
@@ -1674,6 +1679,7 @@ impl MappedHeapBuilder {
                 padding: [0; GC_HEADER_PADDING],
                 next: 0,
             },
+            header_padding: [0; STRING_HEADER_PADDING],
             size,
             size_padding: [0; STRING_I64_PADDING],
             size_byte,

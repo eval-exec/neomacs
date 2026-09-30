@@ -43,19 +43,24 @@ fn ready_and_failed_terminals_consume_their_active_generations() {
     let ready = loads.begin_generated(ImageId::new(51));
     let failed = loads.begin_generated(ImageId::new(52));
 
-    let ready = WorkerDecodeOutcome::Ready(ImageCache::decoded_image(
-        ready,
-        DecodedPixels {
-            geometry: ImageRealization::default().resolve_geometry(
-                ImageSizeSpec::default(),
-                ImageNativeExtent::new(1, 1),
-                ImageRotation::None,
-            ),
-            rgba: vec![0, 0, 0, 255],
+    let geometry = ImageRealization::default().resolve_geometry(
+        ImageSizeSpec::default(),
+        ImageNativeExtent::new(1, 1),
+        ImageRotation::None,
+    );
+    let ready = WorkerDecodeOutcome::Ready(DecodedImage {
+        load: ready,
+        geometry,
+        data: vec![0, 0, 0, 255],
+        metadata: ImageMetadata {
+            layout: geometry.layout(),
+            reported: geometry.reported(),
+            background: 0,
+            background_transparent: false,
             mask: ImageMaskKind::None,
             embedded: ImageEmbeddedMetadata::default(),
         },
-    ));
+    });
     assert!(matches!(
         loads.take_current(ready),
         Some(WorkerDecodeOutcome::Ready(_))
@@ -265,4 +270,3 @@ fn test_band() -> DecodedBand {
     );
     DecodedBand::new(rows, RasterBand::new(placement, vec![0u8; 4].into()))
 }
-

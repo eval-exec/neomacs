@@ -2,10 +2,6 @@ use naga::proc::Layouter;
 
 const BUILTIN_SHADERS: &[(&str, &str)] = &[
     ("glyph", include_str!("shaders/glyph.wgsl")),
-    (
-        "glyph_subpixel",
-        include_str!("shaders/glyph_subpixel.wgsl"),
-    ),
     ("image", include_str!("shaders/image.wgsl")),
     ("rect", include_str!("shaders/rect.wgsl")),
     ("rounded_rect", include_str!("shaders/rounded_rect.wgsl")),

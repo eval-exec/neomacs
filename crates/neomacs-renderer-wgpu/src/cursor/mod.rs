@@ -42,15 +42,6 @@ struct CornerEase {
     length_multiplier: f32,
 }
 
-/// Timing for Neovide's independently eased corners. Positions are shared
-/// with the spring mode so changing between corner modes stays continuous.
-#[derive(Clone, Copy, Default)]
-struct CornerEase {
-    start: (f32, f32),
-    progress: f32,
-    length_multiplier: f32,
-}
-
 /// Copyable cursor settings, excluding live animation and target state.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CursorConfigSnapshot {
