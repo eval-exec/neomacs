@@ -2013,3 +2013,148 @@ fn the_texture_a_banded_decode_fills_ends_as_the_whole_image_paths() {
         "the finished texture holds the whole-image path's bytes"
     );
 }
+
+/// A JPEG of `width` x `height` carrying `pixels` as RGB.
+///
+/// `image` 0.25's `jpeg` feature decodes only, so the tests bring their own
+/// encoder. Quality 85 selects the encoder's 2x2 chroma subsampling, which is
+/// the 4:2:0 shape: one MCU row is sixteen output rows, so this is the case
+/// where a band cannot be a single row.
+fn jpeg_bytes(width: u32, height: u32, pixels: Vec<u8>, progressive: bool) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    let mut encoder = jpeg_encoder::Encoder::new(&mut bytes, 85);
+    encoder.set_progressive(progressive);
+    encoder
+        .encode(
+            &pixels,
+            width as u16,
+            height as u16,
+            jpeg_encoder::ColorType::Rgb,
+        )
+        .expect("JPEG is encodable");
+    bytes
+}
+
+/// A baseline JPEG of `width` x `height` whose every pixel differs, so a band
+/// placed at the wrong offset is visible rather than hidden by identical rows.
+fn varying_jpeg(width: u32, height: u32) -> Vec<u8> {
+    let rgb: Vec<u8> = (0..height)
+        .flat_map(|y| {
+            (0..width).flat_map(move |x| [(x % 251) as u8, (y % 253) as u8, ((x + y) % 241) as u8])
+        })
+        .collect();
+    jpeg_bytes(width, height, rgb, false)
+}
+
+/// The same picture, encoded as a progressive frame.
+fn varying_progressive_jpeg(width: u32, height: u32) -> Vec<u8> {
+    let rgb: Vec<u8> = (0..height)
+        .flat_map(|y| {
+            (0..width).flat_map(move |x| [(x % 251) as u8, (y % 253) as u8, ((x + y) % 241) as u8])
+        })
+        .collect();
+    jpeg_bytes(width, height, rgb, true)
+}
+
+/// A large baseline JPEG takes the banded path, and the image it ends as is the
+/// whole-image path's pixels, byte for byte.
+///
+/// This is the acceptance criterion for JPEG, stated the way the PNG one is: at
+/// the source's own size the filter is the identity, so the finished raster is
+/// `image`'s own decode of the same file and a band that lost, doubled or moved
+/// a row would show as a difference rather than as a blur.
+#[test]
+fn a_large_baseline_jpeg_bands_that_add_up_to_the_whole_image() {
+    let (width, height) = (2200_u32, 2000_u32);
+    assert!(u64::from(width) * u64::from(height) >= crate::image_bands::BANDING_MIN_PIXELS);
+    let data = varying_jpeg(width, height);
+    let mut bands = Vec::new();
+
+    let decoded = decode_with_bands(&data, 1.0, &mut bands).expect("decode");
+    assert_eq!(decoded.geometry.raster().dimensions(), (width, height));
+
+    assert!(
+        bands.len() > 1,
+        "a four-megapixel JPEG must band, got {} band(s)",
+        bands.len()
+    );
+    let mut expected_start = 0;
+    for band in &bands {
+        let rows = band.placed().placement().rows();
+        assert_eq!(rows.start(), expected_start, "bands tile the raster");
+        expected_start = rows.end();
+    }
+    assert_eq!(expected_start, height, "the bands cover the raster");
+
+    assert_eq!(
+        decoded.rgba,
+        whole_pixels(&data).rgba,
+        "the banded decode ends as the whole-image path's pixels"
+    );
+    let expected = image::load_from_memory(&data)
+        .expect("fixture decodes")
+        .to_rgba8()
+        .into_raw();
+    assert_eq!(
+        decoded.rgba, expected,
+        "which at this realization is `image`'s own decode of the same file"
+    );
+}
+
+/// A progressive JPEG has no usable band, so it takes the whole-image path —
+/// and the picture it produces is the one a baseline encoding of the same
+/// pixels produces, to within what the two encodings cost.
+///
+/// The point is not that the two are identical (they are not: two lossy
+/// encodings of one picture are two pictures) but that neither is *wrong*: the
+/// progressive frame decodes to the same dimensions and the same
+/// `image::load_from_memory` bytes as every other path produces for it, which
+/// is what a band taken from an unfinished scan would not.
+#[test]
+fn a_progressive_jpeg_decodes_through_the_whole_path() {
+    let (width, height) = (2200_u32, 2000_u32);
+    let data = varying_progressive_jpeg(width, height);
+    let mut bands = Vec::new();
+
+    let decoded = decode_with_bands(&data, 1.0, &mut bands).expect("decode");
+    assert!(
+        bands.is_empty(),
+        "a progressive frame has no bands to publish, got {}",
+        bands.len()
+    );
+    assert_eq!(decoded.geometry.raster().dimensions(), (width, height));
+    assert_eq!(
+        decoded.rgba,
+        whole_pixels(&data).rgba,
+        "a progressive frame decodes whole, like every other unbandable source"
+    );
+    let expected = image::load_from_memory(&data)
+        .expect("fixture decodes")
+        .to_rgba8()
+        .into_raw();
+    assert_eq!(decoded.rgba, expected);
+}
+
+/// JPEG takes the same size threshold PNG does: the same kind of source bands
+/// on one side of it and decodes whole on the other.
+#[test]
+fn a_jpeg_below_the_threshold_publishes_no_bands() {
+    let threshold = crate::image_bands::BANDING_MIN_PIXELS;
+    // 4:2:0 rounds the MCU rows to a multiple of sixteen, so the fixtures are
+    // chosen with that in mind rather than to make the arithmetic tidy.
+    let (below_width, below_height) = (1999_u32, 1999_u32);
+    let (above_width, above_height) = (2000_u32, 2000_u32);
+    assert!(u64::from(below_width) * u64::from(below_height) < threshold);
+    assert!(u64::from(above_width) * u64::from(above_height) >= threshold);
+
+    let mut below = Vec::new();
+    decode_with_bands(&varying_jpeg(below_width, below_height), 1.0, &mut below).expect("decode");
+    let mut above = Vec::new();
+    decode_with_bands(&varying_jpeg(above_width, above_height), 1.0, &mut above).expect("decode");
+
+    assert!(below.is_empty(), "a JPEG under the threshold decodes whole");
+    assert!(
+        !above.is_empty(),
+        "a JPEG at the threshold decodes in bands"
+    );
+}

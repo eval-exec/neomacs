@@ -34,6 +34,13 @@ use neomacs_display_protocol::{
     ImageIntrinsicExtent, ImageMaskKind, ImageMaskPolicy, ImageNativeExtent, ImageRasterExtent,
     ImageRealization, ImageRotation, ImageSizeSpec,
 };
+use zune_jpeg::JpegDecoder as ZuneDecoder;
+// Reached through `zune_jpeg` rather than depended on directly: the decoder
+// was built against this exact `zune_core`, and naming it any other way would
+// be naming a second copy whose `ZCursor` is a different type.
+use zune_jpeg::zune_core::bytestream::ZCursor as ZuneCursor;
+use zune_jpeg::zune_core::colorspace::ColorSpace as ZuneColorSpace;
+use zune_jpeg::zune_core::options::DecoderOptions as ZuneOptions;
 
 use crate::image_scale::RasterTarget;
 
@@ -330,6 +337,11 @@ pub enum BandedSource<'a> {
     /// PNG, whose reader yields one transformed row at a time
     /// (`png-0.18.1` `src/decoder/mod.rs:513` `next_row`).
     Png(PngRows<'a>),
+    /// Baseline JPEG, whose decoder yields one MCU row at a time
+    /// (`zune-jpeg` `McuRowReader::next_row` — the fork `Cargo.toml`'s
+    /// `[patch.crates-io]` block pins, since `zune-jpeg` 0.5.15's public
+    /// surface is `decode`/`decode_into` and nothing else).
+    Jpeg(JpegRows<'a>),
 }
 
 impl<'a> BandedSource<'a> {
@@ -337,6 +349,7 @@ impl<'a> BandedSource<'a> {
     pub fn next_band(&mut self) -> BandStep {
         match self {
             Self::Png(rows) => rows.next_band(),
+            Self::Jpeg(rows) => rows.next_band(),
         }
     }
 
@@ -347,6 +360,7 @@ impl<'a> BandedSource<'a> {
     pub fn into_raster(self) -> Option<RasterPixels> {
         match self {
             Self::Png(rows) => rows.into_raster(),
+            Self::Jpeg(rows) => rows.into_raster(),
         }
     }
 }
@@ -469,19 +483,17 @@ impl<'a> BandSource<'a> {
                 PngRows::open(data, BandPlan::new(size, realization), min_pixels)
                     .map_or(Self::Whole, |rows| Self::Banded(BandedSource::Png(rows)))
             }
+            Ok(image::ImageFormat::Jpeg) => {
+                JpegRows::open(data, BandPlan::new(size, realization), min_pixels)
+                    .map_or(Self::Whole, |rows| Self::Banded(BandedSource::Jpeg(rows)))
+            }
             // Every other format `image` reports, named so the route per format
-            // is a line of code rather than a default. None of them can band:
-            // `image` decodes JPEG with `zune-jpeg`, whose public surface is
-            // `decode`/`decode_into` — a whole frame, optionally into a
-            // caller-provided buffer (`zune-jpeg-0.5.15` `src/decoder.rs:215`,
-            // `:827`) — with no row-wise entry point at all. Baseline JPEG is
-            // row-wise decodable as a format; the pinned decoder does not
-            // expose it. GIF, WebP, TIFF, BMP, ICO, TGA, DDS, PNM, HDR,
-            // OpenEXR, farbfeld, AVIF and QOI are whole-image decoders in
-            // `image` likewise.
+            // is a line of code rather than a default. None of them can band.
+            // GIF, WebP, TIFF, BMP, ICO, TGA, DDS, PNM, HDR, OpenEXR,
+            // farbfeld, AVIF and QOI are whole-image decoders in `image`, with
+            // no row-wise entry point to reach.
             Ok(
-                image::ImageFormat::Jpeg
-                | image::ImageFormat::Gif
+                image::ImageFormat::Gif
                 | image::ImageFormat::WebP
                 | image::ImageFormat::Pnm
                 | image::ImageFormat::Tiff
@@ -581,6 +593,203 @@ impl BandPlan {
 #[path = "image_bands/tests.rs"]
 mod tests;
 
+/// A baseline JPEG's rows, as the decoder hands them over.
+///
+/// The unit a JPEG decoder can stop at is the MCU row — eight or sixteen
+/// *output* rows, depending on the sampling factors — which is coarser than the
+/// row budget a band is planned to, and finer than nothing. So a band here is
+/// whole MCU rows: the budget decides how many of them one band is, the way it
+/// decides how many rows one band of a PNG is, and neither can be finer than
+/// its own decoder's unit of work.
+type JpegReader<'a> = zune_jpeg::McuRowReader<ZuneCursor<&'a [u8]>>;
+
+/// A baseline JPEG being read one MCU row at a time, straight into the raster
+/// it will be drawn from.
+///
+/// Same shape as [`PngRows`] and for the same reason: the struct holds no
+/// image. Each source row is expanded to RGBA, resampled into the target's
+/// coordinates and filtered into whichever output rows cover it, and what is
+/// left at the end is the raster the texture takes.
+pub struct JpegRows<'a> {
+    /// The row-wise decoder. It carries its own cursor: the bands it hands back
+    /// are the next MCU rows and nothing else can be asked of it, which is
+    /// where "bands cannot overlap, skip or arrive out of order" comes from
+    /// here.
+    reader: JpegReader<'a>,
+    /// The colours the decoder was configured to output, and how a row of them
+    /// widens to RGBA.
+    format: RowFormat,
+    native: ImageNativeExtent,
+    /// Rows one band aims to read, before the target's own floor of one raster
+    /// row is applied and before MCU rows round it up. The last band of a
+    /// source is shorter.
+    band: NonZeroU32,
+    /// The raster being filled, and the source rows still being filtered.
+    target: RasterTarget,
+    /// One source row, expanded to RGBA.
+    row: Vec<u8>,
+    /// The mask identity of the rows read so far.
+    mask: ImageMaskKind,
+    /// Rows read so far. Every band is derived from this cursor.
+    decoded: u32,
+    /// Set once the reader has failed, so later calls cannot report progress a
+    /// caller might read as a successful continuation.
+    failed: bool,
+}
+
+impl<'a> JpegRows<'a> {
+    /// Open `data` for row-wise reading, or decline.
+    ///
+    /// `None` hands the source back to the whole-image path, and means one of:
+    /// the headers would not parse, the image is progressive, its components
+    /// are split across scans so that no MCU row is final until a later one has
+    /// landed, the output is not one of the colour types below, the source is
+    /// too small for banding to pay ([`BANDING_MIN_PIXELS`]), or the
+    /// realization asks for it *larger* than it is.
+    fn open(data: &'a [u8], plan: BandPlan, min_pixels: u64) -> Option<Self> {
+        // The options `image`'s own JPEG decoder configures
+        // (`image-0.25.10` `src/codecs/jpeg/decoder.rs:34-38`): non-strict, and
+        // no dimension limits. Both paths decoding through them is what makes a
+        // banded decode and a whole decode of the same file agree pixel for
+        // pixel.
+        let options = ZuneOptions::default()
+            .set_strict_mode(false)
+            .set_max_width(usize::MAX)
+            .set_max_height(usize::MAX);
+        let mut decoder = ZuneDecoder::new_with_options(ZuneCursor::new(data), options);
+        decoder.decode_headers().ok()?;
+        let (width, height) = decoder.dimensions()?;
+        let (width, height) = (width as u32, height as u32);
+        // A progressive image is decoded in several scans, each carrying part
+        // of every block, so no prefix of it is final until the last scan has
+        // landed: those bands would be wrong pixels rather than early ones.
+        // `mcu_rows_available` is the same question plus the split-scan
+        // baseline shape, which `is_progressive` alone does not catch.
+        if decoder.mcu_rows_available().is_err() {
+            return None;
+        }
+        // The output colour `image` asks this decoder for, which is the input
+        // colour where it is one of the four it can pass through and RGB
+        // otherwise (`src/codecs/jpeg/decoder.rs:56-69`).
+        let requested = match decoder.input_colorspace()? {
+            space @ (ZuneColorSpace::RGB
+            | ZuneColorSpace::RGBA
+            | ZuneColorSpace::Luma
+            | ZuneColorSpace::LumaA) => space,
+            _ => ZuneColorSpace::RGB,
+        };
+        decoder.set_options(decoder.options().jpeg_set_out_colorspace(requested));
+        let reader = zune_jpeg::McuRowReader::new(decoder).ok()?;
+        // What the decoder actually produced, which is what a row's bytes mean.
+        let format = RowFormat::of_jpeg(reader.color_space())?;
+        if u64::from(width) * u64::from(height) < min_pixels {
+            return None;
+        }
+        let native = ImageNativeExtent::new(width, height);
+        Some(Self {
+            target: plan.target(native)?,
+            row: vec![0; width as usize * 4],
+            native,
+            band: plan.band_rows(width, height),
+            format,
+            mask: ImageMaskKind::None,
+            reader,
+            decoded: 0,
+            failed: false,
+        })
+    }
+
+    /// Read the next band's worth of rows into the raster.
+    ///
+    /// A band is at least one MCU row and at least enough rows to fill a raster
+    /// row, so it always has a placement: stopping while the target had nowhere
+    /// to write would publish a band with no destination, which is exactly the
+    /// state [`DecodedBand`] exists to make unrepresentable. The last band of a
+    /// source is whatever is left of it.
+    fn next_band(&mut self) -> BandStep {
+        if self.failed {
+            return BandStep::Failed;
+        }
+        let height = self.native.height();
+        if self.decoded >= height {
+            return BandStep::Done;
+        }
+        let start = self.decoded;
+        let built = self.target.built();
+        let budget = self.band.get().min(height - start);
+        loop {
+            if self.decoded >= height {
+                break;
+            }
+            if self.decoded > start && self.decoded - start >= budget && self.target.built() > built
+            {
+                break;
+            }
+            if self.read_mcu_row().is_err() {
+                // The decoder ran out before the header's height did, or would
+                // not read a stream the headers promised it could. Either way
+                // this source can never finish, and the caller must decode the
+                // image whole rather than draw a prefix of it.
+                self.failed = true;
+                return BandStep::Failed;
+            }
+        }
+        let source = RowRange::new(
+            start,
+            NonZeroU32::new(self.decoded - start).unwrap_or(NonZeroU32::MIN),
+        );
+        match self.target.band_since(built) {
+            Some(placed) => BandStep::Band(DecodedBand::new(source, placed)),
+            // Unreachable for the same reason it is in `PngRows::next_band`:
+            // the loop stops either with a raster row built or at the end of
+            // the source, and the source's last row completes the raster's last
+            // row. Handled as a failure rather than asserted because the
+            // alternative — a band that fills nothing — is a state the caller
+            // cannot represent.
+            None => {
+                self.failed = true;
+                BandStep::Failed
+            }
+        }
+    }
+
+    /// Read one MCU row — several source rows — into the raster.
+    fn read_mcu_row(&mut self) -> Result<(), ()> {
+        // A borrow of one field, so the rest of `self` stays usable inside the
+        // loop below. The band borrows the reader, which is what stops a later
+        // MCU row from being asked for before this one has been written out.
+        let reader = &mut self.reader;
+        let Some(band) = reader.next_row().map_err(|_| ())? else {
+            return Err(());
+        };
+        let stride = band.row_bytes();
+        for source in band.pixels().chunks_exact(stride) {
+            self.format.expand_row(source, &mut self.row).ok_or(())?;
+            // The mask is a property of the source's own pixels, so it is read
+            // from them rather than from the raster they are filtered into.
+            if self.format.may_be_transparent() {
+                self.mask = merge_mask(self.mask, classify_alpha(&self.row));
+            }
+            self.target.push_row(&self.row);
+            self.decoded += 1;
+        }
+        Ok(())
+    }
+
+    fn into_raster(self) -> Option<RasterPixels> {
+        if self.failed || self.decoded != self.native.height() {
+            return None;
+        }
+        let raster = self.target.raster();
+        Some(RasterPixels {
+            native: self.native,
+            raster,
+            rgba: self.target.into_pixels()?,
+            mask: self.mask,
+        })
+    }
+}
+
 /// A PNG being read one row at a time, straight into the raster it will be
 /// drawn from.
 ///
@@ -591,7 +800,7 @@ mod tests;
 /// to build, and the resample of it that followed, are both gone.
 pub struct PngRows<'a> {
     reader: png::Reader<Cursor<&'a [u8]>>,
-    format: PngRowFormat,
+    format: RowFormat,
     native: ImageNativeExtent,
     /// Rows one band carries, before the target's own floor of one raster row
     /// is applied. The last band of a source is shorter.
@@ -633,7 +842,7 @@ impl<'a> PngRows<'a> {
         if reader.info().interlaced {
             return None;
         }
-        let format = PngRowFormat::of(reader.output_color_type())?;
+        let format = RowFormat::of_png(reader.output_color_type())?;
         if u64::from(width) * u64::from(height) < min_pixels {
             return None;
         }
@@ -746,28 +955,47 @@ impl<'a> PngRows<'a> {
     }
 }
 
-/// The 8-bit output colour types a PNG row can arrive in.
+/// The 8-bit colour types a source row can arrive in.
 ///
-/// `Transformations::EXPAND` lifts grayscale below 8 bits and palettes (with
-/// or without `tRNS`) into these, leaving 16-bit output as the one thing to
-/// decline — its rows are big-endian and `image` reorders them only inside its
-/// own decoder, so a row-wise path would have to reimplement that to stay
-/// byte-exact. 16-bit PNGs are rare enough to read whole.
+/// Both row-wise decoders arrive at the same four, which is not a coincidence:
+/// each is the colour type `image`'s own decoder for that format hands to
+/// `to_rgba8`, and expanding to RGBA is where a banded decode and a whole one
+/// meet. For PNG, `Transformations::EXPAND` lifts grayscale below 8 bits and
+/// palettes (with or without `tRNS`) into these, leaving 16-bit output as the
+/// one thing to decline — its rows are big-endian and `image` reorders them
+/// only inside its own decoder, so a row-wise path would have to reimplement
+/// that to stay byte-exact. For JPEG these are the four colours `image` asks
+/// `zune-jpeg` for, one per input colour space it can map.
 #[derive(Clone, Copy, Debug)]
-enum PngRowFormat {
+enum RowFormat {
     Gray8,
     GrayAlpha8,
     Rgb8,
     Rgba8,
 }
 
-impl PngRowFormat {
-    fn of((color, depth): (png::ColorType, png::BitDepth)) -> Option<Self> {
+impl RowFormat {
+    fn of_png((color, depth): (png::ColorType, png::BitDepth)) -> Option<Self> {
         match (color, depth) {
             (png::ColorType::Grayscale, png::BitDepth::Eight) => Some(Self::Gray8),
             (png::ColorType::GrayscaleAlpha, png::BitDepth::Eight) => Some(Self::GrayAlpha8),
             (png::ColorType::Rgb, png::BitDepth::Eight) => Some(Self::Rgb8),
             (png::ColorType::Rgba, png::BitDepth::Eight) => Some(Self::Rgba8),
+            _ => None,
+        }
+    }
+
+    /// The colour a JPEG decoder was configured to output.
+    ///
+    /// The decoder's own answer and not the request: a colour space it cannot
+    /// produce for this image is one this path declines rather than reads as
+    /// the wrong one.
+    fn of_jpeg(space: ZuneColorSpace) -> Option<Self> {
+        match space {
+            ZuneColorSpace::Luma => Some(Self::Gray8),
+            ZuneColorSpace::LumaA => Some(Self::GrayAlpha8),
+            ZuneColorSpace::RGB => Some(Self::Rgb8),
+            ZuneColorSpace::RGBA => Some(Self::Rgba8),
             _ => None,
         }
     }

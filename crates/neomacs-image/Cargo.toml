@@ -11,6 +11,7 @@ description = "CPU image decoding shared by native and browser Neomacs"
 neomacs-display-protocol.workspace = true
 imagesize.workspace = true
 png.workspace = true
+zune-jpeg.workspace = true
 flate2.workspace = true
 resvg.workspace = true
 svgtypes.workspace = true
@@ -28,6 +29,7 @@ image = { workspace = true, features = ["bmp", "dds", "exr", "ff", "gif", "hdr",
 
 [dev-dependencies]
 neomacs-infra.workspace = true
+jpeg-encoder.workspace = true
 
 [lints]
 workspace = true
