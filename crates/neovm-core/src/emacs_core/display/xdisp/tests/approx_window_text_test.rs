@@ -282,7 +282,7 @@ fn exact_target_decoding_matches_approximate_context_without_text_acquisition() 
             Some(Value::T),
             Some(Value::fixnum(-1)),
             Some(Value::fixnum(17)),
-            Some(Value::fixnum(i64::MAX)),
+            Some(Value::fixnum(Value::MOST_POSITIVE_FIXNUM)),
         ] {
             let expected = resolve_pos_visible_target_lisp_pos(&ctx, pos.as_ref()).unwrap();
             APPROX_WINDOW_TEXT_COPIED_CHARS.with(|count| count.set(0));
