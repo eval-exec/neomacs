@@ -144,4 +144,98 @@
            (with-current-buffer buffer (set-buffer-modified-p nil))
            (kill-buffer buffer)))))))
 
+(defmacro neomacs-wasm-test--with-resizable-landing (&rest body)
+  "Exercise frame resize hooks with a stand-in for the optional tree package."
+  (declare (indent 0))
+  `(neomacs-wasm-test--with-site
+     (let* ((frame (selected-frame))
+            (original-width (window-total-width (frame-root-window frame)))
+            (original-layout (frame-parameter frame 'neomacs-wasm-landing-layout))
+            (window-size-change-functions nil)
+            (original-features features))
+       (provide 'treemacs)
+       (save-window-excursion
+         (unwind-protect
+             (cl-letf (((symbol-function 'neomacs-wasm-landing--tree)
+                        (lambda ()
+                          (with-current-buffer (get-buffer-create "*Landing test tree*")
+                            (setq major-mode 'treemacs-mode)
+                            (display-buffer-in-side-window
+                             (current-buffer) '((side . left) (window-width . 24)))))))
+               ,@body)
+           (setq features original-features)
+           (set-frame-width frame original-width)
+           (set-frame-parameter frame 'neomacs-wasm-landing-layout original-layout)
+           (dolist (name '("*NEO Emacs*" "*Playgorund*" "*About*"
+                           "*Landing test tree*" "*Landing custom pane*"))
+             (when-let* ((buffer (get-buffer name)))
+               (with-current-buffer buffer (set-buffer-modified-p nil))
+               (kill-buffer buffer))))))))
+
+(ert-deftest neomacs-wasm-landing-restores-panes-on-width-changes ()
+  (neomacs-wasm-test--with-resizable-landing
+   (set-frame-width frame 80)
+   (neomacs-wasm-landing-open)
+   (should (one-window-p t))
+   (with-current-buffer "*Playgorund*" (erase-buffer) (insert "(+ 20 22)"))
+   ;; A real size-change notification must restore panes without reopening.
+   (set-frame-width frame 150)
+   (run-hook-with-args 'window-size-change-functions frame)
+   (should (get-buffer-window "*Landing test tree*" frame))
+   (should-not (get-buffer-window "*About*" frame))
+   (set-frame-width frame 200)
+   (run-hook-with-args 'window-size-change-functions frame)
+   (should (get-buffer-window "*Landing test tree*" frame))
+   (should (get-buffer-window "*About*" frame))
+   (should (get-buffer-window "*Playgorund*" frame))
+   (should (equal (buffer-name) "*NEO Emacs*"))
+   (with-current-buffer "*Playgorund*" (should (equal (buffer-string) "(+ 20 22)")))
+   (let ((windows (window-list frame 'no-minibuf)))
+     (set-frame-width frame 210)
+     (run-hook-with-args 'window-size-change-functions frame)
+     (should (equal windows (window-list frame 'no-minibuf))))
+   ;; Model the pane deletion performed when the frontend shrinks its frame.
+   (set-frame-width frame 80)
+   (dolist (window (window-list frame 'no-minibuf))
+     (unless (equal (buffer-name (window-buffer window)) "*NEO Emacs*")
+       (delete-window window)))
+   (run-hook-with-args 'window-size-change-functions frame)
+   (set-frame-width frame 200)
+   (run-hook-with-args 'window-size-change-functions frame)
+   (should (get-buffer-window "*Landing test tree*" frame))
+   (should (get-buffer-window "*About*" frame))
+   (with-current-buffer "*Playgorund*" (should (equal (buffer-string) "(+ 20 22)")))))
+
+(ert-deftest neomacs-wasm-landing-resize-preserves-user-layout ()
+  (neomacs-wasm-test--with-resizable-landing
+   (set-frame-width frame 80)
+   (neomacs-wasm-landing-open)
+   (set-window-buffer (split-window-below) (get-buffer-create "*Landing custom pane*"))
+   (run-hook-with-args 'window-size-change-functions frame)
+   (set-frame-width frame 200)
+   (run-hook-with-args 'window-size-change-functions frame)
+   (should (get-buffer-window "*Landing custom pane*" frame))
+   (should (= (length (window-list frame 'no-minibuf)) 2))
+   (should-not (get-buffer-window "*About*" frame))))
+
+(ert-deftest neomacs-wasm-landing-resize-respects-a-closed-pane ()
+  (neomacs-wasm-test--with-resizable-landing
+   (set-frame-width frame 200)
+   (neomacs-wasm-landing-open)
+   (delete-window (get-buffer-window "*About*" frame))
+   (run-hook-with-args 'window-size-change-functions frame)
+   (set-frame-width frame 210)
+   (run-hook-with-args 'window-size-change-functions frame)
+   (should-not (get-buffer-window "*About*" frame))))
+
+(ert-deftest neomacs-wasm-landing-resize-preserves-a-new-buffer ()
+  (neomacs-wasm-test--with-resizable-landing
+   (set-frame-width frame 80)
+   (neomacs-wasm-landing-open)
+   (switch-to-buffer (get-buffer-create "*Landing custom pane*"))
+   (set-frame-width frame 200)
+   (run-hook-with-args 'window-size-change-functions frame)
+   (should (one-window-p t))
+   (should (equal (buffer-name) "*Landing custom pane*"))))
+
 ;;; wasm-startup-test.el ends here
