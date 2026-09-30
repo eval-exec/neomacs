@@ -190,8 +190,12 @@ sidebar on the right. The playground cursor starts after `(+ 1 2)`: press
 `C-x C-e` to evaluate it. Examples are inserted only once. Medium layouts
 omit the personal sidebar and then Treemacs as space decreases. Narrow
 layouts show welcome; the other buffers remain accessible with `C-x b`.
-`M-x neomacs-wasm-landing-open` reopens the layout without erasing playground
-edits. Set the profile to `editor` to retain ordinary scratch-buffer startup.
+Frame-width changes automatically restore missing landing panes when space
+permits, preserving edits, selection, and existing windows. Splitting a window,
+changing its buffer, or explicitly closing a pane stops automatic restoration
+for that frame. `M-x neomacs-wasm-landing-open` reopens the layout and enables
+restoration again without erasing playground edits. Set the profile to `editor`
+to retain ordinary scratch-buffer startup.
 
 The welcome buffer uses local face remapping: proportional sans-serif prose,
 contrasting serif Org headings, and heading scales of 1.8×, 1.4×, and 1.15×

@@ -296,6 +296,22 @@ def main():
             )
             editor.driver.save_screenshot(str(artifacts / "narrow-landing.png"))
             print("PASS: narrow landing hides sidebars without losing playground contents")
+            editor.driver.set_window_size(1800, 1100)
+            editor.wait_for_window_matrices("About", contains="@eval-exec", count=1)
+            editor.eval_expression(
+                '''(progn
+                  (unless (and (treemacs-get-local-window)
+                               (get-buffer-window "*About*")
+                               (get-buffer-window "*Playgorund*")
+                               (equal (buffer-name) "*NEO Emacs*")
+                               (with-current-buffer "*Playgorund*"
+                                 (equal (buffer-string) "(setq neomacs-wasm-test-evaluation (+ 1 2))")))
+                    (error "widening did not restore landing panes and preserve edits"))
+                  (message "WIDE-LANDING-RESTORED"))''',
+                "WIDE-LANDING-RESTORED",
+            )
+            editor.driver.save_screenshot(str(artifacts / "restored-landing.png"))
+            print("PASS: browser resize restores landing panes without reopening or losing edits")
         except Exception:
             editor.capture_failure_artifacts(args.artifacts_dir)
             raise
