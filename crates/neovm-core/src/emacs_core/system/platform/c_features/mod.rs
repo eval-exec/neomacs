@@ -214,6 +214,7 @@ pub(crate) fn gnu_c_features() -> [GnuCFeature; 30] {
                       dbus-vendored cargo feature static-links libdbus), and \
                       system/dbusbind implements the six subrs over that library",
                 present: cfg!(neomacs_have_dbus),
+                hosts: NativeOnly,
             },
         },
         GnuCFeature {

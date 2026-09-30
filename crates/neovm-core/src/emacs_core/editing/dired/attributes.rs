@@ -59,7 +59,17 @@ pub(super) fn build_file_attributes(
 ) -> Option<Value> {
     use fileio::{FileAttributeType, FilePrincipal, FileTimestamp};
     let path = fileio::lisp_file_name_to_path_buf(filename);
-    let attributes = eval.editor_file_system().attributes(&path).ok()?;
+    let attributes = eval
+        .editor_file_system()
+        .attributes_with_identity(
+            &path,
+            if id_format.ids_as_strings() {
+                fileio::IdentityDetail::WithNames
+            } else {
+                fileio::IdentityDetail::IdsOnly
+            },
+        )
+        .ok()?;
     let file_type = match &attributes.kind {
         FileAttributeType::Directory => Value::T,
         FileAttributeType::SymbolicLink(target) => {

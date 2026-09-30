@@ -454,11 +454,7 @@ impl<'a> BandSource<'a> {
     /// what banding does, so the tests that are about what it does read a
     /// small source rather than encode a four-megapixel one.
     #[cfg(test)]
-    pub fn open_forced(
-        data: &'a [u8],
-        size: ImageSizeSpec,
-        realization: ImageRealization,
-    ) -> Self {
+    pub fn open_forced(data: &'a [u8], size: ImageSizeSpec, realization: ImageRealization) -> Self {
         Self::open_at_least(data, size, realization, 0)
     }
 

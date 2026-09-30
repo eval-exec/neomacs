@@ -25,7 +25,7 @@ pub mod shader_surface_cache;
 #[path = "tests/texture_discipline_test.rs"]
 mod texture_discipline_test;
 pub mod tooltip_layout;
-pub use image_bands::{BandPlacement,DecodedBand,RasterBand,RowRange,TextureRows};
+pub use image_bands::{BandPlacement, DecodedBand, RasterBand, RowRange, TextureRows};
 pub use neomacs_image::{SvgResourceContext, xbm, xpm};
 pub mod vertex;
 

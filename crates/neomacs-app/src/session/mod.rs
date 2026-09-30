@@ -68,7 +68,9 @@ impl SessionPresentationTransport {
         }
         let result = self
             .runtime
-            .publish_visible_frames_with_evaluator(evaluator, |eval, frame| (self.try_publish)(eval, frame));
+            .publish_visible_frames_with_evaluator(evaluator, |eval, frame| {
+                (self.try_publish)(eval, frame)
+            });
         if result.published() > 0 {
             (self.notify_frontend)();
         }
@@ -141,7 +143,13 @@ impl EditorSession {
         try_publish: impl Fn(&mut Context, SealedFramePresentation) -> bool + 'static,
         notify_frontend: impl Fn() + 'static,
     ) -> Self {
-        Self::attach_presentation_transport(evaluator, presentation, route, try_publish, notify_frontend)
+        Self::attach_presentation_transport(
+            evaluator,
+            presentation,
+            route,
+            try_publish,
+            notify_frontend,
+        )
     }
 
     fn attach_presentation_transport(

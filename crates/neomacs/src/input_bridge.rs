@@ -187,12 +187,14 @@ pub(crate) fn convert_monitor_infos(monitors: &[DisplayMonitorInfo]) -> Vec<Neom
 pub(crate) fn convert_display_event(event: &DisplayEvent) -> EvaluatorInputBatch<'_> {
     if let DisplayEvent::Tracked { receipt, event } = event {
         return convert_display_event(event).map_inline_action(|action| KbInputEvent::Tracked {
-            receipt: receipt.clone(), event: Box::new(action),
+            receipt: receipt.clone(),
+            event: Box::new(action),
         });
     }
     if let DisplayEvent::Observed { token, event } = event {
         return convert_display_event(event).map_inline_action(|action| KbInputEvent::Observed {
-            token: *token, event: Box::new(action),
+            token: *token,
+            event: Box::new(action),
         });
     }
     if let DisplayEvent::Frontend(event) = event {

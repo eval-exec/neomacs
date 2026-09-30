@@ -26,7 +26,6 @@ pub(crate) fn subr_entry_from_value(function: Value) -> Option<(SymId, SubrEntry
             min_args: subr.min_args,
             max_args: subr.max_args,
             dispatch_kind: subr.dispatch_kind,
-            name_id: subr.name,
             interactive_spec: registered.and_then(|entry| entry.interactive_spec),
             portability: registered.map_or(
                 crate::emacs_core::subr::SubrPortability::AllTargets,
@@ -63,7 +62,6 @@ pub(crate) fn subr_call_entry_from_value(function: Value) -> Option<(SymId, Subr
             min_args: subr.min_args,
             max_args: subr.max_args,
             dispatch_kind: subr.dispatch_kind,
-            name_id: subr.name,
             interactive_spec: None,
             // Call-only entries do not participate in portable-image ABI
             // validation; that reads the registered table. Keep this hot path

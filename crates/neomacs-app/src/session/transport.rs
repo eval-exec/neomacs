@@ -1,8 +1,8 @@
 //! Typed, acknowledgement-safe transport handles owned by a frontend.
 
+use neovm_core::emacs_core::eval::QuitRequest;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use crossbeam_channel::{Receiver, Sender, TryRecvError};
 use neomacs_display_protocol::FrameDisplayState;
@@ -78,14 +78,14 @@ impl std::error::Error for FrontendInputDisconnected {}
 pub struct FrontendInputPort {
     input_tx: Sender<InputEvent>,
     wait_notifier: Option<WaitNotifier>,
-    quit_requested: Arc<AtomicBool>,
+    quit_requested: QuitRequest,
 }
 
 impl FrontendInputPort {
     pub(super) fn new(
         input_tx: Sender<InputEvent>,
         wait_notifier: Option<WaitNotifier>,
-        quit_requested: Arc<AtomicBool>,
+        quit_requested: QuitRequest,
     ) -> Self {
         Self {
             input_tx,
@@ -115,7 +115,9 @@ impl FrontendInputPort {
         &self,
         event: neomacs_display_protocol::ImageStateEvent,
     ) -> Result<FrontendInputSubmission, FrontendInputDisconnected> {
-        self.submit_batch(EvaluatorInputBatch::single(InputEvent::ImageStateChanged { event }))
+        self.submit_batch(EvaluatorInputBatch::single(InputEvent::ImageStateChanged {
+            event,
+        }))
     }
 
     pub(super) fn submit_batch(
@@ -125,7 +127,7 @@ impl FrontendInputPort {
         let mut queued = 0;
         for event in batch {
             if event.requests_default_quit() {
-                self.quit_requested.store(true, Ordering::Relaxed);
+                self.quit_requested.request();
             }
             if self.input_tx.send(event).is_err() {
                 return Err(FrontendInputDisconnected { queued });
@@ -384,7 +386,7 @@ mod tests {
     #[test]
     fn input_port_expands_one_atomic_text_commit_in_order() {
         let (input_tx, input_rx) = crossbeam_channel::unbounded();
-        let port = FrontendInputPort::new(input_tx, None, Arc::new(AtomicBool::new(false)));
+        let port = FrontendInputPort::new(input_tx, None, QuitRequest::new());
 
         let submission = port
             .submit(&FrontendEvent::text_committed(
@@ -414,7 +416,7 @@ mod tests {
     #[test]
     fn ignored_key_release_does_not_wake_the_evaluator() {
         let (input_tx, _input_rx) = crossbeam_channel::unbounded();
-        let port = FrontendInputPort::new(input_tx, None, Arc::new(AtomicBool::new(false)));
+        let port = FrontendInputPort::new(input_tx, None, QuitRequest::new());
         let released = FrontendEvent::Key(FrontendKeyEvent::new(
             FrontendKeySymbol::new('x' as u32),
             FrontendModifiers::default(),
@@ -431,7 +433,7 @@ mod tests {
     #[test]
     fn latest_frame_guard_discards_superseded_and_retires_active_revisions() {
         let (input_tx, input_rx) = crossbeam_channel::unbounded();
-        let input = FrontendInputPort::new(input_tx, None, Arc::new(AtomicBool::new(false)));
+        let input = FrontendInputPort::new(input_tx, None, QuitRequest::new());
         let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
         let mut inbox = FrontendFrameInbox {
             frames: frame_rx,
@@ -469,7 +471,7 @@ mod tests {
     #[test]
     fn remote_handoff_transfers_feedback_responsibility_without_discarding() {
         let (input_tx, input_rx) = crossbeam_channel::unbounded();
-        let port = FrontendInputPort::new(input_tx, None, Arc::new(AtomicBool::new(false)));
+        let port = FrontendInputPort::new(input_tx, None, QuitRequest::new());
         let pending = PendingFrontendFrame::new(Box::new(sealed_frame(17)), port);
 
         assert_eq!(pending.state().presentation_id, PresentationId::new(17));

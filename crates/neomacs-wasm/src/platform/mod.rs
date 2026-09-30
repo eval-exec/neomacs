@@ -537,7 +537,8 @@ pub async fn wait_for_first_editor_presentation() -> Result<String, JsValue> {
 /// Worker. Its typed receipt keeps 64-bit identities lossless in JavaScript.
 #[wasm_bindgen]
 pub fn install_worker_presentation(bytes: &[u8]) -> Result<WorkerPresentationReceipt, JsValue> {
-    let state = WORKER_PRESENTATIONS.with(|decoder| decoder.borrow_mut().decode(bytes))
+    let state = WORKER_PRESENTATIONS
+        .with(|decoder| decoder.borrow_mut().decode(bytes))
         .map_err(|error| JsValue::from_str(&format!("invalid Worker presentation: {error}")))?;
     if state.images.iter().any(|image| !image.validate()) {
         return Err(JsValue::from_str("invalid Worker image payload"));

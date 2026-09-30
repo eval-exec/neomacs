@@ -132,8 +132,6 @@ fn ime_session_reports_gnu_text_conversion_event_and_edit_list() {
     );
 }
 
-
-
 #[test]
 fn precise_scroll_is_a_lisp_wheel_command_with_pixel_payload() {
     let mut eval = crate::emacs_core::Context::new();

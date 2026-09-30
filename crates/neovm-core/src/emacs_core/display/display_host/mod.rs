@@ -304,8 +304,11 @@ impl GuiResourceQuery {
 
 /// Image capability independent of native window ownership and font queries.
 pub trait ImageHost {
-    fn resolve_image_sync(&self, request: super::image_catalog::ImageResolveRequest)
-        -> Result<Option<super::image_catalog::ReadyImage>, String>;
+    fn resolve_image_sync(
+        &self,
+        request: super::image_catalog::ImageResolveRequest,
+        limit: super::image_catalog::ImageSizeLimit,
+    ) -> Result<Option<super::image_catalog::ReadyImage>, String>;
     fn image_catalog(&self) -> &dyn super::image_catalog::ImageCatalog;
     fn image_catalog_shared(&self) -> std::rc::Rc<dyn super::image_catalog::ImageCatalog>;
 }
@@ -321,9 +324,12 @@ impl DisplayHost for ImageHostAdapter {
     fn resize_gui_frame(&mut self, _request: GuiFrameHostRequest) -> Result<(), String> {
         Err("image capability does not own windows".to_owned())
     }
-    fn resolve_image_sync(&self, request: super::image_catalog::ImageResolveRequest)
-        -> Result<Option<super::image_catalog::ReadyImage>, String> {
-        self.0.resolve_image_sync(request)
+    fn resolve_image_sync(
+        &self,
+        request: super::image_catalog::ImageResolveRequest,
+        limit: super::image_catalog::ImageSizeLimit,
+    ) -> Result<Option<super::image_catalog::ReadyImage>, String> {
+        self.0.resolve_image_sync(request, limit)
     }
     fn image_catalog(&self) -> Option<&dyn super::image_catalog::ImageCatalog> {
         Some(self.0.image_catalog())
@@ -331,7 +337,10 @@ impl DisplayHost for ImageHostAdapter {
     fn image_catalog_shared(&self) -> Option<std::rc::Rc<dyn super::image_catalog::ImageCatalog>> {
         Some(self.0.image_catalog_shared())
     }
-    fn reconcile_image_catalog_for_media_rebuild(&self, event: super::image_catalog::ImageStateEvent) {
+    fn reconcile_image_catalog_for_media_rebuild(
+        &self,
+        event: super::image_catalog::ImageStateEvent,
+    ) {
         self.0.image_catalog().reconcile_renderer_state(event);
     }
 }

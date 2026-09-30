@@ -91,10 +91,17 @@ impl EditorFileSystemNamespace {
 
 impl EditorFileSystem for EditorFileSystemNamespace {
     fn attributes(&self, path: &Path) -> io::Result<super::FileAttributeSnapshot> {
+        self.attributes_with_identity(path, super::IdentityDetail::WithNames)
+    }
+    fn attributes_with_identity(
+        &self,
+        path: &Path,
+        detail: super::IdentityDetail,
+    ) -> io::Result<super::FileAttributeSnapshot> {
         if self.runtime_store_for(path).is_some() {
             return super::FileAttributeSnapshot::read_single_user_virtual(self, path);
         }
-        self.host.attributes(path)
+        self.host.attributes_with_identity(path, detail)
     }
     fn metadata(&self, path: &Path, follow_links: bool) -> io::Result<FileMetadata> {
         if self.runtime_store_for(path).is_some() {

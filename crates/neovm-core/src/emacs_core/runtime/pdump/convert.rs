@@ -4685,6 +4685,7 @@ fn hash_key_requires_restored_identity(
         | DumpHashKey::FloatEq(_, _)
         | DumpHashKey::Symbol(_)
         | DumpHashKey::Keyword(_)
+        | DumpHashKey::StringContent(_, _)
         | DumpHashKey::Str(_)
         | DumpHashKey::Char(_)
         | DumpHashKey::Window(_)

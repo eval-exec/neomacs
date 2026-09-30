@@ -275,7 +275,6 @@ fn serialized_hash_keys_follow_the_consumers_integer_representation() {
     );
 }
 
-
 #[test]
 fn cross_width_equal_key_does_not_depend_on_object_population_order() {
     crate::test_utils::init_test_tracing();
@@ -326,7 +325,6 @@ fn cross_width_equal_key_does_not_depend_on_object_population_order() {
     );
 }
 
-
 #[test]
 fn cross_width_eq_key_uses_entry_value_when_snapshot_is_elided() {
     crate::test_utils::init_test_tracing();
@@ -366,7 +364,6 @@ fn cross_width_eq_key_uses_entry_value_when_snapshot_is_elided() {
     );
 }
 
-
 #[test]
 fn producer_shaped_eq_bignum_key_demotes_to_consumer_fixnum() {
     crate::test_utils::init_test_tracing();
@@ -375,8 +372,7 @@ fn producer_shaped_eq_bignum_key_demotes_to_consumer_fixnum() {
     let integer = wasm32_maximum + 1;
     let producer_key = Value::bignum(Integer::from(integer));
     let mut encoder = DumpEncoder::new();
-    let serialized_key =
-        dump_hash_key(&mut encoder, &producer_key.to_hash_key(&HashTableTest::Eq));
+    let serialized_key = dump_hash_key(&mut encoder, &producer_key.to_hash_key(&HashTableTest::Eq));
     assert!(
         matches!(serialized_key, DumpHashKey::HeapRef(_)),
         "an eq bignum is serialized from its pointer-identity key"
@@ -407,4 +403,3 @@ fn producer_shaped_eq_bignum_key_demotes_to_consumer_fixnum() {
         "the 64-bit consumer must use its immediate fixnum identity"
     );
 }
-

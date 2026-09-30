@@ -172,11 +172,40 @@ impl<T: std::io::Read + std::io::Seek> FileReader for T {}
 /// Browser implementations may suspend the Wasm stack while the Worker awaits
 /// an asynchronous host API, but a caller always observes one completed
 /// operation or one typed `io::Error`.
+/// What the caller needs from a file's owner and group.
+///
+/// Turning a numeric id into a NAME goes through the system name service --
+/// NSS on Unix, which may consult files, sssd, LDAP or the network -- while
+/// the id itself is already sitting in the `stat` result. The two are not the
+/// same request, and asking for the expensive one by accident is exactly what
+/// happened: `file-attributes` resolved names for EVERY call and then threw
+/// them away unless `id-format' was `string', making it 146x GNU (3044ms vs
+/// 21ms over 2000 calls) and `directory-files-and-attributes' 125x.
+///
+/// Making it an argument rather than a default means a caller has to say which
+/// it wants, and a new backend has to handle both.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IdentityDetail {
+    /// Numeric ids only, read from metadata already in hand.
+    IdsOnly,
+    /// Ids and their names, resolved through the name service.
+    WithNames,
+}
+
 pub trait EditorFileSystem {
     /// Detailed attributes of the entry itself, never its symlink target.
     /// Native adapters obtain stat fields from one non-following observation.
     fn attributes(&self, path: &Path) -> io::Result<FileAttributeSnapshot> {
         FileAttributeSnapshot::read(self, path)
+    }
+    /// Read attributes, resolving principal names only when requested.
+    fn attributes_with_identity(
+        &self,
+        path: &Path,
+        detail: IdentityDetail,
+    ) -> io::Result<FileAttributeSnapshot> {
+        let _ = detail;
+        self.attributes(path)
     }
     fn metadata(&self, path: &Path, follow_links: bool) -> io::Result<FileMetadata>;
     fn access(&self, path: &Path, mode: AccessMode) -> bool;

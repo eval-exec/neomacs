@@ -71,7 +71,8 @@ pub(crate) fn jit_stack_limit_here() -> usize {
 /// [`JIT_STACK_RED_ZONE`]: the exact test behind a compiled leaf's entry
 /// guard. Unknown bounds answer `false`.
 pub(crate) fn native_stack_exhausted() -> bool {
-    crate::emacs_core::stack_growth::remaining_stack().is_some_and(|remaining| remaining < JIT_STACK_RED_ZONE)
+    crate::emacs_core::stack_growth::remaining_stack()
+        .is_some_and(|remaining| remaining < JIT_STACK_RED_ZONE)
 }
 
 /// `stacker::maybe_grow(red_zone, segment, ..)` over `owner`, keeping the

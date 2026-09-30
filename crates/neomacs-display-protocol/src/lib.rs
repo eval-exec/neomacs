@@ -97,4 +97,6 @@ mod tests;
 
 pub mod input_latency;
 mod pointer_input;
-pub use pointer_input::{PointerPosition, PointerTarget, ScrollDelta, PointerAction, PositionedPointerInput};
+pub use pointer_input::{
+    PointerAction, PointerPosition, PointerTarget, PositionedPointerInput, ScrollDelta,
+};
