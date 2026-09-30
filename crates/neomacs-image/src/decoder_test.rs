@@ -1,5 +1,5 @@
 use super::*;
-use crate::image_bands::{BandPlacement, DecodedBand, RasterBand, RowRange};
+use crate::image_bands::DecodedBand;
 use crate::image_probe::{ImageProbeSource, probe_image_layout};
 use neomacs_display_protocol::{AxisSize, ImageFrameDelay};
 use std::io::Cursor;
@@ -29,14 +29,6 @@ fn decoder_recovers_from_a_panicking_request() {
         .is_some()
     );
 }
-
-#[cfg(not(target_family = "wasm"))]
-#[cfg(not(target_family = "wasm"))]
-use std::num::NonZeroUsize;
-
-#[cfg(not(target_family = "wasm"))]
-#[cfg(not(target_family = "wasm"))]
-use std::num::NonZeroUsize;
 
 #[cfg(not(target_family = "wasm"))]
 #[test]
@@ -1957,19 +1949,21 @@ fn the_texture_a_banded_decode_fills_ends_as_the_whole_image_paths() {
     // nobody wrote is visible.
     let mut texture = vec![0u8; raster_width as usize * raster_height as usize * 4];
     let stride = raster_width as usize * 4;
-    let mut filled = FilledRows::empty(raster);
+    let mut filled = 0;
     for band in &bands {
         let placed = band.placed();
         let rows = placed.placement().rows();
-        let advanced = filled
-            .extend(rows)
-            .expect("each band continues the rows already written");
+        assert_eq!(
+            rows.start(),
+            filled,
+            "each band continues the rows already written"
+        );
         texture[rows.start() as usize * stride..rows.end() as usize * stride]
             .copy_from_slice(placed.pixels());
-        filled = advanced;
+        filled = rows.end();
     }
     assert!(
-        filled.is_complete(),
+        filled == raster_height,
         "the bands wrote every row of the texture"
     );
     for row in 0..raster_height as usize {
@@ -2019,4 +2013,3 @@ fn the_texture_a_banded_decode_fills_ends_as_the_whole_image_paths() {
         "the finished texture holds the whole-image path's bytes"
     );
 }
-

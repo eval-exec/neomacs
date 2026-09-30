@@ -6980,7 +6980,9 @@ fn superseded_gui_publications_retire_evaluator_records_without_input_roundtrip(
     let _bootstrap = bootstrap_buffers(&mut eval, 960, 640, gui_display());
     let frame_id = eval.frame_manager().selected_frame().unwrap().id;
     configure_gnu_startup_state(&mut eval, frame_id, &gui_startup());
-    REDISPLAY_RUNTIME.with(|runtime| runtime.enable_cosmic_metrics());
+    REDISPLAY_RUNTIME.with(|runtime| {
+        runtime.use_scalable_metrics(neomacs_layout_engine::font::sizing::FontSizing::native_gui())
+    });
     let comms = neomacs_display_runtime::thread_comm::ThreadComms::new();
     assert!(
         !eval

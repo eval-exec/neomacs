@@ -6,7 +6,7 @@
 
 use super::super::frame_layout::{REDISPLAY_RUNTIME, run_tty_layout_tree};
 use super::super::{Interactivity, bootstrap_buffers, bootstrap_tty_display_config};
-use neomacs_display_runtime::redisplay::RedisplayRuntime;
+use neomacs_app::presentation::EditorPresentationRuntime;
 use neovm_core::emacs_core::load::create_bootstrap_evaluator_cached_with_features;
 
 #[test]
@@ -20,7 +20,7 @@ fn an_idle_redisplay_skips_layout_in_a_real_session() {
         36,
         bootstrap_tty_display_config(Interactivity::Interactive),
     );
-    REDISPLAY_RUNTIME.with(RedisplayRuntime::disable_cosmic_metrics);
+    REDISPLAY_RUNTIME.with(EditorPresentationRuntime::use_cell_grid);
     let layouts = std::rc::Rc::new(std::cell::Cell::new(0usize));
     let counter = layouts.clone();
     eval.redisplay_fn = Some(Box::new(move |eval| {

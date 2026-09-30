@@ -3755,3 +3755,18 @@ fn android_ci_builds_and_verifies_the_complete_release_package() {
         );
     }
 }
+
+fn github_workflow_job<'a>(workflow: &'a str, name: &str) -> &'a str {
+    let marker = format!("\n  {name}:\n");
+    let (_, tail) = workflow
+        .split_once(&marker)
+        .unwrap_or_else(|| panic!("workflow must define job {name}"));
+    let mut offset = 0;
+    for line in tail.split_inclusive('\n') {
+        if line.starts_with("  ") && !line.starts_with("   ") {
+            return &tail[..offset];
+        }
+        offset += line.len();
+    }
+    tail
+}

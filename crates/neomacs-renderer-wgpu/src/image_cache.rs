@@ -8,19 +8,16 @@
 //! - LRU cache with memory limits
 
 use neomacs_display_protocol::{
-    ImageCacheUsage, ImageColorContext, ImageEmbeddedMetadata, ImageFrameIndex, ImageHeuristicMask,
-    ImageId, ImageIntrinsicExtent, ImageLayoutExtent, ImageLoadAttempt, ImageLoadToken,
-    ImageMaskKind, ImageMaskPolicy, ImageNativeExtent, ImageRasterExtent, ImageRealization,
-    ImageReportedExtent, ImageRotation, ImageSequenceId, ImageSequenceRetirement, ImageSizeSpec,
-    ResolvedImageGeometry, RetainedImageSet,
+    ImageCacheUsage, ImageColorContext, ImageFrameIndex, ImageId, ImageIntrinsicExtent,
+    ImageLayoutExtent, ImageLoadAttempt, ImageLoadToken, ImageMaskKind, ImageMaskPolicy,
+    ImageNativeExtent, ImageRasterExtent, ImageRealization, ImageRotation, ImageSequenceId,
+    ImageSequenceRetirement, ImageSizeSpec, RetainedImageSet,
 };
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
 #[cfg(not(target_family = "wasm"))]
 use std::num::NonZeroUsize;
-use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::path::Path;
 #[cfg(not(target_family = "wasm"))]
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -28,10 +25,9 @@ use std::sync::{Arc, mpsc};
 #[cfg(not(target_family = "wasm"))]
 use std::thread;
 
-use crate::image_bands::{
-    BandFilling, BandSink, BandSource, BandStep, DecodedBand, RasterBand, RowRange, TextureRows,
-    classify_alpha,
-};
+use crate::image_bands::{DecodedBand, RasterBand, RowRange, TextureRows};
+#[cfg(test)]
+use neomacs_display_protocol::ImageEmbeddedMetadata;
 pub use neomacs_display_protocol::{DecodedImage, ImageMetadata};
 use neomacs_image::ImageSequenceCache;
 use neomacs_image::decoder::{DecodeRequest, ImageDecoder, ImageSource, WorkerDecodeOutcome};
@@ -358,6 +354,7 @@ pub struct ImageCache {
     pending_dimensions: HashMap<ImageId, ImageLayoutExtent>,
     /// Channel to receive decoded images
     decoded_rx: mpsc::Receiver<WorkerDecodeOutcome>,
+    decoded_tx: mpsc::Sender<WorkerDecodeOutcome>,
     /// Compile-target-selected image decode executor.
     decoder: ImageDecodeExecutor,
     /// CPU decoder/compositor state shared across all frames of an animation.
@@ -384,7 +381,85 @@ fn lru_unpresented_victim(
         .map(|(id, _)| id)
 }
 
+std::cfg_select! {
+    target_family = "wasm" => {
+        /// Browser Wasm has no ambient native threads. Decode requests run on
+        /// the presentation event loop and publish through the same completion
+        /// channel as the native pool, keeping the cache state machine shared.
+        struct ImageDecodeExecutor {
+            completed: mpsc::Sender<WorkerDecodeOutcome>,
+            sequence_cache: Arc<ImageSequenceCache>,
+        }
+
+        impl ImageDecodeExecutor {
+            fn new(
+                completed: mpsc::Sender<WorkerDecodeOutcome>,
+                sequence_cache: Arc<ImageSequenceCache>,
+            ) -> Self {
+                Self {
+                    completed,
+                    sequence_cache,
+                }
+            }
+
+            fn submit(&self, request: DecodeRequest) {
+                let outcome = ImageDecoder::decode_request(request, &self.sequence_cache);
+                let _ = self.completed.send(outcome);
+            }
+        }
+    }
+    _ => {
+        /// Native image decoding is isolated from presentation by a bounded
+        /// persistent thread pool.
+        struct ImageDecodeExecutor {
+            requests: mpsc::Sender<DecodeRequest>,
+        }
+
+        impl ImageDecodeExecutor {
+            fn new(
+                completed: mpsc::Sender<WorkerDecodeOutcome>,
+                sequence_cache: Arc<ImageSequenceCache>,
+            ) -> Self {
+                let (requests, receiver) = mpsc::channel::<DecodeRequest>();
+                let receiver = Arc::new(Mutex::new(receiver));
+                let pool_size = ImageDecoderPoolSize::detected();
+                tracing::info!("Starting {} image decoder threads", pool_size.get());
+                for thread_id in 0..pool_size.get() {
+                    let receiver = Arc::clone(&receiver);
+                    let completed = completed.clone();
+                    let sequence_cache = Arc::clone(&sequence_cache);
+                    thread::spawn(move || {
+                        ImageCache::decoder_thread_pooled(
+                            thread_id,
+                            receiver,
+                            completed,
+                            sequence_cache,
+                        );
+                    });
+                }
+                Self { requests }
+            }
+
+            fn submit(&self, request: DecodeRequest) {
+                let _ = self.requests.send(request);
+            }
+        }
+    }
+}
+
 impl ImageCache {
+    /// Accept a validated decode from an external worker through the same
+    /// completion path as the native decoder pool.
+    pub fn accept_decoded(&mut self, decoded: DecodedImage) -> Result<(), &'static str> {
+        if !decoded.validate() {
+            return Err("invalid decoded image geometry or pixels");
+        }
+        self.begin_load(decoded.load);
+        self.decoded_tx
+            .send(WorkerDecodeOutcome::Ready(decoded))
+            .map_err(|_| "image completion channel disconnected")
+    }
+
     /// Create a new image cache
     pub fn new(device: &wgpu::Device) -> Self {
         // Create bind group layout for image textures
@@ -425,7 +500,7 @@ impl ImageCache {
         // All target executors publish through one completion channel.
         let (decoded_tx, decoded_rx) = mpsc::channel::<WorkerDecodeOutcome>();
         let sequence_cache = Arc::new(ImageSequenceCache::new());
-        let decoder = ImageDecodeExecutor::new(decoded_tx, Arc::clone(&sequence_cache));
+        let decoder = ImageDecodeExecutor::new(decoded_tx.clone(), Arc::clone(&sequence_cache));
 
         Self {
             next_id: AtomicU32::new(1),
@@ -436,6 +511,7 @@ impl ImageCache {
             retained_images: RetainedImageSet::default(),
             pending_dimensions: HashMap::new(),
             decoded_rx,
+            decoded_tx,
             decoder,
             sequence_cache,
             bind_group_layout,

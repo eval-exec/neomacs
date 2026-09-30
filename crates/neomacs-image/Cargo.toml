@@ -26,5 +26,8 @@ image = { workspace = true, default-features = true }
 # or Rayon's native worker pool.
 image = { workspace = true, features = ["bmp", "dds", "exr", "ff", "gif", "hdr", "ico", "jpeg", "png", "pnm", "qoi", "tga", "tiff", "webp"] }
 
+[dev-dependencies]
+neomacs-infra.workspace = true
+
 [lints]
 workspace = true

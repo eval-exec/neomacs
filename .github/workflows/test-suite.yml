@@ -1004,4 +1004,3 @@ jobs:
             ${{ env.TMPDIR }}/browser-smoke-artifacts
           if-no-files-found: ignore
           retention-days: 14
-

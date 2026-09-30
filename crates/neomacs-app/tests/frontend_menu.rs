@@ -19,25 +19,19 @@ fn pointer_can_open_a_submenu_and_select_its_enabled_command_without_a_window() 
         availability,
         indicator: MenuIndicator::None,
     };
-    let mut menu = MenuSession::new(
-        0.0,
-        0.0,
-        vec![
-            item(
-                "File",
-                0,
-                MenuItemKind::Submenu {
-                    availability: MenuAvailability::Enabled,
-                },
-            ),
-            item("Unavailable", 1, command(MenuAvailability::Disabled)),
-            item("Open", 1, command(MenuAvailability::Enabled)),
-        ],
-        None,
-        14.0,
-        20.0,
-        8.0,
-    );
+    let items = vec![
+        item(
+            "File",
+            0,
+            MenuItemKind::Submenu {
+                availability: MenuAvailability::Enabled,
+            },
+        ),
+        item("Unavailable", 1, command(MenuAvailability::Disabled)),
+        item("Open", 1, command(MenuAvailability::Enabled)),
+    ];
+    let measured = neomacs_display_protocol::menu::MeasuredMenu::measure(items, None, 8.0, |_| 8.0);
+    let mut menu = MenuSession::new(0.0, 0.0, measured, 14.0, 20.0);
 
     // Panel-local logical pixels; independent of native-window placement.
     menu.hover_panel(0, 10.0, 6.0);

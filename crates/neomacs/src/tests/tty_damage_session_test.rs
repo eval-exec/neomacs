@@ -7,9 +7,9 @@
 
 use super::super::frame_layout::{REDISPLAY_RUNTIME, run_tty_layout_tree};
 use super::super::{Interactivity, bootstrap_buffers, bootstrap_tty_display_config};
+use neomacs_app::presentation::EditorPresentationRuntime;
 use neomacs_display_runtime::backend::tty::rif::TtyRif;
 use neomacs_display_runtime::backend::tty::rif::damage::{ScreenMatch, TtyDamageMode};
-use neomacs_display_runtime::redisplay::RedisplayRuntime;
 use neovm_core::emacs_core::Context;
 use neovm_core::emacs_core::load::create_bootstrap_evaluator_cached_with_features;
 
@@ -141,7 +141,7 @@ fn session(silent: bool) -> Renderers {
         ROWS as u32,
         bootstrap_tty_display_config(Interactivity::Interactive),
     );
-    REDISPLAY_RUNTIME.with(RedisplayRuntime::disable_cosmic_metrics);
+    REDISPLAY_RUNTIME.with(EditorPresentationRuntime::use_cell_grid);
     let mut r = Renderers::new(silent);
     r.frame(&mut eval, "startup");
     r.step(&mut eval, "load source", SOURCE);

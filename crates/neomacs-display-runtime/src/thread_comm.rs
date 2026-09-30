@@ -1036,12 +1036,12 @@ impl RenderComms {
         #[cfg(target_os = "linux")]
         if neomacs_display_protocol::input_latency::enabled() {
             let target = match &event {
-                InputEvent::Key {
-                    keysym: 0xff55 | 0xff56,
-                    pressed: true,
-                    emacs_frame_id,
-                    ..
-                } => Some((*emacs_frame_id, "page")),
+                InputEvent::Frontend(FrontendEvent::Key(key))
+                    if matches!(key.symbol().get(), 0xff55 | 0xff56)
+                        && key.state() == FrontendKeyState::Pressed =>
+                {
+                    Some((key.target().get(), "page"))
+                }
                 InputEvent::PositionedPointer(PositionedPointerInput {
                     position,
                     action: PointerAction::Scroll { delta, .. },
@@ -1182,17 +1182,18 @@ impl RenderComms {
         Option<neomacs_display_protocol::input_progress::InputReceipt>,
         Option<neomacs_display_protocol::input_latency::InputToken>,
     ) {
-        let receipt = if matches!(
-            &event,
-            InputEvent::Key {
-                keysym: 0xff55 | 0xff56,
-                pressed: true,
-                ..
-            } | InputEvent::PositionedPointer(PositionedPointerInput {
+        let is_scroll = match &event {
+            InputEvent::Frontend(FrontendEvent::Key(key)) => {
+                matches!(key.symbol().get(), 0xff55 | 0xff56)
+                    && key.state() == FrontendKeyState::Pressed
+            }
+            InputEvent::PositionedPointer(PositionedPointerInput {
                 action: PointerAction::Scroll { .. },
                 ..
-            })
-        ) {
+            }) => true,
+            _ => false,
+        };
+        let receipt = if is_scroll {
             self.input_stream.issue()
         } else {
             None

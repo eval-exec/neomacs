@@ -39,7 +39,7 @@ pub(crate) struct JitHeapState {
     pub(crate) barrier_len: Cell<usize>,
 }
 
-const _: () = assert!(size_of::<JitHeapState>() == 48);
+const _: () = assert!(size_of::<JitHeapState>() == 6 * size_of::<usize>());
 
 impl JitHeapState {
     /// A new heap's state: no open region, an empty window (no partition,

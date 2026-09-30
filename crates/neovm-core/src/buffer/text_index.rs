@@ -273,6 +273,10 @@ pub(crate) fn report_mismatch(what: &str, detail: &str) {
     }
 }
 
+#[cfg(target_family = "wasm")]
+fn register_stats_report() {}
+
+#[cfg(not(target_family = "wasm"))]
 fn register_stats_report() {
     extern "C" fn report() {
         let line = format!(
