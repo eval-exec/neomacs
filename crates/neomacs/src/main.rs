@@ -198,12 +198,11 @@ use neovm_core::emacs_core::display_host::{
 #[cfg(feature = "video")]
 use neovm_core::emacs_core::eval::VideoResolveSource;
 use neovm_core::emacs_core::eval::{
-    FontEntityMetricsRequest, FontSpecResolveRequest, GuiFrameHostSize,
-    ResolvedFontEntityMetrics, ResolvedFontMatch, ResolvedFontSpecMatch, ResolvedFrameFont,
-    ResolvedSurface, ResolvedVideo, ResolvedWebKit, ShaderSurfaceContent,
-    ShaderSurfaceCreateRequest, ShaderSurfaceLanguage, ShaderSurfaceUniformInit,
-    SurfaceChannelKind, SurfaceResolveRequest, VideoResolveRequest, WebKitResolveRequest,
-    WebKitResolveSource,
+    FontEntityMetricsRequest, FontSpecResolveRequest, GuiFrameHostSize, ResolvedFontEntityMetrics,
+    ResolvedFontMatch, ResolvedFontSpecMatch, ResolvedFrameFont, ResolvedSurface, ResolvedVideo,
+    ResolvedWebKit, ShaderSurfaceContent, ShaderSurfaceCreateRequest, ShaderSurfaceLanguage,
+    ShaderSurfaceUniformInit, SurfaceChannelKind, SurfaceResolveRequest, VideoResolveRequest,
+    WebKitResolveRequest, WebKitResolveSource,
 };
 use neovm_core::emacs_core::image_catalog::{
     ImageCatalog, ImageResolveRequest, ImageSizeLimit, ReadyImage,
@@ -3668,9 +3667,11 @@ fn run_gui_evaluator_worker(
         },
         move |eval, display_state| match frame_tx.submit(display_state) {
             Ok(superseded) => {
-                if let Some(old) = superseded { old.discard(eval); }
+                if let Some(old) = superseded {
+                    old.discard(eval);
+                }
                 true
-            },
+            }
             Err(error) => {
                 tracing::debug!(
                     "discarded GUI presentation because render submission failed: {error}"
@@ -4531,7 +4532,9 @@ fn bootstrap_buffers_with_font(
 ) -> InitialEditorSurface {
     let frame_metrics = font.metrics();
     let bootstrap_font = match font {
-        startup_font::BootstrapFont::Tty => InitialFrameFont::new(Value::NIL, Value::string("fixed")),
+        startup_font::BootstrapFont::Tty => {
+            InitialFrameFont::new(Value::NIL, Value::string("fixed"))
+        }
         startup_font::BootstrapFont::Gui(font) => {
             InitialFrameFont::opened((*font).into_selected(), display.font_sizing())
         }

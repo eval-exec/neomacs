@@ -1,6 +1,6 @@
 use super::*;
-use crate::image_bands::{BandPlacement,DecodedBand,RasterBand,RowRange};
-use crate::image_probe::{ImageProbeSource,probe_image_layout};
+use crate::image_bands::{BandPlacement, DecodedBand, RasterBand, RowRange};
+use crate::image_probe::{ImageProbeSource, probe_image_layout};
 use neomacs_display_protocol::{AxisSize, ImageFrameDelay};
 use std::io::Cursor;
 #[test]
@@ -161,7 +161,8 @@ fn decoder_rejects_unavailable_frame_instead_of_silently_showing_frame_zero() {
     let still = png_bytes(vec![0x12, 0x34, 0x56, 0xff], 1, 1);
 
     assert!(
-        ImageDecoder::decode_data_with_metadata_for_frame(&still, ImageFrameIndex::new(1)).is_none()
+        ImageDecoder::decode_data_with_metadata_for_frame(&still, ImageFrameIndex::new(1))
+            .is_none()
     );
     assert!(
         ImageDecoder::decode_data_with_metadata_for_frame(

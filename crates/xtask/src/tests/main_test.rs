@@ -352,7 +352,7 @@ fn the_macos_package_renders_the_canonical_window_icon() {
 fn portable_frontend_ci_reuses_one_runtime_bundle_and_smokes_packaged_wasm() {
     let workflow = include_str!(concat!(
         env!("CARGO_WORKSPACE_DIR"),
-        "/.github/workflows/ci.yml"
+        "/.github/workflows/test-suite.yml"
     ));
 
     let assets = github_workflow_job(workflow, "portable-runtime-assets");
@@ -3755,4 +3755,3 @@ fn android_ci_builds_and_verifies_the_complete_release_package() {
         );
     }
 }
-

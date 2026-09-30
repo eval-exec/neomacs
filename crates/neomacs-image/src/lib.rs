@@ -13,5 +13,5 @@ pub use image_sequence::ImageSequenceCache;
 pub use svg::SvgResourceContext;
 
 pub mod image_bands;
-mod image_scale;
 pub mod image_probe;
+mod image_scale;

@@ -42,7 +42,14 @@ fn metadata_from_native(metadata: fs::Metadata) -> FileMetadata {
 
 impl EditorFileSystem for NativeFileSystem {
     fn attributes(&self, path: &Path) -> io::Result<super::FileAttributeSnapshot> {
-        attributes::read(path)
+        attributes::read(path, super::IdentityDetail::WithNames)
+    }
+    fn attributes_with_identity(
+        &self,
+        path: &Path,
+        detail: super::IdentityDetail,
+    ) -> io::Result<super::FileAttributeSnapshot> {
+        attributes::read(path, detail)
     }
     fn metadata(&self, path: &Path, follow_links: bool) -> io::Result<FileMetadata> {
         let metadata = if follow_links {

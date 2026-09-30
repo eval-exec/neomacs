@@ -256,7 +256,7 @@ impl Context {
                             specpdl: backtrace,
                             operands: self.bc_buf.len(),
                         });
-                        self.push_unevalled_backtrace_frame(original_fun, original_args);
+                        self.push_unevalled_form_frame(original_fun, original_args);
                         let prepared = match self.take_debug_on_call_arm(DebugOnCallCode::EvalForm)
                         {
                             Some(arm) => self.do_debug_on_call(arm).and_then(|()| {
@@ -423,7 +423,7 @@ impl Context {
                                     Step::Return(self.maybe_grow_eval_stack(|ctx| {
                                         let args = LispArgVec::from_slice(&ctx.bc_buf[first_arg..]);
                                         ctx.apply_subr_object_with_entry(
-                                            sym_id, function, args, entry,
+                                            sym_id, function, &args, entry,
                                         )
                                     }))
                                 }
@@ -608,9 +608,9 @@ impl Context {
                 } else {
                     let args = LispArgVec::from_slice(&self.bc_buf[first_arg..first_arg + nargs]);
                     if entry.dispatch_kind == SubrDispatchKind::ContextCallable {
-                        return self.apply_evaluator_callable_by_id(sym_id, args);
+                        return self.apply_evaluator_callable_by_id(sym_id, &args);
                     }
-                    self.dispatch_subr_entry_unchecked(entry, args)
+                    self.dispatch_subr_entry_unchecked(entry, &args)
                 };
                 result.unwrap_or_else(|| {
                     Err(signal(

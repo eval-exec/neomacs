@@ -37,6 +37,6 @@ impl Context {
         self.features
             .retain(|feature| !target_owned_features.contains(feature));
         self.features.extend(initial_feature_ids());
-        self.sync_features_variable();
+        super::sync_features_variable_in_state(&mut self.obarray, &self.features);
     }
 }

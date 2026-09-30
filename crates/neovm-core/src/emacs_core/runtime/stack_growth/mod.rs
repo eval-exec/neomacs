@@ -53,18 +53,27 @@ std::cfg_select! {
 #[inline]
 pub(crate) fn remaining_stack() -> Option<usize> {
     #[cfg(target_family = "wasm")]
-    { None }
+    {
+        None
+    }
     #[cfg(not(target_family = "wasm"))]
-    { stacker::remaining_stack() }
+    {
+        stacker::remaining_stack()
+    }
 }
 
 /// Run a callback on a fresh native segment where the host supports it.
 #[inline]
 pub(crate) fn grow<R>(stack_size: usize, callback: impl FnOnce() -> R) -> R {
     #[cfg(target_family = "wasm")]
-    { let _ = stack_size; callback() }
+    {
+        let _ = stack_size;
+        callback()
+    }
     #[cfg(not(target_family = "wasm"))]
-    { stacker::grow(stack_size, callback) }
+    {
+        stacker::grow(stack_size, callback)
+    }
 }
 
 /// What this host does when Lisp recursion outruns the stack.

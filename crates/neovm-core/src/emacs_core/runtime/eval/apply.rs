@@ -446,7 +446,8 @@ impl Context {
         nargs: usize,
     ) -> BytecodeBacktraceFrame {
         let base = self.specpdl.len();
-        let args = self.backtrace_args_from_oversized_bc_stack(BytecodeBacktraceRange::new(args_start, nargs));
+        let args = self
+            .backtrace_args_from_oversized_bc_stack(BytecodeBacktraceRange::new(args_start, nargs));
         self.specpdl.push(SpecBinding::Backtrace {
             function,
             args,

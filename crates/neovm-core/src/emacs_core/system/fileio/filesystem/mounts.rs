@@ -121,9 +121,18 @@ fn namespace_metadata() -> FileMetadata {
 
 impl EditorFileSystem for MountTableFileSystem {
     fn attributes(&self, path: &Path) -> io::Result<super::FileAttributeSnapshot> {
+        self.attributes_with_identity(path, super::IdentityDetail::WithNames)
+    }
+    fn attributes_with_identity(
+        &self,
+        path: &Path,
+        detail: super::IdentityDetail,
+    ) -> io::Result<super::FileAttributeSnapshot> {
         match self.route(path) {
             Ok((mount, relative)) => {
-                let mut attributes = mount.filesystem.attributes(&relative)?;
+                let mut attributes = mount
+                    .filesystem
+                    .attributes_with_identity(&relative, detail)?;
                 if let super::FileAttributeType::SymbolicLink(target) = attributes.kind {
                     attributes.kind =
                         super::FileAttributeType::SymbolicLink(mount.namespace_link_target(target));

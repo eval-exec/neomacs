@@ -187,15 +187,7 @@ impl Context {
 
     /// `eval_lambda_body_value`: the sampled stack probe, then the forms.
     fn ti_body(&mut self, act: &Act, body: Value, seq: &Seq) -> EvalResult {
-        let depth = self.depth;
-        if depth < STACK_GROWTH_PROBE_START_DEPTH
-            || !depth.is_multiple_of(STACK_GROWTH_PROBE_INTERVAL)
-        {
-            return self.ti_body_forms(act, body, seq);
-        }
-        stacker::maybe_grow(EVAL_STACK_RED_ZONE, EVAL_STACK_SEGMENT, || {
-            self.ti_body_forms(act, body, seq)
-        })
+        self.maybe_grow_eval_stack(|ctx| ctx.ti_body_forms(act, body, seq))
     }
 
     /// `eval_lambda_body_forms`.

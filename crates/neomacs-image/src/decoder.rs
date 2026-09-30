@@ -7,16 +7,16 @@ use neomacs_display_protocol::{
 };
 #[cfg(test)]
 use neomacs_display_protocol::{ImageId, ImageLoadAttempt};
-use std::fs::File;
-use std::io::BufReader;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
 #[cfg(test)]
 use std::sync::Arc;
 
-use std::num::NonZeroU32;
+use crate::image_bands::{
+    BandFilling, BandSink, BandSource, BandStep, DecodedBand, classify_alpha,
+};
+#[cfg(test)]
 use std::sync::atomic::{AtomicU32, Ordering};
-use crate::image_bands::{BandFilling, BandSink, BandSource, BandStep, DecodedBand, RasterBand, RowRange, TextureRows, classify_alpha};
 /// Maximum texture dimension (width or height)
 const MAX_TEXTURE_SIZE: u32 = 4096;
 
@@ -314,7 +314,10 @@ pub enum ImageSource {
 
 pub struct ImageDecoder;
 impl ImageDecoder {
-    pub fn decode_request(request: DecodeRequest, sequence_cache: &ImageSequenceCache) -> WorkerDecodeOutcome {
+    pub fn decode_request(
+        request: DecodeRequest,
+        sequence_cache: &ImageSequenceCache,
+    ) -> WorkerDecodeOutcome {
         Self::decode_request_with_sink(request, sequence_cache, None)
     }
 
@@ -1003,7 +1006,6 @@ impl ImageDecoder {
         let (width, height) = intrinsic.dimensions();
         ImageNativeExtent::new(width.ceil() as u32, height.ceil() as u32)
     }
-
 }
 
 #[cfg(test)]

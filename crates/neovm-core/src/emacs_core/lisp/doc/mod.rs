@@ -181,9 +181,7 @@ fn execute_documentation_plan(
 ) -> Result<DocumentationOutcome, Flow> {
     match plan {
         DocumentationPlan::Final(value) => Ok(DocumentationOutcome::Value(value)),
-        DocumentationPlan::Eval(value) => {
-            eval.eval_value(&value).map(DocumentationOutcome::Value)
-        }
+        DocumentationPlan::Eval(value) => eval.eval_value(&value).map(DocumentationOutcome::Value),
         DocumentationPlan::Unresolved(reread) => Ok(DocumentationOutcome::Unresolved(reread)),
         DocumentationPlan::FunctionDoc(function) => {
             let doc = eval.apply(Value::symbol("function-documentation"), vec![function])?;

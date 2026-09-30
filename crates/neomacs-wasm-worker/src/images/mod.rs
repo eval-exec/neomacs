@@ -19,6 +19,7 @@ pub(crate) struct BrowserImages {
     resources: Option<Rc<dyn RuntimeResourceStore>>,
     entries: RefCell<HashMap<ImageResolveRequest, ImageLookup>>,
     next_id: Cell<u32>,
+    limits: RefCell<HashMap<ImageResolveRequest, ImageSizeLimit>>,
     decoder: PortableImageDecoder,
     uploads: RefCell<Vec<DecodedImage>>,
     retirements: RefCell<Vec<ImageId>>,
@@ -54,6 +55,12 @@ impl BrowserImages {
                         .to_vec()
                 }
             };
+            let limit = self.limits.borrow()[request];
+            neomacs_image::image_probe::admit(
+                neomacs_image::image_probe::ImageProbeSource::Data(&bytes),
+                limit,
+            )
+            .map_err(|_| "image exceeds max-image-size")?;
             let image = self.decoder.decode(EncodedImage {
                 load: pending.load(),
                 bytes,
@@ -133,11 +140,12 @@ impl BrowserImages {
 }
 
 impl ImageCatalog for BrowserImages {
-    fn lookup(&self, request: ImageResolveRequest) -> ImageLookup {
+    fn lookup(&self, request: ImageResolveRequest, limit: ImageSizeLimit) -> ImageLookup {
         let mut entries = self.entries.borrow_mut();
         entries
-            .entry(request)
+            .entry(request.clone())
             .or_insert_with(|| {
+                self.limits.borrow_mut().insert(request, limit);
                 let id = self
                     .next_id
                     .get()
@@ -162,6 +170,7 @@ impl ImageCatalog for BrowserImages {
             };
             if remove {
                 removed.push(state.placement().image_id());
+                self.limits.borrow_mut().remove(request);
             }
             !remove
         });
@@ -197,8 +206,9 @@ impl ImageHost for BrowserImageHost {
     fn resolve_image_sync(
         &self,
         request: ImageResolveRequest,
+        limit: ImageSizeLimit,
     ) -> Result<Option<ReadyImage>, String> {
-        self.0.lookup(request.clone());
+        self.0.lookup(request.clone(), limit);
         match self.0.resolve(&request) {
             ImageLookup::Ready(image) => Ok(Some(image)),
             ImageLookup::Failed(image) => Err(image.error),

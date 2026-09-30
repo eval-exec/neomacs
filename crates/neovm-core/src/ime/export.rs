@@ -33,10 +33,10 @@ impl crate::Context {
                 else {
                     return None;
                 };
-                let recorded = snapshot.layout_freshness?;
+                let recorded = snapshot.layout_freshness.as_ref()?;
                 let current =
                     self.window_display_snapshot_freshness(frame.id, window, buffer.id())?;
-                if recorded != current {
+                if recorded != &current {
                     return None;
                 }
                 Some(presentation)

@@ -1070,10 +1070,9 @@ impl<'face> WindowChromeDisplayRowRenderRequest<'face> {
             .render_services
             .reborrow()
             .with_automatic_composition(automatic_composition);
-        let mut rendered = self.row.render_row(
-            &mut render_services,
-            state.evaluator.media_host(),
-        )?;
+        let mut rendered = self
+            .row
+            .render_row(&mut render_services, state.evaluator.media_host())?;
         rendered.rendered.remap_root_string_provenance(
             crate::display_row::root_lisp_string_id(),
             |output_position| chrome_strings.source_position(output_position),

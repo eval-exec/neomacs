@@ -69,7 +69,9 @@ impl Context {
     /// 3. Cons → special form / macro / function call
     pub fn eval_sub(&mut self, form: Value) -> EvalResult {
         #[cfg(target_family = "wasm")]
-        { return self.eval_sub_continuation(form); }
+        {
+            return self.eval_sub_continuation(form);
+        }
 
         crate::emacs_core::subr::leaf::debug_assert_no_leaf_active!("eval");
         // 1. Symbol → variable lookup (GNU eval.c:2554-2562)
@@ -537,7 +539,7 @@ impl Context {
             let result = if surface_sym_id == target_sym_id {
                 self.try_special_form_value_id(surface_sym_id, original_args)
             } else {
-                self.try_aliased_special_form_value_id(surface_sym_id, target_sym_id, original_args)
+                self.try_special_form_with_surface(surface_sym_id, target_sym_id, original_args)
             };
             if let Some(result) = result {
                 return result;

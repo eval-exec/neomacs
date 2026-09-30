@@ -5772,7 +5772,9 @@ fn default_load_path_entries(
             Value::string(crate::emacs_core::fileio::host_path_to_lisp_file_name_string(dir))
         })
         .collect();
-    entries.extend(bootstrap_load_path_entries_with_filesystem(lisp_dir, filesystem));
+    entries.extend(bootstrap_load_path_entries_with_filesystem(
+        lisp_dir, filesystem,
+    ));
     entries
 }
 

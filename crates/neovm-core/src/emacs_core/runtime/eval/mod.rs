@@ -812,8 +812,15 @@ pub(crate) fn lookup_global_subr_entry(sym_id: SymId) -> Option<SubrEntry> {
 /// Portable runtime images use this to state their minimum consumer contract.
 /// Returning entries rather than exposing the thread-local table keeps its
 /// dense `SymId` indexing an evaluator implementation detail.
-pub(crate) fn registered_global_subr_entries() -> Vec<SubrEntry> {
-    GLOBAL_SUBR_TABLE.with(|table| table.borrow().iter().flatten().copied().collect())
+pub(crate) fn registered_global_subr_entries() -> Vec<(SymId, SubrEntry)> {
+    GLOBAL_SUBR_TABLE.with(|table| {
+        table
+            .borrow()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| entry.map(|entry| (SymId(index as u32), entry)))
+            .collect()
+    })
 }
 
 #[cfg(test)]
@@ -5624,14 +5631,19 @@ impl Context {
     /// Read-only media capabilities. Window ownership uses `display_host` only.
     pub fn media_host(&self) -> Option<&dyn DisplayHost> {
         self.display_host.as_deref().or_else(|| {
-            self.image_host.as_ref().map(|host| host as &dyn DisplayHost)
+            self.image_host
+                .as_ref()
+                .map(|host| host as &dyn DisplayHost)
         })
     }
 
     /// A native display retains its own font policy; direct surfaces use the
     /// independently installed font capability.
     pub(crate) fn font_queries(&mut self) -> Option<&mut dyn super::display_host::FontQueryHost> {
-        super::display_host::font_queries_for_hosts(&mut self.display_host, &mut self.font_query_host)
+        super::display_host::font_queries_for_hosts(
+            &mut self.display_host,
+            &mut self.font_query_host,
+        )
     }
 
     /// Evaluate a Lisp expression string. Convenience for tests.
@@ -5788,7 +5800,9 @@ impl Context {
         if let Some(sym_id) = sym_id
             && let Some(func) = prefetched_cell
         {
-            let subr = head.and_then(|head| head.func).and_then(subr_call_entry_from_value);
+            let subr = head
+                .and_then(|head| head.func)
+                .and_then(subr_call_entry_from_value);
             if let Some((target_sym_id, entry)) = subr
                 && entry.dispatch_kind == SubrDispatchKind::SpecialForm
                 && target_sym_id == sym_id

@@ -258,7 +258,11 @@ impl Context {
                             ev.obarray.fmakunbound_id(binding_id);
                         }
                     } else {
-                        ev.obarray.set_symbol_function_id_for(binding_id, function, crate::emacs_core::symbol::FunctionEpochBump::PdumpRestore);
+                        ev.obarray.set_symbol_function_id_for(
+                            binding_id,
+                            function,
+                            crate::emacs_core::symbol::FunctionEpochBump::PdumpRestore,
+                        );
                     }
                 }
                 FunctionCellSnapshot::ExplicitlyUnbound => {

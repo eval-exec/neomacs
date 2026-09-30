@@ -32,9 +32,9 @@ use crate::image_bands::{
     BandFilling, BandSink, BandSource, BandStep, DecodedBand, RasterBand, RowRange, TextureRows,
     classify_alpha,
 };
-use neomacs_image::ImageSequenceCache;
-use neomacs_image::decoder::{ImageDecoder, DecodeRequest, ImageSource, WorkerDecodeOutcome};
 pub use neomacs_display_protocol::{DecodedImage, ImageMetadata};
+use neomacs_image::ImageSequenceCache;
+use neomacs_image::decoder::{DecodeRequest, ImageDecoder, ImageSource, WorkerDecodeOutcome};
 
 #[cfg(target_os = "linux")]
 use crate::external_buffer::DmaBufBuffer;
@@ -510,7 +510,11 @@ impl ImageCache {
                     let mut publish_band = |decoded: DecodedBand| {
                         let _ = tx.send(WorkerDecodeOutcome::Band { load, decoded });
                     };
-                    let outcome = ImageDecoder::decode_request_with_sink(request, &sequence_cache, Some(&mut publish_band));
+                    let outcome = ImageDecoder::decode_request_with_sink(
+                        request,
+                        &sequence_cache,
+                        Some(&mut publish_band),
+                    );
                     let _ = tx.send(outcome);
                 }
                 Err(_) => {
@@ -531,10 +535,18 @@ impl ImageCache {
         &self.sampler
     }
 
-    pub fn query_file_dimensions(path: &str) -> Option<ImageNativeExtent> { ImageDecoder::query_file_dimensions(path) }
-    fn query_file_intrinsic_extent(path: &str) -> Option<ImageIntrinsicExtent> { ImageDecoder::query_file_intrinsic_extent(path) }
-    pub fn query_data_dimensions(data: &[u8]) -> Option<ImageNativeExtent> { ImageDecoder::query_data_dimensions(data) }
-    fn query_data_intrinsic_extent(data: &[u8]) -> Option<ImageIntrinsicExtent> { ImageDecoder::query_data_intrinsic_extent(data) }
+    pub fn query_file_dimensions(path: &str) -> Option<ImageNativeExtent> {
+        ImageDecoder::query_file_dimensions(path)
+    }
+    fn query_file_intrinsic_extent(path: &str) -> Option<ImageIntrinsicExtent> {
+        ImageDecoder::query_file_intrinsic_extent(path)
+    }
+    pub fn query_data_dimensions(data: &[u8]) -> Option<ImageNativeExtent> {
+        ImageDecoder::query_data_dimensions(data)
+    }
+    fn query_data_intrinsic_extent(data: &[u8]) -> Option<ImageIntrinsicExtent> {
+        ImageDecoder::query_data_intrinsic_extent(data)
+    }
     /// Load image from file (async)
     /// Returns image ID immediately, texture loads in background
     pub fn load_file(

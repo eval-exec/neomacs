@@ -891,7 +891,10 @@ impl CharsetRegistry {
     fn load_charset_map(&self, map_name: &str, info: &CharsetInfo) -> Option<Arc<CharsetMapData>> {
         let index = usize::try_from(info.id).ok()?;
         if let Some(entry) = self.map_memo.borrow().get(index).and_then(Option::as_ref)
-            && entry.map_name == map_name && entry.code_space == info.code_space && entry.min_code == info.min_code {
+            && entry.map_name == map_name
+            && entry.code_space == info.code_space
+            && entry.min_code == info.min_code
+        {
             return entry.map.clone();
         }
         let key = CharsetMapCacheKey {
@@ -910,8 +913,15 @@ impl CharsetRegistry {
         self.map_cache.borrow_mut().insert(key, loaded.clone());
         if index <= 4096 {
             let mut memo = self.map_memo.borrow_mut();
-            if memo.len() <= index { memo.resize_with(index + 1, || None); }
-            memo[index] = Some(CharsetMapMemo { map_name: map_name.to_owned(), code_space: info.code_space, min_code: info.min_code, map: loaded.clone() });
+            if memo.len() <= index {
+                memo.resize_with(index + 1, || None);
+            }
+            memo[index] = Some(CharsetMapMemo {
+                map_name: map_name.to_owned(),
+                code_space: info.code_space,
+                min_code: info.min_code,
+                map: loaded.clone(),
+            });
         }
         loaded
     }
@@ -1483,7 +1493,8 @@ pub(crate) fn charset_decoder(charset: SymId) -> Option<CharsetDecoder> {
         let name = registry.resolve_name(charset);
         let info = registry.charsets.get(&name)?;
         let fast = match &info.method {
-            CharsetMethod::Map(map_name) if !info.unified_p => registry.load_charset_map(map_name, info)
+            CharsetMethod::Map(map_name) if !info.unified_p => registry
+                .load_charset_map(map_name, info)
                 .map(|map| FastCharsetDecode {
                     ascii_compatible_p: info.ascii_compatible_p,
                     min_code: info.min_code,

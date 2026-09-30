@@ -446,7 +446,10 @@ pub(crate) fn resolve_live_frame_font_request(
 ) -> LiveFrameFontResolution {
     resolve_live_frame_font_request_in_state(
         &eval.frames,
-        super::display_host::font_queries_for_hosts(&mut eval.display_host, &mut eval.font_query_host),
+        super::display_host::font_queries_for_hosts(
+            &mut eval.display_host,
+            &mut eval.font_query_host,
+        ),
         frame_id,
         requested,
     )

@@ -1,5 +1,5 @@
 use super::*;
-use crate::image_bands::{BandPlacement,DecodedBand,RasterBand,RowRange};
+use crate::image_bands::{BandPlacement, DecodedBand, RasterBand, RowRange};
 #[test]
 fn image_decoder_pool_is_nonempty_and_bounded_on_large_hosts() {
     let one = NonZeroUsize::new(1).unwrap();

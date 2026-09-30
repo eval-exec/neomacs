@@ -131,7 +131,8 @@ impl<'a> EvaluatorInputBatch<'a> {
     /// Decorate the final action of an inline input batch, after its observations.
     pub fn map_inline_action(mut self, decorate: impl FnOnce(InputEvent) -> InputEvent) -> Self {
         if let EvaluatorInputBatchInner::Inline(events) = &mut self.inner
-            && let Some(action) = events.events.iter_mut().rev().find(|event| event.is_some()) {
+            && let Some(action) = events.events.iter_mut().rev().find(|event| event.is_some())
+        {
             *action = Some(decorate(action.take().unwrap()));
         }
         self

@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 use super::types::DumpContextState;
 use super::{Context, DumpError, mark_after_pdump_load_hook_pending, restore_snapshot};
 use crate::emacs_core::eval::{SubrEntry, registered_global_subr_entries};
-use crate::emacs_core::intern::resolve_name;
+use crate::emacs_core::intern::{SymId, resolve_sym};
 use crate::tagged::header::SubrDispatchKind;
 
 const MAGIC: [u8; 16] = *b"NEOMACS-PRTDUMP!";
@@ -65,9 +65,9 @@ impl From<SubrDispatchKind> for PortableSubrDispatch {
 }
 
 impl PortableSubrAbi {
-    fn from_entry(entry: SubrEntry) -> Self {
+    fn from_entry((symbol, entry): (SymId, SubrEntry)) -> Self {
         Self {
-            name: resolve_name(entry.name_id).to_owned(),
+            name: resolve_sym(symbol).to_owned(),
             min_args: entry.min_args,
             max_args: entry.max_args,
             dispatch: entry.dispatch_kind.into(),
@@ -89,7 +89,9 @@ impl PortableSubrAbi {
 fn compiled_subr_contract() -> Vec<PortableSubrAbi> {
     let mut entries = registered_global_subr_entries()
         .into_iter()
-        .filter(|entry| entry.portability == crate::emacs_core::subr::SubrPortability::AllTargets)
+        .filter(|(_, entry)| {
+            entry.portability == crate::emacs_core::subr::SubrPortability::AllTargets
+        })
         .map(PortableSubrAbi::from_entry)
         .collect::<Vec<_>>();
     entries.sort();

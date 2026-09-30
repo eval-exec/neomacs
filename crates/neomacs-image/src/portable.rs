@@ -51,6 +51,9 @@ impl PortableImageDecoder {
             frame: image.frame,
         };
         match ImageDecoder::decode_request(request, &self.sequences) {
+            WorkerDecodeOutcome::Band { .. } => {
+                unreachable!("decoding without a sink returns only a terminal outcome")
+            }
             WorkerDecodeOutcome::Ready(image) => Ok(image),
             WorkerDecodeOutcome::Failed(_) => Err("image decode failed"),
         }

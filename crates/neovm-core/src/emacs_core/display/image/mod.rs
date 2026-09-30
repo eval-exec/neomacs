@@ -1379,9 +1379,7 @@ pub(crate) fn builtin_clear_image_cache_in_context(
                 .as_deref()
                 .and_then(image_resolve_source_from_items);
             if let Some(source) = source
-                && let Some(catalog) = eval
-                    .media_host()
-                    .and_then(|host| host.image_catalog())
+                && let Some(catalog) = eval.media_host().and_then(|host| host.image_catalog())
             {
                 catalog.invalidate_animation(ImageAnimationInvalidation::Source(source));
             }
@@ -1408,19 +1406,13 @@ pub(crate) fn builtin_clear_image_cache_in_context(
             if invalidated {
                 eval.invalidate_media();
             }
-            if let Some(catalog) = eval
-                .media_host()
-                .and_then(|host| host.image_catalog())
-            {
+            if let Some(catalog) = eval.media_host().and_then(|host| host.image_catalog()) {
                 catalog.invalidate_animation(ImageAnimationInvalidation::All);
             }
             return Ok(Value::NIL);
         }
         // Unknown filter object: accept without clearing (no dependency match).
-        if let Some(catalog) = eval
-            .media_host()
-            .and_then(|host| host.image_catalog())
-        {
+        if let Some(catalog) = eval.media_host().and_then(|host| host.image_catalog()) {
             catalog.invalidate_animation(ImageAnimationInvalidation::All);
         }
         return Ok(Value::NIL);
@@ -1443,10 +1435,7 @@ pub(crate) fn builtin_clear_image_cache_in_context(
     if invalidated {
         eval.invalidate_media();
     }
-    if let Some(catalog) = eval
-        .media_host()
-        .and_then(|host| host.image_catalog())
-    {
+    if let Some(catalog) = eval.media_host().and_then(|host| host.image_catalog()) {
         catalog.invalidate_animation(ImageAnimationInvalidation::All);
     }
 

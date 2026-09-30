@@ -7,7 +7,10 @@ use std::{fs, io, path::Path};
 
 mod file_identity;
 
-pub(super) fn read(path: &Path) -> io::Result<FileAttributeSnapshot> {
+pub(super) fn read(
+    path: &Path,
+    detail: super::super::IdentityDetail,
+) -> io::Result<FileAttributeSnapshot> {
     let stat = fs::symlink_metadata(path)?;
     let kind = if stat.file_type().is_symlink() {
         FileAttributeType::SymbolicLink(fs::read_link(path)?)
@@ -16,7 +19,7 @@ pub(super) fn read(path: &Path) -> io::Result<FileAttributeSnapshot> {
     } else {
         FileAttributeType::Other
     };
-    let ownership = file_identity::for_path(path, &stat);
+    let ownership = file_identity::for_path(path, &stat, detail);
     let mut attributes = FileAttributeSnapshot {
         kind,
         links: Some(1),

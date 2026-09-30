@@ -1030,10 +1030,14 @@ impl DecodedImage {
     /// Validate an upload received from a separate worker before GPU allocation.
     pub fn validate(&self) -> bool {
         let raster = self.geometry.raster();
-        raster.width() > 0 && raster.height() > 0
-            && raster.width() <= 4096 && raster.height() <= 4096
-            && (raster.width() as usize).checked_mul(raster.height() as usize)
-                .and_then(|pixels| pixels.checked_mul(4)) == Some(self.data.len())
+        raster.width() > 0
+            && raster.height() > 0
+            && raster.width() <= 4096
+            && raster.height() <= 4096
+            && (raster.width() as usize)
+                .checked_mul(raster.height() as usize)
+                .and_then(|pixels| pixels.checked_mul(4))
+                == Some(self.data.len())
             && self.geometry.layout() == self.metadata.layout
             && self.geometry.reported() == self.metadata.reported
     }

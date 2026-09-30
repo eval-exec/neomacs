@@ -187,21 +187,35 @@ impl EditorPresentationRuntime {
         }));
     }
 
-    pub fn maintain_scroll_coverage(&self, evaluator: &Context) -> (Option<std::time::Duration>, bool) {
+    pub fn maintain_scroll_coverage(
+        &self,
+        evaluator: &Context,
+    ) -> (Option<std::time::Duration>, bool) {
         self.runtime.maintain_scroll_coverage(evaluator)
     }
 
-    pub fn resolved_scroll_preview(&self, evaluator: &Context, frame: FrameId, window: neovm_core::window::WindowId, inputs: Vec<neomacs_display_protocol::input_progress::InputReceipt>) -> Option<neomacs_display_protocol::scroll_coverage::ResolvedScrollIntent> {
-        self.runtime.resolved_scroll_preview(evaluator, frame, window, inputs)
+    pub fn resolved_scroll_preview(
+        &self,
+        evaluator: &Context,
+        frame: FrameId,
+        window: neovm_core::window::WindowId,
+        inputs: Vec<neomacs_display_protocol::input_progress::InputReceipt>,
+    ) -> Option<neomacs_display_protocol::scroll_coverage::ResolvedScrollIntent> {
+        self.runtime
+            .resolved_scroll_preview(evaluator, frame, window, inputs)
     }
 
     /// Install the synchronous window-layout query adapter on an evaluator.
     pub fn install_window_layout_query_hook(&self, evaluator: &mut Context) {
         let maintenance = self.clone();
-        evaluator.display_idle_maintenance_fn = Some(Box::new(move |eval| maintenance.maintain_scroll_coverage(eval)));
+        evaluator.display_idle_maintenance_fn = Some(Box::new(move |eval| {
+            maintenance.maintain_scroll_coverage(eval)
+        }));
         let queries = self.clone();
         evaluator.install_window_layout_query(move |eval, frame_id, window_id, scope| {
-            queries.runtime.query_window(eval, frame_id, window_id, scope)
+            queries
+                .runtime
+                .query_window(eval, frame_id, window_id, scope)
         });
     }
 

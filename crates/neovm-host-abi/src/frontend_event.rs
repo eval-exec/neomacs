@@ -78,14 +78,21 @@ pub struct FrontendModifiers {
 }
 
 impl FrontendModifiers {
+    /// Bit carrying the shift modifier in the transport mask.
     pub const SHIFT_MASK: u32 = 1 << 0;
+    /// Bit carrying the control modifier in the transport mask.
     pub const CONTROL_MASK: u32 = 1 << 1;
+    /// Bit carrying the meta modifier in the transport mask.
     pub const META_MASK: u32 = 1 << 2;
+    /// Bit carrying the super modifier in the transport mask.
     pub const SUPER_MASK: u32 = 1 << 3;
+    /// Bit carrying the alt modifier in the transport mask.
     pub const ALT_MASK: u32 = 1 << 4;
+    /// Bit carrying the hyper modifier in the transport mask.
     pub const HYPER_MASK: u32 = 1 << 5;
 
     #[must_use]
+    /// Construct the four modifiers reported by portable host adapters.
     pub const fn new(shift: bool, control: bool, meta: bool, super_: bool) -> Self {
         Self {
             shift,
@@ -122,21 +129,25 @@ impl FrontendModifiers {
     }
 
     #[must_use]
+    /// Whether the shift modifier is active.
     pub const fn shift(self) -> bool {
         self.shift
     }
 
     #[must_use]
+    /// Whether the control modifier is active.
     pub const fn control(self) -> bool {
         self.control
     }
 
     #[must_use]
+    /// Whether the meta modifier is active.
     pub const fn meta(self) -> bool {
         self.meta
     }
 
     #[must_use]
+    /// Whether the super modifier is active.
     pub const fn super_(self) -> bool {
         self.super_
     }
