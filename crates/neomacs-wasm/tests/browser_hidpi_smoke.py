@@ -136,6 +136,8 @@ def assert_browser_viewport(
           width: globalThis.innerWidth,
           height: globalThis.innerHeight,
           scale: globalThis.devicePixelRatio,
+          canvasX: bounds.x,
+          canvasY: bounds.y,
           canvasWidth: bounds.width,
           canvasHeight: bounds.height,
         };
@@ -145,8 +147,10 @@ def assert_browser_viewport(
         "width": width,
         "height": height,
         "scale": scale,
-        "canvasWidth": width - 18,
-        "canvasHeight": height - 52,
+        "canvasX": 0,
+        "canvasY": 0,
+        "canvasWidth": width,
+        "canvasHeight": height,
     }
     if observed != expected:
         raise RuntimeError(
@@ -168,8 +172,8 @@ def main() -> None:
         assert_browser_viewport(driver, width=1975, height=1100, scale=1.75)
         wait_for_logical_geometry(
             driver,
-            width=1957,
-            height=1048,
+            width=1975,
+            height=1100,
             timeout=args.timeout,
         )
         assert_editor_frame_scale(editor, 1.75)
@@ -180,8 +184,8 @@ def main() -> None:
         assert_browser_viewport(driver, width=1975, height=1100, scale=2.0)
         wait_for_logical_geometry(
             driver,
-            width=1957,
-            height=1048,
+            width=1975,
+            height=1100,
             timeout=args.timeout,
             after_presentation=before_scale_change,
         )
@@ -192,8 +196,8 @@ def main() -> None:
         assert_browser_viewport(driver, width=1440, height=900, scale=2.0)
         wait_for_logical_geometry(
             driver,
-            width=1422,
-            height=848,
+            width=1440,
+            height=900,
             timeout=args.timeout,
             after_presentation=before_resize,
         )

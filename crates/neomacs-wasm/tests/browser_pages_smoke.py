@@ -12,6 +12,7 @@ from urllib.request import urlopen
 from selenium import webdriver
 
 from browser_basic_smoke import exercise_editing_and_persistence
+from browser_hidpi_smoke import assert_browser_viewport
 from browser_test_support import BrowserEditorHarness, chrome_options
 
 
@@ -60,39 +61,16 @@ def main():
             editor.driver.get(url)
             editor.wait_ready()
             editor.wait_for_frame_text("landing", contains="Welcome to the browser editor.")
-            title = editor.driver.find_element("id", "browser-window-title")
-            assert "NEO Emacs (WebAssembly build)" in title.text, title.text
-            warning = editor.driver.find_element("id", "browser-build-warning")
-            assert warning.is_displayed()
-            assert warning.get_property("textContent").strip() == (
-                "Experimental · Incomplete · Work in progress"
-            ), warning.text
-            assert warning.value_of_css_property("text-transform") == "uppercase"
-            assert "landing page still needs substantial polish" in title.text, title.text
-            link = title.find_element("tag name", "a")
-            assert link.get_attribute("href") == "https://github.com/eval-exec/neomacs"
-            assert link.get_attribute("target") == "_blank"
+            assert "NEO Emacs (WebAssembly build)" in editor.driver.title
+            assert "Experimental · Incomplete · Work in progress" in editor.driver.title
+            assert not editor.driver.find_elements("id", "browser-titlebar")
+            assert editor.driver.find_element("css selector", 'head link[rel="icon"]')
             editor.wait_for_window_matrices("About", contains="@eval-exec", count=1)
             assert not editor.driver.find_element("id", "browser-startup").is_displayed()
-            assert warning.is_displayed(), "The warning disappeared with the startup overlay"
-            rotation = editor.driver.execute_script(r"""
-              const icon = document.querySelector('#browser-window-icon');
-              const animation = icon.getAnimations()[0];
-              if (!animation) return null;
-              animation.pause();
-              animation.currentTime = animation.effect.getTiming().duration / 4;
-              const matrix = new DOMMatrix(getComputedStyle(icon).transform);
-              animation.play();
-              return {b: matrix.b, c: matrix.c};
+            viewport = editor.driver.execute_script("""
+              return {width: innerWidth, height: innerHeight, scale: devicePixelRatio};
             """)
-            assert rotation and rotation["b"] > 0.99 and rotation["c"] < -0.99, rotation
-            editor.driver.execute_cdp_cmd("Emulation.setEmulatedMedia", {
-                "features": [{"name": "prefers-reduced-motion", "value": "reduce"}],
-            })
-            assert editor.driver.execute_script(r"""
-              return document.querySelector('#browser-window-icon').getAnimations().length === 0;
-            """), "The icon ignores reduced-motion preferences"
-            editor.driver.execute_cdp_cmd("Emulation.setEmulatedMedia", {"features": []})
+            assert_browser_viewport(editor.driver, **viewport)
             loaded = editor.driver.execute_script(r"""
               return [...document.scripts].some(script => script.src.includes(arguments[0]))
                 || performance.getEntriesByType('resource').some(entry =>
@@ -112,7 +90,7 @@ def main():
             exercise_editing_and_persistence(editor, make_driver)
             errors = editor.driver.execute_script("return globalThis.__neomacsConsoleErrors")
             assert not errors, errors
-            print(f"PASS: {url} renders release {args.expected_bundle}; title, layout, "
+            print(f"PASS: {url} renders release {args.expected_bundle}; viewport, layout, "
                   "editing, save and browser-restart persistence work", flush=True)
         except Exception:
             editor.capture_failure_artifacts(str(artifacts))
