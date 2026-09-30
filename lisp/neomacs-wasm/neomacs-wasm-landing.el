@@ -6,7 +6,8 @@
 ;;; Commentary:
 
 ;; The landing page is the editor: ordinary buffers, buttons, faces, and
-;; windows.  No DOM imitation or resize hook takes over the user's layout.
+;; windows.  Resize events restore its panes while the landing layout is
+;; intact; user changes leave window management under the user's control.
 
 ;;; Code:
 
@@ -260,11 +261,73 @@ Only image geometry changes; never rearrange the user's windows."
      (setq neomacs-wasm-package-error (error-message-string error-data))
      (neomacs-wasm-landing--welcome))))
 
+(defvar neomacs-wasm-landing--resizing nil)
+
+(defun neomacs-wasm-landing--remember-layout (frame)
+  "Record FRAME's width and landing windows after arranging its panes."
+  (set-frame-parameter
+   frame 'neomacs-wasm-landing-layout
+   (cons (window-total-width (frame-root-window frame))
+         (mapcar (lambda (window) (cons window (window-buffer window)))
+                 (window-list frame 'no-minibuf)))))
+
+(defun neomacs-wasm-landing--resize-layout (frame)
+  "Restore missing landing panes when FRAME grows wide enough.
+Stop managing the layout if the user splits a window, switches its buffer,
+or closes a pane without a frame-width change.  Existing panes and buffer
+contents are preserved."
+  (when-let* (((not neomacs-wasm-landing--resizing))
+              (layout (frame-parameter frame 'neomacs-wasm-landing-layout)))
+    (with-selected-frame frame
+      (let* ((width (window-total-width (frame-root-window frame)))
+             (windows (window-list frame 'no-minibuf))
+             (unchanged-width (= width (car layout)))
+             (known-windows
+              (seq-every-p (lambda (window)
+                            (eq (window-buffer window)
+                                (cdr (assq window (cdr layout)))))
+                          windows)))
+        (cond
+         ((or (not known-windows)
+              (and unchanged-width (/= (length windows) (length (cdr layout)))))
+          (set-frame-parameter frame 'neomacs-wasm-landing-layout nil))
+         ((not unchanged-width)
+          (let ((neomacs-wasm-landing--resizing t))
+            (save-selected-window
+              (when (or (get-buffer-window "*NEO Emacs*" frame)
+                        (get-buffer-window "*Playgorund*" frame))
+                (when (and (>= width 130) (featurep 'treemacs)
+                           (not (seq-some
+                                 (lambda (window)
+                                   (with-current-buffer (window-buffer window)
+                                     (derived-mode-p 'treemacs-mode)))
+                                 windows)))
+                  (neomacs-wasm-landing--tree))
+                (when-let* (((>= width 170))
+                            (neomacs-wasm-landing-personal-info)
+                            (info (get-buffer "*About*"))
+                            ((not (get-buffer-window info frame))))
+                  (display-buffer-in-side-window
+                   info '((side . right) (slot . 0) (window-width . 33))))
+                (let ((welcome (get-buffer-window "*NEO Emacs*" frame))
+                      (playground (get-buffer-window "*Playgorund*" frame)))
+                  (cond
+                   ((and welcome (not playground) (get-buffer "*Playgorund*")
+                         (>= (window-total-width welcome) 85))
+                    (set-window-buffer (split-window welcome nil 'right)
+                                       (get-buffer "*Playgorund*")))
+                   ((and playground (not welcome) (get-buffer "*NEO Emacs*")
+                         (>= (window-total-width playground) 85))
+                    (set-window-buffer (split-window playground nil 'left)
+                                       (get-buffer "*NEO Emacs*")))))))
+            (neomacs-wasm-landing--remember-layout frame))))))))
+
 (defun neomacs-wasm-landing-open ()
   "Open the landing page, Treemacs, playground, and personal sidebar.
 Medium frames omit the personal sidebar; narrow frames show welcome only.
 All buffers remain accessible with C-x b.  Reopening preserves playground
-edits.  Only this command or initial startup arranges the windows."
+edits.  Frame resize events restore missing panes until the user changes
+the landing window layout."
   (interactive)
   (let ((welcome (neomacs-wasm-landing--welcome))
         (info (neomacs-wasm-landing--about)))
@@ -291,7 +354,9 @@ edits.  Only this command or initial startup arranges the windows."
         (let ((right (split-window-right)))
           (set-window-buffer right (get-buffer "*Playgorund*"))
           (select-window right)))))
+  (neomacs-wasm-landing--remember-layout (selected-frame))
   (add-hook 'window-size-change-functions #'neomacs-wasm-landing--resize-banner)
+  (add-hook 'window-size-change-functions #'neomacs-wasm-landing--resize-layout)
   (neomacs-wasm-landing--resize-banner)
   (when (bound-and-true-p neomacs-wasm-package-error)
     (message "Optional landing packages unavailable: %s. Reload to retry."
