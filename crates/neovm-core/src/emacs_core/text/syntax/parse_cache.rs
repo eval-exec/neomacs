@@ -157,6 +157,9 @@ pub(crate) enum Invalidation {
 #[derive(Debug, Default)]
 pub(crate) struct SyntaxParseCache {
     runs: Vec<ParseRun>,
+    /// A conservative membership filter for numeric FROM positions. A clear
+    /// bit proves a miss; collisions still require an exact run search.
+    from_filter: u64,
     /// LRU clock.
     clock: u64,
     /// Lowest Emacs byte position whose text changed since the last drain.
@@ -180,7 +183,15 @@ impl SyntaxParseCache {
     /// mutation notes and validate the complete key before using any state.
     #[inline]
     pub(crate) fn has_run_from(&self, from_char: usize) -> bool {
-        self.runs.iter().any(|run| run.key.from_char == from_char)
+        self.from_filter & from_filter_bit(from_char) != 0
+            && self.runs.iter().any(|run| run.key.from_char == from_char)
+    }
+
+    fn rebuild_from_filter(&mut self) {
+        self.from_filter = self
+            .runs
+            .iter()
+            .fold(0, |mask, run| mask | from_filter_bit(run.key.from_char));
     }
 
     /// A text edit whose first changed byte is `at_byte` (every later byte may
@@ -211,12 +222,19 @@ impl SyntaxParseCache {
         let outcome = self.take_invalidation(epoch, prop_tick);
         match outcome {
             Invalidation::Nothing => {}
-            Invalidation::All => self.runs.clear(),
+            Invalidation::All => {
+                self.runs.clear();
+                self.from_filter = 0;
+            }
             Invalidation::From { byte, char } => {
                 for run in &mut self.runs {
                     run.truncate(byte, char);
                 }
+                let before = self.runs.len();
                 self.runs.retain(|run| !run.is_empty());
+                if self.runs.len() != before {
+                    self.rebuild_from_filter();
+                }
             }
         }
         outcome
@@ -252,6 +270,13 @@ impl SyntaxParseCache {
         self.noted_prop_ticks = 0;
         outcome
     }
+}
+
+/// Multiplicative hashing uses the high bits so aligned FROM positions do not
+/// all land in the same bucket. The filter never substitutes for key equality.
+#[inline]
+fn from_filter_bit(from_char: usize) -> u64 {
+    1u64 << ((from_char as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) >> 58)
 }
 
 // ---------------------------------------------------------------------------
@@ -393,6 +418,7 @@ fn count(f: impl FnOnce(&mut ParseCacheStats)) {
 
 /// `NEOVM_SYNTAX_PARSE_CACHE_STATS=PATH`: the counters are rewritten to PATH
 /// every 256 queries (engagement checks for measurement runs).
+#[inline]
 fn maybe_write_stats_file() {
     static PATH: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     let Some(path) = PATH
@@ -404,10 +430,17 @@ fn maybe_write_stats_file() {
     if path.is_empty() {
         return;
     }
-    let stats = parse_cache_stats();
-    if !stats.queries.is_multiple_of(256) {
+    if !STATS.with(|cell| cell.get().queries.is_multiple_of(256)) {
         return;
     }
+    write_stats_file(path);
+}
+
+/// Formatting and filesystem work belongs only to an enabled periodic flush.
+#[cold]
+#[inline(never)]
+fn write_stats_file(path: &str) {
+    let stats = parse_cache_stats();
     let _ = std::fs::write(
         path,
         format!(
@@ -688,7 +721,9 @@ impl SyntaxParseCache {
                         .map(|(index, _)| index)
                 {
                     self.runs.swap_remove(oldest);
+                    self.rebuild_from_filter();
                 }
+                self.from_filter |= from_filter_bit(key.from_char);
                 self.runs.push(ParseRun::new(key));
                 self.runs.len() - 1
             }
@@ -767,6 +802,7 @@ impl SyntaxParseCache {
         }
         if run.is_empty() {
             self.runs.swap_remove(index);
+            self.rebuild_from_filter();
         }
     }
 }
@@ -864,6 +900,25 @@ fn finished(end: ScanEnd) -> ScanFinish {
     }
 }
 
+/// Whether a short query cannot reuse any run, using validated, absolute
+/// zero-based character positions. This leaves mutation notes pending: they
+/// can remove a run, but cannot create one for a missing FROM.
+#[inline(always)]
+pub(super) fn short_query_without_run(buf: &Buffer, from_char: usize, to_char: usize) -> bool {
+    to_char - from_char < min_span_chars() && !buf.syntax_parse_cache_has_run_from(from_char)
+}
+
+/// Account for a short miss after its plain scan, including the periodic
+/// diagnostics used to qualify cache engagement.
+#[inline]
+pub(super) fn note_short_query() {
+    count(|stats| {
+        stats.queries += 1;
+        stats.short += 1;
+    });
+    maybe_write_stats_file();
+}
+
 /// `parse-partial-sexp` of `buf` through the cache: the finished state and
 /// the stop position. The caller has validated FROM and TO and found no
 /// `syntax-propertize` to run.
@@ -906,13 +961,9 @@ pub(super) fn parse_partial_sexp_cached(
     // building a full key or draining invalidation just to discover a miss.
     // Keep the normal lookup for matching FROM: a longer recorded scan can
     // still answer a short query by resuming or returning an exact result.
-    if to_char - from_char < min_span_chars() && !buf.syntax_parse_cache_has_run_from(from_char) {
-        count(|stats| {
-            stats.queries += 1;
-            stats.short += 1;
-        });
+    if short_query_without_run(buf, from_char, to_char) {
         let finish = plain(start);
-        maybe_write_stats_file();
+        note_short_query();
         return (finish.state, finish.stop);
     }
     count(|stats| stats.queries += 1);

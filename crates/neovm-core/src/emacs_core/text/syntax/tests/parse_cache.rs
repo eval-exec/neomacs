@@ -454,6 +454,7 @@ fn short_queries_keep_long_run_resumes_and_exact_answers() {
     reset_parse_cache_stats();
     check(&mut eval, short, "fresh short scan");
     let stats = parse_cache_stats();
+    assert_eq!(stats.queries, 1, "short miss counted once");
     assert_eq!(stats.short, 1);
     assert_eq!((stats.recorded, stats.resumes, stats.exact), (0, 0, 0));
 
@@ -464,9 +465,86 @@ fn short_queries_keep_long_run_resumes_and_exact_answers() {
     let verified = answer(&mut eval, short, Value::NIL, ParseCacheMode::Verify);
     assert_eq!(verified, plain);
     let stats = parse_cache_stats();
+    assert_eq!(stats.queries, 4, "each cache-enabled query counted once");
     assert_eq!(stats.exact, 1);
     assert_eq!(stats.verified, 1);
     assert_eq!(stats.mismatches, 0);
+    GEOMETRY_OVERRIDE.with(|cell| cell.set(None));
+}
+
+/// Colliding membership bits must survive removal of another run in the bucket.
+#[test]
+fn from_membership_survives_collisions_eviction_and_invalidation() {
+    GEOMETRY_OVERRIDE.with(|cell| cell.set(Some((16, 128))));
+    let mut eval = crate::emacs_core::eval::Context::new();
+    install_table(&mut eval, 1);
+    eval.eval_str("(insert (apply #'concat (make-list 1600 \"(a)\\n\")))")
+        .expect("text");
+    let colliding = (1..1024)
+        .find(|from| from_filter_bit(*from) == from_filter_bit(0))
+        .expect("a deliberate filter collision");
+    let query = |from| Query {
+        from: from + 1,
+        to: from + 301,
+        target_depth: None,
+        stop_before: false,
+        commentstop: 0,
+        oldstate_from_parse: false,
+    };
+    check(&mut eval, query(0), "first bucket occupant");
+    check(&mut eval, query(colliding), "colliding bucket occupant");
+    let later: Vec<_> = (colliding + 700..)
+        .filter(|from| from_filter_bit(*from) != from_filter_bit(0))
+        .take(MAX_RUNS - 1)
+        .collect();
+    for &from in &later {
+        check(&mut eval, query(from), "evict the first colliding run");
+    }
+    let probes: Vec<_> = [0, colliding].into_iter().chain(later).collect();
+    let inspect = |eval: &crate::emacs_core::eval::Context| {
+        eval.buffers
+            .current_buffer()
+            .expect("buffer")
+            .with_syntax_parse_cache(|cache, _| {
+                for &from in &probes {
+                    assert_eq!(
+                        cache.has_run_from(from),
+                        cache.runs.iter().any(|run| run.key.from_char == from),
+                        "membership at {from}"
+                    );
+                }
+                assert!(!cache.has_run_from(0), "oldest run evicted");
+                assert!(cache.has_run_from(colliding), "collision survivor kept");
+            });
+    };
+    inspect(&eval);
+    eval.eval_str(&format!("(goto-char {}) (insert \"!\")", colliding + 501))
+        .expect("partial invalidation after the surviving run");
+    inspect(&eval);
+    eval.buffers
+        .current_buffer()
+        .expect("buffer")
+        .with_syntax_parse_cache(|cache, _| {
+            let from = colliding + 400;
+            let mut key = cache.runs[0].key.clone();
+            key.from_char = from;
+            cache.store(key, Record::new(from, from, from), None);
+            assert!(!cache.has_run_from(from), "empty recording not retained");
+            assert!(
+                cache.has_run_from(colliding),
+                "empty removal preserves others"
+            );
+        });
+    eval.eval_str("(erase-buffer)").expect("full invalidation");
+    eval.buffers
+        .current_buffer()
+        .expect("buffer")
+        .with_syntax_parse_cache(|cache, _| {
+            for from in probes {
+                assert!(!cache.has_run_from(from), "all runs invalidated");
+            }
+        });
+    assert!(!SyntaxParseCache::default().has_run_from(colliding));
     GEOMETRY_OVERRIDE.with(|cell| cell.set(None));
 }
 

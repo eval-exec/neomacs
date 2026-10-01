@@ -7125,8 +7125,18 @@ pub(crate) fn builtin_parse_partial_sexp_6(
     let props = SyntaxProperties::for_scan(honor, &eval.obarray, &eval.buffers);
     let escape_policy = CommentEndEscapePolicy::for_context(eval);
     let cache_mode = parse_cache::parse_cache_mode();
-    let (state, stop_pos) = if cache_mode == parse_cache::ParseCacheMode::Off {
-        parse_state_from_range_with_options(
+    // Short misses use the same plain entry point as cache-off queries. Decide
+    // before entering the general cache machinery, whose recording and
+    // verification state is unnecessary when no run can share FROM. Bounds
+    // were validated above, so these are absolute character positions.
+    let short_miss = cache_mode != parse_cache::ParseCacheMode::Off
+        && parse_cache::short_query_without_run(
+            buf,
+            LispCharPos1::new(from).to_char_pos().get(),
+            LispCharPos1::new(to).to_char_pos().get(),
+        );
+    let (state, stop_pos) = if cache_mode == parse_cache::ParseCacheMode::Off || short_miss {
+        let answer = parse_state_from_range_with_options(
             buf,
             &table,
             from,
@@ -7137,7 +7147,11 @@ pub(crate) fn builtin_parse_partial_sexp_6(
             commentstop,
             props,
             escape_policy,
-        )
+        );
+        if short_miss {
+            parse_cache::note_short_query();
+        }
+        answer
     } else {
         let (state, stop) = parse_cache::parse_partial_sexp_cached(
             buf,
