@@ -136,7 +136,7 @@ pub(crate) fn backward_scroll_plan(
             (index, shift_row_positions(row, 0, 0))
         })
         .collect();
-    let (row_snapshots, points) = shifted_snapshots(prev, &indices, 0);
+    let (row_snapshots, points, point_rows) = shifted_snapshots(prev, &indices, 0);
     Some(EditSyncPlan {
         stop_charpos: first_row.start_charpos,
         first_unchanged_index: first_index,
@@ -144,6 +144,7 @@ pub(crate) fn backward_scroll_plan(
         rows,
         row_snapshots,
         points,
+        point_rows,
     })
 }
 
@@ -188,6 +189,7 @@ pub struct EditSyncPlan {
     pub(crate) row_snapshots: Vec<DisplayRowSnapshot>,
     /// Their display points (old `row`/`y`, shifted positions).
     pub(crate) points: Vec<DisplayPointSnapshot>,
+    pub(crate) point_rows: Option<neovm_core::window::DisplayPointRows>,
 }
 
 /// What the row walker checks at every row boundary. Installed on the output
@@ -257,6 +259,7 @@ pub(crate) struct EditSyncInstall {
     pub(crate) rows: Vec<(usize, MatrixRow)>,
     pub(crate) row_snapshots: Vec<DisplayRowSnapshot>,
     pub(crate) points: Vec<DisplayPointSnapshot>,
+    pub(crate) point_rows: Option<neovm_core::window::DisplayPointRows>,
     /// Vertical shift in pixels (GNU `dy`); 0 when the rows kept their place.
     pub(crate) dy: f32,
 }
@@ -323,10 +326,27 @@ impl EditSyncPlan {
                 Some(point)
             })
             .collect();
+        let point_rows = self
+            .point_rows
+            .map(|points| neovm_core::window::DisplayPointRows {
+                rows: points
+                    .rows
+                    .into_iter()
+                    .filter_map(|row| {
+                        let new_row = *kept.get(&row.row())?;
+                        Some(row.replaced_placement(
+                            new_row,
+                            row.y() + if shift_y { dy_px } else { 0 },
+                            0,
+                        ))
+                    })
+                    .collect(),
+            });
         EditSyncInstall {
             rows,
             row_snapshots,
             points,
+            point_rows,
             dy: if shift_y { dy } else { 0.0 },
         }
     }
@@ -401,7 +421,11 @@ pub(crate) fn shifted_snapshots(
     prev: &RetainedWindowMatrix,
     indices: &rustc_hash::FxHashSet<i64>,
     delta: i64,
-) -> (Vec<DisplayRowSnapshot>, Vec<DisplayPointSnapshot>) {
+) -> (
+    Vec<DisplayRowSnapshot>,
+    Vec<DisplayPointSnapshot>,
+    Option<neovm_core::window::DisplayPointRows>,
+) {
     let shift = |p: LispCharPos1| {
         LispCharPos1::from_one_based_usize((p.to_one_based_usize() as i64 + delta) as usize)
     };
@@ -428,7 +452,17 @@ pub(crate) fn shifted_snapshots(
             point
         })
         .collect();
-    (rows, points)
+    let point_rows = prev.display_snapshot.point_rows.as_ref().map(|points| {
+        neovm_core::window::DisplayPointRows {
+            rows: points
+                .rows
+                .iter()
+                .filter(|row| indices.contains(&row.row()))
+                .map(|row| row.replaced_placement(row.row(), row.y(), delta))
+                .collect(),
+        }
+    });
+    (rows, points, point_rows)
 }
 
 /// Whether the body row `row` carries a box face anywhere: only then can its
@@ -521,7 +555,7 @@ pub(crate) fn plan(
             (index, shift_row_positions(row, dirty_start, delta))
         })
         .collect();
-    let (row_snapshots, points) = shifted_snapshots(prev, &indices, delta);
+    let (row_snapshots, points, point_rows) = shifted_snapshots(prev, &indices, delta);
     Some(EditSyncPlan {
         stop_charpos,
         first_unchanged_index: first_index,
@@ -529,6 +563,7 @@ pub(crate) fn plan(
         rows,
         row_snapshots,
         points,
+        point_rows,
     })
 }
 

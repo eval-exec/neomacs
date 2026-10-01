@@ -135,6 +135,7 @@ impl PreparedViewports {
                 row.row += dr;
                 row.y += dy;
             }
+            snapshot.materialize_points_mut();
             snapshot
                 .points
                 .retain(|point| point.row >= first_row.row && point.row <= last_row.row);

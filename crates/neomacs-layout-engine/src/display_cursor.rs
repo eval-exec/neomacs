@@ -1549,7 +1549,7 @@ impl<'a> VisualTextWindowCursorPublishContext<'a> {
                 continue;
             };
             let source = visual_cursor_source_from_point(
-                point,
+                &point,
                 spec.id as i64,
                 self.text_area_left,
                 self.window_top,

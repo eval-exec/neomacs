@@ -2,6 +2,9 @@ use super::*;
 use crate::buffer::{CharLen, EmacsByteLen};
 use neomacs_display_protocol::TransitionDirection;
 
+#[cfg(test)]
+mod point_rows_query_test;
+
 #[test]
 fn layout_variable_enum_covers_the_display_dirty_registry() {
     use crate::buffer::buffer::{DISPLAY_AFFECTING_BUFFER_SLOTS, DISPLAY_AFFECTING_GLOBAL_VARS};
@@ -99,6 +102,7 @@ fn prepared_presentation_publishes_one_atomic_window_redisplay_output() {
         col: 3,
     };
     let first_snapshot = WindowDisplaySnapshot {
+        point_rows: None,
         window_id,
         window_end_record: Some(first_end),
         logical_cursor: Some(first_cursor),
@@ -138,6 +142,7 @@ fn prepared_presentation_publishes_one_atomic_window_redisplay_output() {
         MatrixRow0::new(11),
     );
     let second_snapshot = WindowDisplaySnapshot {
+        point_rows: None,
         window_id,
         window_end_record: Some(second_end),
         rows: vec![DisplayRowSnapshot {
@@ -181,6 +186,7 @@ fn snapshot_window_geometry_keeps_pixel_spaces_and_cell_origin_distinct() {
     window.set_left_col(18);
     window.set_top_line(2);
     let snapshot = WindowDisplaySnapshot {
+        point_rows: None,
         window_id: WindowId(11),
         cell_origin: super::geometry::CellOrigin::new(18, 2),
         regions: PresentedWindowRegions {
@@ -263,6 +269,7 @@ fn presented_coordinate_queries_cover_the_full_mixed_font_row() {
     // partially scrolled, with only its extra descent/spacing visible.
     for vscroll in [0, 29] {
         let snapshot = WindowDisplaySnapshot {
+            point_rows: None,
             window_id: window,
             regions: PresentedWindowRegions {
                 outer: TransportRect::new(0.0, 0.0, 800.0, 600.0),
@@ -348,6 +355,7 @@ fn sealed_geometry_queries_reject_stale_presentations_and_use_explicit_regions()
         FrameId(7),
         presentation,
         [WindowDisplaySnapshot {
+            point_rows: None,
             window_id,
             regions: PresentedWindowRegions {
                 outer: TransportRect::new(144.0, 24.0, 800.0, 600.0),
@@ -404,6 +412,7 @@ fn sealed_geometry_queries_reject_stale_presentations_and_use_explicit_regions()
         FrameId(7),
         PresentationId::new(42),
         [WindowDisplaySnapshot {
+            point_rows: None,
             window_id,
             regions: PresentedWindowRegions {
                 outer: TransportRect::new(144.0, 24.0, 800.0, 600.0),
@@ -477,6 +486,7 @@ fn prepare_activate_replaces_geometry_and_presentation_together() {
         .prepare_and_activate_display_presentation_for_test(
             PresentationId::new(41),
             vec![WindowDisplaySnapshot {
+                point_rows: None,
                 window_id,
                 text_area_left_offset: 8,
                 ..WindowDisplaySnapshot::default()
@@ -531,6 +541,7 @@ fn prepared_display_presentation_does_not_replace_active_geometry() {
         .prepare_live_window_presentation(
             PresentationId::new(41),
             vec![WindowDisplaySnapshot {
+                point_rows: None,
                 window_id,
                 text_area_left_offset: 8,
                 ..WindowDisplaySnapshot::default()
@@ -565,6 +576,7 @@ fn prepared_display_presentation_does_not_replace_active_geometry() {
         .prepare_live_window_presentation(
             PresentationId::new(42),
             vec![WindowDisplaySnapshot {
+                point_rows: None,
                 window_id,
                 text_area_left_offset: 24,
                 ..WindowDisplaySnapshot::default()
@@ -604,6 +616,7 @@ fn geometry_only_snapshot_is_interactive_but_not_live_redisplay_evidence() {
         .prepare_live_window_presentation(
             PresentationId::new(41),
             vec![WindowDisplaySnapshot {
+                point_rows: None,
                 window_id,
                 text_area_left_offset: 8,
                 ..WindowDisplaySnapshot::default()
@@ -619,6 +632,7 @@ fn geometry_only_snapshot_is_interactive_but_not_live_redisplay_evidence() {
             PresentationId::new(42),
             vec![WindowPresentationSnapshot::geometry_only(
                 WindowDisplaySnapshot {
+                    point_rows: None,
                     window_id,
                     text_area_left_offset: 24,
                     ..WindowDisplaySnapshot::default()
@@ -649,6 +663,7 @@ fn geometry_only_snapshot_is_interactive_but_not_live_redisplay_evidence() {
         frame.prepare_display_presentation(
             PresentationId::new(42),
             vec![WindowPresentationSnapshot::live(WindowDisplaySnapshot {
+                point_rows: None,
                 window_id,
                 text_area_left_offset: 24,
                 ..WindowDisplaySnapshot::default()
@@ -680,6 +695,7 @@ fn preparing_accepted_presentation_commits_live_window_output() {
         .prepare_live_window_presentation(
             PresentationId::new(41),
             vec![WindowDisplaySnapshot {
+                point_rows: None,
                 window_id,
                 logical_cursor: Some(logical_cursor),
                 rows: vec![DisplayRowSnapshot {
@@ -734,6 +750,7 @@ fn discarded_snapshot_preserves_latest_completed_coordinate_queries() {
         .unwrap()
         .set_window_system(Some(Value::symbol("x")));
     let snapshot = |position| WindowDisplaySnapshot {
+        point_rows: None,
         window_id,
         regions_materialized: true,
         regions: PresentedWindowRegions {
@@ -1018,6 +1035,7 @@ fn popup_anchor_translates_with_side_window_without_changing_body_local_cursor_g
             .prepare_and_activate_display_presentation_for_test(
                 presentation,
                 vec![WindowDisplaySnapshot {
+                    point_rows: None,
                     window_id: window,
                     regions: PresentedWindowRegions {
                         outer: TransportRect::new(body_left, 50.0, 536.0, 500.0),
@@ -1117,6 +1135,7 @@ fn active_visual_anchors_are_semantic_and_presentation_qualified() {
         .prepare_live_window_presentation(
             presentation,
             vec![WindowDisplaySnapshot {
+                point_rows: None,
                 window_id: window,
                 regions: PresentedWindowRegions {
                     outer: TransportRect::new(240.0, 40.0, 560.0, 520.0),
@@ -1230,6 +1249,7 @@ fn duplicate_windows_reject_candidate_without_replacing_publication() {
         .prepare_and_activate_display_presentation_for_test(
             PresentationId::new(1),
             vec![WindowDisplaySnapshot {
+                point_rows: None,
                 window_id,
                 ..WindowDisplaySnapshot::default()
             }],
@@ -1240,10 +1260,12 @@ fn duplicate_windows_reject_candidate_without_replacing_publication() {
         PresentationId::new(2),
         vec![
             WindowDisplaySnapshot {
+                point_rows: None,
                 window_id,
                 ..WindowDisplaySnapshot::default()
             },
             WindowDisplaySnapshot {
+                point_rows: None,
                 window_id,
                 ..WindowDisplaySnapshot::default()
             },
@@ -1268,6 +1290,7 @@ fn presented_positions_require_body_local_row_facts() {
         FrameId(7),
         PresentationId::new(1),
         [WindowDisplaySnapshot {
+            point_rows: None,
             window_id,
             points: vec![DisplayPointSnapshot {
                 role: DisplayPointRole::Glyph,
@@ -1299,6 +1322,7 @@ fn legacy_unowned_snapshots_do_not_create_an_authoritative_geometry_view() {
     let frame = manager.get_mut(frame_id).expect("frame");
     let window_id = frame.selected_window;
     frame.replace_redisplay_cache_for_test(vec![WindowDisplaySnapshot {
+        point_rows: None,
         window_id,
         ..WindowDisplaySnapshot::default()
     }]);
@@ -1759,6 +1783,7 @@ fn frame_manager_gc_traces_prepared_and_active_chrome_strings() {
         .prepare_live_window_presentation(
             geometry::PresentationId::new(9),
             vec![WindowDisplaySnapshot {
+                point_rows: None,
                 window_id,
                 chrome_strings: vec![PresentedWindowChromeString::new(
                     PresentedWindowChromeArea::TabLine,
@@ -2570,6 +2595,7 @@ fn frame_resize_pixelwise_updates_window_tree_and_invalidates_display_state() {
     frame.char_width = 10.0;
     frame.char_height = 20.0;
     frame.commit_redisplay_cache_for_test(vec![WindowDisplaySnapshot {
+        point_rows: None,
         window_id: w1,
         phys_cursor: Some(WindowCursorSnapshot {
             kind: WindowCursorKind::Bar,
@@ -2838,6 +2864,7 @@ fn completed_redisplay_syncs_live_window_cursor_state() {
 
     let frame = mgr.get_mut(fid).unwrap();
     frame.commit_redisplay_cache_for_test(vec![WindowDisplaySnapshot {
+        point_rows: None,
         window_id: wid,
         phys_cursor: Some(cursor.clone()),
         rows: vec![DisplayRowSnapshot {
@@ -2879,6 +2906,7 @@ fn completed_redisplay_replaces_old_output_cursor_progress() {
     let frame = mgr.get_mut(fid).unwrap();
 
     frame.commit_redisplay_cache_for_test(vec![WindowDisplaySnapshot {
+        point_rows: None,
         window_id: wid,
         rows: vec![DisplayRowSnapshot {
             truncated_end_buffer_pos: None,
@@ -2898,6 +2926,7 @@ fn completed_redisplay_replaces_old_output_cursor_progress() {
     }]);
 
     frame.commit_redisplay_cache_for_test(vec![WindowDisplaySnapshot {
+        point_rows: None,
         window_id: wid,
         rows: vec![DisplayRowSnapshot {
             truncated_end_buffer_pos: None,
@@ -2954,6 +2983,7 @@ fn cache_only_fixture_preserves_live_window_cursor_state() {
         col: 8,
     };
     let snapshot = WindowDisplaySnapshot {
+        point_rows: None,
         window_id: wid,
         phys_cursor: Some(cursor.clone()),
         rows: vec![DisplayRowSnapshot {
@@ -2977,6 +3007,7 @@ fn cache_only_fixture_preserves_live_window_cursor_state() {
     frame.begin_display_output_pass();
     frame.replay_window_output_snapshot(&snapshot);
     frame.replace_redisplay_cache_for_test(vec![WindowDisplaySnapshot {
+        point_rows: None,
         window_id: wid,
         phys_cursor: None,
         ..WindowDisplaySnapshot::default()
@@ -3006,6 +3037,7 @@ fn no_op_set_window_vscroll_preserves_display_snapshot() {
         let frame = mgr.get_mut(fid).unwrap();
         frame.set_window_system(Some(Value::symbol("x")));
         frame.replace_redisplay_cache_for_test(vec![WindowDisplaySnapshot {
+            point_rows: None,
             window_id: wid,
             points: vec![DisplayPointSnapshot {
                 role: DisplayPointRole::Glyph,
@@ -3063,6 +3095,7 @@ fn completed_redisplay_preserves_logical_cursor_without_physical_cursor() {
 
     let frame = mgr.get_mut(fid).unwrap();
     frame.commit_redisplay_cache_for_test(vec![WindowDisplaySnapshot {
+        point_rows: None,
         window_id: wid,
         logical_cursor: Some(logical_cursor),
         rows: vec![DisplayRowSnapshot {
@@ -3125,6 +3158,7 @@ fn completed_redisplay_commits_last_cursor_visibility_state() {
     display.cursor_off_p = true;
 
     frame.commit_redisplay_cache_for_test(vec![WindowDisplaySnapshot {
+        point_rows: None,
         window_id: wid,
         phys_cursor: Some(cursor),
         ..WindowDisplaySnapshot::default()
@@ -3151,6 +3185,7 @@ fn clear_physical_cursor_state_preserves_committed_cursor_history() {
         col: 5,
     };
     let snapshot = WindowDisplaySnapshot {
+        point_rows: None,
         window_id: WindowId(1),
         phys_cursor: Some(cursor.clone()),
         rows: vec![DisplayRowSnapshot {
@@ -3318,6 +3353,7 @@ fn output_pass_commits_output_cursor_from_row_geometry() {
         col: 7,
     };
     let snapshot = WindowDisplaySnapshot {
+        point_rows: None,
         window_id: WindowId(1),
         phys_cursor: Some(cursor.clone()),
         rows: vec![DisplayRowSnapshot {
@@ -3466,6 +3502,7 @@ fn explicit_window_output_finalization_preserves_live_logical_and_physical_curso
         col: 10,
     };
     let snapshot = WindowDisplaySnapshot {
+        point_rows: None,
         window_id: wid,
         logical_cursor: Some(WindowCursorPos::from_snapshot(&snapshot_phys)),
         phys_cursor: Some(snapshot_phys),
@@ -3533,6 +3570,7 @@ fn finish_window_output_update_preserves_live_cursor_state_with_snapshot_output_
         col: 2,
     };
     let snapshot = WindowDisplaySnapshot {
+        point_rows: None,
         window_id: wid,
         rows: vec![DisplayRowSnapshot {
             truncated_end_buffer_pos: None,
@@ -3590,6 +3628,7 @@ fn output_pass_keeps_cursor_target_and_output_progress_separate() {
         col: 2,
     };
     let snapshot = WindowDisplaySnapshot {
+        point_rows: None,
         window_id: WindowId(1),
         phys_cursor: Some(cursor.clone()),
         rows: vec![
@@ -4069,6 +4108,7 @@ fn a_prepared_presentation_shares_its_window_snapshots() {
     let frame = manager.get_mut(frame_id).expect("frame");
     let window_id = frame.selected_window;
     let publication = WindowPresentationSnapshot::live(WindowDisplaySnapshot {
+        point_rows: None,
         window_id,
         text_area_left_offset: 8,
         ..WindowDisplaySnapshot::default()

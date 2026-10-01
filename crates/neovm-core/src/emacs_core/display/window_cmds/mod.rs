@@ -485,9 +485,8 @@ fn leftmost_glyph_width(
     char_width: i64,
 ) -> i64 {
     snapshot
-        .points
-        .iter()
-        .filter(|point| point.row == row.row && point.width > 0)
+        .iter_row_points(row.row)
+        .filter(|point| point.width > 0)
         .min_by_key(|point| point.x)
         .map(|point| point.width)
         .unwrap_or(char_width)

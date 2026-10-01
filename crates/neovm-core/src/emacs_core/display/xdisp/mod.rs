@@ -7386,7 +7386,7 @@ fn resolve_exact_visible_metrics_with_layout(
         };
         return Ok(geometry
             .point_for_buffer_pos(pos_lisp)
-            .map(|point| (wid, exact_metrics_from_redisplay_point(&geometry, point))));
+            .map(|point| (wid, exact_metrics_from_redisplay_point(&geometry, &point))));
     }
     if retained_rows_valid {
         return Ok(None);
@@ -7454,7 +7454,7 @@ fn resolve_exact_visible_metrics(
         };
         return Ok(snapshot
             .point_for_buffer_pos(pos_lisp)
-            .map(|point| (wid, exact_metrics_from_redisplay_point(snapshot, point))));
+            .map(|point| (wid, exact_metrics_from_redisplay_point(snapshot, &point))));
     }
     let publication = match source {
         PositionGeometrySource::Redisplay => frame.completed_presentation_geometry(),
@@ -7908,7 +7908,7 @@ fn compute_live_window_geometry(
     let buffer_id = frame.find_window(wid).and_then(|window| window.buffer_id());
     if buffer_id
         .and_then(|buffer_id| eval.fresh_window_display_snapshot(fid, wid, buffer_id))
-        .is_some_and(|snapshot| !snapshot.points.is_empty())
+        .is_some_and(|snapshot| snapshot.has_points())
     {
         return Ok(None);
     }

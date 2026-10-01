@@ -254,8 +254,7 @@ impl PresentationWindow {
             .map(|row| (row.row, row.height))
             .collect();
         let positions = snapshot
-            .points
-            .iter()
+            .iter_points()
             .map(|point| {
                 let body_row = body_rows
                     .get(&point.row)

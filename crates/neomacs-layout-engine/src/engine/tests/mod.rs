@@ -2537,7 +2537,10 @@ fn accepted_presentation_publishes_identical_evaluator_and_renderer_window_regio
         .find(|snapshot| snapshot.display_snapshot().window_id == selected)
         .expect("selected display snapshot")
         .display_snapshot_mut();
-    let poisoned_point = poisoned.points.first_mut().expect("visible point");
+    let poisoned_point = poisoned
+        .materialize_points_mut()
+        .first_mut()
+        .expect("visible point");
     poisoned_point.y = 777;
     poisoned_point.row = 999;
     let poisoned_x = poisoned_point.x;
@@ -2610,7 +2613,7 @@ fn accepted_presentation_publishes_identical_evaluator_and_renderer_window_regio
         .find(|snapshot| snapshot.display_snapshot().window_id == selected)
         .expect("selected zero-area snapshot")
         .display_snapshot_mut();
-    zero.points.clear();
+    zero.set_points(Vec::new());
     zero.regions.text_body.width = 0.0;
     let zero_index = crate::presentation::spatial::PresentationSpatialPlan::compile(
         renderer,
@@ -3111,7 +3114,7 @@ fn window_layout_trace(
             .filter(|row| row.enabled)
             .map(|row| RowTrace::from_row(row, &state.faces))
             .collect(),
-        points: display_snapshot.points.clone(),
+        points: display_snapshot.iter_points().collect(),
         output_rows: display_snapshot.rows.clone(),
         phys_cursor: display_snapshot.phys_cursor.clone(),
         visible_span: display_snapshot.visible_buffer_span(),
@@ -4905,6 +4908,7 @@ fn mouse_position_query_resolves_blank_buffer_row() {
         "the blank row must retain its semantic buffer anchor"
     );
     let snapshot = WindowDisplaySnapshot {
+        point_rows: None,
         points: trace.points,
         rows: trace.output_rows,
         ..WindowDisplaySnapshot::default()
@@ -9825,7 +9829,7 @@ fn layout_frame_rust_tracks_multibyte_sample_positions() {
     let snapshot = frame
         .redisplay_snapshot(selected_window)
         .expect("display snapshot");
-    let all_points = snapshot.points.clone();
+    let all_points = snapshot.iter_points().collect::<Vec<_>>();
     let a = snapshot
         .point_for_buffer_pos(LispCharPos1::from_one_based_usize(1))
         .expect("a");
@@ -13024,7 +13028,7 @@ fn layout_frame_rust_publishes_face_scaled_advances_for_inline_plist_faces() {
     let snapshot = frame
         .redisplay_snapshot(selected_window)
         .expect("display snapshot");
-    let all_points = snapshot.points.clone();
+    let all_points = snapshot.iter_points().collect::<Vec<_>>();
     let a = snapshot
         .point_for_buffer_pos(LispCharPos1::from_one_based_usize(1))
         .expect("a");
@@ -13068,20 +13072,20 @@ fn layout_frame_rust_publishes_face_scaled_advances_for_inline_plist_faces() {
         false,
         face_font_size,
     );
-    assert_point_width_matches_advance(a, expected_a, "inline face a", &all_points);
-    assert_point_width_matches_advance(hao1, expected_hao, "inline face first 好", &all_points);
-    assert_point_width_matches_advance(hao2, expected_hao, "inline face second 好", &all_points);
-    assert_point_width_matches_advance(b, expected_b, "inline face b", &all_points);
-    assert_point_delta_matches_advance(a, hao1, expected_a, "inline face first 好", &all_points);
+    assert_point_width_matches_advance(&a, expected_a, "inline face a", &all_points);
+    assert_point_width_matches_advance(&hao1, expected_hao, "inline face first 好", &all_points);
+    assert_point_width_matches_advance(&hao2, expected_hao, "inline face second 好", &all_points);
+    assert_point_width_matches_advance(&b, expected_b, "inline face b", &all_points);
+    assert_point_delta_matches_advance(&a, &hao1, expected_a, "inline face first 好", &all_points);
     assert_point_delta_matches_advance(
-        hao1,
-        hao2,
+        &hao1,
+        &hao2,
         expected_hao,
         "inline face second 好",
         &all_points,
     );
-    assert_point_delta_matches_advance(hao2, b, expected_hao, "inline face b", &all_points);
-    assert_point_delta_matches_advance(b, space, expected_b, "inline face space", &all_points);
+    assert_point_delta_matches_advance(&hao2, &b, expected_hao, "inline face b", &all_points);
+    assert_point_delta_matches_advance(&b, &space, expected_b, "inline face space", &all_points);
 }
 
 #[test]
@@ -18322,7 +18326,7 @@ fn layout_frame_rust_display_space_width_uses_canonical_column_width() {
         (slot_width - expected_width).abs() <= 1,
         "display space width should follow canonical frame column width; got slot {slot_width}, expected {expected_width}, frame char width {}, points={:?}",
         frame.char_width,
-        snapshot.points
+        snapshot.iter_points().collect::<Vec<_>>()
     );
 }
 
@@ -18474,7 +18478,7 @@ fn layout_frame_rust_keeps_mixed_width_advances_correct_after_mid_line_face_chan
     let snapshot = frame
         .redisplay_snapshot(selected_window)
         .expect("display snapshot");
-    let all_points = snapshot.points.clone();
+    let all_points = snapshot.iter_points().collect::<Vec<_>>();
     let a = snapshot
         .point_for_buffer_pos(LispCharPos1::from_one_based_usize(sample_pos))
         .expect("a");
@@ -18515,13 +18519,13 @@ fn layout_frame_rust_keeps_mixed_width_advances_correct_after_mid_line_face_chan
         face_font_size,
     );
 
-    assert_point_width_matches_advance(a, expected_a, "a", &all_points);
-    assert_point_width_matches_advance(hao1, expected_hao, "first 好", &all_points);
-    assert_point_width_matches_advance(hao2, expected_hao, "second 好", &all_points);
-    assert_point_width_matches_advance(b, expected_b, "b", &all_points);
-    assert_point_delta_matches_advance(a, hao1, expected_a, "first 好", &all_points);
-    assert_point_delta_matches_advance(hao1, hao2, expected_hao, "second 好", &all_points);
-    assert_point_delta_matches_advance(hao2, b, expected_hao, "b", &all_points);
+    assert_point_width_matches_advance(&a, expected_a, "a", &all_points);
+    assert_point_width_matches_advance(&hao1, expected_hao, "first 好", &all_points);
+    assert_point_width_matches_advance(&hao2, expected_hao, "second 好", &all_points);
+    assert_point_width_matches_advance(&b, expected_b, "b", &all_points);
+    assert_point_delta_matches_advance(&a, &hao1, expected_a, "first 好", &all_points);
+    assert_point_delta_matches_advance(&hao1, &hao2, expected_hao, "second 好", &all_points);
+    assert_point_delta_matches_advance(&hao2, &b, expected_hao, "b", &all_points);
     let space = snapshot
         .point_for_buffer_pos(LispCharPos1::from_one_based_usize(sample_pos + 4))
         .expect("space");
@@ -18600,7 +18604,7 @@ fn layout_frame_rust_keeps_face_positions_after_truncated_multibyte_line() {
     let snapshot = frame
         .redisplay_snapshot(selected_window)
         .expect("display snapshot");
-    let all_points = snapshot.points.clone();
+    let all_points = snapshot.iter_points().collect::<Vec<_>>();
     let a = snapshot
         .point_for_buffer_pos(LispCharPos1::from_one_based_usize(sample_pos))
         .expect("a");
@@ -18641,13 +18645,13 @@ fn layout_frame_rust_keeps_face_positions_after_truncated_multibyte_line() {
         face_font_size,
     );
 
-    assert_point_width_matches_advance(a, expected_a, "a", &all_points);
-    assert_point_width_matches_advance(hao1, expected_hao, "first 好", &all_points);
-    assert_point_width_matches_advance(hao2, expected_hao, "second 好", &all_points);
-    assert_point_width_matches_advance(b, expected_b, "b", &all_points);
-    assert_point_delta_matches_advance(a, hao1, expected_a, "first 好", &all_points);
-    assert_point_delta_matches_advance(hao1, hao2, expected_hao, "second 好", &all_points);
-    assert_point_delta_matches_advance(hao2, b, expected_hao, "b", &all_points);
+    assert_point_width_matches_advance(&a, expected_a, "a", &all_points);
+    assert_point_width_matches_advance(&hao1, expected_hao, "first 好", &all_points);
+    assert_point_width_matches_advance(&hao2, expected_hao, "second 好", &all_points);
+    assert_point_width_matches_advance(&b, expected_b, "b", &all_points);
+    assert_point_delta_matches_advance(&a, &hao1, expected_a, "first 好", &all_points);
+    assert_point_delta_matches_advance(&hao1, &hao2, expected_hao, "second 好", &all_points);
+    assert_point_delta_matches_advance(&hao2, &b, expected_hao, "b", &all_points);
 }
 
 #[test]
@@ -18780,7 +18784,7 @@ fn layout_frame_rust_keeps_mixed_width_positions_correct_after_sequential_window
         let snapshot = frame
             .redisplay_snapshot(selected_window)
             .expect("display snapshot");
-        let all_points = snapshot.points.clone();
+        let all_points = snapshot.iter_points().collect::<Vec<_>>();
         let buffer = eval.buffer_manager().get(buf_id).expect("buffer");
         let sample_chars = [
             (target.line_beg, char_at_lisp_pos(buffer, target.line_beg)),
@@ -18843,22 +18847,33 @@ fn layout_frame_rust_keeps_mixed_width_positions_correct_after_sequential_window
             face_font_size,
         );
 
-        assert_point_width_matches_advance(a, expected_a, "sequential a", &all_points);
-        assert_point_width_matches_advance(hao1, expected_hao, "sequential first 好", &all_points);
-        assert_point_width_matches_advance(hao2, expected_hao, "sequential second 好", &all_points);
-        assert_point_width_matches_advance(b, expected_b, "sequential b", &all_points);
-        assert_point_delta_matches_advance(a, hao1, expected_a, "sequential first 好", &all_points);
-        assert_point_delta_matches_advance(
-            hao1,
-            hao2,
+        assert_point_width_matches_advance(&a, expected_a, "sequential a", &all_points);
+        assert_point_width_matches_advance(&hao1, expected_hao, "sequential first 好", &all_points);
+        assert_point_width_matches_advance(
+            &hao2,
             expected_hao,
             "sequential second 好",
             &all_points,
         );
-        assert_point_delta_matches_advance(hao2, b, expected_hao, "sequential b", &all_points);
+        assert_point_width_matches_advance(&b, expected_b, "sequential b", &all_points);
         assert_point_delta_matches_advance(
-            b,
-            after_b,
+            &a,
+            &hao1,
+            expected_a,
+            "sequential first 好",
+            &all_points,
+        );
+        assert_point_delta_matches_advance(
+            &hao1,
+            &hao2,
+            expected_hao,
+            "sequential second 好",
+            &all_points,
+        );
+        assert_point_delta_matches_advance(&hao2, &b, expected_hao, "sequential b", &all_points);
+        assert_point_delta_matches_advance(
+            &b,
+            &after_b,
             expected_b,
             "sequential after b",
             &all_points,
@@ -19013,7 +19028,7 @@ fn layout_frame_rust_keeps_mixed_width_positions_correct_across_family_switches(
         let snapshot = frame
             .redisplay_snapshot(selected_window)
             .expect("display snapshot");
-        let all_points = snapshot.points.clone();
+        let all_points = snapshot.iter_points().collect::<Vec<_>>();
         let visible_span = snapshot.visible_buffer_span();
         let buffer = eval.buffer_manager().get(buf_id).expect("buffer");
         let sample_chars = [
@@ -19096,38 +19111,38 @@ fn layout_frame_rust_keeps_mixed_width_positions_correct_across_family_switches(
             face_font_size,
         );
 
-        assert_point_width_matches_advance(a, expected_a, "family-switch a", &all_points);
+        assert_point_width_matches_advance(&a, expected_a, "family-switch a", &all_points);
         assert_point_width_matches_advance(
-            hao1,
+            &hao1,
             expected_hao,
             "family-switch first 好",
             &all_points,
         );
         assert_point_width_matches_advance(
-            hao2,
+            &hao2,
             expected_hao,
             "family-switch second 好",
             &all_points,
         );
-        assert_point_width_matches_advance(b, expected_b, "family-switch b", &all_points);
+        assert_point_width_matches_advance(&b, expected_b, "family-switch b", &all_points);
         assert_point_delta_matches_advance(
-            a,
-            hao1,
+            &a,
+            &hao1,
             expected_a,
             "family-switch first 好",
             &all_points,
         );
         assert_point_delta_matches_advance(
-            hao1,
-            hao2,
+            &hao1,
+            &hao2,
             expected_hao,
             "family-switch second 好",
             &all_points,
         );
-        assert_point_delta_matches_advance(hao2, b, expected_hao, "family-switch b", &all_points);
+        assert_point_delta_matches_advance(&hao2, &b, expected_hao, "family-switch b", &all_points);
         assert_point_delta_matches_advance(
-            b,
-            after_b,
+            &b,
+            &after_b,
             expected_b,
             "family-switch after b",
             &all_points,
@@ -19193,14 +19208,14 @@ fn layout_frame_rust_word_wrap_snapshot_stays_sorted_after_rewind() {
     let snapshot = frame
         .redisplay_snapshot(selected_window)
         .expect("display snapshot");
+    let all_points = snapshot.iter_points().collect::<Vec<_>>();
     assert!(
-        snapshot.points.iter().any(|point| point.row > 0),
+        all_points.iter().any(|point| point.row > 0),
         "expected word-wrap to create multiple rows, got points={:?}",
-        snapshot.points
+        all_points
     );
     let buffer = eval.buffer_manager().get(buf_id).expect("buffer");
-    let point_chars = snapshot
-        .points
+    let point_chars = all_points
         .iter()
         .map(|point| {
             (
@@ -19209,11 +19224,11 @@ fn layout_frame_rust_word_wrap_snapshot_stays_sorted_after_rewind() {
             )
         })
         .collect::<Vec<_>>();
-    for window in snapshot.points.windows(2) {
+    for window in all_points.windows(2) {
         assert!(
             window[0].buffer_pos < window[1].buffer_pos,
             "expected snapshot points to stay sorted after wrap rewind, got {:?}; chars={:?}",
-            snapshot.points,
+            all_points,
             point_chars
         );
     }
@@ -19286,7 +19301,7 @@ fn layout_frame_rust_reads_far_enough_for_last_visible_truncated_line() {
     assert!(
         target.is_some(),
         "expected last visible truncated line to remain readable by layout, target_pos={target_pos}, points={:?}",
-        snapshot.points
+        snapshot.iter_points().collect::<Vec<_>>()
     );
 }
 
@@ -19355,7 +19370,7 @@ fn layout_frame_rust_retries_window_when_point_starts_below_visible_span() {
             .point_for_buffer_pos(LispCharPos1::from_one_based_usize(target_pos))
             .is_some(),
         "expected retried layout to publish geometry for point {target_pos}, points={:?}",
-        snapshot.points
+        snapshot.iter_points().collect::<Vec<_>>()
     );
     match window {
         neovm_core::window::Window::Leaf { window_start, .. } => {
@@ -19920,10 +19935,10 @@ fn layout_frame_rust_converges_visibility_for_wrapped_rows_in_one_redisplay() {
     let snapshot = frame
         .redisplay_snapshot(selected_window)
         .expect("display snapshot");
+    let all_points = snapshot.iter_points().collect::<Vec<_>>();
     let window = frame.find_window(selected_window).expect("selected window");
     let buffer = eval.buffer_manager().get(buf_id).expect("buffer");
-    let point_chars = snapshot
-        .points
+    let point_chars = all_points
         .iter()
         .map(|point| {
             (
@@ -19938,7 +19953,7 @@ fn layout_frame_rust_converges_visibility_for_wrapped_rows_in_one_redisplay() {
             .point_for_buffer_pos(LispCharPos1::from_one_based_usize(target_pos))
             .is_some(),
         "expected wrapped-line redisplay to converge on point {target_pos}, points={:?}, rows={:?}, chars={:?}",
-        snapshot.points,
+        all_points,
         snapshot.rows,
         point_chars
     );
@@ -20006,12 +20021,13 @@ fn layout_frame_rust_converges_visibility_for_point_line_tail_clipping() {
     let snapshot = frame
         .redisplay_snapshot(selected_window)
         .expect("display snapshot");
+    let all_points = snapshot.iter_points().collect::<Vec<_>>();
     assert!(
         snapshot
             .point_for_buffer_pos(LispCharPos1::from_one_based_usize(later_pos))
             .is_some(),
         "expected redisplay to publish later positions from the point line after retry, points={:?}, rows={:?}",
-        snapshot.points,
+        all_points,
         snapshot.rows
     );
 }
@@ -20069,7 +20085,7 @@ fn layout_frame_rust_keeps_visible_eob_cursor_on_short_trailing_newline_buffer()
             .point_for_buffer_pos(LispCharPos1::from_one_based_usize(1))
             .is_some(),
         "expected first line to remain visible when EOB cursor is already onscreen, points={:?}, rows={:?}",
-        snapshot.points,
+        snapshot.iter_points().collect::<Vec<_>>(),
         snapshot.rows
     );
     match window {
@@ -20191,7 +20207,7 @@ fn layout_frame_rust_keeps_visible_eob_cursor_across_redisplay_with_scroll_step(
     assert!(
         snapshot.point_for_buffer_pos(LispCharPos1::ONE).is_some(),
         "repeated redisplay should keep the prompt/input row visible, points={:?}, rows={:?}",
-        snapshot.points,
+        snapshot.iter_points().collect::<Vec<_>>(),
         snapshot.rows
     );
     match window {
@@ -20261,7 +20277,7 @@ fn layout_frame_rust_keeps_default_scratch_message_at_top_when_eob_is_visible() 
             .point_for_buffer_pos(LispCharPos1::from_one_based_usize(1))
             .is_some(),
         "expected the first scratch row to remain visible when EOB fits onscreen, points={:?}, rows={:?}",
-        snapshot.points,
+        snapshot.iter_points().collect::<Vec<_>>(),
         snapshot.rows
     );
     match window {
@@ -35582,6 +35598,7 @@ fn every_row_carries_a_slot_for_its_own_line_terminator() {
     // `tail.is_at_accessible_end()`).
     let trace = layout_trace_for_plain_text("abcdef\nghijkl\n");
     let snapshot = WindowDisplaySnapshot {
+        point_rows: None,
         points: trace.points,
         rows: trace.output_rows,
         ..WindowDisplaySnapshot::default()
@@ -35589,8 +35606,7 @@ fn every_row_carries_a_slot_for_its_own_line_terminator() {
 
     let row_report = |row: i64| -> String {
         let points: Vec<(i64, i64)> = snapshot
-            .points
-            .iter()
+            .iter_points()
             .filter(|point| point.row == row)
             .map(|point| (point.buffer_pos.as_i64(), point.col))
             .collect();
@@ -35651,6 +35667,7 @@ fn an_empty_line_row_is_anchored_on_its_own_terminator() {
     // and `posn-at-point` at 5 answers `(5 (0 . 1) (0 . 1))`.
     let trace = layout_trace_for_plain_text("abc\n\ndef\n");
     let snapshot = WindowDisplaySnapshot {
+        point_rows: None,
         points: trace.points,
         rows: trace.output_rows,
         ..WindowDisplaySnapshot::default()
@@ -35712,6 +35729,7 @@ fn a_coordinate_below_every_row_answers_the_end_of_the_buffer() {
     // click land on one of them.
     let trace = layout_trace_for_plain_text("abcdef\nghijkl\n");
     let snapshot = WindowDisplaySnapshot {
+        point_rows: None,
         points: trace.points,
         rows: trace.output_rows,
         ..WindowDisplaySnapshot::default()
@@ -35778,6 +35796,7 @@ fn an_empty_buffer_answers_its_only_position_at_every_row() {
     // `posn-actual-col-row` pinned to row 0.
     let trace = layout_trace_for_plain_text("");
     let snapshot = WindowDisplaySnapshot {
+        point_rows: None,
         points: trace.points,
         rows: trace.output_rows,
         ..WindowDisplaySnapshot::default()
@@ -35819,6 +35838,7 @@ fn a_window_full_of_text_has_a_row_at_every_coordinate() {
     let text = (0..200).map(|i| format!("line {i}\n")).collect::<String>();
     let trace = layout_trace_for_plain_text(&text);
     let snapshot = WindowDisplaySnapshot {
+        point_rows: None,
         points: trace.points,
         rows: trace.output_rows,
         ..WindowDisplaySnapshot::default()
@@ -36996,3 +37016,6 @@ fn unchanged_frame_layout_consults_the_image_catalog_once_per_pass() {
          *Messages* line wired to the lookup would grow on every redisplay"
     );
 }
+
+#[cfg(test)]
+mod point_rows_test;

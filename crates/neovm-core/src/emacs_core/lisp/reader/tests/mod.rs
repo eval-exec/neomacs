@@ -67,6 +67,7 @@ fn install_mouse_help_echo_snapshot_with_value(eval: &mut Context, help: Value) 
     let window_id = eval.frames.get(frame_id).expect("frame").selected_window;
     let frame = eval.frames.get_mut(frame_id).expect("frame");
     frame.commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
+        point_rows: None,
         window_id,
         text_area_left_offset: 8,
         points: vec![crate::window::DisplayPointSnapshot {

@@ -303,6 +303,7 @@ fn presented_tab_line_hit_joins_renderer_string_index_with_rooted_lisp_value() {
             .prepare_and_activate_display_presentation_for_test(
                 presentation,
                 vec![WindowDisplaySnapshot {
+                    point_rows: None,
                     window_id,
                     regions,
                     regions_materialized: true,
@@ -369,6 +370,7 @@ fn presented_region_drives_exact_gnu_mouse_position_and_rejects_stale_observatio
             .prepare_and_activate_display_presentation_for_test(
                 crate::window::geometry::PresentationId::new(1),
                 vec![crate::window::WindowDisplaySnapshot {
+                    point_rows: None,
                     window_id,
                     regions: crate::window::PresentedWindowRegions {
                         outer: neomacs_display_protocol::types::Rect::new(10.0, 5.0, 180.0, 90.0),
@@ -612,6 +614,7 @@ fn frame_with_a_divider() -> (crate::emacs_core::Context, crate::window::FrameId
             .prepare_and_activate_display_presentation_for_test(
                 crate::window::geometry::PresentationId::new(1),
                 vec![crate::window::WindowDisplaySnapshot {
+                    point_rows: None,
                     window_id,
                     regions: crate::window::PresentedWindowRegions {
                         outer: neomacs_display_protocol::types::Rect::new(10.0, 5.0, 180.0, 90.0),
@@ -1917,6 +1920,7 @@ fn presented_mouse_position_over_the_inactive_echo_area_reports_the_mini_windows
                 crate::window::geometry::PresentationId::new(3),
                 vec![WindowPresentationSnapshot::geometry_only(
                     WindowDisplaySnapshot {
+                        point_rows: None,
                         window_id: minibuffer_window,
                         regions: PresentedWindowRegions {
                             outer: Rect::new(0.0, 584.0, 2560.0, 16.0),
@@ -2039,6 +2043,7 @@ fn geometry_only_echo_area_hit_cannot_publish_live_minibuffer_help_echo() {
                 crate::window::geometry::PresentationId::new(4),
                 vec![WindowPresentationSnapshot::geometry_only(
                     WindowDisplaySnapshot {
+                        point_rows: None,
                         window_id: minibuffer_window,
                         regions: PresentedWindowRegions {
                             outer: Rect::new(0.0, 104.0, 400.0, 16.0),

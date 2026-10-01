@@ -8,7 +8,10 @@ use super::snapshot_rows::PreparedWindowRows;
 use super::{DisplayRowTerminator, RowMetricsSnapshot};
 use crate::display_status_line::DisplayRowOutputProgress;
 use neovm_core::buffer::LispCharPos1;
-use neovm_core::window::{DisplayPointSnapshot, DisplayRowEndSource, DisplayRowSnapshot};
+use neovm_core::window::{
+    DisplayPointRow, DisplayPointRows, DisplayPointRowsMode, DisplayPointSnapshot,
+    DisplayRowEndSource, DisplayRowSnapshot, display_point_rows_mode,
+};
 
 #[derive(Clone, Copy, Debug)]
 struct CurrentRowProgress {
@@ -21,6 +24,14 @@ struct CurrentRowProgress {
     start_x: i64,
 }
 
+/// Emitter lookup precedes publication's canonical sort. A fresh closed row
+/// keeps its walk order; retained points arrive as one canonically sorted group.
+#[derive(Clone, Copy, Debug)]
+enum PointLookupGroup {
+    FreshRow { index: usize },
+    ReusedRows { start: usize, end: usize },
+}
+
 pub(super) struct WindowRowGeometry {
     pub(super) text_row_base: i64,
     pub(super) text_x: f32,
@@ -28,6 +39,8 @@ pub(super) struct WindowRowGeometry {
     /// Enabled only while collecting restart certificates for pixel queries.
     query_translation_exact: Option<bool>,
     points: Vec<DisplayPointSnapshot>,
+    point_rows: Option<DisplayPointRows>,
+    point_lookup_groups: Vec<PointLookupGroup>,
     rows: Vec<DisplayRowSnapshot>,
     row_metrics: Vec<RowMetricsSnapshot>,
     current_row_first_display_pos: Option<LispCharPos1>,
@@ -49,6 +62,9 @@ impl WindowRowGeometry {
             window_top,
             query_translation_exact: None,
             points: Vec::new(),
+            point_rows: (display_point_rows_mode() != DisplayPointRowsMode::Off)
+                .then(|| DisplayPointRows { rows: Vec::new() }),
+            point_lookup_groups: Vec::new(),
             rows: Vec::new(),
             row_metrics: Vec::new(),
             current_row_first_display_pos: None,
@@ -108,7 +124,13 @@ impl WindowRowGeometry {
     }
 
     pub(super) fn finish(self, body_origin_y: i64) -> PreparedWindowRows {
-        PreparedWindowRows::new(self.points, self.rows, self.text_row_base, body_origin_y)
+        PreparedWindowRows::with_point_rows(
+            self.points,
+            self.point_rows,
+            self.rows,
+            self.text_row_base,
+            body_origin_y,
+        )
     }
 
     /// Seed the body half of this emitter from a prior clean pass (Phase 1
@@ -122,9 +144,27 @@ impl WindowRowGeometry {
         &mut self,
         rows: Vec<DisplayRowSnapshot>,
         points: Vec<DisplayPointSnapshot>,
+        point_rows: Option<DisplayPointRows>,
     ) {
         self.rows = rows;
         self.points = points;
+        if let Some(point_rows) = point_rows {
+            self.point_rows = Some(point_rows);
+        }
+        self.point_lookup_groups.clear();
+        if let Some(frozen) = &mut self.point_rows {
+            if !self.points.is_empty() {
+                frozen
+                    .rows
+                    .extend(DisplayPointRows::from_points(std::mem::take(&mut self.points)).rows);
+            }
+            if !frozen.rows.is_empty() {
+                self.point_lookup_groups.push(PointLookupGroup::ReusedRows {
+                    start: 0,
+                    end: frozen.rows.len(),
+                });
+            }
+        }
     }
 
     /// Append reused (Phase 2 scroll) body rows + points to the emitter, on top
@@ -136,9 +176,31 @@ impl WindowRowGeometry {
         &mut self,
         rows: Vec<DisplayRowSnapshot>,
         points: Vec<DisplayPointSnapshot>,
+        point_rows: Option<DisplayPointRows>,
     ) {
         self.rows.extend(rows);
-        self.points.extend(points);
+        let lookup_start = self.point_rows.as_ref().map_or(0, |rows| rows.rows.len());
+        if let Some(reused) = point_rows {
+            self.point_rows
+                .get_or_insert_with(DisplayPointRows::default)
+                .rows
+                .extend(reused.rows);
+        }
+        if let Some(frozen) = &mut self.point_rows {
+            if !points.is_empty() {
+                frozen
+                    .rows
+                    .extend(DisplayPointRows::from_points(points).rows);
+            }
+            if frozen.rows.len() > lookup_start {
+                self.point_lookup_groups.push(PointLookupGroup::ReusedRows {
+                    start: lookup_start,
+                    end: frozen.rows.len(),
+                });
+            }
+        } else {
+            self.points.extend(points);
+        }
     }
 
     /// Normalize the body rows' snapshot columns to the full walk's convention.
@@ -182,14 +244,34 @@ impl WindowRowGeometry {
         &self.rows
     }
 
-    pub(super) fn point_for_buffer_pos(&self, pos: LispCharPos1) -> Option<&DisplayPointSnapshot> {
-        self.points.iter().find(|point| point.buffer_pos == pos)
+    pub(super) fn point_for_buffer_pos(&self, pos: LispCharPos1) -> Option<DisplayPointSnapshot> {
+        if let Some(frozen) = &self.point_rows {
+            for group in &self.point_lookup_groups {
+                let point = match *group {
+                    PointLookupGroup::FreshRow { index } => frozen.rows[index]
+                        .points_emission_order()
+                        .find(|point| point.buffer_pos == pos),
+                    PointLookupGroup::ReusedRows { start, end } => frozen.rows[start..end]
+                        .iter()
+                        .flat_map(DisplayPointRow::points)
+                        .filter(|point| point.buffer_pos == pos)
+                        .min_by_key(|point| (point.buffer_pos, point.row, point.col, point.x)),
+                };
+                if point.is_some() {
+                    return point;
+                }
+            }
+        }
+        self.points
+            .iter()
+            .find(|point| point.buffer_pos == pos)
+            .cloned()
     }
 
     pub(super) fn point_for_lisp_buffer_pos(
         &self,
         pos: LispCharPos1,
-    ) -> Option<&DisplayPointSnapshot> {
+    ) -> Option<DisplayPointSnapshot> {
         self.point_for_buffer_pos(pos)
     }
 
@@ -521,6 +603,18 @@ impl WindowRowGeometry {
         // forget. The push must precede the `take()`s below, which clear the
         // row's first/last display positions.
         self.publish_row_terminator_slot(&row_progress, row_height);
+        if let Some(point_rows) = &mut self.point_rows {
+            if !self.points.is_empty() {
+                let index = point_rows.rows.len();
+                point_rows
+                    .rows
+                    .push(DisplayPointRow::from_points(std::mem::take(
+                        &mut self.points,
+                    )));
+                self.point_lookup_groups
+                    .push(PointLookupGroup::FreshRow { index });
+            }
+        }
         self.rows.push(DisplayRowSnapshot {
             row: row_progress.row,
             y: row_progress.y,
@@ -621,12 +715,21 @@ mod tests {
         assert_eq!(row.end_buffer_pos, Some(LispCharPos1::new(3)));
         assert_eq!(row.end_source, DisplayRowEndSource::DisplayStringWrap);
         assert_eq!((row.row, row.y, row.end_x, row.end_col), (2, 8, 16, 2));
-        assert_eq!(prepared.points.len(), 2);
-        assert_eq!(prepared.points[0].buffer_pos, LispCharPos1::new(2));
-        assert_eq!(prepared.points[1].buffer_pos, LispCharPos1::new(3));
-        assert_eq!((prepared.points[1].x, prepared.points[1].width), (16, 8));
+        let points = prepared
+            .point_rows
+            .as_ref()
+            .map(|rows| rows.iter_points().collect::<Vec<_>>())
+            .unwrap_or_else(|| prepared.points.clone());
+        assert_eq!(points.len(), 2);
+        assert_eq!(points[0].buffer_pos, LispCharPos1::new(2));
+        assert_eq!(points[1].buffer_pos, LispCharPos1::new(3));
+        assert_eq!((points[1].x, points[1].width), (16, 8));
         assert_eq!(prepared.body_rows.len(), 1);
         assert_eq!(prepared.body_rows[0].body_row, 0);
         assert_eq!(prepared.body_rows[0].body_y, 0);
     }
 }
+
+#[cfg(test)]
+#[path = "row_geometry/lookup_test.rs"]
+mod lookup_test;

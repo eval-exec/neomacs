@@ -1414,16 +1414,19 @@ impl WindowOutputEmitter {
         &mut self,
         rows: Vec<DisplayRowSnapshot>,
         points: Vec<DisplayPointSnapshot>,
+        point_rows: Option<neovm_core::window::DisplayPointRows>,
     ) {
-        self.geometry.seed_cursor_only_body(rows, points)
+        self.geometry
+            .seed_cursor_only_body(rows, points, point_rows)
     }
 
     pub(crate) fn push_reused_body(
         &mut self,
         rows: Vec<DisplayRowSnapshot>,
         points: Vec<DisplayPointSnapshot>,
+        point_rows: Option<neovm_core::window::DisplayPointRows>,
     ) {
-        self.geometry.push_reused_body(rows, points)
+        self.geometry.push_reused_body(rows, points, point_rows)
     }
 
     pub(crate) fn normalize_body_start_cols(&mut self) {
@@ -1443,14 +1446,14 @@ impl WindowOutputEmitter {
     }
 
     #[cfg(test)]
-    pub(crate) fn point_for_buffer_pos(&self, pos: LispCharPos1) -> Option<&DisplayPointSnapshot> {
+    pub(crate) fn point_for_buffer_pos(&self, pos: LispCharPos1) -> Option<DisplayPointSnapshot> {
         self.geometry.point_for_buffer_pos(pos)
     }
 
     pub(crate) fn point_for_lisp_buffer_pos(
         &self,
         pos: LispCharPos1,
-    ) -> Option<&DisplayPointSnapshot> {
+    ) -> Option<DisplayPointSnapshot> {
         self.geometry.point_for_lisp_buffer_pos(pos)
     }
 
@@ -1852,6 +1855,7 @@ impl WindowOutputEmitter {
             logical_cursor,
             phys_cursor: phys_cursor.clone(),
             points: prepared_rows.points,
+            point_rows: prepared_rows.point_rows,
             rows: prepared_rows.rows,
             buffer_modiff,
             layout_freshness,

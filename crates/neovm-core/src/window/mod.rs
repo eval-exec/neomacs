@@ -2703,7 +2703,7 @@ impl PresentedWindowChromeString {
 }
 
 /// Last authoritative redisplay geometry for a live leaf window.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct WindowDisplaySnapshot {
     /// Window identifier this snapshot belongs to.
     pub window_id: WindowId,
@@ -2734,6 +2734,10 @@ pub struct WindowDisplaySnapshot {
     pub phys_cursor: Option<WindowCursorSnapshot>,
     /// Visible source-position geometry, sorted by `buffer_pos`.
     pub points: Vec<DisplayPointSnapshot>,
+    /// Shared immutable per-row storage. When present this is authoritative;
+    /// The flat vector is empty under `on` and `verify`; `verify` checks each
+    /// frozen row's encoding roundtrip before publication.
+    pub point_rows: Option<DisplayPointRows>,
     /// Visible row metrics, sorted by `row`.
     pub rows: Vec<DisplayRowSnapshot>,
     /// The displayed buffer's `modified_tick` when this snapshot was produced.
@@ -2918,6 +2922,62 @@ impl WindowVisibleBufferSpan {
 }
 
 impl WindowDisplaySnapshot {
+    /// Iterate canonical source order without materializing shared row cells.
+    pub fn iter_points(&self) -> impl ExactSizeIterator<Item = DisplayPointSnapshot> + '_ {
+        point_rows::WindowDisplayPointIter::new(&self.points, self.point_rows.as_ref())
+    }
+
+    pub fn point_count(&self) -> usize {
+        self.point_rows
+            .as_ref()
+            .map_or_else(|| self.points.len(), DisplayPointRows::point_count)
+    }
+
+    pub fn has_points(&self) -> bool {
+        self.point_rows.as_ref().map_or_else(
+            || !self.points.is_empty(),
+            |rows| rows.rows.iter().any(|row| row.point_count() != 0),
+        )
+    }
+
+    /// Source-order points for one row, without scanning other compact rows.
+    pub fn iter_row_points(&self, row: i64) -> impl Iterator<Item = DisplayPointSnapshot> + '_ {
+        let mut compact = self
+            .point_rows
+            .as_ref()
+            .and_then(|rows| rows.row(row))
+            .map(DisplayPointRow::points);
+        let shared = self.point_rows.is_some();
+        let mut flat = self.points.iter();
+        std::iter::from_fn(move || {
+            if let Some(points) = compact.as_mut() {
+                return points.next();
+            }
+            if shared {
+                return None;
+            }
+            flat.find(|point| point.row == row).cloned()
+        })
+    }
+
+    /// Cold scratch mutation boundary: flatten once and discard row storage.
+    pub fn materialize_points_mut(&mut self) -> &mut Vec<DisplayPointSnapshot> {
+        if let Some(rows) = self.point_rows.take() {
+            self.points = rows.iter_points().collect();
+        }
+        &mut self.points
+    }
+
+    pub fn clear_point_rows(&mut self) {
+        self.point_rows = None;
+    }
+
+    /// Replace the flat points and invalidate any previous shared representation.
+    pub fn set_points(&mut self, points: Vec<DisplayPointSnapshot>) {
+        self.point_rows = None;
+        self.points = points;
+    }
+
     /// Height of header/tab chrome above the window's text body.
     pub fn top_chrome_height(&self) -> i64 {
         self.header_line_height
@@ -2986,13 +3046,13 @@ impl WindowDisplaySnapshot {
             .rows
             .iter()
             .find_map(|row| row.start_buffer_pos)
-            .or_else(|| self.points.first().map(|point| point.buffer_pos))?;
+            .or_else(|| self.iter_points().next().map(|point| point.buffer_pos))?;
         let end = self
             .rows
             .iter()
             .rev()
             .find_map(|row| row.end_buffer_pos)
-            .or_else(|| self.points.last().map(|point| point.buffer_pos))?;
+            .or_else(|| self.iter_points().last().map(|point| point.buffer_pos))?;
         Some(WindowVisibleBufferSpan::new(start, end))
     }
 
@@ -3023,53 +3083,41 @@ impl WindowDisplaySnapshot {
     ///
     /// Off-window positions return `None`, matching GNU Emacs `posn-at-point`
     /// and `pos-visible-in-window-p` semantics.
-    pub fn point_for_buffer_pos(&self, pos: LispCharPos1) -> Option<&DisplayPointSnapshot> {
-        if self.points.is_empty() {
+    pub fn point_for_buffer_pos(&self, pos: LispCharPos1) -> Option<DisplayPointSnapshot> {
+        if !self.has_points() {
             return None;
         }
         let visible_span = self.visible_buffer_span()?;
         if pos < visible_span.start() || pos > visible_span.end() {
             return None;
         }
-        let idx = self.points.partition_point(|point| point.buffer_pos < pos);
-        // Every point published for POS, in walk order.  A position can have
-        // more than one: with `truncate-lines` nil, position 80 of an 80-column
-        // window stands under the continuation marker in row 0 column 79 AND is
-        // drawn at row 1 column 0.  GNU answers the DRAWN one -- `posn-at-point`
-        // gives `(0 . 1)` there (measured, Emacs 31.0.90,
-        // `scripts/l212-marker-column-probe.el`) -- because
-        // `pos_visible_in_window_p` runs an iterator TO the position and reports
-        // where the walk puts it, and the walk puts it on the continuation row.
-        // A marker slot therefore stands in for a position only when nothing
-        // drew it, which is the truncating case: there position 80 is drawn
-        // nowhere and GNU answers the marker's own column.
-        let run = &self.points[idx..];
-        let run = &run[..run.partition_point(|point| point.buffer_pos == pos)];
-        if let Some(point) = run
-            .iter()
-            .find(|point| point.role == DisplayPointRole::Glyph)
-            .or_else(|| run.first())
-        {
-            Some(point)
+        // Drawn glyphs take precedence over marker columns across all rows.
+        // Source ties retain walk order, including bidi and replacing strings.
+        let exact = if let Some(rows) = &self.point_rows {
+            rows.point_for_buffer_pos(pos)
         } else {
-            let row = self.row_for_buffer_pos(pos)?;
-            let next_on_row = self
-                .points
-                .iter()
-                .find(|point| point.row == row.row && point.buffer_pos > pos);
-            let prev_on_row = self
-                .points
-                .iter()
-                .rev()
-                .find(|point| point.row == row.row && point.buffer_pos < pos);
-            match (prev_on_row, next_on_row) {
-                // GNU `posn-at-point` may report neighboring positions when
-                // the requested buffer position is hidden by redisplay
-                // within the same visible row, but it returns nil when the
-                // position is not visible at all.
-                (Some(_), Some(next)) => Some(next),
-                _ => None,
-            }
+            let idx = self.points.partition_point(|point| point.buffer_pos < pos);
+            let run = &self.points[idx..];
+            let run = &run[..run.partition_point(|point| point.buffer_pos == pos)];
+            run.iter()
+                .find(|point| point.role == DisplayPointRole::Glyph)
+                .or_else(|| run.first())
+                .cloned()
+        };
+        if exact.is_some() {
+            return exact;
+        }
+        let row = self.row_for_buffer_pos(pos)?;
+        let next = self
+            .iter_row_points(row.row)
+            .find(|point| point.buffer_pos > pos);
+        let previous = self
+            .iter_row_points(row.row)
+            .filter(|point| point.buffer_pos < pos)
+            .last();
+        match (previous, next) {
+            (Some(_), Some(next)) => Some(next),
+            _ => None,
         }
     }
 
@@ -3128,12 +3176,11 @@ impl WindowDisplaySnapshot {
     fn row_end_point(&self, row: &DisplayRowSnapshot) -> Option<DisplayPointSnapshot> {
         let end = row.end_buffer_pos?;
         if let Some(point) = self
-            .points
-            .iter()
-            .rev()
-            .find(|point| point.row == row.row && point.buffer_pos == end)
+            .iter_row_points(row.row)
+            .filter(|point| point.buffer_pos == end)
+            .last()
         {
-            return Some(point.clone());
+            return Some(point);
         }
         Some(DisplayPointSnapshot {
             role: DisplayPointRole::Glyph,
@@ -3166,13 +3213,19 @@ impl WindowDisplaySnapshot {
             WindowSnapshotRowAtY::BelowLastTextRow(row) => return self.row_end_point(row),
             WindowSnapshotRowAtY::NoTextRow => return None,
         };
-        let mut row_points: Vec<_> = self
-            .points
-            .iter()
-            .filter(|point| point.row == row.row)
-            .collect();
-        row_points.sort_by_key(|point| (point.x, point.col, point.buffer_pos));
-        let mut row_points = row_points.into_iter();
+        let compact = self.point_rows.as_ref().and_then(|rows| rows.row(row.row));
+        let mut flat_points = if self.point_rows.is_none() {
+            self.iter_row_points(row.row).collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        flat_points.sort_by_key(|point| (point.x, point.col, point.buffer_pos));
+        let mut compact_points = compact.map(DisplayPointRow::points_x_order);
+        let mut flat_points = flat_points.into_iter();
+        let mut row_points = std::iter::from_fn(move || match &mut compact_points {
+            Some(points) => points.next(),
+            None => flat_points.next(),
+        });
         let Some(mut last) = row_points.next() else {
             return row.start_buffer_pos.map(|buffer_pos| DisplayPointSnapshot {
                 role: DisplayPointRole::Glyph,
@@ -3186,19 +3239,19 @@ impl WindowDisplaySnapshot {
             });
         };
         if x <= last.x {
-            return Some(last.clone());
+            return Some(last);
         }
         for point in row_points {
             let right = last.x.saturating_add(last.width.max(1));
             if x < right {
-                return Some(last.clone());
+                return Some(last);
             }
             if x < point.x {
-                return Some(last.clone());
+                return Some(last);
             }
             last = point;
         }
-        Some(last.clone())
+        Some(last)
     }
 
     /// Row metrics for visual row ROW.
@@ -3331,6 +3384,28 @@ pub struct ChromeLineHit {
     pub height: i64,
 }
 
+impl PartialEq for WindowDisplaySnapshot {
+    fn eq(&self, other: &Self) -> bool {
+        self.window_id == other.window_id
+            && self.cell_origin == other.cell_origin
+            && self.regions == other.regions
+            && self.regions_materialized == other.regions_materialized
+            && self.body_rows == other.body_rows
+            && self.text_area_left_offset == other.text_area_left_offset
+            && self.mode_line_height == other.mode_line_height
+            && self.header_line_height == other.header_line_height
+            && self.tab_line_height == other.tab_line_height
+            && self.chrome_strings == other.chrome_strings
+            && self.logical_cursor == other.logical_cursor
+            && self.phys_cursor == other.phys_cursor
+            && self.rows == other.rows
+            && self.buffer_modiff == other.buffer_modiff
+            && self.layout_freshness == other.layout_freshness
+            && self.window_end_record == other.window_end_record
+            && self.iter_points().eq(other.iter_points())
+    }
+}
+
 impl Default for WindowDisplaySnapshot {
     fn default() -> Self {
         Self {
@@ -3347,6 +3422,7 @@ impl Default for WindowDisplaySnapshot {
             logical_cursor: None,
             phys_cursor: None,
             points: Vec::new(),
+            point_rows: None,
             rows: Vec::new(),
             buffer_modiff: None,
             layout_freshness: None,

@@ -182,7 +182,7 @@ impl QueryCache {
             || !snapshot.chrome_strings.is_empty()
             || snapshot.rows.len() > MAX_ROWS
             || snapshot.body_rows.len() > MAX_ROWS
-            || snapshot.points.len() > MAX_POINTS
+            || snapshot.point_count() > MAX_POINTS
         {
             return;
         }
@@ -243,7 +243,7 @@ impl QueryCache {
                 .entries
                 .iter()
                 .filter_map(|entry| entry.query.geometry())
-                .map(|s| s.points.len())
+                .map(|s| s.point_count())
                 .sum::<usize>()
                 > MAX_TOTAL_POINTS
         {

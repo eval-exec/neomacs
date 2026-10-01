@@ -136,8 +136,8 @@ fn assert_layout_mutation_with_host(
     let original = eval
         .fresh_window_display_snapshot(frame, window, buffer)
         .unwrap()
-        .points
-        .clone();
+        .iter_points()
+        .collect::<Vec<_>>();
 
     engine.layout_frame_rust(&mut eval, frame);
     assert!(
@@ -169,30 +169,32 @@ fn assert_layout_mutation_with_host(
         .unwrap()
         .into_geometry()
         .unwrap()
-        .points;
+        .iter_points()
+        .collect::<Vec<_>>();
     engine.layout_frame_rust(&mut eval, frame);
     let full_windows = engine.last_layout_stats().full_windows;
     let incremental = eval
         .fresh_window_display_snapshot(frame, window, buffer)
         .unwrap()
-        .points
-        .clone();
+        .iter_points()
+        .collect::<Vec<_>>();
     let mut full = if graphical {
         LayoutEngine::new()
     } else {
         LayoutEngine::new_without_font_metrics()
     };
     full.layout_frame_rust(&mut eval, frame);
-    let reference = &eval
+    let reference = eval
         .fresh_window_display_snapshot(frame, window, buffer)
         .unwrap()
-        .points;
+        .iter_points()
+        .collect::<Vec<_>>();
     assert_ne!(
-        &original, reference,
+        &original, &reference,
         "the mutation must change actual layout geometry"
     );
     assert_eq!(
-        &incremental, reference,
+        &incremental, &reference,
         "retained engine agrees with a fresh full layout"
     );
     assert_ne!(
@@ -201,7 +203,7 @@ fn assert_layout_mutation_with_host(
     );
     assert!(full_windows > 0, "input changes invalidate row reuse");
     assert_eq!(
-        &measured, reference,
+        &measured, &reference,
         "synchronous query agrees with redisplay"
     );
     assert!(
@@ -299,13 +301,11 @@ fn tall_stretch_prefix_reserves_vertical_space_before_next_line() {
         .fresh_window_display_snapshot(frame, window, buffer)
         .unwrap();
     let first = snapshot
-        .points
-        .iter()
+        .iter_points()
         .find(|point| point.buffer_pos.as_i64() == 1)
         .unwrap();
     let second = snapshot
-        .points
-        .iter()
+        .iter_points()
         .find(|point| point.buffer_pos.as_i64() == 3)
         .unwrap();
     assert!(

@@ -310,6 +310,7 @@ impl ScrollCoverage {
         }
         let snapshot = std::sync::Arc::make_mut(&mut admission.retained.display_snapshot);
         snapshot.points = body.geometry.points;
+        snapshot.point_rows = body.geometry.point_rows;
         snapshot.rows = body.geometry.rows;
         snapshot.body_rows = body.geometry.body_rows;
         snapshot.logical_cursor = None;

@@ -242,9 +242,8 @@ fn stop_after_source_anchor(
             // Only the final mixed row needs a glyph scan. String-only rows
             // are skipped in O(1), keeping the entire walk O(rows + points).
             let target = snapshot
-                .points
-                .iter()
-                .filter(|point| point.row == row.row && point.buffer_pos > anchor)
+                .iter_row_points(row.row)
+                .filter(|point| point.buffer_pos > anchor)
                 .map(|point| point.buffer_pos)
                 .chain(std::iter::once(end))
                 .min()?;
@@ -299,9 +298,7 @@ fn row_goal_stops(
 ) -> impl Iterator<Item = RowGoalStop> {
     let admit_edge = wrap.goal_stops_at_row_edge();
     let glyphs = snapshot
-        .points
-        .iter()
-        .filter(|point| point.row == row.row)
+        .iter_row_points(row.row)
         // A marker column IS a goal stop, except under WORD_WRAP.  See
         // [`LineWrap::goal_stops_at_row_edge`] for GNU's mechanism and the
         // measurement; ledger 212 section 5 declined this without the gate and

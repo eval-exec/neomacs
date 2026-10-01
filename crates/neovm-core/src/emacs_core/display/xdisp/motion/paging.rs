@@ -435,8 +435,7 @@ fn plan_scroll(
                 buffer: buffer_id,
                 y: point_geometry.map_or(0, |(_, top, _)| top),
                 x: snapshot
-                    .points
-                    .iter()
+                    .iter_points()
                     .find(|stop| stop.buffer_pos == point && stop.role == DisplayPointRole::Glyph)
                     .map_or(0, |stop| stop.x),
             })

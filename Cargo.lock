@@ -3898,6 +3898,7 @@ dependencies = [
  "objc2-core-text",
  "once_cell",
  "rustc-hash 2.1.3",
+ "serde_json",
  "strum",
  "sys-locale",
  "tracing",

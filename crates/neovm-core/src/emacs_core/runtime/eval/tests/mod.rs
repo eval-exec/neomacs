@@ -4411,6 +4411,7 @@ fn read_char_mouse_press_uses_clicked_window_geometry() {
         .get_mut(fid)
         .expect("mutable frame")
         .commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
+            point_rows: None,
             window_id: w2,
             cell_origin: Default::default(),
             regions: Default::default(),
@@ -4536,6 +4537,7 @@ fn read_key_sequence_uses_clicked_window_local_map_for_mouse_event() {
         .get_mut(fid)
         .expect("mutable frame")
         .commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
+            point_rows: None,
             window_id: w2,
             cell_origin: Default::default(),
             regions: Default::default(),
@@ -4646,6 +4648,7 @@ fn read_key_sequence_drops_unbound_down_mouse_before_bound_click() {
         .get_mut(fid)
         .expect("mutable frame")
         .commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
+            point_rows: None,
             window_id: w2,
             cell_origin: Default::default(),
             regions: Default::default(),
@@ -5227,6 +5230,7 @@ fn read_key_sequence_uses_clicked_window_buffer_local_minor_mode_maps() {
         .get_mut(fid)
         .expect("mutable frame")
         .commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
+            point_rows: None,
             window_id: w2,
             cell_origin: Default::default(),
             regions: Default::default(),
@@ -5334,6 +5338,7 @@ fn read_key_sequence_prefixes_mode_line_mouse_click_for_lookup() {
         .get_mut(fid)
         .expect("mutable frame")
         .commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
+            point_rows: None,
             window_id: w2,
             cell_origin: Default::default(),
             regions: Default::default(),

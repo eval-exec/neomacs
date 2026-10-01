@@ -28,6 +28,7 @@ fn plan() -> EditSyncPlan {
         ],
         row_snapshots: Vec::new(),
         points: Vec::new(),
+        point_rows: None,
     }
 }
 

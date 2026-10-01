@@ -102,6 +102,7 @@ fn publish_selected_gui_window_regions(
         .prepare_and_activate_display_presentation_for_test(
             crate::window::geometry::PresentationId::new(presentation),
             vec![crate::window::WindowDisplaySnapshot {
+                point_rows: None,
                 window_id,
                 regions,
                 regions_materialized: true,
@@ -1583,6 +1584,7 @@ fn gui_window_body_geometry_excludes_fringes_and_margins() {
         .prepare_and_activate_display_presentation_for_test(
             crate::window::geometry::PresentationId::new(1),
             vec![crate::window::WindowDisplaySnapshot {
+                point_rows: None,
                 window_id,
                 regions: crate::window::PresentedWindowRegions {
                     outer: neomacs_display_protocol::types::Rect::new(0.0, 0.0, 800.0, 600.0),
@@ -1868,6 +1870,7 @@ fn gui_set_window_buffer_applies_buffer_local_display_defaults() {
         .prepare_and_activate_display_presentation_for_test(
             crate::window::geometry::PresentationId::new(1),
             vec![crate::window::WindowDisplaySnapshot {
+                point_rows: None,
                 window_id,
                 regions: crate::window::PresentedWindowRegions {
                     outer: neomacs_display_protocol::types::Rect::new(0.0, 0.0, 800.0, 600.0),
@@ -4690,6 +4693,7 @@ fn window_cursor_info_returns_last_redisplay_cursor_geometry() {
     {
         let frame = ev.frames.get_mut(fid).expect("frame");
         frame.commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
+            point_rows: None,
             window_id: wid,
             phys_cursor: Some(crate::window::WindowCursorSnapshot {
                 kind: crate::window::WindowCursorKind::Bar,
@@ -4729,6 +4733,7 @@ fn window_cursor_info_hides_and_restores_live_cursor_geometry() {
     {
         let frame = ev.frames.get_mut(fid).expect("frame");
         frame.commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
+            point_rows: None,
             window_id: wid,
             phys_cursor: Some(crate::window::WindowCursorSnapshot {
                 kind: crate::window::WindowCursorKind::Bar,
@@ -9566,6 +9571,7 @@ fn window_end_reads_the_atomic_record_when_a_snapshot_disagrees() {
         );
 
         frame.commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
+            point_rows: None,
             window_id: wid,
             rows: vec![crate::window::DisplayRowSnapshot {
                 truncated_end_buffer_pos: None,
@@ -9792,6 +9798,7 @@ fn window_chrome_height_queries_prefer_last_redisplay_snapshot_when_available() 
     {
         let frame = ev.frames.get_mut(fid).expect("frame");
         frame.commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
+            point_rows: None,
             window_id: wid,
             mode_line_height: 35,
             header_line_height: 35,
@@ -9830,6 +9837,7 @@ fn window_body_pixel_edges_begin_below_rendered_header_and_tab_lines() {
             .prepare_and_activate_display_presentation_for_test(
                 crate::window::geometry::PresentationId::new(1),
                 vec![crate::window::WindowDisplaySnapshot {
+                    point_rows: None,
                     window_id: wid,
                     regions: crate::window::PresentedWindowRegions {
                         outer: neomacs_display_protocol::types::Rect::new(0.0, 0.0, 800.0, 600.0),
@@ -9933,6 +9941,7 @@ fn gnu_lisp_window_edges_use_logical_outer_and_presented_body_regions() {
             .prepare_and_activate_display_presentation_for_test(
                 crate::window::geometry::PresentationId::new(presentation),
                 vec![crate::window::WindowDisplaySnapshot {
+                    point_rows: None,
                     window_id: wid,
                     cell_origin: crate::window::geometry::CellOrigin::new(18, 2),
                     regions: crate::window::PresentedWindowRegions {
@@ -10186,6 +10195,7 @@ fn presented_fringe_geometry_and_scrollbar_tuple_keep_live_gnu_configuration() {
         .prepare_and_activate_display_presentation_for_test(
             crate::window::geometry::PresentationId::new(1),
             vec![crate::window::WindowDisplaySnapshot {
+                point_rows: None,
                 window_id,
                 regions: crate::window::PresentedWindowRegions {
                     outer: neomacs_display_protocol::types::Rect::new(0.0, 0.0, 800.0, 600.0),
@@ -11621,6 +11631,7 @@ fn window_lines_pixel_dimensions_fixture() -> (Context, crate::window::WindowId,
             ..crate::window::DisplayRowSnapshot::default()
         };
         frame.commit_redisplay_cache_for_test(vec![crate::window::WindowDisplaySnapshot {
+            point_rows: None,
             window_id: wid,
             mode_line_height: 20,
             rows: vec![

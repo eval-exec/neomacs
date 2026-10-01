@@ -106,6 +106,13 @@ fn reposition_complete_rows(
     for row in &mut placed.rows {
         row.y = row.y.checked_add(dy)?;
     }
+    if let Some(points) = &mut placed.point_rows {
+        points.rows = points
+            .rows
+            .iter()
+            .map(|row| row.try_replaced_placement(row.row(), row.y().checked_add(dy)?, 0))
+            .collect::<Option<_>>()?;
+    }
     for point in &mut placed.points {
         point.y = point.y.checked_add(dy)?;
     }

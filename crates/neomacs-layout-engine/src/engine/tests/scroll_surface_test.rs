@@ -711,8 +711,12 @@ fn certified_worker_rows_answer_motion_without_a_new_walk() {
             expected.geometry().unwrap().rows
         );
         assert_eq!(
-            actual.geometry().unwrap().points,
-            expected.geometry().unwrap().points
+            actual.geometry().unwrap().iter_points().collect::<Vec<_>>(),
+            expected
+                .geometry()
+                .unwrap()
+                .iter_points()
+                .collect::<Vec<_>>()
         );
         eval.eval_str(&format!(
             "(put-text-property {} {} 'display \"replacement\")",
@@ -781,8 +785,12 @@ fn certified_worker_pixels_answer_motion_without_a_new_walk() {
             expected.geometry().unwrap().rows
         );
         assert_eq!(
-            actual.geometry().unwrap().points,
-            expected.geometry().unwrap().points
+            actual.geometry().unwrap().iter_points().collect::<Vec<_>>(),
+            expected
+                .geometry()
+                .unwrap()
+                .iter_points()
+                .collect::<Vec<_>>()
         );
         let uncovered = WindowLayoutQueryScope::Pixels {
             start: LispCharPos1::from_one_based_usize(target + 1),

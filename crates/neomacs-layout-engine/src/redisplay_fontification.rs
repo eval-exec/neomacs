@@ -87,7 +87,7 @@ impl VisibleFontificationCoverage {
         let fontified = Value::symbol("fontified");
         let mut plan = VisibleFontificationPlan { spans: Vec::new() };
 
-        for point in &snapshot.points {
+        for point in snapshot.iter_points() {
             let charpos = CharPos0::new(point.buffer_pos.as_i64().saturating_sub(1) as usize);
             if charpos < contiguous_prepass_end || charpos >= accessible_end {
                 continue;

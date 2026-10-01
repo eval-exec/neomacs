@@ -368,6 +368,16 @@ impl PreparedViewports {
                 .filter(|row| row.row <= *last_index as i64)
                 .cloned()
                 .collect();
+            snapshot.point_rows = prefix.reused_point_rows.as_ref().map(|points| {
+                neovm_core::window::DisplayPointRows {
+                    rows: points
+                        .rows
+                        .iter()
+                        .filter(|row| row.row() <= *last_index as i64)
+                        .cloned()
+                        .collect(),
+                }
+            });
             snapshot.points = prefix
                 .reused_points
                 .iter()
@@ -447,6 +457,15 @@ impl PreparedViewports {
                         Some(row)
                     }),
             );
+            if let (Some(reused), Some(original)) = (
+                &mut snapshot.point_rows,
+                &entry.retained.display_snapshot.point_rows,
+            ) {
+                reused.rows.extend(original.rows.iter().filter_map(|row| {
+                    let &(index, dy) = remap.get(&row.row())?;
+                    Some(row.replaced_placement(index, row.y() + dy, 0))
+                }));
+            }
             snapshot
                 .points
                 .extend(

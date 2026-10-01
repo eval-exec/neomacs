@@ -50,6 +50,7 @@ wio.workspace = true
 
 [dev-dependencies]
 neomacs-test-fonts.workspace = true
+serde_json.workspace = true
 tracing-test.workspace = true
 
 [lints]

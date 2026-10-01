@@ -45,7 +45,11 @@ fn lazy_text_positions_are_the_eager_ones_and_resolve_alike() {
         &mut engine,
         frame_id,
     );
-    assert!(!eager.text_deferred());
+    // C6 row sources defer independently of the older eager/lazy knob.
+    assert_eq!(
+        eager.text_deferred(),
+        neovm_core::window::display_point_rows_mode().enabled(),
+    );
     assert!(!eager.text_positions().is_empty());
 
     eval.eval_str("(forward-char 1)").expect("move");
@@ -57,7 +61,8 @@ fn lazy_text_positions_are_the_eager_ones_and_resolve_alike() {
     );
     assert!(lazy.text_deferred(), "composing built no text position");
 
-    // The first query builds them, and every point resolves as before.
+    // Legacy lazy sources build on the first query; C6 sources answer from
+    // queried rows and keep frame materialization deferred. Results are exact.
     let query = |index: &neomacs_display_protocol::PresentedHitIndex, x: f32, y: f32| {
         index
             .resolve(neomacs_display_protocol::PresentedHitQuery::new(
@@ -76,6 +81,9 @@ fn lazy_text_positions_are_the_eager_ones_and_resolve_alike() {
         }
     }
     assert!(resolved > 100, "the grid reached text: {resolved}");
-    assert!(!lazy.text_deferred());
+    assert_eq!(
+        lazy.text_deferred(),
+        neovm_core::window::display_point_rows_mode().enabled(),
+    );
     assert_eq!(lazy.text_positions(), eager.text_positions());
 }

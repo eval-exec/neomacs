@@ -895,7 +895,11 @@ impl BufferSourceOutputSetup {
 
             // Seed the emitter's point-independent body half, then publish the
             // (unchanged) redisplay positions for the mode-line chrome.
-            output_emitter.seed_cursor_only_body(replay.body_row_snapshots, replay.points);
+            output_emitter.seed_cursor_only_body(
+                replay.body_row_snapshots,
+                replay.points,
+                replay.point_rows,
+            );
             let mut redisplay_positions = TextWindowRedisplayPositions::from_output_rows(
                 &output_emitter,
                 tail_context.window_start,
@@ -1115,6 +1119,11 @@ impl BufferSourceOutputSetup {
                 scroll.reused_rows.extend(placed.rows);
                 scroll.reused_row_snapshots.extend(placed.row_snapshots);
                 scroll.reused_points.extend(placed.points);
+                if let (Some(reused), Some(placed)) =
+                    (&mut scroll.reused_point_rows, placed.point_rows)
+                {
+                    reused.rows.extend(placed.rows);
+                }
             }
             // Whether reused rows sit BELOW the walked span.
             let below_reused = scroll.bound_walk || edit_sync_shift.is_some();
@@ -1249,7 +1258,11 @@ impl BufferSourceOutputSetup {
                     return BufferSourceRenderAttemptOutcome::ReplayMispredicted;
                 }
             }
-            output_emitter.push_reused_body(scroll.reused_row_snapshots, scroll.reused_points);
+            output_emitter.push_reused_body(
+                scroll.reused_row_snapshots,
+                scroll.reused_points,
+                scroll.reused_point_rows,
+            );
             output_emitter.normalize_body_start_cols();
 
             let mut redisplay_positions = scroll_positions.unwrap_or_else(|| {

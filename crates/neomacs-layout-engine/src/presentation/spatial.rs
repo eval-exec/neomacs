@@ -11,6 +11,8 @@ use neomacs_display_protocol::{
 };
 use neovm_core::window::{WindowDisplaySnapshot, WindowPresentationSnapshot};
 
+mod row_text;
+
 /// All spatial products compiled from one completed redisplay snapshot.
 ///
 /// The plan is deliberately not a transport object: it can only be consumed
@@ -31,7 +33,12 @@ impl PresentationSpatialPlan {
         let mut regions = Vec::new();
         let mut resize_handles = Vec::new();
         let mut positions = Vec::new();
-        let text_positions_mode = presented_text_positions_mode();
+        let point_rows_enabled = neovm_core::window::display_point_rows_mode().enabled();
+        let text_positions_mode = if point_rows_enabled {
+            PresentedTextPositionsMode::Lazy
+        } else {
+            presented_text_positions_mode()
+        };
         let mut deferred_text = Vec::new();
 
         for (window_z, info) in state.window_infos.iter().enumerate() {
@@ -158,10 +165,20 @@ impl PresentationSpatialPlan {
                         })
                         .map(WindowPresentationSnapshot::shared_display_snapshot)
                     {
+                        let row_text = if point_rows_enabled {
+                            row_text::RowWindowText::new(
+                                info.window_id,
+                                shared.clone(),
+                                window_regions.text_body,
+                            )?
+                        } else {
+                            None
+                        };
                         deferred_text.push(DeferredWindowText {
                             window: info.window_id,
                             snapshot: shared.clone(),
                             text_body: window_regions.text_body,
+                            row_text,
                         });
                     }
                 }
@@ -547,6 +564,7 @@ struct DeferredWindowText {
     window: DisplayWindowId,
     snapshot: std::sync::Arc<WindowDisplaySnapshot>,
     text_body: neomacs_display_protocol::Rect,
+    row_text: Option<row_text::RowWindowText>,
 }
 
 /// A frame's text hit positions, built on first use from its windows'
@@ -568,6 +586,50 @@ impl neomacs_display_protocol::PresentedTextPositionSource for DeferredFrameText
             )?;
         }
         Ok(positions)
+    }
+
+    fn hit_text_position(
+        &self,
+        window: DisplayWindowId,
+        x: f32,
+        y: f32,
+    ) -> neomacs_display_protocol::PresentedTextPositionHit {
+        use neomacs_display_protocol::PresentedTextPositionHit;
+        // A legacy snapshot anywhere requires the legacy materializer, whose
+        // validation rejects malformed geometry in unqueried windows too.
+        if self.windows.iter().any(|window| window.row_text.is_none()) {
+            return PresentedTextPositionHit::Unsupported;
+        }
+        for source in self.windows.iter().filter(|source| source.window == window) {
+            match source
+                .row_text
+                .as_ref()
+                .expect("checked row sources")
+                .hit(x, y)
+            {
+                Ok(Some(position)) => {
+                    return PresentedTextPositionHit::Resolved(Ok(Some(position)));
+                }
+                Ok(None) => {}
+                Err(error) => return PresentedTextPositionHit::Resolved(Err(error)),
+            }
+        }
+        PresentedTextPositionHit::Resolved(Ok(None))
+    }
+
+    fn is_empty(&self) -> Option<bool> {
+        if self.windows.iter().any(|window| window.row_text.is_none()) {
+            None
+        } else {
+            self.windows.iter().try_fold(true, |empty, window| {
+                window
+                    .row_text
+                    .as_ref()
+                    .expect("checked row sources")
+                    .is_empty()
+                    .map(|window_empty| empty && window_empty)
+            })
+        }
     }
 }
 
@@ -599,17 +661,14 @@ fn push_row_fallback_positions(
     if text_body.width <= 0.0 || text_body.height <= 0.0 {
         return Ok(());
     }
-    let body_left = text_body.x;
-    let body_right = text_body.x + text_body.width;
-
     // Group the window's points by output row ONCE. The previous per-row
     // `points.iter().filter(...)` re-scanned every point for every row —
     // O(rows x points) per window per frame.
     let mut points_by_row: rustc_hash::FxHashMap<
         i64,
-        Vec<&neovm_core::window::DisplayPointSnapshot>,
+        Vec<neovm_core::window::DisplayPointSnapshot>,
     > = rustc_hash::FxHashMap::default();
-    for point in &snapshot.points {
+    for point in snapshot.iter_points() {
         points_by_row.entry(point.row).or_default().push(point);
     }
     for row_points in points_by_row.values_mut() {
@@ -617,68 +676,81 @@ fn push_row_fallback_positions(
     }
 
     for row in &snapshot.rows {
-        let Some(row_anchor) = row.start_buffer_pos.or(row.end_buffer_pos) else {
-            continue;
-        };
-        let (body_row, body_y) = snapshot.text_body_position(row.row, row.y);
-        let top = (text_body.y + body_y as f32).max(text_body.y);
-        let bottom = (text_body.y + body_y as f32 + row.height.max(1) as f32)
-            .min(text_body.y + text_body.height);
-        if bottom <= top {
-            continue;
-        }
-
         let row_points = points_by_row
             .get(&row.row)
-            .map(|points| points.as_slice())
+            .map(Vec::as_slice)
             .unwrap_or(&[]);
+        push_one_row_fallback_positions(positions, window, snapshot, text_body, row, row_points)?;
+    }
+    Ok(())
+}
 
-        let mut covered_right = body_left;
-        let mut preceding = None;
-        for &point in row_points {
-            let point_left = (text_body.x + point.x as f32).clamp(body_left, body_right);
-            let point_right = (text_body.x + point.x as f32 + point.width.max(1) as f32)
-                .clamp(body_left, body_right);
-            if point_left > covered_right {
-                let (buffer_position, column) = preceding.map_or(
-                    (point.buffer_pos.as_i64(), point.col),
-                    |previous: &neovm_core::window::DisplayPointSnapshot| {
-                        (previous.buffer_pos.as_i64(), previous.col)
-                    },
-                );
-                push_text_position_span(
-                    positions,
-                    window,
-                    covered_right,
-                    top,
-                    point_left - covered_right,
-                    bottom - top,
-                    buffer_position,
-                    body_row,
-                    column,
-                )?;
-            }
-            covered_right = covered_right.max(point_right);
-            preceding = Some(point);
-        }
+fn push_one_row_fallback_positions(
+    positions: &mut Vec<PresentedTextPosition>,
+    window: DisplayWindowId,
+    snapshot: &WindowDisplaySnapshot,
+    text_body: neomacs_display_protocol::Rect,
+    row: &neovm_core::window::DisplayRowSnapshot,
+    row_points: &[neovm_core::window::DisplayPointSnapshot],
+) -> Result<(), PresentedHitError> {
+    let body_left = text_body.x;
+    let body_right = text_body.x + text_body.width;
+    let Some(row_anchor) = row.start_buffer_pos.or(row.end_buffer_pos) else {
+        return Ok(());
+    };
+    let (body_row, body_y) = snapshot.text_body_position(row.row, row.y);
+    let top = (text_body.y + body_y as f32).max(text_body.y);
+    let bottom = (text_body.y + body_y as f32 + row.height.max(1) as f32)
+        .min(text_body.y + text_body.height);
+    if bottom <= top {
+        return Ok(());
+    }
 
-        if covered_right < body_right {
-            let (buffer_position, column) = preceding
-                .map_or((row_anchor.as_i64(), row.start_col), |point| {
-                    (point.buffer_pos.as_i64(), point.col)
-                });
+    let mut covered_right = body_left;
+    let mut preceding = None;
+    for point in row_points {
+        let point_left = (text_body.x + point.x as f32).clamp(body_left, body_right);
+        let point_right =
+            (text_body.x + point.x as f32 + point.width.max(1) as f32).clamp(body_left, body_right);
+        if point_left > covered_right {
+            let (buffer_position, column) = preceding.map_or(
+                (point.buffer_pos.as_i64(), point.col),
+                |previous: &neovm_core::window::DisplayPointSnapshot| {
+                    (previous.buffer_pos.as_i64(), previous.col)
+                },
+            );
             push_text_position_span(
                 positions,
                 window,
                 covered_right,
                 top,
-                body_right - covered_right,
+                point_left - covered_right,
                 bottom - top,
                 buffer_position,
                 body_row,
                 column,
             )?;
         }
+        covered_right = covered_right.max(point_right);
+        preceding = Some(point);
+    }
+
+    if covered_right < body_right {
+        let (buffer_position, column) = preceding
+            .map_or((row_anchor.as_i64(), row.start_col), |point| {
+                (point.buffer_pos.as_i64(), point.col)
+            });
+        push_text_position_span(
+            positions,
+            window,
+            covered_right,
+            top,
+            body_right - covered_right,
+            bottom - top,
+            buffer_position,
+            body_row,
+            column,
+        )?;
     }
     Ok(())
 }
@@ -739,7 +811,7 @@ pub(crate) fn body_text_positions(
     // the (sorted body_rows) binary search. The previous per-point
     // linear scan was O(points x rows) per window per frame.
     let mut last_body_row: Option<&neovm_core::window::PresentedBodyRowSnapshot> = None;
-    for point in &snapshot.points {
+    for point in snapshot.iter_points() {
         let body_row = match last_body_row.filter(|row| row.output_row == point.row) {
             Some(row) => row,
             None => {

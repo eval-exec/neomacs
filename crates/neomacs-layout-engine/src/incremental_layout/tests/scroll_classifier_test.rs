@@ -81,6 +81,7 @@ fn synthetic_matrix(base: i64, n_body: usize) -> RetainedWindowMatrix {
         key: synthetic_key(base, 0),
         validity: MatrixValidity::Valid,
         display_snapshot: std::sync::Arc::new(WindowDisplaySnapshot {
+            point_rows: None,
             window_id: WindowId(1),
             text_area_left_offset: 0,
             mode_line_height: 16,

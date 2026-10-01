@@ -1171,7 +1171,10 @@ fn verify_report_lines_from_concurrent_writers_never_interleave() {
 
 #[test]
 fn row_identity_knob_parses_and_defaults_to_appearance() {
-    assert_eq!(parse_tty_row_identity_knob(None), TtyRowIdentity::Appearance);
+    assert_eq!(
+        parse_tty_row_identity_knob(None),
+        TtyRowIdentity::Appearance
+    );
     assert_eq!(
         parse_tty_row_identity_knob(Some("address")),
         TtyRowIdentity::Address

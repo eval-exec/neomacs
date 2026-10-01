@@ -76,8 +76,7 @@ pub(super) fn pixels_suffix(
             .as_ref()
             .is_some_and(|cursor| cursor.row >= selected.row)
         || snapshot
-            .points
-            .iter()
+            .iter_points()
             .any(|point| point.row >= selected.row && point.buffer_pos < start)
     {
         return None;
@@ -87,6 +86,20 @@ pub(super) fn pixels_suffix(
     for row in &mut placed.rows {
         row.row = row.row.checked_sub(row_delta)?;
         row.y = row.y.checked_sub(y_delta)?;
+    }
+    if let Some(points) = &mut placed.point_rows {
+        points.rows = points
+            .rows
+            .iter()
+            .filter(|row| row.row() >= selected.row)
+            .map(|row| {
+                row.try_replaced_placement(
+                    row.row().checked_sub(row_delta)?,
+                    row.y().checked_sub(y_delta)?,
+                    0,
+                )
+            })
+            .collect::<Option<_>>()?;
     }
     placed.points.retain(|point| point.row >= selected.row);
     for point in &mut placed.points {

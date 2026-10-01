@@ -179,7 +179,7 @@ fn position_prefix_reuses_earlier_complete_rows_with_exact_inputs() {
             let actual = actual.geometry().unwrap();
             let expected = expected.geometry().unwrap();
             let point = expected.point_for_buffer_pos(target).unwrap();
-            assert_eq!(actual.point_for_buffer_pos(target), Some(point));
+            assert_eq!(actual.point_for_buffer_pos(target), Some(point.clone()));
             assert_eq!(
                 actual.row_metrics(point.row),
                 expected.row_metrics(point.row)
@@ -1183,8 +1183,7 @@ fn offscreen_row_queries_preserve_automatic_composition_metrics() {
             .expect("geometry");
         widths.push(
             snapshot
-                .points
-                .iter()
+                .iter_points()
                 .find(|point| {
                     point.role == DisplayPointRole::Glyph
                         && point.buffer_pos == LispCharPos1::new(9841)
@@ -2058,7 +2057,11 @@ fn identical_geometry_queries_reuse_rows_and_mutations_force_a_new_walk() {
             let actual = actual.into_geometry().unwrap();
             let expected = expected.into_geometry().unwrap();
             assert_eq!(actual.rows, expected.rows, "{change}");
-            assert_eq!(actual.points, expected.points, "{change}");
+            assert_eq!(
+                actual.iter_points().collect::<Vec<_>>(),
+                expected.iter_points().collect::<Vec<_>>(),
+                "{change}"
+            );
         }
     }
 }
@@ -2104,7 +2107,10 @@ fn geometry_queries_reevaluate_conditional_display_without_source_edits() {
         .into_geometry()
         .unwrap();
     assert_eq!(actual.rows, expected.rows);
-    assert_eq!(actual.points, expected.points);
+    assert_eq!(
+        actual.iter_points().collect::<Vec<_>>(),
+        expected.iter_points().collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -2599,11 +2605,14 @@ fn pixel_extent_queries_match_complete_rows_with_mixed_heights_and_overlays() {
             assert_eq!(pixels.rows, expected, "start={start:?}, height={height}");
             let last = pixels.rows.last().unwrap().row;
             let expected: Vec<_> = rows
-                .points
-                .into_iter()
+                .iter_points()
                 .filter(|point| point.row <= last)
                 .collect();
-            assert_eq!(pixels.points, expected, "start={start:?}, height={height}");
+            assert_eq!(
+                pixels.iter_points().collect::<Vec<_>>(),
+                expected,
+                "start={start:?}, height={height}"
+            );
         }
     }
 }

@@ -5498,6 +5498,7 @@ fn bootstrap_runtime_gui_disabled_command_n_cancels_with_new_help_window() {
             .prepare_and_activate_display_presentation_for_test(
                 crate::window::geometry::PresentationId::new(1),
                 vec![crate::window::WindowDisplaySnapshot {
+                    point_rows: None,
                     window_id: selected_window,
                     ..Default::default()
                 }],

@@ -261,6 +261,8 @@ impl PreparedViewports {
         let mut matrix = GlyphMatrix::new(end - begin, current.matrix.ncols);
         let mut snapshot = WindowDisplaySnapshot::default();
         snapshot.regions = current.display_snapshot.regions;
+        let row_storage = neovm_core::window::display_point_rows_mode().enabled();
+        snapshot.point_rows = row_storage.then(neovm_core::window::DisplayPointRows::default);
         // Group points once per source, preserving per-face hit-test heights.
         let mut points = rustc_hash::FxHashMap::<(usize, i64), Vec<_>>::default();
         for (source, _) in &all[begin..end] {
@@ -269,7 +271,10 @@ impl PreparedViewports {
                 continue;
             }
             points.insert((identity, -1), Vec::new());
-            for point in &source.display_snapshot.points {
+            if row_storage && source.display_snapshot.point_rows.is_some() {
+                continue;
+            }
+            for point in source.display_snapshot.iter_points() {
                 points.entry((identity, point.row)).or_default().push(point);
             }
         }
@@ -294,11 +299,45 @@ impl PreparedViewports {
                 body_y: (original.text_pixel_bounds.y + y - top).round() as i64,
             });
             let identity = *source as *const RetainedWindowMatrix as usize;
-            for point in points.get(&(identity, *index as i64)).into_iter().flatten() {
-                let mut point = (*point).clone();
-                point.row = output_row as i64;
-                point.y = y.round() as i64;
-                snapshot.points.push(point);
+            let frozen = source
+                .display_snapshot
+                .point_rows
+                .as_ref()
+                .and_then(|rows| rows.row(*index as i64));
+            if let Some(frozen) = frozen.filter(|row| row_storage && row.has_uniform_y()) {
+                // The legacy export makes every point's Y equal to this row's
+                // Y. Uniform rows can make exactly that change by placement,
+                // retaining their immutable point arrays.
+                snapshot
+                    .point_rows
+                    .as_mut()?
+                    .rows
+                    .push(frozen.replaced_placement(output_row as i64, y.round() as i64, 0));
+            } else {
+                let source_points: Vec<_> = if row_storage && frozen.is_some() {
+                    frozen?.points().collect()
+                } else {
+                    points
+                        .get(&(identity, *index as i64))
+                        .cloned()
+                        .unwrap_or_default()
+                };
+                let placed: Vec<_> = source_points
+                    .into_iter()
+                    .map(|mut point| {
+                        point.row = output_row as i64;
+                        point.y = y.round() as i64;
+                        point
+                    })
+                    .collect();
+                if let Some(rows) = &mut snapshot.point_rows {
+                    if !placed.is_empty() {
+                        rows.rows
+                            .push(neovm_core::window::DisplayPointRow::from_points(placed));
+                    }
+                } else {
+                    snapshot.points.extend(placed);
+                }
             }
             y += row.height_px;
             matrix.rows[output_row] = MatrixRow::new(row);

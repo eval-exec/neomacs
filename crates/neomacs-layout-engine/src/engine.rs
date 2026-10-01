@@ -2819,6 +2819,9 @@ impl LayoutEngine {
                         .saturating_add(i64::try_from(height.get()).unwrap_or(i64::MAX));
                     snapshot.rows.retain(|row| row.y < bottom);
                     let last = snapshot.rows.last().map(|row| row.row);
+                    if let Some(points) = &mut snapshot.point_rows {
+                        points.rows.retain(|row| Some(row.row()) <= last);
+                    }
                     snapshot.points.retain(|point| Some(point.row) <= last);
                     snapshot
                         .body_rows

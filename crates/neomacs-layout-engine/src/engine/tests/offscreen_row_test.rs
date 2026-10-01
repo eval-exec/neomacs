@@ -215,12 +215,14 @@ fn unseen_row_worker_glyphs_match_canonical_window_body() {
     assert_eq!(actual_row.end_charpos, expected.end_charpos);
     let expected_snapshot = &fresh.retained_window_matrices[&display_window].display_snapshot;
     let expected_points: Vec<_> = expected_snapshot
-        .points
-        .iter()
+        .iter_points()
         .filter(|point| point.row == row_base as i64)
-        .cloned()
         .collect();
-    assert_eq!(actual.geometry.points, expected_points);
+    let actual_points = match &actual.geometry.point_rows {
+        Some(rows) => rows.iter_points().collect::<Vec<_>>(),
+        None => actual.geometry.points.clone(),
+    };
+    assert_eq!(actual_points, expected_points);
     assert_eq!(actual.geometry.rows[0], expected_snapshot.rows[row_base]);
 }
 
@@ -1462,8 +1464,7 @@ fn buffer_newline_numeric_height_uses_default_font_for_factors() {
     let newline_cell_height = |engine: &LayoutEngine| {
         engine.retained_window_matrices[&owner]
             .display_snapshot
-            .points
-            .iter()
+            .iter_points()
             .find(|point| {
                 point.buffer_pos == neovm_core::buffer::LispCharPos1::from_one_based_usize(6)
             })
