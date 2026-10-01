@@ -14,6 +14,10 @@
 //! | `legacy` (default) | `Legacy` | the persistent per-thread module defines each leaf in place (the B4 path, unchanged) |
 //! | `sync` | `Sync` | the split, run in line: the eval thread's backend compiles each packaged function at once. Deterministic |
 //! | `on` | `Threaded` | entry tier-ups, first-sight and OSR compiles hand their package to a worker thread (`bg::worker`); the function stays interpreted (a native caller takes the strict call path; a hot loop interprets on without latching) until its leaf is installed; re-tiers and the AOT drain run as under `sync`. x86-64 Linux; elsewhere `on` is `sync` |
+//! | `auto` | `Threaded` or `Sync` | `on` when the process's affinity has at least two CPUs, else `sync` (a worker on the eval thread's only CPU just competes with it) |
+//!
+//! The companions -- worker count, queue caps, the classes that defer, worker
+//! placement and the stress soak -- are in the knob table of `jit/mod.rs`.
 //!
 //! Whatever the mode, the CLIF and the machine code are the same, and so is
 //! everything Lisp can observe: the mode moves where code is produced, never
