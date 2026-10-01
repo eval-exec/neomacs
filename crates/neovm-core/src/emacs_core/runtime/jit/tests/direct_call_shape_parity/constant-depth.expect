@@ -1,0 +1,1 @@
+(((error "Lisp nesting exceeds ‘max-lisp-eval-depth’") t t) 20)

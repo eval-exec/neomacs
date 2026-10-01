@@ -85,9 +85,8 @@ fn optional_short_calls_pass_nil_and_record_their_own_arguments() {
     assert_shaped_calls_bypass_the_shim(&runs);
     let shim = &runs[0];
     assert!(
-        shim.out.starts_with(
-            "(((7 nil nil) (7 1 nil) (7 1 2) (7 1 nil nil nil) (7 1 2 3 nil))"
-        ),
+        shim.out
+            .starts_with("(((7 nil nil) (7 1 nil) (7 1 2) (7 1 nil nil nil) (7 1 2 3 nil))"),
         "{}",
         shim.out
     );
@@ -229,9 +228,8 @@ fn rest_calls_cons_a_fresh_list_and_record_their_own_arguments() {
     assert_shaped_calls_bypass_the_shim(&runs);
     let shim = &runs[0];
     assert!(
-        shim.out.starts_with(
-            "(((7) (7 (1)) (7 (1) 2 3 4 5) (7 nil nil) (7 1 nil) (7 1 (2 3)))"
-        ),
+        shim.out
+            .starts_with("(((7) (7 (1)) (7 (1) 2 3 4 5) (7 nil nil) (7 1 nil) (7 1 (2 3)))"),
         "{}",
         shim.out
     );

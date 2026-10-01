@@ -117,6 +117,10 @@ impl LeafAbi {
 
 /// The shape of the lambda list of the function being compiled, as far as
 /// its entry ABI cares.
+///
+/// Threading: this is a compile-time fact, scoped to the compiler thread;
+/// it contains no Lisp values or mutator state. Independent compiler threads
+/// and nested compiles each use their own restored scope.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LambdaList {
     /// Required parameters only.
@@ -167,6 +171,7 @@ pub(crate) fn lambda_list() -> LambdaList {
 
 /// For its lifetime, the lambda-list fact [`LeafAbi::for_build`] reads
 /// ([`lambda_list`]); the previous one is restored on drop.
+/// Threading: owns only the current compiler thread's enum override.
 pub(crate) struct LambdaListScope(LambdaList);
 
 impl LambdaListScope {

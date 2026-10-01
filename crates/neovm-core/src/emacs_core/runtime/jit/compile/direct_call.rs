@@ -91,6 +91,7 @@ impl Drop for UnboundedBodyScope {
 /// its expected callee: how the call's arguments become the callee's
 /// register words (`nonrest` slots, nil for each one the call lacks, then
 /// the `&rest` list when `rest`).
+/// Threading: immutable compile-time counts, with no mutator-owned values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CalleeShape {
     pub(crate) required: usize,
@@ -142,6 +143,8 @@ pub(crate) const MAX_REST_CALL_ARGS: usize = 8;
 
 /// A site the lowering will emit as a direct call: its constants and the
 /// probed layouts its push and pop use.
+/// Threading: belongs to one compiler's lowering; the emitted slot belongs
+/// to the caller's mutator-owned compiled leaf, as for existing spec sites.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct DirectSite {
     expected: u64,
@@ -158,6 +161,7 @@ pub(crate) struct DirectSite {
 }
 
 /// Whose call a direct site makes.
+/// Threading: SSA values of one lowering, never shared Lisp runtime state.
 #[derive(Clone, Copy)]
 pub(crate) enum DirectCallee {
     /// A speculated symbol: the slot's epoch is the function epoch it was
@@ -756,7 +760,8 @@ pub(crate) extern "C" fn neovm_jit_direct_slow(
     out: *mut i64,
     shape: i64,
 ) -> i64 {
-    let status = super::dispatch::neovm_jit_call_spec(ctx, sym_bits, expected, slot, args, nargs, out);
+    let status =
+        super::dispatch::neovm_jit_call_spec(ctx, sym_bits, expected, slot, args, nargs, out);
     // SAFETY: the executing leaf's slot (the contract above).
     let slot = unsafe { &*(slot as *const SpecSlot) };
     if slot.direct_entry.load(Ordering::Relaxed) == 0 && !slot.leaf_ptr().is_null() {

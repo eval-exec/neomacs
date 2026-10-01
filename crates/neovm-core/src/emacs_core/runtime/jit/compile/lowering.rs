@@ -3186,10 +3186,13 @@ pub(crate) fn build_mir_leaf_fn<S: LeafSink>(
         let mut rt = if plan.needs_rt {
             // Qualified ordinary calls and named builtins share the baseline
             // emitter. AOT plans have no ordinary call slots yet.
+            let shapes = jit_direct_shapes();
             let groups = super::ShimGroups {
                 subr_spec: plan.spec_sites.values().any(|s| s.kind.is_round1_subr()),
                 cbsym_spec: plan.has_named_builtin,
                 tier2_profile: emit.t2.is_some(),
+                direct_shapes: !aot && (shapes.optional || shapes.rest),
+                call_census: !aot && jit_call_census_on(),
             };
             let refs = super::RtRefs::new(
                 sink.shim_ids(call_conv, ptr_ty, groups)?,
@@ -7285,13 +7288,7 @@ fn lower_simple_op_arms(
             // its slow path (`direct_call::DirectCallee::Source`).
             let direct_source_status = match (spec, source_direct) {
                 (
-                    Some((
-                        _,
-                        _,
-                        slot_ptr,
-                        _,
-                        SpecCalleeKind::Source | SpecCalleeKind::Constant,
-                    )),
+                    Some((_, _, slot_ptr, _, SpecCalleeKind::Source | SpecCalleeKind::Constant)),
                     Some(site),
                 ) => {
                     let slot_v = fb.ins().iconst(types::I64, slot_ptr);
@@ -7314,7 +7311,13 @@ fn lower_simple_op_arms(
                     // A closure source site's hit, and a constant site: the
                     // source shim, which answers STATUS_NEED_GENERIC for what
                     // its fast path declines.
-                    Some((_, _, slot_ptr, _, SpecCalleeKind::Source | SpecCalleeKind::Constant)) => {
+                    Some((
+                        _,
+                        _,
+                        slot_ptr,
+                        _,
+                        SpecCalleeKind::Source | SpecCalleeKind::Constant,
+                    )) => {
                         let slot_v = fb.ins().iconst(types::I64, slot_ptr);
                         super::source_slots::emit_source_call(
                             fb, rt, slot_v, vmctx, func_val, args_addr, n_val, out_addr,

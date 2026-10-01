@@ -708,4 +708,9 @@ fn a_deep_direct_recursion_signals_bytecode_stack_overflow() {
 // P1.1 Stage 2 (`NEOVM_JIT_DIRECT_SHAPES`): the call shapes beyond the exact
 // named call, on this file's harness.
 #[path = "direct_call_shapes.rs"]
+#[cfg(test)]
 mod shapes;
+
+#[path = "direct_call_shape_parity.rs"]
+#[cfg(test)]
+mod shape_parity;

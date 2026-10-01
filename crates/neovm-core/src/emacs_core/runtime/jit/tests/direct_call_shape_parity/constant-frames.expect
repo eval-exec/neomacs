@@ -1,0 +1,1 @@
+(t ((7 2) (7 2)) ((((t (byte-code-function (1 . 1) t) (show) nil)) (t (byte-code-function (1 . 1) t) show) ((t (byte-code-function (1 . 1) t) (show) nil))) (((t (byte-code-function (1 . 1) t) (show) nil)) (t (byte-code-function (1 . 1) t) show) ((t (byte-code-function (1 . 1) t) (show) nil)))))
